@@ -1,7 +1,7 @@
 import base64
 import posixpath
 import re
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
 from itertools import accumulate, chain, repeat, takewhile
@@ -115,6 +115,10 @@ def _with_embedded_s3_uris(file_id: str) -> Iterator[str]:
     return chain((file_id,), _s3_uris_embedded_in_file_id(file_id))
 
 
+def _non_scalar(values: Iterable[object]) -> Iterator[object]:
+    return (value for value in values if type(value) not in _SCALAR_TYPES)
+
+
 def _sequence_items(value: object) -> Sequence[object] | None:
     if isinstance(value, tuple):
         return _OBJECT_TUPLE.validate_python(value)
@@ -137,9 +141,15 @@ def _child_nodes(node: _BodyNode) -> Iterator[_BodyNode]:
     fields: Final = as_str_mapping(node.value)
     if fields is not None:
         inside_media_part: Final = node.inside_media_part or _is_media_part(fields, node.key)
-        return (_BodyNode(child, child_key, inside_media_part) for child_key, child in fields.items())
+        return (
+            _BodyNode(child, child_key, inside_media_part)
+            for child_key, child in fields.items()
+            if type(child) not in _SCALAR_TYPES
+        )
     items: Final = _sequence_items(node.value)
-    return (_BodyNode(item, None, node.inside_media_part) for item in items) if items is not None else iter(())
+    if items is None:
+        return iter(())
+    return (_BodyNode(item, None, node.inside_media_part) for item in _non_scalar(items))
 
 
 def _next_level(level: tuple[_BodyNode, ...], _: None) -> tuple[_BodyNode, ...]:
@@ -201,9 +211,11 @@ def _may_name_an_s3_uri(value: object) -> bool:
         return is_s3_uri(value)
     fields: Final = as_str_mapping(value)
     if fields is not None:
-        return not _KEYS_THAT_MAY_HIDE_AN_S3_URI.isdisjoint(fields) or any(map(_may_name_an_s3_uri, fields.values()))
+        return not _KEYS_THAT_MAY_HIDE_AN_S3_URI.isdisjoint(fields) or any(
+            map(_may_name_an_s3_uri, _non_scalar(fields.values()))
+        )
     items: Final = _sequence_items(value)
-    return items is not None and not _SCALAR_TYPES.issuperset(map(type, items)) and any(map(_may_name_an_s3_uri, items))
+    return items is not None and any(map(_may_name_an_s3_uri, _non_scalar(items)))
 
 
 def _may_carry_s3_media(request_body: Mapping[str, object]) -> bool:
