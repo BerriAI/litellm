@@ -1,5 +1,6 @@
 """Typed configuration for the OpenTelemetry instrumentation."""
 
+from collections.abc import Mapping
 from enum import Enum
 from functools import lru_cache
 from typing import Annotated, Final
@@ -94,7 +95,7 @@ class ExporterSpec(LiteLLMBaseModel):
             "different backend's exporter."
         ),
     )
-    resource_attributes: dict[str, str] = Field(
+    resource_attributes: Mapping[str, str] = Field(
         default_factory=dict,
         description="Resource attributes only this exporter's copy of a span carries, over the provider's resource.",
     )
