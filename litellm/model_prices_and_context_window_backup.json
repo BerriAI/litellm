@@ -28593,6 +28593,7 @@
     "fireworks_ai/accounts/fireworks/models/deepseek-v4-flash": {
         "cache_read_input_token_cost": 2.8e-08,
         "deprecation_date": "2026-08-14",
+        "deprecation_source": "https://docs.fireworks.ai/api-reference/list-models.md",
         "input_cost_per_token": 1.4e-07,
         "litellm_provider": "fireworks_ai",
         "max_input_tokens": 1048576,
@@ -28600,6 +28601,7 @@
         "mode": "chat",
         "output_cost_per_token": 2.8e-07,
         "source": "https://docs.fireworks.ai/serverless/pricing",
+        "successor_model": "fireworks_ai/accounts/fireworks/models/deepseek-v4-flash-0731",
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -29065,6 +29067,7 @@
     "fireworks_ai/deepseek-v4-flash": {
         "cache_read_input_token_cost": 2.8e-08,
         "deprecation_date": "2026-08-14",
+        "deprecation_source": "https://docs.fireworks.ai/api-reference/list-models.md",
         "input_cost_per_token": 1.4e-07,
         "litellm_provider": "fireworks_ai",
         "max_input_tokens": 1048576,
@@ -29072,6 +29075,7 @@
         "mode": "chat",
         "output_cost_per_token": 2.8e-07,
         "source": "https://docs.fireworks.ai/serverless/pricing",
+        "successor_model": "fireworks_ai/deepseek-v4-flash-0731",
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -83589,6 +83593,7 @@
     "fireworks_ai/accounts/fireworks/routers/spot-deepseek-v4-flash": {
         "cache_read_input_token_cost": 2.1e-08,
         "deprecation_date": "2026-08-14",
+        "deprecation_source": "https://docs.fireworks.ai/api-reference/list-models.md",
         "input_cost_per_token": 1.05e-07,
         "litellm_provider": "fireworks_ai",
         "max_input_tokens": 1048576,
@@ -83596,6 +83601,7 @@
         "mode": "chat",
         "output_cost_per_token": 2.1e-07,
         "source": "https://api.fireworks.ai/v1/serverless/models",
+        "successor_model": "fireworks_ai/accounts/fireworks/models/deepseek-v4-flash-0731",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
