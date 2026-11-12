@@ -1162,6 +1162,11 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         stash.borrowing_team_model_reserved_window = (
             _reserved_window(atomic_response, enforced_team_share) if team_reservation else None
         )
+        tpm_share: Final = (
+            None if enforced_team_share is None else (enforced_team_share["rate_limit"] or {}).get("tokens_per_unit")
+        )
+        if team_reservation and tpm_share is not None and self.v3_limiter.get_rate_limit_type() != "input":
+            self.v3_limiter.bound_output_for_limit(data, tpm_share, call_type)
         if team_share is not None and enforced_team_share is None:
             await self.v3_limiter.atomic_check_and_increment_by_n(
                 descriptors=[team_share.share],
@@ -1193,7 +1198,6 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         tpm_share: Final = (descriptor["rate_limit"] or {}).get("tokens_per_unit")
         if tpm_share is None or not data:
             return 0
-        self.v3_limiter.bound_output_for_limit(data, tpm_share, call_type)
         try:
             estimate: Final = await offload_token_count(self.v3_limiter.estimate_request_tokens)(
                 data=data,

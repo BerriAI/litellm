@@ -2602,6 +2602,26 @@ async def test_a_request_without_max_tokens_leaves_admission_capped_to_the_teams
 
 
 @pytest.mark.asyncio
+async def test_a_refused_admission_leaves_the_requests_output_uncapped(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.0)
+    prompt: Final[dict[str, object]] = {"messages": [{"role": "user", "content": "word " * 300}]}
+    with pytest.raises(ProxyRateLimitError):
+        await _check(handler, _team_key(), saturation=1.0, data=prompt)
+    assert "max_tokens" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_an_input_token_limit_leaves_the_reply_length_alone(monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setitem(proxy_server.general_settings, "token_rate_limit_type", "input")
+    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.0)
+    prompt: Final[dict[str, object]] = {"messages": [{"role": "user", "content": "hi"}]}
+    await _check(handler, _team_key(), saturation=1.0, data=prompt)
+    assert "max_tokens" not in prompt
+
+
+@pytest.mark.asyncio
 async def test_a_failed_attempt_that_recorded_usage_is_charged_that_usage_instead_of_refunded(
     monkeypatch: pytest.MonkeyPatch,
 ):
