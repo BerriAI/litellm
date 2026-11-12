@@ -251,6 +251,10 @@ impl Error {
         Repr::ComputedHeader(name.into()).into()
     }
 
+    pub fn request_body(error: serde_json::Error) -> Self {
+        Repr::RequestBody(error).into()
+    }
+
     pub fn unsignable_body() -> Self {
         Repr::UnsignableBody.into()
     }
