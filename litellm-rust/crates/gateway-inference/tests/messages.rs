@@ -138,6 +138,12 @@ async fn deployment_sampling_params_sit_under_the_client_body(
     Some(None)
 )]
 #[case::refused_without_drop_params("no-sampling", "", 400, None)]
+#[case::dropped_by_additional_drop_params(
+    "no-sampling",
+    "\n      additional_drop_params: [temperature]",
+    200,
+    Some(None)
+)]
 #[case::kept_for_a_model_with_sampling_params(
     "sampling",
     "\n      drop_params: true",
@@ -147,7 +153,7 @@ async fn deployment_sampling_params_sit_under_the_client_body(
 #[tokio::test]
 async fn a_deployment_temperature_follows_the_model_map_sampling_flag(
     #[case] model: &str,
-    #[case] drop_params: &str,
+    #[case] drop_settings: &str,
     #[case] status: u16,
     #[case] sent_temperature: Option<Option<f64>>,
 ) {
@@ -171,7 +177,7 @@ async fn a_deployment_temperature_follows_the_model_map_sampling_flag(
     .value;
     let app = support::app_from_config(
         &format!(
-            "model_list:\n  - model_name: public/model\n    litellm_params:\n      model: anthropic/{model}\n      api_base: {}\n      api_key: test-key\n      temperature: 0.5{drop_params}",
+            "model_list:\n  - model_name: public/model\n    litellm_params:\n      model: anthropic/{model}\n      api_base: {}\n      api_key: test-key\n      temperature: 0.5{drop_settings}",
             upstream.uri()
         ),
         &models,

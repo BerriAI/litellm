@@ -42,6 +42,31 @@ fn sampling_support_comes_from_the_model_map(#[case] parameters: &str, #[case] e
 }
 
 #[rstest]
+#[case::unset("", &[])]
+#[case::paths("additional_drop_params: [temperature, metadata.user_id]", &["temperature", "metadata.user_id"])]
+#[case::only_text_entries("additional_drop_params: [temperature, 5, null]", &["temperature"])]
+#[case::not_a_list("additional_drop_params: temperature", &[])]
+fn deployment_additional_drop_params_reach_the_shaping(
+    #[case] parameters: &str,
+    #[case] expected: &[&str],
+) {
+    let config = Config::from_yaml(&format!(
+        "model_list:\n  - model_name: public-model\n    litellm_params:\n      model: anthropic/no-sampling\n      {parameters}"
+    ))
+    .unwrap();
+
+    assert_eq!(
+        Router::from_config(&config, &|_: &str| None, &models())
+            .get("public-model")
+            .unwrap()
+            .shaping
+            .settings
+            .additional_drop_params,
+        expected
+    );
+}
+
+#[rstest]
 #[case::minimal("")]
 #[case::configured(
     "api_key: test-key\n      api_base: https://provider.example/v1\n      custom_llm_provider: test-provider"

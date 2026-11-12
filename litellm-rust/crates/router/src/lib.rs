@@ -47,6 +47,21 @@ fn supports_sampling_params(catalog: &Catalog, params: &LitellmParams) -> bool {
         .unwrap_or(true)
 }
 
+fn additional_drop_params(params: &LitellmParams) -> Vec<String> {
+    params
+        .extra
+        .get("additional_drop_params")
+        .and_then(|paths| paths.as_array())
+        .map(|paths| {
+            paths
+                .iter()
+                .filter_map(|path| path.as_str())
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 impl Router {
     pub fn from_config(config: &Config, env: &impl Lookup, catalog: &Catalog) -> Self {
         let drops_params_globally = is_on(config.litellm_settings.drop_params.as_ref(), env);
@@ -77,6 +92,9 @@ impl Router {
                             settings: MessagesSettings {
                                 drop_params: drops_params_globally
                                     || is_on(model.litellm_params.drop_params.as_ref(), env),
+                                additional_drop_params: additional_drop_params(
+                                    &model.litellm_params,
+                                ),
                                 ..MessagesSettings::default()
                             },
                         },
