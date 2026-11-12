@@ -33,9 +33,11 @@ from litellm.integrations.otel.model.baggage import promoted_metadata
 from litellm.integrations.otel.model.db_endpoint import db_span_attributes
 from litellm.integrations.otel.model.metadata import flatten_metadata
 from litellm.integrations.otel.model.semconv import LiteLLM, Metric
+from litellm.integrations.otel.model.utils import as_str
 from litellm.integrations.otel.plumbing.otlp_tls import resolve_otlp_http_tls
 from litellm.integrations.otel.routing import routed_model_name, routing_decision_attributes
 from litellm.litellm_core_utils.core_helpers import iter_items, require_attributes
+from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.secret_redaction import redact_string
@@ -138,6 +140,18 @@ def _response_field(response_obj: object, key: str) -> object:
     if not response_obj:
         return None
     return require_attributes(response_obj, _SupportsGet, "get").get(key)
+
+
+def _semconv_response_model(
+    response_obj: object, response_model: object, model_group: object, deployment_model: object
+) -> object:
+    hidden_params: Final = get_hidden_params(response_obj)
+    provider_model: Final = hidden_params.get("provider_response_model") if hidden_params is not None else None
+    if isinstance(provider_model, str) and provider_model:
+        return provider_model
+    if response_model and response_model == model_group and isinstance(deployment_model, str) and deployment_model:
+        return deployment_model
+    return response_model
 
 
 def _billed_usage(response_obj: object, call_type: str | None, litellm_params: Mapping[str, object] | None) -> object:
@@ -2617,10 +2631,14 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 )
 
             # The model used to generate the response.
-            response_model: Final = routed_model_name(
-                _response_field(response_obj, "model"),
-                standard_logging_payload.get("model_group"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # kwargs is untyped
-                decision,
+            model_group: Final = as_str(standard_logging_payload.get("model_group"))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # kwargs is untyped
+            routed_response_model: Final = routed_model_name(
+                _response_field(response_obj, "model"), model_group, decision
+            )
+            response_model: Final = (
+                _semconv_response_model(response_obj, routed_response_model, model_group, kwargs.get("model"))
+                if self._gen_ai_semconv_latest_experimental
+                else routed_response_model
             )
             if response_model:
                 self.safe_set_attribute(
