@@ -83,11 +83,13 @@ The first command removes only the sample records. `down -v` deletes the demo da
 ## What the 2026-11-12 verification run showed
 
 These numbers come from one small run on synthetic prompts. They show the pipeline works end to end, not that the
-taxonomy is good on real traffic.
+taxonomy is good on real traffic. The live figures were measured on a provisional image, the branch image of an
+earlier commit with that run's discovery and gateway fixes copied in, not on a fresh build of the final commit.
+Evidence and screenshots are in the verification session, https://app.devin.ai/sessions/65500c38bb1d4f35b1332a77252bdfbf.
 
 - The seeded demo started with no provider keys, made no model call, and seeding twice left identical row counts.
-- Live discovery read 44 synthetic coding requests sent through the gateway to `claude-haiku-5-5` and drafted two
-  named tasks, "Implement or refactor application code features" (27 requests) and "Repair builds and write tests"
+- Live discovery read 47 requests, 44 synthetic coding requests sent through the gateway to `claude-haiku-5-5` plus 3
+  mock requests from the accounting check, and drafted two named tasks, "Implement or refactor application code features" (27 requests) and "Repair builds and write tests"
   (19), with 1 request left as noise. They were frozen without edits.
 - Jev then assigned the 30 held-out requests in under 20 seconds of the last send. 21 landed on a task and 9 came back
   unknown, none failed. That is a coverage of 0.70, below the 0.80 we aimed for. The 9 unknown were explain, docs and
