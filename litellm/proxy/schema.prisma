@@ -11,7 +11,9 @@ generator client {
 
 // Budget / Rate Limits for an org
 model LiteLLM_BudgetTable {
-  customer_organization_budgets LiteLLM_CustomerOrganizationBudgetTable[]
+  customer_organization_defaults LiteLLM_CustomerOrganizationTable[] @relation("CustomerOrganizationDefaultBudget")
+  customer_organizations LiteLLM_CustomerOrganizationTable[] @relation("CustomerOrganizationBudget")
+  customer_member_templates LiteLLM_CustomerMemberTable[] @relation("CustomerMemberTemplate")
   customer_teams LiteLLM_CustomerTeamTable[] @relation("CustomerTeamBudget")
   customer_members LiteLLM_CustomerMemberTable[] @relation("CustomerMemberBudget")
   budget_id String @id @default(uuid())
@@ -44,11 +46,16 @@ model LiteLLM_BudgetTable {
 }
 
 model LiteLLM_CustomerOrganizationTable {
-  default_budgets LiteLLM_CustomerOrganizationBudgetTable[] @relation("CustomerOrganizationTemplates")
+  spend Float @default(0.0)
+  budget_reset_at DateTime?
+  budget_ids String[] @default([])
+  budget_names Json @default("{}")
+  budget_id String?
+  budget LiteLLM_BudgetTable? @relation("CustomerOrganizationBudget", fields: [budget_id], references: [budget_id])
   customer_org_id String @id @default(uuid())
   alias String?
   default_budget_id String?
-  default_budget_template LiteLLM_CustomerOrganizationBudgetTable? @relation("CustomerOrganizationDefaultTemplate", fields: [customer_org_id, default_budget_id], references: [customer_org_id, budget_id], onDelete: NoAction, onUpdate: NoAction)
+  default_budget LiteLLM_BudgetTable? @relation("CustomerOrganizationDefaultBudget", fields: [default_budget_id], references: [budget_id])
   teams LiteLLM_CustomerTeamTable[]
   created_at DateTime @default(now())
   created_by String
@@ -56,17 +63,9 @@ model LiteLLM_CustomerOrganizationTable {
   updated_by String
 }
 
-model LiteLLM_CustomerOrganizationBudgetTable {
-  customer_org_id String
-  budget_id String @unique
-  customer_org LiteLLM_CustomerOrganizationTable @relation("CustomerOrganizationTemplates", fields: [customer_org_id], references: [customer_org_id])
-  created_at DateTime @default(now())
-  default_for LiteLLM_CustomerOrganizationTable[] @relation("CustomerOrganizationDefaultTemplate")
-  budget LiteLLM_BudgetTable @relation(fields: [budget_id], references: [budget_id])
-  @@id([customer_org_id, budget_id])
-}
-
 model LiteLLM_CustomerTeamTable {
+  spend Float @default(0.0)
+  budget_reset_at DateTime?
   customer_team_id String @id @default(uuid())
   alias String?
   parent_org_id String
@@ -82,17 +81,23 @@ model LiteLLM_CustomerTeamTable {
 }
 
 model LiteLLM_CustomerMemberTable {
+  spend Float @default(0.0)
+  budget_reset_at DateTime?
   customer_member_id String @id @default(uuid())
   alias String?
   parent_team_id String
   parent_team LiteLLM_CustomerTeamTable @relation(fields: [parent_team_id], references: [customer_team_id])
-  budget_id String
-  budget LiteLLM_BudgetTable @relation("CustomerMemberBudget", fields: [budget_id], references: [budget_id])
+  budget_id String?
+  budget LiteLLM_BudgetTable? @relation("CustomerMemberBudget", fields: [budget_id], references: [budget_id], onDelete: Restrict)
+  budget_template_id String?
+  budget_template LiteLLM_BudgetTable? @relation("CustomerMemberTemplate", fields: [budget_template_id], references: [budget_id], onDelete: Restrict)
+  budget_override_expires_at DateTime?
   created_at DateTime @default(now())
   created_by String
   updated_at DateTime @default(now()) @updatedAt
   updated_by String
   @@index([parent_team_id])
+  @@index([budget_template_id])
 }
 
 // Models on proxy

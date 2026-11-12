@@ -1,12 +1,16 @@
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from enum import Enum
+from itertools import chain
 from typing import TYPE_CHECKING, Final, Generic, Protocol, TypeVar
 from uuid import uuid4
 
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import ConfigDict, Field, TypeAdapter, model_validator
 
+from litellm.models.budget import LiteLLM_BudgetTable
+from litellm.repositories.budget_repository import create_budget_row, update_budget_row
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.types.proxy.management_endpoints.customer_hierarchy import (
     Budget,
@@ -21,6 +25,7 @@ from litellm.types.proxy.management_endpoints.customer_hierarchy import (
     Team,
     TeamCreate,
     TeamPatch,
+    TemplatePatch,
 )
 
 if TYPE_CHECKING:
@@ -36,11 +41,19 @@ class ErrorCode(str, Enum):
     HAS_CHILDREN = "has_children"
     FORBIDDEN = "forbidden"
     DATABASE_UNAVAILABLE = "database_unavailable"
+    INVALID_TEMPLATE_NAMES = "invalid_template_names"
+    TEMPLATE_IN_USE = "template_in_use"
+    BUDGET_REQUIRED = "budget_required"
 
 
 @dataclass(frozen=True, slots=True)
 class Failure:
     code: ErrorCode
+
+
+class TransactionOperation(str, Enum):
+    READ_WRITE = "read_write"
+    DELETE = "delete"
 
 
 class PrismaRecord(Protocol):
@@ -66,32 +79,65 @@ class BudgetRecord(Budget):
 
 _VALUES: Final = TypeAdapter(Mapping[str, object])
 _BUDGET: Final[TypeAdapter[BudgetRecord | None]] = TypeAdapter(BudgetRecord | None)
+_EXPIRY: Final[TypeAdapter[datetime | None]] = TypeAdapter(datetime | None)
 
 
 def budget_values(budget: Budget) -> Mapping[str, object]:
     return _VALUES.validate_python(budget.model_dump())
 
 
-def related_budget(value: object) -> Budget | None:
+def related_budget(value: object, now: datetime | None = None, inherited_maximum: float | None = None) -> Budget | None:
     record: Final = _BUDGET.validate_python(value)
-    return Budget.model_validate(record.model_dump()) if record is not None else None
+    if record is None:
+        return None
+    if now is None:
+        return Budget.model_validate(record.model_dump())
+    budget: Final = LiteLLM_BudgetTable.model_validate(value)
+    maximum: Final = budget.effective_max_budget(utc_datetime(now))
+    if maximum is not None:
+        return Budget.model_validate({**record.model_dump(), "max_budget": maximum})
+    if inherited_maximum is None:
+        return Budget.model_validate(record.model_dump())
+    return Budget.model_validate(
+        {
+            **record.model_dump(),
+            "max_budget": inherited_maximum + budget.active_temp_budget_increase(utc_datetime(now)),
+        }
+    )
 
 
-def organization_response(row: PrismaRecord) -> Organization:
-    values: Final = row.model_dump()
-    templates: Final = TypeAdapter(tuple[Mapping[str, object], ...]).validate_python(values.get("default_budgets", ()))
+class OrganizationRecord(Organization):
+    budget_ids: tuple[str, ...] = ()
+    budget_names: Mapping[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def valid_ownership(self) -> "OrganizationRecord":
+        if set(self.budget_names) != set(self.budget_ids):
+            raise ValueError("Budget names must match the organization's budget IDs")
+        if len(set(self.budget_names.values())) != len(self.budget_ids):
+            raise ValueError("Template names must be unique")
+        if self.default_budget_id is not None and self.default_budget_id not in self.budget_ids:
+            raise ValueError("Default budget must belong to the organization")
+        return self
+
+
+class StoredBudget(BudgetRecord):
+    budget_id: str
+
+
+def organization_response(row: OrganizationRecord, budgets: Mapping[str, StoredBudget]) -> Organization:
     return Organization.model_validate(
         {
-            **values,
+            **row.model_dump(exclude={"budget_ids", "budget_names"}),
             "default_budgets": tuple(
                 OrganizationBudget.model_validate(
                     {
-                        **budget_values(BudgetRecord.model_validate(template["budget"])),
-                        "budget_id": template["budget_id"],
-                        "is_default": template["budget_id"] == values.get("default_budget_id"),
+                        **budgets[budget_id].model_dump(),
+                        "name": row.budget_names[budget_id],
+                        "is_default": budget_id == row.default_budget_id,
                     }
                 )
-                for template in templates
+                for budget_id in row.budget_ids
             ),
         }
     )
@@ -102,58 +148,113 @@ def team_response(row: PrismaRecord) -> Team:
     return Team.model_validate({**values, "budget": related_budget(values.get("budget"))})
 
 
-def member_response(row: PrismaRecord) -> CustomerMember:
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def utc_datetime(value: datetime) -> datetime:
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+
+def effective_member_budget(
+    template: Budget | None, override: Budget | None, expires_at: datetime | None, now: datetime
+) -> Budget:
+    inherited: Final = template if template is not None else Budget(allowed_models=())
+    if override is None:
+        return inherited
+    if expires_at is not None and utc_datetime(expires_at) <= utc_datetime(now):
+        return inherited
+    values: Final = _VALUES.validate_python(override.model_dump(exclude_none=True, exclude={"allowed_models"}))
+    models: Final[Mapping[str, object]] = {"allowed_models": override.allowed_models} if override.allowed_models else {}
+    return Budget.model_validate({**budget_values(inherited), **values, **models})
+
+
+def member_response(row: PrismaRecord, now: datetime) -> CustomerMember:
     values: Final = row.model_dump()
-    return CustomerMember.model_validate({**values, "budget": related_budget(values.get("budget"))})
+    override: Final = related_budget(values.get("budget"))
+    template: Final = related_budget(values.get("budget_template"), now)
+    effective_override: Final = related_budget(
+        values.get("budget"), now, template.max_budget if template is not None else None
+    )
+    expiry: Final = _EXPIRY.validate_python(values.get("budget_override_expires_at"))
+    return CustomerMember.model_validate(
+        {
+            **values,
+            "budget_override": override,
+            "effective_budget": effective_member_budget(template, effective_override, expiry, now),
+        }
+    )
 
 
-def valid_templates(templates: tuple[BudgetTemplate, ...] | None) -> bool:
-    flagged: Final = sum(template.is_default for template in templates or ())
-    return not templates or flagged == 1 or (len(templates) == 1 and flagged == 0)
+def default_template_index(templates: tuple[BudgetTemplate, ...]) -> int | Failure | None:
+    if not templates:
+        return None
+    flagged: Final = tuple(index for index, template in enumerate(templates) if template.is_default)
+    if len(flagged) > 1:
+        return Failure(ErrorCode.INVALID_DEFAULT_BUDGET)
+    if flagged:
+        return flagged[0]
+    if len(templates) == 1:
+        return 0
+    return Failure(ErrorCode.INVALID_DEFAULT_BUDGET)
 
 
 def alias_patch(payload: OrganizationPatch | TeamPatch | MemberPatch) -> Mapping[str, object]:
     return {"alias": payload.alias} if "alias" in payload.model_fields_set else {}
 
 
-_ORGANIZATION_INCLUDE: Final = {
-    "default_budgets": {"include": {"budget": True}, "order_by": [{"created_at": "asc"}, {"budget_id": "asc"}]}
-}
 _BUDGET_INCLUDE: Final = {"budget": True}
+_MEMBER_INCLUDE: Final = {"budget": True, "budget_template": True}
 
 
 class CustomerHierarchyStore:
-    def __init__(self, db: "Prisma") -> None:
+    def __init__(self, db: "Prisma", now: datetime) -> None:
+        self.now = now
         self.organizations: TableActions[PrismaRecord] = db.litellm_customerorganizationtable  # pyright: ignore[reportAttributeAccessIssue]  # protocol accepts immutable query mappings
         self.teams: TableActions[PrismaRecord] = db.litellm_customerteamtable  # pyright: ignore[reportAttributeAccessIssue]  # protocol accepts immutable query mappings
         self.members: TableActions[PrismaRecord] = db.litellm_customermembertable  # pyright: ignore[reportAttributeAccessIssue]  # protocol accepts immutable query mappings
         self.budgets: TableActions[PrismaRecord] = db.litellm_budgettable  # pyright: ignore[reportAttributeAccessIssue]  # protocol accepts immutable query mappings
-        self.templates: TableActions[PrismaRecord] = db.litellm_customerorganizationbudgettable  # pyright: ignore[reportAttributeAccessIssue]  # protocol accepts immutable query mappings
+
+    async def organization_responses(self, rows: Sequence[PrismaRecord]) -> tuple[Organization, ...]:
+        records: Final = tuple(
+            OrganizationRecord.model_validate(
+                {**row.model_dump(), "budget": related_budget(row.model_dump().get("budget"))}
+            )
+            for row in rows
+        )
+        budget_ids: Final = tuple(chain.from_iterable(record.budget_ids for record in records))
+        budget_rows: Final = await self.budgets.find_many(where={"budget_id": {"in": budget_ids}})
+        resolved: Final = tuple(StoredBudget.model_validate(row.model_dump()) for row in budget_rows)
+        budgets: Final = {budget.budget_id: budget for budget in resolved}
+        return tuple(organization_response(record, budgets) for record in records)
 
     async def get_organization(self, organization_id: str) -> Organization | Failure:
         row: Final = await self.organizations.find_unique(
-            where={"customer_org_id": organization_id}, include=_ORGANIZATION_INCLUDE
+            where={"customer_org_id": organization_id}, include=_BUDGET_INCLUDE
         )
-        return organization_response(row) if row is not None else Failure(ErrorCode.NOT_FOUND)
+        if row is None:
+            return Failure(ErrorCode.NOT_FOUND)
+        organizations: Final = await self.organization_responses((row,))
+        return organizations[0]
 
     async def get_team(self, team_id: str) -> Team | Failure:
         row: Final = await self.teams.find_unique(where={"customer_team_id": team_id}, include=_BUDGET_INCLUDE)
         return team_response(row) if row is not None else Failure(ErrorCode.NOT_FOUND)
 
     async def get_member(self, member_id: str) -> CustomerMember | Failure:
-        row: Final = await self.members.find_unique(where={"customer_member_id": member_id}, include=_BUDGET_INCLUDE)
-        return member_response(row) if row is not None else Failure(ErrorCode.NOT_FOUND)
+        row: Final = await self.members.find_unique(where={"customer_member_id": member_id}, include=_MEMBER_INCLUDE)
+        return member_response(row, self.now) if row is not None else Failure(ErrorCode.NOT_FOUND)
 
     async def create_budget(self, budget: Budget, actor: str) -> str:
         budget_id: Final = str(uuid4())
-        await self.budgets.create(
-            data={
+        await create_budget_row(
+            self.budgets,
+            {
                 **budget_values(budget),
                 "allowed_models": budget.allowed_models or (),
                 "budget_id": budget_id,
-                "created_by": actor,
-                "updated_by": actor,
-            }
+            },
+            actor,
         )
         return budget_id
 
@@ -161,99 +262,146 @@ class CustomerHierarchyStore:
         if budget_id is None:
             return await self.create_budget(budget, actor)
         patch: Final = _VALUES.validate_python(budget.model_dump(exclude_unset=True))
-        await self.budgets.update(
-            where={"budget_id": budget_id},
-            data={
+        await update_budget_row(
+            self.budgets,
+            budget_id,
+            {
                 **patch,
                 **({"allowed_models": budget.allowed_models or ()} if "allowed_models" in patch else {}),
+            },
+            actor,
+        )
+        return budget_id
+
+    async def write_template_metadata(
+        self, organization_id: str, names: Mapping[str, str], default_id: str | None, actor: str
+    ) -> None:
+        from prisma import Json
+
+        await self.organizations.update(
+            where={"customer_org_id": organization_id},
+            data={
+                "budget_ids": tuple(names),
+                "budget_names": Json(dict(names)),
+                "default_budget_id": default_id,
                 "updated_by": actor,
             },
         )
-        return budget_id
 
-    async def copy_template_budget(self, template: Budget | None, overrides: Budget | None, actor: str) -> str:
-        copied: Final[Mapping[str, object]] = budget_values(template) if template is not None else {}
-        patch: Final[Mapping[str, object]] = (
-            _VALUES.validate_python(overrides.model_dump(exclude_unset=True)) if overrides else {}
+    async def create_organization(self, payload: OrganizationCreate, actor: str) -> Organization | Failure:
+        default_index: Final = default_template_index(payload.default_budgets)
+        if isinstance(default_index, Failure):
+            return default_index
+        names: Final = tuple(template.name for template in payload.default_budgets)
+        if len(set(names)) != len(names):
+            return Failure(ErrorCode.INVALID_TEMPLATE_NAMES)
+        organization_id: Final = payload.customer_org_id or str(uuid4())
+        overall_id: Final = await self.create_budget(payload.budget, actor) if payload.budget is not None else None
+        await self.organizations.create(
+            data={
+                "customer_org_id": organization_id,
+                "alias": payload.alias,
+                "budget_id": overall_id,
+                "created_by": actor,
+                "updated_by": actor,
+            }
         )
-        return await self.create_budget(Budget.model_validate({**copied, **patch}), actor)
-
-    async def replace_organization_templates(
-        self, organization_id: str, templates: tuple[BudgetTemplate, ...], actor: str
-    ) -> None:
-        old: Final = await self.templates.find_many(where={"customer_org_id": organization_id})
-        await self.organizations.update(
-            where={"customer_org_id": organization_id}, data={"default_budget_id": None, "updated_by": actor}
-        )
-        await self.templates.delete_many(where={"customer_org_id": organization_id})
-        for row in old:
-            await self.budgets.delete(where={"budget_id": row.model_dump()["budget_id"]})
         created: Final = tuple(
-            [await self.add_organization_template(organization_id, template, actor) for template in templates]
+            [
+                await self.create_budget(
+                    Budget.model_validate(template.model_dump(exclude={"name", "is_default"})), actor
+                )
+                for template in payload.default_budgets
+            ]
         )
-        selected: Final = next(
-            (
-                budget_id
-                for budget_id, template in zip(created, templates)
-                if template.is_default or len(templates) == 1
-            ),
-            None,
+        await self.write_template_metadata(
+            organization_id,
+            dict(zip(created, names)),
+            created[default_index] if default_index is not None else None,
+            actor,
+        )
+        return await self.get_organization(organization_id)
+
+    async def update_organization(
+        self, organization_id: str, payload: OrganizationPatch, actor: str
+    ) -> Organization | Failure:
+        organization: Final = await self.get_organization(organization_id)
+        if isinstance(organization, Failure):
+            return organization
+        budget_id: Final = (
+            await self.update_budget(organization.budget_id, payload.budget, actor)
+            if payload.budget is not None
+            else organization.budget_id
         )
         await self.organizations.update(
-            where={"customer_org_id": organization_id}, data={"default_budget_id": selected, "updated_by": actor}
+            where={"customer_org_id": organization_id},
+            data={**alias_patch(payload), "budget_id": budget_id, "updated_by": actor},
         )
+        return await self.get_organization(organization_id)
 
-    async def add_organization_template(self, organization_id: str, template: BudgetTemplate, actor: str) -> str:
-        budget: Final = Budget.model_validate(template.model_dump(exclude={"is_default"}))
-        budget_id: Final = await self.create_budget(budget, actor)
-        await self.templates.create(data={"customer_org_id": organization_id, "budget_id": budget_id})
-        return budget_id
+    async def add_template(self, organization_id: str, payload: BudgetTemplate, actor: str) -> Organization | Failure:
+        organization: Final = await self.get_organization(organization_id)
+        if isinstance(organization, Failure):
+            return organization
+        names: Final = {template.budget_id: template.name for template in organization.default_budgets}
+        if payload.name in names.values():
+            return Failure(ErrorCode.INVALID_TEMPLATE_NAMES)
+        budget_id: Final = await self.create_budget(
+            Budget.model_validate(payload.model_dump(exclude={"name", "is_default"})), actor
+        )
+        default_id: Final = budget_id if payload.is_default or not names else organization.default_budget_id
+        await self.write_template_metadata(organization_id, {**names, budget_id: payload.name}, default_id, actor)
+        return await self.get_organization(organization_id)
 
-    async def resolve_member_template(self, team_id: str, template_id: str | None) -> Budget | Failure | None:
+    async def update_template(
+        self, organization_id: str, budget_id: str, payload: TemplatePatch, actor: str
+    ) -> Organization | Failure:
+        organization: Final = await self.get_organization(organization_id)
+        if isinstance(organization, Failure):
+            return organization
+        names: Final = {template.budget_id: template.name for template in organization.default_budgets}
+        if budget_id not in names:
+            return Failure(ErrorCode.TEMPLATE_NOT_IN_ORG)
+        name: Final = payload.name if payload.name is not None else names[budget_id]
+        if any(existing_name == name for existing_id, existing_name in names.items() if existing_id != budget_id):
+            return Failure(ErrorCode.INVALID_TEMPLATE_NAMES)
+        if payload.is_default is False and organization.default_budget_id == budget_id:
+            return Failure(ErrorCode.INVALID_DEFAULT_BUDGET)
+        patch: Final = Budget.model_validate(payload.model_dump(exclude_unset=True, exclude={"name", "is_default"}))
+        await self.update_budget(budget_id, patch, actor)
+        default_id: Final = budget_id if payload.is_default is True else organization.default_budget_id
+        await self.write_template_metadata(organization_id, {**names, budget_id: name}, default_id, actor)
+        return await self.get_organization(organization_id)
+
+    async def delete_template(self, organization_id: str, budget_id: str, actor: str) -> None | Failure:
+        organization: Final = await self.get_organization(organization_id)
+        if isinstance(organization, Failure):
+            return organization
+        names: Final = {template.budget_id: template.name for template in organization.default_budgets}
+        if budget_id not in names:
+            return Failure(ErrorCode.TEMPLATE_NOT_IN_ORG)
+        if organization.default_budget_id == budget_id:
+            return Failure(ErrorCode.TEMPLATE_IN_USE)
+        if await self.members.count(where={"budget_template_id": budget_id}):
+            return Failure(ErrorCode.TEMPLATE_IN_USE)
+        remaining: Final = {key: name for key, name in names.items() if key != budget_id}
+        await self.write_template_metadata(organization_id, remaining, organization.default_budget_id, actor)
+        await self.budgets.delete(where={"budget_id": budget_id})
+        return None
+
+    async def resolve_member_template(self, team_id: str, template_id: str | None) -> str | Failure | None:
         team: Final = await self.get_team(team_id)
         if isinstance(team, Failure):
             return Failure(ErrorCode.PARENT_NOT_FOUND)
         organization: Final = await self.get_organization(team.parent_org_id)
         if isinstance(organization, Failure):
             return Failure(ErrorCode.PARENT_NOT_FOUND)
-        selected_id: Final = template_id if template_id is not None else organization.default_budget_id
-        if selected_id is None:
-            return None
-        selected: Final = next(
-            (template for template in organization.default_budgets if template.budget_id == selected_id), None
-        )
+        selected: Final = template_id if template_id is not None else organization.default_budget_id
         if selected is None:
+            return None
+        if not any(template.budget_id == selected for template in organization.default_budgets):
             return Failure(ErrorCode.TEMPLATE_NOT_IN_ORG)
-        return Budget.model_validate(selected.model_dump(exclude={"is_default", "budget_id"}))
-
-    async def create_organization(self, payload: OrganizationCreate, actor: str) -> Organization | Failure:
-        if not valid_templates(payload.default_budgets):
-            return Failure(ErrorCode.INVALID_DEFAULT_BUDGET)
-        organization_id: Final = payload.customer_org_id or str(uuid4())
-        await self.organizations.create(
-            data={
-                "customer_org_id": organization_id,
-                "alias": payload.alias,
-                "created_by": actor,
-                "updated_by": actor,
-            }
-        )
-        await self.replace_organization_templates(organization_id, payload.default_budgets or (), actor)
-        return await self.get_organization(organization_id)
-
-    async def update_organization(
-        self, organization_id: str, payload: OrganizationPatch, actor: str
-    ) -> Organization | Failure:
-        if not valid_templates(payload.default_budgets):
-            return Failure(ErrorCode.INVALID_DEFAULT_BUDGET)
-        row: Final = await self.organizations.update(
-            where={"customer_org_id": organization_id}, data={**alias_patch(payload), "updated_by": actor}
-        )
-        if row is None:
-            return Failure(ErrorCode.NOT_FOUND)
-        if payload.default_budgets is not None:
-            await self.replace_organization_templates(organization_id, payload.default_budgets, actor)
-        return await self.get_organization(organization_id)
+        return selected
 
     async def create_team(self, payload: TeamCreate, actor: str) -> Team | Failure:
         parent: Final = await self.organizations.find_unique(where={"customer_org_id": payload.parent_org_id})
@@ -289,32 +437,73 @@ class CustomerHierarchyStore:
         return await self.get_team(team_id)
 
     async def create_member(self, payload: MemberCreate, actor: str) -> CustomerMember | Failure:
-        template: Final = await self.resolve_member_template(payload.parent_team_id, payload.budget_template_id)
-        if isinstance(template, Failure):
-            return template
-        budget_id: Final = await self.copy_template_budget(template, payload.budget, actor)
+        template_id: Final = await self.resolve_member_template(payload.parent_team_id, payload.budget_template_id)
+        if isinstance(template_id, Failure):
+            return template_id
+        if template_id is None and payload.budget_override is None:
+            return Failure(ErrorCode.BUDGET_REQUIRED)
+        budget_id: Final = (
+            await self.create_budget(payload.budget_override, actor) if payload.budget_override is not None else None
+        )
         member_id: Final = payload.customer_member_id or str(uuid4())
         await self.members.create(
             data={
                 "customer_member_id": member_id,
                 "alias": payload.alias,
                 "parent_team_id": payload.parent_team_id,
+                "budget_template_id": template_id,
                 "budget_id": budget_id,
+                "budget_override_expires_at": payload.budget_override_expires_at,
                 "created_by": actor,
                 "updated_by": actor,
             }
         )
         return await self.get_member(member_id)
 
+    async def member_template_patch(self, member: CustomerMember, payload: MemberPatch) -> str | Failure | None:
+        if "budget_template_id" not in payload.model_fields_set:
+            return member.budget_template_id
+        if payload.budget_template_id is None:
+            return None
+        return await self.resolve_member_template(member.parent_team_id, payload.budget_template_id)
+
+    async def member_override_patch(self, member: CustomerMember, payload: MemberPatch, actor: str) -> str | None:
+        if "budget_override" not in payload.model_fields_set:
+            return member.budget_id
+        if payload.budget_override is None:
+            return None
+        return await self.update_budget(member.budget_id, payload.budget_override, actor)
+
     async def update_member(self, member_id: str, payload: MemberPatch, actor: str) -> CustomerMember | Failure:
         member: Final = await self.get_member(member_id)
         if isinstance(member, Failure):
             return member
-        if payload.budget is not None:
-            await self.update_budget(member.budget_id, payload.budget, actor)
-        await self.members.update(
-            where={"customer_member_id": member_id}, data={**alias_patch(payload), "updated_by": actor}
+        selected: Final = await self.member_template_patch(member, payload)
+        if isinstance(selected, Failure):
+            return selected
+        override: Final = (
+            payload.budget_override if "budget_override" in payload.model_fields_set else member.budget_override
         )
+        if selected is None and override is None:
+            return Failure(ErrorCode.BUDGET_REQUIRED)
+        budget_id: Final = await self.member_override_patch(member, payload, actor)
+        expiry: Final = (
+            payload.budget_override_expires_at
+            if "budget_override_expires_at" in payload.model_fields_set
+            else member.budget_override_expires_at
+        )
+        await self.members.update(
+            where={"customer_member_id": member_id},
+            data={
+                **alias_patch(payload),
+                "budget_id": budget_id,
+                "budget_template_id": selected,
+                "budget_override_expires_at": expiry,
+                "updated_by": actor,
+            },
+        )
+        if member.budget_id is not None and budget_id is None:
+            await self.budgets.delete(where={"budget_id": member.budget_id})
         return await self.get_member(member_id)
 
     async def list_organizations(self, page: int, page_size: int) -> Page[Organization]:
@@ -323,9 +512,9 @@ class CustomerHierarchyStore:
             skip=(page - 1) * page_size,
             take=page_size,
             order=[{"created_at": "asc"}, {"customer_org_id": "asc"}],
-            include=_ORGANIZATION_INCLUDE,
+            include=_BUDGET_INCLUDE,
         )
-        return Page(tuple(organization_response(row) for row in rows), count)
+        return Page(await self.organization_responses(rows), count)
 
     async def list_teams(self, parent_org_id: str | None, page: int, page_size: int) -> Page[Team]:
         where: Final = {"parent_org_id": parent_org_id} if parent_org_id is not None else {}
@@ -347,16 +536,17 @@ class CustomerHierarchyStore:
             skip=(page - 1) * page_size,
             take=page_size,
             order=[{"created_at": "asc"}, {"customer_member_id": "asc"}],
-            include=_BUDGET_INCLUDE,
+            include=_MEMBER_INCLUDE,
         )
-        return Page(tuple(member_response(row) for row in rows), count)
+        return Page(tuple(member_response(row, self.now) for row in rows), count)
 
     async def delete_member(self, member_id: str) -> None | Failure:
         member: Final = await self.get_member(member_id)
         if isinstance(member, Failure):
             return member
         await self.members.delete(where={"customer_member_id": member_id})
-        await self.budgets.delete(where={"budget_id": member.budget_id})
+        if member.budget_id is not None:
+            await self.budgets.delete(where={"budget_id": member.budget_id})
         return None
 
     async def delete_team(self, team_id: str) -> None | Failure:
@@ -376,29 +566,38 @@ class CustomerHierarchyStore:
             return organization
         if await self.teams.count(where={"parent_org_id": organization_id}):
             return Failure(ErrorCode.HAS_CHILDREN)
-        await self.replace_organization_templates(organization_id, (), organization.updated_by)
         await self.organizations.delete(where={"customer_org_id": organization_id})
+        for template in organization.default_budgets:
+            await self.budgets.delete(where={"budget_id": template.budget_id})
+        if organization.budget_id is not None:
+            await self.budgets.delete(where={"budget_id": organization.budget_id})
         return None
 
 
 class CustomerHierarchy:
-    def __init__(self, db: TransactionSource) -> None:
+    def __init__(self, db: TransactionSource, clock: Callable[[], datetime] = utc_now) -> None:
         self.db = db
+        self.clock = clock
 
     async def transaction(
-        self, operation: Callable[[CustomerHierarchyStore], Awaitable[T]], *, deleting: bool = False
+        self,
+        operation: Callable[[CustomerHierarchyStore], Awaitable[T]],
+        *,
+        operation_type: TransactionOperation = TransactionOperation.READ_WRITE,
     ) -> T | Failure:
         from prisma.errors import ForeignKeyViolationError, RecordNotFoundError, UniqueViolationError
 
         try:
             async with self.db.tx() as tx:
-                return await operation(CustomerHierarchyStore(tx))
+                return await operation(CustomerHierarchyStore(tx, self.clock()))
         except UniqueViolationError:
             return Failure(ErrorCode.ALREADY_EXISTS)
         except RecordNotFoundError:
             return Failure(ErrorCode.NOT_FOUND)
         except ForeignKeyViolationError:
-            return Failure(ErrorCode.HAS_CHILDREN if deleting else ErrorCode.PARENT_NOT_FOUND)
+            return Failure(
+                ErrorCode.HAS_CHILDREN if operation_type is TransactionOperation.DELETE else ErrorCode.PARENT_NOT_FOUND
+            )
 
     async def create_organization(self, payload: OrganizationCreate, actor: str) -> Organization | Failure:
         return await self.transaction(lambda store: store.create_organization(payload, actor))
@@ -412,7 +611,9 @@ class CustomerHierarchy:
         return await self.transaction(lambda store: store.update_organization(entity_id, payload, actor))
 
     async def delete_organization(self, entity_id: str) -> None | Failure:
-        return await self.transaction(lambda store: store.delete_organization(entity_id), deleting=True)
+        return await self.transaction(
+            lambda store: store.delete_organization(entity_id), operation_type=TransactionOperation.DELETE
+        )
 
     async def create_team(self, payload: TeamCreate, actor: str) -> Team | Failure:
         return await self.transaction(lambda store: store.create_team(payload, actor))
@@ -424,7 +625,9 @@ class CustomerHierarchy:
         return await self.transaction(lambda store: store.update_team(entity_id, payload, actor))
 
     async def delete_team(self, entity_id: str) -> None | Failure:
-        return await self.transaction(lambda store: store.delete_team(entity_id), deleting=True)
+        return await self.transaction(
+            lambda store: store.delete_team(entity_id), operation_type=TransactionOperation.DELETE
+        )
 
     async def create_member(self, payload: MemberCreate, actor: str) -> CustomerMember | Failure:
         return await self.transaction(lambda store: store.create_member(payload, actor))
@@ -436,7 +639,9 @@ class CustomerHierarchy:
         return await self.transaction(lambda store: store.update_member(entity_id, payload, actor))
 
     async def delete_member(self, entity_id: str) -> None | Failure:
-        return await self.transaction(lambda store: store.delete_member(entity_id), deleting=True)
+        return await self.transaction(
+            lambda store: store.delete_member(entity_id), operation_type=TransactionOperation.DELETE
+        )
 
     async def list_organizations(self, page: int = 1, page_size: int = 50) -> Page[Organization] | Failure:
         return await self.transaction(lambda store: store.list_organizations(page, page_size))
@@ -450,3 +655,17 @@ class CustomerHierarchy:
         self, parent_team_id: str | None = None, page: int = 1, page_size: int = 50
     ) -> Page[CustomerMember] | Failure:
         return await self.transaction(lambda store: store.list_members(parent_team_id, page, page_size))
+
+    async def add_template(self, organization_id: str, payload: BudgetTemplate, actor: str) -> Organization | Failure:
+        return await self.transaction(lambda store: store.add_template(organization_id, payload, actor))
+
+    async def update_template(
+        self, organization_id: str, budget_id: str, payload: TemplatePatch, actor: str
+    ) -> Organization | Failure:
+        return await self.transaction(lambda store: store.update_template(organization_id, budget_id, payload, actor))
+
+    async def delete_template(self, organization_id: str, budget_id: str, actor: str) -> None | Failure:
+        return await self.transaction(
+            lambda store: store.delete_template(organization_id, budget_id, actor),
+            operation_type=TransactionOperation.DELETE,
+        )

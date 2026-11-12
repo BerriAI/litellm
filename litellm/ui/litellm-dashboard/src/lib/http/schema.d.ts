@@ -9683,9 +9683,53 @@ export interface paths {
         head?: never;
         /**
          * Update Customer Organization
-         * @description Update a customer organization and its budgets. Proxy admins only.
+         * @description Update a customer organization alias or overall budget. Proxy admins only.
          */
         patch: operations["update_customer_organization_management_v1_customer_organizations__customer_org_id__patch"];
+        trace?: never;
+    };
+    "/management/v1/customer_organizations/{customer_org_id}/default_budgets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add Customer Budget Template
+         * @description Add a named budget template to a customer organization. Proxy admins only.
+         */
+        post: operations["add_customer_budget_template_management_v1_customer_organizations__customer_org_id__default_budgets_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/customer_organizations/{customer_org_id}/default_budgets/{budget_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Customer Budget Template
+         * @description Delete an unreferenced, non-default customer budget template. Proxy admins only.
+         */
+        delete: operations["delete_customer_budget_template_management_v1_customer_organizations__customer_org_id__default_budgets__budget_id__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Update Customer Budget Template
+         * @description Edit a budget template in place. Members inherit the updated values. Proxy admins only.
+         */
+        patch: operations["update_customer_budget_template_management_v1_customer_organizations__customer_org_id__default_budgets__budget_id__patch"];
         trace?: never;
     };
     "/management/v1/customer_teams": {
@@ -29315,6 +29359,8 @@ export interface components {
             max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
+            /** Soft Budget */
+            soft_budget?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
         };
@@ -29469,8 +29515,12 @@ export interface components {
             is_default: boolean;
             /** Max Budget */
             max_budget?: number | null;
+            /** Name */
+            name: string;
             /** Rpm Limit */
             rpm_limit?: number | null;
+            /** Soft Budget */
+            soft_budget?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
         };
@@ -32993,9 +33043,15 @@ export interface components {
         CustomerMember: {
             /** Alias */
             alias?: string | null;
-            budget: components["schemas"]["Budget"];
             /** Budget Id */
-            budget_id: string;
+            budget_id?: string | null;
+            budget_override?: components["schemas"]["Budget"] | null;
+            /** Budget Override Expires At */
+            budget_override_expires_at?: string | null;
+            /** Budget Reset At */
+            budget_reset_at?: string | null;
+            /** Budget Template Id */
+            budget_template_id?: string | null;
             /**
              * Created At
              * Format: date-time
@@ -33005,8 +33061,14 @@ export interface components {
             created_by: string;
             /** Customer Member Id */
             customer_member_id: string;
+            effective_budget: components["schemas"]["Budget"];
             /** Parent Team Id */
             parent_team_id: string;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
             /**
              * Updated At
              * Format: date-time
@@ -40252,7 +40314,9 @@ export interface components {
         MemberCreate: {
             /** Alias */
             alias?: string | null;
-            budget?: components["schemas"]["Budget"] | null;
+            budget_override?: components["schemas"]["Budget"] | null;
+            /** Budget Override Expires At */
+            budget_override_expires_at?: string | null;
             /** Budget Template Id */
             budget_template_id?: string | null;
             /** Customer Member Id */
@@ -40264,7 +40328,11 @@ export interface components {
         MemberPatch: {
             /** Alias */
             alias?: string | null;
-            budget?: components["schemas"]["Budget"] | null;
+            budget_override?: components["schemas"]["Budget"] | null;
+            /** Budget Override Expires At */
+            budget_override_expires_at?: string | null;
+            /** Budget Template Id */
+            budget_template_id?: string | null;
         };
         /** MemoryCreateRequest */
         MemoryCreateRequest: {
@@ -42132,6 +42200,11 @@ export interface components {
         Organization: {
             /** Alias */
             alias?: string | null;
+            budget?: components["schemas"]["Budget"] | null;
+            /** Budget Id */
+            budget_id?: string | null;
+            /** Budget Reset At */
+            budget_reset_at?: string | null;
             /**
              * Created At
              * Format: date-time
@@ -42148,6 +42221,11 @@ export interface components {
              * @default []
              */
             default_budgets: components["schemas"]["OrganizationBudget"][];
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
             /**
              * Updated At
              * Format: date-time
@@ -42180,8 +42258,12 @@ export interface components {
             is_default: boolean;
             /** Max Budget */
             max_budget?: number | null;
+            /** Name */
+            name: string;
             /** Rpm Limit */
             rpm_limit?: number | null;
+            /** Soft Budget */
+            soft_budget?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
         };
@@ -42189,10 +42271,14 @@ export interface components {
         OrganizationCreate: {
             /** Alias */
             alias?: string | null;
+            budget?: components["schemas"]["Budget"] | null;
             /** Customer Org Id */
             customer_org_id?: string | null;
-            /** Default Budgets */
-            default_budgets?: components["schemas"]["BudgetTemplate"][] | null;
+            /**
+             * Default Budgets
+             * @default []
+             */
+            default_budgets: components["schemas"]["BudgetTemplate"][];
         };
         /** OrganizationMemberAddRequest */
         OrganizationMemberAddRequest: {
@@ -42228,8 +42314,7 @@ export interface components {
         OrganizationPatch: {
             /** Alias */
             alias?: string | null;
-            /** Default Budgets */
-            default_budgets?: components["schemas"]["BudgetTemplate"][] | null;
+            budget?: components["schemas"]["Budget"] | null;
         };
         /** OrganizationRequest */
         OrganizationRequest: {
@@ -49045,6 +49130,8 @@ export interface components {
             budget?: components["schemas"]["Budget"] | null;
             /** Budget Id */
             budget_id?: string | null;
+            /** Budget Reset At */
+            budget_reset_at?: string | null;
             /**
              * Created At
              * Format: date-time
@@ -49056,6 +49143,11 @@ export interface components {
             customer_team_id: string;
             /** Parent Org Id */
             parent_org_id: string;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
             /**
              * Updated At
              * Format: date-time
@@ -49803,6 +49895,25 @@ export interface components {
             destination?: components["schemas"]["TelemetryDestination"] | null;
             /** Groups */
             groups: string[];
+        };
+        /** TemplatePatch */
+        TemplatePatch: {
+            /** Allowed Models */
+            allowed_models?: string[] | null;
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Is Default */
+            is_default?: boolean | null;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Name */
+            name?: string | null;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /** Soft Budget */
+            soft_budget?: number | null;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
         };
         /**
          * TestCustomCodeGuardrailRequest
@@ -68180,6 +68291,107 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["OrganizationPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Organization"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    add_customer_budget_template_management_v1_customer_organizations__customer_org_id__default_budgets_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                customer_org_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetTemplate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Organization"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_customer_budget_template_management_v1_customer_organizations__customer_org_id__default_budgets__budget_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                customer_org_id: string;
+                budget_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_customer_budget_template_management_v1_customer_organizations__customer_org_id__default_budgets__budget_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                customer_org_id: string;
+                budget_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TemplatePatch"];
             };
         };
         responses: {

@@ -18,6 +18,7 @@ from litellm.proxy.management_helpers.utils import (
     management_endpoint_wrapper,  # pyright: ignore[reportUnknownVariableType]  # legacy decorator is untyped
 )
 from litellm.types.proxy.management_endpoints.customer_hierarchy import (
+    BudgetTemplate,
     CustomerMember,
     MemberCreate,
     MemberPatch,
@@ -27,6 +28,7 @@ from litellm.types.proxy.management_endpoints.customer_hierarchy import (
     Team,
     TeamCreate,
     TeamPatch,
+    TemplatePatch,
 )
 from litellm.types.proxy.management_endpoints.management_v1 import ListMeta, ListResponse, ProblemDetail
 
@@ -55,6 +57,12 @@ def error_details(code: ErrorCode) -> tuple[int, str, str]:
             )
         case ErrorCode.HAS_CHILDREN:
             return 409, "Has children", "Delete the customer's children before deleting the parent."
+        case ErrorCode.INVALID_TEMPLATE_NAMES:
+            return 422, "Invalid template names", "Budget template names must be unique within the organization."
+        case ErrorCode.TEMPLATE_IN_USE:
+            return 409, "Template in use", "A default or referenced template cannot be deleted."
+        case ErrorCode.BUDGET_REQUIRED:
+            return 422, "Budget required", "A member requires a template or a budget override."
         case ErrorCode.FORBIDDEN:
             return 403, "Forbidden", "Only proxy admins can manage customer hierarchies."
         case ErrorCode.DATABASE_UNAVAILABLE:
@@ -163,7 +171,7 @@ async def get_customer_organization(
 @router.patch(
     "/customer_organizations/{customer_org_id}",
     response_model=Organization,
-    description="Update a customer organization and its budgets. Proxy admins only.",
+    description="Update a customer organization alias or overall budget. Proxy admins only.",
 )
 @management_endpoint_wrapper
 async def update_customer_organization(
@@ -357,3 +365,51 @@ async def list_customer_members(
     size: Final = min(page_size, 100)
     result: Final = resolve(await hierarchy.list_members(parent_team_id, page, size))
     return list_response(result, request, page, size)
+
+
+@router.post(
+    "/customer_organizations/{customer_org_id}/default_budgets",
+    status_code=201,
+    response_model=Organization,
+    description="Add a named budget template to a customer organization. Proxy admins only.",
+)
+@management_endpoint_wrapper
+async def add_customer_budget_template(
+    customer_org_id: str,
+    data: BudgetTemplate,
+    actor: Annotated[str, Depends(customer_actor)],
+    hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+) -> Organization:
+    return resolve(await hierarchy.add_template(customer_org_id, data, actor))
+
+
+@router.patch(
+    "/customer_organizations/{customer_org_id}/default_budgets/{budget_id}",
+    response_model=Organization,
+    description="Edit a budget template in place. Members inherit the updated values. Proxy admins only.",
+)
+@management_endpoint_wrapper
+async def update_customer_budget_template(
+    customer_org_id: str,
+    budget_id: str,
+    data: TemplatePatch,
+    actor: Annotated[str, Depends(customer_actor)],
+    hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+) -> Organization:
+    return resolve(await hierarchy.update_template(customer_org_id, budget_id, data, actor))
+
+
+@router.delete(
+    "/customer_organizations/{customer_org_id}/default_budgets/{budget_id}",
+    status_code=204,
+    description="Delete an unreferenced, non-default customer budget template. Proxy admins only.",
+)
+@management_endpoint_wrapper
+async def delete_customer_budget_template(
+    customer_org_id: str,
+    budget_id: str,
+    actor: Annotated[str, Depends(customer_actor)],
+    hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+) -> Response:
+    resolve(await hierarchy.delete_template(customer_org_id, budget_id, actor))
+    return Response(status_code=204)
