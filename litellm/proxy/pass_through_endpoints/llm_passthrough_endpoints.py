@@ -1258,6 +1258,14 @@ async def is_streaming_request_fn(request: Request) -> bool:
     return False
 
 
+_ANTHROPIC_FILES_PATH: Final = "/v1/files"
+
+
+def _is_anthropic_files_path(endpoint_path: str) -> bool:
+    normalized: Final = posixpath.normpath("/" + endpoint_path.lstrip("/"))
+    return normalized == _ANTHROPIC_FILES_PATH or normalized.startswith(_ANTHROPIC_FILES_PATH + "/")
+
+
 @router.api_route(
     "/anthropic/{endpoint:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
@@ -1278,6 +1286,15 @@ async def anthropic_proxy_route(
     # Ensure endpoint starts with '/' for proper URL construction
     if not encoded_endpoint.startswith("/"):
         encoded_endpoint = "/" + encoded_endpoint
+
+    if litellm.require_managed_files is True and _is_anthropic_files_path(encoded_endpoint):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Anthropic file requests must use /anthropic/v1/files when require_managed_files is enabled "
+                "in litellm_settings."
+            ),
+        )
 
     # Construct the full target URL using httpx, preserving any base path
     # prefix that the operator configured on base_target_url.
