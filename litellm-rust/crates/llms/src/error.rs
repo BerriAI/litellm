@@ -23,6 +23,11 @@ pub enum Error {
 }
 
 impl Error {
+    /// The provider's credentials, project or location could not authenticate the call.
+    pub fn is_auth_failure(&self) -> bool {
+        matches!(self, Self::Auth(_))
+    }
+
     pub fn is_request(&self) -> bool {
         match self {
             Self::InvalidType { .. } | Self::MissingField(_) | Self::InvalidRequest(_) => true,
@@ -191,6 +196,12 @@ pub enum ErrorDetail {
         "thinking.budget_tokens must be a number, got {actual}. To drop it, set `litellm.drop_params=True`, or `drop_params: true` under `litellm_settings` on the proxy"
     )]
     NonNumericThinkingBudget { actual: &'static str },
+    /// Python's Vertex `sanitize_vertex_anthropic_output_params` for an `output_format` that is
+    /// not a JSON object.
+    #[error(
+        "{model} on vertex_ai needs `output_format` to be a JSON object, got {actual}. To drop it, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
+    )]
+    NonObjectOutputFormat { model: String, actual: &'static str },
     /// Python's comparison of two operands it cannot order, which raises `TypeError` with this
     /// text before any request is sent.
     #[error("'{op}' not supported between instances of '{left}' and '{right}'")]

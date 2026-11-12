@@ -563,11 +563,13 @@ impl MessagesPythonHost {
     fn provider(&self, py: Python<'_>) -> String {
         self.view
             .request(py)
-            .and_then(|request| request.get_item("custom_llm_provider"))
-            .ok()
-            .flatten()
-            .and_then(|value| value.extract::<Option<String>>().ok().flatten())
-            .unwrap_or_else(|| "anthropic".into())
+            .and_then(|request| {
+                py.import(ROUTE_HOST_MODULE)?
+                    .getattr("failure_provider")?
+                    .call1((request,))?
+                    .extract::<String>()
+            })
+            .unwrap_or_else(|_| "anthropic".into())
     }
 
     fn map_transport_failure(&self, py: Python<'_>, error: PyErr) -> PyResult<PyErr> {

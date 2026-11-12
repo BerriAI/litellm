@@ -2,6 +2,7 @@ use std::error::Error as StdError;
 
 use litellm_error::Report;
 use litellm_inference::Error;
+use litellm_llms_types::providers::anthropic::VERSION_HEADER;
 use pyo3::{
     exceptions::{PyRuntimeError, PyTypeError, PyValueError},
     prelude::*,
@@ -42,6 +43,12 @@ const MESSAGES_PYTHON_RAISED: &str = "messages_python_raised";
 /// The text of a refusal Python's provider config raises from its request transform, which its
 /// HTTP handler maps as a provider error.
 const MESSAGES_PROVIDER_REJECTION: &str = "messages_provider_rejection";
+/// The provider's credentials, project or location could not authenticate the call, which a
+/// provider's Python config raises as its own credential-loading exception.
+const MESSAGES_AUTH_FAILURE: &str = "messages_auth_failure";
+/// The rejection names the model and provider, as Python's `UnsupportedParamsError` for a Vertex
+/// `anthropic-version` does.
+const MESSAGES_ATTRIBUTED_REJECTION: &str = "messages_attributed_rejection";
 
 fn provider_rejection(rejection: &(dyn StdError + 'static)) -> Option<String> {
     match rejection.downcast_ref::<litellm_llms::Error>() {
@@ -159,15 +166,26 @@ pub(crate) fn route_failure(
                 Some(
                     litellm_llms::ErrorDetail::UnsupportedParameter { .. }
                         | litellm_llms::ErrorDetail::NonNumericThinkingBudget { .. }
+                        | litellm_llms::ErrorDetail::NonObjectOutputFormat { .. }
                 )
             ) {
                 value.setattr(MESSAGES_UNSUPPORTED_PARAM, true)?;
             }
             if matches!(
                 rejection.downcast_ref::<litellm_llms::ErrorDetail>(),
-                Some(litellm_llms::ErrorDetail::NonNumericThinkingBudget { .. })
+                Some(
+                    litellm_llms::ErrorDetail::NonNumericThinkingBudget { .. }
+                        | litellm_llms::ErrorDetail::NonObjectOutputFormat { .. }
+                )
             ) {
                 value.setattr(MESSAGES_LATE_REJECTION, true)?;
+            }
+            if let Some(litellm_llms::ErrorDetail::UnsupportedParameter { param, .. }) =
+                rejection.downcast_ref::<litellm_llms::ErrorDetail>()
+                && param == VERSION_HEADER
+            {
+                value.setattr(MESSAGES_LATE_REJECTION, true)?;
+                value.setattr(MESSAGES_ATTRIBUTED_REJECTION, true)?;
             }
             if let Some(text) = provider_rejection(rejection) {
                 value.setattr(MESSAGES_PROVIDER_REJECTION, text)?;
@@ -190,6 +208,9 @@ pub(crate) fn route_failure(
             }
             if error.is_missing_credential() {
                 value.setattr(MESSAGES_MISSING_CREDENTIAL, true)?;
+            }
+            if error.is_auth_failure() {
+                value.setattr(MESSAGES_AUTH_FAILURE, true)?;
             }
             native
         }

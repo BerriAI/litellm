@@ -15,6 +15,7 @@ import responses
 
 import litellm
 from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
+from litellm.llms.anthropic.messages.native import handler as python_messages
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.messages.transformation import (
     VertexAIPartnerModelsAnthropicMessagesConfig,
@@ -122,7 +123,7 @@ async def _send_to_vertex(client: MagicMock, caller_headers: Mapping[str, str], 
             "https://oauth2.googleapis.com/token",
             json={"access_token": "vertex-token", "expires_in": 3600},
         )
-        await litellm.anthropic.messages.acreate(
+        await python_messages.anthropic_messages(
             model="vertex_ai/claude-sonnet-5",
             messages=[{"role": "user", "content": "hi"}],
             max_tokens=16,
@@ -1130,7 +1131,7 @@ async def test_vertex_messages_request_sends_compact_2026_09_04_beta_on_the_wire
         "litellm.llms.vertex_ai.vertex_llm_base.VertexBase._ensure_access_token_async",
         AsyncMock(return_value=("token", "test-project")),
     ):
-        await litellm.anthropic.messages.acreate(
+        await python_messages.anthropic_messages(
             model="vertex_ai/claude-sonnet-4-6",
             max_tokens=64,
             messages=[{"role": "user", "content": "Reply with the single word: pong"}],

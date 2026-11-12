@@ -1173,7 +1173,15 @@ mod tests {
         shaping: MessagesShaping,
         requested: &str,
         drop_params: bool,
+        token_uri: &str,
     ) -> MessagesCall {
+        let credentials = json!({
+            "type": "authorized_user",
+            "client_id": "vertex-client",
+            "client_secret": "vertex-secret",
+            "refresh_token": "vertex-refresh",
+            "token_uri": token_uri,
+        });
         MessagesCall {
             body: body(
                 json!({"model": "claude-sonnet-4-5", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16}),
@@ -1181,11 +1189,17 @@ mod tests {
             api_key: None,
             api_base: Some("https://vertex.test".into()),
             custom_llm_provider: Some("vertex_ai".into()),
-            litellm_params: Default::default(),
-            extra_headers: Some(Map::from_iter([
-                ("authorization".to_string(), json!("Bearer vertex-token")),
-                ("anthropic-version".to_string(), json!(requested)),
-            ])),
+            litellm_params: litellm_router_types::LitellmParams {
+                vertex: litellm_auth::VertexParams {
+                    vertex_credentials: Some(credentials.to_string()),
+                    ..litellm_auth::VertexParams::default()
+                },
+                ..litellm_router_types::LitellmParams::default()
+            },
+            extra_headers: Some(Map::from_iter([(
+                "anthropic-version".to_string(),
+                json!(requested),
+            )])),
             provider_specific_header: None,
             timeout: None,
             shaping: MessagesShaping {
@@ -1196,6 +1210,19 @@ mod tests {
                 ..shaping
             },
         }
+    }
+
+    async fn vertex_token_endpoint() -> MockServer {
+        let server = MockServer::start().await;
+        Mock::given(any())
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "access_token": "vertex-token",
+                "expires_in": 3600,
+                "token_type": "Bearer",
+            })))
+            .mount(&server)
+            .await;
+        server
     }
 
     fn vertex_project(name: &str) -> Option<String> {
@@ -1213,8 +1240,14 @@ mod tests {
         #[case] drop_params: bool,
         #[case] body_version: &str,
     ) {
+        let tokens = vertex_token_endpoint().await;
         let call = provider_call_with_secrets(
-            vertex_call_requesting(shaping, requested, drop_params),
+            vertex_call_requesting(
+                shaping,
+                requested,
+                drop_params,
+                &format!("{}/token", tokens.uri()),
+            ),
             &vertex_project,
         )
         .await
@@ -1235,9 +1268,15 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn vertex_refuses_an_unsupported_version_without_drop_params(shaping: MessagesShaping) {
+        let tokens = vertex_token_endpoint().await;
         assert!(matches!(
             provider_call_with_secrets(
-                vertex_call_requesting(shaping, "latest", false),
+                vertex_call_requesting(
+                    shaping,
+                    "latest",
+                    false,
+                    &format!("{}/token", tokens.uri())
+                ),
                 &vertex_project
             )
             .await,

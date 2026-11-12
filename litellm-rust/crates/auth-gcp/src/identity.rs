@@ -1,6 +1,12 @@
 use crate::{
-    config::{CredentialSource, is_base64_encoded_json, names_a_credentials_file},
-    constants::{CLOUD_PLATFORM_SCOPE, GOOGLE_OAUTH_TOKEN_ENDPOINT},
+    aws_wif::{explicit_aws_credentials, uses_explicit_aws},
+    config::{
+        CredentialSource, explicit_credentials_project, is_base64_encoded_json,
+        names_a_credentials_file, non_empty_env, well_known_credentials_file,
+    },
+    constants::{
+        CLOUD_PLATFORM_SCOPE, GOOGLE_APPLICATION_CREDENTIALS_ENV, GOOGLE_OAUTH_TOKEN_ENDPOINT,
+    },
 };
 use gcp_auth::{CustomServiceAccount, TokenProvider};
 use litellm_auth_types::{Error, ErrorDetail};
@@ -8,7 +14,12 @@ use litellm_secret_value::SecretValue;
 use moka::future::Cache;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::{future::Future, pin::Pin, sync::Arc};
+use std::{
+    future::Future,
+    path::{Path, PathBuf},
+    pin::Pin,
+    sync::Arc,
+};
 
 #[derive(Clone)]
 pub struct GcpAuth {
@@ -107,7 +118,9 @@ impl GcpTokenSource for SdkTokenSource {
     }
 }
 
-async fn load_application_credentials(path: &str) -> Result<Arc<dyn GcpTokenSource>, Error> {
+async fn load_application_credentials(
+    path: impl AsRef<Path>,
+) -> Result<Arc<dyn GcpTokenSource>, Error> {
     let contents = tokio::fs::read_to_string(path)
         .await
         .map_err(auth_acquisition_error)?;
@@ -117,10 +130,7 @@ async fn load_application_credentials(path: &str) -> Result<Arc<dyn GcpTokenSour
 fn load_credentials_json(contents: &str) -> Result<Arc<dyn GcpTokenSource>, Error> {
     let configured: Value = serde_json::from_str(contents).map_err(auth_acquisition_error)?;
     let kind = configured.get("type").and_then(Value::as_str);
-    let project_id = configured
-        .get("project_id")
-        .and_then(Value::as_str)
-        .map(str::to_string);
+    let project_id = explicit_credentials_project(&configured);
     let credentials = match kind {
         Some("authorized_user") => {
             google_cloud_auth::credentials::user_account::Builder::new(configured)
@@ -131,6 +141,12 @@ fn load_credentials_json(contents: &str) -> Result<Arc<dyn GcpTokenSource>, Erro
             google_cloud_auth::credentials::impersonated::Builder::new(configured)
                 .with_scopes([CLOUD_PLATFORM_SCOPE])
                 .build_access_token_credentials()
+        }
+        Some("external_account") if uses_explicit_aws(&configured) => {
+            return explicit_aws_credentials(
+                &configured,
+                Arc::new(|name| std::env::var(name).ok()),
+            );
         }
         Some("external_account") => {
             google_cloud_auth::credentials::external_account::Builder::new(configured)
@@ -175,11 +191,27 @@ impl GcpProviderLoader for NativeProviderLoader {
                     return load_application_credentials(&path).await;
                 }
                 CredentialSource::Adc => {
-                    gcp_auth::provider().await.map_err(auth_acquisition_error)?
+                    return load_default_credentials(&|name| std::env::var(name).ok()).await;
                 }
             };
             Ok(Arc::new(ServiceAccountTokenSource(provider)) as Arc<dyn GcpTokenSource>)
         })
+    }
+}
+
+/// `google.auth.default`'s order: `GOOGLE_APPLICATION_CREDENTIALS`, gcloud's credentials file
+/// of any type, then the metadata server.
+async fn load_default_credentials(
+    env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
+) -> Result<Arc<dyn GcpTokenSource>, Error> {
+    match non_empty_env(env_lookup, GOOGLE_APPLICATION_CREDENTIALS_ENV)
+        .map(PathBuf::from)
+        .or_else(|| well_known_credentials_file(env_lookup))
+    {
+        Some(path) => load_application_credentials(&path).await,
+        None => Ok(Arc::new(ServiceAccountTokenSource(
+            gcp_auth::provider().await.map_err(auth_acquisition_error)?,
+        ))),
     }
 }
 
@@ -255,13 +287,14 @@ mod tests {
     use super::*;
 
     #[rstest::rstest]
-    #[case::authorized_user("authorized_user", 2)]
-    #[case::external_account("external_account", 2)]
-    #[case::impersonated_service_account("impersonated_service_account", 4)]
+    #[case::authorized_user("authorized_user", 2, Some("quota-project"))]
+    #[case::external_account("external_account", 2, None)]
+    #[case::impersonated_service_account("impersonated_service_account", 4, None)]
     #[tokio::test]
     async fn explicit_application_credentials_refresh_expired_tokens(
         #[case] kind: &str,
         #[case] expected_requests: usize,
+        #[case] expected_project: Option<&str>,
         #[values(false, true)] inline: bool,
     ) {
         use axum::{Json, Router, routing::post};
@@ -326,12 +359,10 @@ mod tests {
         };
         let provider = NativeProviderLoader.load(source).await.unwrap();
 
-        assert!(matches!(
-            provider.project_id().await,
-            Err(Error::CredentialAcquisition(ErrorDetail::Unresolved {
-                subject: "GCP resource project"
-            }))
-        ));
+        assert_eq!(
+            provider.project_id().await.ok().as_deref(),
+            expected_project
+        );
         let original = provider.token().await.unwrap();
         tokio::time::pause();
         tokio::time::advance(std::time::Duration::from_secs(3601)).await;
@@ -432,6 +463,48 @@ mod tests {
             !litellm_error::Report::new(&error)
                 .to_string()
                 .contains("credential-value")
+        );
+    }
+
+    #[rstest::rstest]
+    #[tokio::test]
+    async fn gcloud_credentials_of_any_type_are_loaded_before_the_metadata_server() {
+        let config_dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            config_dir
+                .path()
+                .join("application_default_credentials.json"),
+            r#"{"type":"unsupported"}"#,
+        )
+        .unwrap();
+        let directory = config_dir.path().to_str().unwrap().to_string();
+        let Err(error) = load_default_credentials(&|name| {
+            (name == "CLOUDSDK_CONFIG").then(|| directory.clone())
+        })
+        .await
+        else {
+            panic!("an unsupported gcloud credential type should not load");
+        };
+        assert!(matches!(error, Error::InvalidConfiguration(_)));
+    }
+
+    #[rstest::rstest]
+    fn explicit_aws_federation_keys_bypass_the_aws_metadata_service() {
+        let configured = serde_json::json!({
+            "type": "external_account",
+            "audience": "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/providers/aws",
+            "subject_token_type": "urn:ietf:params:aws:token-type:aws4_request",
+            "credential_source": {"environment_id": "aws1"},
+            "aws_access_key_id": "key",
+            "aws_secret_access_key": "secret"
+        });
+        let Err(error) = load_credentials_json(&configured.to_string()) else {
+            panic!("explicit AWS keys without aws_region_name should not load");
+        };
+        assert!(
+            litellm_error::Report::new(&error)
+                .to_string()
+                .contains("aws_region_name")
         );
     }
 

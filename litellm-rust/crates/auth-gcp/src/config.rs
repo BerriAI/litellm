@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
 use base64::{
     Engine, alphabet,
@@ -11,7 +14,10 @@ use serde_json::{Map, Value};
 
 use litellm_auth_types::VertexParams;
 
-use crate::constants::GOOGLE_APPLICATION_CREDENTIALS_ENV;
+use crate::constants::{
+    CLOUDSDK_ACTIVE_CONFIG_NAME_ENV, CLOUDSDK_CONFIG_ENV, CLOUDSDK_CORE_PROJECT_ENV,
+    GCLOUD_PROJECT_ENV, GOOGLE_APPLICATION_CREDENTIALS_ENV, GOOGLE_CLOUD_PROJECT_ENV,
+};
 
 #[derive(Clone, Debug, Default)]
 pub struct VertexConfig {
@@ -75,31 +81,126 @@ pub fn get_vertex_ai_project(
         .or_else(|| VertexParams::PROJECT.resolve(&|_| None, env_lookup))
 }
 
-/// The project a request is billed to when nothing names it: the `project_id` inside the
-/// service account the call would authenticate with. Application default credentials carry
-/// no project that can be read without a token exchange, so they resolve to `None`.
+/// The project a request is billed to when nothing names it, read the way Python's
+/// `VertexBase.load_auth` reads it: from explicit credentials (`quota_project_id` for an
+/// authorized user, otherwise `project_id`), or as `google.auth.default` does for application
+/// default credentials (`GOOGLE_CLOUD_PROJECT`, the key file, then the gcloud configuration
+/// next to gcloud's credentials). The metadata server's project needs a network call, so
+/// credentials found there resolve to `None`.
 pub fn get_vertex_ai_project_from_credentials(
     config: &VertexConfig,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Option<String> {
-    let text = match credential_source(config, env_lookup) {
-        CredentialSource::Inline(configured) => configured.expose().to_string(),
+    let explicit = |text: &str| explicit_credentials_project(&serde_json::from_str(text).ok()?);
+    match credential_source(config, env_lookup) {
+        CredentialSource::Inline(configured) => explicit(configured.expose()),
         CredentialSource::Trusted(configured) => {
             let configured = configured.expose();
             if names_a_credentials_file(configured) {
-                std::fs::read_to_string(configured).ok()?
+                explicit(&std::fs::read_to_string(configured).ok()?)
             } else {
-                configured.to_string()
+                explicit(configured)
             }
         }
-        CredentialSource::ApplicationCredentials(path) => std::fs::read_to_string(path).ok()?,
-        CredentialSource::Adc => return None,
+        CredentialSource::ApplicationCredentials(path) => {
+            default_project(env_lookup, Some(Path::new(&path)))
+        }
+        CredentialSource::Adc => default_project(
+            env_lookup,
+            well_known_credentials_file(env_lookup).as_deref(),
+        ),
+    }
+}
+
+pub(crate) fn explicit_credentials_project(credentials: &Value) -> Option<String> {
+    let field = match credentials.get("type").and_then(Value::as_str) {
+        Some("authorized_user") => "quota_project_id",
+        _ => "project_id",
     };
-    serde_json::from_str::<Value>(&text)
-        .ok()?
-        .get("project_id")
+    credentials
+        .get(field)
         .and_then(Value::as_str)
         .map(str::to_string)
+}
+
+fn default_project(
+    env_lookup: &dyn Fn(&str) -> Option<String>,
+    path: Option<&Path>,
+) -> Option<String> {
+    non_empty_env(env_lookup, GOOGLE_CLOUD_PROJECT_ENV)
+        .or_else(|| non_empty_env(env_lookup, GCLOUD_PROJECT_ENV))
+        .or_else(|| {
+            serde_json::from_str::<Value>(&std::fs::read_to_string(path?).ok()?)
+                .ok()?
+                .get("project_id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .or_else(|| {
+            (path.is_some() && well_known_credentials_file(env_lookup).as_deref() == path)
+                .then(|| gcloud_project(env_lookup))
+                .flatten()
+        })
+}
+
+fn gcloud_config_dir(env_lookup: &dyn Fn(&str) -> Option<String>) -> Option<PathBuf> {
+    non_empty_env(env_lookup, CLOUDSDK_CONFIG_ENV)
+        .map(PathBuf::from)
+        .or_else(default_gcloud_config_dir)
+}
+
+#[cfg(windows)]
+fn default_gcloud_config_dir() -> Option<PathBuf> {
+    std::env::var_os("APPDATA").map(|app_data| PathBuf::from(app_data).join("gcloud"))
+}
+
+#[cfg(not(windows))]
+fn default_gcloud_config_dir() -> Option<PathBuf> {
+    std::env::home_dir().map(|home| home.join(".config").join("gcloud"))
+}
+
+/// gcloud's `application_default_credentials.json`, which `google.auth.default` reads after
+/// `GOOGLE_APPLICATION_CREDENTIALS` and before the metadata server.
+pub(crate) fn well_known_credentials_file(
+    env_lookup: &dyn Fn(&str) -> Option<String>,
+) -> Option<PathBuf> {
+    gcloud_config_dir(env_lookup)
+        .map(|dir| dir.join("application_default_credentials.json"))
+        .filter(|path| path.is_file())
+}
+
+/// The `core/project` property of gcloud's active configuration, which
+/// `google.auth._cloud_sdk.get_project_id` asks gcloud for.
+fn gcloud_project(env_lookup: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+    if let Some(project) = non_empty_env(env_lookup, CLOUDSDK_CORE_PROJECT_ENV) {
+        return Some(project);
+    }
+    let dir = gcloud_config_dir(env_lookup)?;
+    let active = non_empty_env(env_lookup, CLOUDSDK_ACTIVE_CONFIG_NAME_ENV)
+        .or_else(|| {
+            std::fs::read_to_string(dir.join("active_config"))
+                .ok()
+                .map(|name| name.trim().to_string())
+                .filter(|name| !name.is_empty())
+        })
+        .unwrap_or_else(|| "default".to_string());
+    let properties =
+        std::fs::read_to_string(dir.join("configurations").join(format!("config_{active}")))
+            .ok()?;
+    let mut in_core = false;
+    properties.lines().map(str::trim).find_map(|line| {
+        if let Some(section) = line
+            .strip_prefix('[')
+            .and_then(|line| line.strip_suffix(']'))
+        {
+            in_core = section.trim() == "core";
+            return None;
+        }
+        let (key, value) = line.split_once('=')?;
+        (in_core && key.trim() == "project")
+            .then(|| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    })
 }
 
 pub fn get_vertex_ai_location(

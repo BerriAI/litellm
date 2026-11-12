@@ -85,6 +85,23 @@ impl Error {
         }
     }
 
+    /// The provider's credentials, project or location could not authenticate the call.
+    pub fn is_auth_failure(&self) -> bool {
+        match self {
+            Self::Llm(error) => error.is_auth_failure(),
+            Self::Auth(_) => true,
+            Self::InvalidProvider(_)
+            | Self::UnresolvedProvider { .. }
+            | Self::Declined(_)
+            | Self::Headers(_)
+            | Self::Http(_)
+            | Self::Secret(_)
+            | Self::Host(_)
+            | Self::Transport(_)
+            | Self::PostCallHook(_) => false,
+        }
+    }
+
     pub fn is_missing_credential(&self) -> bool {
         match self {
             Self::Llm(error) => error.is_missing_credential(),

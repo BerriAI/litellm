@@ -173,8 +173,28 @@ def modify_max_tokens(
         cache.remember_unclamped(kwargs.get("litellm_logging_obj"), unclamped)
 
 
+def _serves_thread(request: Mapping[str, object]) -> bool:
+    if request.get("thread") is None:
+        return True
+    provider: Final = failure_provider(request)
+    api_base: Final = request.get("api_base")
+    return handler.serves_message_threads(
+        native_messages_config(
+            str(request["model"]).removeprefix(f"{provider}/"),
+            provider,
+            request.get("model_info"),
+            api_base if isinstance(api_base, str) else None,
+        )
+    )
+
+
 def _body_fields(request: Mapping[str, object]) -> Mapping[str, object]:
-    params: Final = known_params(_BODY_FIELDS.difference(handler.additional_drop_paths(request)), request)
+    unsent: Final = (
+        handler.additional_drop_paths(request)
+        if _serves_thread(request)
+        else (*handler.additional_drop_paths(request), "thread")
+    )
+    params: Final = known_params(_BODY_FIELDS.difference(unsent), request)
     if deployment_reasoning_effort_levels(request.get("model_info")) is None:
         return params
     return _with_deployment_effort(params, request)
@@ -564,6 +584,12 @@ def _rejection(error: Exception, request: Mapping[str, object], request_provider
         return _public_provider_error(
             _config_error(400, provider_rejection, (), request, request_provider), error, request, request_provider
         )
+    if getattr(error, "messages_attributed_rejection", False):
+        return litellm.UnsupportedParamsError(
+            message=str(error),
+            llm_provider=request_provider,
+            model=str(request["model"]).removeprefix(f"{request_provider}/"),
+        )
     if getattr(error, "messages_unsupported_param", False):
         return litellm.UnsupportedParamsError(message=str(error))
     return litellm.BadRequestError(
@@ -789,6 +815,7 @@ def map_failure(
         error.__context__ = chained  # rebind-ok: Python chains the transport timeout as the exception context
     if getattr(error, "messages_late_rejection", False):
         _log_resolved_call(request, request_provider)
+        _flag_messages_call(request.get("litellm_logging_obj"), asynchronous)
     if getattr(error, "messages_python_raised", False):
         # Python's request transform raises this builtin exception unmapped, e.g. the TypeError
         # of comparing a string max_tokens while capping the thinking budget.
@@ -796,6 +823,9 @@ def map_failure(
         return error
     if getattr(error, "messages_request_error", False):
         return _rejection(error, request, request_provider)
+    if getattr(error, "messages_auth_failure", False) and request_provider == "vertex_ai":
+        _flag_messages_call(request.get("litellm_logging_obj"), asynchronous)
+        return _vertex_auth_failure(error, request)
     if getattr(error, "messages_missing_credential", False):
         return litellm.AuthenticationError(
             message=_MISSING_KEY,
@@ -808,6 +838,37 @@ def map_failure(
             error, str(request["model"]), request_provider, request, optional_str(request.get("api_base"))
         )
     return _public_provider_error(provider_error, error, request, request_provider)
+
+
+def _vertex_auth_failure(error: Exception, request: Mapping[str, object]) -> Exception:
+    """What Python's Vertex config raises for the credentials, project or location the native call
+    could not use: its credential loading and URL checks are rerun without the token exchange, and a
+    failure only that exchange can raise is google-auth's `RefreshError`."""
+    from google.auth.exceptions import RefreshError
+
+    from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
+    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+
+    class _Unrefreshed(VertexBase):
+        def refresh_auth(self, credentials: object) -> None:
+            return None
+
+    params: Final = dict(request)
+    vertex: Final = _Unrefreshed()
+    try:
+        vertex.load_auth(
+            credentials=VertexBase.safe_get_vertex_ai_credentials(params),  # pyright: ignore[reportUnknownMemberType]  # its params dict is untyped
+            project_id=VertexBase.safe_get_vertex_ai_project(params),  # pyright: ignore[reportUnknownMemberType]  # its params dict is untyped
+        )
+        if not request.get("api_base"):
+            get_vertex_base_url(
+                vertex.get_vertex_region(
+                    VertexBase.safe_get_vertex_ai_location(params), str(request["model"]).removeprefix("vertex_ai/")
+                )
+            )
+    except Exception as python_error:  # noqa: BLE001  # Python's credential loading raises its own exception types unmapped
+        return python_error
+    return RefreshError(str(error))
 
 
 def _drop_params(kwargs: Mapping[str, object]) -> bool:
@@ -827,6 +888,10 @@ def _resolved_provider(request: Mapping[str, object]) -> str | None:
     return optional_str(request.get("custom_llm_provider")) or inferred_provider(
         str(request["model"]), optional_str(request.get("api_base"))
     )
+
+
+def failure_provider(request: Mapping[str, object]) -> str:
+    return _resolved_provider(request) or "anthropic"
 
 
 def _scope_provider_specific_header(request: Mapping[str, object]) -> None:
@@ -863,6 +928,13 @@ def _raise_as_python_does(request: Mapping[str, object], asynchronous: bool) -> 
     except Exception:
         _flag_messages_call(logger, asynchronous)
         raise
+    if not _serves_thread(request):
+        refusal: Final = handler.unserved_thread_refusal(
+            request.get("thread"), failure_provider(request), request.get("drop_params")
+        )
+        if refusal is not None:
+            _flag_messages_call(request.get("litellm_logging_obj"), asynchronous)
+            raise _public_provider_error(refusal, refusal, request, failure_provider(request))
     api_base: Final = request.get("api_base")
     if not isinstance(api_base, str) or _resolved_provider(request) != "anthropic":
         return

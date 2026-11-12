@@ -6,14 +6,16 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-google-sdk = ["dep:http"]
+google-sdk = []
 
 [dependencies]
 litellm-secret-value.workspace = true
 litellm-auth-types.workspace = true
+litellm-auth-aws.workspace = true
 
 base64.workspace = true
 moka.workspace = true
+percent-encoding.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -22,11 +24,11 @@ veil.workspace = true
 
 gcp_auth = "0.12.7"
 google-cloud-auth.workspace = true
-http = { workspace = true, optional = true }
+http.workspace = true
 
 [dev-dependencies]
 time = { workspace = true, features = ["formatting"] }
-axum = { workspace = true, features = ["json"] }
+axum = { workspace = true, features = ["json", "form"] }
 litellm-error.workspace = true
 rstest.workspace = true
 rustls.workspace = true

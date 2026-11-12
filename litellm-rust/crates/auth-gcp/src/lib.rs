@@ -1,4 +1,5 @@
 mod auth;
+mod aws_wif;
 mod config;
 pub mod constants;
 mod identity;

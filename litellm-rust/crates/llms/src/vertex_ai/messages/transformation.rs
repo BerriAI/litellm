@@ -5,7 +5,7 @@ use litellm_auth_gcp::{
     get_vertex_ai_project_from_credentials, secret_names,
 };
 use litellm_host::interceptors::RetriedRequest;
-use litellm_http::request::{has_header, header_value, without_headers};
+use litellm_http::request::{header_value, without_headers};
 use litellm_llms_types::{
     formats::messages::{MessagesOptionalParams, MessagesRequest, MessagesTool, OutputConfig},
     providers::anthropic::{AnthropicBeta, BetaProvider, BetaSet, VERSION_HEADER},
@@ -17,9 +17,11 @@ use serde_json::{Value, json};
 use crate::{
     Error,
     anthropic::{
+        beta_headers::BetaPolicy,
         common_utils::{merge_beta_headers, supports_effort_param},
         messages::{
             handler::shape_anthropic_messages_request,
+            thinking::python_type_name,
             transformation::{provider_feature_betas, transform_messages_request},
         },
     },
@@ -104,12 +106,16 @@ impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
                 .supports_mid_conversation_system,
         ));
         let accepts_effort = supports_effort_param(&context.thinking.capabilities);
+        let output_config = fold_output_format(
+            request.params.output_config,
+            request.params.output_format,
+            &request.model,
+        )?;
         Ok(MessagesRequest {
             params: MessagesOptionalParams {
-                output_config: request
-                    .params
-                    .output_config
+                output_config: output_config
                     .and_then(|config| sanitize_output_config(config, accepts_effort)),
+                output_format: None,
                 ..request.params
             },
             ..request
@@ -120,9 +126,10 @@ impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
         secret_names()
     }
 
-    /// A forwarded bearer is sent as is; otherwise a Google access token for the configured
-    /// credentials (`vertex_credentials`, `VERTEXAI_CREDENTIALS`, `GOOGLE_APPLICATION_CREDENTIALS`,
-    /// then application default credentials) is acquired when the request is sent.
+    /// A Google access token for the configured credentials (`vertex_credentials`,
+    /// `VERTEXAI_CREDENTIALS`, `GOOGLE_APPLICATION_CREDENTIALS`, then application default
+    /// credentials), acquired when the request is sent. Like Python, it replaces any forwarded
+    /// `Authorization` header.
     fn validate_environment(
         &self,
         headers: Headers,
@@ -132,12 +139,6 @@ impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
         litellm_params: &LitellmParams,
         _env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
-        if has_header(&headers, "authorization") {
-            return Ok(ValidatedEnvironment {
-                headers,
-                auth: AuthScheme::Forwarded,
-            });
-        }
         Ok(ValidatedEnvironment {
             headers,
             auth: AuthScheme::GcpAccessToken {
@@ -146,11 +147,12 @@ impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
         })
     }
 
+    /// Python filters every beta, the caller's too, through Vertex's column of the beta map.
     fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
-        merge_beta_headers(
+        BetaPolicy::Filter(BetaProvider::VertexAi).apply(merge_beta_headers(
             without_headers(headers, &[VERSION_HEADER]),
             vertex_feature_betas(request),
-        )
+        ))
     }
 
     fn request_body(
@@ -229,6 +231,35 @@ pub fn complete_vertex_anthropic_url(
     })
 }
 
+/// Python's `sanitize_vertex_anthropic_output_params` folds `output_format` into
+/// `output_config.format`, since Vertex rejects the top-level field: an object wins over an
+/// existing format, a malformed `output_config` is dropped, and any other value is refused.
+fn fold_output_format(
+    config: Option<Recognized<OutputConfig>>,
+    output_format: Option<Value>,
+    model: &str,
+) -> Result<Option<Recognized<OutputConfig>>, Error> {
+    match output_format {
+        None | Some(Value::Null) => Ok(config),
+        Some(Value::Object(format)) => {
+            let base = match config {
+                Some(Recognized::Known(config)) => config,
+                Some(Recognized::Unrecognized(_)) | None => OutputConfig::default(),
+            };
+            Ok(Some(Recognized::Known(OutputConfig {
+                format: Some(Value::Object(format)),
+                ..base
+            })))
+        }
+        Some(other) => Err(Error::InvalidRequest(
+            crate::ErrorDetail::NonObjectOutputFormat {
+                model: model.into(),
+                actual: python_type_name(&other),
+            },
+        )),
+    }
+}
+
 /// Python's `sanitize_vertex_anthropic_output_params`: `effort` only reaches models whose
 /// capabilities accept it, a malformed `output_config` is dropped, and an emptied one is omitted.
 fn sanitize_output_config(
@@ -259,7 +290,11 @@ fn has_web_search_tool(tools: Option<&[Recognized<MessagesTool>]>) -> bool {
 /// betas under Vertex's policy, plus the web search beta Vertex needs spelled out.
 fn vertex_feature_betas(request: &MessagesRequest) -> BetaSet {
     let params = &request.params;
-    provider_feature_betas(request, BetaProvider::VertexAi).union(
+    let betas: BetaSet = provider_feature_betas(request, BetaProvider::VertexAi)
+        .into_iter()
+        .filter(|beta| *beta != AnthropicBeta::StructuredOutputs20251113)
+        .collect();
+    betas.union(
         has_web_search_tool(params.tools.as_deref())
             .then_some(AnthropicBeta::WebSearch20250305)
             .into_iter()
@@ -518,10 +553,10 @@ mod tests {
     }
 
     #[rstest]
-    fn a_forwarded_bearer_is_sent_as_is() {
+    fn a_forwarded_bearer_still_gets_a_google_access_token() {
         assert!(matches!(
             validated(&[("Authorization", "Bearer caller")]).auth,
-            AuthScheme::Forwarded
+            AuthScheme::GcpAccessToken { .. }
         ));
     }
 
@@ -778,6 +813,60 @@ mod tests {
         assert_eq!(body.get("output_config").cloned(), expected);
     }
 
+    #[rstest]
+    #[case::folded_into_output_config(
+        json!({"output_format": {"type": "json_schema"}}),
+        Some(json!({"format": {"type": "json_schema"}}))
+    )]
+    #[case::wins_over_an_existing_format(
+        json!({
+            "output_format": {"type": "json_schema"},
+            "output_config": {"effort": "high", "format": {"type": "text"}}
+        }),
+        Some(json!({"effort": "high", "format": {"type": "json_schema"}}))
+    )]
+    fn output_format_moves_into_output_config(
+        #[case] fields: Value,
+        #[case] expected: Option<Value>,
+    ) {
+        let mut request = json!({
+            "model": "claude-opus-4-7",
+            "max_tokens": 16,
+            "messages": [{"role": "user", "content": "hi"}]
+        });
+        request
+            .as_object_mut()
+            .unwrap()
+            .extend(fields.as_object().unwrap().clone());
+        let body = transformed(request, &with_output_config());
+        assert_eq!(body.get("output_format"), None);
+        assert_eq!(body.get("output_config").cloned(), expected);
+    }
+
+    #[rstest]
+    #[case::string(json!("json"), "str")]
+    #[case::list(json!(["json"]), "list")]
+    fn an_output_format_that_is_not_an_object_is_refused(
+        #[case] output_format: Value,
+        #[case] actual: &str,
+    ) {
+        let request: MessagesRequest = serde_json::from_value(json!({
+            "model": "claude-opus-4-7",
+            "max_tokens": 16,
+            "output_format": output_format,
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .unwrap();
+        let error = VERTEX_ANTHROPIC_MESSAGES_CONFIG
+            .transform_anthropic_messages_request(request, &with_output_config())
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            Error::InvalidRequest(crate::ErrorDetail::NonObjectOutputFormat { actual: found, .. })
+                if found == actual
+        ));
+    }
+
     fn betas(fields: Value) -> Vec<String> {
         let request: MessagesRequest = serde_json::from_value(json!({
             "model": "claude-sonnet-4-5",
@@ -835,7 +924,35 @@ mod tests {
         &[]
     )]
     #[case::fast_mode_is_not_a_vertex_beta(json!({"speed": "fast"}), &[])]
+    #[case::structured_output_needs_no_vertex_beta(
+        json!({"output_config": {"format": {"type": "json_schema"}}}),
+        &[]
+    )]
     fn beta_headers_follow_the_vertex_policy(#[case] fields: Value, #[case] expected: &[&str]) {
         assert_eq!(betas(fields), expected);
+    }
+
+    #[rstest]
+    fn caller_betas_pass_through_the_vertex_column() {
+        let request: MessagesRequest = serde_json::from_value(json!({
+            "model": "claude-sonnet-4-5",
+            "max_tokens": 16,
+            "messages": [{"role": "user", "content": "hi"}],
+        }))
+        .unwrap();
+        let headers = VERTEX_ANTHROPIC_MESSAGES_CONFIG.request_headers(
+            vec![(
+                "anthropic-beta".into(),
+                "files-api-2025-04-14, example-beta-2099-01-01, context-1m-2025-08-07".into(),
+            )],
+            &request,
+        );
+        assert_eq!(
+            headers,
+            vec![(
+                "anthropic-beta".to_string(),
+                "context-1m-2025-08-07".to_string()
+            )]
+        );
     }
 }

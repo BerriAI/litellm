@@ -22,6 +22,7 @@ import pytest
 
 import litellm
 from litellm import Router, get_optional_params
+from litellm.llms.anthropic.messages.native import handler as python_messages
 from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
 
 
@@ -2510,7 +2511,7 @@ async def test_anthropic_message_via_anthropic_messages(
         "max_retries": 0,
     }
 
-    response: Final = await litellm.anthropic_messages(**call_params)
+    response: Final = await python_messages.anthropic_messages(**call_params)
     completion_response: Final = await litellm.acompletion(**call_params)
 
     assert response["stop_reason"] == "end_turn"
