@@ -1395,7 +1395,10 @@ export const dailyActivityAggregatedCall = (
 ): Promise<DailyActivityAggregatedResponse> =>
   apiClient.get<DailyActivityAggregatedResponse>(`/${entity}/daily/activity/aggregated`, {
     accessToken: req.accessToken,
-    query: dailyActivityQuery(entity, req, req.apiKeyLimit === undefined ? {} : { api_key_limit: req.apiKeyLimit }),
+    query: dailyActivityQuery(entity, req, {
+      api_key_limit: req.apiKeyLimit,
+      include_entity_breakdown: req.includeEntityBreakdown,
+    }),
   });
 
 export const subscriptionUsageCall = (

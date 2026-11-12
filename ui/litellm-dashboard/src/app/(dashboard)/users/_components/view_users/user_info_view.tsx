@@ -1,4 +1,5 @@
-import type { ParseKeys } from "i18next";
+import ResourceActivity from "@/components/UsagePage/ResourceActivity";
+import { MemberRoleSelect } from "./MemberRoleSelect";
 import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
@@ -19,7 +20,6 @@ import {
   teamMemberDeleteCall,
   Member,
 } from "@/components/networking";
-import { SimpleTooltip } from "@/components/ui/tooltip";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import {
   Combobox,
@@ -29,7 +29,6 @@ import {
   ComboboxItem,
   ComboboxList,
 } from "@/components/ui/combobox";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { hasProxyWideSpendView, rolesWithWriteAccess } from "@/utils/roles";
 import { teamDetailHref } from "@/utils/entityLinks";
 import { BadgeLink } from "@/components/shared/BadgeLink";
@@ -69,17 +68,11 @@ interface TeamDisplayInfo {
 }
 
 const ADD_TEAM_FIELD_ID = "add-team-team";
-const ADD_TEAM_ROLE_FIELD_ID = "add-team-role";
 
 interface TeamOption {
   team_id: string;
   team_alias: string;
 }
-
-const MEMBER_ROLE_OPTIONS: ReadonlyArray<{ value: string; hintKey: ParseKeys }> = [
-  { value: "user", hintKey: "users.userInfo.memberRoles.userHint" },
-  { value: "admin", hintKey: "users.userInfo.memberRoles.adminHint" },
-];
 
 export default function UserInfoView({
   userId,
@@ -94,7 +87,7 @@ export default function UserInfoView({
   const { t } = useTranslation();
   const { premiumUser, userId: signedInUserId } = useAuthorized();
   const canViewAutoRouterUsage = hasProxyWideSpendView(userRole);
-  const canViewSavings = canViewAutoRouterUsage || (Boolean(userId.trim()) && userId === signedInUserId);
+  const canViewUserUsage = canViewAutoRouterUsage || (Boolean(userId.trim()) && userId === signedInUserId);
   const activityDateRange = useActivityDateRange();
   const [userData, setUserData] = useState<UserInfoV2Response | null>(null);
   const [teamDetails, setTeamDetails] = useState<TeamDisplayInfo[]>([]);
@@ -107,7 +100,7 @@ export default function UserInfoView({
   const [invitationLinkData, setInvitationLinkData] = useState<InvitationLink | null>(null);
   const [baseUrl, setBaseUrl] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<string>(initialTab === 1 ? "details" : "overview");
-  const hiddenSavingsTab = activeTab === "savings" && !canViewSavings;
+  const hiddenUsageTab = (activeTab === "savings" || activeTab === "activity") && !canViewUserUsage;
   const hiddenRouterTab = activeTab === "auto-router-usage" && !canViewAutoRouterUsage;
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [isTeamsExpanded, setIsTeamsExpanded] = useState(false);
@@ -490,7 +483,7 @@ export default function UserInfoView({
       />
 
       <Tabs
-        value={hiddenSavingsTab || hiddenRouterTab ? "overview" : activeTab}
+        value={hiddenUsageTab || hiddenRouterTab ? "overview" : activeTab}
         onValueChange={(v: unknown) => setActiveTab(String(v))}
         className="gap-0"
       >
@@ -501,7 +494,12 @@ export default function UserInfoView({
           <TabsTrigger value="details" className="flex-none data-active:text-primary after:bg-primary">
             {t("users.userInfo.tabs.details")}
           </TabsTrigger>
-          {canViewSavings && (
+          {canViewUserUsage && (
+            <TabsTrigger value="activity" className="flex-none data-active:text-primary after:bg-primary">
+              {t("shared.resourceActivity.title")}
+            </TabsTrigger>
+          )}
+          {canViewUserUsage && (
             <TabsTrigger value="savings" className="flex-none data-active:text-primary after:bg-primary">
               {t("users.userInfo.tabs.savings")}
             </TabsTrigger>
@@ -512,6 +510,12 @@ export default function UserInfoView({
             </TabsTrigger>
           )}
         </TabsList>
+
+        {canViewUserUsage && (
+          <TabsContent value="activity">
+            <ResourceActivity scope="user" id={userId} activity={activityDateRange} />
+          </TabsContent>
+        )}
 
         {/* Overview Panel */}
         <TabsContent value="overview" keepMounted>
@@ -731,7 +735,7 @@ export default function UserInfoView({
             )}
           </Card>
         </TabsContent>
-        {canViewSavings && (
+        {canViewUserUsage && (
           <TabsContent value="savings">
             {activeTab === "savings" &&
               (userId.trim() ? (
@@ -829,24 +833,7 @@ export default function UserInfoView({
                 </Combobox>
               </Field>
 
-              <Field>
-                <FieldLabel htmlFor={ADD_TEAM_ROLE_FIELD_ID}>{t("users.userInfo.addTeamDialog.memberRole")}</FieldLabel>
-                <Select value={selectedRole} onValueChange={(value) => value !== null && setSelectedRole(value)}>
-                  <SelectTrigger id={ADD_TEAM_ROLE_FIELD_ID} className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {MEMBER_ROLE_OPTIONS.map((option) => (
-                      <SelectItem key={option.value} value={option.value} title={option.value}>
-                        <SimpleTooltip content={t(option.hintKey)}>
-                          <span className="font-medium">{option.value}</span>
-                          <span className="ml-2 text-muted-foreground text-sm">- {t(option.hintKey)}</span>
-                        </SimpleTooltip>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </Field>
+              <MemberRoleSelect value={selectedRole} onChange={setSelectedRole} />
             </FieldGroup>
 
             <div className="text-right mt-4">

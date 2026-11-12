@@ -10,6 +10,7 @@ import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event"
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { Profiler } from "react";
 import UserInfoView from "./user_info_view";
+import { EMPTY_DAILY_ACTIVITY_RESPONSE } from "@/components/UsagePage/dailyActivityApi";
 import type { DailyData, SpendMetrics } from "@/components/UsagePage/types";
 import type { AutoRouterBenchmarksResponse } from "@/app/(dashboard)/cost-optimization/_components/autoRouterBenchmarks";
 
@@ -120,6 +121,41 @@ describe("UserInfoView add-to-team form", () => {
     mockTeamMemberAddCall.mockResolvedValue({});
     mockFetchMCPServers.mockResolvedValue([MCP_SERVER]);
     mockListMCPTools.mockResolvedValue({ tools: [] });
+  });
+
+  it("loads only the selected user's Activity, after opening the tab", async () => {
+    mockUserDailyActivityAggregatedCall.mockResolvedValue(EMPTY_DAILY_ACTIVITY_RESPONSE);
+    render(<UserInfoView {...defaultProps} />);
+    const activityTab = await screen.findByRole("tab", { name: "Activity" });
+    expect(mockUserDailyActivityAggregatedCall).not.toHaveBeenCalled();
+
+    fireEvent.click(activityTab);
+
+    expect(await screen.findByText("No daily details available")).toBeInTheDocument();
+    expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledWith(
+      "user",
+      expect.objectContaining({ entityIds: [defaultProps.userId], apiKey: undefined }),
+    );
+    vi.stubGlobal("requestIdleCallback", (callback: () => void) => {
+      callback();
+      return 0;
+    });
+    fireEvent.click(screen.getByRole("button", { name: /\d.* - .*\d/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Last 7 Days/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledTimes(2));
+    const selected = vi.mocked(mockUserDailyActivityAggregatedCall).mock.calls.at(-1)![1];
+    fireEvent.click(screen.getByRole("tab", { name: "Overview" }));
+    fireEvent.click(activityTab);
+    await waitFor(() => expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledTimes(3));
+    expect(mockUserDailyActivityAggregatedCall).toHaveBeenLastCalledWith(
+      "user",
+      expect.objectContaining({
+        startTime: selected.startTime,
+        endTime: selected.endTime,
+      }),
+    );
+    vi.unstubAllGlobals();
   });
 
   const setup = () => userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });

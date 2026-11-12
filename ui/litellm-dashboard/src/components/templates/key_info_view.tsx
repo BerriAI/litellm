@@ -1,3 +1,4 @@
+import ResourceActivity from "@/components/UsagePage/ResourceActivity";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useModelAccessGroupNames } from "@/app/(dashboard)/hooks/models/useModels";
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
@@ -746,6 +747,9 @@ export default function KeyInfoView({
           <TabsTrigger value="overview" className="flex-none rounded-none px-4 py-2">
             {t("keyDetail.keyInfoView.tabs.overview")}
           </TabsTrigger>
+          <TabsTrigger value="activity" className="flex-none rounded-none px-4 py-2">
+            {t("shared.resourceActivity.title")}
+          </TabsTrigger>
           <TabsTrigger value="savings" className="flex-none rounded-none px-4 py-2">
             {t("keyDetail.keyInfoView.tabs.savings")}
           </TabsTrigger>
@@ -948,6 +952,10 @@ export default function KeyInfoView({
                 variant="card"
               />
             </div>
+          </TabsContent>
+
+          <TabsContent value="activity">
+            <ResourceActivity scope="key" id={currentKeyData.token} activity={activityDateRange} />
           </TabsContent>
 
           {/* Savings Panel. No keepMounted: this tab sweeps the daily rollup, and staying mounted

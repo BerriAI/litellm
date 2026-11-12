@@ -1,3 +1,4 @@
+import ResourceActivity from "@/components/UsagePage/ResourceActivity";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import type { components } from "@/lib/http/schema";
 import useCan from "@/app/(dashboard)/hooks/useCan";
@@ -1606,6 +1607,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           <LoggingSettingsView loggingConfigs={info.metadata?.logging || []} disabledCallbacks={[]} variant="card" />
         </div>
       ),
+    },
+    {
+      key: TEAM_INFO_TAB_KEYS.ACTIVITY,
+      label: t(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.ACTIVITY]),
+      children: <ResourceActivity scope="team" id={teamId} />,
     },
     {
       key: TEAM_INFO_TAB_KEYS.MY_USER,
