@@ -11936,3 +11936,24 @@ def test_cost_failure_for_an_unpriced_response_echoes_only_a_text_search_respons
         )
 
     assert (image_data in str(exc_info.value)) is echoes_response
+
+
+def test_replicate_time_based_pricing_bills_elapsed_seconds() -> None:
+    """Replicate's unmapped-model fallback prices wall-clock seconds, not milliseconds.
+
+    `created`/`ended` on the response are unix timestamps in seconds, so a 60 second
+    run has to bill 60 seconds. Reading `ended` off the dict with `getattr` always
+    missed it, and dividing the seconds-only difference by 1000 under-billed this path
+    by three orders of magnitude.
+    """
+    from litellm.constants import DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND
+    from litellm.cost_calculator import get_replicate_completion_pricing
+
+    one_minute = get_replicate_completion_pricing({"created": 1_700_000_000.0, "ended": 1_700_000_060.0})
+    assert one_minute == pytest.approx(DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND * 60)
+
+    # The explicit millisecond duration used by the caller still converts through /1000.
+    assert get_replicate_completion_pricing({}, 5000) == pytest.approx(DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND * 5)
+
+    # Clock skew must not create a negative cost.
+    assert get_replicate_completion_pricing({"created": 1_700_000_060.0, "ended": 1_700_000_000.0}) == 0.0
