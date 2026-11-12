@@ -60,7 +60,9 @@ mod _native {
         PyGuardedReply, PyWindowCount,
     };
     #[pymodule_export]
-    use crate::redis::store::request::{NativeRequestRedis, NativeSend};
+    use crate::redis::store::request::{
+        NativeRequestRedis, NativeSend, drain_post_call_redis_batches,
+    };
     #[pymodule_export]
     use crate::redis::store::router_session_pins::NativeRouterSessionPins;
     #[pymodule_export]
@@ -68,9 +70,7 @@ mod _native {
     #[pymodule_export]
     use crate::redis::store::sensitive_route_pins::NativeSensitiveRoutePins;
     #[pymodule_export]
-    use crate::redis::store::spend_counters::{
-        NativeSpendCounters, PyPostCallSettlement, PySpendRead,
-    };
+    use crate::redis::store::spend_counters::{NativeSpendCounters, PySpendRead};
     #[pymodule_export]
     use crate::redis::store::{
         NativePending, NativeRedisStoreError, router_cooldowns::NativeRouterCooldowns,
@@ -156,6 +156,7 @@ mod tests {
                 "NativeAdmission",
                 "NativeRequestRedis",
                 "NativeSend",
+                "drain_post_call_redis_batches",
                 "NativeAuthCache",
                 "NativeDeploymentHealth",
                 "NativeRouterSessionPins",
@@ -173,7 +174,6 @@ mod tests {
                 "NativeSensitiveRoutePins",
                 "NativeRedisStoreError",
                 "NativeSpendCounters",
-                "PostCallSettlement",
                 "SpendRead",
                 "LocalSizes",
                 "native_redis_breaker_states",

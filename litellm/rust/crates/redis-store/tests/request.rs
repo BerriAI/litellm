@@ -7,7 +7,7 @@ use std::{
 
 use litellm_redis_client::commands;
 use litellm_redis_client::{Amount, CallTag, Expiry, Operation, tagged};
-use litellm_redis_store::RequestRedis;
+use litellm_redis_store::{PostCallDrain, RequestRedis};
 use litellm_redis_testing::{RedisDeployment, Topology};
 use rstest::rstest;
 use support::{connect, connect_observed, connect_tagged};
@@ -202,10 +202,11 @@ async fn the_deadline_flush_runs_under_the_tag_given_when_its_first_op_is_declar
     let (client, tags) = connect_tagged(&deployment);
     let caller = Arc::new(Mutex::new("the request before it has a span"));
     let asked = caller.clone();
-    let request = RequestRedis::with_deadline_tag(
+    let request = RequestRedis::hosted(
         Handle::current(),
         Duration::from_millis(100),
         Arc::new(move || Some(Arc::new(*asked.lock().unwrap()) as CallTag)),
+        PostCallDrain::default(),
     );
     *caller.lock().unwrap() = "post_call_redis_batch";
 
@@ -244,4 +245,87 @@ async fn a_follow_up_runs_under_the_tag_it_was_spawned_in(
     request.flush_post().await;
 
     assert_eq!(tags.seen(), vec![Some("async_increment")]);
+}
+
+#[rstest]
+#[tokio::test]
+async fn the_drain_sends_every_post_batch_still_waiting_including_one_declared_after_a_flush(
+    #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
+) {
+    let deployment = RedisDeployment::start(topology).await.unwrap();
+    let (client, trips) = connect_observed(&deployment);
+    let drain = PostCallDrain::default();
+    let hosted = || {
+        RequestRedis::hosted(
+            Handle::current(),
+            LONG_DEADLINE,
+            Arc::new(|| None),
+            drain.clone(),
+        )
+    };
+    let declared_again = hosted();
+    let waiting = hosted();
+
+    drop(
+        declared_again
+            .post(&client)
+            .add(commands::incr_by_float("a", Amount::Int(1), TTL)),
+    );
+    declared_again.flush_post().await;
+    let late = declared_again
+        .post(&client)
+        .add(commands::incr_by_float("a", Amount::Int(2), TTL));
+    let waiting_total =
+        waiting
+            .post(&client)
+            .add(commands::incr_by_float("b", Amount::Int(3), TTL));
+    let sent_before_the_drain = trips.seen().len();
+    drain.drain().await;
+    let sent_by_the_drain = trips.seen()[sent_before_the_drain..].to_vec();
+
+    assert_eq!(
+        sent_by_the_drain,
+        [increments(topology, 1), increments(topology, 1)].concat()
+    );
+    assert_eq!(late.settled().await.unwrap(), 3.0);
+    assert_eq!(waiting_total.settled().await.unwrap(), 3.0);
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_drain_that_overlaps_a_flush_waits_for_its_writes_and_follow_ups(
+    #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
+) {
+    let deployment = RedisDeployment::start(topology).await.unwrap();
+    let client = connect(&deployment);
+    let drain = PostCallDrain::default();
+    let request = RequestRedis::hosted(
+        Handle::current(),
+        LONG_DEADLINE,
+        Arc::new(|| None),
+        drain.clone(),
+    );
+    let (finish, finished) = oneshot::channel::<()>();
+    drop(
+        request
+            .post(&client)
+            .add(commands::incr_by_float("a", Amount::Int(1), TTL)),
+    );
+    request.spawn(async move {
+        let _ = finished.await;
+    });
+    let flush = tokio::spawn({
+        let request = request.clone();
+        async move { request.flush_post().await }
+    });
+    tokio::task::yield_now().await;
+
+    let drained_during_the_flush = tokio::time::timeout(Duration::from_millis(200), drain.drain())
+        .await
+        .is_ok();
+    finish.send(()).unwrap();
+    flush.await.unwrap();
+    drain.drain().await;
+
+    assert!(!drained_during_the_flush);
 }

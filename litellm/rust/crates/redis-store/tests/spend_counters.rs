@@ -337,7 +337,7 @@ async fn a_post_call_increment_from_a_thread_without_a_runtime_lands_in_redis_an
     .expect("a Python thread has no Tokio context, and declaring there must not panic");
     request.flush_post().await;
 
-    assert!(declared.is_some());
+    assert!(declared);
     let mirrored =
         litellm_redis_testing::eventually(async || store.get_local(&counter).unwrap()).await;
     assert_eq!(mirrored, Number::Float(3.5));
@@ -361,12 +361,10 @@ async fn post_call_increments_wait_for_the_post_batch_then_land_in_memory(
     let request = RequestRedis::new(Handle::current(), LONG_DEADLINE);
     let counter = team("t");
 
-    let settlement = store
-        .increment_many_post_call(&request, &[(counter.clone(), Number::Float(3.5))])
-        .unwrap();
+    assert!(store.increment_many_post_call(&request, &[(counter.clone(), Number::Float(3.5))]));
     request.flush_pre().await;
 
-    assert!(!settlement.is_settled());
+    assert_eq!(store.get_local(&counter).unwrap(), None);
     assert!(trips.seen().is_empty());
     assert_eq!(
         raw.send(commands::get::<String>(&counter.key()))
@@ -376,9 +374,7 @@ async fn post_call_increments_wait_for_the_post_batch_then_land_in_memory(
     );
 
     request.flush_post().await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
 
-    assert!(settlement.is_settled());
     let increment = match topology {
         Topology::Standalone => Operation::Pipeline { ops: 1 },
         Topology::Cluster => Operation::Command("INCRBYFLOAT"),
@@ -591,21 +587,51 @@ async fn a_failed_post_call_increment_drops_the_counter_from_memory() {
     let request = RequestRedis::new(Handle::current(), LONG_DEADLINE);
     let counter = team("t");
     store.increment(&counter, Number::Float(1.0)).await.unwrap();
-    let settlement = store
-        .increment_many_post_call(&request, &[(counter.clone(), Number::Float(1.0))])
-        .unwrap();
+    assert!(store.increment_many_post_call(
+        &request,
+        &[
+            (counter.clone(), Number::Float(1.0)),
+            (committed(counter.clone()), Number::Float(1.0)),
+        ],
+    ));
     deployment.stop().await.unwrap();
 
     request.flush_post().await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
 
     assert_eq!(store.get_local(&counter).unwrap(), None);
-    assert!(settlement.is_settled());
+    assert!(request.tracked_writes_settled());
 }
 
 #[rstest]
 #[tokio::test]
-async fn a_post_call_settlement_settles_when_the_deadline_sends_the_batch(
+async fn the_request_tracks_only_its_committed_spend_charges_until_they_land(
+    #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
+) {
+    let deployment = RedisDeployment::start(topology).await.unwrap();
+    let store = store(Some(connect(&deployment)));
+    let live_only = RequestRedis::new(Handle::current(), LONG_DEADLINE);
+    let charged = RequestRedis::new(Handle::current(), LONG_DEADLINE);
+
+    assert!(store.increment_many_post_call(&live_only, &[(team("t"), Number::Float(1.0))]));
+    assert!(store.increment_many_post_call(
+        &charged,
+        &[
+            (team("t"), Number::Float(1.0)),
+            (committed(team("t")), Number::Float(1.0)),
+        ],
+    ));
+    let before_the_batch_went_out = charged.tracked_writes_settled();
+    live_only.flush_post().await;
+    charged.flush_post().await;
+
+    assert!(!before_the_batch_went_out);
+    assert!(!live_only.tracked_writes_settled());
+    assert!(charged.tracked_writes_settled());
+}
+
+#[rstest]
+#[tokio::test]
+async fn the_request_sees_its_committed_charge_settle_when_the_deadline_sends_the_batch(
     #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
 ) {
     let deployment = RedisDeployment::start(topology).await.unwrap();
@@ -614,12 +640,11 @@ async fn a_post_call_settlement_settles_when_the_deadline_sends_the_batch(
     let request = RequestRedis::new(Handle::current(), Duration::from_millis(50));
     let counter = committed(team("t"));
 
-    let settlement = store
-        .increment_many_post_call(&request, &[(counter.clone(), Number::Float(2.5))])
-        .unwrap();
+    assert!(store.increment_many_post_call(&request, &[(counter.clone(), Number::Float(2.5))]));
 
-    assert!(!settlement.is_settled());
-    litellm_redis_testing::eventually(async || settlement.is_settled().then_some(())).await;
+    assert!(!request.tracked_writes_settled());
+    litellm_redis_testing::eventually(async || request.tracked_writes_settled().then_some(()))
+        .await;
     assert_eq!(
         raw.send(commands::get::<String>(&counter.key()))
             .await
@@ -666,9 +691,7 @@ async fn every_write_gives_a_committed_twin_the_committed_ttl_and_other_counters
         .increment_many(&[(pipelined.clone(), Number::Float(1.0))])
         .await
         .unwrap();
-    let settlement = store
-        .increment_many_post_call(&request, &[(post_call.clone(), Number::Float(1.0))])
-        .unwrap();
+    assert!(store.increment_many_post_call(&request, &[(post_call.clone(), Number::Float(1.0))]));
     request.flush_post().await;
     store
         .seed(&seeded, Number::Float(1.0), LostSeed::Answer)
@@ -677,7 +700,6 @@ async fn every_write_gives_a_committed_twin_the_committed_ttl_and_other_counters
     store.set_max(&repaired, Number::Float(1.0)).await.unwrap();
     assert!(store.refresh_ttl(&refreshed).await.unwrap());
 
-    assert!(settlement.is_settled());
     let remaining =
         async |counter: &SpendCounter| match raw.send(commands::ttl(&counter.key())).await.unwrap()
         {
@@ -707,12 +729,10 @@ async fn a_post_call_charge_moves_a_committed_twins_expiry_out_to_the_committed_
         .await
         .unwrap();
 
-    let settlement = store
-        .increment_many_post_call(&request, &[(counter.clone(), Number::Float(1.0))])
-        .unwrap();
+    assert!(store.increment_many_post_call(&request, &[(counter.clone(), Number::Float(1.0))]));
     request.flush_post().await;
 
-    assert!(settlement.is_settled());
+    assert!(request.tracked_writes_settled());
     match raw.send(commands::ttl(&counter.key())).await.unwrap() {
         Ttl::Expires(remaining) => assert!(within(remaining, COMMITTED_TTL.as_secs())),
         other => panic!("{} has no TTL: {other:?}", counter.key()),
@@ -745,11 +765,7 @@ async fn without_redis_counters_live_in_memory() {
         store.read(&counter).await.unwrap(),
         Reading::Memory(Some(Number::Float(7.0)))
     );
-    assert!(
-        store
-            .increment_many_post_call(&request, &[(counter.clone(), Number::Int(1))])
-            .is_none()
-    );
+    assert!(!store.increment_many_post_call(&request, &[(counter.clone(), Number::Int(1))]));
     assert!(
         store
             .read_many(RedisSend::PreCall(&request), &[counter])

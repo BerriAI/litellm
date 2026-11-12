@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from litellm.caching.redis_batch import Batch, request_redis_batch_scope
+from litellm.caching.redis_batch import request_redis_batch_scope
 from litellm.caching.redis_cache import RedisCache
 from litellm.proxy.common_utils.user_api_key_cache import is_user_key_cache_key
 from litellm.redis.stores.auth_cache import AuthCacheSettings, AuthCacheStore
@@ -122,25 +122,28 @@ def test_user_key_objects_live_in_their_own_memory_partition() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_key_the_request_read_found_absent_is_answered_without_another_read_until_written() -> None:
-    fake: Final = FakeAuthCache(redis={"team_id:hit": {"team_id": "hit"}})
+async def test_reads_and_writes_hand_the_native_store_the_requests_batches_once_built() -> None:
+    fake: Final = FakeAuthCache()
     store: Final = AuthCacheStore(fake)
+    natives: Final = FakeNatives()
 
-    with request_redis_batch_scope(native_factory=FakeNatives(), native_send_factory=fake_send) as request:  # pyright: ignore[reportArgumentType]  # test double
-        found = await store.read_missing(["team_id:absent", "team_id:hit"], batch=Batch.PRE_CALL)
-        absent = await store.get("team_id:absent")
-        await store.set("team_id:absent", {"team_id": "now"}, None)
-        store.delete_local("team_id:absent")
-        refilled = await store.get("team_id:absent")
-        store.declare_delete("team_id:hit")
-        deleted = await store.get("team_id:hit")
-        await request.flush_pre_call()
+    await store.get("team_id:t1")
+    with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send) as request:  # pyright: ignore[reportArgumentType]  # test double
+        await store.get("team_id:t1")
+        built: Final = request.native()
+        await store.get("team_id:t1")
+        await store.set("team_id:t1", {"team_id": "t1"}, None)
+        store.set_sync("team_id:t1", {"team_id": "t1"}, None)
+        await store.set_many([("team_id:t1", {"team_id": "t1"})], None)
 
-    assert found == {"team_id:absent": None, "team_id:hit": {"team_id": "hit"}}
-    assert absent is None
-    assert refilled == {"team_id": "now"}
-    assert deleted is None
-    assert [command[:2] for command in fake.commands] == [("SET", "team_id:absent"), ("GET", "team_id:absent")]
+    assert fake.requests == [
+        ("get", None),
+        ("get", None),
+        ("get", built),
+        ("set", built),
+        ("set_sync", built),
+        ("set_many", built),
+    ]
 
 
 @pytest.mark.asyncio
@@ -148,7 +151,7 @@ async def test_outside_a_request_a_read_is_a_round_trip_of_its_own() -> None:
     fake: Final = FakeAuthCache(redis={"team_id:t1": {"team_id": "t1"}})
     store: Final = AuthCacheStore(fake)
 
-    assert await store.read_missing(["team_id:t1", "team_id:t2"], batch=Batch.PRE_CALL) == {
+    assert await store.read_missing(["team_id:t1", "team_id:t2"]) == {
         "team_id:t1": {"team_id": "t1"},
         "team_id:t2": None,
     }

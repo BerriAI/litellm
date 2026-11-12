@@ -6,7 +6,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 from litellm._internal_context import with_service_target
-from litellm.caching.redis_batch import Batch, PostCallSettlement
+from litellm.caching.redis_batch import Batch
 from litellm.redis.stores._route import post_call_request, ready, route
 from litellm.redis.stores.spend_counters.handle import SpendCountersHandle
 from litellm.redis.stores.spend_counters.types import (
@@ -113,14 +113,12 @@ class SpendCounterStore:
         return tuple(await self._handle.increment_many(increments))
 
     @with_service_target(SPEND_COUNTERS_TARGET)
-    def increment_many_post_call(self, increments: Sequence[SpendIncrement]) -> PostCallSettlement | None:
-        """Declares the increments on the request's post-call batch, None when there is no Redis or request.
-        Each total lands in memory once the batch goes out; a counter whose increment failed is dropped everywhere.
-        The settlement reports when every reply is back, whoever sent the batch."""
+    def increment_many_post_call(self, increments: Sequence[SpendIncrement]) -> bool:
+        """Declares the increments on the request's post-call batch, False when there is no Redis or request. Each
+        total lands in memory once the batch goes out; a counter whose increment failed is dropped everywhere. The
+        request tracks a committed charge until it lands, which ``tracked_writes_settled`` reports."""
         request: Final = post_call_request() if self.has_redis and increments else None
-        if request is None:
-            return None
-        return self._handle.increment_many_post_call(request, increments)
+        return request is not None and self._handle.increment_many_post_call(request, increments)
 
     @with_service_target(SPEND_COUNTERS_TARGET)
     async def set_max(self, counter: str, spend: float) -> float | None:

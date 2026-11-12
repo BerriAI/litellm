@@ -339,7 +339,7 @@ from litellm._logging import (
     verbose_router_logger,
 )
 from litellm.caching.caching import DualCache, RedisCache
-from litellm.caching.redis_batch import active_request_redis_batches, drain_post_call_redis_batches
+from litellm.caching.redis_batch import drain_post_call_redis_batches
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError, is_redis_timeout_failure
 from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.constants import (
@@ -1008,7 +1008,6 @@ from litellm.proxy.spend_tracking.committed_spend import (
     committed_spend_key,
     committed_spend_keys,
     has_committed_twin,
-    is_committed_spend_key,
     seed_committed_spend,
 )
 from litellm.proxy.spend_tracking.spend_capture_rate import (
@@ -4556,15 +4555,7 @@ def _defer_spend_counter_increments(pending: Sequence[PendingSpendIncrement]) ->
     """Post-call increments ride the request's native post-call pipeline with the other counters. Each counter's
     new value lands in memory when the pipeline settles; a failed one is dropped everywhere so no reader trusts a
     counter whose increment may not have applied, as ``increment_spend_counters_pipeline`` does."""
-    settlement: Final = spend_counter_store.increment_many_post_call(
-        tuple((item.counter_key, item.increment) for item in pending)
-    )
-    if settlement is None:
-        return False
-    batches: Final = active_request_redis_batches()
-    if batches is not None and any(is_committed_spend_key(item.counter_key) for item in pending):
-        batches.track_post_call_settlement(settlement)
-    return True
+    return spend_counter_store.increment_many_post_call(tuple((item.counter_key, item.increment) for item in pending))
 
 
 async def increment_spend_counters_pipeline(pending: Sequence[PendingSpendIncrement]) -> tuple[float | None, ...]:

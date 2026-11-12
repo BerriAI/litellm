@@ -10,7 +10,7 @@ from litellm.caching.redis_batch import Batch, active_request_redis_batches
 from litellm.redis.stores._route import route
 from litellm.redis.stores.auth_cache.handle import AuthCacheHandle
 from litellm.redis.stores.auth_cache.types import AUTH_CACHE_TARGET, AuthCacheSettings, WriteBack
-from litellm.rust_bridge._native import LocalSizes
+from litellm.rust_bridge._native import LocalSizes, NativeRequestRedis
 
 __all__ = [
     "AUTH_CACHE_TARGET",
@@ -18,6 +18,13 @@ __all__ = [
     "AuthCacheStore",
     "WriteBack",
 ]
+
+
+def _built_request() -> NativeRequestRedis | None:
+    """The current request's native batches when a store op already built them; none built means none of its reads
+    found a key absent yet."""
+    request: Final = active_request_redis_batches()
+    return None if request is None else request.existing_native()
 
 
 def _redis_ttl(ttl: float | None) -> float | None:
@@ -31,7 +38,7 @@ class AuthCacheStore:
     returns), so callers validate models themselves. Redis calls are reported under the caller's service target.
 
     Inside a request, a key a prefetch read found absent in Redis is answered as absent by ``get`` until something
-    writes it, so per-key getters after a prefetch cost no round trip."""
+    writes it, so per-key getters after a prefetch cost no round trip. The native request tracks those keys."""
 
     def __init__(self, handle: AuthCacheHandle) -> None:
         self._handle: Final = handle
@@ -42,10 +49,7 @@ class AuthCacheStore:
 
     @with_service_target(AUTH_CACHE_TARGET)
     async def get(self, key: str) -> object:
-        request: Final = active_request_redis_batches()
-        if request is not None and request.native_read_as_missing(key) and self._handle.get_local(key) is None:
-            return None
-        return await self._handle.get(key)
+        return await self._handle.get(key, _built_request())
 
     @with_service_target(AUTH_CACHE_TARGET)
     def get_sync(self, key: str) -> object:
@@ -53,13 +57,11 @@ class AuthCacheStore:
 
     @with_service_target(AUTH_CACHE_TARGET)
     async def set(self, key: str, value: object, ttl: float | None) -> None:
-        self._forget_miss(key)
-        await self._handle.set(key, value, _redis_ttl(ttl))
+        await self._handle.set(key, value, _redis_ttl(ttl), _built_request())
 
     @with_service_target(AUTH_CACHE_TARGET)
     def set_sync(self, key: str, value: object, ttl: float | None) -> None:
-        self._forget_miss(key)
-        self._handle.set_sync(key, value, _redis_ttl(ttl))
+        self._handle.set_sync(key, value, _redis_ttl(ttl), _built_request())
 
     @with_service_target(AUTH_CACHE_TARGET)
     def declare_set(self, key: str, value: object, ttl: float | None) -> Awaitable[None] | None:
@@ -68,34 +70,26 @@ class AuthCacheStore:
         target: Final = route(Batch.PRE_CALL)
         if target.request is None:
             return None
-        pending: Final = self._handle.declare_set(key, value, _redis_ttl(ttl), target.send)
-        target.request.forget_native_miss(key)
-        return target.result(pending)
+        return target.result(self._handle.declare_set(key, value, _redis_ttl(ttl), target.send))
 
     @with_service_target(AUTH_CACHE_TARGET)
     def declare_delete(self, key: str) -> Awaitable[None] | None:
         target: Final = route(Batch.PRE_CALL)
         if target.request is None:
             return None
-        pending: Final = self._handle.declare_delete(key, target.send)
-        target.request.note_native_misses((key,))
-        return target.result(pending)
+        return target.result(self._handle.declare_delete(key, target.send))
 
     @with_service_target(AUTH_CACHE_TARGET)
     async def set_many(self, entries: Sequence[tuple[str, object]], ttl: float | None) -> None:
-        for key, _value in entries:
-            self._forget_miss(key)
-        await self._handle.set_many(entries, _redis_ttl(ttl))
+        await self._handle.set_many(entries, _redis_ttl(ttl), _built_request())
 
     @with_service_target(AUTH_CACHE_TARGET)
-    async def write_back(self, entries: Sequence[WriteBack], *, batch: Batch) -> None:
-        """Memory now; the SETs ride the batch ``batch`` picks, so a pre-call write inside a request goes out with the
-        next flush, else in a round trip of its own. An entry without a TTL keeps ``default_in_memory_ttl`` in memory and the
-        connection's default TTL in Redis."""
-        for key, _value, _ttl in entries:
-            self._forget_miss(key)
+    async def write_back(self, entries: Sequence[WriteBack]) -> None:
+        """Memory now; inside a request the SETs ride its pre-call batch and go out with the next flush, else in a
+        round trip of their own. An entry without a TTL keeps ``default_in_memory_ttl`` in memory and the connection's
+        default TTL in Redis."""
         await self._handle.write_back(
-            tuple((key, value, _redis_ttl(ttl)) for key, value, ttl in entries), route(batch).send
+            tuple((key, value, _redis_ttl(ttl)) for key, value, ttl in entries), route(Batch.PRE_CALL).send
         )
 
     @with_service_target(AUTH_CACHE_TARGET)
@@ -108,17 +102,14 @@ class AuthCacheStore:
         self._handle.delete_sync(keys)
 
     @with_service_target(AUTH_CACHE_TARGET)
-    async def read_missing(self, keys: Sequence[str], *, batch: Batch) -> Mapping[str, object]:
-        """One read of ``keys`` (already missing in memory) on the batch ``batch`` picks, noting the keys Redis lacks
-        when it rode a request. Absent keys map to None; raises when Redis failed."""
-        target: Final = route(batch)
+    async def read_missing(self, keys: Sequence[str]) -> Mapping[str, object]:
+        """One read of ``keys`` (already missing in memory), on the request's pre-call batch inside a request, which
+        then notes the keys Redis lacks. Absent keys map to None; raises when Redis failed."""
+        target: Final = route(Batch.PRE_CALL)
         pending: Final = self._handle.get_many(keys, target.send)
         if pending is None:
             return MappingProxyType({})
-        found: Final = MappingProxyType(dict(zip(keys, await target.result(pending), strict=True)))
-        if target.request is not None:
-            target.request.note_native_misses(tuple(key for key, value in found.items() if value is None))
-        return found
+        return MappingProxyType(dict(zip(keys, await target.result(pending), strict=True)))
 
     @with_service_target(AUTH_CACHE_TARGET, preserve_existing=True)
     async def increment_if_present(self, key: str, amount: float) -> float | None:
@@ -138,9 +129,3 @@ class AuthCacheStore:
 
     def len_local(self) -> LocalSizes:
         return self._handle.len_local()
-
-    @staticmethod
-    def _forget_miss(key: str) -> None:
-        request: Final = active_request_redis_batches()
-        if request is not None:
-            request.forget_native_miss(key)

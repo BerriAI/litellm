@@ -45,7 +45,7 @@ impl NativeAuthCache {
     }
 
     /// `request` answers a key its pre-call reads already found absent without another `GET`.
-    #[pyo3(signature = (key, request = None))]
+    #[pyo3(signature = (key, request))]
     fn get<'py>(
         &self,
         py: Python<'py>,
@@ -79,33 +79,38 @@ impl NativeAuthCache {
         Ok(())
     }
 
-    #[pyo3(signature = (key, value, ttl_seconds = None))]
+    /// `request` reads the key again from now on, though one of its reads found it absent.
+    #[pyo3(signature = (key, value, ttl_seconds, request))]
     fn set<'py>(
         &self,
         py: Python<'py>,
         key: String,
         value: PyValue,
         ttl_seconds: Option<f64>,
+        request: Option<&NativeRequestRedis>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = self.0.clone();
         let ttl = ttl(ttl_seconds)?;
+        let request = request.map(|request| request.0.clone());
         redis_async(py, "async_set_cache", kind_error, async move {
-            store.set(&key, value.0, ttl).await
+            store.set(request.as_ref(), &key, value.0, ttl).await
         })
     }
 
-    #[pyo3(signature = (key, value, ttl_seconds = None))]
+    #[pyo3(signature = (key, value, ttl_seconds, request))]
     fn set_sync(
         &self,
         py: Python<'_>,
         key: String,
         value: PyValue,
         ttl_seconds: Option<f64>,
+        request: Option<&NativeRequestRedis>,
     ) -> PyResult<()> {
         let store = self.0.clone();
         let ttl = ttl(ttl_seconds)?;
+        let request = request.map(|request| request.0.clone());
         redis_sync(py, "set_cache", kind_error, async move {
-            store.set_str(&key, value.0, ttl).await
+            store.set_str(request.as_ref(), &key, value.0, ttl).await
         })
     }
 
@@ -143,12 +148,13 @@ impl NativeAuthCache {
         ))
     }
 
-    #[pyo3(signature = (entries, ttl_seconds = None))]
+    #[pyo3(signature = (entries, ttl_seconds, request))]
     fn set_many<'py>(
         &self,
         py: Python<'py>,
         entries: Vec<(String, PyValue)>,
         ttl_seconds: Option<f64>,
+        request: Option<&NativeRequestRedis>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = self.0.clone();
         let entries = entries
@@ -156,8 +162,9 @@ impl NativeAuthCache {
             .map(|(key, value)| (key, value.0))
             .collect();
         let ttl = ttl(ttl_seconds)?;
+        let request = request.map(|request| request.0.clone());
         redis_async(py, "async_set_cache_pipeline", kind_error, async move {
-            store.set_many(entries, ttl).await
+            store.set_many(request.as_ref(), entries, ttl).await
         })
     }
 

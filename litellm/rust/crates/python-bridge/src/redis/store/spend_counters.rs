@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use litellm_redis_store::{
     Number,
-    spend_counters::{LostSeed, PostCallSettlement, Reading, SpendCounter, SpendCounters},
+    spend_counters::{LostSeed, Reading, SpendCounter, SpendCounters},
 };
 use pyo3::prelude::*;
 
@@ -26,18 +26,6 @@ impl PySpendRead {
     #[new]
     fn new(value: Option<PyNumber>, from_redis: bool) -> Self {
         Self { value, from_redis }
-    }
-}
-
-/// Whether every increment one `increment_many_post_call` declared has its reply.
-#[pyclass(frozen, name = "PostCallSettlement")]
-pub(crate) struct PyPostCallSettlement(PostCallSettlement);
-
-#[pymethods]
-impl PyPostCallSettlement {
-    #[getter]
-    fn settled(&self) -> bool {
-        self.0.is_settled()
     }
 }
 
@@ -143,15 +131,15 @@ impl NativeSpendCounters {
         })
     }
 
-    /// Declares the increments on the request's post-call batch; `None` when there is no Redis.
+    /// Declares the increments on the request's post-call batch; `false` when there is no Redis.
+    /// The request tracks a committed counter's increment until it lands.
     fn increment_many_post_call(
         &self,
         request: &NativeRequestRedis,
         increments: Vec<(PyData<SpendCounter>, PyNumber)>,
-    ) -> Option<PyPostCallSettlement> {
+    ) -> bool {
         self.0
             .increment_many_post_call(&request.0, &self::increments(increments))
-            .map(PyPostCallSettlement)
     }
 
     fn set_max<'py>(

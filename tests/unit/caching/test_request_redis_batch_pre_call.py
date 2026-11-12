@@ -537,18 +537,6 @@ async def test_auth_write_back_outside_a_scope_writes_through_as_before():
 
 
 @pytest.mark.asyncio
-async def test_a_key_the_request_read_as_absent_is_not_read_again_by_a_per_key_get():
-    cache, fake = shared_cache()
-    with request_redis_batch_scope(native_factory=FakeNatives(), native_send_factory=fake_send) as request:  # pyright: ignore[reportArgumentType]  # test double
-        await prefetch_identity_keys(["absent-key"], cache)
-        assert await cache.async_get_cache("absent-key") is None
-        await cache.async_set_cache("absent-key", {"v": 1}, ttl=5)
-        assert await cache.async_get_cache("absent-key") == {"v": 1}
-        await request.flush_pre_call()
-    assert fake.commands == []
-
-
-@pytest.mark.asyncio
 async def test_management_object_writes_inside_a_request_ride_its_pipeline_and_write_through_outside():
     cache, fake = shared_cache()
     natives: Final = FakeNatives()
@@ -602,15 +590,16 @@ async def test_a_changed_default_in_memory_ttl_reaches_the_native_store():
 
 
 @pytest.mark.asyncio
-async def test_identity_prefetch_is_one_read_after_which_hits_and_misses_alike_cost_no_read():
+async def test_identity_prefetch_is_one_read_after_which_a_hit_costs_no_read_and_a_miss_is_asked_of_the_request():
     cache, fake = shared_cache(FakeAuthCache(redis={"key-hit": {"k": "key-hit"}}))
     natives: Final = FakeNatives()
     with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send):  # pyright: ignore[reportArgumentType]  # test double
         await prefetch_identity_keys(["key-hit", "end_user_id:eu-miss", "key-hit"], cache)
         assert await cache.async_get_cache("key-hit") == {"k": "key-hit"}
-        assert await cache.async_get_cache("end_user_id:eu-miss") is None
+        assert fake.commands == []
+        await cache.async_get_cache("end_user_id:eu-miss")
     assert natives.built[0].events == ["declare auth_cache end_user_id:eu-miss,key-hit", "flush_pre"]
-    assert fake.commands == []
+    assert fake.requests[-1] == ("get", natives.built[0])
     assert cache.get_local("end_user_id:eu-miss") is None
 
 
