@@ -39,6 +39,9 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (  # noqa: F401  # l
     RateLimitStatus,
     RateLimitUnverifiableError,
     RequestRateLimiterStash,
+    ReservationOperation,
+    ReservationWindowIdentity,
+    WindowGuardedIncrement,
     _PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _socket_turn_tpm_windows,  # pyright: ignore[reportPrivateUsage]  # same per-turn TPM window the regular limiter checks
     borrowing_team_model_limits,
@@ -132,19 +135,48 @@ def _team_model_token_increment(
     )
 
 
+def _window_guarded(
+    operations: tuple[CounterIncrement, ...], window: ReservationWindowIdentity | None
+) -> tuple[ReservationOperation, ...]:
+    """Apply a reservation's settlement only while the window it was held in is still open, never to a newer window."""
+    if window is None:
+        return operations
+    return tuple(
+        WindowGuardedIncrement(increment=op, expected_window_start=window[1], reservation_backend=window[2])
+        if op.counter == window[0]
+        else op
+        for op in operations
+    )
+
+
 def _team_model_settlement(
-    stash: RequestRateLimiterStash | None, model_group: str, total_tokens: int, reserved_tokens: int, ttl: int
-) -> tuple[CounterIncrement, ...]:
+    stash: RequestRateLimiterStash | None, model_group: str | None, total_tokens: int, ttl: int
+) -> tuple[ReservationOperation, ...]:
     """Settle the admitting team counter to actual usage, or charge the fallback group that served the call instead."""
     if stash is None:
         return ()
-    fallback_descriptor: Final = stash.borrowing_team_model_fallback_limits.get(model_group)
+    reserved_tokens: Final = stash.borrowing_team_model_reserved_tokens
+    window: Final = stash.borrowing_team_model_reserved_window
+    fallback_descriptor: Final = (
+        stash.borrowing_team_model_fallback_limits.get(model_group) if model_group is not None else None
+    )
     if fallback_descriptor is None:
-        return _team_model_token_increment(stash.borrowing_team_model_limit, total_tokens - reserved_tokens, ttl)
+        return _window_guarded(
+            _team_model_token_increment(stash.borrowing_team_model_limit, total_tokens - reserved_tokens, ttl), window
+        )
     return (
-        *_team_model_token_increment(stash.borrowing_team_model_limit, -reserved_tokens, ttl),
+        *_window_guarded(_team_model_token_increment(stash.borrowing_team_model_limit, -reserved_tokens, ttl), window),
         *_team_model_token_increment(fallback_descriptor, total_tokens, ttl),
     )
+
+
+def _reserved_window(
+    response: RateLimitResponse, descriptor: RateLimitDescriptor | None
+) -> ReservationWindowIdentity | None:
+    if descriptor is None:
+        return None
+    counter: Final = RateLimitScope(descriptor["key"], descriptor["value"]).counter("tokens")
+    return next((w for w in response.get("reservation_windows", frozenset()) if w[0] == counter), None)
 
 
 def _get_priority_settings() -> "PriorityReservationSettings":
@@ -760,7 +792,11 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         # priority allocation has accurate usage when it later becomes
         # enforced. The increment-then-check semantics of should_rate_limit
         # are fine because we ignore the OVER_LIMIT response.
-        get_or_create_request_stash().borrowing_team_model_reserved_tokens = team_reservation
+        stash: Final = get_or_create_request_stash()
+        stash.borrowing_team_model_reserved_tokens = team_reservation
+        stash.borrowing_team_model_reserved_window = (
+            _reserved_window(atomic_response, team_limit_descriptor) if team_reservation else None
+        )
         if team_limit_descriptor is not None and not should_enforce_priority:
             await self.v3_limiter.atomic_check_and_increment_by_n(
                 descriptors=[team_limit_descriptor],
@@ -802,9 +838,12 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         return max(estimate, 1)
 
     async def async_fallback_target_allowed(
-        self, user_api_key_dict: UserAPIKeyAuth, model: str, request_data: Mapping[str, object]
+        self, user_api_key_dict: UserAPIKeyAuth, model: str, request_data: Mapping[str, object], *, commit: bool = True
     ) -> bool:
-        """Count a router fallback attempt against the team's share on the target, and refuse it once the target saturates."""
+        """Hold a router fallback target to the team's share on it once it saturates.
+
+        With ``commit`` the attempt is counted against that share and the target's saturation, otherwise only checked.
+        """
         team_limit_descriptor: Final = self._create_borrowing_team_model_limit_descriptor(
             model=model, user_api_key_dict=user_api_key_dict
         )
@@ -812,12 +851,21 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         if team_limit_descriptor is None or model_group_info is None:
             return True
         saturation: Final = await self._check_model_saturation(model, model_group_info)
+        enforced: Final = saturation >= _get_priority_settings().saturation_threshold
+        if not commit:
+            checked: Final = await self.v3_limiter.should_rate_limit(
+                [team_limit_descriptor], parent_otel_span=user_api_key_dict.parent_otel_span, read_only=True
+            )
+            return not enforced or checked["overall_code"] != "OVER_LIMIT"
+        model_wide_descriptor: Final = self._create_model_tracking_descriptor(
+            model=model, model_group_info=model_group_info, high_limit_multiplier=1
+        )
         response: Final = await self.v3_limiter.atomic_check_and_increment_by_n(
-            descriptors=[team_limit_descriptor],
-            increments=[{"requests": 1, "tokens": 0}],
+            descriptors=[model_wide_descriptor, team_limit_descriptor],
+            increments=[{"requests": 1, "tokens": 0}, {"requests": 1, "tokens": 0}],
             parent_otel_span=user_api_key_dict.parent_otel_span,
         )
-        if saturation >= _get_priority_settings().saturation_threshold and response["overall_code"] == "OVER_LIMIT":
+        if enforced and response["overall_code"] == "OVER_LIMIT":
             return False
         stash: Final = get_or_create_request_stash()
         stash.borrowing_team_model_fallback_limits = MappingProxyType(
@@ -979,25 +1027,28 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                 or _SettlementMetadata()
             )
 
-            # Get model and priority
             model_group: Final = get_model_group_from_litellm_kwargs(dict(kwargs))
+            total_tokens: Final = _settled_tokens(
+                _usage_of(callback_kwargs, response_obj), self.v3_limiter.get_rate_limit_type()
+            )
+            stash: Final = request_stash_for_callback(callback_kwargs)
+            team_model_tokens: Final = _team_model_settlement(
+                stash, model_group, total_tokens, self.v3_limiter.window_size
+            )
+            if stash is not None:
+                stash.borrowing_team_model_reserved_tokens = 0
+                stash.borrowing_team_model_reserved_window = None
             if not model_group:
+                if team_model_tokens:
+                    await self.v3_limiter.async_increment_reservation_aware_tokens(
+                        pipeline_operations=team_model_tokens, parent_otel_span=litellm_parent_otel_span
+                    )
                 return
 
             # Get priority from user_api_key_auth_metadata in standard_logging_metadata
             # This is where user_api_key_dict.metadata is stored during pre-call
             key_priority: Final = settlement_metadata.priority
 
-            total_tokens: Final = _settled_tokens(
-                _usage_of(callback_kwargs, response_obj), self.v3_limiter.get_rate_limit_type()
-            )
-            stash: Final = request_stash_for_callback(callback_kwargs)
-            reserved_tokens: Final = stash.borrowing_team_model_reserved_tokens if stash is not None else 0
-            team_model_tokens: Final = _team_model_settlement(
-                stash, model_group, total_tokens, reserved_tokens, self.v3_limiter.window_size
-            )
-            if stash is not None:
-                stash.borrowing_team_model_reserved_tokens = 0
             if total_tokens == 0 and not team_model_tokens:
                 return
 
@@ -1033,11 +1084,11 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                     ),
                 )
             )
-            pipeline_operations: Final = (*usage_operations, *team_model_tokens)
+            pipeline_operations: Final[tuple[ReservationOperation, ...]] = (*usage_operations, *team_model_tokens)
 
             # Execute token increments with TTL preservation
             if pipeline_operations:
-                await self.v3_limiter.async_increment_tokens_with_ttl_preservation(
+                await self.v3_limiter.async_increment_reservation_aware_tokens(
                     pipeline_operations=pipeline_operations,
                     parent_otel_span=litellm_parent_otel_span,
                 )
@@ -1063,12 +1114,18 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         stash: Final = request_stash_for_callback(callback_kwargs_mapping(kwargs))
         if stash is None or stash.borrowing_team_model_reserved_tokens == 0:
             return
-        refund: Final = _team_model_token_increment(
-            stash.borrowing_team_model_limit, -stash.borrowing_team_model_reserved_tokens, self.v3_limiter.window_size
+        refund: Final = _window_guarded(
+            _team_model_token_increment(
+                stash.borrowing_team_model_limit,
+                -stash.borrowing_team_model_reserved_tokens,
+                self.v3_limiter.window_size,
+            ),
+            stash.borrowing_team_model_reserved_window,
         )
         stash.borrowing_team_model_reserved_tokens = 0
+        stash.borrowing_team_model_reserved_window = None
         if refund:
-            await self.v3_limiter.async_increment_tokens_with_ttl_preservation(pipeline_operations=refund)
+            await self.v3_limiter.async_increment_reservation_aware_tokens(pipeline_operations=refund)
 
 
 PROXY_DynamicRateLimitHandlerV3: Final = _PROXY_DynamicRateLimitHandlerV3

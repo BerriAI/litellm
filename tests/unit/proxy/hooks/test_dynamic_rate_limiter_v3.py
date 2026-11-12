@@ -1334,7 +1334,7 @@ async def test_async_log_success_event_increments_by_actual_tokens(monkeypatch):
                 }
             )
 
-    handler.v3_limiter.async_increment_tokens_with_ttl_preservation = mock_increment
+    handler.v3_limiter.async_increment_reservation_aware_tokens = mock_increment
 
     # Create mock response with 50 completion tokens
     mock_response = MagicMock(spec=ModelResponse)
@@ -1508,7 +1508,7 @@ async def test_async_log_success_event_uses_team_priority_from_auth_metadata(mon
         for op in pipeline_operations:
             incremented_keys.append(op.counter.scope)
 
-    handler.v3_limiter.async_increment_tokens_with_ttl_preservation = mock_increment
+    handler.v3_limiter.async_increment_reservation_aware_tokens = mock_increment
 
     # Create mock response
     mock_response = MagicMock(spec=ModelResponse)
@@ -2211,3 +2211,39 @@ async def test_a_fallback_target_still_borrows_while_idle_and_its_tokens_count_a
     with pytest.raises(ProxyRateLimitError) as exc:
         await _check(handler, _team_key(), saturation=0.5)
     _held_to_team_limit(exc.value, "tokens", "model_tpm_limit")
+
+
+@pytest.mark.asyncio
+async def test_a_fallback_attempt_counts_toward_the_targets_saturation(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    group: Final = handler.llm_router.registry().group("shared-model")
+    assert group is not None
+    assert await handler.async_fallback_target_allowed(_team_key(), "shared-model", {}) is True
+    assert await handler._check_model_saturation("shared-model", group) > 0
+
+
+@pytest.mark.asyncio
+async def test_a_read_only_fallback_check_does_not_use_the_teams_share(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.0)
+    key: Final = _team_key(
+        team_limits={"model_tpm_limit": {"shared-model": 100}, "model_rpm_limit": {"shared-model": 2}}
+    )
+    await _admit_then_settle(handler, key, 50)
+    assert await handler.async_fallback_target_allowed(key, "shared-model", {}, commit=False) is True
+    assert await handler.async_fallback_target_allowed(key, "shared-model", {}, commit=False) is True
+    assert await handler.async_fallback_target_allowed(key, "shared-model", {}) is True
+    assert await handler.async_fallback_target_allowed(key, "shared-model", {}) is False
+
+
+@pytest.mark.asyncio
+async def test_a_success_without_a_model_group_still_releases_the_reservation(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    await _check(handler, _team_key(), saturation=0.5, data=_prompt(words=30))
+    assert await _team_tokens_remaining(handler) < 70
+    await handler.async_log_success_event(
+        kwargs={"litellm_params": {"metadata": {}}},
+        response_obj=litellm.ModelResponse(usage=litellm.Usage(prompt_tokens=5, completion_tokens=0, total_tokens=5)),
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    assert await _team_tokens_remaining(handler) == 95

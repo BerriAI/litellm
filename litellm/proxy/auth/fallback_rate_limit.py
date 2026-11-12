@@ -44,11 +44,15 @@ class RouterFallbackRateLimitCheck:
         if valid_token is None:
             return True
         try:
-            if not await limiter.async_fallback_target_allowed(valid_token, model, request_kwargs):
-                return False
             dynamic_limiter: Final = next(
                 (cb for cb in litellm.callbacks if isinstance(cb, PROXY_DynamicRateLimitHandlerV3)), None
             )
+            if dynamic_limiter is not None and not await dynamic_limiter.async_fallback_target_allowed(
+                valid_token, model, request_kwargs, commit=False
+            ):
+                return False
+            if not await limiter.async_fallback_target_allowed(valid_token, model, request_kwargs):
+                return False
             return dynamic_limiter is None or await dynamic_limiter.async_fallback_target_allowed(
                 valid_token, model, request_kwargs
             )

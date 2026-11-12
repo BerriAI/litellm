@@ -575,6 +575,7 @@ class RequestRateLimiterStash:
     batch_tpd_refund_ops: tuple[ReservationOperation, ...] = ()
     borrowing_team_model_limit: RateLimitDescriptor | None = None
     borrowing_team_model_reserved_tokens: int = 0
+    borrowing_team_model_reserved_window: ReservationWindowIdentity | None = None
     borrowing_team_model_fallback_limits: Mapping[str, RateLimitDescriptor] = field(
         default_factory=lambda: MappingProxyType({})
     )
