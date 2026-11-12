@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 
 import httpx
 from pydantic import JsonValue, TypeAdapter
-from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing only on 3.13
+from typing_extensions import TypeIs, assert_never  # noqa: TID251  # these are absent from typing on Python 3.10
 
 import litellm
 from litellm._logging import verbose_logger
@@ -113,6 +113,16 @@ def _reasoning_level_and_summary(reasoning_effort: object) -> tuple[object, obje
 
 def _is_json_array(value: object) -> TypeIs[Sequence[object]]:  # guard-ok: a decoded JSON array is a list
     return isinstance(value, list)
+
+
+def _public_reasoning_level(result: str | UnsupportedParamsError | None) -> str | None:
+    match result:
+        case UnsupportedParamsError():
+            raise result
+        case str() | None:
+            return result
+        case _:
+            assert_never(result)
 
 
 class MistralConfig(OpenAIGPTConfig):
@@ -245,7 +255,9 @@ class MistralConfig(OpenAIGPTConfig):
     ) -> dict:
         requested: Final = _MISTRAL_REASONING_EFFORT_PARAMS.validate_python(non_default_params)
         reasoning_level: Final = (
-            self._reasoning_level_to_send(model, requested, drop_params) if "reasoning_effort" in requested else None
+            _public_reasoning_level(self._reasoning_level_to_send(model, requested, drop_params))
+            if "reasoning_effort" in requested
+            else None
         )
         leaves_level_to_mistral: Final = (
             _reasoning_level_and_summary(requested.get("reasoning_effort"))[0] == _PROVIDER_DEFAULT_EFFORT
@@ -292,7 +304,7 @@ class MistralConfig(OpenAIGPTConfig):
 
     def _reasoning_level_to_send(
         self, model: str, requested: MistralReasoningEffortParams, drop_params: bool
-    ) -> str | None:
+    ) -> str | UnsupportedParamsError | None:
         requested_effort: Final = requested.get("reasoning_effort")
         level, summary = _reasoning_level_and_summary(requested_effort)
         leaves_level_to_mistral: Final = level == _PROVIDER_DEFAULT_EFFORT
@@ -309,7 +321,7 @@ class MistralConfig(OpenAIGPTConfig):
                     "reasoning_effort", requested_effort, model, _NON_LEVEL_EFFORT_REASON, drop_params_gated=True
                 )
             return sendable
-        raise UnsupportedParamsError(
+        return UnsupportedParamsError(
             message=(
                 f"{self.custom_llm_provider} does not support parameters: ['reasoning_effort'], for model={model}, "
                 "since the Mistral API takes it only as a level such as 'high', with no reasoning summary. "
