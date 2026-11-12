@@ -94,7 +94,11 @@ export default function TaskClusterMap({ tasks, points, colors, selectedTaskId, 
                 onClick={() => onSelect(bubble.task_id)}
               />
             ))}
-            <LabelList dataKey="countLabel" position="center" className="fill-foreground text-xs font-medium" />
+            <LabelList
+              dataKey="countLabel"
+              position="center"
+              className="pointer-events-none fill-foreground text-xs font-medium"
+            />
           </Scatter>
         </ScatterChart>
       </ChartContainer>
