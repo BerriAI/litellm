@@ -60,12 +60,17 @@ async def _served_catalog_tool() -> str:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("case", ["unique", "ambiguous", "missing", "failure"])
+@pytest.mark.parametrize(
+    "case",
+    ["unique", "ambiguous", "missing", "failure", "slow_failure", "blocked_stdio", "scoped_bearer", "rate_limited"],
+)
 async def test_resource_read_requires_unique_owner_from_complete_listings(
     monkeypatch: pytest.MonkeyPatch, case: str
 ) -> None:
     uri: Final = "ui://widget/view.html"
-    reads: Final[asyncio.Queue[str]] = asyncio.Queue()
+    caller_bearer: Final = "Bearer caller-upstream-token"
+    reads: Final[asyncio.Queue[tuple[str, str | None]]] = asyncio.Queue()
+    slow_listing_cancelled: Final = asyncio.Event()
     message: Final = TypeAdapter(JSONRPCMessage)
 
     async def respond(request: httpx2.Request) -> httpx2.Response:
@@ -88,7 +93,7 @@ async def test_resource_read_requires_unique_owner_from_complete_listings(
                 },
             )
         if payload.method == "resources/read":
-            reads.put_nowait(request.url.host)
+            reads.put_nowait((request.url.host, request.headers.get("authorization")))
             return httpx2.Response(
                 200,
                 json={
@@ -102,6 +107,13 @@ async def test_resource_read_requires_unique_owner_from_complete_listings(
         assert payload.method == "resources/list"
         if case == "failure" and request.url.host == "other.example":
             return httpx2.Response(503, text="private upstream diagnostic")
+        if case == "slow_failure" and request.url.host == "owner.example":
+            return httpx2.Response(503, text="private upstream diagnostic")
+        if case == "slow_failure":
+            try:
+                await asyncio.Event().wait()
+            finally:
+                slow_listing_cancelled.set()
         if not (payload.params or {}).get("cursor"):
             return httpx2.Response(
                 200,
@@ -114,7 +126,9 @@ async def test_resource_read_requires_unique_owner_from_complete_listings(
                     },
                 },
             )
-        owns: Final = case != "missing" and (request.url.host == "owner.example" or case == "ambiguous")
+        owns: Final = case not in ("missing", "rate_limited") and (
+            request.url.host == "owner.example" or case == "ambiguous"
+        )
         return httpx2.Response(
             200,
             json={
@@ -127,34 +141,69 @@ async def test_resource_read_requires_unique_owner_from_complete_listings(
         )
 
     manager: Final = MCPServerManager(upstream_transport=httpx2.MockTransport(respond))
-    servers: Final = tuple(
+    auth_type: Final = MCPAuth.true_passthrough if case == "scoped_bearer" else None
+    http_servers: Final = tuple(
         MCPServer(
             server_id=name,
             name=name,
             url=f"https://{name}.example/mcp",
             transport=MCPTransport.http,
+            auth_type=auth_type,
             allow_all_keys=True,
+            rpm=1,
         )
         for name in ("owner", "other")
     )
+    stdio_server: Final = MCPServer(
+        server_id="local",
+        name="local",
+        transport=MCPTransport.stdio,
+        command="unused",
+        allow_all_keys=True,
+    )
+    servers: Final = (*http_servers, stdio_server) if case == "blocked_stdio" else http_servers
+    caller: Final = UserAPIKeyAuth(api_key=hash_token("sk-resource-read"))
     monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", _mcp_rate_limited_proxy_logging())
+    monkeypatch.delenv("LITELLM_ENABLE_MCP_STDIO", raising=False)
     for server in servers:
         monkeypatch.setitem(manager.config_mcp_servers, server.server_id, server)
-    if case == "unique":
-        result: Final = await operations.mcp_read_resource(url=AnyUrl(uri))
+
+    async def read() -> object:
+        return await operations.mcp_read_resource(
+            url=AnyUrl(uri),
+            user_api_key_auth=caller,
+            oauth2_headers={"Authorization": caller_bearer},
+            raw_headers={"authorization": caller_bearer, "x-litellm-api-key": "sk-resource-read"},
+        )
+
+    if case in ("unique", "blocked_stdio", "scoped_bearer"):
+        result: Final = await read()
         assert result == ReadResourceResult(contents=[TextResourceContents(uri=uri, text="owner.example")])
         assert reads.qsize() == 1
-        assert reads.get_nowait() == "owner.example"
+        host, authorization = reads.get_nowait()
+        assert host == "owner.example"
+        assert authorization != caller_bearer, "the caller bearer must not reach a gateway-selected owner"
+        return
+    if case == "rate_limited":
+        with pytest.raises(HTTPException) as first:
+            await read()
+        assert first.value.status_code == 404
+        with pytest.raises(ProxyRateLimitError):
+            await read()
+        assert reads.empty()
         return
     with pytest.raises(HTTPException) as rejected:
-        await operations.mcp_read_resource(url=AnyUrl(uri))
-    assert rejected.value.status_code == {"ambiguous": 400, "missing": 404, "failure": 502}[case]
-    assert {"ambiguous": "ambiguous", "missing": "not found", "failure": "list resources"}[case] in str(
-        rejected.value.detail
-    ).lower()
+        await asyncio.wait_for(read(), timeout=30)
+    assert rejected.value.status_code == {"ambiguous": 400, "missing": 404, "failure": 502, "slow_failure": 502}[case]
+    assert {"ambiguous": "ambiguous", "missing": "not found", "failure": "list resources", "slow_failure": "owner"}[
+        case
+    ] in str(rejected.value.detail).lower()
     assert reads.empty()
     assert "private upstream diagnostic" not in str(rejected.value.detail)
+    if case == "slow_failure":
+        await asyncio.wait_for(slow_listing_cancelled.wait(), timeout=30)
 
 
 def _listing_client() -> SimpleNamespace:
