@@ -112,7 +112,6 @@ def spend_window() -> Mapping[str, object]:
         "base_timed": 0,
         "active_days": 7,
         "timed_days": 0,
-        "exists": True,
     }
 
 
