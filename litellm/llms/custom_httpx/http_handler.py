@@ -1722,38 +1722,43 @@ class HTTPHandler:
         response: Final = self.client.send(request, stream=True, follow_redirects=False)
         return self._read_with_response_limit(response, max_bytes=max_bytes, follow_redirects=follow_redirects)
 
+    def _last_redirect_hop(self, response: httpx.Response, *, follow_redirects: bool) -> httpx.Response:
+        hop = response  # rebind-ok: walks the redirect chain without recursion
+        for _ in range(10):
+            if hop.next_request is None or not follow_redirects:
+                return hop
+            hop.close()
+            hop = self.client.send(
+                hop.next_request, auth=None, stream=True, follow_redirects=False
+            )  # rebind-ok: walks the redirect chain without recursion
+        if hop.next_request is None or not follow_redirects:
+            return hop
+        hop.close()
+        raise ValueError("Too many redirects")
+
     def _read_with_response_limit(
-        self, response: httpx.Response, *, max_bytes: int, follow_redirects: bool, redirects_remaining: int = 10
+        self, response: httpx.Response, *, max_bytes: int, follow_redirects: bool
     ) -> httpx.Response:
+        final: Final = self._last_redirect_hop(response, follow_redirects=follow_redirects)
         try:
-            if response.next_request is not None and follow_redirects:
-                if redirects_remaining == 0:
-                    raise ValueError("Too many redirects")
-                response.close()
-                following: Final = self.client.send(
-                    response.next_request, auth=None, stream=True, follow_redirects=False
-                )
-                return self._read_with_response_limit(
-                    following, max_bytes=max_bytes, follow_redirects=True, redirects_remaining=redirects_remaining - 1
-                )
-            if response.is_redirect or response.is_error:
-                return httpx.Response(response.status_code, headers=response.headers, request=response.request)
-            content_encoding: Final = header_value(response.headers, "content-encoding")
+            if final.is_redirect or final.is_error:
+                return httpx.Response(final.status_code, headers=final.headers, request=final.request)
+            content_encoding: Final = header_value(final.headers, "content-encoding")
             if ("identity" if content_encoding is None else content_encoding).lower() != "identity":
                 raise HTTPResponseLimitError("Response size limits require an uncompressed response")
-            content_length: Final = header_value(response.headers, "content-length")
+            content_length: Final = header_value(final.headers, "content-length")
             if int("0" if content_length is None else content_length) > max_bytes:
                 raise HTTPResponseLimitError("Response exceeds the configured size limit")
             with BytesIO() as body:
-                for chunk in response.iter_bytes(chunk_size=65536):
+                for chunk in final.iter_bytes(chunk_size=65536):
                     if body.tell() + len(chunk) > max_bytes:
                         raise HTTPResponseLimitError("Response exceeds the configured size limit")
                     body.write(chunk)
                 return httpx.Response(
-                    response.status_code, headers=response.headers, content=body.getvalue(), request=response.request
+                    final.status_code, headers=final.headers, content=body.getvalue(), request=final.request
                 )
         finally:
-            response.close()
+            final.close()
 
     def _send_streaming_get(
         self,

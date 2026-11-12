@@ -2838,3 +2838,14 @@ def test_sync_bounded_get_follows_a_redirect_with_the_limit(respx_mock: respx.Mo
         handler.close()
     assert response.content == b"ok"
     assert final.calls[0].request.headers["accept-encoding"] == "identity"
+
+
+def test_sync_bounded_get_stops_redirect_loops(respx_mock: respx.MockRouter):
+    route = respx_mock.get("https://example.com/loop.bin").respond(302, headers={"location": "/loop.bin"})
+    handler = HTTPHandler()
+    try:
+        with pytest.raises(ValueError, match="Too many redirects"):
+            handler.get("https://example.com/loop.bin", max_response_bytes=100, follow_redirects=True)
+    finally:
+        handler.close()
+    assert route.call_count == 11
