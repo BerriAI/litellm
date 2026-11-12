@@ -62389,6 +62389,1679 @@
       }
     }
   },
+  "task_insights": {
+    "components": {
+      "schemas": {
+        "DraftTaskEdit": {
+          "properties": {
+            "description": {
+              "anyOf": [
+                {
+                  "maxLength": 2000,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Description"
+            },
+            "exclusion_criteria": {
+              "anyOf": [
+                {
+                  "maxLength": 2000,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Exclusion Criteria"
+            },
+            "inclusion_criteria": {
+              "anyOf": [
+                {
+                  "maxLength": 2000,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Inclusion Criteria"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "maxLength": 120,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Name"
+            }
+          },
+          "title": "DraftTaskEdit",
+          "type": "object"
+        },
+        "HTTPValidationError": {
+          "properties": {
+            "detail": {
+              "items": {
+                "$ref": "#/components/schemas/ValidationError"
+              },
+              "title": "Detail",
+              "type": "array"
+            }
+          },
+          "title": "HTTPValidationError",
+          "type": "object"
+        },
+        "ModelConfigSummary": {
+          "properties": {
+            "configured": {
+              "description": "False when traffic names a deployment that is no longer configured",
+              "title": "Configured",
+              "type": "boolean"
+            },
+            "max_input_tokens": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "From model metadata. Whether a given request fits is for the router to check",
+              "title": "Max Input Tokens"
+            },
+            "model_config_id": {
+              "title": "Model Config Id",
+              "type": "string"
+            },
+            "model_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Public model name of the deployment",
+              "title": "Model Name"
+            },
+            "provider_model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Provider model the deployment calls",
+              "title": "Provider Model"
+            }
+          },
+          "required": [
+            "model_config_id",
+            "model_name",
+            "provider_model",
+            "configured"
+          ],
+          "title": "ModelConfigSummary",
+          "type": "object"
+        },
+        "RequestSample": {
+          "properties": {
+            "delivery_count": {
+              "title": "Delivery Count",
+              "type": "integer"
+            },
+            "excerpt": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Excerpt"
+            },
+            "latency_ms": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Latency Ms"
+            },
+            "model_config_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Model Config Id"
+            },
+            "model_group": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Model Group"
+            },
+            "outcome": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "assigned",
+                    "unknown",
+                    "failed"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Outcome"
+            },
+            "request_id": {
+              "title": "Request Id",
+              "type": "string"
+            },
+            "session_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session Id"
+            },
+            "spend": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Spend"
+            },
+            "start_time": {
+              "format": "date-time",
+              "title": "Start Time",
+              "type": "string"
+            },
+            "top_probability": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Top Probability"
+            }
+          },
+          "required": [
+            "request_id",
+            "start_time",
+            "model_config_id",
+            "model_group",
+            "session_id",
+            "spend",
+            "latency_ms",
+            "delivery_count",
+            "outcome",
+            "top_probability",
+            "excerpt"
+          ],
+          "title": "RequestSample",
+          "type": "object"
+        },
+        "TaskCompatibility": {
+          "properties": {
+            "missing": {
+              "description": "Required capabilities the model metadata says it lacks. A router must still check each request",
+              "items": {
+                "enum": [
+                  "function_calling",
+                  "vision",
+                  "reasoning",
+                  "structured_output"
+                ],
+                "type": "string"
+              },
+              "title": "Missing",
+              "type": "array"
+            },
+            "model_config_id": {
+              "title": "Model Config Id",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "compatible",
+                "incompatible",
+                "unknown"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "task_id": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "model_config_id",
+            "task_id",
+            "status",
+            "missing"
+          ],
+          "title": "TaskCompatibility",
+          "type": "object"
+        },
+        "TaskDefinition": {
+          "properties": {
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "description": {
+              "title": "Description",
+              "type": "string"
+            },
+            "discovery_size": {
+              "default": 0,
+              "title": "Discovery Size",
+              "type": "integer"
+            },
+            "examples": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Examples",
+              "type": "array"
+            },
+            "exclusion_criteria": {
+              "title": "Exclusion Criteria",
+              "type": "string"
+            },
+            "frozen_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Frozen At"
+            },
+            "inclusion_criteria": {
+              "title": "Inclusion Criteria",
+              "type": "string"
+            },
+            "map_x": {
+              "title": "Map X",
+              "type": "number"
+            },
+            "map_y": {
+              "title": "Map Y",
+              "type": "number"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "required_capabilities": {
+              "default": [],
+              "items": {
+                "enum": [
+                  "function_calling",
+                  "vision",
+                  "reasoning",
+                  "structured_output"
+                ],
+                "type": "string"
+              },
+              "title": "Required Capabilities",
+              "type": "array"
+            },
+            "source": {
+              "enum": [
+                "discovered",
+                "sample"
+              ],
+              "title": "Source",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "draft",
+                "frozen"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "task_id": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "task_id",
+            "name",
+            "description",
+            "inclusion_criteria",
+            "exclusion_criteria",
+            "status",
+            "source",
+            "map_x",
+            "map_y",
+            "created_at"
+          ],
+          "title": "TaskDefinition",
+          "type": "object"
+        },
+        "TaskDetailResponse": {
+          "properties": {
+            "definition": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/TaskDefinition"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "entries": {
+              "items": {
+                "$ref": "#/components/schemas/TaskMatrixEntry"
+              },
+              "title": "Entries",
+              "type": "array"
+            },
+            "model_config_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Model Config Id"
+            },
+            "model_configs": {
+              "items": {
+                "$ref": "#/components/schemas/ModelConfigSummary"
+              },
+              "title": "Model Configs",
+              "type": "array"
+            },
+            "requests": {
+              "items": {
+                "$ref": "#/components/schemas/RequestSample"
+              },
+              "title": "Requests",
+              "type": "array"
+            },
+            "summary": {
+              "$ref": "#/components/schemas/TaskSummary"
+            },
+            "window": {
+              "$ref": "#/components/schemas/TaskInsightsWindowOut"
+            }
+          },
+          "required": [
+            "window",
+            "summary",
+            "definition",
+            "model_config_id",
+            "entries",
+            "model_configs",
+            "requests"
+          ],
+          "title": "TaskDetailResponse",
+          "type": "object"
+        },
+        "TaskDiscoveryRequest": {
+          "properties": {
+            "end_date": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "YYYY-MM-DD, defaults to today",
+              "title": "End Date"
+            },
+            "max_requests": {
+              "default": 500,
+              "maximum": 500.0,
+              "minimum": 20.0,
+              "title": "Max Requests",
+              "type": "integer"
+            },
+            "start_date": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "YYYY-MM-DD, defaults to 30 days before end_date",
+              "title": "Start Date"
+            }
+          },
+          "title": "TaskDiscoveryRequest",
+          "type": "object"
+        },
+        "TaskFreezeRequest": {
+          "properties": {
+            "draft_task_count": {
+              "description": "Number of draft tasks reviewed. Freezing fails when the draft changed since the review",
+              "minimum": 1.0,
+              "title": "Draft Task Count",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "draft_task_count"
+          ],
+          "title": "TaskFreezeRequest",
+          "type": "object"
+        },
+        "TaskFreezeResponse": {
+          "properties": {
+            "frozen_task_count": {
+              "title": "Frozen Task Count",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "frozen_task_count"
+          ],
+          "title": "TaskFreezeResponse",
+          "type": "object"
+        },
+        "TaskInsightsOverviewResponse": {
+          "properties": {
+            "last_refreshed_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last Refreshed At"
+            },
+            "points": {
+              "description": "A bounded deterministic sample of requests for the map",
+              "items": {
+                "$ref": "#/components/schemas/TaskMapPoint"
+              },
+              "title": "Points",
+              "type": "array"
+            },
+            "status": {
+              "$ref": "#/components/schemas/TaskInsightsStatus"
+            },
+            "tasks": {
+              "items": {
+                "$ref": "#/components/schemas/TaskSummary"
+              },
+              "title": "Tasks",
+              "type": "array"
+            },
+            "totals": {
+              "$ref": "#/components/schemas/TaskInsightsTotals"
+            },
+            "window": {
+              "$ref": "#/components/schemas/TaskInsightsWindowOut"
+            }
+          },
+          "required": [
+            "window",
+            "last_refreshed_at",
+            "status",
+            "totals",
+            "tasks",
+            "points"
+          ],
+          "title": "TaskInsightsOverviewResponse",
+          "type": "object"
+        },
+        "TaskInsightsStatus": {
+          "properties": {
+            "discovery_error": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Discovery Error"
+            },
+            "discovery_finished_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Discovery Finished At"
+            },
+            "discovery_requested_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Discovery Requested At"
+            },
+            "discovery_status": {
+              "enum": [
+                "idle",
+                "requested",
+                "running",
+                "failed",
+                "completed"
+              ],
+              "title": "Discovery Status",
+              "type": "string"
+            },
+            "draft_task_count": {
+              "title": "Draft Task Count",
+              "type": "integer"
+            },
+            "frozen_task_count": {
+              "title": "Frozen Task Count",
+              "type": "integer"
+            },
+            "last_bucketed_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last Bucketed At"
+            },
+            "sample_data": {
+              "description": "True when the taxonomy and assignments are seeded sample data",
+              "title": "Sample Data",
+              "type": "boolean"
+            },
+            "taxonomy_frozen_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Taxonomy Frozen At"
+            }
+          },
+          "required": [
+            "discovery_status",
+            "discovery_error",
+            "discovery_requested_at",
+            "discovery_finished_at",
+            "taxonomy_frozen_at",
+            "last_bucketed_at",
+            "sample_data",
+            "draft_task_count",
+            "frozen_task_count"
+          ],
+          "title": "TaskInsightsStatus",
+          "type": "object"
+        },
+        "TaskInsightsTotals": {
+          "properties": {
+            "analysis_request_count": {
+              "description": "Requests the analysis worker made, excluded from the figures",
+              "title": "Analysis Request Count",
+              "type": "integer"
+            },
+            "analysis_spend": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Analysis Spend"
+            },
+            "classified_count": {
+              "title": "Classified Count",
+              "type": "integer"
+            },
+            "cost_observations": {
+              "title": "Cost Observations",
+              "type": "integer"
+            },
+            "delivery_count": {
+              "title": "Delivery Count",
+              "type": "integer"
+            },
+            "request_count": {
+              "title": "Request Count",
+              "type": "integer"
+            },
+            "session_count": {
+              "description": "Distinct sessions in the window, each counted once across tasks",
+              "title": "Session Count",
+              "type": "integer"
+            },
+            "spend": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Spend"
+            },
+            "unattributed_count": {
+              "description": "Requests with no delivery tied to a known deployment",
+              "title": "Unattributed Count",
+              "type": "integer"
+            },
+            "unclassified_count": {
+              "title": "Unclassified Count",
+              "type": "integer"
+            },
+            "unknown_count": {
+              "title": "Unknown Count",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "request_count",
+            "delivery_count",
+            "session_count",
+            "spend",
+            "cost_observations",
+            "unattributed_count",
+            "classified_count",
+            "unknown_count",
+            "unclassified_count",
+            "analysis_request_count",
+            "analysis_spend"
+          ],
+          "title": "TaskInsightsTotals",
+          "type": "object"
+        },
+        "TaskInsightsWindowOut": {
+          "properties": {
+            "end_date": {
+              "description": "Last day of the measurement window, YYYY-MM-DD (UTC), inclusive",
+              "title": "End Date",
+              "type": "string"
+            },
+            "start_date": {
+              "description": "First day of the measurement window, YYYY-MM-DD (UTC)",
+              "title": "Start Date",
+              "type": "string"
+            },
+            "team_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Team the figures are filtered to, if any",
+              "title": "Team Id"
+            }
+          },
+          "required": [
+            "start_date",
+            "end_date"
+          ],
+          "title": "TaskInsightsWindowOut",
+          "type": "object"
+        },
+        "TaskMapPoint": {
+          "properties": {
+            "placement": {
+              "description": "`embedding` points come from the discovery projection, `categorical` points are drawn at a stable offset around their task and carry no semantic position",
+              "enum": [
+                "embedding",
+                "categorical"
+              ],
+              "title": "Placement",
+              "type": "string"
+            },
+            "request_id": {
+              "title": "Request Id",
+              "type": "string"
+            },
+            "task_id": {
+              "title": "Task Id",
+              "type": "string"
+            },
+            "x": {
+              "title": "X",
+              "type": "number"
+            },
+            "y": {
+              "title": "Y",
+              "type": "number"
+            }
+          },
+          "required": [
+            "request_id",
+            "task_id",
+            "x",
+            "y",
+            "placement"
+          ],
+          "title": "TaskMapPoint",
+          "type": "object"
+        },
+        "TaskMatrixEntry": {
+          "properties": {
+            "avg_cost_usd": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Avg Cost Usd"
+            },
+            "cost_observations": {
+              "title": "Cost Observations",
+              "type": "integer"
+            },
+            "eval_sample_count": {
+              "default": 0,
+              "description": "Not measured yet, always 0",
+              "title": "Eval Sample Count",
+              "type": "integer"
+            },
+            "eval_success_rate": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Not measured yet, always null",
+              "title": "Eval Success Rate"
+            },
+            "latency_observations": {
+              "title": "Latency Observations",
+              "type": "integer"
+            },
+            "model_config_id": {
+              "title": "Model Config Id",
+              "type": "string"
+            },
+            "p95_latency_ms": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "P95 Latency Ms"
+            },
+            "request_count": {
+              "title": "Request Count",
+              "type": "integer"
+            },
+            "task_id": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "model_config_id",
+            "task_id",
+            "request_count",
+            "avg_cost_usd",
+            "cost_observations",
+            "p95_latency_ms",
+            "latency_observations"
+          ],
+          "title": "TaskMatrixEntry",
+          "type": "object"
+        },
+        "TaskMatrixResponse": {
+          "properties": {
+            "compatibility": {
+              "items": {
+                "$ref": "#/components/schemas/TaskCompatibility"
+              },
+              "title": "Compatibility",
+              "type": "array"
+            },
+            "entries": {
+              "items": {
+                "$ref": "#/components/schemas/TaskMatrixEntry"
+              },
+              "title": "Entries",
+              "type": "array"
+            },
+            "last_refreshed_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last Refreshed At"
+            },
+            "measurement_window": {
+              "$ref": "#/components/schemas/TaskInsightsWindowOut"
+            },
+            "model_configs": {
+              "items": {
+                "$ref": "#/components/schemas/ModelConfigSummary"
+              },
+              "title": "Model Configs",
+              "type": "array"
+            },
+            "tasks": {
+              "items": {
+                "$ref": "#/components/schemas/TaskRef"
+              },
+              "title": "Tasks",
+              "type": "array"
+            },
+            "unattributed_request_count": {
+              "description": "Requests whose serving deployment is unknown",
+              "title": "Unattributed Request Count",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "measurement_window",
+            "last_refreshed_at",
+            "tasks",
+            "model_configs",
+            "entries",
+            "compatibility",
+            "unattributed_request_count"
+          ],
+          "title": "TaskMatrixResponse",
+          "type": "object"
+        },
+        "TaskRef": {
+          "properties": {
+            "kind": {
+              "enum": [
+                "task",
+                "unknown",
+                "unclassified"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "required_capabilities": {
+              "items": {
+                "enum": [
+                  "function_calling",
+                  "vision",
+                  "reasoning",
+                  "structured_output"
+                ],
+                "type": "string"
+              },
+              "title": "Required Capabilities",
+              "type": "array"
+            },
+            "task_id": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "task_id",
+            "name",
+            "kind",
+            "required_capabilities"
+          ],
+          "title": "TaskRef",
+          "type": "object"
+        },
+        "TaskSummary": {
+          "properties": {
+            "avg_cost_usd": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Avg Cost Usd"
+            },
+            "cost_observations": {
+              "description": "Requests whose cost is known",
+              "title": "Cost Observations",
+              "type": "integer"
+            },
+            "delivery_count": {
+              "title": "Delivery Count",
+              "type": "integer"
+            },
+            "description": {
+              "title": "Description",
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "task",
+                "unknown",
+                "unclassified"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "map_x": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Layout position only, distance does not measure model quality",
+              "title": "Map X"
+            },
+            "map_y": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Map Y"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "request_count": {
+              "title": "Request Count",
+              "type": "integer"
+            },
+            "session_count": {
+              "description": "Distinct sessions with a request in this task",
+              "title": "Session Count",
+              "type": "integer"
+            },
+            "share": {
+              "description": "Fraction of requests in the window, from 0 to 1",
+              "title": "Share",
+              "type": "number"
+            },
+            "spend": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Sum of known request costs in USD, null when no cost was recorded",
+              "title": "Spend"
+            },
+            "task_id": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "task_id",
+            "name",
+            "description",
+            "kind",
+            "request_count",
+            "delivery_count",
+            "session_count",
+            "share",
+            "spend",
+            "cost_observations",
+            "avg_cost_usd",
+            "map_x",
+            "map_y"
+          ],
+          "title": "TaskSummary",
+          "type": "object"
+        },
+        "TaskTaxonomyResponse": {
+          "properties": {
+            "definitions": {
+              "items": {
+                "$ref": "#/components/schemas/TaskDefinition"
+              },
+              "title": "Definitions",
+              "type": "array"
+            },
+            "status": {
+              "$ref": "#/components/schemas/TaskInsightsStatus"
+            }
+          },
+          "required": [
+            "status",
+            "definitions"
+          ],
+          "title": "TaskTaxonomyResponse",
+          "type": "object"
+        },
+        "ValidationError": {
+          "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
+            "loc": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              },
+              "title": "Location",
+              "type": "array"
+            },
+            "msg": {
+              "title": "Message",
+              "type": "string"
+            },
+            "type": {
+              "title": "Error Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "loc",
+            "msg",
+            "type"
+          ],
+          "title": "ValidationError",
+          "type": "object"
+        }
+      }
+    },
+    "paths": {
+      "/task-insights/discovery": {
+        "post": {
+          "description": "Queues discovery over up to `max_requests` distinct request texts. The analysis worker embeds and clusters\nthem and drafts task definitions for review, which is the only step that calls models.",
+          "operationId": "request_task_insights_discovery_task_insights_discovery_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskDiscoveryRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/TaskTaxonomyResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Request Task Insights Discovery",
+          "tags": [
+            "task_insights"
+          ]
+        }
+      },
+      "/task-insights/matrix": {
+        "get": {
+          "description": "Request count, mean cost and p95 latency per deployment and task. Missing cost or latency stays null and\n`*_observations` says how many requests the figure rests on. Compatibility comes from current model metadata.",
+          "operationId": "get_task_insights_matrix_task_insights_matrix_get",
+          "parameters": [
+            {
+              "description": "YYYY-MM-DD (UTC), defaults to 30 days before end_date",
+              "in": "query",
+              "name": "start_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "YYYY-MM-DD (UTC), defaults to 30 days before end_date",
+                "title": "Start Date"
+              }
+            },
+            {
+              "description": "YYYY-MM-DD (UTC), inclusive, defaults to today",
+              "in": "query",
+              "name": "end_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "YYYY-MM-DD (UTC), inclusive, defaults to today",
+                "title": "End Date"
+              }
+            },
+            {
+              "description": "Only count requests made by this team",
+              "in": "query",
+              "name": "team_id",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Only count requests made by this team",
+                "title": "Team Id"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/TaskMatrixResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Task Insights Matrix",
+          "tags": [
+            "task_insights"
+          ]
+        }
+      },
+      "/task-insights/overview": {
+        "get": {
+          "description": "Task volume, spend and a bounded sample of map points. Counts are requests, never repeated deliveries.",
+          "operationId": "get_task_insights_overview_task_insights_overview_get",
+          "parameters": [
+            {
+              "description": "YYYY-MM-DD (UTC), defaults to 30 days before end_date",
+              "in": "query",
+              "name": "start_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "YYYY-MM-DD (UTC), defaults to 30 days before end_date",
+                "title": "Start Date"
+              }
+            },
+            {
+              "description": "YYYY-MM-DD (UTC), inclusive, defaults to today",
+              "in": "query",
+              "name": "end_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "YYYY-MM-DD (UTC), inclusive, defaults to today",
+                "title": "End Date"
+              }
+            },
+            {
+              "description": "Only count requests made by this team",
+              "in": "query",
+              "name": "team_id",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Only count requests made by this team",
+                "title": "Team Id"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/TaskInsightsOverviewResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Task Insights Overview",
+          "tags": [
+            "task_insights"
+          ]
+        }
+      },
+      "/task-insights/tasks/{task_id}": {
+        "get": {
+          "description": "A task's definition, its metrics per deployment and its most recent requests with bounded text excerpts.",
+          "operationId": "get_task_insights_task_task_insights_tasks__task_id__get",
+          "parameters": [
+            {
+              "description": "A frozen task id, `unknown` or `unclassified`",
+              "in": "path",
+              "name": "task_id",
+              "required": true,
+              "schema": {
+                "description": "A frozen task id, `unknown` or `unclassified`",
+                "title": "Task Id",
+                "type": "string"
+              }
+            },
+            {
+              "description": "YYYY-MM-DD (UTC), defaults to 30 days before end_date",
+              "in": "query",
+              "name": "start_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "YYYY-MM-DD (UTC), defaults to 30 days before end_date",
+                "title": "Start Date"
+              }
+            },
+            {
+              "description": "YYYY-MM-DD (UTC), inclusive, defaults to today",
+              "in": "query",
+              "name": "end_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "YYYY-MM-DD (UTC), inclusive, defaults to today",
+                "title": "End Date"
+              }
+            },
+            {
+              "description": "Only count requests made by this team",
+              "in": "query",
+              "name": "team_id",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Only count requests made by this team",
+                "title": "Team Id"
+              }
+            },
+            {
+              "description": "Only show requests served by this deployment",
+              "in": "query",
+              "name": "model_config_id",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Only show requests served by this deployment",
+                "title": "Model Config Id"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/TaskDetailResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Task Insights Task",
+          "tags": [
+            "task_insights"
+          ]
+        },
+        "patch": {
+          "description": "Frozen definitions are immutable, so the assignments made against them stay explainable.",
+          "operationId": "edit_task_insights_draft_task_insights_tasks__task_id__patch",
+          "parameters": [
+            {
+              "description": "A draft task id",
+              "in": "path",
+              "name": "task_id",
+              "required": true,
+              "schema": {
+                "description": "A draft task id",
+                "title": "Task Id",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftTaskEdit"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/TaskDefinition"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Edit Task Insights Draft",
+          "tags": [
+            "task_insights"
+          ]
+        }
+      },
+      "/task-insights/taxonomy": {
+        "get": {
+          "description": "Draft and frozen task definitions with the discovery state, for reviewing a draft before freezing it.",
+          "operationId": "get_task_insights_taxonomy_task_insights_taxonomy_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/TaskTaxonomyResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Task Insights Taxonomy",
+          "tags": [
+            "task_insights"
+          ]
+        }
+      },
+      "/task-insights/taxonomy/freeze": {
+        "post": {
+          "description": "Replaces the frozen taxonomy with the draft and clears every assignment, which the worker then rebuilds.",
+          "operationId": "freeze_task_insights_taxonomy_task_insights_taxonomy_freeze_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskFreezeRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/TaskFreezeResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Freeze Task Insights Taxonomy",
+          "tags": [
+            "task_insights"
+          ]
+        }
+      }
+    }
+  },
   "tools": {
     "components": {
       "schemas": {

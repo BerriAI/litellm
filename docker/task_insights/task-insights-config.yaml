@@ -19,12 +19,12 @@ model_list:
       api_key: os.environ/ANTHROPIC_API_KEY
     model_info:
       id: task-insights-demo-haiku
-  - model_name: claude-fable-5-1
+  - model_name: claude-haiku-5-5-fallback
     litellm_params:
-      model: anthropic/claude-fable-5-1
+      model: anthropic/claude-haiku-5-5
       api_key: os.environ/ANTHROPIC_API_KEY
     model_info:
-      id: task-insights-demo-fable
+      id: task-insights-demo-haiku-fallback
   - model_name: qwen3.7-text-embedding
     litellm_params:
       model: dashscope/qwen3.7-text-embedding
@@ -43,6 +43,9 @@ model_list:
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   store_prompts_in_spend_logs: true
+  coordination_redis:
+    host: os.environ/REDIS_HOST
+    port: os.environ/REDIS_PORT
 
 router_settings:
   redis_host: os.environ/REDIS_HOST

@@ -4,7 +4,7 @@ Task Insights groups coding-agent traffic into named tasks and shows, for each t
 
 ## Run the seeded demo
 
-You need Docker with Compose v2, about 15 GB of free disk for the build, and port 4000 free.
+You need Docker with Compose v2 and port 4000 free on localhost. The images and build cache take about 15 GB, so make sure that fits on top of whatever free-space reserve you keep, the verification runs kept 50 GiB free beyond it. The proxy runs two workers that share one dedicated Redis for router state and counters.
 
 ```bash
 git fetch origin litellm_task_insights_poc
@@ -23,14 +23,14 @@ Open http://localhost:4000/ui, sign in as `admin` with the `LITELLM_MASTER_KEY` 
 1. The tab opens on the last 7 days with a **Sample data** badge. The cards show requests, ledger deliveries (retries make deliveries outnumber requests), sessions, task coverage and known spend. The figures never count a missing cost as zero, they say how many requests the spend rests on.
 2. The **task map** places each task as a bubble sized by volume. Filled dots are discovery sample positions and hollow dots are later requests drawn around their task. Positions only group similar requests, distance says nothing about model quality.
 3. **Tasks by volume and spend** is the ranked table equivalent of the map. Switch the ranking to spend to see which task costs most.
-4. **Models by task** is the heatmap. Switch between requests, mean cost and p95 latency. Grey striped cells have no evidence for that metric. `claude-fable-5-1` is configured but has no traffic, so its column stays empty. A warning icon marks a deployment whose model metadata says it lacks a capability the task needs.
+4. **Models by task** is the heatmap. Switch between requests, mean cost and p95 latency. Grey striped cells have no evidence for that metric. `claude-haiku-5-5-fallback` is configured but has no traffic, so its column stays empty. A warning icon marks a deployment whose model metadata says it lacks a capability the task needs.
 5. Click a bubble, a row or a cell. The side sheet shows the task definition, what it includes and excludes, examples, per-model metrics and the recent requests behind it, including requests with unknown cost or latency. A cell click filters the requests to that deployment.
 6. Change the date range or pick a team (`Sample: Platform`, `Sample: Mobile`, `Sample: Data`). The URL keeps the tab, team, metric and selection, so the link is shareable.
 7. Sign in as a non-admin and the tab is not offered, the API answers 403.
 
 ## Optional live flow
 
-This sends a small batch of synthetic coding requests through the gateway, discovers tasks from it, and then buckets a second batch with Jev. It calls paid models. In our runs the whole flow costs well under a dollar, and Devin's verification notes report the measured spend.
+This sends a small batch of synthetic coding requests through the gateway, discovers tasks from it, and then buckets a second batch with Jev. It calls paid models, so check the measured spend in the Usage page afterwards. The analysis calls show up as analysis spend in the tab.
 
 Add the provider keys to `docker/task_insights/.env`. Only the names are listed here:
 

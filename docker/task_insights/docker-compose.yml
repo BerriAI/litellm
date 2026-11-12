@@ -34,9 +34,9 @@ services:
     build:
       context: ../..
       target: runtime
-    command: ["--config", "/app/task-insights-config.yaml", "--port", "4000"]
+    command: ["--config", "/app/task-insights-config.yaml", "--port", "4000", "--num_workers", "2"]
     ports:
-      - "${TASK_INSIGHTS_PORT:-4000}:4000"
+      - "127.0.0.1:${TASK_INSIGHTS_PORT:-4000}:4000"
     volumes:
       - ./task-insights-config.yaml:/app/task-insights-config.yaml:ro
     environment:
