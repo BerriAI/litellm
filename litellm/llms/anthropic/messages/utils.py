@@ -1,6 +1,7 @@
+import copy
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeVar
 
@@ -35,6 +36,54 @@ def json_copy_or_original(value: _JsonValue) -> _JsonValue:
         return json.loads(json.dumps(value, default=dict))
     except (TypeError, ValueError, RecursionError):
         return value
+
+
+_SUBSCHEMA_LIST_KEYWORDS: Final = ("anyOf", "oneOf", "allOf")
+_SUBSCHEMA_MAP_KEYWORDS: Final = ("$defs", "definitions")
+
+
+_JSON_ARRAY: Final = TypeAdapter(list[object])
+
+
+def _json_array(value: object) -> Sequence[object] | None:
+    try:
+        return _JSON_ARRAY.validate_python(value, strict=True)
+    except ValidationError:
+        return None
+
+
+def openai_strict_json_schema(schema: object) -> object:
+    """New copy of a JSON schema where every object with properties forbids extra keys and requires all of them.
+
+    OpenAI strict structured outputs rejects any schema that leaves an object open or a property optional.
+    """
+    source: Final = object_mapping(schema)
+    if source is None:
+        return schema
+    properties: Final = object_mapping(source.get("properties"))
+    closed_object: Final[Mapping[str, object]] = (
+        {
+            "properties": {name: openai_strict_json_schema(prop) for name, prop in properties.items()},
+            "required": list(properties),
+            "additionalProperties": False,
+        }
+        if source.get("type") == "object" and properties is not None
+        else {}
+    )
+    items: Final[Mapping[str, object]] = (
+        {"items": openai_strict_json_schema(source["items"])} if "items" in source else {}
+    )
+    variants: Final[Mapping[str, object]] = {
+        key: [openai_strict_json_schema(variant) for variant in subschemas]
+        for key in _SUBSCHEMA_LIST_KEYWORDS
+        if (subschemas := _json_array(source.get(key))) is not None
+    }
+    definitions: Final[Mapping[str, object]] = {
+        key: {name: openai_strict_json_schema(definition) for name, definition in defs.items()}
+        for key in _SUBSCHEMA_MAP_KEYWORDS
+        if (defs := object_mapping(source.get(key))) is not None
+    }
+    return {**copy.deepcopy(dict(source)), **closed_object, **items, **variants, **definitions}
 
 
 class _ClaudeCodeUserId(LiteLLMBaseModel):
@@ -136,7 +185,7 @@ def proxy_sub_call_logging_kwargs(parent_kwargs: Mapping[str, object]) -> ProxyS
         if disable_header is None
         else {**parent_params, "proxy_server_request": {"headers": {X_LITELLM_DISABLE_CALLBACKS: disable_header}}}
     )
-    trusted_vars: Final = _object_mapping(parent_kwargs.get(TRUSTED_CALLBACK_VARS_FIELD))
+    trusted_vars: Final = object_mapping(parent_kwargs.get(TRUSTED_CALLBACK_VARS_FIELD))
     if trusted_vars is None:
         return dynamic_params
     return {**dynamic_params, "litellm_trusted_callback_vars": trusted_vars}
@@ -154,13 +203,13 @@ def proxy_sub_call_trace_id(parent_kwargs: Mapping[str, object]) -> str | None:
 
 
 def _disable_callbacks_header(parent_kwargs: Mapping[str, object]) -> str | None:
-    parent_request: Final = _object_mapping(parent_kwargs.get("proxy_server_request"))
-    headers: Final = _object_mapping(parent_request.get("headers")) if parent_request is not None else None
+    parent_request: Final = object_mapping(parent_kwargs.get("proxy_server_request"))
+    headers: Final = object_mapping(parent_request.get("headers")) if parent_request is not None else None
     header: Final = headers.get(X_LITELLM_DISABLE_CALLBACKS) if headers is not None else None
     return header if isinstance(header, str) else None
 
 
-def _object_mapping(value: object) -> Mapping[str, object] | None:
+def object_mapping(value: object) -> Mapping[str, object] | None:
     try:
         return _OBJECT_MAPPING.validate_python(value)
     except ValidationError:
