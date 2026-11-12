@@ -1,5 +1,6 @@
 import asyncio
 import concurrent.futures
+import importlib.util
 import inspect
 import os
 import socket
@@ -129,6 +130,48 @@ def _environment_proxy_mounts(
             for pattern, proxy_url in get_environment_proxies().items()
         }
     )
+
+
+DIRECT_OUTBOUND_PROXY: Final = "direct"
+_OUTBOUND_PROXY_SCHEMES: Final = frozenset({"http", "https", "socks5", "socks5h"})
+_SOCKS_SCHEMES: Final = frozenset({"socks5", "socks5h"})
+
+
+def resolve_outbound_proxy(outbound_proxy: str | None) -> str | None:
+    """A deployment's own egress: a proxy URL, "direct" to skip the environment proxies, or None to inherit them."""
+    if outbound_proxy is None:
+        return None
+    candidate: Final = outbound_proxy.strip()
+    if candidate.lower() == DIRECT_OUTBOUND_PROXY:
+        return DIRECT_OUTBOUND_PROXY
+    scheme: Final = httpx.URL(candidate).scheme.lower() if candidate else ""
+    if scheme not in _OUTBOUND_PROXY_SCHEMES:
+        raise ValueError(
+            "outbound_proxy must be an http://, https://, socks5:// or socks5h:// URL, or 'direct'. "
+            f"Got scheme {scheme!r}"
+        )
+    if scheme in _SOCKS_SCHEMES and importlib.util.find_spec("socksio") is None:
+        raise ValueError(
+            "outbound_proxy uses a SOCKS URL but the 'socksio' package is not installed. "
+            "Install it with: pip install 'httpx[socks]'"
+        )
+    return candidate
+
+
+def httpx_client_params(
+    litellm_params: Mapping[str, object] | None,
+) -> dict[str, object]:  # mutable-ok: the client cache key is built from a plain dict
+    """The deployment-level knobs that shape the HTTP client itself rather than a single request."""
+    source: Final = litellm_params if litellm_params is not None else {}
+    return {"ssl_verify": source.get("ssl_verify"), "outbound_proxy": source.get("outbound_proxy")}
+
+
+_OUTBOUND_PROXY_ADAPTER: Final = TypeAdapter(str | None)
+
+
+def outbound_proxy_of(litellm_params: Mapping[str, object] | None) -> str | None:
+    source: Final = litellm_params if litellm_params is not None else {}
+    return _OUTBOUND_PROXY_ADAPTER.validate_python(source.get("outbound_proxy"))
 
 
 class _TCPConnectorKwargs(TypedDict, total=False):
@@ -764,6 +807,7 @@ class AsyncHTTPHandler:
         follow_redirects: bool = True,
         http2: bool = False,
         token_exchange_engine: JwtBearerTokenExchangeEngine = default_token_exchange_engine,
+        outbound_proxy: str | None = None,
     ):
         self.timeout = timeout
         self.event_hooks = event_hooks
@@ -773,6 +817,7 @@ class AsyncHTTPHandler:
         self.token_exchange_engine = token_exchange_engine
         self.follow_redirects = follow_redirects
         self.http2 = http2
+        self.outbound_proxy = resolve_outbound_proxy(outbound_proxy)
         self._owns_client = True
         self._client = self.create_client(
             timeout=timeout,
@@ -814,6 +859,10 @@ class AsyncHTTPHandler:
                 cookies=blocked_cookie_jar(),
                 follow_redirects=self.follow_redirects,
                 trust_env=False,
+            )
+        if self.outbound_proxy is not None:
+            return self._create_outbound_proxy_client(
+                outbound_proxy=self.outbound_proxy, timeout=timeout, event_hooks=event_hooks, ssl_verify=ssl_verify
             )
         use_http2: Final = _resolve_http2(self.http2, ssl_verify)
         replaces_aiohttp: Final = use_http2 and AsyncHTTPHandler.should_use_aiohttp_transport()
@@ -860,6 +909,52 @@ class AsyncHTTPHandler:
             http2=use_http2,
             trust_env=trust_env,
         )
+
+    def _create_outbound_proxy_client(
+        self,
+        outbound_proxy: str,
+        timeout: float | httpx.Timeout | None,
+        event_hooks: HTTPEventHooks | None,
+        ssl_verify: VerifyTypes | None,
+    ) -> httpx.AsyncClient:
+        """A deployment with its own egress never inherits HTTP(S)_PROXY / ALL_PROXY, so trust_env stays off."""
+        use_http2: Final = _resolve_http2(self.http2, ssl_verify)
+        ssl_config: Final = get_ssl_configuration(ssl_verify, http2=use_http2)
+        cert: Final = os.getenv("SSL_CERTIFICATE", litellm.ssl_certificate)
+        return httpx.AsyncClient(
+            transport=AsyncHTTPHandler.create_outbound_proxy_transport(
+                outbound_proxy, verify=ssl_config, cert=cert, http2=use_http2, limits=DEFAULT_LIMITS
+            ),
+            limits=DEFAULT_LIMITS,
+            event_hooks=event_hooks,
+            timeout=timeout if timeout is not None else _DEFAULT_TIMEOUT,
+            verify=ssl_config,
+            cert=cert,
+            headers=get_default_headers(),
+            cookies=blocked_cookie_jar(),
+            follow_redirects=self.follow_redirects,
+            http2=use_http2,
+            trust_env=False,
+        )
+
+    @staticmethod
+    def create_outbound_proxy_transport(
+        outbound_proxy: str,
+        verify: VerifyTypes,
+        cert: CertTypes | None,
+        http2: bool = False,
+        limits: httpx.Limits = DEFAULT_LIMITS,
+    ) -> AsyncHTTPTransport | AsyncHTTP2ConnectionSpread | None:
+        if outbound_proxy == DIRECT_OUTBOUND_PROXY:
+            return AsyncHTTPHandler._create_httpx_transport(http2=http2, verify=verify, cert=cert, limits=limits)
+        if http2:
+            return AsyncHTTP2ConnectionSpread(
+                lambda lane_limits: AsyncHTTPTransport(
+                    proxy=outbound_proxy, verify=verify, cert=cert, http2=True, limits=lane_limits
+                ),
+                limits,
+            )
+        return AsyncHTTPTransport(proxy=outbound_proxy, verify=verify, cert=cert, limits=limits)
 
     async def close(self):
         # Close the client when you're done with it
@@ -1609,11 +1704,13 @@ class HTTPHandler:
         disable_default_headers: bool
         | None = False,  # arize phoenix returns different API responses when user agent header in request
         follow_redirects: bool = True,
+        outbound_proxy: str | None = None,
     ):
         self.timeout = timeout
         self.ssl_verify = ssl_verify
         self.disable_default_headers = disable_default_headers
         self.follow_redirects = follow_redirects
+        self.outbound_proxy = resolve_outbound_proxy(outbound_proxy)
         self._owns_client = client is None
         self._heal_lock = threading.Lock()
         self._client = self.create_client() if client is None else client
@@ -1629,6 +1726,21 @@ class HTTPHandler:
 
         # Get default headers (User-Agent, overridable via LITELLM_USER_AGENT)
         default_headers: Final = get_default_headers() if not self.disable_default_headers else None
+
+        if self.outbound_proxy is not None:
+            return httpx.Client(
+                transport=HTTPHandler.create_sync_outbound_proxy_transport(
+                    self.outbound_proxy, verify=ssl_config, cert=cert, http2=use_http2
+                ),
+                timeout=self.timeout if self.timeout is not None else _DEFAULT_TIMEOUT,
+                verify=ssl_config,
+                cert=cert,
+                headers=default_headers,
+                cookies=blocked_cookie_jar(),
+                follow_redirects=self.follow_redirects,
+                http2=use_http2,
+                trust_env=False,
+            )
 
         transport: Final = self._create_sync_transport(verify=ssl_config, cert=cert, http2=use_http2)
 
@@ -1967,6 +2079,14 @@ class HTTPHandler:
         return _environment_proxy_mounts(
             lambda proxy_url: HTTPTransport(proxy=proxy_url, verify=verify, cert=cert, http2=http2)
         )
+
+    @staticmethod
+    def create_sync_outbound_proxy_transport(
+        outbound_proxy: str, verify: VerifyTypes, cert: CertTypes | None, http2: bool
+    ) -> httpx.BaseTransport | None:
+        if outbound_proxy == DIRECT_OUTBOUND_PROXY:
+            return HTTPHandler._create_sync_transport(verify=verify, cert=cert, http2=http2)
+        return HTTPTransport(proxy=outbound_proxy, verify=verify, cert=cert, http2=http2)
 
 
 def get_async_httpx_client(

@@ -4192,6 +4192,37 @@ class TestIsRequestBodySafeBlocksFireworksForwardUserId:
         )
 
 
+class TestIsRequestBodySafeBlocksOutboundProxy:
+    @pytest.mark.parametrize(
+        "body",
+        [
+            pytest.param({"outbound_proxy": "http://attacker.example:8080"}, id="root"),
+            pytest.param({"extra_body": {"outbound_proxy": "http://attacker.example:8080"}}, id="extra_body"),
+            pytest.param({"metadata": {"outbound_proxy": "http://attacker.example:8080"}}, id="metadata"),
+            pytest.param({"outbound_proxy": "direct", "ssl_verify": False}, id="direct"),
+        ],
+    )
+    def test_outbound_proxy_in_request_body_is_rejected(self, body: dict[str, object]) -> None:
+        with pytest.raises(ValueError, match="outbound_proxy"):
+            is_request_body_safe(
+                request_body={"model": "mistral-model", **body},
+                general_settings={},
+                llm_router=None,
+                model="mistral-model",
+            )
+
+    def test_admin_opt_in_proxy_wide_allows_outbound_proxy(self) -> None:
+        assert (
+            is_request_body_safe(
+                request_body={"model": "mistral-model", "outbound_proxy": "http://corp-proxy:3128"},
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="mistral-model",
+            )
+            is True
+        )
+
+
 class TestIsRequestBodySafeBlocksRustOptIn:
     """``rust`` hands the whole call to the Rust core, which signs and sends
     with its own HTTP client rather than the one the deployment configured, and

@@ -39,8 +39,11 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     _DEFAULT_TTL_FOR_HTTPX_CLIENTS,
     AsyncHTTPHandler,
+    HTTPHandler,
     get_ssl_configuration,
     http2_enabled,
+    outbound_proxy_of,
+    resolve_outbound_proxy,
 )
 
 
@@ -421,6 +424,7 @@ class BaseOpenAILLM:
 
         for param in openai_client_fields:
             key_parts.append(f"{param}={client_initialization_params.get(param)}")
+        key_parts.append(f"outbound_proxy={outbound_proxy_of(client_initialization_params.get('litellm_params'))}")
 
         _cache_key: Final = ",".join(key_parts)
         return _cache_key
@@ -438,6 +442,7 @@ class BaseOpenAILLM:
     @staticmethod
     def _get_async_http_client(
         shared_session: Optional["ClientSession"] = None,
+        outbound_proxy: str | None = None,
     ) -> httpx.AsyncClient | DefaultAsyncHttpxClient | None:
         if litellm.aclient_session is not None:
             return litellm.aclient_session
@@ -449,6 +454,17 @@ class BaseOpenAILLM:
 
         # Get unified SSL configuration
         ssl_config: Final = get_ssl_configuration()
+        deployment_proxy: Final = resolve_outbound_proxy(outbound_proxy)
+        if deployment_proxy is not None:
+            return httpx.AsyncClient(
+                verify=ssl_config,
+                transport=AsyncHTTPHandler.create_outbound_proxy_transport(
+                    deployment_proxy, verify=ssl_config, cert=None, http2=http2_enabled()
+                ),
+                follow_redirects=True,
+                http2=http2_enabled(),
+                trust_env=False,
+            )
         transport: Final = AsyncHTTPHandler.create_async_transport(
             ssl_context=(ssl_config if isinstance(ssl_config, ssl.SSLContext) else None),
             ssl_verify=ssl_config if isinstance(ssl_config, bool) else None,
@@ -467,11 +483,12 @@ class BaseOpenAILLM:
     def get_async_http_client(
         cls,
         shared_session: Optional["ClientSession"] = None,
+        outbound_proxy: str | None = None,
     ) -> httpx.AsyncClient | None:
-        return cls._get_async_http_client(shared_session)
+        return cls._get_async_http_client(shared_session, outbound_proxy=outbound_proxy)
 
     @staticmethod
-    def _get_sync_http_client() -> httpx.Client | DefaultHttpxClient | None:
+    def _get_sync_http_client(outbound_proxy: str | None = None) -> httpx.Client | DefaultHttpxClient | None:
         if litellm.client_session is not None:
             return litellm.client_session
 
@@ -482,6 +499,17 @@ class BaseOpenAILLM:
 
         # Get unified SSL configuration
         ssl_config: Final = get_ssl_configuration()
+        deployment_proxy: Final = resolve_outbound_proxy(outbound_proxy)
+        if deployment_proxy is not None:
+            return httpx.Client(
+                verify=ssl_config,
+                transport=HTTPHandler.create_sync_outbound_proxy_transport(
+                    deployment_proxy, verify=ssl_config, cert=None, http2=http2_enabled()
+                ),
+                follow_redirects=True,
+                http2=http2_enabled(),
+                trust_env=False,
+            )
 
         return httpx.Client(
             verify=ssl_config,

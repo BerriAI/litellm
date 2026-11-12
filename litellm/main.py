@@ -5798,6 +5798,7 @@ def completion(
     organization: Final = kwargs.get("organization", None)
     ### VERIFY SSL ###
     ssl_verify: Final = kwargs.get("ssl_verify", None)
+    outbound_proxy: Final = kwargs.get("outbound_proxy", None)
     ### CUSTOM MODEL COST ###
     input_cost_per_token: Final = kwargs.get("input_cost_per_token", None)
     output_cost_per_token: Final = kwargs.get("output_cost_per_token", None)
@@ -6265,6 +6266,7 @@ def completion(
             prompt_id=prompt_id,
             prompt_variables=prompt_variables,
             ssl_verify=ssl_verify,
+            outbound_proxy=outbound_proxy,
             merge_reasoning_content_in_choices=kwargs.get("merge_reasoning_content_in_choices", None),
             use_litellm_proxy=kwargs.get("use_litellm_proxy", False),
             api_version=api_version,
@@ -7994,7 +7996,10 @@ def embedding(
                 optional_params=optional_params,
                 client=client,
                 aembedding=aembedding,
-                litellm_params={"ssl_verify": kwargs.get("ssl_verify", None)},
+                litellm_params={
+                    "ssl_verify": kwargs.get("ssl_verify", None),
+                    "outbound_proxy": kwargs.get("outbound_proxy", None),
+                },
             )
         elif custom_llm_provider == "perplexity":
             response = base_llm_http_handler.embedding(

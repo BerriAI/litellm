@@ -3,6 +3,7 @@ Contains utils used by OpenAI compatible endpoints
 """
 
 from typing import Final
+from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import Request
 
@@ -13,6 +14,14 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
 )
 
 SENSITIVE_DATA_MASKER: Final = SensitiveDataMasker()
+
+
+def strip_url_userinfo(url: str) -> str:
+    """Drop the ``user:password@`` part of a URL so proxy credentials never leave the server."""
+    parts: Final = urlsplit(url)
+    if "@" not in parts.netloc:
+        return url
+    return urlunsplit(parts._replace(netloc=parts.netloc.rpartition("@")[2]))
 
 
 def remove_sensitive_info_from_deployment(
@@ -35,6 +44,9 @@ def remove_sensitive_info_from_deployment(
     deployment_dict["litellm_params"].pop("vertex_ai_credentials", None)
     deployment_dict["litellm_params"].pop("aws_access_key_id", None)
     deployment_dict["litellm_params"].pop("aws_secret_access_key", None)
+    outbound_proxy: Final = deployment_dict["litellm_params"].get("outbound_proxy")
+    if isinstance(outbound_proxy, str):
+        deployment_dict["litellm_params"]["outbound_proxy"] = strip_url_userinfo(outbound_proxy)
 
     # Rate-limit config fields must never be masked — they are integers, not credentials.
     # The field names contain "key" which matches the masker's sensitive pattern, so we

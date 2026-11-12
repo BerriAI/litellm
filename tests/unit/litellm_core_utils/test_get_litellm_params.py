@@ -559,3 +559,26 @@ class TestOpenAIWifKeys:
         params = get_litellm_params()
         for key in self.THREE_KEYS:
             assert key not in params
+
+
+class TestOutboundProxy:
+    """outbound_proxy is a per-deployment connection setting like ssl_verify: it has to ride the kwargs
+    funnel into litellm_params (where the HTTP client is built) and stay out of the provider body."""
+
+    def test_value_survives_into_litellm_params(self):
+        params = get_litellm_params(outbound_proxy="socks5h://egress.internal:1080")
+        assert params["outbound_proxy"] == "socks5h://egress.internal:1080"
+
+    def test_unset_is_none_like_ssl_verify(self):
+        params = get_litellm_params()
+        assert params["outbound_proxy"] is None
+        assert params["ssl_verify"] is None
+
+    def test_value_is_forwarded_from_completion_kwargs(self, monkeypatch):
+        forwarded = _funnel_kwargs_completion_forwards(monkeypatch, {"outbound_proxy": "http://egress.internal:3128"})
+        assert forwarded["outbound_proxy"] == "http://egress.internal:3128"
+
+    def test_key_stays_out_of_the_provider_body(self):
+        from litellm.types.utils import all_litellm_params
+
+        assert "outbound_proxy" in all_litellm_params

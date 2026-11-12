@@ -194,6 +194,50 @@ def test_get_openai_client_cache_key(client_type):
     assert "api_key=sk-test" in key
 
 
+@pytest.mark.parametrize("client_type", ["openai", "azure"])
+def test_get_openai_client_cache_key_separates_deployments_by_outbound_proxy(client_type):
+    """Two deployments that differ only in egress must not share one SDK client."""
+    base = {"api_key": "sk-test", "api_base": "https://api.openai.com/v1"}
+    inherited = BaseOpenAILLM.get_openai_client_cache_key(
+        client_initialization_params={**base, "litellm_params": {}}, client_type=client_type
+    )
+    proxied = BaseOpenAILLM.get_openai_client_cache_key(
+        client_initialization_params={**base, "litellm_params": {"outbound_proxy": "socks5://egress:1080"}},
+        client_type=client_type,
+    )
+    direct = BaseOpenAILLM.get_openai_client_cache_key(
+        client_initialization_params={**base, "litellm_params": {"outbound_proxy": "direct"}}, client_type=client_type
+    )
+    assert len({inherited, proxied, direct}) == 3
+    assert "outbound_proxy=socks5://egress:1080" in proxied
+
+
+def test_sdk_http_client_uses_the_deployment_outbound_proxy(monkeypatch):
+    """The OpenAI SDK client built for a proxied deployment must not inherit the process proxy env."""
+    from litellm.llms.openai.openai import OpenAIChatCompletion
+
+    from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
+
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.invalid:3128")
+    monkeypatch.setattr(litellm, "aclient_session", None)
+    monkeypatch.setattr(litellm, "client_session", None)
+    monkeypatch.setattr(litellm, "network_mock", False, raising=False)
+    monkeypatch.setattr(litellm, "http2", False)
+    monkeypatch.delenv("LITELLM_HTTP2", raising=False)
+
+    async_client = OpenAIChatCompletion._get_async_http_client(outbound_proxy="http://egress.internal:3128")
+    sync_client = OpenAIChatCompletion._get_sync_http_client(outbound_proxy="http://egress.internal:3128")
+    try:
+        assert async_client.trust_env is False
+        assert sync_client.trust_env is False
+        assert not isinstance(async_client._transport, LiteLLMAiohttpTransport)
+        assert isinstance(async_client._transport, httpx.AsyncHTTPTransport)
+        assert isinstance(sync_client._transport, httpx.HTTPTransport)
+        assert async_client._mounts == {}
+        assert sync_client._mounts == {}
+    finally:
+        sync_client.close()
+
 def test_evicting_a_client_built_on_the_callers_session_leaves_that_session_open(monkeypatch):
     """`litellm.aclient_session` belongs to the caller, who goes on using it.
 
