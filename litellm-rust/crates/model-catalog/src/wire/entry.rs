@@ -50,7 +50,9 @@ impl EntryWire {
             "off_peak_pricing" => self.off_peak = reader.off_peak(value),
             "search_context_cost_per_query" => self.search_context = reader.value(path(), value),
             "guardrail_cost_per_unit" => self.guardrail = reader.value(path(), value),
-            "output_cost_per_video_clip" => self.output_cost_per_video_clip = reader.value(path(), value),
+            "output_cost_per_video_clip" => {
+                self.output_cost_per_video_clip = reader.value(path(), value)
+            }
             "regional_endpoint_uplift_multiplier" => {
                 self.regional_endpoint_uplift = reader.value(path(), value)
             }
