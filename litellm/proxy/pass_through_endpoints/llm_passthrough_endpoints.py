@@ -3080,17 +3080,11 @@ _CREDENTIALLESS_VERTEX_MISSING_CREDENTIAL_DETAIL: Final = (
 
 
 def _normalize_credential_value(value: str) -> str:
-    """Reduce a header value to the bare token, matching how ``user_api_key_auth``
-    reads a caller's key.
-
-    Reuses the auth module's ``_get_bearer_token`` so the caller-key comparison
-    strips exactly the schemes authentication accepts (``Bearer`` / ``bearer`` /
-    ``Basic`` / ``AWS4-HMAC-SHA256`` credential), rather than re-deriving a
-    narrower normalization here. ``_get_bearer_token`` returns ``""`` for a value
-    with no recognized scheme prefix, so a bare token (or a real Google
-    credential that carries no scheme) falls back to its own value.
-    """
-    return get_bearer_token(value) or value
+    normalized: Final = value.strip()
+    parts: Final = normalized.split(maxsplit=1)
+    if len(parts) == 2 and parts[0].lower() == "bearer":
+        return parts[1].strip()
+    return (get_bearer_token(normalized) or normalized).strip()
 
 
 _VERTEX_UPSTREAM_CREDENTIAL_HEADERS: Final = frozenset({"authorization", "x-goog-api-key"})

@@ -25,7 +25,10 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.proxy import proxy_server
 from litellm.proxy._types import (
+    LiteLLM_BudgetTable,
     LiteLLM_JWTAuth,
+    LiteLLM_ProjectTableCachedObj,
+    LiteLLM_TagTable,
     LiteLLM_TeamTableCachedObj,
     LitellmUserRoles,
     RoleBasedPermissions,
@@ -35,6 +38,7 @@ from litellm.proxy._types import (
 from litellm.proxy.agent_endpoints import agent_registry
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.common_utils.http_parsing_utils import safe_set_request_parsed_body
+from litellm.proxy.common_utils.user_api_key_cache import project_cache_key, tag_cache_key
 from litellm.proxy.pass_through_endpoints.cursor_cli_passthrough_endpoints import cursor_cli_passthrough
 from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry
@@ -136,6 +140,116 @@ def test_gateway_bearer_cannot_replace_the_separate_gateway_header(
     assert response.status_code == 401
     assert response.json()["detail"] == "A separate LiteLLM gateway credential is required"
     assert not respx_mock.calls
+
+
+@pytest.mark.parametrize("credential", [MASTER_KEY, "sk-cursor-normalized-key"])
+@pytest.mark.parametrize("template", ["Bearer  {}", "bEaReR {}", "Bearer {}  "])
+def test_normalized_gateway_bearers_never_reach_cursor(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    credential: str,
+    template: str,
+) -> None:
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    proxy_server.user_api_key_cache.set_cache(
+        key=hash_token(credential), value=UserAPIKeyAuth(token=hash_token(credential))
+    )
+    upstream: Final = respx_mock.post(f"{_BASE}/{_RUN}").respond(content=b"\x08\x01")
+    response: Final = client.post(
+        f"/cursor-cli/{_RUN}",
+        headers={"x-litellm-api-key": credential, "authorization": template.format(credential)},
+        content=b"\xff",
+    )
+    assert response.status_code == 401, response.text
+    assert not upstream.called
+
+
+@pytest.mark.parametrize("credential", [MASTER_KEY, "sk-cursor-normalized-key"])
+def test_normalized_copied_gateway_secret_is_removed_without_changing_cursor_credentials(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, credential: str
+) -> None:
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    proxy_server.user_api_key_cache.set_cache(
+        key=hash_token(credential), value=UserAPIKeyAuth(token=hash_token(credential))
+    )
+    upstream: Final = respx_mock.post(f"{_BASE}/{_RUN}").respond(content=b"\x08\x01")
+    bearer: Final = f"bEaReR  {_TOKEN}  "
+    response: Final = client.post(
+        f"/cursor-cli/{_RUN}",
+        headers={"x-litellm-api-key": credential, "authorization": bearer, "x-copy-key": f"bEaReR  {credential}  "},
+        content=b"\xff",
+    )
+    assert response.status_code == 200, response.text
+    assert upstream.calls.last.request.headers["authorization"] == bearer
+    assert "x-copy-key" not in upstream.calls.last.request.headers
+
+
+@pytest.mark.parametrize("source", ["key", "team", "project", "header", "master-header"])
+@pytest.mark.parametrize("tpm_limit", [0, 100, None])
+def test_effective_tag_token_caps_cannot_be_bypassed_by_opaque_requests(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    source: str,
+    tpm_limit: int | None,
+) -> None:
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    key: Final = MASTER_KEY if source == "master-header" else "sk-cursor-tagged-key"
+    tag: Final = "cursor-budget-tag"
+    proxy_server.user_api_key_cache.set_cache(
+        key=tag_cache_key(tag),
+        value=LiteLLM_TagTable(
+            tag_name=tag,
+            litellm_budget_table=LiteLLM_BudgetTable(budget_id="tag-budget", tpm_limit=tpm_limit, rpm_limit=100),
+        ),
+    )
+    proxy_server.user_api_key_cache.set_cache(
+        key="team_id:tag-team",
+        value=LiteLLM_TeamTableCachedObj(team_id="tag-team", metadata={"tags": [tag]}),
+    )
+    proxy_server.user_api_key_cache.set_cache(
+        key=project_cache_key("tag-project"),
+        value=LiteLLM_ProjectTableCachedObj(project_id="tag-project", metadata={"tags": [tag]}),
+    )
+    proxy_server.user_api_key_cache.set_cache(
+        key=hash_token(key),
+        value=UserAPIKeyAuth(
+            token=hash_token(key),
+            metadata={"tags": [tag]} if source == "key" else {},
+            team_id="tag-team" if source == "team" else None,
+            project_id="tag-project" if source == "project" else None,
+        ),
+    )
+    upstream: Final = respx_mock.post(f"{_BASE}/{_RUN}").respond(content=b"\x08\x01")
+    response: Final = client.post(
+        f"/cursor-cli/{_RUN}",
+        headers={
+            **_HEADERS,
+            "x-litellm-api-key": key,
+            **({"x-litellm-tags": tag} if source in {"header", "master-header"} else {}),
+        },
+        content=b"\xff",
+    )
+    assert response.status_code == (200 if tpm_limit is None else 403), response.text
+    assert upstream.called is (tpm_limit is None)
+
+
+@pytest.mark.parametrize("lookup", ["absent", "error", "no-database"])
+def test_opaque_tag_lookup_distinguishes_absent_tags_from_unverifiable_limits(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, lookup: str
+) -> None:
+    database: Final = MagicMock()
+    database.db.litellm_tagtable.find_many = AsyncMock(
+        return_value=[], side_effect=ConnectionError("tag database unavailable") if lookup == "error" else None
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", None if lookup == "no-database" else database)
+    upstream: Final = respx_mock.post(f"{_BASE}/{_RUN}").respond(content=b"\x08\x01")
+    response: Final = client.post(
+        f"/cursor-cli/{_RUN}", headers={**_HEADERS, "x-litellm-tags": "unregistered-tag"}, content=b"\xff"
+    )
+    assert response.status_code == (403 if lookup == "error" else 200), response.text
+    assert upstream.called is (lookup != "error")
 
 
 @pytest.mark.parametrize("restriction", ["role", "scope"])

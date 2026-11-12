@@ -117,6 +117,7 @@ from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _safe_get_request_query_params,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    get_tags_from_request_body,
     safe_get_request_headers,
     safe_get_request_query_params,
 )
@@ -1210,6 +1211,7 @@ async def common_checks(
     10. [OPTIONAL] Organization checks - is user_object.organization_id is set, run these checks
     11. [OPTIONAL] Vector store checks - is the object allowed to access the vector store
     """
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, metadata_variable_name_for_request
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     _model: Final[str | list[str] | None] = get_model_from_request(
@@ -1288,6 +1290,22 @@ async def common_checks(
         ):
             if source is not None:
                 check_opaque_inference_controls(source.model_dump())
+        opaque_tags: Final = tuple(
+            dict.fromkeys(
+                (
+                    *get_tags_from_request_body(_typed_request_body(request_body)),
+                    *LiteLLMProxyRequestSetup.get_inherited_tags(valid_token),
+                )
+            )
+        )
+        if prisma_client is not None and opaque_tags:
+            opaque_tag_objects: Final = await read_tag_objects_batch(
+                tag_names=opaque_tags, prisma_client=prisma_client, user_api_key_cache=user_api_key_cache
+            )
+            if isinstance(opaque_tag_objects, Exception):
+                raise HTTPException(status_code=403, detail="Opaque inference cannot verify tag policies")
+            for tag_object in opaque_tag_objects.values():
+                check_opaque_inference_controls(tag_object.model_dump())
 
     unpriced_models: Final = (
         _unpriced_models_in_request(model=_model, llm_router=llm_router)
@@ -1499,8 +1517,6 @@ async def common_checks(
     if not skip_all_budget_checks:
         # Key metadata.tags are injected into request_body here so the tag budget
         # check can read them; this mutation must run before the gathered checks.
-        from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, metadata_variable_name_for_request
-
         if valid_token is not None:
             for tag_target in LiteLLMProxyRequestSetup.pre_auth_tag_merge_targets(request, request_body):
                 LiteLLMProxyRequestSetup.pre_seed_litellm_metadata_for_route(request_data=tag_target, route=route)
