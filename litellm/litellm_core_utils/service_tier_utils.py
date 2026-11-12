@@ -21,8 +21,7 @@ def get_served_service_tier(standard_logging_payload: StandardLoggingPayload) ->
     The tier the provider reports it actually served the request on.
 
     Providers report it either at the top level of the response (OpenAI, Bedrock,
-    Groq) or on the usage object (Anthropic). Streaming responses carry no served
-    tier.
+    Groq) or on the usage object (Anthropic).
     """
     response: Final = standard_logging_payload.get("response")
     usage_object: Final = standard_logging_payload.get("metadata", {}).get("usage_object")
@@ -60,10 +59,9 @@ def get_service_tier_from_standard_logging_payload(
     so latency and spend stay segmentable when the request said ``auto`` and the
     provider picked the concrete tier.
 
-    Streaming responses carry no served tier, so the requested tier is the
-    fallback. Values the provider itself reports are not caller-controlled and
-    stay unrestricted, so a tier a provider adds later is still labelled
-    correctly.
+    The requested tier is the fallback when the provider reports none. Values
+    the provider itself reports are not caller-controlled and stay unrestricted,
+    so a tier a provider adds later is still labelled correctly.
     """
     served_tier: Final = get_served_service_tier(standard_logging_payload)
     if served_tier is not None:

@@ -45,6 +45,7 @@ if TYPE_CHECKING:
     from litellm.types.llms.openai import AllMessageValues
 
 BEDROCK_INVOKE_TRACE_FIELD: Final = "amazon-bedrock-trace"
+BEDROCK_SERVICE_TIER_HEADER: Final = "X-Amzn-Bedrock-Service-Tier"
 
 
 _ERROR_REQUEST_URL: Final = "https://docs.litellm.ai/docs"
@@ -65,6 +66,13 @@ BedrockRoute = Literal[
     "mantle",
     "chat_completions",
 ]
+
+
+def served_service_tier(response_headers: Mapping[str, str] | None) -> str | None:
+    tier_header: Final = BEDROCK_SERVICE_TIER_HEADER.lower()
+    return next(
+        (value for name, value in (response_headers or {}).items() if name.lower() == tier_header and value), None
+    )
 
 
 def error_response_text(response: httpx.Response) -> str:
