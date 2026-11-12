@@ -68562,10 +68562,12 @@
     "xai/grok-imagine-image-quality": {
         "deprecation_date": "2026-11-02",
         "deprecation_source": "https://docs.x.ai/developers/migration/imagine-image-quality-nov-2",
-        "input_cost_per_image": 0.05,
+        "input_cost_per_image": 0.04,
         "litellm_provider": "xai",
         "mode": "image_generation",
-        "source": "https://docs.x.ai/docs/models",
+        "output_cost_per_image_1K": 0.04,
+        "output_cost_per_image_2K": 0.06,
+        "source": "https://docs.x.ai/developers/migration/imagine-image-quality-nov-2",
         "successor_model": "xai/grok-imagine-image-2.0",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -68581,10 +68583,12 @@
     "xai/grok-imagine-image-quality-20260403": {
         "deprecation_date": "2026-11-02",
         "deprecation_source": "https://docs.x.ai/developers/migration/imagine-image-quality-nov-2",
-        "input_cost_per_image": 0.05,
+        "input_cost_per_image": 0.04,
         "litellm_provider": "xai",
         "mode": "image_generation",
-        "source": "https://docs.x.ai/docs/models",
+        "output_cost_per_image_1K": 0.04,
+        "output_cost_per_image_2K": 0.06,
+        "source": "https://docs.x.ai/developers/migration/imagine-image-quality-nov-2",
         "successor_model": "xai/grok-imagine-image-2.0",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -68600,10 +68604,12 @@
     "xai/grok-imagine-image-quality-latest": {
         "deprecation_date": "2026-11-02",
         "deprecation_source": "https://docs.x.ai/developers/migration/imagine-image-quality-nov-2",
-        "input_cost_per_image": 0.05,
+        "input_cost_per_image": 0.04,
         "litellm_provider": "xai",
         "mode": "image_generation",
-        "source": "https://docs.x.ai/docs/models",
+        "output_cost_per_image_1K": 0.04,
+        "output_cost_per_image_2K": 0.06,
+        "source": "https://docs.x.ai/developers/migration/imagine-image-quality-nov-2",
         "successor_model": "xai/grok-imagine-image-2.0",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -68619,10 +68625,12 @@
     "xai/grok-imagine-image-pro": {
         "deprecation_date": "2026-05-15",
         "deprecation_source": "https://docs.x.ai/developers/migration/may-15-retirement",
-        "input_cost_per_image": 0.05,
+        "input_cost_per_image": 0.04,
         "litellm_provider": "xai",
         "mode": "image_generation",
-        "source": "https://docs.x.ai/docs/models",
+        "output_cost_per_image_1K": 0.04,
+        "output_cost_per_image_2K": 0.06,
+        "source": "https://docs.x.ai/developers/migration/imagine-image-quality-nov-2",
         "successor_model": "xai/grok-imagine-image-2.0",
         "supported_endpoints": [
             "/v1/images/generations"
