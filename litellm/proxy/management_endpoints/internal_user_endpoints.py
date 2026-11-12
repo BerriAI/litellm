@@ -1122,13 +1122,13 @@ async def _target_in_caller_admin_org(
     caller_user_id: str,
     target_user_id: str,
 ) -> bool:
-    admin_memberships: Final = await prisma_client.db.litellm_organizationmembership.find_many(
+    admin_memberships: Final = await _organization_membership_table(prisma_client).find_many(
         where={"user_id": caller_user_id, "user_role": LitellmUserRoles.ORG_ADMIN.value}
     )
     if not admin_memberships:
         return False
     admin_org_ids: Final = {membership.organization_id for membership in admin_memberships}
-    target_memberships: Final = await prisma_client.db.litellm_organizationmembership.find_many(
+    target_memberships: Final = await _organization_membership_table(prisma_client).find_many(
         where={"user_id": target_user_id}
     )
     return any(membership.organization_id in admin_org_ids for membership in target_memberships)

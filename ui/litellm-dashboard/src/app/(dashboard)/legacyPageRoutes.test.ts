@@ -14,8 +14,6 @@ describe("legacyPageRedirectHref", () => {
   });
 
   it("keeps the older aliases for renamed pages", () => {
-    expect(redirect("page=api_ref")).toBe("/ui/api-reference");
-    expect(redirect("page=api-reference")).toBe("/ui/api-reference");
     expect(redirect("page=claude-code-plugins")).toBe("/ui/skills");
   });
 

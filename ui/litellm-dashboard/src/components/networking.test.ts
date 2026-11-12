@@ -388,7 +388,7 @@ describe("UI config and public endpoints", () => {
     await Networking.getUiConfig();
 
     expect(Networking.serverRootPath).toBe("/litellm");
-    expect(uiHref("api-reference")).toBe("/litellm/ui/api-reference");
+    expect(uiHref("logs")).toBe("/litellm/ui/logs");
   });
 
   it("sends model group connection probes to the configured gateway", async () => {

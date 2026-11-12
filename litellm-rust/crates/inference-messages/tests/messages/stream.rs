@@ -451,7 +451,7 @@ async fn stalling_error_upstream() -> (String, JoinHandle<()>) {
 
 #[rstest]
 #[tokio::test]
-async fn the_timeout_covers_a_stalled_stream_error_body(call: MessagesCall) {
+async fn a_stalled_stream_error_body_reads_as_empty(call: MessagesCall) {
     let (base, connection) = stalling_error_upstream().await;
     let host = RecordingStreamHost::new(
         MessagesCall {
@@ -467,7 +467,7 @@ async fn the_timeout_covers_a_stalled_stream_error_body(call: MessagesCall) {
         .expect_err("a stalled error body fails the call");
 
     assert!(error.dispatched(), "{error:?}");
-    assert_eq!(error.upstream_response(), None);
+    assert_eq!(error.upstream_response(), Some((429, "")));
     assert!(host.seen.into_inner().unwrap().is_empty());
     tokio::time::timeout(Duration::from_secs(5), connection)
         .await

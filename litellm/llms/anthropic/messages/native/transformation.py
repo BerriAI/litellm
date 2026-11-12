@@ -105,7 +105,6 @@ _MESSAGES_ADAPTER: Final = TypeAdapter(list[dict[str, object]])
 
 
 class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
-    _workload_identity_eligible: ClassVar[bool] = True
     _report_reasoning_drops: ClassVar[bool] = True
 
     @property
@@ -372,12 +371,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             self._apply_env_auth_header(
                 headers,
                 self._require_auth_header(
-                    AnthropicModelInfo.get_auth_header(
-                        api_key,
-                        api_base=api_base,
-                        litellm_params=litellm_params,
-                        allow_workload_identity=self._allows_workload_identity,
-                    ),
+                    AnthropicModelInfo.get_auth_header(api_key, api_base=api_base),
                     model=model,
                 ),
             )
@@ -412,12 +406,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             self._apply_env_auth_header(
                 oauth_headers,
                 self._require_auth_header(
-                    await AnthropicModelInfo.aget_auth_header(
-                        oauth_api_key,
-                        api_base=api_base,
-                        litellm_params=litellm_params,
-                        allow_workload_identity=self._allows_workload_identity,
-                    ),
+                    await AnthropicModelInfo.aget_auth_header(oauth_api_key, api_base=api_base),
                     model=model,
                 ),
             )
@@ -446,14 +435,6 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         headers.update(auth_header)
         if merged_beta:
             headers["anthropic-beta"] = merged_beta
-
-    @property
-    def _allows_workload_identity(self) -> bool:
-        """Subclasses reuse this validate step for their own /v1/messages-compatible providers, so
-        eligibility is declared per class and never inherited."""
-        from litellm.llms.anthropic.common_utils import config_allows_workload_identity
-
-        return config_allows_workload_identity(self)
 
     def finalize_messages_headers(
         self,

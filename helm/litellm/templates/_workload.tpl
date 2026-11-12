@@ -507,7 +507,11 @@ spec:
       path: /metrics/
       interval: {{ .Values.gateway.serviceMonitor.interval }}
       scrapeTimeout: {{ .Values.gateway.serviceMonitor.scrapeTimeout }}
-      scheme: http
+      scheme: {{ .Values.gateway.serviceMonitor.scheme }}
+      {{- with .Values.gateway.serviceMonitor.tlsConfig }}
+      tlsConfig:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.gateway.serviceMonitor.relabelings }}
       relabelings:
         {{- toYaml . | nindent 8 }}

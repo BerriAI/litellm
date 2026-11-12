@@ -1,8 +1,10 @@
+use crate::anthropic::messages::transformation::retry_anthropic_messages_after_http_error;
 use litellm_auth::VertexParams;
 use litellm_auth_gcp::{
     VertexConfig, get_vertex_ai_location, get_vertex_ai_project,
     get_vertex_ai_project_from_credentials, secret_names,
 };
+use litellm_host::interceptors::RetriedRequest;
 use litellm_http::request::{has_header, header_value, without_headers};
 use litellm_llms_types::{
     formats::messages::{MessagesOptionalParams, MessagesRequest, MessagesTool, OutputConfig},
@@ -24,7 +26,7 @@ use crate::{
     base_llm::{
         auth::{AuthScheme, Headers, ValidatedEnvironment},
         messages::{
-            context::MessagesTransformContext,
+            context::{MessagesShapeOptions, MessagesTransformContext},
             normalization::{normalize_system_role_messages, strip_cache_control_scope},
             transformation::BaseMessagesConfig,
         },
@@ -47,12 +49,28 @@ pub const VERTEX_ANTHROPIC_MESSAGES_CONFIG: VertexAiPartnerModelsAnthropicMessag
     VertexAiPartnerModelsAnthropicMessagesConfig;
 
 impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
+    fn tool_custom_field(&self, model: &str) -> crate::base_llm::messages::tools::ToolCustomField {
+        crate::base_llm::messages::tools::ToolCustomField::Rewrite {
+            hoist_defer_loading: crate::anthropic::messages::transformation::is_claude_model(model),
+        }
+    }
+
+    fn retry_after_http_error(
+        &self,
+        status: u16,
+        error_text: &str,
+        request_body: &Value,
+        context: &MessagesTransformContext,
+    ) -> Option<RetriedRequest> {
+        retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
+    }
+
     fn shape_request(
         &self,
         request: MessagesRequest,
-        reasoning_auto_summary: bool,
+        options: MessagesShapeOptions,
     ) -> Result<MessagesRequest, Error> {
-        shape_anthropic_messages_request(request, reasoning_auto_summary)
+        shape_anthropic_messages_request(request, options)
     }
 
     fn get_complete_url(
@@ -700,6 +718,7 @@ mod tests {
                     ..ThinkingContext::default()
                 },
                 drop_params: false,
+                drops_unsupported_params: false,
             },
         );
         assert_eq!(body["system"], json!("be terse"));
@@ -717,6 +736,7 @@ mod tests {
                 ..ThinkingContext::default()
             },
             drop_params: false,
+            drops_unsupported_params: false,
         }
     }
 
