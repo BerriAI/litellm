@@ -1,7 +1,8 @@
 # litellm/proxy/vector_stores/vector_store_registry.py
 import json
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timezone
+from itertools import chain
 from typing import (
     TYPE_CHECKING,
     Any,  # noqa: TID251  # untyped non_default_params dict is the only source of the unknown key type
@@ -10,7 +11,8 @@ from typing import (
     get_args,
 )
 
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import ConfigDict, TypeAdapter, ValidationError
+from typing_extensions import TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import remove_items_at_indices
@@ -33,11 +35,45 @@ else:
     PrismaClient = Any
 
 _DB_ROW: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
+_ITEMS: Final = TypeAdapter(Sequence[object], config=ConfigDict(strict=True))
+_TOOL: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True))
+_STORE_ID_ITEMS: Final = TypeAdapter(list[object] | tuple[object, ...], config=ConfigDict(strict=True))
+
+
+class _ManagedVectorStoreRowFields(TypedDict, total=False, extra_items=object):
+    pass
+
+
+def _row_fields(row: Iterable[tuple[str, object]]) -> Mapping[str, object]:
+    return dict(row)
+
+
+def _named_store_ids(store_ids: object) -> tuple[str, ...]:
+    if isinstance(store_ids, str):
+        return (store_ids,)
+    try:
+        items: Final = _STORE_ID_ITEMS.validate_python(store_ids)
+    except ValidationError:
+        return ()
+    return tuple(store_id for store_id in items if isinstance(store_id, str))
+
+
+def listed_vector_store_ids(store_ids: object) -> tuple[str, ...]:
+    return _named_store_ids(store_ids) if isinstance(store_ids, (list, tuple)) else ()
+
+
+def vector_store_ids_in_tool(tool: object) -> tuple[str, ...]:
+    try:
+        return _named_store_ids(_TOOL.validate_python(tool).get("vector_store_ids"))
+    except ValidationError:
+        return ()
 
 
 class VectorStoreIndexRegistry:
-    def __init__(self, vector_store_indexes: list[LiteLLM_ManagedVectorStoreIndex] = []):
-        self.vector_store_indexes: list[LiteLLM_ManagedVectorStoreIndex] = vector_store_indexes
+    def __init__(self, vector_store_indexes: list[LiteLLM_ManagedVectorStoreIndex] | None = None):
+        self.vector_store_indexes: list[LiteLLM_ManagedVectorStoreIndex] = (
+            vector_store_indexes if vector_store_indexes is not None else []
+        )
 
     def get_vector_store_indexes(self) -> list[LiteLLM_ManagedVectorStoreIndex]:
         """
@@ -109,8 +145,8 @@ class VectorStoreIndexRegistry:
 
 
 class VectorStoreRegistry:
-    def __init__(self, vector_stores: list[LiteLLM_ManagedVectorStore] = []):
-        self.vector_stores: list[LiteLLM_ManagedVectorStore] = vector_stores
+    def __init__(self, vector_stores: list[LiteLLM_ManagedVectorStore] | None = None):
+        self.vector_stores: list[LiteLLM_ManagedVectorStore] = vector_stores if vector_stores is not None else []
         self.vector_store_ids_to_vector_store_map: dict[str, LiteLLM_ManagedVectorStore] = {}
 
     def _extract_tool_params(self, tool: dict) -> VectorStoreToolParams:
@@ -128,7 +164,7 @@ class VectorStoreRegistry:
 
         return VectorStoreToolParams(**kwargs)
 
-    def get_vector_store_ids_to_run(self, non_default_params: dict, tools: list[dict] | None = None) -> list[str]:
+    def get_vector_store_ids_to_run(self, non_default_params: dict, tools: object = None) -> list[str]:
         """
         Returns the vector store ids to run
 
@@ -172,7 +208,7 @@ class VectorStoreRegistry:
         tools_to_remove: Final[list[int]] = []
 
         for i, tool in enumerate(tools):
-            tool_vector_store_ids = tool.get("vector_store_ids", [])
+            tool_vector_store_ids = vector_store_ids_in_tool(tool)
             if not tool_vector_store_ids:
                 continue
 
@@ -282,7 +318,7 @@ class VectorStoreRegistry:
             List of vector stores with tool parameters merged into litellm_params
         """
         # Pop vector_store_ids from params
-        vector_store_ids: Final[list[str]] = non_default_params.pop("vector_store_ids", None) or []
+        vector_store_ids: Final = [*listed_vector_store_ids(non_default_params.pop("vector_store_ids", None))]
 
         # Extract params from tools and collect IDs
         params_by_id = self.get_and_pop_recognised_vector_store_tools(tools=tools, vector_store_ids=vector_store_ids)
@@ -330,7 +366,7 @@ class VectorStoreRegistry:
             List of vector stores with tool parameters merged into litellm_params
         """
         # Pop vector_store_ids from params
-        vector_store_ids: Final[list[str]] = non_default_params.pop("vector_store_ids", None) or []
+        vector_store_ids: Final = [*listed_vector_store_ids(non_default_params.pop("vector_store_ids", None))]
 
         # Extract params from tools and collect IDs
         params_by_id = self.get_and_pop_recognised_vector_store_tools(tools=tools, vector_store_ids=vector_store_ids)
@@ -392,17 +428,15 @@ class VectorStoreRegistry:
 
         return vector_stores_to_run
 
-    def _get_vector_store_ids_from_tool_calls(
-        self, tools: list[dict] | None = None, vector_store_ids: list[str] = []
-    ) -> list[str]:
+    def _get_vector_store_ids_from_tool_calls(self, tools: object, vector_store_ids: list[str]) -> list[str]:
         """
         Returns the vector store ids from the tool calls
         """
-        if tools:
-            for tool in tools:
-                if "vector_store_ids" in tool:
-                    vector_store_ids.extend(tool["vector_store_ids"])
-        return vector_store_ids
+        try:
+            validated_tools: Final = _ITEMS.validate_python(tools)
+        except ValidationError:
+            return vector_store_ids
+        return [*vector_store_ids, *chain.from_iterable(vector_store_ids_in_tool(tool) for tool in validated_tools)]
 
     def load_vector_stores_from_config(self, vector_stores_config: list[dict]):
         """
@@ -412,7 +446,7 @@ class VectorStoreRegistry:
             # cast to VectorStoreConfig
             litellm_vector_store_config = LiteLLM_VectorStoreConfig(**vector_store_config)
             vector_store_name = litellm_vector_store_config.get("vector_store_name")
-            vector_store_litellm_params: dict[str, Any] = litellm_vector_store_config.get("litellm_params") or {}
+            vector_store_litellm_params = litellm_vector_store_config.get("litellm_params") or {}
 
             vector_store_id = vector_store_litellm_params.get("vector_store_id")
             if vector_store_id is None:
@@ -513,8 +547,10 @@ class VectorStoreRegistry:
                 order={"created_at": "desc"},
             )
             for vector_store in _vector_stores_from_db:
-                _dict_vector_store = dict(vector_store)
-                _litellm_managed_vector_store = LiteLLM_ManagedVectorStore(**_dict_vector_store)
+                _dict_vector_store = _row_fields(vector_store)
+                _litellm_managed_vector_store = LiteLLM_ManagedVectorStore(
+                    **_ManagedVectorStoreRowFields(**_dict_vector_store)
+                )
                 vector_stores_from_db.append(_litellm_managed_vector_store)
         return vector_stores_from_db
 

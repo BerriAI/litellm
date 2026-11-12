@@ -93,3 +93,22 @@ fn project_is_read_from_the_credentials_that_would_authenticate() {
         None
     );
 }
+
+#[rstest]
+fn project_is_read_from_a_relative_key_file_named_like_json() {
+    let key = tempfile::Builder::new()
+        .prefix("{vertex")
+        .suffix(".json")
+        .tempfile_in(".")
+        .unwrap();
+    std::fs::write(key.path(), r#"{"project_id":"file-project"}"#).unwrap();
+    let relative_name = key.path().file_name().unwrap().to_str().unwrap();
+    let from_file = VertexConfig::from_params(&VertexParams {
+        vertex_credentials: Some(relative_name.into()),
+        ..VertexParams::default()
+    });
+    assert_eq!(
+        get_vertex_ai_project_from_credentials(&from_file, &|_| None).as_deref(),
+        Some("file-project")
+    );
+}

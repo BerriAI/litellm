@@ -2,8 +2,12 @@
 Utils used for litellm.transcription() and litellm.atranscription()
 """
 
+import base64
+import binascii
 import hashlib
+import math
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Final
 
@@ -15,6 +19,19 @@ from litellm.types.files import (
     get_file_mime_type_from_extension,
 )
 from litellm.types.utils import FileTypes
+
+
+def normalized_audio_duration_seconds(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        seconds: Final = float(value)
+    except OverflowError:
+        return None
+    return seconds if math.isfinite(seconds) and seconds >= 0 else None
+
+
+LIBSNDFILE_UNKNOWN_FRAME_COUNT: Final = 2**63 - 1
 
 
 @dataclass
@@ -287,9 +304,12 @@ def calculate_request_duration(file: FileTypes) -> float | None:
                 "Pass bytes, an open file handle, a (filename, content) "
                 "tuple, or a pathlib.Path."
             )
-        elif isinstance(file, os.PathLike):
-            # File path (PathLike): SDK convenience.
-            with open(str(file), "rb") as f:
+        elif isinstance(file, os.PathLike) or (
+            isinstance(file, tuple) and len(file) >= 2 and isinstance(file[1], os.PathLike)
+        ):
+            # File path (PathLike), bare or as the content of a (filename, path) tuple: SDK convenience.
+            path: Final = file if isinstance(file, os.PathLike) else file[1]
+            with open(str(path), "rb") as f:
                 file_content = f.read()
         elif isinstance(file, tuple):
             # Tuple format: (filename, content, optional content_type)
@@ -299,7 +319,7 @@ def calculate_request_duration(file: FileTypes) -> float | None:
                     file_content = content
                 elif hasattr(content, "read") and not isinstance(content, (str, os.PathLike)):
                     # File-like object in tuple
-                    current_pos: Final = getattr(content, "tell", lambda: None)()
+                    current_pos: Final = content.tell() if hasattr(content, "tell") else None
                     # Seek to start to ensure we read the entire content
                     if hasattr(content, "seek"):
                         content.seek(0)
@@ -323,12 +343,54 @@ def calculate_request_duration(file: FileTypes) -> float | None:
         # Extract duration using soundfile
         file_object: Final = io.BytesIO(file_content)
         with sf.SoundFile(file_object) as audio:
-            duration: Final = len(audio) / audio.samplerate
+            frames: Final = len(audio)
+            if frames >= LIBSNDFILE_UNKNOWN_FRAME_COUNT:
+                return None
+            duration: Final = frames / audio.samplerate
             return duration
 
     except Exception:
         # Silently fail if duration extraction fails
         return None
+
+
+DEFAULT_AUDIO_TOKEN_ESTIMATE: Final = 300
+AUDIO_TOKENS_PER_SECOND: Final = 10
+AUDIO_BYTES_PER_TOKEN: Final = 1600
+_MAX_AUDIO_ESTIMATE_BYTES: Final = 16 * 1024 * 1024
+
+
+def _audio_token_rate(model: str) -> int | None:
+    if model.startswith(
+        ("gemini-", "gemini/gemini-", "vertex_ai/gemini-", "vertex_ai_beta/gemini-", "openrouter/google/gemini-")
+    ):
+        family: Final = model.rsplit("/", 1)[-1]
+        return 25 if family.startswith(("gemini-3-", "gemini-3.")) else 32
+    if model.startswith(("gpt-", "openai/gpt-", "azure/gpt-", "openrouter/openai/gpt-")):
+        return AUDIO_TOKENS_PER_SECOND
+    return None
+
+
+def estimate_audio_tokens(data: str | None, models: Sequence[str] = (), fallback_model: str | None = None) -> int:
+    """Estimate audio tokens from container duration within a bounded decoding budget."""
+    if not data:
+        return DEFAULT_AUDIO_TOKEN_ESTIMATE
+    fallback_estimate: Final = max(len(data) * 3 // 4 // AUDIO_BYTES_PER_TOKEN, DEFAULT_AUDIO_TOKEN_ESTIMATE)
+    padding: Final = 2 if data.endswith("==") else 1 if data.endswith("=") else 0
+    if len(data) * 3 // 4 - padding > _MAX_AUDIO_ESTIMATE_BYTES:
+        return fallback_estimate
+    try:
+        duration: Final = calculate_request_duration(base64.b64decode(data, validate=True))
+    except (ValueError, binascii.Error):
+        return fallback_estimate
+    if duration is None or not math.isfinite(duration) or duration <= 0:
+        return fallback_estimate
+    fallback_rate: Final = _audio_token_rate(fallback_model) if fallback_model is not None else None
+    rate: Final = max(
+        (_audio_token_rate(model) or fallback_rate or AUDIO_TOKENS_PER_SECOND for model in models),
+        default=fallback_rate or AUDIO_TOKENS_PER_SECOND,
+    )
+    return max(1, math.ceil(duration * rate))
 
 
 DEFAULT_SPEECH_MEDIA_TYPE: Final = "audio/mpeg"

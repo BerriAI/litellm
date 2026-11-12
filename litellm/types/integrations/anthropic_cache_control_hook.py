@@ -19,15 +19,17 @@ class CacheControlMessageInjectionPoint(TypedDict):
     control: ChatCompletionCachedContent | None
     _litellm_openai_dialect: NotRequired[ReadOnly[bool]]
     _litellm_external_breakpoints: NotRequired[ReadOnly[int]]
+    _litellm_custom_llm_provider: NotRequired[ReadOnly[str]]
 
 
 class CacheControlToolConfigInjectionPoint(TypedDict):
-    """Type for tool_config-level injection points (Bedrock)."""
+    """Type for tool_config-level injection points (Anthropic and Bedrock)."""
 
     location: Literal["tool_config"]
     control: ChatCompletionCachedContent | None
     _litellm_openai_dialect: NotRequired[ReadOnly[bool]]
     _litellm_external_breakpoints: NotRequired[ReadOnly[int]]
+    _litellm_custom_llm_provider: NotRequired[ReadOnly[str]]
 
 
 CacheControlInjectionPoint = CacheControlMessageInjectionPoint | CacheControlToolConfigInjectionPoint

@@ -5,6 +5,15 @@ use futures_util::{Stream, StreamExt, stream, stream::BoxStream};
 
 pub type ByteStream = BoxStream<'static, Result<Bytes, io::Error>>;
 
+/// The transport error a body stream carried as an `io::Error`, however many times framing
+/// wrapped it on the way.
+pub(crate) fn tunnelled_http(error: &io::Error) -> Option<&litellm_http::Error> {
+    let inner = error.get_ref()?;
+    inner
+        .downcast_ref::<litellm_http::Error>()
+        .or_else(|| tunnelled_http(inner.downcast_ref::<io::Error>()?))
+}
+
 pub trait StreamTransformer {
     type Input;
     type Output;

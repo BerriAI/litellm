@@ -322,7 +322,12 @@ def create_migration(
 
                     # Write the SQL to migration.sql
                     migration_file = migration_dir / "migration.sql"
-                    migration_file.write_text(diff_sql)
+                    migration_sql: Final = (
+                        diff_sql
+                        if "CONCURRENTLY" in diff_sql.upper()
+                        else "SET LOCAL lock_timeout = '10s';\n\n" + diff_sql
+                    )
+                    migration_file.write_text(migration_sql)
 
                     print(f"Created migration in {migration_dir}")
                     return True

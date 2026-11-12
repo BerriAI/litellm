@@ -8,6 +8,7 @@ The proxy's model-info refresh is answered here.
 
 from __future__ import annotations
 
+import os
 from collections import deque
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -16,7 +17,7 @@ from typing import Final
 
 from tests.integration._support.wire import Reply, Request, Wire, wire_server
 
-PROVIDER_PORT: Final = 8191
+PROVIDER_PORT: Final = int(os.environ.get("INTEGRATION_PROVIDER_PORT", "8191"))
 PROVIDER_URL: Final = f"http://127.0.0.1:{PROVIDER_PORT}"
 MODEL_DISCOVERY: Final = ("GET", "/v1/models")
 _UNQUEUED: Final = Reply(status=500, body=b'{"error": "the shared fake provider has no reply queued for this request"}')
@@ -32,9 +33,7 @@ class SharedProvider:
         self.replies.extend(replies)
 
     def received(self) -> tuple[Request, ...]:
-        return tuple(
-            request for request in self.wire.drain() if (request.method, request.target) != MODEL_DISCOVERY
-        )
+        return tuple(request for request in self.wire.drain() if (request.method, request.target) != MODEL_DISCOVERY)
 
 
 @contextmanager

@@ -6,7 +6,7 @@ from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 from openai.types.fine_tuning import FineTuningJob
 
 from litellm._logging import verbose_logger
-from litellm.llms.openai.common_utils import OpenAIAsyncHTTPClient, OpenAIHTTPClient
+from litellm.llms.openai.workload_identity import build_async_openai_client, build_openai_client
 from litellm.types.utils import LiteLLMFineTuningJob
 
 _AZURE_STATUS_MAP: Final[Mapping[object, str]] = {
@@ -74,27 +74,27 @@ class OpenAIFineTuningAPI:
         client: OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | None = None,
         _is_async: bool = False,
         api_version: str | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | None:
-        received_args: Final = locals()
-        openai_client: OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | None = None
-        if client is None:
-            data: Final = {}
-            for k, v in received_args.items():
-                if k == "self" or k == "client" or k == "_is_async":
-                    pass
-                elif k == "api_base" and v is not None:
-                    data["base_url"] = v
-                elif v is not None:
-                    data[k] = v
-            if _is_async is True:
-                openai_client = AsyncOpenAI(**data, http_client=OpenAIAsyncHTTPClient())
-            else:
-                openai_client = OpenAI(**data, http_client=OpenAIHTTPClient())
-        else:
-            openai_client = client
-
-        return openai_client
+        if client is not None:
+            return client
+        if _is_async:
+            return build_async_openai_client(
+                api_key=api_key,
+                api_base=api_base,
+                timeout=timeout,
+                max_retries=max_retries,
+                organization=organization,
+                litellm_params=litellm_params,
+            )
+        return build_openai_client(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            organization=organization,
+            litellm_params=litellm_params,
+        )
 
     async def acreate_fine_tuning_job(
         self,
@@ -116,6 +116,7 @@ class OpenAIFineTuningAPI:
         max_retries: int | None,
         organization: str | None,
         client: OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> LiteLLMFineTuningJob | Coroutine[object, object, LiteLLMFineTuningJob]:
         openai_client: Final[OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | None] = self.get_openai_client(
             api_key=api_key,
@@ -126,6 +127,7 @@ class OpenAIFineTuningAPI:
             client=client,
             _is_async=_is_async,
             api_version=api_version,
+            litellm_params=litellm_params,
         )
         if openai_client is None:
             raise ValueError(
@@ -164,6 +166,7 @@ class OpenAIFineTuningAPI:
         max_retries: int | None,
         organization: str | None,
         client: OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> LiteLLMFineTuningJob | Coroutine[object, object, LiteLLMFineTuningJob]:
         openai_client: Final[OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | None] = self.get_openai_client(
             api_key=api_key,
@@ -174,6 +177,7 @@ class OpenAIFineTuningAPI:
             client=client,
             _is_async=_is_async,
             api_version=api_version,
+            litellm_params=litellm_params,
         )
         if openai_client is None:
             raise ValueError(
@@ -212,6 +216,7 @@ class OpenAIFineTuningAPI:
         max_retries: int | None,
         organization: str | None,
         client: OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | None = None,
+        litellm_params: Mapping[str, object] | None = None,
         after: str | None = None,
         limit: int | None = None,
     ):
@@ -224,6 +229,7 @@ class OpenAIFineTuningAPI:
             client=client,
             _is_async=_is_async,
             api_version=api_version,
+            litellm_params=litellm_params,
         )
         if openai_client is None:
             raise ValueError(
@@ -263,6 +269,7 @@ class OpenAIFineTuningAPI:
         max_retries: int | None,
         organization: str | None,
         client: OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> LiteLLMFineTuningJob | Coroutine[object, object, LiteLLMFineTuningJob]:
         openai_client: Final[OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | None] = self.get_openai_client(
             api_key=api_key,
@@ -273,6 +280,7 @@ class OpenAIFineTuningAPI:
             client=client,
             _is_async=_is_async,
             api_version=api_version,
+            litellm_params=litellm_params,
         )
         if openai_client is None:
             raise ValueError(

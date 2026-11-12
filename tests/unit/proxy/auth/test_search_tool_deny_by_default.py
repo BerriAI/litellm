@@ -1,8 +1,9 @@
 from collections.abc import Mapping
-from typing import Final, TypedDict
+from typing import Final, TypedDict, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi import HTTPException
 
 from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.proxy import proxy_server
@@ -76,6 +77,14 @@ def _team_loader(team_tools: list[str] | None | str) -> TeamObjectLoader:
         )
 
     return load
+
+
+def _missing_dashboard_team_loader() -> tuple[TeamObjectLoader, AsyncMock]:
+    missing_team: Final = HTTPException(
+        status_code=404, detail="Team doesn't exist in db. Team=litellm-dashboard"
+    )
+    load_team: Final = AsyncMock(side_effect=missing_team)
+    return cast(TeamObjectLoader, load_team), load_team
 
 
 async def _no_team() -> None:
@@ -194,9 +203,6 @@ async def test_search_tool_access_is_unchanged_without_search_tool_deny_by_defau
             id="proxy admin virtual key not exempt",
         ),
         pytest.param(CallerFields(api_key=LITELLM_PROXY_MASTER_KEY_ALIAS), None, None, None, id="master key exempt"),
-        pytest.param(
-            CallerFields(team_id=UI_TEAM_ID, virtual_key=False), None, None, None, id="dashboard session exempt"
-        ),
     ],
 )
 @pytest.mark.asyncio
@@ -249,6 +255,79 @@ async def test_search_tool_deny_by_default_does_not_load_the_user_when_off(
 
 
 @pytest.mark.parametrize(
+    "general_settings",
+    [{}, {"search_tool_deny_by_default": False}],
+    ids=["omitted", "false"],
+)
+@pytest.mark.parametrize(
+    "user_role",
+    [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.INTERNAL_USER],
+    ids=["admin", "internal-user"],
+)
+@pytest.mark.parametrize(
+    "key_tools, expected",
+    [
+        pytest.param(None, None, id="unrestricted-key"),
+        pytest.param(["search-a"], None, id="key-grants-search-a"),
+        pytest.param(["search-b"], _LEGACY, id="key-excludes-search-a"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_dashboard_search_tool_grants_without_deny_by_default(
+    general_settings: Mapping[str, object],
+    user_role: LitellmUserRoles,
+    key_tools: list[str] | None,
+    expected: ProxyErrorTypes | None,
+) -> None:
+    caller: Final = _caller(
+        virtual_key=False,
+        key_tools=key_tools,
+        team_id=UI_TEAM_ID,
+        user_role=user_role,
+    )
+    load_team, load_team_mock = _missing_dashboard_team_loader()
+    assert await _denied_by(general_settings, caller, load_team) == expected
+    load_team_mock.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "user_role",
+    [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY],
+    ids=["admin", "admin-view-only"],
+)
+@pytest.mark.asyncio
+async def test_admin_dashboard_search_tool_grants_with_deny_by_default(user_role: LitellmUserRoles) -> None:
+    caller: Final = _caller(virtual_key=False, team_id=UI_TEAM_ID, user_role=user_role)
+    load_team, load_team_mock = _missing_dashboard_team_loader()
+    assert await _denied_by(_DENY_ON, caller, load_team) is None
+    load_team_mock.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "user_id, user_tools, expected",
+    [
+        pytest.param("user-1", ["search-a"], None, id="user-grants-search-a"),
+        pytest.param("user-1", ["search-b"], _USER, id="user-grants-another-tool"),
+        pytest.param("user-1", None, _USER, id="user-grant-null"),
+        pytest.param("user-2", None, _USER, id="no-user-row"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_internal_dashboard_search_tool_requires_the_user_grant_with_deny_by_default(
+    cache: UserApiKeyCache,
+    user_id: str,
+    user_tools: list[str] | None,
+    expected: ProxyErrorTypes | None,
+) -> None:
+    if user_id == "user-1":
+        _cache_user(cache, user_tools)
+    caller: Final = _caller(virtual_key=False, team_id=UI_TEAM_ID, user_id=user_id)
+    load_team, load_team_mock = _missing_dashboard_team_loader()
+    assert await _denied_by(_DENY_ON, caller, load_team) == expected
+    load_team_mock.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
     "general_settings, caller, expected",
     [
         pytest.param({}, _caller(), None, id="flag off"),
@@ -257,6 +336,24 @@ async def test_search_tool_deny_by_default_does_not_load_the_user_when_off(
         pytest.param(_DENY_ON, _caller(virtual_key=False), _USER, id="keyless user"),
         pytest.param(_DENY_ON, _caller(user_role=LitellmUserRoles.PROXY_ADMIN), _KEY, id="proxy admin key"),
         pytest.param(_DENY_ON, _caller(api_key=LITELLM_PROXY_MASTER_KEY_ALIAS), None, id="master key"),
+        pytest.param(
+            _DENY_ON,
+            _caller(virtual_key=False, team_id=UI_TEAM_ID, user_role=LitellmUserRoles.INTERNAL_USER),
+            _USER,
+            id="internal dashboard user",
+        ),
+        pytest.param(
+            _DENY_ON,
+            _caller(virtual_key=False, team_id=UI_TEAM_ID, user_role=LitellmUserRoles.PROXY_ADMIN),
+            None,
+            id="admin dashboard",
+        ),
+        pytest.param(
+            _DENY_ON,
+            _caller(virtual_key=False, team_id=UI_TEAM_ID, user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY),
+            None,
+            id="admin view-only dashboard",
+        ),
     ],
 )
 def test_unregistered_search_fallback_follows_search_tool_deny_by_default(
@@ -268,3 +365,12 @@ def test_unregistered_search_fallback_follows_search_tool_deny_by_default(
     with pytest.raises(ProxyException) as exc_info:
         check_unregistered_search_fallback(caller, general_settings)
     assert (exc_info.value.type, exc_info.value.code) == (expected, "403")
+
+
+@pytest.mark.asyncio
+async def test_search_preserves_missing_real_team_error_without_deny_by_default() -> None:
+    missing_team: Final = HTTPException(status_code=404, detail="Team doesn't exist in db. Team=team-1")
+    load_team: Final = AsyncMock(side_effect=missing_team)
+    with pytest.raises(HTTPException) as exc_info:
+        await can_caller_call_search_tool("search-a", _caller(team_id="team-1"), {}, load_team)
+    assert exc_info.value is missing_team

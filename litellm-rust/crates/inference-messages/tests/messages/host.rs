@@ -1,3 +1,4 @@
+use litellm_core_utils::decline::Decline;
 use litellm_host::lifecycle::ExecutionEvent;
 use std::sync::Mutex;
 
@@ -5,9 +6,11 @@ use litellm_host::{
     interceptors::{ExecutionFacts, RequestContext, ResultSource, WireRequest},
     lifecycle::CallEvent,
 };
-use litellm_inference_messages::{MessagesCallResponse, route::Messages};
+use litellm_inference_messages::{MessagesBody, MessagesCallResponse, route::Messages};
 use litellm_inference_testing::{RecordingSecrets, no_secrets};
-use litellm_llms::base_llm::messages::context::MessagesModelCapabilities as AnthropicModelCapabilities;
+use litellm_llms::base_llm::messages::context::{
+    MessagesModelCapabilities as AnthropicModelCapabilities, SupportedEffortTiers,
+};
 use rstest::rstest;
 
 use super::*;
@@ -23,6 +26,7 @@ struct RecordingHost {
     optional_params: Mutex<Vec<Value>>,
     facts: Mutex<Vec<ExecutionFacts>>,
     reject_result: bool,
+    reject_response: bool,
 }
 
 impl RecordingHost {
@@ -34,6 +38,7 @@ impl RecordingHost {
             optional_params: Mutex::new(Vec::new()),
             facts: Mutex::new(Vec::new()),
             reject_result: false,
+            reject_response: false,
         }
     }
 
@@ -81,7 +86,7 @@ impl litellm_host::interceptors::Interceptors<<Messages as litellm_host::protoco
     async fn result_ready(&self, facts: ExecutionFacts) -> Result<(), Error> {
         self.facts.lock().unwrap().push(facts);
         if self.reject_result {
-            return Err(Error::Unsupported("result rejected"));
+            return Err(Error::Declined(Decline::new("result rejected")));
         }
         Ok(())
     }
@@ -101,6 +106,9 @@ impl litellm_host::interceptors::Interceptors<<Messages as litellm_host::protoco
         &self,
         raw: litellm_host::interceptors::RawResponse,
     ) -> Result<(), <Messages as litellm_host::protocol::Protocol>::Error> {
+        if self.reject_response {
+            return Err(Error::Declined(Decline::new("response rejected")));
+        }
         litellm_host::lifecycle::CallObserver::observe(
             self,
             litellm_host::lifecycle::CallEvent::Execution(
@@ -121,6 +129,7 @@ async fn rejected_results_are_not_delivered_or_cached(
     call: MessagesCall,
     #[case] streaming: bool,
     #[case] hosted: bool,
+    #[values(false, true)] cached: bool,
 ) {
     use futures_util::TryStreamExt;
     use litellm_cache_memory::InMemoryCache;
@@ -142,13 +151,8 @@ async fn rejected_results_are_not_delivered_or_cached(
         )))),
         CacheScope::Shared,
     ));
-    for (reject, expected_requests, cached) in [
-        (true, 1, false),
-        (false, 2, false),
-        (true, 2, true),
-        (false, 2, true),
-    ] {
-        let request = authenticated(
+    let request = || {
+        authenticated(
             with_fields(
                 MessagesCall {
                     body: call.body.clone(),
@@ -157,36 +161,41 @@ async fn rejected_results_are_not_delivered_or_cached(
                 json!({"stream": streaming}),
             ),
             upstream.uri(),
-        );
-        let host = RecordingHost {
-            reject_result: reject,
-            ..RecordingHost::passthrough(request)
-        };
-        let result = if hosted {
-            litellm_host_native::in_process::run_hosted(
-                route.clone().machine(host.request().unwrap(), None),
-                host.runtime(),
-            )
+        )
+    };
+    let host = RecordingHost {
+        reject_result: true,
+        ..RecordingHost::passthrough(request())
+    };
+    if cached {
+        let output = route.execute(request(), &(), None).await.unwrap();
+        if let MessagesCallResponse::Stream { chunks, .. } = output {
+            chunks.try_collect::<Vec<_>>().await.unwrap();
+        }
+    }
+    let result = if hosted {
+        litellm_host_native::in_process::run_hosted(
+            route.clone().machine(host.request().unwrap(), None),
+            host.runtime(),
+        )
+        .await
+        .map(|_| ())
+    } else {
+        route
+            .execute(host.request().unwrap(), &host, None)
             .await
             .map(|_| ())
-        } else {
-            match route.execute(host.request().unwrap(), &host, None).await {
-                Ok(MessagesCallResponse::Complete(_)) => Ok(()),
-                Ok(MessagesCallResponse::Stream { chunks, .. }) => {
-                    chunks.try_collect::<Vec<_>>().await.map(|_| ())
-                }
-                Err(error) => Err(error),
-            }
-        };
-        assert_eq!(
-            result,
-            if reject {
-                Err(Error::Unsupported("result rejected"))
-            } else {
-                Ok(())
-            }
-        );
-        assert_eq!(received(&upstream).await.len(), expected_requests);
+    };
+    let error = result.unwrap_err();
+    assert_eq!(error.declined().is_some(), cached);
+    assert_eq!(error.dispatched(), !cached);
+    assert!(
+        litellm_error::Report::new(&error)
+            .to_string()
+            .contains("result rejected")
+    );
+    assert_eq!(received(&upstream).await.len(), 1);
+    {
         let facts = host.facts.lock().unwrap();
         assert_eq!(facts.len(), 1);
         assert_eq!(
@@ -194,6 +203,46 @@ async fn rejected_results_are_not_delivered_or_cached(
             cached
         );
     }
+    let output = route.execute(request(), &(), None).await.unwrap();
+    if let MessagesCallResponse::Stream { chunks, .. } = output {
+        chunks.try_collect::<Vec<_>>().await.unwrap();
+    }
+    assert_eq!(received(&upstream).await.len(), if cached { 1 } else { 2 });
+}
+
+#[rstest]
+#[case::native(false)]
+#[case::hosted(true)]
+#[tokio::test]
+async fn response_hook_declines_are_terminal(call: MessagesCall, #[case] hosted: bool) {
+    let upstream = upstream([message_response()]).await;
+    let host = RecordingHost {
+        reject_response: true,
+        ..RecordingHost::passthrough(authenticated(call, upstream.uri()))
+    };
+    let route = messages_route(no_secrets());
+    let result = if hosted {
+        litellm_host_native::in_process::run_hosted(
+            route.machine(host.request().unwrap(), None),
+            host.runtime(),
+        )
+        .await
+        .map(|_| ())
+    } else {
+        route
+            .execute(host.request().unwrap(), &host, None)
+            .await
+            .map(|_| ())
+    };
+    let error = result.unwrap_err();
+    assert!(error.declined().is_none());
+    assert!(error.dispatched());
+    assert!(
+        litellm_error::Report::new(&error)
+            .to_string()
+            .contains("response rejected")
+    );
+    assert_eq!(received(&upstream).await.len(), 1);
 }
 
 async fn run_through(host: &RecordingHost) -> Result<MessagesOutput, Error> {
@@ -291,7 +340,10 @@ async fn response_mode_follows_the_intercepted_request(
                 }
                 MessagesCallResponse::Complete(message) => {
                     assert_eq!(expected_stream, Some(false));
-                    assert_eq!(*message, serde_json::from_value(message_body()).unwrap());
+                    assert_eq!(
+                        message,
+                        MessagesBody::Message(serde_json::from_value(message_body()).unwrap())
+                    );
                 }
             }
             Ok::<_, Error>(())
@@ -301,7 +353,7 @@ async fn response_mode_follows_the_intercepted_request(
     let summaries = traces.summaries("litellm.route");
     assert_eq!(summaries.len(), 1);
     let Some(expected_stream) = expected_stream else {
-        assert!(matches!(result, Err(Error::InvalidRequest(_))));
+        assert!(result.unwrap_err().is_request());
         assert!(received(&upstream).await.is_empty());
         assert_eq!(summaries[0]["outcome"], "failure");
         return;
@@ -322,14 +374,17 @@ async fn a_before_send_failure_never_sends(call: MessagesCall) {
     let upstream = upstream([message_response()]).await;
     let host = RecordingHost::new(
         authenticated(call, upstream.uri()),
-        Box::new(|_| Err(Error::InvalidRequest("vetoed by the host".into()))),
+        Box::new(|_| Err(litellm_llms::Error::MissingField("vetoed by the host").into())),
     );
 
     let error = run_through(&host)
         .await
         .expect_err("the host failure fails the call");
 
-    assert_eq!(error, Error::InvalidRequest("vetoed by the host".into()));
+    assert_eq!(
+        error,
+        Error::from(litellm_llms::Error::MissingField("vetoed by the host"))
+    );
     assert!(received(&upstream).await.is_empty());
     assert!(host.raw_responses().is_empty());
 }
@@ -369,7 +424,7 @@ async fn no_raw_response_is_emitted_for_a_stream_or_a_failure(
     assert!(host.raw_responses().is_empty());
 }
 
-/// Python logs `optional_params` as what it is about to send, so a dropped param must
+/// Python logs `optional_params` after its requested-param gate, so a dropped param must
 /// not resurface in callbacks.
 #[rstest]
 #[tokio::test]
@@ -399,4 +454,83 @@ async fn the_request_context_carries_the_shaped_params_without_model_or_messages
     let [optional_params] = <[Value; 1]>::try_from(host.optional_params.into_inner().unwrap())
         .unwrap_or_else(|seen| panic!("before_provider_request runs once, saw {}", seen.len()));
     assert_eq!(optional_params, json!({"max_tokens": 16}));
+}
+
+#[rstest]
+#[tokio::test]
+async fn the_request_context_leaves_out_a_listed_param_the_model_refuses(call: MessagesCall) {
+    let upstream = upstream([message_response()]).await;
+    let host = RecordingHost::passthrough(authenticated(
+        MessagesCall {
+            shaping: MessagesShaping {
+                settings: MessagesSettings {
+                    additional_drop_params: vec!["temperature".into()],
+                    ..MessagesSettings::default()
+                },
+                capabilities: AnthropicModelCapabilities {
+                    supports_sampling_params: false,
+                    ..AnthropicModelCapabilities::default()
+                },
+            },
+            ..with_fields(call, json!({"temperature": 0.2}))
+        },
+        upstream.uri(),
+    ));
+
+    run_through(&host).await.expect("messages call succeeds");
+
+    let [optional_params] = <[Value; 1]>::try_from(host.optional_params.into_inner().unwrap())
+        .unwrap_or_else(|seen| panic!("before_provider_request runs once, saw {}", seen.len()));
+    assert_eq!(optional_params, json!({"max_tokens": 16}));
+}
+
+#[rstest]
+#[case::reasoning_effort_on_an_adaptive_model(
+    AnthropicModelCapabilities {
+        supports_reasoning: true,
+        supports_adaptive_thinking: true,
+        supports_output_config: true,
+        effort_tiers: SupportedEffortTiers { low: true, ..SupportedEffortTiers::default() },
+        ..AnthropicModelCapabilities::default()
+    },
+    json!({"reasoning_effort": "low"})
+)]
+#[case::adaptive_payload_on_a_legacy_model(
+    AnthropicModelCapabilities {
+        supports_reasoning: true,
+        ..AnthropicModelCapabilities::default()
+    },
+    json!({"max_tokens": 3000, "thinking": {"type": "adaptive"}, "output_config": {"effort": "high"}})
+)]
+#[tokio::test]
+async fn the_request_context_carries_the_requested_reasoning_not_its_translation(
+    call: MessagesCall,
+    #[case] capabilities: AnthropicModelCapabilities,
+    #[case] fields: Value,
+) {
+    let upstream = upstream([message_response()]).await;
+    let host = RecordingHost::passthrough(authenticated(
+        MessagesCall {
+            shaping: MessagesShaping {
+                capabilities,
+                ..MessagesShaping::default()
+            },
+            ..with_fields(call, fields.clone())
+        },
+        upstream.uri(),
+    ));
+
+    run_through(&host).await.expect("messages call succeeds");
+
+    let [optional_params] = <[Value; 1]>::try_from(host.optional_params.into_inner().unwrap())
+        .unwrap_or_else(|seen| panic!("before_provider_request runs once, saw {}", seen.len()));
+    assert_eq!(
+        optional_params,
+        Value::Object(
+            object(json!({"max_tokens": 16}))
+                .into_iter()
+                .chain(object(fields))
+                .collect()
+        )
+    );
 }

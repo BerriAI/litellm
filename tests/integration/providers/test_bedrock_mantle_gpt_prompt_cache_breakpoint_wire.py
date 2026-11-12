@@ -1,10 +1,12 @@
 import asyncio
 import json
+from collections.abc import Iterator
 from typing import Final
 from urllib.parse import urlsplit
 
 import pytest
 from integration._support.client import Gateway, eventually
+from integration._support.process import isolated_gateway
 from integration._support.wire import Request, wire_server
 from integration.providers._mantle_gpt_prompt_cache_support import (
     ANTHROPIC_PATH,
@@ -66,6 +68,15 @@ from integration.providers._mantle_gpt_prompt_cache_support import (
 from pydantic import JsonValue
 
 pytestmark = pytest.mark.timeout(600)
+
+
+@pytest.fixture(scope="module")
+def gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
+    with (
+        pytest.MonkeyPatch.context() as environment,
+        isolated_gateway(tmp_path_factory.mktemp("gateway"), environment) as owned,
+    ):
+        yield owned
 
 
 @pytest.mark.parametrize("stream", [False, True], ids=["json", "stream"])

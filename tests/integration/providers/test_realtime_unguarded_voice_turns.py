@@ -54,7 +54,7 @@ from tests.integration._support.process import (
 from tests.integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
 from tests.integration.cost_calculation.cost_tracking_case import RealtimeResponse
 
-pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+pytestmark: Final = [pytest.mark.timeout(2 * graceful_stop_seconds() + 120), pytest.mark.shares_worker_state]
 
 WORKERS: Final = 2
 BURST: Final = 20
@@ -114,12 +114,10 @@ TRANSCRIPT_FIELDS: Final = (
     pytest.param({"transcript": {"text": "a"}}, id="object"),
 )
 VOICE_UPDATE: Final[dict[str, JsonValue]] = {"type": "realtime", "instructions": "answer briefly"}
-VOICE_UPDATE_FORWARDED: Final[dict[str, JsonValue]] = {
-    "type": "realtime",
-    "instructions": "answer briefly",
-    "audio": {"input": {"turn_detection": {"create_response": False}}},
+VOICE_UPDATE_GATED: Final[dict[str, JsonValue]] = {
+    **VOICE_UPDATE,
+    "audio": {"input": {"turn_detection": {"type": "server_vad", "create_response": False}}},
 }
-TURN_DETECTION_TYPE_MISSING: Final = "Missing required parameter: 'session.audio.input.turn_detection.type'."
 INJECTED_UPDATE: Final[dict[str, JsonValue]] = {
     "type": "realtime",
     "audio": {"input": {"turn_detection": {"type": "server_vad", "create_response": False}}},
@@ -853,13 +851,6 @@ def _spawned_worker(child: psutil.Process) -> bool:
         return False
 
 
-def _exited(process: psutil.Process) -> bool:
-    try:
-        return process.status() == psutil.STATUS_ZOMBIE
-    except psutil.NoSuchProcess:
-        return True
-
-
 def _workers(root: psutil.Process) -> tuple[psutil.Process, ...]:
     return tuple(
         sorted((child for child in root.children() if _spawned_worker(child)), key=lambda process: process.pid)
@@ -913,16 +904,16 @@ async def _sessions_on_every_worker(
 
 
 async def _sessions_through_worker_kill(
-    url: str, key: str, workers: tuple[psutil.Process, ...]
+    url: str, key: str, owned: OwnedProxy, workers: tuple[psutil.Process, ...]
 ) -> tuple[tuple[Session, bool], ...]:
     opened: Final = await _sessions_on_every_worker(url, key, workers, ())
     sockets: Final = tuple(session.socket for session in opened)
     try:
         on_killed_worker: Final = tuple(session.pid == workers[0].pid for session in opened)
-        workers[0].kill()
-        await asyncio.to_thread(eventually, lambda: _exited(workers[0]), bool, graceful_stop_seconds())
-        turns: Final = (_turn_or_close(socket, label) for socket, label in zip(sockets, _labels(len(sockets))))
-        sessions: Final = await asyncio.wait_for(asyncio.gather(*turns), 90)
+        with owned.replacing_worker(workers[0].pid) as kill:
+            await asyncio.to_thread(kill)
+            turns: Final = (_turn_or_close(socket, label) for socket, label in zip(sockets, _labels(len(sockets))))
+            sessions: Final = await asyncio.wait_for(asyncio.gather(*turns), 90)
         return tuple(zip(sessions, on_killed_worker))
     finally:
         await asyncio.gather(*(socket.close() for socket in sockets))
@@ -941,7 +932,7 @@ def test_worker_kill_leaves_the_surviving_sessions_with_only_their_own_frames(ga
             workers: Final = _workers(root)
             assert len(workers) == WORKERS, [process.pid for process in workers]
             outcomes: Final = asyncio.run(
-                _sessions_through_worker_kill(_session_url(_owned_url(owned), f"model={model}"), key, workers)
+                _sessions_through_worker_kill(_session_url(_owned_url(owned), f"model={model}"), key, owned, workers)
             )
             served: Final = tuple(label for label, (_, killed) in zip(_labels(len(outcomes)), outcomes) if not killed)
             assert [session.types for session, _ in outcomes] == [
@@ -989,15 +980,15 @@ def test_list_mode_transcript_guardrail_still_turns_auto_response_off_and_answer
         assert session.types == (
             "session.created",
             "session.updated",
-            "error",
+            "session.updated",
             TRANSCRIPT_COMPLETED,
             RESPONSE_DONE,
         ), session
         assert session.transcript_fields == ({"transcript": TRANSCRIPT},), session
-        assert session.error_messages == (TURN_DETECTION_TYPE_MISSING,), session
+        assert session.error_messages == (), session
         assert _sent(observed) == (
             _update_frame(INJECTED_UPDATE),
-            _update_frame(VOICE_UPDATE_FORWARDED),
+            _update_frame(VOICE_UPDATE_GATED),
             COMMIT,
             PROXY_RESPONSE_CREATE,
         ), _sent(observed)

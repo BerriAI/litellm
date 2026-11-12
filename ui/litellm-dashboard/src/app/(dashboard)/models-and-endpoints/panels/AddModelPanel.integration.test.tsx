@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
-import { act, renderWithProviders, screen, waitFor, within } from "../../../../../tests/test-utils";
+import { act, fireEvent, renderWithProviders, screen, waitFor, within } from "../../../../../tests/test-utils";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AddModelPanel from "./AddModelPanel";
@@ -79,6 +80,13 @@ vi.mock("@/app/(dashboard)/hooks/providers/useProviderFields", () => ({
         default_model_placeholder: "jev-latest",
         credential_fields: [{ key: "api_key", label: "API Key", field_type: "password", required: false }],
       },
+      {
+        provider: "StreamLake",
+        provider_display_name: "StreamLake",
+        litellm_provider: "streamlake",
+        default_model_placeholder: "streamlake/<model-or-endpoint>",
+        credential_fields: [{ key: "api_key", label: "API Key", field_type: "password", required: false }],
+      },
     ],
     isLoading: false,
     error: null,
@@ -131,6 +139,7 @@ const alwaysMounted = {
 
 const advancedOpenExtras = {
   guardrails: undefined,
+  kubernetes_pod_discovery: undefined,
   tags: undefined,
   use_in_pass_through: undefined,
   vector_store_ids: undefined,
@@ -140,9 +149,9 @@ const baseModelInfo = { access_groups: undefined, mode: undefined };
 
 const { api_base: _omitted, ...ALWAYS_MOUNTED_WITHOUT_API_BASE } = alwaysMounted;
 
-const setup = async () => {
+const setup = async (searchParams?: string, onUrlUpdate?: OnUrlUpdateFunction) => {
   const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
-  renderWithProviders(<AddModelPanel />);
+  renderWithProviders(<AddModelPanel />, { searchParams, onUrlUpdate });
   await screen.findByText("Provider");
 
   const openAdvanced = async () => {
@@ -276,6 +285,28 @@ describe("AddModelPanel submit payload contract", () => {
     });
   });
 
+  it("creates a StreamLake model from a public model selection and API key", async () => {
+    mockUseModelCostMap.mockReturnValue({ data: { "streamlake/GLM-5.3": { litellm_provider: "streamlake" } } });
+    const { user, submit } = await setup();
+
+    await user.click(screen.getByRole("combobox", { name: /provider/i }));
+    await user.click(await screen.findByText("StreamLake"));
+    await user.click(screen.getByRole("combobox", { name: "Select models" }));
+    await user.click(await screen.findByText("streamlake/GLM-5.3"));
+    fireEvent.change(screen.getByLabelText("API Key"), { target: { value: "sk-streamlake-test" } });
+    await submit();
+
+    expect(lastCreatedModel()).toStrictEqual({
+      model_name: "streamlake/GLM-5.3",
+      litellm_params: {
+        model: "streamlake/GLM-5.3",
+        custom_llm_provider: "streamlake",
+        api_key: "sk-streamlake-test",
+      },
+      model_info: { ...baseModelInfo },
+    });
+  });
+
   it("registers four more keys as undefined once Advanced Settings opens", async () => {
     const { openAdvanced, fillRequired, submit } = await setup();
     await fillRequired();
@@ -299,6 +330,24 @@ describe("AddModelPanel submit payload contract", () => {
     expect(lastCreatedModel()).toStrictEqual({
       model_name: "gpt-4o",
       litellm_params: { ...alwaysMounted, ...advancedOpenExtras, rpm: 7 },
+      model_info: { ...baseModelInfo },
+    });
+  });
+
+  it("submits Kubernetes pod discovery in litellm_params", async () => {
+    const { user, openAdvanced, fillRequired, submit } = await setup();
+    await fillRequired();
+    await openAdvanced();
+    await user.click(screen.getByRole("switch", { name: "Kubernetes pod discovery" }));
+    await submit();
+
+    expect(lastCreatedModel()).toStrictEqual({
+      model_name: "gpt-4o",
+      litellm_params: {
+        ...alwaysMounted,
+        ...advancedOpenExtras,
+        kubernetes_pod_discovery: true,
+      },
       model_info: { ...baseModelInfo },
     });
   });
@@ -563,14 +612,6 @@ describe("AddModelPanel decision models", () => {
 
   const decisionNotice = () => screen.queryByRole("note", { name: "Decision model notice" });
 
-  it("finds a provider by the name of one of its decision models", async () => {
-    const { user } = await setup();
-    await user.type(screen.getByRole("combobox", { name: /provider/i }), "jev");
-
-    expect(await screen.findByRole("option", { name: /TypeSafe/ })).toBeInTheDocument();
-    expect(screen.queryByRole("option", { name: /Anthropic/ })).not.toBeInTheDocument();
-  });
-
   it("points a decision-only provider at the decision routes, the docs, and the playground", async () => {
     const { user } = await setup();
     await user.type(screen.getByRole("combobox", { name: /provider/i }), "TypeSafe");
@@ -601,5 +642,80 @@ describe("AddModelPanel decision models", () => {
     const note = await screen.findByRole("note", { name: "Decision model notice" });
     expect(note).toHaveTextContent("/v1/decisions");
     expect(note).not.toHaveTextContent("/chat/completions");
+  });
+});
+
+describe("AddModelPanel prefill from the URL", () => {
+  const COST_MAP = {
+    "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
+    "gpt-4o-2024-08-06": { litellm_provider: "openai", mode: "chat" },
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseModelCostMap.mockReturnValue({ data: COST_MAP });
+    mockPtuEnabled.mockReturnValue(false);
+    mockAuthorized.mockReturnValue(PROXY_ADMIN);
+  });
+
+  it("preselects the provider and model named in the URL and submits that model", async () => {
+    const { submit } = await setup("?provider=typesafe&litellm_model=typesafe%2Fjev-latest");
+
+    await waitFor(() => expect(screen.getByRole("combobox", { name: /provider/i })).toHaveValue("TypeSafe"));
+    expect(screen.getByRole("combobox", { name: "Select models" })).toBeInTheDocument();
+    expect(screen.getByDisplayValue("typesafe/jev-latest")).toBeInTheDocument();
+    expect(await screen.findByRole("note", { name: "Decision model notice" })).toBeInTheDocument();
+
+    await submit();
+
+    expect(lastCreatedModel()).toStrictEqual({
+      model_name: "typesafe/jev-latest",
+      litellm_params: { api_key: undefined, custom_llm_provider: "typesafe", model: "typesafe/jev-latest" },
+      model_info: { ...baseModelInfo },
+    });
+  });
+
+  it("drops the prefill params from the URL once the prefilled model is added", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    const { submit } = await setup("?provider=typesafe&litellm_model=typesafe%2Fjev-latest", onUrlUpdate);
+    await waitFor(() => expect(screen.getByRole("combobox", { name: /provider/i })).toHaveValue("TypeSafe"));
+
+    await submit();
+
+    await waitFor(() => {
+      const params = onUrlUpdate.mock.calls.at(-1)?.[0].searchParams;
+      expect(params?.has("provider")).toBe(false);
+      expect(params?.has("litellm_model")).toBe(false);
+    });
+  });
+
+  it("leaves the form on its defaults when the provider slug matches no provider, model included", async () => {
+    const { submitExpectingRejection } = await setup("?provider=unknownslug&litellm_model=typesafe%2Fjev-latest");
+
+    expect(screen.getByRole("combobox", { name: /provider/i })).toHaveValue("");
+    expect(screen.queryByDisplayValue("typesafe/jev-latest")).not.toBeInTheDocument();
+
+    await submitExpectingRejection("Required");
+
+    expect(modelCreateCall).not.toHaveBeenCalled();
+  });
+
+  it("keeps a provider the user picks after the prefill instead of re-applying the URL", async () => {
+    const { user, submit } = await setup("?provider=typesafe&litellm_model=typesafe%2Fjev-latest");
+    await waitFor(() => expect(screen.getByRole("combobox", { name: /provider/i })).toHaveValue("TypeSafe"));
+
+    const provider = screen.getByRole("combobox", { name: /provider/i });
+    await user.clear(provider);
+    await user.type(provider, "OpenAI");
+    await user.click(await screen.findByRole("option", { name: /OpenAI/ }));
+    await user.click(await screen.findByPlaceholderText("Select models"));
+    await user.click(await screen.findByText("gpt-4o-2024-08-06"));
+    await submit();
+
+    expect(lastCreatedModel()).toStrictEqual({
+      model_name: "gpt-4o-2024-08-06",
+      litellm_params: { ...alwaysMounted, model: "gpt-4o-2024-08-06" },
+      model_info: { ...baseModelInfo },
+    });
   });
 });

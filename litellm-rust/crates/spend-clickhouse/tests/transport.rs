@@ -29,7 +29,7 @@ async fn spend_insert_controls_target_and_retry_settings() {
         .mount(&server)
         .await;
     let config = Config::new("spend_test".into(), &format!("{}?query=DROP&async_insert=0&wait_for_async_insert=0&input_format_skip_unknown_fields=1&database=wrong&readonly=1", server.uri()), 7).unwrap();
-    let client = Client::no_redirect_for_test();
+    let client = Client::for_test();
     let row = BTreeMap::from([
         ("request_id".into(), json!("request")),
         ("start_time".into(), json!(1234)),
@@ -77,7 +77,7 @@ async fn spend_insert_preserves_storage_failure(#[case] status: u16) {
         .await;
     let config = Config::new("spend_test".into(), &server.uri(), 7).unwrap();
     let error = insert_rows(
-        &Client::no_redirect_for_test(),
+        &Client::for_test(),
         config.storage().writer(),
         "spend_test",
         vec![BTreeMap::from([("request_id".into(), json!("request"))])],
@@ -95,7 +95,7 @@ async fn empty_spend_insert_does_not_contact_storage() {
     let server = MockServer::start().await;
     let config = Config::new("spend_test".into(), &server.uri(), 7).unwrap();
     insert_rows(
-        &Client::no_redirect_for_test(),
+        &Client::for_test(),
         config.storage().writer(),
         "spend_test",
         vec![],
@@ -116,7 +116,7 @@ async fn failed_schema_setup_is_reported() {
         .await;
     let config = Config::new("spend_test".into(), &server.uri(), 7).unwrap();
     assert!(matches!(
-        ensure_schema(&Client::no_redirect_for_test(), &config).await,
+        ensure_schema(&Client::for_test(), &config).await,
         Err(Error::Storage(
             litellm_storage_clickhouse::Error::SchemaFailed(403)
         ))

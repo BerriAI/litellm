@@ -23,7 +23,7 @@ from integration._support.aws_control_plane import (
     verified_scope,
 )
 from integration._support.client import JSON_OBJECT, Gateway, Scenario, eventually, held, object_value, string_value
-from integration._support.process import OwnedProxy, owned_proxy_process
+from integration._support.process import OwnedProxy, OwnedState, owned_proxy_process
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from pydantic import JsonValue
 
@@ -115,6 +115,7 @@ def discovery_proxy(
         config=discovery_config(parent, directory, check_provider_endpoint=check_provider_endpoint),
         remove_environment=aws_environment_names(),
         workers=workers,
+        state=OwnedState.SHARED_WITH_WORKER,
     ) as owned:
         wait_for_every_worker(owned.log, workers)
         yield owned

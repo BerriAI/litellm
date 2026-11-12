@@ -3,16 +3,19 @@ import { render, screen } from "@testing-library/react";
 import type { ConnectFlowStatus } from "@/components/networking";
 import ConnectFlowBanner, { isLoopbackOrigin } from "./ConnectFlowBanner";
 
+const { startOAuthFlow } = vi.hoisted(() => ({ startOAuthFlow: vi.fn() }));
+
 vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: () => "https://gateway.example.com",
 }));
 
 vi.mock("@/hooks/useUserMcpOAuthFlow", () => ({
-  useUserMcpOAuthFlow: () => ({ startOAuthFlow: vi.fn(), status: "idle" }),
+  useUserMcpOAuthFlow: () => ({ startOAuthFlow, status: "idle" }),
 }));
 
 afterEach(() => {
   vi.restoreAllMocks();
+  startOAuthFlow.mockClear();
 });
 
 const unscoped = (client_origin: string): ConnectFlowStatus => ({
@@ -21,6 +24,7 @@ const unscoped = (client_origin: string): ConnectFlowStatus => ({
   server_id: null,
   server_name: null,
   connected: null,
+  servers: null,
 });
 
 const renderBanner = (clientOrigin: string) =>
@@ -45,6 +49,53 @@ describe("ConnectFlowBanner", () => {
     expect(form.innerHTML).not.toContain("token");
     expect(screen.getByRole("button", { name: /finish connecting/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+  });
+
+  it("lists multi-server consent and requires every server before finishing", () => {
+    const flow: ConnectFlowStatus = {
+      state: "multi",
+      client_origin: "https://claude.ai",
+      server_id: null,
+      server_name: null,
+      connected: null,
+      servers: [
+        { server_id: "alpha-id", server_name: "alpha", connected: false },
+        { server_id: "beta-id", server_name: "beta", connected: false },
+      ],
+    };
+    const { rerender } = render(
+      <ConnectFlowBanner
+        flowHandle="flow-handle-123"
+        flow={flow}
+        accessToken="tok"
+        onConnected={vi.fn()}
+        failed={false}
+      />,
+    );
+
+    expect(screen.getByText("Allow https://claude.ai to use alpha, beta")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Connect alpha" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Connect beta" })).toBeInTheDocument();
+    expect(startOAuthFlow).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /finish connecting/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+
+    rerender(
+      <ConnectFlowBanner
+        flowHandle="flow-handle-123"
+        flow={{
+          ...flow,
+          servers: flow.servers?.map((server) => ({ ...server, connected: true })) ?? null,
+        }}
+        accessToken="tok"
+        onConnected={vi.fn()}
+        failed={false}
+      />,
+    );
+
+    expect(
+      screen.getByText("Click Finish connecting to give https://claude.ai access to alpha, beta as you."),
+    ).toBeInTheDocument();
   });
 
   it("offers manual delivery only for a loopback client, posted only when checked", () => {

@@ -13,12 +13,15 @@ from __future__ import annotations
 import json
 import re
 import socket
+import sys
 import threading
 import time
 from collections.abc import Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from functools import partial
+from http.client import HTTPResponse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import MappingProxyType
@@ -31,11 +34,13 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from integration._support.client import Gateway, gateway_from_environment
 from integration._support.process import owned_proxy_process
+from integration._support.timing import assert_enforced_within
 from integration._support.wire import Reply, Request, wire_server
 
 SLOW_SECONDS: Final = 20
 FAST_SECONDS: Final = 3
-BOUND_SECONDS: Final = 8
+GUARDRAIL_TIMEOUT_SECONDS: Final = 1
+TIMEOUT_SLACK_SECONDS: Final = 7
 PROBE_CONCURRENCY: Final = 8
 TOKEN_PATH: Final = "/token"
 TOKEN_REPLY: Final = json.dumps(
@@ -144,6 +149,7 @@ PROVIDERS: Final = (
     pytest.param("pillar", "pillar", {}, "pre_call", False, id="pillar"),
     pytest.param("cisco", "cisco_ai_defense", {}, "pre_call", False, id="cisco-ai-defense"),
     pytest.param("vigil", "vigil_guard", {}, "pre_call", False, id="vigil-guard"),
+    pytest.param("wingback", "wingback", {}, "pre_call", False, id="wingback"),
     pytest.param("singulr", "singulr", {}, "pre_call", False, id="singulr"),
     pytest.param("headroom", "headroom", {}, "pre_call", True, id="headroom"),
     pytest.param("onyx", "onyx", {}, "post_call", False, id="onyx"),
@@ -171,6 +177,7 @@ class Sink:
     port: int
     seen: list[Seen] = field(default_factory=list)
     lock: threading.Lock = field(default_factory=threading.Lock)
+    closing: threading.Event = field(default_factory=threading.Event)
     server: ThreadingHTTPServer | None = None
     thread: threading.Thread | None = None
 
@@ -192,7 +199,7 @@ class Sink:
                     )
                 is_token: Final = self.path.startswith(TOKEN_PATH)
                 if not is_token:
-                    time.sleep(SLOW_SECONDS if self.path.startswith("/slow/") else FAST_SECONDS)
+                    sink.closing.wait(SLOW_SECONDS if self.path.startswith("/slow/") else FAST_SECONDS)
                 payload: Final = TOKEN_REPLY if is_token else b"{}"
                 self.send_response(200)
                 self.send_header("content-type", "application/json")
@@ -210,14 +217,22 @@ class Sink:
 
         class Server(ThreadingHTTPServer):
             allow_reuse_address = True
-            daemon_threads = True
+            daemon_threads = False
+            block_on_close = True
+            request_queue_size: Final = socket.SOMAXCONN
+
+            def handle_error(self, request: object, client_address: object) -> None:
+                if not isinstance(sys.exc_info()[1], ConnectionError):
+                    super().handle_error(request, client_address)
 
         self.server = Server(("127.0.0.1", self.port), Handler)
+        self.port = self.server.server_port
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
 
     def stop(self) -> None:
         assert self.server is not None and self.thread is not None
+        self.closing.set()
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=5)
@@ -319,7 +334,7 @@ def _rig_config(sink_url: str, root: Path) -> Path:
     config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     config["litellm_settings"]["cache"] = False
     config["guardrails"] = [
-        _guardrail(name, provider, sink_url, 1, dict(extra), mode)
+        _guardrail(name, provider, sink_url, GUARDRAIL_TIMEOUT_SECONDS, dict(extra), mode)
         for name, provider, extra, mode, _ in _provider_values()
     ] + [
         _guardrail("control-generic", "generic_guardrail_api", sink_url, None, {}, "pre_call"),
@@ -339,10 +354,7 @@ class Rig:
 @pytest.fixture(scope="module")
 def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
     root: Final = tmp_path_factory.mktemp("guardrail-timeout")
-    with socket.socket() as reserve:
-        reserve.bind(("127.0.0.1", 0))
-        port: Final = reserve.getsockname()[1]
-    sink: Final = Sink(port)
+    sink: Final = Sink(0)
     sink.start()
     with gateway_from_environment() as gateway, wire_server(_provider) as provider:
         config: Final = _rig_config(sink.url, root)
@@ -430,9 +442,7 @@ def test_litellm_params_timeout_bounds_outbound_call(
     outcome: Final = outcomes[name]
     calls: Final = rig.sink.calls_for(name)
     assert calls, f"{name}: sink saw no request for {provider}"
-    assert outcome.elapsed < BOUND_SECONDS, (
-        f"{name}: elapsed {outcome.elapsed:.2f}s, expected under {BOUND_SECONDS}s with timeout=1"
-    )
+    assert_enforced_within(outcome.elapsed, configured=GUARDRAIL_TIMEOUT_SECONDS, slack=TIMEOUT_SLACK_SECONDS)
     assert isinstance(outcome.response, httpx.Response), f"{name}: client gave up: {outcome.response!r}"
     assert outcome.response.status_code != 504, outcome.response.text
 
@@ -446,3 +456,42 @@ def test_unset_timeout_waits_for_sink_response(rig: Rig, outcomes: Mapping[str, 
     )
     assert isinstance(outcome.response, httpx.Response), f"control-generic: client gave up: {outcome.response!r}"
     assert outcome.response.status_code in (200, 400, 500), outcome.response.text
+
+
+def _connect_sink(port: int, _index: int) -> socket.socket | OSError:
+    try:
+        return socket.create_connection(("127.0.0.1", port), timeout=1)
+    except OSError as error:
+        return error
+
+
+def _read_sink_probe(stream: socket.socket) -> tuple[int, bytes]:
+    stream.sendall(b"GET /token/capacity-probe/ HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+    with HTTPResponse(stream) as response:
+        response.begin()
+        return response.status, response.read()
+
+
+def test_owned_sink_records_every_connection_from_a_concurrent_probe_burst(rig: Rig) -> None:
+    server: Final = rig.sink.server
+    original_thread: Final = rig.sink.thread
+    assert server is not None and original_thread is not None
+    connection_count: Final = len(PROVIDERS) + 1
+    server.shutdown()
+    original_thread.join(timeout=5)
+    try:
+        with ThreadPoolExecutor(max_workers=connection_count) as pool:
+            opened: Final = tuple(pool.map(partial(_connect_sink, rig.sink.port), range(connection_count)))
+    finally:
+        resumed: Final = threading.Thread(target=server.serve_forever, daemon=True)
+        rig.sink.thread = resumed
+        resumed.start()
+    with ExitStack() as clients:
+        connected: Final = tuple(stream for stream in opened if isinstance(stream, socket.socket))
+        for stream in connected:
+            clients.enter_context(stream)
+        assert len(connected) == connection_count, tuple(type(value).__name__ for value in opened)
+        with ThreadPoolExecutor(max_workers=connection_count) as pool:
+            replies: Final = tuple(pool.map(_read_sink_probe, connected))
+        assert replies == ((200, TOKEN_REPLY),) * connection_count
+        assert len(rig.sink.calls_for("capacity-probe")) == connection_count

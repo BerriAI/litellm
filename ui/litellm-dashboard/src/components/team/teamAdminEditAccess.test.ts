@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  type TeamAdminMetadataContext,
+  teamAdminDeclaredFields,
+  teamAdminMetadataChange,
+  teamAdminMetadataPairIssue,
+  teamAdminMetadataPairs,
   parseSupportedTeamAdminEditableFields,
   parseTeamAdminEditableFields,
   parseTeamEditAccess,
@@ -13,8 +18,15 @@ describe("teamAdminFieldLabel", () => {
     ["tpm_limit", "Tokens per minute Limit (TPM)"],
     ["rpm_limit", "Requests per minute Limit (RPM)"],
     ["max_budget", "Max Budget (USD)"],
+    ["soft_budget", "Soft Budget (USD)"],
+    ["metadata", "Team Metadata"],
     ["raise_max_budget", "Raise the team's max budget"],
     ["projects", "Create and update projects"],
+    ["team_member_budget", "Member Default Budget (USD)"],
+    ["team_member_budget_duration", "Member Default Budget Duration"],
+    ["team_member_tpm_limit", "Member Default TPM Limit"],
+    ["team_member_rpm_limit", "Member Default RPM Limit"],
+    ["create_member_keys", "Create keys for team members"],
   ])("names %s the way the team settings form does", (field, label) => {
     expect(teamAdminFieldLabel(field)).toBe(label);
   });
@@ -75,6 +87,86 @@ describe("teamAdminSettingsChanges", () => {
   });
 });
 
+describe("teamAdminSettingsChanges for team member defaults", () => {
+  const stored = {
+    team_member_budget: 10,
+    team_member_budget_duration: "30d",
+    team_member_tpm_limit: 100,
+    team_member_rpm_limit: 5,
+  };
+  const enabled = new Set([
+    "team_member_budget",
+    "team_member_budget_duration",
+    "team_member_tpm_limit",
+    "team_member_rpm_limit",
+  ]);
+
+  const durationEnabled = new Set(["team_member_budget_duration"]);
+
+  it("sends every changed member default and skips the unchanged ones", () => {
+    const values = {
+      team_member_budget: "25",
+      team_member_budget_duration: "7d",
+      team_member_tpm_limit: "100",
+      team_member_rpm_limit: "9",
+    };
+
+    expect(teamAdminSettingsChanges(values, stored, enabled)).toStrictEqual({
+      team_member_budget: 25,
+      team_member_budget_duration: "7d",
+      team_member_rpm_limit: 9,
+    });
+  });
+
+  it("sends a never-resetting duration as null", () => {
+    expect(teamAdminSettingsChanges({ team_member_budget_duration: null }, stored, durationEnabled)).toStrictEqual({
+      team_member_budget_duration: null,
+    });
+  });
+
+  it("sends a never-resetting duration for a team without member defaults yet", () => {
+    expect(teamAdminSettingsChanges({ team_member_budget_duration: null }, {}, durationEnabled)).toStrictEqual({
+      team_member_budget_duration: null,
+    });
+  });
+
+  it.each([
+    ["the stored duration", "30d", stored],
+    ["an untouched duration on a team with a stored duration", undefined, stored],
+    ["an untouched duration on a team without member defaults", undefined, {}],
+    ["a stored never-resetting duration picked again", null, { team_member_budget_duration: null }],
+  ])("sends no duration for %s", (_label, team_member_budget_duration, initialValues) => {
+    expect(teamAdminSettingsChanges({ team_member_budget_duration }, initialValues, durationEnabled)).toStrictEqual({});
+  });
+
+  it("leaves out member defaults the proxy did not enable", () => {
+    const values = { team_member_budget: "25", team_member_budget_duration: "7d" };
+
+    expect(teamAdminSettingsChanges(values, stored, new Set(["max_budget"]))).toStrictEqual({});
+  });
+});
+
+describe("teamAdminSettingsChanges for the soft budget", () => {
+  const stored = { soft_budget: 50 };
+  const enabled = new Set(["soft_budget"]);
+
+  it("sends a changed soft budget as a number", () => {
+    expect(teamAdminSettingsChanges({ soft_budget: "40" }, stored, enabled)).toStrictEqual({ soft_budget: 40 });
+  });
+
+  it("sends a cleared soft budget as no soft budget", () => {
+    expect(teamAdminSettingsChanges({ soft_budget: "" }, stored, enabled)).toStrictEqual({ soft_budget: null });
+  });
+
+  it("leaves out an unchanged soft budget", () => {
+    expect(teamAdminSettingsChanges({ soft_budget: "50" }, stored, enabled)).toStrictEqual({});
+  });
+
+  it("leaves out a changed soft budget when the proxy did not enable it", () => {
+    expect(teamAdminSettingsChanges({ soft_budget: "40" }, stored, new Set(["max_budget"]))).toStrictEqual({});
+  });
+});
+
 describe("parseTeamAdminEditableFields", () => {
   it("returns the configured list", () => {
     expect(parseTeamAdminEditableFields({ team_admin_editable_team_fields: ["tpm_limit", "rpm_limit"] })).toEqual([
@@ -127,11 +219,14 @@ describe("parseTeamEditAccess", () => {
   });
 
   it("hands a team admin the fields the proxy enabled", () => {
-    expect(parseTeamEditAccess({ kind: "team_admin", editable_fields: ["tpm_limit"] })).toEqual({
+    const expected = {
       kind: "team_admin",
       editableFields: new Set(["tpm_limit"]),
       mayRaiseMaxBudget: false,
-    });
+      proxyControlledMetadataKeys: new Set(),
+    };
+
+    expect(parseTeamEditAccess({ kind: "team_admin", editable_fields: ["tpm_limit"] })).toEqual(expected);
   });
 
   it.each([
@@ -140,10 +235,26 @@ describe("parseTeamEditAccess", () => {
     ["an older proxy omits the flag", {}, false],
     ["the flag is not a boolean", { may_raise_max_budget: "yes" }, false],
   ])("lets a team admin raise the max budget only when %s", (_label, flag, mayRaiseMaxBudget) => {
-    expect(parseTeamEditAccess({ kind: "team_admin", editable_fields: ["max_budget"], ...flag })).toEqual({
+    const expected = {
       kind: "team_admin",
       editableFields: new Set(["max_budget"]),
       mayRaiseMaxBudget,
+      proxyControlledMetadataKeys: new Set(),
+    };
+
+    expect(parseTeamEditAccess({ kind: "team_admin", editable_fields: ["max_budget"], ...flag })).toEqual(expected);
+  });
+
+  it("hands a team admin the metadata keys the proxy keeps for proxy admins", () => {
+    const access = parseTeamEditAccess({
+      kind: "team_admin",
+      editable_fields: ["metadata"],
+      proxy_controlled_metadata_keys: ["guardrails", "priority"],
+    });
+
+    expect(access).toMatchObject({
+      kind: "team_admin",
+      proxyControlledMetadataKeys: new Set(["guardrails", "priority"]),
     });
   });
 
@@ -154,5 +265,103 @@ describe("parseTeamEditAccess", () => {
     ["the field list holds a non-string", { kind: "team_admin", editable_fields: [7] }],
   ])("fails closed to no access when %s", (_label, value) => {
     expect(parseTeamEditAccess(value)).toEqual({ kind: "none" });
+  });
+});
+
+describe("teamAdminMetadataChange", () => {
+  const context: TeamAdminMetadataContext = {
+    storedMetadata: { cost_center: "eng", region: "eu", priority: "high", team_member_budget_id: "budget-1" },
+    proxyControlledKeys: new Set(["priority", "team_member_budget_id", "guardrails"]),
+    declaredKeys: new Set(["cost_center", "department"]),
+  };
+  const storedPairs = [
+    { key: "cost_center", value: "eng" },
+    { key: "region", value: "eu" },
+  ];
+
+  it("sends nothing when the editable keys are unchanged", () => {
+    expect(teamAdminMetadataChange(storedPairs, context)).toStrictEqual({});
+  });
+
+  it("sends the full metadata with the proxy settings carried over when a key is added", () => {
+    expect(teamAdminMetadataChange([...storedPairs, { key: "project", value: "atlas" }], context)).toStrictEqual({
+      metadata: {
+        cost_center: "eng",
+        region: "eu",
+        project: "atlas",
+        priority: "high",
+        team_member_budget_id: "budget-1",
+      },
+    });
+  });
+
+  it("sends the full metadata without a deleted key", () => {
+    expect(teamAdminMetadataChange([{ key: "cost_center", value: "eng" }], context)).toStrictEqual({
+      metadata: { cost_center: "eng", priority: "high", team_member_budget_id: "budget-1" },
+    });
+  });
+
+  it("leaves out an empty declared field the team never set", () => {
+    expect(teamAdminMetadataChange([...storedPairs, { key: "department", value: "" }], context)).toStrictEqual({});
+  });
+});
+
+describe("teamAdminMetadataPairIssue", () => {
+  const context: TeamAdminMetadataContext = {
+    storedMetadata: { cost_center: "eng" },
+    proxyControlledKeys: new Set(["priority"]),
+    declaredKeys: new Set(["cost_center", "department"]),
+  };
+
+  it("flags a key the proxy keeps for proxy admins", () => {
+    expect(teamAdminMetadataPairIssue({ key: "priority", value: "low" }, context)?.path).toBe("key");
+  });
+
+  it("flags emptying a declared field the team has set", () => {
+    expect(teamAdminMetadataPairIssue({ key: "cost_center", value: "" }, context)?.path).toBe("value");
+  });
+
+  it.each([
+    ["JSON null", "null"],
+    ["a JSON empty string", '""'],
+    ["only spaces", "   "],
+  ])("flags a declared field the team has set changed to %s", (_label, value) => {
+    expect(teamAdminMetadataPairIssue({ key: "cost_center", value }, context)?.path).toBe("value");
+  });
+
+  it("accepts a declared field the proxy admin stored empty, resent as it is", () => {
+    const storedEmpty = { ...context, storedMetadata: { cost_center: "" } };
+
+    expect(teamAdminMetadataPairIssue({ key: "cost_center", value: "" }, storedEmpty)).toBeNull();
+  });
+
+  it.each([
+    ["an ordinary key", { key: "project", value: "" }],
+    ["a declared field the team never set", { key: "department", value: "" }],
+    ["a declared field with a new value", { key: "cost_center", value: "sales" }],
+  ])("accepts %s", (_label, pair) => {
+    expect(teamAdminMetadataPairIssue(pair, context)).toBeNull();
+  });
+});
+
+describe("teamAdminMetadataPairs", () => {
+  it("lists declared fields first in schema order, then the team's own keys, without the proxy's keys", () => {
+    const metadata = { region: "eu", priority: "high", department: "r&d", cost_center: "eng" };
+    const pairs = teamAdminMetadataPairs(metadata, new Set(["priority"]), ["cost_center", "department"]);
+
+    expect(pairs.map((pair) => pair.key)).toStrictEqual(["cost_center", "department", "region"]);
+  });
+});
+
+describe("teamAdminDeclaredFields", () => {
+  it("leaves out declared fields that are also proxy settings", () => {
+    const fields = [
+      { key: "cost_center", label: "Cost Center" },
+      { key: "priority", label: "Priority" },
+    ];
+
+    expect(teamAdminDeclaredFields(fields, new Set(["priority"]))).toStrictEqual([
+      { key: "cost_center", label: "Cost Center" },
+    ]);
   });
 });

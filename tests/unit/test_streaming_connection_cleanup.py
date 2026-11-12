@@ -3,13 +3,15 @@ Regression tests for streaming connection pool leak fix.
 """
 
 import asyncio
-from unittest.mock import MagicMock, patch
+import json
+from unittest.mock import MagicMock
 
 import anyio
 import httpx
 import pytest
+import respx
 
-
+import litellm
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.custom_httpx.aiohttp_transport import (
     AiohttpResponseStream,
@@ -55,9 +57,7 @@ async def test_aiohttp_transport_response_uses_stream_not_content():
             return Resp()
 
     transport = LiteLLMAiohttpTransport(client=lambda: FakeSession())  # type: ignore
-    response = await transport.handle_async_request(
-        httpx.Request("GET", "http://example.com")
-    )
+    response = await transport.handle_async_request(httpx.Request("GET", "http://example.com"))
 
     assert isinstance(response.stream, AiohttpResponseStream)
 
@@ -167,224 +167,121 @@ async def test_aclose_completes_under_cancellation():
 # ── Router stream_with_fallbacks cleanup tests ──────────────────
 
 
-@pytest.mark.asyncio
-async def test_stream_with_fallbacks_closes_stream_on_generator_close():
-    """Closing the FallbackStreamWrapper must aclose() the underlying model_response
-    via stream_with_fallbacks' finally block."""
+def _sse_chunk(content: str, finish_reason: str | None = None) -> bytes:
+    payload = {
+        "id": "chatcmpl-test",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "gpt-4",
+        "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": finish_reason}],
+    }
+    return f"data: {json.dumps(payload)}\n\n".encode()
+
+
+_DONE = b"data: [DONE]\n\n"
+
+
+class _TrackingStream(httpx.AsyncByteStream):
+    """An upstream SSE body that records whether the router closed it."""
+
+    def __init__(self, parts: list[bytes], fail: bool = False):
+        self._parts = parts
+        self._fail = fail
+        self.closed = False
+
+    async def __aiter__(self):
+        for part in self._parts:
+            yield part
+        if self._fail:
+            raise httpx.ReadError("upstream dropped the connection")
+
+    async def aclose(self):
+        self.closed = True
+
+
+def _full_stream() -> _TrackingStream:
+    return _TrackingStream([_sse_chunk("c1"), _sse_chunk("c2"), _sse_chunk("c3", "stop"), _DONE])
+
+
+@pytest.fixture
+def stream_router(monkeypatch: pytest.MonkeyPatch):
     from litellm.router import Router
 
-    stream_closed = False
-
-    class FakeStream(CustomStreamWrapper):
-        def __init__(self):
-            super().__init__(
-                completion_stream=None,
-                model="test-model",
-                logging_obj=MagicMock(),
-                custom_llm_provider="openai",
-            )
-            self._items = ["chunk1", "chunk2", "chunk3"]
-            self._index = 0
-
-        def __aiter__(self):
-            return self
-
-        async def __anext__(self):
-            if self._index >= len(self._items):
-                raise StopAsyncIteration
-            item = self._items[self._index]
-            self._index += 1
-            return item
-
-        async def aclose(self):
-            nonlocal stream_closed
-            stream_closed = True
-
-    router = Router(
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    yield Router(
         model_list=[
             {
                 "model_name": "test-model",
                 "litellm_params": {
                     "model": "openai/test",
                     "api_key": "fake",
+                    "api_base": "https://primary.example/v1",
                 },
-            }
-        ]
-    )
-
-    fake_stream = FakeStream()
-
-    # Call _acompletion_streaming_iterator directly so we go through
-    # stream_with_fallbacks and its finally block
-    result = await router._acompletion_streaming_iterator(
-        model_response=fake_stream,
-        messages=[{"role": "user", "content": "hi"}],
-        initial_kwargs={"model": "test-model"},
-    )
-
-    # Consume one chunk then close (simulates client disconnect)
-    async for _ in result:
-        break
-    await result.aclose()
-
-    assert (
-        stream_closed
-    ), "model_response stream was not closed by stream_with_fallbacks finally block"
-
-
-@pytest.mark.asyncio
-async def test_stream_with_fallbacks_closes_stream_on_normal_completion():
-    """stream_with_fallbacks must aclose() model_response even on normal completion."""
-    from litellm.router import Router
-
-    stream_closed = False
-
-    class FakeStream(CustomStreamWrapper):
-        def __init__(self):
-            super().__init__(
-                completion_stream=None,
-                model="test-model",
-                logging_obj=MagicMock(),
-                custom_llm_provider="openai",
-            )
-            self._items = ["chunk1"]
-            self._index = 0
-
-        def __aiter__(self):
-            return self
-
-        async def __anext__(self):
-            if self._index >= len(self._items):
-                raise StopAsyncIteration
-            item = self._items[self._index]
-            self._index += 1
-            return item
-
-        async def aclose(self):
-            nonlocal stream_closed
-            stream_closed = True
-
-    router = Router(
-        model_list=[
-            {
-                "model_name": "test-model",
-                "litellm_params": {
-                    "model": "openai/test",
-                    "api_key": "fake",
-                },
-            }
-        ]
-    )
-
-    fake_stream = FakeStream()
-
-    result = await router._acompletion_streaming_iterator(
-        model_response=fake_stream,
-        messages=[{"role": "user", "content": "hi"}],
-        initial_kwargs={"model": "test-model"},
-    )
-
-    # Exhaust the stream fully
-    async for _ in result:
-        pass
-    await result.aclose()
-
-    assert stream_closed, "model_response stream was not closed after normal completion"
-
-
-@pytest.mark.asyncio
-async def test_stream_with_fallbacks_closes_both_on_fallback_disconnect():
-    """When a fallback is triggered and the client disconnects during fallback
-    iteration, both model_response and fallback_response must be closed."""
-    from litellm.exceptions import MidStreamFallbackError
-    from litellm.router import Router
-
-    model_closed = False
-    fallback_closed = False
-
-    class FakeModelStream(CustomStreamWrapper):
-        """Stream that raises MidStreamFallbackError immediately to trigger fallback."""
-
-        def __init__(self):
-            super().__init__(
-                completion_stream=None,
-                model="test-model",
-                logging_obj=MagicMock(),
-                custom_llm_provider="openai",
-            )
-            self.chunks = []
-
-        def __aiter__(self):
-            return self
-
-        async def __anext__(self):
-            raise MidStreamFallbackError(
-                message="test mid-stream error",
-                model="test-model",
-                llm_provider="openai",
-                generated_content="",
-            )
-
-        async def aclose(self):
-            nonlocal model_closed
-            model_closed = True
-
-    class FakeFallbackStream:
-        """Fallback stream that yields chunks."""
-
-        def __init__(self):
-            self._items = ["fb1", "fb2", "fb3"]
-            self._index = 0
-
-        def __aiter__(self):
-            return self
-
-        async def __anext__(self):
-            if self._index >= len(self._items):
-                raise StopAsyncIteration
-            item = self._items[self._index]
-            self._index += 1
-            return item
-
-        async def aclose(self):
-            nonlocal fallback_closed
-            fallback_closed = True
-
-    router = Router(
-        model_list=[
-            {
-                "model_name": "test-model",
-                "litellm_params": {
-                    "model": "openai/test",
-                    "api_key": "fake",
-                },
-            }
-        ]
-    )
-
-    fake_model_stream = FakeModelStream()
-    fake_fallback_stream = FakeFallbackStream()
-
-    # Mock async_function_with_fallbacks_common_utils to return the fallback stream
-    # instead of actually calling through the full fallback machinery
-    with patch.object(
-        router,
-        "async_function_with_fallbacks_common_utils",
-        return_value=fake_fallback_stream,
-    ):
-        result = await router._acompletion_streaming_iterator(
-            model_response=fake_model_stream,
-            messages=[{"role": "user", "content": "hi"}],
-            initial_kwargs={
-                "model": "test-model",
-                "fallbacks": ["other-model"],
             },
-        )
+            {
+                "model_name": "other-model",
+                "litellm_params": {
+                    "model": "openai/test",
+                    "api_key": "fake",
+                    "api_base": "https://fallback.example/v1",
+                },
+            },
+        ],
+        fallbacks=[{"test-model": ["other-model"]}],
+    )
+    litellm.in_memory_llm_clients_cache.flush_cache()
 
-        # Consume one fallback chunk then close (simulates client disconnect)
+
+async def _open_stream(router, primary: _TrackingStream, fallback: _TrackingStream, mock_router):
+    for host, body in (("primary", primary), ("fallback", fallback)):
+        mock_router.post(f"https://{host}.example/v1/chat/completions").mock(
+            return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=body)
+        )
+    return await router.acompletion(model="test-model", messages=[{"role": "user", "content": "hi"}], stream=True)
+
+
+@pytest.mark.asyncio
+async def test_stream_with_fallbacks_closes_stream_on_generator_close(stream_router):
+    """Closing the router's stream after one chunk (a client disconnect) must
+    close the upstream response."""
+    primary = _full_stream()
+
+    with respx.mock(assert_all_called=False) as mock_router:
+        result = await _open_stream(stream_router, primary, _full_stream(), mock_router)
         async for _ in result:
             break
         await result.aclose()
 
-    assert model_closed, "model_response stream was not closed"
-    assert fallback_closed, "fallback_response stream was not closed"
+    assert primary.closed, "upstream stream was not closed when the client disconnected"
+
+
+@pytest.mark.asyncio
+async def test_stream_with_fallbacks_closes_stream_on_normal_completion(stream_router):
+    """The upstream response must be closed even on normal completion."""
+    primary = _full_stream()
+
+    with respx.mock(assert_all_called=False) as mock_router:
+        result = await _open_stream(stream_router, primary, _full_stream(), mock_router)
+        async for _ in result:
+            pass
+        await result.aclose()
+
+    assert primary.closed, "upstream stream was not closed after normal completion"
+
+
+@pytest.mark.asyncio
+async def test_stream_with_fallbacks_closes_both_on_fallback_disconnect(stream_router):
+    """When a fallback is triggered and the client disconnects during fallback
+    iteration, both the primary and the fallback upstream must be closed."""
+    primary = _TrackingStream([], fail=True)
+    fallback = _full_stream()
+
+    with respx.mock() as mock_router:
+        result = await _open_stream(stream_router, primary, fallback, mock_router)
+        async for _ in result:
+            break
+        await result.aclose()
+
+    assert primary.closed, "primary upstream stream was not closed"
+    assert fallback.closed, "fallback upstream stream was not closed"

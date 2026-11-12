@@ -53,6 +53,7 @@ pub(super) const RULES: &[Rule] = &[
         |mapping| {
             mapping.error_str.contains("invalid_request_error")
                 && !mapping.error_str.contains("Incorrect API key provided")
+                && !matches!(mapping.status, Some(401 | 404))
         },
         PublicError::BadRequest,
     ),
@@ -130,6 +131,23 @@ mod tests {
     )]
     fn each_text_rule_claims_its_marker(#[case] text: &str, #[case] expected: PublicError) {
         assert_eq!(classified(Some(400), text), Some(expected));
+    }
+
+    #[rstest::rstest]
+    #[case::unauthorized(Some(401), None)]
+    #[case::not_found(Some(404), None)]
+    #[case::forbidden(Some(403), Some(PublicError::BadRequest))]
+    #[case::rate_limited(Some(429), Some(PublicError::BadRequest))]
+    #[case::server_error(Some(500), Some(PublicError::BadRequest))]
+    #[case::no_status(None, Some(PublicError::BadRequest))]
+    fn invalid_request_errors_leave_401_and_404_to_the_status_mapping(
+        #[case] status: Option<u16>,
+        #[case] expected: Option<PublicError>,
+    ) {
+        assert_eq!(
+            classified(status, "invalid_request_error bad field"),
+            expected
+        );
     }
 
     #[rstest::rstest]

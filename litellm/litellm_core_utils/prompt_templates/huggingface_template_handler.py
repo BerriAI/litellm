@@ -1,7 +1,8 @@
 import json
 from datetime import datetime
-from typing import Any, Final, Literal
+from typing import Final, Literal
 
+from pydantic import TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.llms.custom_httpx.http_handler import (
@@ -9,6 +10,8 @@ from litellm.llms.custom_httpx.http_handler import (
     get_httpx_client,
 )
 from litellm.types.llms.custom_http import httpxSpecialProvider
+
+_DECODED_TOKENIZER_CONFIG: Final = TypeAdapter(object)
 
 
 class _TokenizerConfigResult(TypedDict):
@@ -23,6 +26,10 @@ class _ChatTemplateFileResult(TypedDict):
 
     status: ReadOnly[Literal["success", "failure"]]
     chat_template: NotRequired[ReadOnly[str]]
+
+
+class _AddedToken(TypedDict, total=False, extra_items=object):
+    content: ReadOnly[str]
 
 
 def strftime_now(fmt: str) -> str:
@@ -55,7 +62,7 @@ def get_tokenizer_config(hf_model_name: str) -> _TokenizerConfigResult:
     except Exception as e:
         raise e
     if response.status_code == 200:
-        tokenizer_config: Final = json.loads(response.content)
+        tokenizer_config: Final = _DECODED_TOKENIZER_CONFIG.validate_python(json.loads(response.content))
         return {"status": "success", "tokenizer": tokenizer_config}
     else:
         return {"status": "failure"}
@@ -83,7 +90,7 @@ async def aget_tokenizer_config(hf_model_name: str) -> _TokenizerConfigResult:
     except Exception as e:
         raise e
     if response.status_code == 200:
-        tokenizer_config: Final = json.loads(response.content)
+        tokenizer_config: Final = _DECODED_TOKENIZER_CONFIG.validate_python(json.loads(response.content))
         return {"status": "success", "tokenizer": tokenizer_config}
     else:
         return {"status": "failure"}
@@ -156,7 +163,7 @@ async def aget_chat_template_file(hf_model_name: str) -> _ChatTemplateFileResult
 _aget_chat_template_file = aget_chat_template_file
 
 
-def extract_token_value(token_value: None | str | dict[str, Any]) -> str:
+def extract_token_value(token_value: None | str | _AddedToken) -> str:
     """
     Extract token string from various formats (string, dict, etc.)
 

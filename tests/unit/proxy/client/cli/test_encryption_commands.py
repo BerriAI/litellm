@@ -5,6 +5,8 @@ check vs POST migrate, dry-run param) and its residual-state messaging without a
 live proxy.
 """
 
+from typing import Final
+
 import pytest
 from click.testing import CliRunner
 
@@ -69,3 +71,20 @@ def test_migrate_reports_residual_legacy(runner):
     result = runner.invoke(cli_main.cli, ["encryption", "migrate", "--check"])
     assert result.exit_code == 0, result.output
     assert "Residual legacy values remaining: 3" in result.output
+
+
+@pytest.mark.parametrize("residual", [-1, float("nan")])
+def test_migrate_prints_no_residual_status_for_a_residual_below_zero_or_nan(runner, residual):
+    _FakeHTTPClient.response = {"status": "success", "report": {"residual_legacy": residual}}
+    result: Final = runner.invoke(cli_main.cli, ["encryption", "migrate", "--check"])
+    assert result.exit_code == 0, result.output
+    assert "No legacy values remaining" not in result.output
+    assert "Residual legacy values remaining" not in result.output
+
+
+@pytest.mark.parametrize("report", [None, "done", {"residual_legacy": "3"}])
+def test_migrate_malformed_report_fails(runner, report):
+    _FakeHTTPClient.response = {"status": "success", "report": report}
+    result: Final = runner.invoke(cli_main.cli, ["encryption", "migrate", "--check"])
+    assert result.exit_code != 0
+    assert "Unexpected" in result.output

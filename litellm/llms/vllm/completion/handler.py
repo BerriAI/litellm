@@ -5,8 +5,8 @@ from typing import Final
 import httpx
 
 from litellm.litellm_core_utils.prompt_templates.factory import (
-    custom_prompt,
     prompt_factory,
+    render_custom_prompt_template,
 )
 from litellm.utils import ModelResponse, Usage
 
@@ -56,11 +56,8 @@ def completion(
     if model in custom_prompt_dict:
         # check if the model has a registered custom prompt
         model_prompt_details: Final = custom_prompt_dict[model]
-        prompt = custom_prompt(
-            role_dict=model_prompt_details["roles"],
-            initial_prompt_value=model_prompt_details["initial_prompt_value"],
-            final_prompt_value=model_prompt_details["final_prompt_value"],
-            messages=messages,
+        prompt = render_custom_prompt_template(
+            template=model_prompt_details, messages=messages, model=model, llm_provider="vllm"
         )
     else:
         prompt = prompt_factory(model=model, messages=messages)
@@ -144,11 +141,8 @@ def batch_completions(model: str, messages: list, optional_params=None, custom_p
         # check if the model has a registered custom prompt
         model_prompt_details: Final = custom_prompt_dict[model]
         for message in messages:
-            prompt = custom_prompt(
-                role_dict=model_prompt_details["roles"],
-                initial_prompt_value=model_prompt_details["initial_prompt_value"],
-                final_prompt_value=model_prompt_details["final_prompt_value"],
-                messages=message,
+            prompt = render_custom_prompt_template(
+                template=model_prompt_details, messages=message, model=model, llm_provider="vllm"
             )
             prompts.append(prompt)
     else:

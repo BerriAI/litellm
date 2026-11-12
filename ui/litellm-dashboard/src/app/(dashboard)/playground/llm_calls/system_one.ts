@@ -1,26 +1,42 @@
 import { z } from "zod";
-import { getGlobalLitellmHeaderName, getProxyBaseUrl } from "@/components/networking";
+import { getGatewayBaseUrl, getGlobalLitellmHeaderName, getProxyBaseUrl } from "@/components/networking";
 import { withRequiredHeaders } from "@/components/llm_calls/request_headers";
 import { createApiClient } from "@/lib/http/client";
-import { isDecisionMode } from "@/lib/decisionModels";
+import { isDecisionEntry } from "@/lib/decisionModels";
 import {
   systemOneResponseSchema,
-  type DecisionEndpoint,
   type PlaygroundRequest,
   type SystemOneResponse,
 } from "../components/systemOneUI/lib/schemas";
+import {
+  openAIDecisionsResponseSchema,
+  type OpenAIDecisionsRequest,
+  type OpenAIDecisionsResponse,
+} from "../components/systemOneUI/lib/openAIDecisions";
 
-export interface SystemOneResult {
-  response: SystemOneResponse;
+export interface DecisionResult<T> {
+  response: T;
   latencyMs: number;
 }
 
+export type SystemOneResult = DecisionResult<SystemOneResponse>;
+export type OpenAIDecisionsResult = DecisionResult<OpenAIDecisionsResponse>;
+export type PlaygroundDecisionRequest =
+  | { endpoint: "/v1/systemone"; payload: PlaygroundRequest }
+  | { endpoint: "/v1/decisions"; payload: OpenAIDecisionsRequest };
+
 const modelGroupInfoSchema = z.object({
-  data: z.array(z.object({ model_group: z.string(), mode: z.string().nullish() })),
+  data: z.array(
+    z.object({
+      model_group: z.string(),
+      mode: z.string().nullish(),
+      supported_endpoints: z.array(z.string()).nullish(),
+    }),
+  ),
 });
 
-function proxyClient(customBaseUrl?: string) {
-  const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
+function proxyClient(customBaseUrl?: string, getDefaultBaseUrl: () => string = getProxyBaseUrl) {
+  const proxyBaseUrl = customBaseUrl || getDefaultBaseUrl();
   const normalizedBaseUrl = proxyBaseUrl.endsWith("/") ? proxyBaseUrl.slice(0, -1) : proxyBaseUrl;
   return createApiClient({ getBaseUrl: () => normalizedBaseUrl });
 }
@@ -46,26 +62,52 @@ export async function fetchDecisionModels(
   });
   return modelGroupInfoSchema
     .parse(body)
-    .data.filter((group) => isDecisionMode(group.mode))
+    .data.filter(isDecisionEntry)
     .map((group) => group.model_group)
     .sort((a, b) => a.localeCompare(b));
 }
 
-export async function makeSystemOneRequest(
-  payload: PlaygroundRequest,
+async function sendDecisionRequest<T>(
+  request: { endpoint: PlaygroundDecisionRequest["endpoint"]; payload: object; schema: z.ZodType<T> },
   accessToken: string,
   customBaseUrl?: string,
-  { signal, endpoint = "/typesafe/v1/systemone" }: { signal?: AbortSignal; endpoint?: DecisionEndpoint } = {},
-): Promise<SystemOneResult> {
+  signal?: AbortSignal,
+): Promise<DecisionResult<T>> {
   const startedAt = performance.now();
-  const body = await proxyClient(customBaseUrl).post<unknown>(endpoint, {
-    body: payload,
+  const body = await proxyClient(customBaseUrl, getGatewayBaseUrl).post<unknown>(request.endpoint, {
+    body: request.payload,
     headers: authHeaders(accessToken),
     signal,
   });
-  const parsed = systemOneResponseSchema.safeParse(body);
+  const parsed = request.schema.safeParse(body);
   if (!parsed.success) {
-    throw new Error("System One response has an invalid shape.");
+    throw new Error(`${request.endpoint} response has an invalid shape.`);
   }
   return { response: parsed.data, latencyMs: performance.now() - startedAt };
+}
+
+export function makeSystemOneRequest(
+  payload: PlaygroundRequest,
+  accessToken: string,
+  customBaseUrl?: string,
+  { signal }: { signal?: AbortSignal } = {},
+): Promise<SystemOneResult> {
+  return sendDecisionRequest(
+    { endpoint: "/v1/systemone", payload, schema: systemOneResponseSchema },
+    accessToken,
+    customBaseUrl,
+    signal,
+  );
+}
+
+export function makePlaygroundDecisionRequest(
+  request: PlaygroundDecisionRequest,
+  accessToken: string,
+  customBaseUrl?: string,
+  { signal }: { signal?: AbortSignal } = {},
+): Promise<SystemOneResult | OpenAIDecisionsResult> {
+  if (request.endpoint === "/v1/systemone") {
+    return makeSystemOneRequest(request.payload, accessToken, customBaseUrl, { signal });
+  }
+  return sendDecisionRequest({ ...request, schema: openAIDecisionsResponseSchema }, accessToken, customBaseUrl, signal);
 }

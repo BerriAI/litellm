@@ -7,6 +7,7 @@ import { getMCPToolsetTableColumns } from "./MCPToolsetTableColumns";
 
 vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: () => "http://localhost:4000",
+  getGatewayBaseUrl: () => "http://gateway.local:5000",
 }));
 
 const mockToolset: MCPToolset = {
@@ -46,7 +47,7 @@ describe("getMCPToolsetTableColumns", () => {
   it("renders the toolset with its endpoint url as subtitle", () => {
     renderTable();
     expect(screen.getByText("github-tools")).toBeInTheDocument();
-    expect(screen.getByText("http://localhost:4000/toolset/github-tools/mcp")).toBeInTheDocument();
+    expect(screen.getByText("http://gateway.local:5000/toolset/github-tools/mcp")).toBeInTheDocument();
   });
 
   it("renders server-prefixed tool chips capped at four with an overflow count", () => {
@@ -77,7 +78,7 @@ describe("getMCPToolsetTableColumns", () => {
 
     await user.click(screen.getByTestId("toolset-actions-ts-1"));
     await user.click(await screen.findByTestId("toolset-action-copy-url"));
-    expect(await window.navigator.clipboard.readText()).toBe("http://localhost:4000/toolset/github-tools/mcp");
+    expect(await window.navigator.clipboard.readText()).toBe("http://gateway.local:5000/toolset/github-tools/mcp");
 
     await user.click(screen.getByTestId("toolset-actions-ts-1"));
     await user.click(await screen.findByTestId("toolset-action-copy-id"));

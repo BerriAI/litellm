@@ -59,6 +59,7 @@ LlmRoute = Literal[
     "ollama_chat",
     "openai",
     "sail",
+    "sagemaker",
     "together_ai",
     "vertex",
     "xiaomi_mimo",
@@ -78,17 +79,22 @@ LlmCapability = Literal[
     "multi_turn",
     "native_passthrough",
     "pdf_input",
+    "logprobs",
     "prompt_cache_1h",
+    "prompt_cache_24h",
     "prompt_cache_5m",
     "response_headers",
     "service_tier",
     "structured_output",
     "thinking",
     "thinking_with_tool_use",
+    "top_k",
     "tool_search",
     "tool_search_history",
     "tool_use",
     "upstream_stream_failure",
+    "transcription",
+    "translation",
     "vision",
     "web_search",
     "web_search_server_tool",
@@ -158,14 +164,7 @@ class OtherCell(_Base):
 
 
 Cell = Annotated[
-    LlmCell
-    | MgmtCell
-    | McpCell
-    | ReliabilityCell
-    | QuotaCell
-    | LoggingCell
-    | GuardrailCell
-    | OtherCell,
+    LlmCell | MgmtCell | McpCell | ReliabilityCell | QuotaCell | LoggingCell | GuardrailCell | OtherCell,
     Field(discriminator="module"),
 ]
 

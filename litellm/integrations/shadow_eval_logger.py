@@ -20,9 +20,10 @@ from datetime import datetime, timezone
 from itertools import groupby
 from operator import itemgetter
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, Final, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, field_validator, model_validator
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -38,8 +39,11 @@ from litellm.litellm_core_utils.llm_judge import (
     parse_json_verdict,
 )
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
+from litellm.llms.anthropic.common_utils import tool_calls_with_server_tool_calls
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
-from litellm.router_utils.common_utils import resolve_model_group_alias
+from litellm.redis.stores.spend_counters import (
+    shadow_eval_counter,
+)
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.management_endpoints.auto_router_endpoints import ShadowEvalDirection
 from litellm.types.utils import SHADOW_EVAL_JUDGE_CALL_ORIGIN, SHADOW_EVAL_ROUTER_CALL_ORIGIN
@@ -112,7 +116,7 @@ def _chat_request_from_anthropic_messages(
     because the logged optional_params switch dialect per provider path (the bridge's
     inner completion rewrites them to chat shape mid-flight); the adapter translates
     them alongside the messages, and sampling params copy through untranslated."""
-    from litellm.llms.anthropic.pass_through.adapters.transformation import (
+    from litellm.llms.anthropic.messages.adapters.transformation import (
         LiteLLMAnthropicMessagesAdapter,
     )
 
@@ -202,7 +206,7 @@ def _chat_final_text(response_obj: object) -> str:
     if read is None:
         return ""
     prose: Final = extract_text_from_content(read("content"))
-    if not (read("tool_calls") or read("function_call")):
+    if not _tool_calls_list(read):
         return prose
     serialized: Final = _serialize_tool_calls(read)
     return f"{prose} {serialized}".strip() if prose else serialized
@@ -218,8 +222,9 @@ _RESPONSES_TOOL_CALL_TYPES: Final = frozenset(("function_call", "custom_tool_cal
 
 
 def _tool_calls_list(read: Callable[[str], object]) -> tuple[object, ...]:
-    calls: Final = read("tool_calls")
-    listed: Final = tuple(calls) if isinstance(calls, Sequence) and not isinstance(calls, str) else ()
+    listed: Final = tool_calls_with_server_tool_calls(
+        {"tool_calls": read("tool_calls"), "provider_specific_fields": read("provider_specific_fields")}
+    )
     single: Final = read("function_call")
     return listed if listed else ((single,) if single is not None else ())
 
@@ -587,7 +592,7 @@ def _leg_eval_spend(sums: Mapping[str, object]) -> float:
 
 
 def _job_spend_counter_key(job_id: str) -> str:
-    return f"spend:shadow_eval:{job_id}"
+    return shadow_eval_counter(job_id)
 
 
 async def _job_spend_from_counter(counter_key: str, fallback_spend: float, max_budget: float) -> float:
@@ -631,13 +636,13 @@ async def _key_or_team_is_over_budget(metadata: Mapping[str, object]) -> bool:
     """
     try:
         from litellm.exceptions import BudgetExceededError
-        from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.auth.auth_checks import (
             get_team_object,
             team_max_budget_check,
             virtual_key_max_budget_check,
         )
         from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+        from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
     except ImportError:
         return False
 
@@ -789,9 +794,7 @@ class ActiveShadowEvalJob(LiteLLMBaseModel):
 def _canonical_group(router: "Router | None", model_group: str) -> str:
     """A model group in the one spelling both a job's scope and a request's model compare
     under: an alias resolves to its target so the two never fail to match on spelling."""
-    return (
-        resolve_model_group_alias(router.model_group_alias, model_group) if router is not None else None
-    ) or model_group
+    return (router.registry().resolve(model_group, kind="alias") if router is not None else None) or model_group
 
 
 def _scope_admits(router: "Router | None", job: "ActiveShadowEvalJob", model_group: str) -> bool:
@@ -799,6 +802,52 @@ def _scope_admits(router: "Router | None", job: "ActiveShadowEvalJob", model_gro
     the router's alias map at match time, so a re-pointed alias applies to the next request
     rather than after the jobs cache rolls."""
     return not job.models or any(_canonical_group(router, name) == model_group for name in job.models)
+
+
+class _ShadowEvalJobRow(Protocol):
+    @property
+    def id(self) -> str: ...
+
+    @property
+    def target_type(self) -> str: ...
+
+    @property
+    def target_id(self) -> str: ...
+
+
+class _AttemptCount(TypedDict):
+    _all: ReadOnly[int]
+
+
+class _AttemptGroup(TypedDict):
+    job_id: ReadOnly[str]
+    _count: ReadOnly[_AttemptCount]
+    _sum: ReadOnly[Mapping[str, object] | None]
+
+
+class _ShadowEvalJobTable(Protocol):
+    async def find_many(self, *, where: Mapping[str, object]) -> Sequence[_ShadowEvalJobRow]: ...
+
+
+class _ShadowEvalAttemptTable(Protocol):
+    async def group_by(
+        self,
+        *,
+        by: Sequence[str],
+        count: bool,
+        sum: Mapping[str, bool],
+        where: Mapping[str, object],
+    ) -> Sequence[_AttemptGroup]: ...
+
+    async def create(self, *, data: Mapping[str, object]) -> object: ...
+
+
+def _shadow_eval_job_table(prisma: "PrismaClient") -> _ShadowEvalJobTable:
+    return prisma.db.litellm_shadowevaljob
+
+
+def _shadow_eval_attempt_table(prisma: "PrismaClient") -> _ShadowEvalAttemptTable:
+    return prisma.db.litellm_shadowevalattempt
 
 
 def _as_active_job(record: object, attempts: int, spend: float) -> ActiveShadowEvalJob | None:
@@ -860,14 +909,14 @@ class ShadowEvalLogger(CustomLogger):
         if prisma is None:
             return _EMPTY_JOBS
         try:
-            records: Final = await prisma.db.litellm_shadowevaljob.find_many(
+            records: Final = await _shadow_eval_job_table(prisma).find_many(
                 where={
                     "stopped_at": None,
                     "ends_at": {"gt": datetime.now(timezone.utc)},
                 },
             )
             grouped: Final = (
-                await prisma.db.litellm_shadowevalattempt.group_by(
+                await _shadow_eval_attempt_table(prisma).group_by(
                     by=["job_id"],
                     count=True,
                     sum={"judge_cost": True, "shadow_cost": True, "shadow_classifier_cost": True},
@@ -894,7 +943,10 @@ class ShadowEvalLogger(CustomLogger):
                 )
             )
             jobs: Final = MappingProxyType(
-                {target: tuple(job for _, job in group) for target, group in groupby(by_target, key=itemgetter(0))}
+                {
+                    target: tuple(job for _, job in group)
+                    for target, group in groupby(by_target, key=lambda entry: entry[0])
+                }
             )
             await self._jobs_cache.async_set_cache(_JOBS_CACHE_KEY, jobs)
             self._job_starts = {}
@@ -1242,7 +1294,7 @@ class ShadowEvalLogger(CustomLogger):
         if prisma is None:
             return
         try:
-            await prisma.db.litellm_shadowevalattempt.create(
+            await _shadow_eval_attempt_table(prisma).create(
                 data={
                     "job_id": job.id,
                     "request_id": request_id,

@@ -64,6 +64,9 @@ from pipecat_service import LiteLLMRealtimeLLMService  # noqa: E402
 # Vertex native-audio live is flaky through pipecat tool calling (upstream
 # pipecat-ai/pipecat#2544); raw-ws tool_call_round_trip[vertex_ai] is the
 # source of truth for that provider. Keep openai/azure/gemini here.
+# Bedrock event shapes are not yet pipecat-compatible (missing GA fields and
+# event names, and no tool-result round trip reaches Nova); raw-ws
+# tool_call_round_trip[bedrock] is the source of truth for that provider.
 PROVIDER_PARAMS = [
     pytest.param(
         p,
@@ -79,7 +82,7 @@ PROVIDER_PARAMS = [
             )
         ),
     )
-    for p in PROVIDERS if p.id != "vertex_ai"
+    for p in PROVIDERS if p.id not in ("vertex_ai", "bedrock")
 ]
 
 WEATHER_TOOL = ToolsSchema(

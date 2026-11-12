@@ -234,12 +234,32 @@ class TestGeminiImageEditTransformation:
         assert usage["prompt_tokens"] == 35
         assert usage["completion_tokens"] == 1716
         assert usage["prompt_tokens_details"]["image_tokens"] == 5
-        assert usage["completion_tokens_details"]["image_tokens"] == 1716
+        assert usage["completion_tokens_details"] == {}
 
         logging_usage = StandardLoggingPayloadSetup.get_usage_as_dict(
             response_obj=image_response.model_dump()
         )
-        assert logging_usage["completion_tokens_details"]["image_tokens"] == 1716
+        assert all(value is None for value in logging_usage["completion_tokens_details"].values())
+
+    @pytest.mark.parametrize(
+        ("body", "error", "message"),
+        [
+            (["not", "an", "object"], AttributeError, "'list' object has no attribute 'get'"),
+            ({"candidates": None}, TypeError, "'NoneType' object is not iterable"),
+            ({"candidates": [{"content": {"parts": None}}]}, TypeError, "'NoneType' object is not iterable"),
+        ],
+    )
+    def test_transform_image_edit_response_malformed_body_raises_the_error_of_the_failing_lookup(
+        self, body: object, error: type[Exception], message: str
+    ) -> None:
+        with pytest.raises(error, match=message) as raised:
+            self.config.transform_image_edit_response(
+                model=self.model,
+                raw_response=httpx.Response(200, json=body),
+                logging_obj=self.logging_obj,
+            )
+
+        assert raised.type is error
 
     def test_transform_image_edit_request_without_image_raises(self) -> None:
         optional_params = {}

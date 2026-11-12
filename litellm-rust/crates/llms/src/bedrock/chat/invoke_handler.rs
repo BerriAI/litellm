@@ -2,6 +2,7 @@ use base64::Engine;
 use bytes::Buf;
 use futures_util::{Stream, StreamExt};
 use litellm_framer::{
+    EventStreamError,
     aws_event_stream::{AwsEventStreamCodec, Message},
     frames,
 };
@@ -11,9 +12,8 @@ use serde_json::Value;
 
 use crate::{
     Error,
-    anthropic::chat::handler::ModelResponseIterator,
     base_llm::{
-        chat::streaming::{ChatStream, StreamShape},
+        base_model_iterator::tunnelled_http,
         messages::streaming::{ByteStream, EventStream},
     },
 };
@@ -47,11 +47,21 @@ where
     B: Buf + Send,
     E: std::error::Error + Send + Sync + 'static,
 {
-    frames(input, AwsEventStreamCodec).map(|message| {
-        decode_invoke_chunk(message.map_err(|error| {
+    frames(input, AwsEventStreamCodec).map(|message| decode_invoke_chunk(message.map_err(framing)?))
+}
+
+fn framing(error: EventStreamError) -> Error {
+    match &error {
+        EventStreamError::Body(body) if let Some(http) = tunnelled_http(body) => {
+            Error::Http(http.clone())
+        }
+        EventStreamError::Body(_)
+        | EventStreamError::InvalidLength(_)
+        | EventStreamError::Truncated
+        | EventStreamError::Malformed(_) => {
             Error::InvalidResponse(crate::ErrorDetail::failed("stream framing", error))
-        })?)
-    })
+        }
+    }
 }
 
 pub fn decode_invoke_anthropic_chunk(chunk: Value) -> Result<MessagesStreamEvent, Error> {
@@ -64,34 +74,6 @@ pub fn invoke_anthropic_event_stream(bytes: ByteStream) -> EventStream {
     Box::pin(invoke_chunk_stream(bytes).map(|chunk| decode_invoke_anthropic_chunk(chunk?)))
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::EnumString)]
-enum InvokeProvider {
-    #[strum(serialize = "anthropic")]
-    Anthropic,
-    #[strum(serialize = "deepseek_r1")]
-    DeepseekR1,
-    #[strum(serialize = "moonshot")]
-    Moonshot,
-    #[strum(disabled)]
-    Unsupported,
-}
-
-pub fn invoke_chat_stream(invoke_provider: &str, shape: StreamShape) -> Result<ChatStream, Error> {
-    match invoke_provider
-        .parse()
-        .unwrap_or(InvokeProvider::Unsupported)
-    {
-        InvokeProvider::Anthropic => Ok(ChatStream::new(
-            invoke_anthropic_event_stream,
-            ModelResponseIterator::new(shape),
-        )),
-        InvokeProvider::DeepseekR1 | InvokeProvider::Moonshot => Err(Error::Unsupported(
-            "Bedrock invoke streaming for this model family",
-        )),
-        InvokeProvider::Unsupported => Err(Error::Unsupported("Bedrock invoke streaming")),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use aws_smithy_eventstream::frame::write_message_to;
@@ -102,7 +84,7 @@ mod tests {
     use litellm_llms_types::formats::messages::streaming::MessagesContentBlockDelta;
 
     use super::*;
-    use crate::base_llm::messages::streaming::anthropic_sse_event_stream;
+    use crate::base_llm::messages::streaming;
 
     fn in_pieces(wire: &[u8]) -> ByteStream {
         let pieces: Vec<Bytes> = wire.chunks(3).map(Bytes::copy_from_slice).collect();
@@ -111,22 +93,6 @@ mod tests {
 
     const TEXT_DELTA: &str =
         r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}"#;
-
-    #[rstest::rstest]
-    #[case::anthropic("anthropic", InvokeProvider::Anthropic)]
-    #[case::deepseek_r1("deepseek_r1", InvokeProvider::DeepseekR1)]
-    #[case::moonshot("moonshot", InvokeProvider::Moonshot)]
-    #[case::unknown("qwen", InvokeProvider::Unsupported)]
-    #[case::case_sensitive("Anthropic", InvokeProvider::Unsupported)]
-    fn invoke_provider_maps_each_model_family_name(
-        #[case] name: &str,
-        #[case] expected: InvokeProvider,
-    ) {
-        assert_eq!(
-            name.parse().unwrap_or(InvokeProvider::Unsupported),
-            expected
-        );
-    }
 
     fn aws_wire(chunk: &str) -> Vec<u8> {
         let payload = serde_json::json!({"bytes": STANDARD.encode(chunk)});
@@ -147,7 +113,7 @@ mod tests {
             .try_collect::<Vec<_>>()
             .await
             .unwrap();
-        let from_sse = anthropic_sse_event_stream(in_pieces(sse.as_bytes()))
+        let from_sse = streaming::event_stream(in_pieces(sse.as_bytes()))
             .try_collect::<Vec<_>>()
             .await
             .unwrap();

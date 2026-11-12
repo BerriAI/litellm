@@ -6,12 +6,14 @@ from dataclasses import dataclass
 from itertools import accumulate
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Optional, TypeAlias
 
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
 from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
+    BAGGAGE_MAPPED_TAGS_METADATA_KEY,
     CLIENT_OUTPUT_CEILING_METADATA_KEY,
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
     MAX_GUARDRAIL_SCAN_METADATA_HEADER_LENGTH,
@@ -24,8 +26,10 @@ from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
 )
+from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
-from litellm.proxy._types import CommonProxyErrors, LiteLLMPromptInjectionParams
+from litellm.proxy._types import CALLBACK_VAR_NAMES, CommonProxyErrors, LiteLLMPromptInjectionParams
+from litellm.proxy.common_utils.callback_config_validation import object_sequence, string_keyed
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
@@ -38,6 +42,7 @@ from litellm.types.utils import (
 )
 
 _CALLBACK_VAR_MASKER: Final = SensitiveDataMasker()
+_LOADED_CALLBACK: Final = TypeAdapter(object)
 # Compound names that are credential-bearing but don't contain any of the
 # default sensitive segments (so SensitiveDataMasker won't flag them).
 _EXTRA_SENSITIVE_CALLBACK_KEYS: Final = {"gcs_path_service_account"}
@@ -86,6 +91,10 @@ class _CallbackNotDispatchable:
 
 
 _CallbackLoadError: TypeAlias = _CallbackResolvedToClass | _CallbackNotDispatchable
+
+
+class _PresidioOptions(TypedDict, total=False, extra_items=object):
+    pass
 
 
 def _classify_loaded_callback(entry: str, loaded: object) -> CustomLogger | Callable[..., object] | _CallbackLoadError:
@@ -188,15 +197,15 @@ def initialize_callbacks_on_proxy(
                 if presidio_logging_only is not None:
                     presidio_logging_only = bool(presidio_logging_only)  # validate boolean given
 
-                _presidio_params = {}
+                _presidio_params: Mapping[str, object] = {}
                 if "presidio" in callback_specific_params and isinstance(callback_specific_params["presidio"], dict):
                     _presidio_params = callback_specific_params["presidio"]
 
-                params: dict[str, Any] = {
+                params: Mapping[str, object] = {
                     "logging_only": presidio_logging_only,
                     **_presidio_params,
                 }
-                pii_masking_object = OPTIONAL_PresidioPIIMasking(**params)
+                pii_masking_object = OPTIONAL_PresidioPIIMasking(**_PresidioOptions(**params))
                 imported_list.append(pii_masking_object)
             elif isinstance(callback, str) and callback == "llamaguard_moderations":
                 try:
@@ -388,9 +397,11 @@ def initialize_callbacks_on_proxy(
                 imported_list.append(
                     _loaded_callback_or_raise(
                         entry=callback,
-                        loaded=get_instance_fn(
-                            value=callback,
-                            config_file_path=config_file_path,
+                        loaded=_LOADED_CALLBACK.validate_python(
+                            get_instance_fn(
+                                value=callback,
+                                config_file_path=config_file_path,
+                            )
                         ),
                     )
                 )
@@ -407,9 +418,11 @@ def initialize_callbacks_on_proxy(
         litellm.callbacks = [
             _loaded_callback_or_raise(
                 entry=value,
-                loaded=get_instance_fn(
-                    value=value,
-                    config_file_path=config_file_path,
+                loaded=_LOADED_CALLBACK.validate_python(
+                    get_instance_fn(
+                        value=value,
+                        config_file_path=config_file_path,
+                    )
                 ),
             )
         ]
@@ -429,10 +442,7 @@ def get_model_group_from_litellm_kwargs(kwargs: dict) -> str | None:
 def get_model_group_from_request_data(data: dict) -> str | None:
     _metadata: Final = data.get("metadata", None) or {}
     _model_group: Final = _metadata.get("model_group", None)
-    if _model_group is not None:
-        return _model_group
-
-    return None
+    return _model_group if isinstance(_model_group, str) else None
 
 
 def get_remaining_tokens_and_requests_from_request_data(data: dict) -> dict[str, str]:
@@ -543,6 +553,7 @@ LITELLM_PROXY_INTERNAL_METADATA_KEYS: Final = frozenset(
         PRE_CALL_EXECUTED_GUARDRAILS_KEY,
         SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
         CONSUMED_REQUEST_TAGS_METADATA_KEY,
+        BAGGAGE_MAPPED_TAGS_METADATA_KEY,
         CLIENT_OUTPUT_CEILING_METADATA_KEY,
         ROUTING_REQUEST_TAGS_METADATA_KEY,
         "disable_global_guardrails",
@@ -714,7 +725,7 @@ def strip_callback_config(metadata: dict[str, object] | None) -> dict[str, objec
     return {k: v for k, v in metadata.items() if k not in _CALLBACK_CONFIG_SLOTS}
 
 
-def encrypt_callback_vars(metadata: object) -> Any:
+def encrypt_callback_vars(metadata: object) -> object:
     """Return a deep copy of metadata with callback_vars values encrypted at rest.
 
     Idempotent: a value that already decrypts cleanly is left unchanged so
@@ -729,6 +740,47 @@ def decrypt_callback_vars(metadata: object) -> Any:
     Legacy plaintext rows pass through unchanged (decrypt failure → original).
     """
     return _transform_callback_vars(metadata, _decrypt_or_passthrough)
+
+
+def decrypted_callback_metadata(metadata: object) -> object:
+    return _transform_callback_vars(metadata, _decrypt_or_passthrough)
+
+
+def decrypted_logging_entries(metadata: object) -> object:
+    return string_keyed(decrypted_callback_metadata(metadata)).get("logging")
+
+
+def key_logging_entries(metadata: object) -> tuple[Mapping[str, object], ...] | None:
+    entries: Final = decrypted_logging_entries(metadata)
+    if entries is None:
+        return None
+    return tuple(resolved for entry in _logging_objects(entries) if (resolved := _with_credential(entry)) is not None)
+
+
+def _logging_objects(entries: object) -> tuple[Mapping[str, object], ...]:
+    items: Final = () if entries in ("", {}) else object_sequence(entries)
+    if items is None or not all(isinstance(item, Mapping) for item in items):
+        raise TypeError(f"key metadata.logging must be a list of objects, got {type(entries).__name__}")
+    return tuple(string_keyed(item) for item in items)
+
+
+def _with_credential(entry: Mapping[str, object]) -> Mapping[str, object] | None:
+    credential_name: Final = entry.get("litellm_credential_name")
+    if not isinstance(credential_name, str):
+        return entry
+    credential_vars: Final = {
+        name: str(value)
+        for name, value in CredentialAccessor.get_credential_values(credential_name).items()
+        if name in CALLBACK_VAR_NAMES and value is not None
+    }
+    if not credential_vars:
+        verbose_proxy_logger.error(
+            "Ignoring key logging entry for %s: credential %r is not defined or holds no logging values",
+            entry.get("callback_name"),
+            credential_name,
+        )
+        return None
+    return {**entry, "callback_vars": {**credential_vars, **string_keyed(entry.get("callback_vars"))}}
 
 
 def _transform_callback_vars(metadata: object, transform: Callable[[str, object], object]) -> object:

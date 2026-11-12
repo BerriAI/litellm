@@ -178,14 +178,15 @@ impl NativeGateway {
                     .ok_or(Error::Forbidden)?;
                 let mut upstream = request;
                 upstream.name = tool.tool.name.clone();
-                match self
+                let result = self
                     .send(server, CallToolRequest::new(upstream).into(), &context)
-                    .await
-                {
-                    Err(Error::Upstream(rmcp::service::ServiceError::McpError(error))) => {
-                        Ok(CallToolResult::error(vec![ContentBlock::text(error.message)]).into())
-                    }
-                    result => result,
+                    .await;
+                match result.as_ref().err().and_then(Error::mcp_error) {
+                    Some(error) => Ok(CallToolResult::error(vec![ContentBlock::text(
+                        error.message.clone(),
+                    )])
+                    .into()),
+                    None => result,
                 }
             }
             Operation::ListPrompts(params) => {
@@ -321,9 +322,7 @@ impl NativeGateway {
                     return Err(Error::Forbidden);
                 }
                 let [server] = servers.as_ref() else {
-                    return Err(Error::InvalidRequest(
-                        "read_resource requires exactly one allowed MCP server".into(),
-                    ));
+                    return Err(Error::AmbiguousResourceServer);
                 };
                 self.send(server, ReadResourceRequest::new(request).into(), &context)
                     .await
@@ -363,9 +362,7 @@ impl Operations for NativeGateway {
 
 fn reject_cursor(params: &Option<PaginatedRequestParams>) -> Result<(), Error> {
     match params.as_ref().and_then(|params| params.cursor.as_ref()) {
-        Some(_) => Err(Error::InvalidRequest(
-            "Gateway listings do not accept an upstream cursor".into(),
-        )),
+        Some(_) => Err(Error::UpstreamCursor),
         None => Ok(()),
     }
 }

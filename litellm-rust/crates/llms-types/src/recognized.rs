@@ -7,6 +7,16 @@ pub enum Recognized<T> {
     Unrecognized(Value),
 }
 
+/// `deserialize_with` for an optional `Recognized` field whose explicit `null` must stay
+/// distinguishable from an absent key: `null` becomes `Some(Unrecognized(Null))`.
+pub fn present<'de, D, T>(deserializer: D) -> Result<Option<Recognized<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    Recognized<T>: serde::Deserialize<'de>,
+{
+    <Recognized<T> as serde::Deserialize<'de>>::deserialize(deserializer).map(Some)
+}
+
 impl<T> Recognized<T> {
     pub fn known(&self) -> Option<&T> {
         match self {
@@ -18,10 +28,9 @@ impl<T> Recognized<T> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use rstest::rstest;
     use serde_json::json;
-
-    use super::*;
 
     #[rstest]
     #[case::known(json!(7), Recognized::Known(7))]

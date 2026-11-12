@@ -15,14 +15,15 @@ import contextvars
 import os
 from collections.abc import Coroutine
 from functools import partial
-from typing import Any, Final, Literal, cast
+from typing import Any, Final, Literal, Protocol, cast
 
 import httpx
 from openai.types.batch import BatchRequestCounts
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.get_litellm_params import add_trusted_model_credentials_to_litellm_params
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.batches.handler import AnthropicBatchesHandler
 from litellm.llms.azure.batches.handler import AzureBatchesAPI
@@ -61,8 +62,13 @@ azure_batches_instance: Final = AzureBatchesAPI()
 vertex_ai_batches_instance: Final = VertexAIBatchPrediction(gcs_bucket_name="")
 anthropic_batches_instance: Final = AnthropicBatchesHandler()
 xai_batches_instance: Final = XAIBatchesHandler()
+_EXTRA_BODY: Final = TypeAdapter(object)
 base_llm_http_handler = BaseLLMHTTPHandler()
 #################################################
+
+
+class _PopsKeys(Protocol):
+    def pop(self, key: str, default: None, /) -> object: ...
 
 
 def _resolve_timeout(
@@ -127,7 +133,7 @@ async def acreate_batch(
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
-    output_expires_after: dict[str, Any] | None = None,
+    output_expires_after: FileExpiresAfter | None = None,
     **kwargs,
 ) -> LiteLLMBatch:
     """
@@ -191,9 +197,9 @@ def create_batch(
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
-    output_expires_after: dict[str, Any] | None = None,
+    output_expires_after: FileExpiresAfter | None = None,
     **kwargs,
-) -> LiteLLMBatch | Coroutine[Any, Any, LiteLLMBatch]:
+) -> LiteLLMBatch | Coroutine[object, None, LiteLLMBatch]:
     """
     Creates and executes a batch from an uploaded file of request
 
@@ -246,7 +252,7 @@ def create_batch(
             extra_body=extra_body,
         )
         if output_expires_after is not None:
-            _create_batch_request["output_expires_after"] = cast(FileExpiresAfter, output_expires_after)
+            _create_batch_request["output_expires_after"] = output_expires_after
         if model is not None:
             provider_config = ProviderConfigManager.get_provider_batches_config(
                 model=model,
@@ -309,6 +315,7 @@ def create_batch(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 _is_async=_is_async,
+                litellm_params=litellm_params,
             )
         elif custom_llm_provider == "azure":
             api_base = optional_params.api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
@@ -471,6 +478,7 @@ def _handle_retrieve_batch_providers_without_provider_config(
             organization=organization,
             timeout=timeout,
             max_retries=optional_params.max_retries,
+            litellm_params=litellm_params,
         )
     elif custom_llm_provider == "azure":
         api_base = optional_params.api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
@@ -484,9 +492,9 @@ def _handle_retrieve_batch_providers_without_provider_config(
             or get_secret_str("AZURE_API_KEY")
         )
 
-        extra_body: Final = optional_params.get("extra_body", {})
+        extra_body: Final = _EXTRA_BODY.validate_python(optional_params.get("extra_body", {}))
         if extra_body is not None:
-            extra_body.pop("azure_ad_token", None)
+            require_attributes(extra_body, _PopsKeys, "pop").pop("azure_ad_token", None)
         else:
             get_secret_str("AZURE_AD_TOKEN")
 
@@ -568,7 +576,7 @@ def retrieve_batch(
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
     **kwargs,
-) -> LiteLLMBatch | Coroutine[Any, Any, LiteLLMBatch]:
+) -> LiteLLMBatch | Coroutine[object, None, LiteLLMBatch]:
     """
     Retrieves a batch.
 
@@ -583,7 +591,6 @@ def retrieve_batch(
             custom_llm_provider=custom_llm_provider,
             **kwargs,
         )
-        add_trusted_model_credentials_to_litellm_params(litellm_params, kwargs)
         if litellm_logging_obj is not None:
             litellm_logging_obj.update_from_kwargs(
                 kwargs=kwargs,
@@ -819,6 +826,7 @@ def list_batches(
                 organization=organization,
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
+                litellm_params=litellm_params,
             )
         elif custom_llm_provider == "azure":
             api_base = optional_params.api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
@@ -941,7 +949,7 @@ def cancel_batch(
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
     **kwargs,
-) -> LiteLLMBatch | Coroutine[Any, Any, LiteLLMBatch]:
+) -> LiteLLMBatch | Coroutine[object, None, LiteLLMBatch]:
     """
     Cancels a batch.
 
@@ -1016,6 +1024,7 @@ def cancel_batch(
                 organization=organization,
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
+                litellm_params=litellm_params,
             )
         elif custom_llm_provider == "azure":
             api_base = optional_params.api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")

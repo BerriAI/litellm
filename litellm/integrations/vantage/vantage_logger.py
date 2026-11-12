@@ -9,6 +9,8 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING, Any, Final, cast
 
+from typing_extensions import TypedDict, Unpack
+
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
@@ -16,10 +18,16 @@ from litellm.integrations.focus.focus_logger import FocusLogger
 
 if TYPE_CHECKING:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+    from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 else:
     AsyncIOScheduler = Any
 
 VANTAGE_USAGE_DATA_JOB_NAME: Final = "vantage_export_usage_data"
+
+
+class _CustomLoggerOptions(TypedDict, total=False, extra_items=object):
+    pass
 
 
 class VantageLogger(FocusLogger):
@@ -41,7 +49,7 @@ class VantageLogger(FocusLogger):
         base_url: str | None = None,
         frequency: str | None = None,
         interval_seconds: int | None = None,
-        **kwargs: Any,
+        **kwargs: Unpack[_CustomLoggerOptions],
     ) -> None:
         resolved_api_key: Final = api_key or os.getenv("VANTAGE_API_KEY")
         resolved_token: Final = integration_token or os.getenv("VANTAGE_INTEGRATION_TOKEN")
@@ -91,7 +99,7 @@ class VantageLogger(FocusLogger):
         """
         from litellm.proxy.proxy_server import proxy_logging_obj
 
-        pod_lock_manager = None
+        pod_lock_manager: PodLockManager | None = None
         if proxy_logging_obj is not None:
             writer: Final[object] = getattr(proxy_logging_obj, "db_spend_update_writer", None)
             if writer is not None:

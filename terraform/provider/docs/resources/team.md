@@ -98,6 +98,24 @@ resource "litellm_team" "model_dependent_team" {
 }
 ```
 
+### Team with Per-Member Model Budgets
+
+```hcl
+resource "litellm_team" "engineering" {
+  team_alias = "engineering"
+  models     = ["claude-opus", "claude-sonnet"]
+
+  # Each member may spend $500 a day in total
+  team_member_budget          = 500
+  team_member_budget_duration = "1d"
+
+  # ...of which at most $400 on Opus. Past that, Sonnet keeps working.
+  team_member_model_max_budget = jsonencode({
+    "claude-opus" = { budget_limit = 400, time_period = "1d" }
+  })
+}
+```
+
 ## Argument Reference
 
 The following arguments are supported:
@@ -149,6 +167,8 @@ The following arguments are supported:
 * `team_member_tpm_limit` - (Optional) Tokens per minute limit applied to each individual team member.
 
 * `team_member_key_duration` - (Optional) Lifetime for keys created by team members (e.g. `1d`, `1w`).
+
+* `team_member_model_max_budget` - (Optional) JSON string of per-model budgets applied to each individual team member, e.g. `jsonencode({"claude-opus" = {budget_limit = 400, time_period = "1d"}})`. Each model maps to an object with `budget_limit` (or `max_budget`) and `time_period` (or `budget_duration`). The proxy rejects `tpm_limit` and `rpm_limit` on team budgets, so the provider rejects them at plan time. A member who reaches a model's cap is blocked on that model only and can keep calling the team's other models until `team_member_budget` runs out. The key is matched against the model name on the request, so for a router alias the cap applies to the alias, not the model the router picks. Remove the attribute to clear every per-model member budget. Requires a LiteLLM Enterprise license on the proxy, and a proxy that includes [#43887](https://github.com/BerriAI/litellm/pull/43887). Older proxies, including v1.105.0 and v1.106.0-rc.1, accept the field but silently drop it, so every plan shows a diff.
 
 * `model_rpm_limit` - (Optional) Map of model name to requests per minute limit for that model.
 

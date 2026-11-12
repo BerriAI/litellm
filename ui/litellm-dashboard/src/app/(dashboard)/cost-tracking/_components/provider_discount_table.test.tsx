@@ -295,6 +295,78 @@ describe("ProviderDiscountTable", () => {
     expect(screen.getByRole("button", { name: "Cancel editing discount for OpenAI" })).toBeInTheDocument();
   });
 
+  it("should render a Models column", () => {
+    renderWithProviders(
+      <ProviderDiscountTable
+        discountConfig={DEFAULT_DISCOUNT_CONFIG}
+        onDiscountChange={onDiscountChange}
+        onRemoveProvider={onRemoveProvider}
+      />,
+    );
+    expect(screen.getByRole("columnheader", { name: "Models" })).toBeInTheDocument();
+  });
+
+  it("should show the model pattern for a provider/pattern key and All models for a bare key", () => {
+    renderWithProviders(
+      <ProviderDiscountTable
+        discountConfig={{ "vertex_ai/claude-*": 0.2, vertex_ai: 0.05 }}
+        onDiscountChange={onDiscountChange}
+        onRemoveProvider={onRemoveProvider}
+      />,
+    );
+    expect(screen.getByText("claude-*")).toBeInTheDocument();
+    expect(screen.getByText("All models")).toBeInTheDocument();
+  });
+
+  it("should split a nested pattern key on the first slash only", () => {
+    renderWithProviders(
+      <ProviderDiscountTable
+        discountConfig={{ "openrouter/anthropic/claude-*": 0.15 }}
+        onDiscountChange={onDiscountChange}
+        onRemoveProvider={onRemoveProvider}
+      />,
+    );
+    expect(screen.getByText("anthropic/claude-*")).toBeInTheDocument();
+    expect(screen.queryByText("All models")).not.toBeInTheDocument();
+  });
+
+  it("should include the pattern in the row action labels for a pattern key", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <ProviderDiscountTable
+        discountConfig={{ "vertex_ai/claude-*": 0.2 }}
+        onDiscountChange={onDiscountChange}
+        onRemoveProvider={onRemoveProvider}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /Remove discount for Vertex AI .* \(claude-\*\)/ }));
+
+    expect(onRemoveProvider).toHaveBeenCalledWith(
+      "vertex_ai/claude-*",
+      "Vertex AI (Anthropic, Gemini, etc.) (claude-*)",
+    );
+  });
+
+  it("should call onDiscountChange with the full config key when editing a pattern row", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <ProviderDiscountTable
+        discountConfig={{ "vertex_ai/claude-*": 0.2 }}
+        onDiscountChange={onDiscountChange}
+        onRemoveProvider={onRemoveProvider}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /Edit discount for Vertex AI .* \(claude-\*\)/ }));
+    const input = screen.getByPlaceholderText("5");
+    await user.clear(input);
+    fireEvent.change(input, { target: { value: "30" } });
+    await user.click(screen.getByRole("button", { name: /Save discount for Vertex AI .* \(claude-\*\)/ }));
+
+    expect(onDiscountChange).toHaveBeenCalledWith("vertex_ai/claude-*", "0.3");
+  });
+
   it("should render the empty message when no discounts are configured", () => {
     renderWithProviders(
       <ProviderDiscountTable

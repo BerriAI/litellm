@@ -1,14 +1,16 @@
 import json
+from typing import Final
 from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
-import litellm
 import pytest
 from pydantic import ValidationError
 
+import litellm
 from litellm.llms.replicate.chat.handler import async_completion
 from litellm.llms.replicate.chat.handler import completion as replicate_completion
 from litellm.llms.replicate.chat.transformation import ReplicateConfig
+from litellm.llms.replicate.common_utils import ReplicateError
 from litellm.types.utils import ModelResponse
 
 
@@ -56,6 +58,106 @@ def test_transform_response_rejects_an_output_that_is_not_made_of_strings_withou
         _transform(httpx.Response(200, json={"status": "succeeded", "output": output}))
 
     assert "secret-output" not in str(exc_info.value)
+
+
+def test_transform_response_reads_a_succeeded_prediction_that_carries_unmodelled_fields() -> None:
+    response = _transform(
+        httpx.Response(
+            200,
+            json={
+                "id": "p1",
+                "status": "succeeded",
+                "output": ["Hello", " there"],
+                "metrics": {"predict_time": 1.5, "stages": [1, {"name": None}]},
+                "urls": {"get": "https://api.replicate.com/v1/predictions/p1"},
+                "error": None,
+            },
+        )
+    )
+
+    assert response.choices[0].message.content == "Hello there"
+    assert response.model == "replicate/acme/echo-model"
+
+
+@pytest.mark.parametrize(
+    ("body", "reported"),
+    [
+        pytest.param(
+            {"status": "failed", "error": "boom", "output": None},
+            "{'status': 'failed', 'error': 'boom', 'output': None}",
+            id="failed",
+        ),
+        pytest.param(
+            {"status": "processing", "output": ["partial"]},
+            "{'status': 'processing', 'output': ['partial']}",
+            id="still-processing",
+        ),
+        pytest.param(
+            {"detail": {"b": [1, 2.5, True], "a": "z"}},
+            "{'detail': {'b': [1, 2.5, True], 'a': 'z'}}",
+            id="no-status",
+        ),
+        pytest.param({}, "{}", id="empty-object"),
+    ],
+)
+def test_transform_response_reports_an_unsuccessful_prediction_body_as_received(
+    body: dict[str, object], reported: str
+) -> None:
+    with pytest.raises(ReplicateError) as exc_info:
+        _transform(httpx.Response(500, json=body, headers={"retry-after": "3"}))
+
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.message == f"LiteLLM Error - prediction not succeeded - {reported}"
+    assert exc_info.value.headers["retry-after"] == "3"
+
+
+@pytest.mark.parametrize(
+    ("body", "echo"),
+    [
+        pytest.param(["secret-output"], "secret-output", id="list"),
+        pytest.param("secret-output", "secret-output", id="string"),
+        pytest.param(4815162342, "4815162342", id="number"),
+        pytest.param(None, "NoneType", id="null"),
+    ],
+)
+def test_transform_response_rejects_a_body_that_is_not_an_object_without_echoing_it(body: object, echo: str) -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        _transform(httpx.Response(500, content=json.dumps(body).encode()))
+
+    assert echo not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("supplied", "stored"),
+    [
+        pytest.param({}, {}, id="nothing-supplied"),
+        pytest.param(
+            {"system_prompt": "", "max_new_tokens": 0, "temperature": 1, "debug": False},
+            {"system_prompt": "", "max_new_tokens": 0, "temperature": 1, "debug": False},
+            id="falsy-values-are-kept",
+        ),
+        pytest.param({"top_k": 40, "seed": None, "stop_sequences": None}, {"top_k": 40}, id="none-is-skipped"),
+    ],
+)
+def test_init_stores_each_supplied_value_except_none_as_class_level_config(
+    supplied: dict[str, object], stored: dict[str, object]
+) -> None:
+    class ScopedReplicateConfig(ReplicateConfig):
+        pass
+
+    ScopedReplicateConfig(**supplied)
+
+    assert ScopedReplicateConfig.get_config() == stored
+
+
+def test_init_called_again_with_none_keeps_the_value_stored_earlier() -> None:
+    class ScopedReplicateConfig(ReplicateConfig):
+        pass
+
+    ScopedReplicateConfig(top_k=40)
+    ScopedReplicateConfig(top_k=None, seed=5)
+
+    assert ScopedReplicateConfig.get_config() == {"top_k": 40, "seed": 5}
 
 
 @pytest.mark.asyncio
@@ -272,3 +374,29 @@ def test_sync_completion_handles_starting_status(mock_get_client, monkeypatch, r
     assert json.loads(mock_client.post.call_args.kwargs["data"])["input"]["prompt"] == (
         "<｜begin▁of▁sentence｜><｜User｜>Hi<｜Assistant｜>"
     )
+
+
+@pytest.mark.parametrize(
+    ("model", "max_tokens_key"),
+    [
+        ("replicate/vicuna-13b", "max_length"),
+        ("replicate/flan-t5-xl", "max_length"),
+        ("meta/codellama-13b", "max_tokens"),
+        ("meta/llama-2-7b", "max_new_tokens"),
+    ],
+)
+def test_map_openai_params_renames_openai_params_to_replicate_inputs(model: str, max_tokens_key: str):
+    mapped: Final = ReplicateConfig().map_openai_params(
+        non_default_params={"stream": True, "max_tokens": 64, "temperature": 0.2, "top_p": 0.9, "stop": ["\n"]},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert mapped == {
+        "stream": True,
+        max_tokens_key: 64,
+        "temperature": 0.2,
+        "top_p": 0.9,
+        "stop_sequences": ["\n"],
+    }

@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Final, Protocol
 import httpx
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
@@ -288,7 +289,7 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         """
         Transform create request for Vertex AI RAG Corpus
         """
-        url: Final = f"{api_base}/ragCorpora"  # Base URL for creating RAG corpus
+        url: Final = join_api_base(api_base, "ragCorpora")  # Base URL for creating RAG corpus
 
         # Add metadata if provided
         metadata: Final = vector_store_create_optional_params.get("metadata")

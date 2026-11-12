@@ -9,6 +9,8 @@ the question neither covers: whether the job that globs a file then deselects it
 """
 
 import importlib.util
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Final
@@ -24,7 +26,25 @@ sys.modules[_spec.name] = coverage  # @dataclass(slots=True) rebuilds via sys.mo
 _spec.loader.exec_module(coverage)
 
 
-def test_integration_groups_require_exclusive_scheduled_circleci_owner(tmp_path: Path) -> None:
+def _write_group_workflow(root: Path, suites: tuple[str, ...] = ("management",)) -> Path:
+    workflow: Final = root / ".github/workflows/test-integration.yml"
+    workflow.parent.mkdir(parents=True, exist_ok=True)
+    workflow.write_text(
+        yaml.safe_dump(
+            {
+                "jobs": {
+                    "integration": {
+                        "strategy": {"matrix": {"suite": list(suites)}},
+                        "steps": [{"run": "bash .github/scripts/ci/run_integration.sh $SUITE"}],
+                    }
+                }
+            }
+        )
+    )
+    return workflow
+
+
+def test_integration_groups_require_exclusive_scheduled_github_owner(tmp_path: Path) -> None:
     test_path: Final = "tests/integration/management/test_contract.py"
     test_file: Final = tmp_path / test_path
     test_file.parent.mkdir(parents=True)
@@ -35,79 +55,133 @@ def test_integration_groups_require_exclusive_scheduled_circleci_owner(tmp_path:
     )
     paths, findings = coverage._integration_ownership(tmp_path)
     assert not paths
-    assert [finding.detail for finding in findings] == ["dedicated CircleCI runner is missing"]
-    circle: Final = tmp_path / ".circleci/config.yml"
-    circle.parent.mkdir()
-    circle.write_text(
-        yaml.safe_dump(
-            {
-                "jobs": {
-                    "integration_contracts": {
-                        "steps": [{"run": {"command": "bash .circleci/scripts/run_integration.sh management"}}]
-                    }
-                },
-                "workflows": {"integration": {"jobs": [{"integration_contracts": {"suite": "management"}}]}},
-            }
-        )
-    )
+    assert [finding.detail for finding in findings] == ["dedicated GitHub Actions runner is missing"]
+    _write_group_workflow(tmp_path)
     paths, findings = coverage._integration_ownership(tmp_path)
     assert paths == frozenset({test_path})
     assert findings == ()
-    configured: Final = yaml.safe_load(circle.read_text())
-    configured["workflows"]["integration"]["jobs"] = [
-        {"integration_contracts": {"matrix": {"parameters": {"suite": ["providers"]}}}}
-    ]
-    circle.write_text(yaml.safe_dump(configured))
+    _write_group_workflow(tmp_path, ("providers",))
     _, findings = coverage._integration_ownership(tmp_path)
     assert [(finding.subject, finding.detail) for finding in findings] == [
-        ("management", "canonical integration group is not scheduled by CircleCI")
+        ("management", "canonical integration group is not scheduled by GitHub Actions")
     ]
-    configured["workflows"]["integration"]["jobs"][0]["integration_contracts"]["matrix"]["parameters"]["suite"] = [
-        "management"
-    ]
-    circle.write_text(yaml.safe_dump(configured))
+    _write_group_workflow(tmp_path)
     workflow: Final = tmp_path / ".github/workflows/test.yml"
-    workflow.parent.mkdir(parents=True)
     workflow.write_text(yaml.safe_dump({"jobs": {"tests": {"steps": [{"run": "pytest tests/integration"}]}}}))
     _, findings = coverage._integration_ownership(tmp_path)
     assert [(finding.subject, finding.detail) for finding in findings] == [
-        (test_path, "integration contract is also selected by GitHub Actions")
+        (test_path, "integration file outside GITHUB_FILES is selected by GitHub Actions")
     ]
-    github_path: Final = "tests/integration/management/test_github_contract.py"
+    github_path: Final = "tests/integration/database/image/test_github_contract.py"
+    (tmp_path / github_path).parent.mkdir(parents=True)
     (tmp_path / github_path).write_text("def test_contract(): pass\n")
     runner: Final = tmp_path / "tests/integration/run.py"
     runner.write_text(runner.read_text() + f"GITHUB_FILES: Final = frozenset({{{github_path!r}}})\n")
-    workflow.write_text(yaml.safe_dump({"jobs": {"tests": {"steps": [{"run": f"pytest {github_path}"}]}}}))
+    workflow.unlink()
+    dedicated: Final = tmp_path / ".github/workflows/image-scan.yml"
+    dedicated.write_text(yaml.safe_dump({"jobs": {"tests": {"steps": [{"run": f"pytest {github_path}"}]}}}))
     github_owned, github_findings = coverage._integration_ownership(tmp_path)
     assert github_owned == frozenset({test_path, github_path})
     assert github_findings == ()
-    workflow.write_text(yaml.safe_dump({"jobs": {}}))
+    per_pr: Final = tmp_path / ".github/workflows/test-mcp-interactions.yml"
+    per_pr.write_text(yaml.safe_dump({"jobs": {"mcp": {"steps": [{"run": f"pytest {github_path}"}]}}}))
+    _, shared_findings = coverage._integration_ownership(tmp_path)
+    assert [(finding.subject, finding.detail) for finding in shared_findings] == [
+        (github_path, "GitHub-owned integration contract runs outside a dedicated integration workflow")
+    ]
+    per_pr.unlink()
+    dedicated.write_text(yaml.safe_dump({"jobs": {}}))
     _, missing_invocation = coverage._integration_ownership(tmp_path)
     assert [(finding.subject, finding.detail) for finding in missing_invocation] == [
         (github_path, "GitHub-owned integration contract has no invoking job")
     ]
-    circle_config: Final = yaml.safe_load(circle.read_text())
-    circle_config["jobs"]["postgres_suite"] = {"parameters": {"test_path": {"type": "string"}}}
-    circle_config["workflows"]["integration"]["jobs"].append({"postgres_suite": {"test_path": github_path}})
-    circle.write_text(yaml.safe_dump(circle_config))
-    _, circle_invocation = coverage._integration_ownership(tmp_path)
-    assert circle_invocation == ()
+    dedicated.write_text(yaml.safe_dump({"jobs": {"tests": {"steps": [{"run": f"pytest {github_path}"}]}}}))
+    _, restored_invocation = coverage._integration_ownership(tmp_path)
+    assert restored_invocation == ()
 
 
-def test_circleci_postgres_suites_count_their_test_path_as_invoked() -> None:
+def _write_integration_tree(root: Path, github_path: str) -> None:
+    contracts: Final = root / "tests/integration/management"
+    contracts.mkdir(parents=True)
+    (contracts / "test_contract.py").write_text("def test_contract(): pass\n")
+    (root / github_path).parent.mkdir(parents=True, exist_ok=True)
+    (root / github_path).write_text("def test_contract(): pass\n")
+    (root / "tests/integration/run.py").write_text(
+        "from types import MappingProxyType\nfrom typing import Final\n"
+        'GROUPS: Final = MappingProxyType({"management": ("management",)})\n'
+        f"GITHUB_FILES: Final = frozenset({{{github_path!r}}})\n"
+    )
+    _write_group_workflow(root)
+
+
+@pytest.mark.parametrize(
+    ("matrix", "expected"),
+    (
+        (["management", "database"], ("management", "database")),
+        ([], ()),
+        (None, ()),
+        ("${{ inputs.suite }}", ()),
+        (
+            "${{ fromJSON(inputs.suite == 'all' && '[\"management\",\"database\"]' || format('[\"{0}\"]', inputs.suite)) }}",
+            ("management", "database"),
+        ),
+    ),
+)
+def test_integration_matrix_accounts_for_default_suites(matrix: object, expected: tuple[str, ...]) -> None:
+    assert coverage._matrix_suites(matrix) == expected
+
+
+@pytest.mark.parametrize(
+    ("github_path", "workflow_name", "exit_code"),
+    [
+        ("tests/integration/database/image/test_github_contract.py", "image-scan.yml", 0),
+        ("tests/integration/database/image/test_github_contract.py", "test-unit.yml", 1),
+        ("tests/integration/management/test_github_contract.py", "image-scan.yml", 1),
+    ],
+)
+def test_census_fails_when_a_github_owned_contract_runs_outside_its_dedicated_workflow(
+    tmp_path: Path, github_path: str, workflow_name: str, exit_code: int
+) -> None:
+    script: Final = tmp_path / ".github/scripts/assert_ci_coverage.py"
+    script.parent.mkdir(parents=True)
+    shutil.copy(_MODULE_PATH, script)
+    _write_integration_tree(tmp_path, github_path)
+    (tmp_path / ".github/workflows" / workflow_name).write_text(
+        yaml.safe_dump({"jobs": {"tests": {"steps": [{"run": f"pytest {github_path}"}]}}})
+    )
+    result: Final = subprocess.run([sys.executable, "-I", str(script)], capture_output=True, text=True, check=False)
+    assert result.returncode == exit_code, result.stdout
+    assert "Playwright" not in result.stdout
+
+
+def test_an_integration_file_outside_every_group_cannot_run_on_a_github_shard(tmp_path: Path) -> None:
+    _write_integration_tree(tmp_path, "tests/integration/database/image/test_github_contract.py")
+    ungrouped: Final = "tests/integration/ci_probe/test_ci_probe.py"
+    (tmp_path / ungrouped).parent.mkdir(parents=True)
+    (tmp_path / ungrouped).write_text("def test_probe(): pass\n")
+    _, before = coverage._integration_ownership(tmp_path)
+    (tmp_path / ".github/workflows/test-unit.yml").write_text(
+        yaml.safe_dump({"jobs": {"mcp": {"steps": [{"run": f"pytest {ungrouped}"}]}}})
+    )
+    _, after = coverage._integration_ownership(tmp_path)
+    assert [(finding.subject, finding.detail) for finding in after if finding.subject == ungrouped] == [
+        (ungrouped, "integration file outside GITHUB_FILES is selected by GitHub Actions")
+    ]
+    assert not [finding for finding in before if finding.subject == ungrouped]
+
+
+def test_workflow_matrices_count_their_test_paths_as_invoked() -> None:
     config: Final = {
-        "workflows": {
-            "integration": {
-                "jobs": [
-                    {"postgres_suite": {"name": "proxy-behavior", "test_path": "tests/proxy_behavior", "seed": True}},
-                    {
-                        "postgres_suite": {
-                            "name": "roi-database",
-                            "test_path": "tests/integration/database/test_roi_observed.py",
-                            "seed": False,
-                        }
-                    },
-                ]
+        "jobs": {
+            "postgres": {
+                "strategy": {
+                    "matrix": {
+                        "include": [
+                            {"test-path": "tests/proxy_behavior"},
+                            {"test-path": "tests/integration/database/test_roi_observed.py"},
+                        ]
+                    }
+                }
             }
         }
     }
@@ -116,20 +190,27 @@ def test_circleci_postgres_suites_count_their_test_path_as_invoked() -> None:
     )
 
 
-def test_every_circleci_postgres_suite_is_credited_on_the_repo_as_it_stands() -> None:
-    circle: Final = yaml.safe_load(coverage.CIRCLECI_CONFIG.read_text())
-    paths: Final = tuple(
-        job["postgres_suite"]["test_path"]
-        for job in circle["workflows"]["integration"]["jobs"]
-        if isinstance(job, dict) and "postgres_suite" in job
+def test_allowlisting_an_unrun_integration_contract_does_not_claim_it_runs(tmp_path: Path) -> None:
+    path: Final = "tests/integration/database/test_roi_observed.py"
+    _write_integration_tree(tmp_path, path)
+    paths, findings = coverage._integration_ownership(tmp_path)
+    assert path not in paths
+    assert [(finding.subject, finding.detail) for finding in findings] == [
+        (path, "GitHub-owned integration contract has no invoking job")
+    ]
+    allowlist: Final = coverage.Allowlist(
+        test_paths=(coverage.AllowEntry(paths=(path,), reason="ran only in CircleCI, removed"),), dockerfiles=()
     )
-    assert paths == (
-        "tests/proxy_behavior",
-        "tests/proxy_security_tests",
-        "tests/proxy_migration_tests",
-        "tests/integration/database/test_roi_observed.py",
+    allowed_paths, allowed_findings = coverage._integration_ownership(tmp_path, allowlist=allowlist)
+    assert path not in allowed_paths
+    assert allowed_findings == ()
+    (tmp_path / ".github/workflows/test-unit.yml").write_text(
+        yaml.safe_dump({"jobs": {"tests": {"steps": [{"run": f"pytest {path}"}]}}})
     )
-    assert set(paths) <= coverage._invoked_test_tokens(coverage._all_scalars())
+    _, wrong_owner = coverage._integration_ownership(tmp_path, allowlist=allowlist)
+    assert [(finding.subject, finding.detail) for finding in wrong_owner] == [
+        (path, "GitHub-owned integration contract runs outside a dedicated integration workflow")
+    ]
 
 
 def test_an_ancestor_directory_covers_a_file_but_does_not_name_it():
@@ -346,7 +427,7 @@ def test_an_excluded_term_matching_only_an_inner_name_leaves_the_file_claimed():
     assert slice_.claims("tests/x/test_router.py", frozenset({"test_cache_key"})) is True
 
 
-def test_character_class_globs_match_the_letter_shards_circleci_uses():
+def test_character_class_globs_match_letter_shards():
     # tests/local_testing is split by first letter; without character-class support every
     # file in it looks unglobbed, and the slice guard would report the whole directory.
     glob = "tests/local_testing/**/test_[a-mA-M]*.py"
@@ -433,15 +514,18 @@ def test_a_dockerfile_directory_entry_is_stale_because_only_an_exact_path_exempt
 def test_a_workflow_that_names_a_file_clears_it_from_the_slice_check():
     named = coverage._workflow_named_tokens()
     assert named, "the workflows must name some test paths or the check proves nothing"
-    assert any(coverage._token_covers(token, "tests/proxy_unit_tests/test_proxy_custom_logger.py") for token in named)
+    assert any(coverage._token_covers(token, "tests/unit/proxy/test_proxy_server_custom_logger.py") for token in named)
 
 
-def test_the_slice_check_credits_only_workflows_never_the_circleci_config():
-    named = coverage._workflow_named_tokens()
-    circleci_only = "tests/proxy_admin_ui_tests"
-    assert not any(coverage._token_covers(token, f"{circleci_only}/test_key_management.py") for token in named), (
-        "a tree only CircleCI globs must not be credited to a workflow"
-    )
+def test_the_slice_check_ignores_configs_outside_the_workflow_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workflows: Final = tmp_path / "workflows"
+    workflows.mkdir()
+    (workflows / "test.yml").write_text("jobs:\n  test:\n    steps:\n      - run: pytest tests/selected\n")
+    (tmp_path / "ignored.yml").write_text("jobs:\n  test:\n    steps:\n      - run: pytest tests/unrun\n")
+    monkeypatch.setattr(coverage, "WORKFLOW_DIR", workflows)
+    assert coverage._workflow_named_tokens() == frozenset({"tests/selected"})
 
 
 @pytest.mark.parametrize("selector", ("test_selected.py", "test_selected.py::test_redis_auth"))
@@ -454,10 +538,53 @@ def test_a_workflow_does_not_credit_a_file_it_never_names(
         f"jobs:\n  test:\n    steps:\n      - run: uv run pytest tests/local_testing/{selector}\n"
     )
     monkeypatch.setattr(coverage, "WORKFLOW_DIR", workflows)
-    monkeypatch.setattr(coverage, "CIRCLECI_CONFIG", tmp_path / "circleci.yml")
 
     named: Final = coverage._workflow_named_tokens()
     assert named == frozenset({"tests/local_testing/test_selected.py"})
     assert not any(
         coverage._token_covers(token, "tests/local_testing/test_unrun.py") for token in named
+    )
+
+
+def test_slice_audit_rechecks_changed_and_new_files_between_calls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workflows: Final = tmp_path / ".github/workflows"
+    workflows.mkdir(parents=True)
+    tests: Final = tmp_path / "tests/local_testing"
+    tests.mkdir(parents=True)
+    (workflows / "test.yml").write_text(
+        yaml.safe_dump(
+            {
+                "jobs": {
+                    selector: {
+                        "steps": [
+                            {
+                                "run": f'pytest tests/local_testing/test_*.py -k "{selector}"'
+                            }
+                        ]
+                    }
+                    for selector in ("selected", "neighbor")
+                }
+            }
+        )
+    )
+    monkeypatch.setattr(coverage, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(coverage, "TESTS_ROOT", tmp_path / "tests")
+    monkeypatch.setattr(coverage, "WORKFLOW_DIR", workflows)
+    allowlist: Final = coverage.Allowlist((), ())
+    existing: Final = tests / "test_existing.py"
+    existing.write_text("def test_selected(): pass\n")
+    assert coverage._deselected_everywhere(allowlist) == ()
+
+    existing.write_text("def test_uncovered(): pass\n")
+    assert tuple(finding.subject for finding in coverage._deselected_everywhere(allowlist)) == (
+        "tests/local_testing/test_existing.py",
+    )
+
+    existing.write_text("def test_selected(): pass\n")
+    added: Final = tests / "test_added.py"
+    added.write_text("def test_uncovered(): pass\n")
+    assert tuple(finding.subject for finding in coverage._deselected_everywhere(allowlist)) == (
+        "tests/local_testing/test_added.py",
     )

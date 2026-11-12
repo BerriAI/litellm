@@ -28,7 +28,7 @@ on:
       - ".github/actions/cache-cargo-build/**"
       - ".github/scripts/detect_changes.sh"
       - ".github/scripts/uv_sync_with_retries.sh"
-      - ".circleci/scripts/classify_changes.sh"
+      - ".github/scripts/ci/classify_changes.sh"
 
 permissions:
   contents: read
@@ -45,7 +45,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14", "3.15"]
 
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
@@ -132,7 +132,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14", "3.15"]
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:

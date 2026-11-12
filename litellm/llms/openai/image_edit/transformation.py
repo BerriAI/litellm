@@ -3,9 +3,13 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 from httpx._types import RequestFiles
+from pydantic import TypeAdapter
+from typing_extensions import TypedDict
 
 import litellm
 from litellm.images.utils import ImageEditRequestUtils
+from litellm.litellm_core_utils.core_helpers import keyword_arguments
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import (
@@ -17,6 +21,7 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ImageResponse
 
 from ..common_utils import OpenAIError
+from ..workload_identity import resolve_openai_bearer_token
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -24,6 +29,13 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _ImageResponseFields(TypedDict, total=False, extra_items=object):
+    pass
 
 
 class OpenAIImageEditConfig(BaseImageEditConfig):
@@ -94,7 +106,7 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         """
         # Build request params, only including non-None values
         request_params: Final = {
-            "model": model,
+            **({"model": model} if model else {}),
             **image_edit_optional_request_params,
         }
         if image is not None:
@@ -147,10 +159,10 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
     ) -> ImageResponse:
         """No transform applied since outputs are in OpenAI spec already"""
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception:
             raise OpenAIError(message=raw_response.text, status_code=raw_response.status_code)
-        return ImageResponse(**raw_response_json)
+        return ImageResponse(**_ImageResponseFields(**keyword_arguments(raw_response_json, ImageResponse)))
 
     def validate_environment(
         self,
@@ -160,12 +172,10 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         litellm_params: dict | None = None,
         api_base: str | None = None,
     ) -> dict:
-        api_key = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
-        headers.update(
-            {
-                "Authorization": f"Bearer {api_key}",
-            }
+        bearer_token: Final = resolve_openai_bearer_token(
+            api_key=api_key, api_base=api_base, litellm_params=litellm_params
         )
+        headers.update({"Authorization": f"Bearer {bearer_token}"})
         return headers
 
     def get_complete_url(
@@ -185,7 +195,4 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
             or "https://api.openai.com/v1"
         )
 
-        # Remove trailing slashes
-        api_base = api_base.rstrip("/")
-
-        return f"{api_base}/images/edits"
+        return join_api_base(api_base, "images/edits")

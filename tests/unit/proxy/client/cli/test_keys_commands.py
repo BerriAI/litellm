@@ -2,14 +2,16 @@ import json
 import os
 from unittest.mock import patch
 
-import requests
-
-
-
 import pytest
+import requests
+import responses
 from click.testing import CliRunner
 
 from litellm.proxy.client.cli import cli
+from litellm.proxy.client.cli.commands.keys import keys
+
+DESTINATION = "https://destination.example.com"
+SOURCE = "https://source.example.com"
 
 
 @pytest.fixture
@@ -538,3 +540,84 @@ def test_keys_import_with_all_key_properties(mock_keys_client, cli_runner):
             budget_id="budget-456",
             config={"max_tokens": 1000},
         )
+
+
+def _sent_requests():
+    return [
+        (call.request.method, call.request.url, call.request.headers.get("Authorization")) for call in responses.calls
+    ]
+
+
+@pytest.mark.parametrize(("api_key", "authorization"), [("sk-destination", "Bearer sk-destination"), (None, None)])
+@pytest.mark.parametrize(
+    ("args", "method", "path", "sent_body", "payload"),
+    [
+        (
+            ["list", "--format", "json"],
+            "GET",
+            "/key/list?return_full_object=true&include_team_keys=false",
+            None,
+            {"keys": [{"token": "abc123", "key_alias": "alias1"}], "total_count": 1},
+        ),
+        (["generate", "--key-alias", "ci"], "POST", "/key/generate", {"key_alias": "ci"}, {"key": "sk-new"}),
+        (
+            ["delete", "--keys", "sk-old"],
+            "POST",
+            "/key/delete",
+            {"keys": ["sk-old"], "key_aliases": None},
+            {"deleted_keys": ["sk-old"]},
+        ),
+    ],
+)
+@responses.activate
+def test_keys_command_calls_the_server_stored_on_the_cli_context(
+    cli_runner, args, method, path, sent_body, payload, api_key, authorization
+):
+    responses.add(method, f"{DESTINATION}{path.partition('?')[0]}", json=payload)
+
+    result = cli_runner.invoke(keys, args, obj={"base_url": DESTINATION, "api_key": api_key})
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output) == payload
+    assert _sent_requests() == [(method, f"{DESTINATION}{path}", authorization)]
+    assert (responses.calls[0].request.body and json.loads(responses.calls[0].request.body)) == sent_body
+
+
+@pytest.mark.parametrize(("api_key", "authorization"), [("sk-destination", "Bearer sk-destination"), (None, None)])
+@responses.activate
+def test_keys_import_reads_the_source_and_writes_to_the_server_stored_on_the_cli_context(
+    cli_runner, api_key, authorization
+):
+    responses.get(f"{SOURCE}/key/list", json={"keys": [{"key_alias": "imported", "user_id": "u1"}]})
+    responses.post(f"{DESTINATION}/key/generate", json={"key": "sk-imported"})
+
+    result = cli_runner.invoke(
+        keys,
+        ["import", "--source-base-url", SOURCE, "--source-api-key", "sk-source"],
+        obj={"base_url": DESTINATION, "api_key": api_key},
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Successfully imported: 1" in result.output
+    assert _sent_requests() == [
+        ("GET", f"{SOURCE}/key/list?page=1&size=100&return_full_object=true", "Bearer sk-source"),
+        ("POST", f"{DESTINATION}/key/generate", authorization),
+    ]
+    assert json.loads(responses.calls[1].request.body) == {"key_alias": "imported", "user_id": "u1"}
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["list"],
+        ["generate", "--key-alias", "ci"],
+        ["delete", "--keys", "sk-old"],
+        ["import", "--source-base-url", SOURCE, "--source-api-key", "sk-source"],
+    ],
+)
+@responses.activate
+def test_keys_command_without_cli_context_values_fails_before_any_request(cli_runner, args):
+    result = cli_runner.invoke(keys, args)
+
+    assert result.exit_code == 1
+    assert _sent_requests() == []
