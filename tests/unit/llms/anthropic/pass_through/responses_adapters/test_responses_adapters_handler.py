@@ -861,14 +861,39 @@ async def test_closing_a_sync_stream_also_ends_an_async_read_of_it(
 
 
 @pytest.mark.asyncio
-async def test_aclose_on_a_sync_streamed_create_still_ends_an_async_read_of_it(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("read_mode", ["unread", "sync", "async"])
+@pytest.mark.parametrize(
+    ("model", "upstream_url", "sse_body"),
+    [
+        ("openai/gpt-5.6-luna", "https://api.openai.com/v1/responses", RESPONSES_SSE_BODY),
+        (
+            "openai/chat_completions/gpt-5.6-luna",
+            "https://api.openai.com/v1/chat/completions",
+            CHAT_COMPLETIONS_SSE_BODY,
+        ),
+    ],
+    ids=["responses", "chat_completions"],
+)
+async def test_aclose_closes_the_upstream_and_ends_both_read_modes(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    upstream_url: str,
+    sse_body: bytes,
+    read_mode: str,
 ) -> None:
-    stream: Final = _sync_stream_from_create(respx_mock, monkeypatch, _RecordingSSEBody())
+    body: Final = _RecordingSSEBody(sse_body)
+    stream: Final = _sync_stream_from_create(respx_mock, monkeypatch, body, model, upstream_url)
     assert isinstance(stream, _AsyncClosableByteStream)
+    if read_mode == "sync":
+        next(stream)
+    elif read_mode == "async":
+        await anext(aiter(stream))
 
     await stream.aclose()
 
+    assert body.closed
+    assert list(stream) == []
     assert [frame async for frame in stream] == []
 
 
