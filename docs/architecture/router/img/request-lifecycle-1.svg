@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 870 224" role="img" aria-labelledby="t">
+<title id="t">The shape of a router request</title>
+<desc>Router.acompletion goes through fallbacks, retries and a single attempt, which calls litellm.acompletion and then the provider.</desc>
+<style>/* litellm architecture diagrams v1, from the litellm-docs Aurora theme (src/css/custom.css). Embed verbatim in every SVG. */
+svg { --ink:#272b37; --text:#3a3e4b; --muted:#646875; --line:#a3a8ba; --rule:#e3e5ee; --card:#ffffff; --canvas:#f7f8fd; --accent:#0117be; --accent-bg:#f2f4fd; --accent-line:#b9c1f0; --host:#1f6fa8; --host-bg:#eaf5fd; --store:#6b3fb8; --store-bg:#efe8fb; --warn:#b42318; --warn-bg:#fdecea; --ok:#1a7f4b; --ok-bg:#e7f6ee; }
+@media (prefers-color-scheme: dark) {
+  svg { --ink:#ffffff; --text:#d6d4ea; --muted:#a6a4c6; --line:#5c6294; --rule:#1a1f45; --card:#0f1335; --canvas:#080b26; --accent:#9fabff; --accent-bg:#161b4a; --accent-line:#3d4790; --host:#7cc4f5; --host-bg:#0f2a44; --store:#c3a6f0; --store-bg:#23173f; --warn:#f19a9a; --warn-bg:#3a1622; --ok:#7ee2a8; --ok-bg:#0f2e25; }
+}
+text { font-family: Geist, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 13px; fill: var(--text); }
+.mono { font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.title { font-weight: 600; fill: var(--ink); }
+.small { font-size: 11.5px; }
+.muted { fill: var(--muted); }
+.accent { fill: var(--accent); }
+.center { text-anchor: middle; }
+.end { text-anchor: end; }
+.canvas { fill: var(--canvas); stroke: var(--rule); stroke-width: 1; }
+.box { fill: var(--card); stroke: var(--line); stroke-width: 1.2; }
+.box.core { fill: var(--accent-bg); stroke: var(--accent); }
+.box.host { fill: var(--host-bg); stroke: var(--host); }
+.box.store { fill: var(--store-bg); stroke: var(--store); }
+.box.warn { fill: var(--warn-bg); stroke: var(--warn); }
+.box.ok { fill: var(--ok-bg); stroke: var(--ok); }
+.box.decision { fill: var(--card); stroke: var(--ink); }
+.group { fill: none; stroke: var(--line); stroke-width: 1; stroke-dasharray: 5 4; }
+.group.core { stroke: var(--accent-line); }
+.group-label { font-size: 11px; font-weight: 600; fill: var(--muted); letter-spacing: 0.06em; }
+.edge { fill: none; stroke: var(--line); stroke-width: 1.4; }
+.edge.strong { stroke: var(--ink); }
+.edge.dashed { stroke-dasharray: 5 4; }
+.edge.core { stroke: var(--accent); }
+.edge.warn { stroke: var(--warn); }
+.edge-label { font-size: 11.5px; fill: var(--muted); paint-order: stroke; stroke: var(--canvas); stroke-width: 4px; stroke-linejoin: round; }
+.arrowhead { fill: var(--line); }
+.arrowhead.strong { fill: var(--ink); }
+.arrowhead.core { fill: var(--accent); }
+.arrowhead.warn { fill: var(--warn); }
+.lifeline { stroke: var(--line); stroke-width: 1; stroke-dasharray: 3 4; }
+.note { fill: var(--accent-bg); stroke: var(--accent-line); stroke-width: 1; }
+.step { fill: var(--accent); }
+.step-text { font-size: 10.5px; font-weight: 600; fill: var(--card); text-anchor: middle; }</style>
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead" d="M0,0 L10,5 L0,10 z"/></marker>
+</defs>
+<rect class="canvas" x="0.5" y="0.5" width="869" height="223" rx="8"/>
+<rect class="box host" x="20" y="20" width="190" height="72" rx="6"/>
+<text class="mono title center" x="115" y="51">Router.acompletion</text>
+<text class="small muted center" x="115" y="69">facade</text>
+<rect class="box core" x="250" y="20" width="354" height="72" rx="6"/>
+<text class="title center" x="427" y="51">Fallbacks</text>
+<text class="small muted center" x="427" y="69">move to another model group when retries are spent</text>
+<rect class="box core" x="644" y="20" width="206" height="72" rx="6"/>
+<text class="title center" x="747" y="43">Retries</text>
+<text class="small muted center" x="747" y="61">loop in the same model group,</text>
+<text class="small muted center" x="747" y="76">with backoff</text>
+<rect class="box core" x="644" y="132" width="206" height="72" rx="6"/>
+<text class="title center" x="747" y="155">Attempt</text>
+<text class="small muted center" x="747" y="173">select, build the deployment's</text>
+<text class="small muted center" x="747" y="188">kwargs, call</text>
+<rect class="box host" x="212" y="132" width="400" height="72" rx="6"/>
+<text class="mono center" x="412" y="172">litellm.acompletion(**deployment params, **request)</text>
+<rect class="box" x="20" y="132" width="160" height="72" rx="6"/>
+<text class="title center" x="100" y="172">Provider HTTP call</text>
+<path class="edge" d="M210,56 H248" marker-end="url(#arrow)"/>
+<path class="edge" d="M604,56 H642" marker-end="url(#arrow)"/>
+<path class="edge" d="M747,92 V130" marker-end="url(#arrow)"/>
+<path class="edge" d="M644,168 H614" marker-end="url(#arrow)"/>
+<path class="edge" d="M212,168 H182" marker-end="url(#arrow)"/>
+</svg>

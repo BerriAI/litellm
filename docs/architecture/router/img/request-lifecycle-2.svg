@@ -1,0 +1,161 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 800" role="img" aria-labelledby="t">
+<title id="t">Request lifecycle, step by step</title>
+<desc>Sequence of one acompletion call through the RustCore driver, router-core, the Python host, DualCache and the provider.</desc>
+<style>/* litellm architecture diagrams v1, from the litellm-docs Aurora theme (src/css/custom.css). Embed verbatim in every SVG. */
+svg { --ink:#272b37; --text:#3a3e4b; --muted:#646875; --line:#a3a8ba; --rule:#e3e5ee; --card:#ffffff; --canvas:#f7f8fd; --accent:#0117be; --accent-bg:#f2f4fd; --accent-line:#b9c1f0; --host:#1f6fa8; --host-bg:#eaf5fd; --store:#6b3fb8; --store-bg:#efe8fb; --warn:#b42318; --warn-bg:#fdecea; --ok:#1a7f4b; --ok-bg:#e7f6ee; }
+@media (prefers-color-scheme: dark) {
+  svg { --ink:#ffffff; --text:#d6d4ea; --muted:#a6a4c6; --line:#5c6294; --rule:#1a1f45; --card:#0f1335; --canvas:#080b26; --accent:#9fabff; --accent-bg:#161b4a; --accent-line:#3d4790; --host:#7cc4f5; --host-bg:#0f2a44; --store:#c3a6f0; --store-bg:#23173f; --warn:#f19a9a; --warn-bg:#3a1622; --ok:#7ee2a8; --ok-bg:#0f2e25; }
+}
+text { font-family: Geist, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 13px; fill: var(--text); }
+.mono { font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.title { font-weight: 600; fill: var(--ink); }
+.small { font-size: 11.5px; }
+.muted { fill: var(--muted); }
+.accent { fill: var(--accent); }
+.center { text-anchor: middle; }
+.end { text-anchor: end; }
+.canvas { fill: var(--canvas); stroke: var(--rule); stroke-width: 1; }
+.box { fill: var(--card); stroke: var(--line); stroke-width: 1.2; }
+.box.core { fill: var(--accent-bg); stroke: var(--accent); }
+.box.host { fill: var(--host-bg); stroke: var(--host); }
+.box.store { fill: var(--store-bg); stroke: var(--store); }
+.box.warn { fill: var(--warn-bg); stroke: var(--warn); }
+.box.ok { fill: var(--ok-bg); stroke: var(--ok); }
+.box.decision { fill: var(--card); stroke: var(--ink); }
+.group { fill: none; stroke: var(--line); stroke-width: 1; stroke-dasharray: 5 4; }
+.group.core { stroke: var(--accent-line); }
+.group-label { font-size: 11px; font-weight: 600; fill: var(--muted); letter-spacing: 0.06em; }
+.edge { fill: none; stroke: var(--line); stroke-width: 1.4; }
+.edge.strong { stroke: var(--ink); }
+.edge.dashed { stroke-dasharray: 5 4; }
+.edge.core { stroke: var(--accent); }
+.edge.warn { stroke: var(--warn); }
+.edge-label { font-size: 11.5px; fill: var(--muted); paint-order: stroke; stroke: var(--canvas); stroke-width: 4px; stroke-linejoin: round; }
+.arrowhead { fill: var(--line); }
+.arrowhead.strong { fill: var(--ink); }
+.arrowhead.core { fill: var(--accent); }
+.arrowhead.warn { fill: var(--warn); }
+.lifeline { stroke: var(--line); stroke-width: 1; stroke-dasharray: 3 4; }
+.note { fill: var(--accent-bg); stroke: var(--accent-line); stroke-width: 1; }
+.step { fill: var(--accent); }
+.step-text { font-size: 10.5px; font-weight: 600; fill: var(--card); text-anchor: middle; }</style>
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead" d="M0,0 L10,5 L0,10 z"/></marker>
+  <marker id="arrow-core" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead core" d="M0,0 L10,5 L0,10 z"/></marker>
+</defs>
+<rect class="canvas" x="0.5" y="0.5" width="879" height="799" rx="8"/>
+<line class="lifeline" x1="48" y1="54" x2="48" y2="788"/>
+<line class="lifeline" x1="236" y1="54" x2="236" y2="788"/>
+<line class="lifeline" x1="462" y1="54" x2="462" y2="788"/>
+<line class="lifeline" x1="604" y1="54" x2="604" y2="788"/>
+<line class="lifeline" x1="714" y1="54" x2="714" y2="788"/>
+<line class="lifeline" x1="832" y1="54" x2="832" y2="788"/>
+<rect class="box" x="6" y="12" width="84" height="42" rx="6"/>
+<text class="title center" x="48" y="29">Router</text>
+<text class="title center" x="48" y="44">facade</text>
+<rect class="box host" x="188" y="12" width="96" height="42" rx="6"/>
+<text class="title center" x="236" y="29"><tspan class="mono">RustCore</tspan></text>
+<text class="title center" x="236" y="44">driver</text>
+<rect class="box core" x="407" y="12" width="110" height="42" rx="6"/>
+<text class="title mono center" x="462" y="37.5">router-core</text>
+<rect class="box host" x="546" y="12" width="116" height="42" rx="6"/>
+<text class="title mono center" x="604" y="29">PythonHost +</text>
+<text class="title mono center" x="604" y="44">router_rust</text>
+<rect class="box store" x="670" y="12" width="88" height="42" rx="6"/>
+<text class="title mono center" x="714" y="37.5">DualCache</text>
+<rect class="box" x="792" y="12" width="80" height="42" rx="6"/>
+<text class="title center" x="832" y="37.5">Provider</text>
+<path class="edge" d="M57,97 H235" marker-end="url(#arrow)"/>
+<text class="edge-label center" x="146" y="76"><tspan class="mono">acompletion(model,</tspan></text>
+<text class="edge-label center" x="146" y="90"><tspan class="mono">messages)</tspan></text>
+<circle class="step" cx="48" cy="97" r="8"/>
+<text class="step-text" x="48" y="100.8">1</text>
+<path class="edge" d="M245,128 H461" marker-end="url(#arrow)"/>
+<text class="edge-label center" x="353" y="121"><tspan class="mono">start("acompletion", request)</tspan></text>
+<circle class="step" cx="236" cy="128" r="8"/>
+<text class="step-text" x="236" y="131.8">2</text>
+<path class="edge core dashed" d="M453,172 H237" marker-end="url(#arrow-core)"/>
+<text class="edge-label center" x="345" y="151"><tspan class="mono">pre_route</tspan> step</text>
+<text class="edge-label center" x="345" y="165">(sub-routers, custom strategy)</text>
+<circle class="step" cx="462" cy="172" r="8"/>
+<text class="step-text" x="462" y="175.8">3</text>
+<path class="edge" d="M245,203 H603" marker-end="url(#arrow)"/>
+<text class="edge-label center" x="424" y="196">run them</text>
+<circle class="step" cx="236" cy="203" r="8"/>
+<text class="step-text" x="236" y="206.8">4</text>
+<path class="edge dashed" d="M595,234 H237" marker-end="url(#arrow)"/>
+<text class="edge-label center" x="416" y="227">routed group, or none</text>
+<circle class="step" cx="604" cy="234" r="8"/>
+<text class="step-text" x="604" y="237.8">5</text>
+<path class="edge core" d="M471,257 H486 V271 H464" marker-end="url(#arrow-core)"/>
+<text class="edge-label" x="494" y="268">resolve the name, team, PTU and access filters</text>
+<circle class="step" cx="462" cy="257" r="8"/>
+<text class="step-text" x="462" y="260.8">6</text>
+<path class="edge core dashed" d="M453,291 H237" marker-end="url(#arrow-core)"/>
+<text class="edge-label center" x="345" y="284">cache step: read cooldowns</text>
+<circle class="step" cx="462" cy="291" r="8"/>
+<text class="step-text" x="462" y="294.8">7</text>
+<path class="edge" d="M245,322 H713" marker-end="url(#arrow)"/>
+<text class="edge-label center" x="479" y="315">batch get</text>
+<circle class="step" cx="236" cy="322" r="8"/>
+<text class="step-text" x="236" y="325.8">8</text>
+<path class="edge core" d="M471,345 H486 V359 H464" marker-end="url(#arrow-core)"/>
+<text class="edge-label" x="494" y="356">drop cooled-down and blocked deployments</text>
+<circle class="step" cx="462" cy="345" r="8"/>
+<text class="step-text" x="462" y="348.8">9</text>
+<path class="edge core dashed" d="M453,392 H237" marker-end="url(#arrow-core)"/>
+<text class="edge-label center" x="345" y="371">select steps: callback filters,</text>
+<text class="edge-label center" x="345" y="385">plugins, tags</text>
+<circle class="step" cx="462" cy="392" r="8"/>
+<text class="step-text" x="462" y="395.8">10</text>
+<path class="edge" d="M245,423 H603" marker-end="url(#arrow)"/>
+<text class="edge-label center" x="424" y="416">run the Python filters</text>
+<circle class="step" cx="236" cy="423" r="8"/>
+<text class="step-text" x="236" y="426.8">11</text>
+<path class="edge core" d="M471,446 H486 V460 H464" marker-end="url(#arrow-core)"/>
+<text class="edge-label" x="494" y="457">pre-call checks, order filter, retry skips</text>
+<circle class="step" cx="462" cy="446" r="8"/>
+<text class="step-text" x="462" y="449.8">12</text>
+<path class="edge core" d="M471,472 H486 V486 H464" marker-end="url(#arrow-core)"/>
+<text class="edge-label" x="494" y="476">simple-shuffle picks</text>
+<text class="edge-label" x="494" y="490">(or a select step for other strategies)</text>
+<circle class="step" cx="462" cy="472" r="8"/>
+<text class="step-text" x="462" y="475.8">13</text>
+<path class="edge core dashed" d="M453,512 H237" marker-end="url(#arrow-core)"/>
+<text class="edge-label center" x="345" y="505">attempt step on deployment a</text>
+<circle class="step" cx="462" cy="512" r="8"/>
+<text class="step-text" x="462" y="515.8">14</text>
+<path class="edge" d="M245,543 H603" marker-end="url(#arrow)"/>
+<text class="edge-label center" x="424" y="536"><tspan class="mono">router_attempt</tspan> builds kwargs, <tspan class="mono">invoke("acompletion")</tspan></text>
+<circle class="step" cx="236" cy="543" r="8"/>
+<text class="step-text" x="236" y="546.8">15</text>
+<path class="edge" d="M613,574 H831" marker-end="url(#arrow)"/>
+<text class="edge-label center" x="722" y="567"><tspan class="mono">litellm.acompletion(**kwargs)</tspan></text>
+<circle class="step" cx="604" cy="574" r="8"/>
+<text class="step-text" x="604" y="577.8">16</text>
+<path class="edge dashed" d="M823,605 H605" marker-end="url(#arrow)"/>
+<text class="edge-label center" x="714" y="598">response or error</text>
+<circle class="step" cx="832" cy="605" r="8"/>
+<text class="step-text" x="832" y="608.8">17</text>
+<path class="edge dashed" d="M595,636 H237" marker-end="url(#arrow)"/>
+<text class="edge-label center" x="416" y="629">output, or a typed failure</text>
+<circle class="step" cx="604" cy="636" r="8"/>
+<text class="step-text" x="604" y="639.8">18</text>
+<path class="edge" d="M245,667 H461" marker-end="url(#arrow)"/>
+<text class="edge-label center" x="353" y="660"><tspan class="mono">next(outcome)</tspan></text>
+<circle class="step" cx="236" cy="667" r="8"/>
+<text class="step-text" x="236" y="670.8">19</text>
+<path class="edge core dashed" d="M453,711 H237" marker-end="url(#arrow-core)"/>
+<text class="edge-label center" x="345" y="690">cache steps: usage, or fail counts</text>
+<text class="edge-label center" x="345" y="704">and maybe a cooldown</text>
+<circle class="step" cx="462" cy="711" r="8"/>
+<text class="step-text" x="462" y="714.8">20</text>
+<path class="edge core dashed" d="M453,742 H237" marker-end="url(#arrow-core)"/>
+<text class="edge-label center" x="345" y="735">done</text>
+<circle class="step" cx="462" cy="742" r="8"/>
+<text class="step-text" x="462" y="745.8">21</text>
+<path class="edge dashed" d="M227,773 H49" marker-end="url(#arrow)"/>
+<text class="edge-label center" x="138" y="766">response with routing headers</text>
+<circle class="step" cx="236" cy="773" r="8"/>
+<text class="step-text" x="236" y="776.8">22</text>
+</svg>

@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 218" role="img" aria-labelledby="t">
+<title id="t">Static and dynamic router settings</title>
+<desc>Router(**arguments) is frozen into RouterConfig by build_router_config; process globals are snapshotted per version into RouterDynamicConfig; both, plus apply(ChangeSet), feed the core.</desc>
+<style>/* litellm architecture diagrams v1, from the litellm-docs Aurora theme (src/css/custom.css). Embed verbatim in every SVG. */
+svg { --ink:#272b37; --text:#3a3e4b; --muted:#646875; --line:#a3a8ba; --rule:#e3e5ee; --card:#ffffff; --canvas:#f7f8fd; --accent:#0117be; --accent-bg:#f2f4fd; --accent-line:#b9c1f0; --host:#1f6fa8; --host-bg:#eaf5fd; --store:#6b3fb8; --store-bg:#efe8fb; --warn:#b42318; --warn-bg:#fdecea; --ok:#1a7f4b; --ok-bg:#e7f6ee; }
+@media (prefers-color-scheme: dark) {
+  svg { --ink:#ffffff; --text:#d6d4ea; --muted:#a6a4c6; --line:#5c6294; --rule:#1a1f45; --card:#0f1335; --canvas:#080b26; --accent:#9fabff; --accent-bg:#161b4a; --accent-line:#3d4790; --host:#7cc4f5; --host-bg:#0f2a44; --store:#c3a6f0; --store-bg:#23173f; --warn:#f19a9a; --warn-bg:#3a1622; --ok:#7ee2a8; --ok-bg:#0f2e25; }
+}
+text { font-family: Geist, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 13px; fill: var(--text); }
+.mono { font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.title { font-weight: 600; fill: var(--ink); }
+.small { font-size: 11.5px; }
+.muted { fill: var(--muted); }
+.accent { fill: var(--accent); }
+.center { text-anchor: middle; }
+.end { text-anchor: end; }
+.canvas { fill: var(--canvas); stroke: var(--rule); stroke-width: 1; }
+.box { fill: var(--card); stroke: var(--line); stroke-width: 1.2; }
+.box.core { fill: var(--accent-bg); stroke: var(--accent); }
+.box.host { fill: var(--host-bg); stroke: var(--host); }
+.box.store { fill: var(--store-bg); stroke: var(--store); }
+.box.warn { fill: var(--warn-bg); stroke: var(--warn); }
+.box.ok { fill: var(--ok-bg); stroke: var(--ok); }
+.box.decision { fill: var(--card); stroke: var(--ink); }
+.group { fill: none; stroke: var(--line); stroke-width: 1; stroke-dasharray: 5 4; }
+.group.core { stroke: var(--accent-line); }
+.group-label { font-size: 11px; font-weight: 600; fill: var(--muted); letter-spacing: 0.06em; }
+.edge { fill: none; stroke: var(--line); stroke-width: 1.4; }
+.edge.strong { stroke: var(--ink); }
+.edge.dashed { stroke-dasharray: 5 4; }
+.edge.core { stroke: var(--accent); }
+.edge.warn { stroke: var(--warn); }
+.edge-label { font-size: 11.5px; fill: var(--muted); paint-order: stroke; stroke: var(--canvas); stroke-width: 4px; stroke-linejoin: round; }
+.arrowhead { fill: var(--line); }
+.arrowhead.strong { fill: var(--ink); }
+.arrowhead.core { fill: var(--accent); }
+.arrowhead.warn { fill: var(--warn); }
+.lifeline { stroke: var(--line); stroke-width: 1; stroke-dasharray: 3 4; }
+.note { fill: var(--accent-bg); stroke: var(--accent-line); stroke-width: 1; }
+.step { fill: var(--accent); }
+.step-text { font-size: 10.5px; font-weight: 600; fill: var(--card); text-anchor: middle; }
+</style>
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead" d="M0,0 L10,5 L0,10 z"/></marker>
+  <marker id="arrow-core" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead core" d="M0,0 L10,5 L0,10 z"/></marker>
+</defs>
+<rect class="canvas" x="0.5" y="0.5" width="819" height="217" rx="8"/>
+<rect class="box" x="20" y="20" width="300" height="50" rx="6"/>
+<text class="mono center" x="170" y="49">Router(**arguments)</text>
+<rect class="box host" x="20" y="86" width="300" height="56" rx="6"/>
+<text class="mono small center" x="170" y="109">litellm.num_retries, litellm.fallbacks,</text>
+<text class="mono small center" x="170" y="126">litellm.model_cost, callbacks, ...</text>
+<rect class="box" x="20" y="158" width="300" height="40" rx="6"/>
+<text class="mono center" x="170" y="182">apply(ChangeSet)</text>
+<rect class="box" x="482" y="20" width="188" height="50" rx="6"/>
+<text class="mono title center" x="576" y="40">RouterConfig</text>
+<text class="small muted center" x="576" y="58">frozen for the router's life</text>
+<rect class="box" x="482" y="86" width="188" height="56" rx="6"/>
+<text class="mono title center" x="576" y="118">RouterDynamicConfig</text>
+<rect class="box core" x="720" y="20" width="80" height="178" rx="6"/>
+<text class="title center" x="760" y="113">core</text>
+<path class="edge" d="M320,45 H480" marker-end="url(#arrow)"/>
+<text class="edge-label mono small center" x="401" y="38">build_router_config</text>
+<path class="edge" d="M320,114 H480" marker-end="url(#arrow)"/>
+<text class="edge-label center" x="401" y="107">snapshot per version</text>
+<path class="edge" d="M670,45 H718" marker-end="url(#arrow)"/>
+<path class="edge" d="M670,114 H718" marker-end="url(#arrow)"/>
+<path class="edge" d="M320,178 H718" marker-end="url(#arrow)"/>
+</svg>

@@ -1,0 +1,117 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 840 376" role="img" aria-labelledby="t">
+<title id="t">How a requested name resolves to deployments</title>
+<style>/* litellm architecture diagrams v1, from the litellm-docs Aurora theme (src/css/custom.css). Embed verbatim in every SVG. */
+svg { --ink:#272b37; --text:#3a3e4b; --muted:#646875; --line:#a3a8ba; --rule:#e3e5ee; --card:#ffffff; --canvas:#f7f8fd; --accent:#0117be; --accent-bg:#f2f4fd; --accent-line:#b9c1f0; --host:#1f6fa8; --host-bg:#eaf5fd; --store:#6b3fb8; --store-bg:#efe8fb; --warn:#b42318; --warn-bg:#fdecea; --ok:#1a7f4b; --ok-bg:#e7f6ee; }
+@media (prefers-color-scheme: dark) {
+  svg { --ink:#ffffff; --text:#d6d4ea; --muted:#a6a4c6; --line:#5c6294; --rule:#1a1f45; --card:#0f1335; --canvas:#080b26; --accent:#9fabff; --accent-bg:#161b4a; --accent-line:#3d4790; --host:#7cc4f5; --host-bg:#0f2a44; --store:#c3a6f0; --store-bg:#23173f; --warn:#f19a9a; --warn-bg:#3a1622; --ok:#7ee2a8; --ok-bg:#0f2e25; }
+}
+text { font-family: Geist, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 13px; fill: var(--text); }
+.mono { font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.title { font-weight: 600; fill: var(--ink); }
+.small { font-size: 11.5px; }
+.muted { fill: var(--muted); }
+.accent { fill: var(--accent); }
+.center { text-anchor: middle; }
+.end { text-anchor: end; }
+.canvas { fill: var(--canvas); stroke: var(--rule); stroke-width: 1; }
+.box { fill: var(--card); stroke: var(--line); stroke-width: 1.2; }
+.box.core { fill: var(--accent-bg); stroke: var(--accent); }
+.box.host { fill: var(--host-bg); stroke: var(--host); }
+.box.store { fill: var(--store-bg); stroke: var(--store); }
+.box.warn { fill: var(--warn-bg); stroke: var(--warn); }
+.box.ok { fill: var(--ok-bg); stroke: var(--ok); }
+.box.decision { fill: var(--card); stroke: var(--ink); }
+.group { fill: none; stroke: var(--line); stroke-width: 1; stroke-dasharray: 5 4; }
+.group.core { stroke: var(--accent-line); }
+.group-label { font-size: 11px; font-weight: 600; fill: var(--muted); letter-spacing: 0.06em; }
+.edge { fill: none; stroke: var(--line); stroke-width: 1.4; }
+.edge.strong { stroke: var(--ink); }
+.edge.dashed { stroke-dasharray: 5 4; }
+.edge.core { stroke: var(--accent); }
+.edge.warn { stroke: var(--warn); }
+.edge-label { font-size: 11.5px; fill: var(--muted); paint-order: stroke; stroke: var(--canvas); stroke-width: 4px; stroke-linejoin: round; }
+.arrowhead { fill: var(--line); }
+.arrowhead.strong { fill: var(--ink); }
+.arrowhead.core { fill: var(--accent); }
+.arrowhead.warn { fill: var(--warn); }
+.lifeline { stroke: var(--line); stroke-width: 1; stroke-dasharray: 3 4; }
+.note { fill: var(--accent-bg); stroke: var(--accent-line); stroke-width: 1; }
+.step { fill: var(--accent); }
+.step-text { font-size: 10.5px; font-weight: 600; fill: var(--card); text-anchor: middle; }</style>
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead" d="M0,0 L10,5 L0,10 z"/></marker>
+  <marker id="arrow-warn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead warn" d="M0,0 L10,5 L0,10 z"/></marker>
+</defs>
+<rect class="canvas" x="0.5" y="0.5" width="839" height="375" rx="8"/>
+<rect class="box" x="20" y="20" width="90" height="46" rx="6"/>
+<text class="center" x="65" y="39.5">requested</text>
+<text class="center" x="65" y="55.5">name</text>
+<rect class="box decision" x="150" y="25" width="165" height="36" rx="18"/>
+<text class="center" x="232.5" y="47.5"><tspan class="mono">specific_deployment?</tspan></text>
+<rect class="box decision" x="360" y="20" width="160" height="46" rx="18"/>
+<text class="center" x="440" y="39.5">not a group name,</text>
+<text class="center" x="440" y="55.5">but a deployment id?</text>
+<rect class="box" x="705" y="20" width="130" height="46" rx="6"/>
+<text class="center" x="770" y="39.5">swap in the alias</text>
+<text class="center" x="770" y="55.5">target, if any</text>
+<rect class="box ok" x="117.5" y="106" width="230" height="46" rx="6"/>
+<text class="center" x="232.5" y="125.5">deployments whose litellm model</text>
+<text class="center" x="232.5" y="141.5">is exactly that name</text>
+<rect class="box ok" x="390.0" y="106" width="100" height="46" rx="6"/>
+<text class="center" x="440" y="125.5">that one</text>
+<text class="center" x="440" y="141.5">deployment</text>
+<rect class="box decision" x="715" y="200" width="110" height="46" rx="18"/>
+<text class="center" x="770" y="219.5">a routing</text>
+<text class="center" x="770" y="235.5">group?</text>
+<rect class="box decision" x="565" y="200" width="105" height="46" rx="18"/>
+<text class="center" x="617.5" y="219.5">a configured</text>
+<text class="center" x="617.5" y="235.5">group?</text>
+<rect class="box" x="539.5" y="98" width="156" height="62" rx="6"/>
+<text class="center" x="617.5" y="117.5">team public name,</text>
+<text class="center" x="617.5" y="133.5">then wildcard, then</text>
+<text class="center" x="617.5" y="149.5"><tspan class="mono">default_deployment</tspan></text>
+<rect class="box" x="325" y="192" width="195" height="62" rx="6"/>
+<text class="center" x="422.5" y="211.5">the group's deployments,</text>
+<text class="center" x="422.5" y="227.5">team ones first, kept to</text>
+<text class="center" x="422.5" y="243.5">the caller's access groups</text>
+<rect class="box decision" x="200" y="205" width="80" height="36" rx="18"/>
+<text class="center" x="240" y="227.5">empty?</text>
+<rect class="box ok" x="20" y="200" width="135" height="46" rx="6"/>
+<text class="center" x="87.5" y="227.5">those deployments</text>
+<rect class="box" x="122.0" y="294" width="236" height="62" rx="6"/>
+<text class="center" x="240" y="313.5">deployments whose litellm model</text>
+<text class="center" x="240" y="329.5">is the name, then the first</text>
+<text class="center" x="240" y="345.5"><tspan class="mono">default_fallbacks</tspan> group</text>
+<rect class="box warn" x="446.0" y="302" width="170" height="46" rx="6"/>
+<text class="center" x="531" y="321.5">error: no deployments</text>
+<text class="center" x="531" y="337.5">for this model</text>
+<rect class="box" x="715.0" y="302" width="110" height="46" rx="6"/>
+<text class="center" x="770" y="321.5">the members'</text>
+<text class="center" x="770" y="337.5">deployments</text>
+<path class="edge" d="M110,43.0 H148" marker-end="url(#arrow)"/>
+<path class="edge" d="M315,43.0 H358" marker-end="url(#arrow)"/>
+<text class="edge-label center" x="337.5" y="37">no</text>
+<path class="edge" d="M520,43.0 H703" marker-end="url(#arrow)"/>
+<text class="edge-label center" x="612.5" y="37">no</text>
+<path class="edge" d="M232.5,61 V104" marker-end="url(#arrow)"/>
+<text class="edge-label" x="238.5" y="87.5">yes</text>
+<path class="edge" d="M440.0,66 V104" marker-end="url(#arrow)"/>
+<text class="edge-label" x="446" y="90">yes</text>
+<path class="edge" d="M770.0,66 V198" marker-end="url(#arrow)"/>
+<path class="edge" d="M715,223.0 H672" marker-end="url(#arrow)"/>
+<text class="edge-label center" x="692.5" y="217">no</text>
+<path class="edge" d="M617.5,200 V162" marker-end="url(#arrow)"/>
+<text class="edge-label" x="623.5" y="184">no</text>
+<path class="edge" d="M565,223.0 H522" marker-end="url(#arrow)"/>
+<text class="edge-label center" x="542.5" y="217">yes</text>
+<path class="edge" d="M325,223.0 H282" marker-end="url(#arrow)"/>
+<path class="edge" d="M200,223.0 H157" marker-end="url(#arrow)"/>
+<text class="edge-label center" x="177.5" y="217">no</text>
+<path class="edge" d="M770.0,246 V300" marker-end="url(#arrow)"/>
+<text class="edge-label" x="776" y="278">yes</text>
+<path class="edge" d="M715.0,325.0 H693.0 V274 H302.5 V223.0 H282" marker-end="url(#arrow)"/>
+<path class="edge" d="M240.0,241 V292" marker-end="url(#arrow)"/>
+<text class="edge-label" x="246" y="286">yes</text>
+<path class="edge warn" d="M358.0,325.0 H444.0" marker-end="url(#arrow-warn)"/>
+<text class="edge-label center" x="402" y="319">still empty</text>
+</svg>

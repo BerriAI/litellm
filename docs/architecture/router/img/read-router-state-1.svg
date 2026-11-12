@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 300" role="img" aria-labelledby="t">
+<title id="t">Pick the entry point for reading router state</title>
+<style>/* litellm architecture diagrams v1, from the litellm-docs Aurora theme (src/css/custom.css). Embed verbatim in every SVG. */
+svg { --ink:#272b37; --text:#3a3e4b; --muted:#646875; --line:#a3a8ba; --rule:#e3e5ee; --card:#ffffff; --canvas:#f7f8fd; --accent:#0117be; --accent-bg:#f2f4fd; --accent-line:#b9c1f0; --host:#1f6fa8; --host-bg:#eaf5fd; --store:#6b3fb8; --store-bg:#efe8fb; --warn:#b42318; --warn-bg:#fdecea; --ok:#1a7f4b; --ok-bg:#e7f6ee; }
+@media (prefers-color-scheme: dark) {
+  svg { --ink:#ffffff; --text:#d6d4ea; --muted:#a6a4c6; --line:#5c6294; --rule:#1a1f45; --card:#0f1335; --canvas:#080b26; --accent:#9fabff; --accent-bg:#161b4a; --accent-line:#3d4790; --host:#7cc4f5; --host-bg:#0f2a44; --store:#c3a6f0; --store-bg:#23173f; --warn:#f19a9a; --warn-bg:#3a1622; --ok:#7ee2a8; --ok-bg:#0f2e25; }
+}
+text { font-family: Geist, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 13px; fill: var(--text); }
+.mono { font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.title { font-weight: 600; fill: var(--ink); }
+.small { font-size: 11.5px; }
+.muted { fill: var(--muted); }
+.accent { fill: var(--accent); }
+.center { text-anchor: middle; }
+.end { text-anchor: end; }
+.canvas { fill: var(--canvas); stroke: var(--rule); stroke-width: 1; }
+.box { fill: var(--card); stroke: var(--line); stroke-width: 1.2; }
+.box.core { fill: var(--accent-bg); stroke: var(--accent); }
+.box.host { fill: var(--host-bg); stroke: var(--host); }
+.box.store { fill: var(--store-bg); stroke: var(--store); }
+.box.warn { fill: var(--warn-bg); stroke: var(--warn); }
+.box.ok { fill: var(--ok-bg); stroke: var(--ok); }
+.box.decision { fill: var(--card); stroke: var(--ink); }
+.group { fill: none; stroke: var(--line); stroke-width: 1; stroke-dasharray: 5 4; }
+.group.core { stroke: var(--accent-line); }
+.group-label { font-size: 11px; font-weight: 600; fill: var(--muted); letter-spacing: 0.06em; }
+.edge { fill: none; stroke: var(--line); stroke-width: 1.4; }
+.edge.strong { stroke: var(--ink); }
+.edge.dashed { stroke-dasharray: 5 4; }
+.edge.core { stroke: var(--accent); }
+.edge.warn { stroke: var(--warn); }
+.edge-label { font-size: 11.5px; fill: var(--muted); paint-order: stroke; stroke: var(--canvas); stroke-width: 4px; stroke-linejoin: round; }
+.arrowhead { fill: var(--line); }
+.arrowhead.strong { fill: var(--ink); }
+.arrowhead.core { fill: var(--accent); }
+.arrowhead.warn { fill: var(--warn); }
+.lifeline { stroke: var(--line); stroke-width: 1; stroke-dasharray: 3 4; }
+.note { fill: var(--accent-bg); stroke: var(--accent-line); stroke-width: 1; }
+.step { fill: var(--accent); }
+.step-text { font-size: 10.5px; font-weight: 600; fill: var(--card); text-anchor: middle; }</style>
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead" d="M0,0 L10,5 L0,10 z"/></marker>
+</defs>
+<rect class="canvas" x="0.5" y="0.5" width="859" height="299" rx="8"/>
+<rect class="box" x="14" y="16" width="196" height="52" rx="6"/>
+<text class="title center" x="112" y="46">What do you need to know?</text>
+<rect class="box" x="444" y="16" width="396" height="52" rx="6"/>
+<text class="center" x="642" y="37">Nothing fits: discuss adding a query</text>
+<text class="center" x="642" y="55">to an existing view before widening the surface</text>
+<rect class="box decision" x="20" y="100" width="184" height="88" rx="6"/>
+<text class="title center" x="112" y="132.5">What is configured?</text>
+<text class="small muted center" x="112" y="152.5">deployments, names,</text>
+<text class="small muted center" x="112" y="168.5">aliases, credentials</text>
+<path class="edge" d="M112,188 V226" marker-end="url(#arrow)"/>
+<text class="edge-label" x="118" y="211">yes</text>
+<rect class="box ok" x="20" y="228" width="184" height="52" rx="6"/>
+<text class="mono center" x="112" y="258">router.registry()</text>
+<path class="edge" d="M204,144 H230" marker-end="url(#arrow)"/>
+<text class="edge-label center" x="218" y="138">no</text>
+<rect class="box decision" x="232" y="100" width="184" height="88" rx="6"/>
+<text class="title center" x="324" y="124">How is the router</text>
+<text class="title center" x="324" y="141">configured?</text>
+<text class="small muted center" x="324" y="161">strategy, fallbacks,</text>
+<text class="small muted center" x="324" y="177">cooldown time</text>
+<path class="edge" d="M324,188 V226" marker-end="url(#arrow)"/>
+<text class="edge-label" x="330" y="211">yes</text>
+<rect class="box ok" x="232" y="228" width="184" height="52" rx="6"/>
+<text class="mono center" x="324" y="258">router.settings()</text>
+<path class="edge" d="M416,144 H442" marker-end="url(#arrow)"/>
+<text class="edge-label center" x="430" y="138">no</text>
+<rect class="box decision" x="444" y="100" width="184" height="88" rx="6"/>
+<text class="title center" x="536" y="124">What state are</text>
+<text class="title center" x="536" y="141">deployments in?</text>
+<text class="small muted center" x="536" y="161">cooldowns, blocked,</text>
+<text class="small muted center" x="536" y="177">usage, health checks</text>
+<path class="edge" d="M536,188 V226" marker-end="url(#arrow)"/>
+<text class="edge-label" x="542" y="211">yes</text>
+<rect class="box ok" x="444" y="228" width="184" height="52" rx="6"/>
+<text class="mono center" x="536" y="258">router.health()</text>
+<path class="edge" d="M628,144 H654" marker-end="url(#arrow)"/>
+<text class="edge-label center" x="642" y="138">no</text>
+<rect class="box decision" x="656" y="100" width="184" height="88" rx="6"/>
+<text class="title center" x="748" y="140">Which deployment would</text>
+<text class="title center" x="748" y="157">a request get?</text>
+<path class="edge" d="M748,188 V226" marker-end="url(#arrow)"/>
+<text class="edge-label" x="754" y="211">yes</text>
+<rect class="box ok" x="656" y="228" width="184" height="52" rx="6"/>
+<text class="mono center" x="748" y="250">await router.select(</text>
+<text class="mono center" x="748" y="266">model, request_kwargs)</text>
+<path class="edge" d="M112,68 V98" marker-end="url(#arrow)"/>
+<path class="edge" d="M748,100 V70" marker-end="url(#arrow)"/>
+<text class="edge-label" x="754" y="89">no</text>
+</svg>

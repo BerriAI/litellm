@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 424" role="img" aria-labelledby="t">
+<title id="t">Router core and host interfaces</title>
+<desc>Router uses RouterCore, picked once by make_core. RustCore implements RouterCore and holds a RouterCoreHandle to the Rust RustRouter, which calls the Host trait. PythonHost implements Host through the step driver.</desc>
+<style>/* litellm architecture diagrams v1, from the litellm-docs Aurora theme (src/css/custom.css). Embed verbatim in every SVG. */
+svg { --ink:#272b37; --text:#3a3e4b; --muted:#646875; --line:#a3a8ba; --rule:#e3e5ee; --card:#ffffff; --canvas:#f7f8fd; --accent:#0117be; --accent-bg:#f2f4fd; --accent-line:#b9c1f0; --host:#1f6fa8; --host-bg:#eaf5fd; --store:#6b3fb8; --store-bg:#efe8fb; --warn:#b42318; --warn-bg:#fdecea; --ok:#1a7f4b; --ok-bg:#e7f6ee; }
+@media (prefers-color-scheme: dark) {
+  svg { --ink:#ffffff; --text:#d6d4ea; --muted:#a6a4c6; --line:#5c6294; --rule:#1a1f45; --card:#0f1335; --canvas:#080b26; --accent:#9fabff; --accent-bg:#161b4a; --accent-line:#3d4790; --host:#7cc4f5; --host-bg:#0f2a44; --store:#c3a6f0; --store-bg:#23173f; --warn:#f19a9a; --warn-bg:#3a1622; --ok:#7ee2a8; --ok-bg:#0f2e25; }
+}
+text { font-family: Geist, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 13px; fill: var(--text); }
+.mono { font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.title { font-weight: 600; fill: var(--ink); }
+.small { font-size: 11.5px; }
+.muted { fill: var(--muted); }
+.accent { fill: var(--accent); }
+.center { text-anchor: middle; }
+.end { text-anchor: end; }
+.canvas { fill: var(--canvas); stroke: var(--rule); stroke-width: 1; }
+.box { fill: var(--card); stroke: var(--line); stroke-width: 1.2; }
+.box.core { fill: var(--accent-bg); stroke: var(--accent); }
+.box.host { fill: var(--host-bg); stroke: var(--host); }
+.box.store { fill: var(--store-bg); stroke: var(--store); }
+.box.warn { fill: var(--warn-bg); stroke: var(--warn); }
+.box.ok { fill: var(--ok-bg); stroke: var(--ok); }
+.box.decision { fill: var(--card); stroke: var(--ink); }
+.group { fill: none; stroke: var(--line); stroke-width: 1; stroke-dasharray: 5 4; }
+.group.core { stroke: var(--accent-line); }
+.group-label { font-size: 11px; font-weight: 600; fill: var(--muted); letter-spacing: 0.06em; }
+.edge { fill: none; stroke: var(--line); stroke-width: 1.4; }
+.edge.strong { stroke: var(--ink); }
+.edge.dashed { stroke-dasharray: 5 4; }
+.edge.core { stroke: var(--accent); }
+.edge.warn { stroke: var(--warn); }
+.edge-label { font-size: 11.5px; fill: var(--muted); paint-order: stroke; stroke: var(--canvas); stroke-width: 4px; stroke-linejoin: round; }
+.arrowhead { fill: var(--line); }
+.arrowhead.strong { fill: var(--ink); }
+.arrowhead.core { fill: var(--accent); }
+.arrowhead.warn { fill: var(--warn); }
+.lifeline { stroke: var(--line); stroke-width: 1; stroke-dasharray: 3 4; }
+.note { fill: var(--accent-bg); stroke: var(--accent-line); stroke-width: 1; }
+.step { fill: var(--accent); }
+.step-text { font-size: 10.5px; font-weight: 600; fill: var(--card); text-anchor: middle; }</style>
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead" d="M0,0 L10,5 L0,10 z"/></marker>
+  <marker id="arrow-core" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead core" d="M0,0 L10,5 L0,10 z"/></marker>
+</defs>
+<rect class="canvas" x="0.5" y="0.5" width="879" height="423" rx="8"/>
+<rect class="group" x="10" y="10" width="860" height="192" rx="8"/>
+<text class="group-label" x="22" y="28">PYTHON</text>
+<rect class="group core" x="295" y="220" width="575" height="192" rx="8"/>
+<text class="group-label" x="307" y="238">RUST</text>
+<rect class="box host" x="20" y="40" width="202" height="100" rx="6"/>
+<text class="mono title center" x="121.0" y="62">Router</text>
+<text class="small muted center" x="121.0" y="78">«Python facade»</text>
+<text class="mono small" x="32" y="99">+from_config(config, host)</text>
+<text class="mono small" x="32" y="115">+endpoint methods</text>
+<text class="mono small" x="32" y="131">+8 entry points</text>
+<rect class="box host" x="315" y="40" width="240" height="152" rx="6"/>
+<text class="mono title center" x="435.0" y="62">RouterCore</text>
+<text class="small muted center" x="435.0" y="78">«Protocol,</text>
+<text class="small muted center" x="435.0" y="93"><tspan class="mono">litellm/router_core.py</tspan>»</text>
+<text class="mono small" x="327" y="114">+registry() settings() health()</text>
+<text class="mono small" x="327" y="130">+select(model, request_kwargs)</text>
+<text class="mono small" x="327" y="146">+apply(changes)</text>
+<text class="mono small" x="327" y="162">+observe() register_plugin()</text>
+<text class="mono small" x="327" y="178">+retire()</text>
+<rect class="box host" x="630" y="40" width="228" height="74" rx="6"/>
+<text class="mono title center" x="744.0" y="62">RustCore</text>
+<text class="small muted center" x="744.0" y="78">«<tspan class="mono">litellm/router_rust/core.py</tspan>»</text>
+<text class="small" x="642" y="99">drives <tspan class="mono">RouterCall</tspan> steps</text>
+<rect class="box core" x="600" y="248" width="258" height="152" rx="6"/>
+<text class="mono title center" x="729.0" y="270">RustRouter</text>
+<text class="small muted center" x="729.0" y="286">«<tspan class="mono">router-core</tspan> Router»</text>
+<text class="mono small" x="612" y="307">+call(op, request)</text>
+<text class="mono small" x="612" y="323">+select(op, request) healthy()</text>
+<text class="mono small" x="612" y="339">+registry() settings() health()</text>
+<text class="mono small" x="612" y="355">+report_success() report_failure()</text>
+<text class="mono small" x="612" y="371">+apply(ChangeSet) RegistryVersion</text>
+<text class="mono small" x="612" y="387">+retire()</text>
+<rect class="box core" x="310" y="248" width="245" height="136" rx="6"/>
+<text class="mono title center" x="432.5" y="270">Host</text>
+<text class="small muted center" x="432.5" y="286">«trait, <tspan class="mono">host.rs</tspan>»</text>
+<text class="mono small" x="322" y="307">+invoke(attempt)</text>
+<text class="mono small" x="322" y="323">+select(stage, ctx, candidates)</text>
+<text class="mono small" x="322" y="339">+pre_route(ask)</text>
+<text class="mono small" x="322" y="355">+allow_fallback(request, target)</text>
+<text class="mono small" x="322" y="371">+sleep() observe() cache()</text>
+<rect class="box host" x="20" y="290" width="120" height="40" rx="6"/>
+<text class="mono title center" x="80" y="314">PythonHost</text>
+<path class="edge" d="M222,90 H313" marker-end="url(#arrow)"/>
+<text class="edge-label center" x="268" y="67">picked once by</text>
+<text class="edge-label center" x="268" y="82"><tspan class="mono">make_core</tspan></text>
+<path class="edge dashed" d="M630,77 H557" marker-end="url(#arrow)"/>
+<text class="edge-label center" x="592" y="69">implements</text>
+<path class="edge" d="M744,114 V246" marker-end="url(#arrow)"/>
+<text class="edge-label mono end" x="734" y="184">RouterCoreHandle</text>
+<path class="edge core" d="M600,310 H557" marker-end="url(#arrow-core)"/>
+<path class="edge dashed" d="M140,310 H308" marker-end="url(#arrow)"/>
+<text class="edge-label center" x="217" y="286">implements, through</text>
+<text class="edge-label center" x="217" y="301">the step driver</text>
+</svg>

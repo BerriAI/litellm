@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 372" role="img" aria-labelledby="t">
+<title id="t">Retry loop after a failed attempt</title>
+<style>/* litellm architecture diagrams v1, from the litellm-docs Aurora theme (src/css/custom.css). Embed verbatim in every SVG. */
+svg { --ink:#272b37; --text:#3a3e4b; --muted:#646875; --line:#a3a8ba; --rule:#e3e5ee; --card:#ffffff; --canvas:#f7f8fd; --accent:#0117be; --accent-bg:#f2f4fd; --accent-line:#b9c1f0; --host:#1f6fa8; --host-bg:#eaf5fd; --store:#6b3fb8; --store-bg:#efe8fb; --warn:#b42318; --warn-bg:#fdecea; --ok:#1a7f4b; --ok-bg:#e7f6ee; }
+@media (prefers-color-scheme: dark) {
+  svg { --ink:#ffffff; --text:#d6d4ea; --muted:#a6a4c6; --line:#5c6294; --rule:#1a1f45; --card:#0f1335; --canvas:#080b26; --accent:#9fabff; --accent-bg:#161b4a; --accent-line:#3d4790; --host:#7cc4f5; --host-bg:#0f2a44; --store:#c3a6f0; --store-bg:#23173f; --warn:#f19a9a; --warn-bg:#3a1622; --ok:#7ee2a8; --ok-bg:#0f2e25; }
+}
+text { font-family: Geist, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 13px; fill: var(--text); }
+.mono { font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.title { font-weight: 600; fill: var(--ink); }
+.small { font-size: 11.5px; }
+.muted { fill: var(--muted); }
+.accent { fill: var(--accent); }
+.center { text-anchor: middle; }
+.end { text-anchor: end; }
+.canvas { fill: var(--canvas); stroke: var(--rule); stroke-width: 1; }
+.box { fill: var(--card); stroke: var(--line); stroke-width: 1.2; }
+.box.core { fill: var(--accent-bg); stroke: var(--accent); }
+.box.host { fill: var(--host-bg); stroke: var(--host); }
+.box.store { fill: var(--store-bg); stroke: var(--store); }
+.box.warn { fill: var(--warn-bg); stroke: var(--warn); }
+.box.ok { fill: var(--ok-bg); stroke: var(--ok); }
+.box.decision { fill: var(--card); stroke: var(--ink); }
+.group { fill: none; stroke: var(--line); stroke-width: 1; stroke-dasharray: 5 4; }
+.group.core { stroke: var(--accent-line); }
+.group-label { font-size: 11px; font-weight: 600; fill: var(--muted); letter-spacing: 0.06em; }
+.edge { fill: none; stroke: var(--line); stroke-width: 1.4; }
+.edge.strong { stroke: var(--ink); }
+.edge.dashed { stroke-dasharray: 5 4; }
+.edge.core { stroke: var(--accent); }
+.edge.warn { stroke: var(--warn); }
+.edge-label { font-size: 11.5px; fill: var(--muted); paint-order: stroke; stroke: var(--canvas); stroke-width: 4px; stroke-linejoin: round; }
+.arrowhead { fill: var(--line); }
+.arrowhead.strong { fill: var(--ink); }
+.arrowhead.core { fill: var(--accent); }
+.arrowhead.warn { fill: var(--warn); }
+.lifeline { stroke: var(--line); stroke-width: 1; stroke-dasharray: 3 4; }
+.note { fill: var(--accent-bg); stroke: var(--accent-line); stroke-width: 1; }
+.step { fill: var(--accent); }
+.step-text { font-size: 10.5px; font-weight: 600; fill: var(--card); text-anchor: middle; }</style>
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead" d="M0,0 L10,5 L0,10 z"/></marker>
+  <marker id="arrow-warn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead warn" d="M0,0 L10,5 L0,10 z"/></marker>
+</defs>
+<rect class="canvas" x="0.5" y="0.5" width="859" height="371" rx="8"/>
+<rect class="box" x="20" y="42" width="108" height="44" rx="6"/>
+<text class="center" x="74" y="68">Attempt failed</text>
+<polygon class="box decision" points="155,64 260,30 365,64 260,98"/>
+<text class="center" x="260" y="68">Guardrail intervention?</text>
+<rect class="box" x="400" y="20" width="440" height="88" rx="6"/>
+<text class="title" x="416" y="42">Number of retries</text>
+<text class="small" x="416" y="61"><tspan class="mono">retry_policy</tspan> for this failure kind, unless the request</text>
+<text class="small" x="416" y="78">set <tspan class="mono">num_retries=0</tspan>, else the request's <tspan class="mono">num_retries</tspan>,</text>
+<text class="small" x="416" y="95">else the deployment's, else the router's <tspan class="mono">num_retries</tspan></text>
+<rect class="box warn" x="20" y="158" width="300" height="44" rx="6"/>
+<text class="center" x="150" y="184">Give up, so the fallback walk sees it</text>
+<polygon class="box decision" points="430,180 510,150 590,180 510,210"/>
+<text class="center" x="510" y="184">Worth retrying?</text>
+<rect class="box" x="620" y="137" width="220" height="86" rx="6"/>
+<text class="title" x="636" y="159">Sleep</text>
+<text class="small" x="636" y="178">0 if other healthy deployments</text>
+<text class="small" x="636" y="195">remain, else <tspan class="mono">Retry-After</tspan></text>
+<text class="small" x="636" y="212">or exponential backoff</text>
+<rect class="box" x="620" y="255" width="220" height="50" rx="6"/>
+<text class="center" x="730" y="276">Select again, skipping</text>
+<text class="small center" x="730" y="293">deployments that already failed</text>
+<polygon class="box decision" points="450,280 510,252 570,280 510,308"/>
+<text class="center" x="510" y="284">Success?</text>
+<rect class="box ok" x="20" y="310" width="310" height="44" rx="6"/>
+<text class="center" x="175" y="336">Return, with <tspan class="mono">x-litellm-attempted-retries</tspan></text>
+<path class="edge" d="M128,64 H153" marker-end="url(#arrow)"/>
+<path class="edge" d="M365,64 H398" marker-end="url(#arrow)"/>
+<text class="edge-label center" x="382" y="56">no</text>
+<path class="edge warn" d="M260,98 V156" marker-end="url(#arrow-warn)"/>
+<text class="edge-label" x="268" y="132">yes</text>
+<path class="edge" d="M510,108 V148" marker-end="url(#arrow)"/>
+<path class="edge warn" d="M430,180 H322" marker-end="url(#arrow-warn)"/>
+<text class="edge-label center" x="376" y="172">no</text>
+<path class="edge" d="M590,180 H618" marker-end="url(#arrow)"/>
+<text class="edge-label center" x="604" y="172">yes</text>
+<path class="edge" d="M730,223 V253" marker-end="url(#arrow)"/>
+<path class="edge" d="M620,280 H572" marker-end="url(#arrow)"/>
+<path class="edge" d="M510,252 V212" marker-end="url(#arrow)"/>
+<text class="edge-label" x="518" y="236">no, retries left</text>
+<path class="edge warn" d="M450,280 H290 V204" marker-end="url(#arrow-warn)"/>
+<text class="edge-label center" x="370" y="272">no, none left</text>
+<path class="edge" d="M510,308 V332 H332" marker-end="url(#arrow)"/>
+<text class="edge-label center" x="420" y="325">yes</text>
+</svg>
