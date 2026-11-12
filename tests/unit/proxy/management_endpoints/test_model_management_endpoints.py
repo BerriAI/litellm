@@ -8818,6 +8818,40 @@ async def test_team_model_delete_rejects_falling_back_to_a_route_its_projects_la
 
 
 @pytest.mark.asyncio
+async def test_team_wildcard_delete_rejects_falling_back_to_a_proxy_wildcard_its_projects_lack_quota_for(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.management_endpoints.model_management_endpoints import ModelInfoDelete, delete_model
+
+    prisma: Final = _media_team_db("video-gen-1", {})
+    prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
+        return_value=_team_model_row("video-*", {"model": "runwayml/*"})
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "video-*",
+                "litellm_params": dict(_TEAM_VERTEX, model="vertex_ai/*"),
+                "model_info": {"id": "proxy-wildcard"},
+            },
+            {
+                "model_name": "model_name_media-team_team-row",
+                "litellm_params": {"model": "runwayml/*"},
+                "model_info": {"id": "team-row", "team_id": "media-team", "team_public_model_name": "video-*"},
+            },
+        ]
+    )
+    _use_quota_proxy(monkeypatch, prisma, router)
+
+    with pytest.raises(ProxyException) as error:
+        await delete_model(model_info=ModelInfoDelete(id="team-row"), user_api_key_dict=_ADMIN)
+
+    assert error.value.code == "400"
+    assert error.value.message.startswith("projects video-gen list 'video-gen-1' without a positive rpm and tpm quota")
+    prisma.db.litellm_proxymodeltable.delete.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_team_model_delete_goes_through_when_nothing_else_serves_its_name(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

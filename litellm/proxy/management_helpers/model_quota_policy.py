@@ -248,6 +248,7 @@ def _routed_deployments_without(
         _without(_named_deployments(llm_router, target, team_id), replaced_id)
         or _without(_named_deployments(llm_router, target, None), replaced_id)
         or _without(llm_router.registry().deployments(target, source="wildcard", team_id=team_id), replaced_id)
+        or _without(llm_router.registry().deployments(target, source="wildcard", team_id=None), replaced_id)
     )
 
 
