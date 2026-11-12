@@ -282,6 +282,7 @@ class ScriptedTool:
     respond: Callable[[JsonRpc], Reply | JsonRpc]
     description: str | Callable[[Mapping[str, str]], str] | None = None
     input_schema: JsonRpc = field(default_factory=lambda: {"type": "object"})
+    event_stream: bool = False
 
     def listing(self, headers: Mapping[str, str]) -> JsonRpc:
         described: Final = self.description(headers) if callable(self.description) else self.description
@@ -334,7 +335,10 @@ def scripted_peer(*tools: ScriptedTool) -> Iterator[McpPeer]:
         if tool is None:
             return jsonrpc_error(identity, -32602, "unknown tool")
         produced: Final = tool.respond(body["params"])
-        return produced if isinstance(produced, Reply) else jsonrpc_reply(identity, produced)
+        reply: Final = produced if isinstance(produced, Reply) else jsonrpc_reply(identity, produced)
+        if not tool.event_stream:
+            return reply
+        return Reply(content_type="text/event-stream", body=b"event: message\ndata: " + reply.body + b"\n\n")
 
     with wire_server(provider) as wire:
         yield McpPeer(wire.url + "/mcp", observed)

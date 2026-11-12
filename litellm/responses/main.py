@@ -26,6 +26,12 @@ from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
     configured_injection_points,
 )
+from litellm.litellm_core_utils.allowed_tools_tool_choice import (
+    allowed_tools_tool_choice_in_effect,
+    allowed_tools_tool_choice_with_gateway_tools_as_functions,
+    is_allowed_tools_tool_choice,
+    parse_allowed_tools_tool_choice,
+)
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -41,6 +47,7 @@ from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
 )
 from litellm.responses.mcp.request_context import MCPRequestContext
+from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     PromptObject,
@@ -205,6 +212,11 @@ async def aresponses_api_with_mcp(
         LiteLLM_Proxy_MCP_Handler,
     )
 
+    sends_a_malformed_choice_as_given: Final = (
+        is_allowed_tools_tool_choice(tool_choice) and parse_allowed_tools_tool_choice(tool_choice) is None
+    )
+    tool_choice_in_effect: Final = allowed_tools_tool_choice_in_effect(tool_choice, model, drop_params=True)
+
     # Parse MCP tools and separate from other tools
     (
         mcp_tools_with_litellm_proxy,
@@ -237,6 +249,9 @@ async def aresponses_api_with_mcp(
         raw_headers=discovery_raw_headers,
     )
     openai_tools: Final = LiteLLM_Proxy_MCP_Handler.transform_mcp_tools_to_openai(original_mcp_tools)
+    gateway: Final = await LiteLLM_Proxy_MCP_Handler.gateway_tools(
+        tool_choice_in_effect, tool_server_map, mcp_tools_with_litellm_proxy, user_api_key_auth
+    )
 
     # Combine with other tools
     all_tools: Final = openai_tools + other_tools if (openai_tools or other_tools) else None
@@ -255,7 +270,9 @@ async def aresponses_api_with_mcp(
         "stream": stream,
         "temperature": temperature,
         "text": text,
-        "tool_choice": tool_choice,
+        "tool_choice": tool_choice
+        if sends_a_malformed_choice_as_given
+        else allowed_tools_tool_choice_with_gateway_tools_as_functions(tool_choice_in_effect, gateway),
         "top_p": top_p,
         "truncation": truncation,
         "user": user,
@@ -294,6 +311,8 @@ async def aresponses_api_with_mcp(
             previous_response_id=previous_response_id,
             tool_server_map=tool_server_map,
             served_tools=original_mcp_tools,
+            tool_choice=tool_choice_in_effect,
+            gateway=gateway,
             **kwargs,
         )
         await mcp_streaming_response.start_initial_response()
@@ -327,7 +346,11 @@ async def aresponses_api_with_mcp(
     # If auto-execute tools is True, then we need to execute the tool calls
     #########################################################
     if should_auto_execute and isinstance(response, ResponsesAPIResponse):
-        tool_calls: Final = LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_response(response=response)
+        tool_calls: Final = LiteLLM_Proxy_MCP_Handler.tool_calls_to_run(
+            LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_response(response=response),
+            tool_choice_in_effect,
+            gateway,
+        )
 
         if tool_calls:
             user_api_key_auth = kwargs.get("litellm_metadata", {}).get("user_api_key_auth")
@@ -1112,11 +1135,7 @@ def _responses_try_dispatch_mcp_gateway(
     | None
 ):
     """Return a response when MCP gateway handles the call; otherwise None."""
-    from litellm.responses.mcp.litellm_proxy_mcp_handler import (
-        LiteLLM_Proxy_MCP_Handler,
-    )
-
-    if skip_mcp_handler or not LiteLLM_Proxy_MCP_Handler.should_use_litellm_mcp_gateway(tools=tools):
+    if skip_mcp_handler or not may_name_litellm_mcp_gateway(tools):
         return None
     mcp_call_kwargs: Final = {
         "model": model,

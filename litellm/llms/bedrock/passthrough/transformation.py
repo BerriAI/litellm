@@ -13,6 +13,10 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig, PassthroughStreamCollector
 from litellm.llms.bedrock.chat.converse_to_openai import as_json_array, as_json_object
+from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
+    bedrock_invoke_guardrail_headers,
+)
+from litellm.llms.bedrock.request_metadata import merge_bedrock_invoke_headers
 from litellm.types.llms.openai import ChatCompletionSystemMessage, ChatCompletionUserMessage
 from litellm.types.utils import ModelResponseStream
 
@@ -38,8 +42,35 @@ def is_bedrock_streaming_endpoint(endpoint: str) -> bool:
 _CONVERSE_ACTIONS: Final = frozenset({"converse", "converse-stream"})
 
 
-def _is_converse_url(url: str) -> bool:
-    return httpx.URL(url).path.rstrip("/").rsplit("/", 1)[-1] in _CONVERSE_ACTIONS
+_INVOKE_ACTIONS: Final = frozenset({"invoke", "invoke-with-response-stream"})
+_BEDROCK_INVOKE_GUARDRAIL_HEADERS: Final = frozenset(
+    {"x-amzn-bedrock-guardrailidentifier", "x-amzn-bedrock-guardrailversion", "x-amzn-bedrock-trace"}
+)
+
+
+def _converse_guardrail_config(action: str, guardrail_config: object) -> object:
+    fields: Final = as_json_object(guardrail_config)
+    if action == "converse-stream" or fields is None:
+        return guardrail_config
+    return {key: value for key, value in fields.items() if key != "streamProcessingMode"}
+
+
+def _with_deployment_guardrail(
+    action: str,
+    headers: Mapping[str, str],
+    body: Mapping[str, object],
+    guardrail_config: object,
+) -> tuple[Mapping[str, str], Mapping[str, object]]:
+    if guardrail_config is None:
+        return headers, body
+    if action in _CONVERSE_ACTIONS:
+        return headers, {**body, "guardrailConfig": _converse_guardrail_config(action, guardrail_config)}
+    if action in _INVOKE_ACTIONS:
+        guardrail_headers: Final = tuple(bedrock_invoke_guardrail_headers(guardrail_config).items())
+        return merge_bedrock_invoke_headers(
+            dict(headers), (), guardrail_headers, _BEDROCK_INVOKE_GUARDRAIL_HEADERS
+        ), body
+    return headers, body
 
 
 def _is_cache_point(entry: object) -> bool:
@@ -363,13 +394,20 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
         api_base: str,
         model: str | None = None,
     ) -> tuple[dict, bytes | None]:
+        action: Final = httpx.URL(api_base).path.rstrip("/").rsplit("/", 1)[-1]
         body: Final[Mapping[str, object]] = request_data or {}
         optional_params: Final = litellm_params.copy()
+        guarded_headers, guarded_body = _with_deployment_guardrail(
+            action,
+            headers,
+            _converse_body_to_send(body) if action in _CONVERSE_ACTIONS else body,
+            litellm_params.get("guardrailConfig"),
+        )
         return self._sign_request(
             service_name="bedrock",
-            headers=headers,
+            headers=dict(guarded_headers),
             optional_params=optional_params,
-            request_data=dict(_converse_body_to_send(body) if _is_converse_url(api_base) else body),
+            request_data=dict(guarded_body),
             api_base=api_base,
             model=model,
             api_key=self.get_bedrock_bearer_token(optional_params),

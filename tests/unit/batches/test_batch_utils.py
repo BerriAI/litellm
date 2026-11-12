@@ -2014,6 +2014,20 @@ def test_total_cost_bills_cached_tokens_per_line_at_the_batch_cached_rate():
     assert result.cost == pytest.approx(long_line + short_line)
 
 
+def test_extract_credentials_keeps_openai_workload_identity_params():
+    params = {
+        "openai_identity_provider_id": "idp_deployment",
+        "openai_service_account_id": "user-deployment",
+        "openai_identity_token_file": "/var/run/secrets/token",
+        "model": "gpt-4o",
+    }
+    assert bu._extract_file_access_credentials(params) == {
+        "openai_identity_provider_id": "idp_deployment",
+        "openai_service_account_id": "user-deployment",
+        "openai_identity_token_file": "/var/run/secrets/token",
+    }
+
+
 # --------------------------------------------------------------------------- #
 # batch_cost_is_final
 # --------------------------------------------------------------------------- #
@@ -2294,6 +2308,36 @@ async def test_native_vertex_rows_route_to_vertex_cost_path_without_flag(monkeyp
     assert (result.successful_requests, result.failed_requests) == (2, 0)
     assert result.models == ["gemini-2.5-flash"]
     assert {(call["model"], call["custom_llm_provider"]) for call in calls} == {("gemini-2.5-flash", "vertex_ai")}
+
+
+@pytest.mark.asyncio
+async def test_raw_vertex_claude_rows_are_priced_like_with_the_native_output_flag(monkeypatch):
+    claude_message: Final = {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-6",
+        "content": [{"type": "text", "text": "Blue."}],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 12, "output_tokens": 5},
+    }
+    rows: Final = [
+        {"custom_id": "ok", "processed_time": "2026-10-29T03:00:00Z", "response": claude_message, "status": ""},
+        {"custom_id": "bad", "processed_time": "2026-10-29T03:00:00Z", "response": {}, "status": "Bad Request"},
+    ]
+
+    async def cost_with_flag(flag: bool) -> bu.BatchCostUsageResult:
+        monkeypatch.setattr(litellm, "disable_vertex_batch_output_transformation", flag, raising=False)
+        return await bu.calculate_batch_cost_and_usage(
+            file_content_dictionary=rows, custom_llm_provider="vertex_ai", model_name="vertex_ai/claude-sonnet-4-6"
+        )
+
+    unflagged: Final = await cost_with_flag(False)
+    flagged: Final = await cost_with_flag(True)
+
+    assert unflagged.cost > 0
+    assert (unflagged.successful_requests, unflagged.failed_requests) == (1, 1)
+    assert (unflagged.cost, unflagged.usage.total_tokens) == (flagged.cost, flagged.usage.total_tokens)
 
 
 @pytest.mark.asyncio

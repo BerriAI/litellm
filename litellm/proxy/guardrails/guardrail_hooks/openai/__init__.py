@@ -5,6 +5,7 @@ from litellm.proxy.guardrails.guardrail_hooks.openai.moderations import (
     OpenAIModerationGuardrail,
 )
 from litellm.types.guardrails import SupportedGuardrailIntegrations
+from litellm.types.workload_identity import OPENAI_WIF_KWARGS_KEYS
 
 if TYPE_CHECKING:
     from litellm.types.guardrails import Guardrail, LitellmParams
@@ -19,6 +20,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
 
     openai_moderation_guardrail: Final = OpenAIModerationGuardrail(
         guardrail_name=guardrail_name,
+        workload_identity_params=litellm_params.model_dump(include=set(OPENAI_WIF_KWARGS_KEYS), exclude_none=True),
         **{
             **litellm_params.model_dump(exclude_none=True),
             "api_key": litellm_params.api_key,
