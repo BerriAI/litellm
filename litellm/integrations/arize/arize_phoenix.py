@@ -48,6 +48,14 @@ ARIZE_HOSTED_PHOENIX_ENDPOINT: Final = "https://otlp.arize.com/v1/traces"
 _MAX_PROJECT_PROVIDERS: Final = 64
 
 
+def _force_flushed(flushable: "SpanProcessor | TracerProvider", timeout_millis: int) -> bool:
+    try:
+        return flushable.force_flush(timeout_millis)
+    except Exception as e:  # noqa: BLE001  # one failed flush must not skip the rest at shutdown
+        verbose_logger.debug("ArizePhoenixLogger: force_flush failed: %s", e)
+        return False
+
+
 class ArizePhoenixLogger(OpenTelemetry):
     """
     Arize Phoenix logger that sends traces to a Phoenix endpoint.
@@ -91,7 +99,7 @@ class ArizePhoenixLogger(OpenTelemetry):
             self.config.exporter,
         )
 
-    def flush_tracer_providers(self) -> None:
+    def flush_tracer_providers(self, timeout_millis: int) -> bool:
         """
         Flush all cached per-project providers and the shared span processor.
 
@@ -99,27 +107,17 @@ class ArizePhoenixLogger(OpenTelemetry):
         spans may still reference evicted providers.
         """
         if getattr(self, "_use_injected_tracer_provider", False):
-            return
+            return True
 
         shared_processor: Final[SpanProcessor | None] = getattr(self, "_shared_span_processor", None)
-        if shared_processor is not None:
-            try:
-                shared_processor.force_flush()
-            except Exception as e:
-                verbose_logger.debug(
-                    "ArizePhoenixLogger: shared span processor force_flush failed: %s",
-                    e,
-                )
-
         with getattr(self, "_project_providers_lock", threading.Lock()):
             project_providers: Final[Mapping[str, TracerProvider]] = getattr(self, "_project_providers", {})
-            providers: Final = list(project_providers.values())
+            providers: Final = tuple(project_providers.values())
 
-        for provider in providers:
-            try:
-                provider.force_flush()
-            except Exception as e:
-                verbose_logger.debug("ArizePhoenixLogger: TracerProvider force_flush failed: %s", e)
+        flushables: Final[tuple[SpanProcessor | TracerProvider, ...]] = (
+            (shared_processor, *providers) if shared_processor is not None else providers
+        )
+        return all(tuple(_force_flushed(flushable, timeout_millis) for flushable in flushables))
 
     def _get_litellm_resource_for_project(self, project_name: str):
         """

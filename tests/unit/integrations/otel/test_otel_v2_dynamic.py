@@ -743,3 +743,31 @@ def test_signoz_keyless_team_endpoint_is_ignored_so_the_operator_key_never_reach
     owned = next(e for e in routed.exporters if e.owner == "signoz")
     assert owned.endpoint == "https://ingest.us.signoz.cloud:443"
     assert owned.headers == "signoz-ingestion-key=OPERATOR"
+
+
+def test_force_flush_sends_spans_still_queued_in_a_live_tenant_provider(otlp_http_sink, monkeypatch):
+    monkeypatch.setenv("OTEL_BSP_SCHEDULE_DELAY", "3600000")
+    cache = _cache("arize", [ExporterSpec(kind="otlp_http", owner="arize", endpoint=otlp_http_sink.url)])
+    route = cache.route_for(NoOpTracer(), {"arize_space_id": "S", "arize_api_key": "K"})
+    route.tracer.start_span("queued").end()
+    cache.release(route.provider)
+
+    assert otlp_http_sink.received.empty()
+    assert cache.force_flush(5_000)
+    assert otlp_http_sink.received.get_nowait() == "/v1/traces"
+
+
+def test_force_flush_sends_spans_still_queued_in_a_retired_tenant_provider(otlp_http_sink, monkeypatch):
+    from litellm.integrations.otel.plumbing import routing as routing_mod
+
+    monkeypatch.setenv("OTEL_BSP_SCHEDULE_DELAY", "3600000")
+    monkeypatch.setattr(routing_mod, "_MAX_CACHED_PROVIDERS", 1)
+    cache = _cache("arize", [ExporterSpec(kind="otlp_http", owner="arize", endpoint=otlp_http_sink.url)])
+    held = cache.route_for(NoOpTracer(), {"arize_space_id": "held", "arize_api_key": "K"})
+    held.tracer.start_span("queued").end()
+    cache.release(cache.route_for(NoOpTracer(), {"arize_space_id": "newer", "arize_api_key": "K"}).provider)
+
+    assert otlp_http_sink.received.empty()
+    assert cache.force_flush(5_000)
+    assert otlp_http_sink.received.get_nowait() == "/v1/traces"
+    cache.release(held.provider)

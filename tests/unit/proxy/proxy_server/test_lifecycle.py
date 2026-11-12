@@ -31,10 +31,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from pydantic import BaseModel
 from typing_extensions import TypedDict
 
 import litellm.proxy.proxy_server as ps
+from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
+from litellm.integrations.otel.logger import OpenTelemetryV2
+from litellm.integrations.otel.model.config import OpenTelemetryV2Config
 from litellm.proxy.management_helpers.audit_logs import track_audit_task
 from litellm.proxy.proxy_server import (
     ProxyStartupEvent,
@@ -201,6 +207,115 @@ async def test_proxy_shutdown_flushes_langfuse_off_the_event_loop_and_logs_a_tim
     assert flush_thread is not threading.main_thread()
     assert timeout_millis == LANGFUSE_SHUTDOWN_FLUSH_TIMEOUT_MILLIS
     assert any("Langfuse shutdown flush incomplete" in record.getMessage() for record in caplog.records)
+
+
+_CALLBACK_LISTS: Final = (
+    "callbacks",
+    "success_callback",
+    "failure_callback",
+    "_async_success_callback",
+    "_async_failure_callback",
+)
+
+
+def _isolate_shutdown(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+    from litellm.litellm_core_utils import litellm_logging
+
+    monkeypatch.setattr(ps, "prisma_client", None, raising=False)
+    monkeypatch.setattr(ps, "jwt_handler", MagicMock(close=AsyncMock()), raising=False)
+    monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
+    monkeypatch.setattr(ps, "open_telemetry_logger", None, raising=False)
+    monkeypatch.setattr(litellm, "cache", None, raising=False)
+    monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [])
+    for name in _CALLBACK_LISTS:
+        monkeypatch.setattr(litellm, name, [])
+
+
+def _batched_provider(exporter: InMemorySpanExporter) -> TracerProvider:
+    provider: Final = TracerProvider()
+    provider.add_span_processor(BatchSpanProcessor(exporter, schedule_delay_millis=3_600_000))
+    return provider
+
+
+def _legacy_otel_logger(provider: TracerProvider) -> OpenTelemetry:
+    return OpenTelemetry(config=OpenTelemetryConfig(exporter="console"), tracer_provider=provider)
+
+
+def _v2_otel_logger(provider: TracerProvider) -> OpenTelemetryV2:
+    return OpenTelemetryV2(config=OpenTelemetryV2Config(exporter="in_memory"), tracer_provider=provider)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("make_logger", [_legacy_otel_logger, _v2_otel_logger], ids=["legacy", "v2"])
+@pytest.mark.parametrize("registered_in", ["callbacks", "in_memory_loggers"])
+async def test_proxy_shutdown_exports_spans_still_waiting_in_an_opentelemetry_batch(
+    monkeypatch, make_logger, registered_in
+):
+    import litellm
+    from litellm.litellm_core_utils import litellm_logging
+
+    _isolate_shutdown(monkeypatch)
+    exporter: Final = InMemorySpanExporter()
+    logger: Final = make_logger(_batched_provider(exporter))
+    for name in _CALLBACK_LISTS:
+        monkeypatch.setattr(litellm, name, [])
+    if registered_in == "callbacks":
+        monkeypatch.setattr(litellm, "callbacks", [logger])
+    else:
+        monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [logger])
+    logger.tracer.start_span("ended-before-shutdown").end()
+
+    await proxy_shutdown_event()
+
+    assert [span.name for span in exporter.get_finished_spans()] == ["ended-before-shutdown"]
+
+
+@pytest.mark.asyncio
+async def test_proxy_shutdown_keeps_flushing_other_loggers_when_one_raises(monkeypatch):
+    import litellm
+
+    class _BrokenOwner:
+        def flush_tracer_providers(self, timeout_millis: int) -> bool:
+            raise RuntimeError("exporter gone")
+
+    _isolate_shutdown(monkeypatch)
+    exporter: Final = InMemorySpanExporter()
+    logger: Final = _legacy_otel_logger(_batched_provider(exporter))
+    monkeypatch.setattr(litellm, "callbacks", [_BrokenOwner(), logger])
+    logger.tracer.start_span("ended-before-shutdown").end()
+
+    await proxy_shutdown_event()
+
+    assert [span.name for span in exporter.get_finished_spans()] == ["ended-before-shutdown"]
+
+
+@pytest.mark.asyncio
+async def test_opentelemetry_shutdown_flush_gives_up_at_its_deadline_and_warns(monkeypatch, caplog):
+    import threading
+    import time
+
+    import litellm
+
+    release: Final = threading.Event()
+
+    class _StuckProcessor(SpanProcessor):
+        def force_flush(self, timeout_millis: int = 30_000) -> bool:
+            return release.wait(30)
+
+    _isolate_shutdown(monkeypatch)
+    provider: Final = TracerProvider()
+    provider.add_span_processor(_StuckProcessor())
+    monkeypatch.setattr(litellm, "callbacks", [_legacy_otel_logger(provider)])
+    started: Final = time.monotonic()
+
+    with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
+        await ps._flush_opentelemetry_on_shutdown(timeout_millis=200)
+    elapsed: Final = time.monotonic() - started
+    release.set()
+
+    assert elapsed < 5
+    assert any("OpenTelemetry shutdown flush did not finish" in record.getMessage() for record in caplog.records)
 
 
 @pytest.mark.asyncio

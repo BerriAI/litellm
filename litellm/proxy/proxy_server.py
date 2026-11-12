@@ -55,6 +55,7 @@ from typing import (
     get_args,
     get_origin,
     get_type_hints,
+    runtime_checkable,
 )
 
 import anyio
@@ -92,6 +93,7 @@ from litellm.constants import (
     LITELLM_UI_ALLOW_HEADERS,
     LITELLM_UI_SESSION_DURATION,
     OPENAI_LIVE_SESSION_START_TIMEOUT_SECONDS,
+    OTEL_SHUTDOWN_FLUSH_TIMEOUT_MILLIS,
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
     SPEND_LOG_QUEUE_MAX_BACKOFF_SECONDS,
     VLLM_CHOICE_FIELDS,
@@ -1441,6 +1443,48 @@ async def _flush_spend_around_logging_drain_on_shutdown(
     await flush_spend()
 
 
+@runtime_checkable
+class _TracerProviderOwner(Protocol):
+    def flush_tracer_providers(self, timeout_millis: int) -> bool: ...
+
+
+def _tracer_provider_owners() -> tuple[_TracerProviderOwner, ...]:
+    from litellm.litellm_core_utils.litellm_logging import in_memory_loggers
+
+    candidates: Final = (*litellm.logging_callback_manager.get_all_callbacks(), *in_memory_loggers())
+    owners: Final = tuple(candidate for candidate in candidates if isinstance(candidate, _TracerProviderOwner))
+    return tuple({id(owner): owner for owner in owners}.values())
+
+
+def _flushed_tracer_providers(owner: _TracerProviderOwner, timeout_millis: int) -> bool:
+    try:
+        return owner.flush_tracer_providers(timeout_millis)
+    except Exception as e:  # noqa: BLE001  # one failed flush must not skip the other loggers at shutdown
+        verbose_proxy_logger.exception("Error flushing OpenTelemetry spans on shutdown: %s", e)
+        return False
+
+
+def _flush_tracer_provider_owners(owners: tuple[_TracerProviderOwner, ...], timeout_millis: int) -> bool:
+    return all(tuple(_flushed_tracer_providers(owner, timeout_millis) for owner in owners))
+
+
+async def _flush_opentelemetry_on_shutdown(timeout_millis: int = OTEL_SHUTDOWN_FLUSH_TIMEOUT_MILLIS) -> None:
+    owners: Final = _tracer_provider_owners()
+    if not owners:
+        return
+    try:
+        flushed: Final = await asyncio.wait_for(
+            asyncio.to_thread(_flush_tracer_provider_owners, owners, timeout_millis), timeout=timeout_millis / 1000
+        )
+    except asyncio.TimeoutError:
+        verbose_proxy_logger.warning(
+            "OpenTelemetry shutdown flush did not finish within %dms; spans still queued may be lost", timeout_millis
+        )
+        return
+    if not flushed:
+        verbose_proxy_logger.warning("OpenTelemetry shutdown flush incomplete; spans still queued may be lost")
+
+
 async def _drain_audit_tasks_on_shutdown() -> None:
     try:
         from litellm.proxy.management_helpers.audit_logs import drain_audit_tasks
@@ -1494,6 +1538,8 @@ async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = N
                 )
         except Exception as e:  # noqa: BLE001  # shutdown must continue even if the flush fails
             verbose_proxy_logger.exception("Error flushing Langfuse export channels on shutdown: %s", e)
+
+    await _flush_opentelemetry_on_shutdown()
 
     ## RESET CUSTOM VARIABLES ##
     cleanup_router_config_variables()

@@ -25,6 +25,12 @@ class TlsSink:
     received: "queue.Queue[str]"
 
 
+@dataclass(frozen=True, slots=True)
+class OtlpHttpSink:
+    url: str
+    received: "queue.Queue[str]"
+
+
 class _RecordingOtelHandler(http.server.BaseHTTPRequestHandler):
     def __init__(self, *args: object, received: "queue.Queue[str]", **kwargs: object) -> None:
         self._received: Final = received
@@ -115,6 +121,20 @@ def restore_process_environment() -> Iterator[None]:
     yield
     os.environ.clear()
     os.environ.update(original)
+
+
+@pytest.fixture
+def otlp_http_sink() -> Iterator[OtlpHttpSink]:
+    received: queue.Queue[str] = queue.Queue()
+    server: Final = http.server.ThreadingHTTPServer(
+        ("127.0.0.1", 0), functools.partial(_RecordingOtelHandler, received=received)
+    )
+    thread: Final = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield OtlpHttpSink(url=f"http://127.0.0.1:{server.server_port}", received=received)
+    server.shutdown()
+    server.server_close()
+    thread.join(timeout=5)
 
 
 @pytest.fixture

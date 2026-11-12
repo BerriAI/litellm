@@ -230,6 +230,10 @@ class OpenTelemetryV2(CustomLogger):
         """The provider this logger emits through, read-only to its callers."""
         return self._tracer_provider
 
+    def flush_tracer_providers(self, timeout_millis: int) -> bool:
+        own: Final = self._tracer_provider.force_flush(timeout_millis)
+        return self._tenant_tracers.force_flush(timeout_millis) and own
+
     def _init_metrics(self, meter_provider: "MeterProvider | None") -> "GenAIMetricRecorder | None":
         """Create the six GenAI histograms when metrics are enabled, else ``None``.
 

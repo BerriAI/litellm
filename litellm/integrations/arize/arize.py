@@ -104,12 +104,14 @@ class ArizeLogger(OpenTelemetry):
 
         if tracer_provider is not None:
             self.tracer = tracer_provider.get_tracer("litellm")
+            self._tracer_provider = tracer_provider
             self.span_kind = SpanKind
             return
 
         provider: Final = TracerProvider(resource=self._get_litellm_resource(self.config))
         provider.add_span_processor(self._get_span_processor())
         self.tracer = provider.get_tracer("litellm")
+        self._tracer_provider = provider
         self.span_kind = SpanKind
 
     def _handle_success(
