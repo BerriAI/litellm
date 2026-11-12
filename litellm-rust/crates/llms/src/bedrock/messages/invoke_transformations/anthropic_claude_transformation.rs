@@ -1,13 +1,17 @@
+use crate::anthropic::messages::transformation::retry_anthropic_messages_after_http_error;
 use litellm_core_utils::decline::Decline;
+use litellm_host::interceptors::RetriedRequest;
 use std::convert::Infallible;
 
 use crate::{
     anthropic::messages::handler::shape_anthropic_messages_request,
-    base_llm::messages::context::MessagesTransformContext,
+    base_llm::messages::context::{MessagesShapeOptions, MessagesTransformContext},
 };
 use futures_util::StreamExt;
 use litellm_auth::AwsParams;
-use litellm_auth::{CredentialPlacement, SecretValue};
+use litellm_auth::CredentialPlacement;
+use litellm_secret_value::SecretValue;
+
 use litellm_auth_aws::{
     AwsCredentialSource, bedrock_model_id_and_region,
     constants::{
@@ -101,12 +105,22 @@ fn invoke_url(
 }
 
 impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
+    fn retry_after_http_error(
+        &self,
+        status: u16,
+        error_text: &str,
+        request_body: &Value,
+        context: &MessagesTransformContext,
+    ) -> Option<RetriedRequest> {
+        retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
+    }
+
     fn shape_request(
         &self,
         request: MessagesRequest,
-        reasoning_auto_summary: bool,
+        options: MessagesShapeOptions,
     ) -> Result<MessagesRequest, Error> {
-        shape_anthropic_messages_request(request, reasoning_auto_summary)
+        shape_anthropic_messages_request(request, options)
     }
 
     fn get_complete_url(

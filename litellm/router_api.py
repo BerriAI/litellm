@@ -32,38 +32,57 @@ as they were.
 # members are still untyped (bare ``dict`` / ``list``) or mutable (the live objects); the overloads
 # repeat them unchanged, and typing the members themselves is the core's job.
 
+import copy
 import hashlib
+import inspect
 import json
+import warnings
 from collections.abc import Iterator, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, TypeAlias, overload
+from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, overload
+
+from litellm.router_config import detached
 
 if TYPE_CHECKING:
+    from functools import _lru_cache_wrapper
     from typing import Any  # noqa: TID251  # only to spell the cores' untyped (Unknown) containers and one Any type
+
+    from opentelemetry.trace import Span
 
     from litellm.caching.caching import DualCache, RedisCache
     from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
+    from litellm.litellm_core_utils.pattern_match_deployments import PatternMatchRouter
+    from litellm.litellm_core_utils.ptu_shares import PTUTeamCeiling
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.messages.dispatch import MessagesResult
+    from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
     from litellm.router import Router
+    from litellm.router_rust.surface.model_list import HostedModelList
+    from litellm.router_rust.surface.registry import UntypedEntry
     from litellm.router_strategy.adaptive_router.adaptive_router import AdaptiveRouter
     from litellm.router_strategy.auto_router.auto_router import AutoRouter
     from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
     from litellm.router_strategy.complexity_router.complexity_router import ComplexityRouter
     from litellm.router_strategy.quality_router.quality_router import QualityRouter
+    from litellm.router_strategy.switchyard_router.switchyard_router import SwitchyardRouter
     from litellm.router_utils.cooldown_cache import CooldownCache
+    from litellm.router_utils.fallback_event_handlers import AttemptedFallbackTargets as _AttemptedFallbackTargets
     from litellm.router_utils.health_state_cache import DeploymentHealthCache
     from litellm.router_utils.kubernetes_pod_discovery import KubernetesPodDiscovery
-    from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
-    from litellm.router_utils.ptu_shares import PTUTeamCeiling
+    from litellm.types.decisions import DecisionsResponse, OpenAIDecisionResponse
+    from litellm.types.llms.openai import ResponsesAPIResponse
     from litellm.types.router import (
         AllowedFailsPolicy,
+        CustomRoutingStrategyBase,
         Deployment,
         DeploymentModelListingInfo,
         DeploymentTypedDict,
         FallbackAccessCheck,
         FallbackBudgetCheck,
+        FallbackRateLimitCheck,
         GuardrailTypedDict,
         ModelGroupInfo,
         PreRoutingHookResponse,
@@ -74,7 +93,7 @@ if TYPE_CHECKING:
         SearchToolTypedDict,
         TaggedPreRoutingStrategy,
     )
-    from litellm.types.utils import BudgetConfig
+    from litellm.types.utils import BudgetConfig, EmbeddingResponse, ModelResponse
     from litellm.types.utils import ModelInfo as ModelMapInfo
 
     # The cores' untyped containers (bare ``list`` / ``dict``, element types Unknown), spelled with Any:
@@ -82,13 +101,28 @@ if TYPE_CHECKING:
     UntypedList: TypeAlias = list[Any]  # pyright: ignore[reportExplicitAny]  # see above
     UntypedDict: TypeAlias = dict[Any, Any]  # pyright: ignore[reportExplicitAny]  # see above
 
+    # Re-exported for litellm.types, which may not import router_utils.
+    AttemptedFallbackTargets: TypeAlias = _AttemptedFallbackTargets
+
+    ModelGroupAliases: TypeAlias = dict[str, str | RouterModelGroupAliasItem]
+    RoutingGroups: TypeAlias = dict[str, RoutingGroup]
+    AccessGroups: TypeAlias = dict[str, list[str]]
+    AutoRouters: TypeAlias = dict[str, list[TaggedPreRoutingStrategy[AutoRouter]]]
+    ComplexityRouters: TypeAlias = dict[str, list[TaggedPreRoutingStrategy[ComplexityRouter]]]
+    QualityRouters: TypeAlias = dict[str, list[TaggedPreRoutingStrategy[QualityRouter]]]
+    AdaptiveRouters: TypeAlias = dict[str, list[TaggedPreRoutingStrategy[AdaptiveRouter]]]
+    SwitchyardRouters: TypeAlias = dict[str, list[TaggedPreRoutingStrategy[SwitchyardRouter]]]
+    RoutingPlugins: TypeAlias = list[RoutingPlugin]
+    ModelNameSet: TypeAlias = set[str]
+
     # What registry().plugins(kind) returns, one member per kind.
     RegistryPlugins: TypeAlias = (
-        dict[str, list[TaggedPreRoutingStrategy[AutoRouter]]]
-        | dict[str, list[TaggedPreRoutingStrategy[ComplexityRouter]]]
-        | dict[str, list[TaggedPreRoutingStrategy[QualityRouter]]]
-        | dict[str, list[TaggedPreRoutingStrategy[AdaptiveRouter]]]
-        | list[RoutingPlugin]
+        AutoRouters
+        | ComplexityRouters
+        | QualityRouters
+        | AdaptiveRouters
+        | SwitchyardRouters
+        | RoutingPlugins
         | RouterBudgetLimiting
         | DualCache
         | None
@@ -127,11 +161,13 @@ ResolveKind: TypeAlias = Literal[
     "team_model",
     "recognized",
     "upstream",
+    "upstream_provider",
     "group_of_id",
     "wildcard_access_group",
     "team_model_alternatives",
     "routing_group_alternatives",
     "search_tool_support",
+    "upstreams",
 ]
 GroupField: TypeAlias = Literal[
     "info",
@@ -139,6 +175,9 @@ GroupField: TypeAlias = Literal[
     "display_name",
     "mode",
     "service_tiers",
+    "pinned_reasoning_efforts",
+    "max_input_tokens",
+    "deployment_model_info",
     "token_limits",
     "listing_info",
 ]
@@ -149,6 +188,7 @@ PluginKind: TypeAlias = Literal[
     "complexity",
     "quality",
     "adaptive",
+    "switchyard",
     "routing",
     "budget_limiter",
     "prompt_caching_pins",
@@ -162,9 +202,9 @@ def deployment_usable_by_team(deployment: "Mapping[str, object] | Deployment", t
     Whether ``team_id`` may use ``deployment``: a team-scoped deployment (``model_info.team_id``
     set) only by that team, any other deployment by everyone. Needs no router instance.
     """
-    from litellm.router import Router
+    from litellm.router_rust.surface.registry import HostRegistry
 
-    return Router._core_deployment_usable_by_team(deployment, team_id)
+    return HostRegistry._core_deployment_usable_by_team(deployment, team_id)
 
 
 def deployment_id(model_group: str, litellm_params: Mapping[str, object]) -> str:
@@ -184,10 +224,358 @@ def deployment_id(model_group: str, litellm_params: Mapping[str, object]) -> str
     return hashlib.sha256("".join(parts).encode()).hexdigest()
 
 
-def _json_default_stable_id(obj: object) -> str:
-    from litellm.router import Router
+# The arguments ``Router.__init__`` accepts, in its signature's order. Every core reads this list
+# (the Python core's ``get_valid_args`` reads its constructor's signature, and the core suite checks
+# that the two agree).
+ROUTER_INIT_ARGS: Final[tuple[str, ...]] = (
+    "model_list",
+    "assistants_config",
+    "search_tools",
+    "guardrail_list",
+    "redis_url",
+    "redis_host",
+    "redis_port",
+    "redis_password",
+    "redis_db",
+    "cache_responses",
+    "cache_kwargs",
+    "caching_groups",
+    "client_ttl",
+    "polling_interval",
+    "default_priority",
+    "num_retries",
+    "max_fallbacks",
+    "timeout",
+    "stream_timeout",
+    "default_litellm_params",
+    "default_max_parallel_requests",
+    "set_verbose",
+    "debug_level",
+    "default_fallbacks",
+    "fallbacks",
+    "context_window_fallbacks",
+    "content_policy_fallbacks",
+    "model_group_alias",
+    "enable_pre_call_checks",
+    "enable_tag_filtering",
+    "tag_filtering_match_any",
+    "tag_routing_prefix",
+    "plugins",
+    "retry_after",
+    "retry_policy",
+    "model_group_retry_policy",
+    "allowed_fails",
+    "allowed_fails_policy",
+    "cooldown_time",
+    "disable_cooldowns",
+    "fallback_on_unsupported_params",
+    "routing_strategy",
+    "optional_pre_call_checks",
+    "routing_strategy_args",
+    "routing_groups",
+    "provider_budget_config",
+    "alerting_config",
+    "router_general_settings",
+    "deployment_affinity_ttl_seconds",
+    "model_group_affinity_config",
+    "ignore_invalid_deployments",
+    "enable_health_check_routing",
+    "health_check_staleness_threshold",
+    "health_check_ignore_transient_errors",
+    "background_health_check_model_groups",
+    "enable_weighted_failover",
+    "enable_mid_stream_fallback_continuation",
+    "fallback_access_check",
+    "fallback_budget_check",
+    "fallback_rate_limit_check",
+    "auto_router_capability_limit",
+    "session_affinity_repin_on_failover",
+)
 
-    return Router._json_default_stable_id(obj)
+
+def router_init_args() -> tuple[str, ...]:
+    """The arguments ``Router.__init__`` accepts (was ``Router.get_valid_args``). Needs no router instance."""
+    return ROUTER_INIT_ARGS
+
+
+def mark_advisor_orchestration_failure(exception: BaseException) -> None:
+    """Tag an advisor orchestration failure, so the router does not cool down the deployment it picked."""
+    from litellm.router_utils.cooldown_handlers import mark_advisor_orchestration_failure as mark
+
+    mark(exception)
+
+
+def fallback_chain(
+    fallbacks: Sequence[Mapping[str, list[str]]],  # mutable-ok: the fallbacks config shape
+    model_group: str,
+) -> tuple[list[str] | None, int | None]:  # mutable-ok: get_fallback_model_group's type, unchanged
+    """
+    The fallbacks configured for a model group, and the index of the generic ``*`` entry (was
+    ``get_fallback_model_group``). Needs no router instance.
+    """
+    from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
+
+    return get_fallback_model_group(fallbacks=fallbacks, model_group=model_group)
+
+
+def request_fallback_chain(
+    fallbacks: Sequence[Mapping[str, list[str]]],  # mutable-ok: the fallbacks config shape
+    request_kwargs: Mapping[str, object],
+    model_group: str | None,
+) -> tuple[list[str] | None, int | None]:  # mutable-ok: get_fallback_model_group's type, unchanged
+    """
+    ``fallback_chain`` for a request: the group a pre-routing hook picked first, then the routed,
+    requested and original groups (was ``get_fallback_model_group_for_lookup_groups``).
+    """
+    from litellm.router_utils.fallback_event_handlers import (
+        fallback_lookup_groups,
+        get_fallback_model_group_for_lookup_groups,
+    )
+
+    return get_fallback_model_group_for_lookup_groups(
+        fallbacks=fallbacks, lookup_groups=fallback_lookup_groups(kwargs=request_kwargs, model_group=model_group)
+    )
+
+
+def fallbacks_disabled(request_kwargs: Mapping[str, object]) -> bool:
+    """Whether the request opted out of fallbacks (was ``fallbacks_disabled_for_request``)."""
+    from litellm.router_utils.fallback_event_handlers import fallbacks_disabled_for_request
+
+    return fallbacks_disabled_for_request(kwargs=request_kwargs)
+
+
+def references_provider_scoped_resource(request_kwargs: Mapping[str, object]) -> bool:
+    """Whether the request names a file, batch or fine-tuning job that only its own provider knows."""
+    from litellm.router_utils.fallback_event_handlers import PROVIDER_SCOPED_RESOURCE_KEYS
+
+    return any(request_kwargs.get(key) for key in PROVIDER_SCOPED_RESOURCE_KEYS)
+
+
+def deployment_metadata(request_kwargs: Mapping[str, object]) -> Mapping[str, object] | None:
+    """The metadata bucket the router stamped the picked deployment into (was ``find_deployment_metadata``)."""
+    from litellm.router_utils.router_callbacks.track_deployment_metrics import find_deployment_metadata
+
+    return find_deployment_metadata(request_kwargs)
+
+
+def _json_default_stable_id(obj: object) -> str:
+    from litellm.router_rust.steps.prerouting import _json_default_stable_id as stable_id
+
+    return stable_id(obj)
+
+
+class _RegistryHost(Protocol):
+    """The host registry members ``RouterRegistry`` reads, typed as the view hands them on."""
+
+    @property
+    def _registry_version(self) -> int: ...
+
+    @property
+    def _core_model_list(self) -> "HostedModelList": ...
+
+    @property
+    def _core_model_group_alias(self) -> "ModelGroupAliases": ...
+
+    @property
+    def _core_routing_groups(self) -> "RoutingGroups": ...
+
+    @property
+    def _core_model_names(self) -> AbstractSet[str]: ...
+
+    @property
+    def _core_deployment_names(self) -> Sequence[str]: ...
+
+    @property
+    def _core_team_public_model_names(self) -> frozenset[str]: ...
+
+    @property
+    def _core_model_name_to_deployment_indices(self) -> Mapping[str, Sequence[int]]: ...
+
+    @property
+    def _core_team_model_to_deployment_indices(self) -> Mapping[tuple[str, str], Sequence[int]]: ...
+
+    @property
+    def _core_pattern_router(self) -> "PatternMatchRouter": ...
+
+    @property
+    def _core_team_pattern_routers(self) -> "Mapping[str, PatternMatchRouter]": ...
+
+    @property
+    def _core_cached_deployment_model_info(self) -> "_lru_cache_wrapper[ModelMapInfo | None]": ...
+
+    @property
+    def _core_auto_routers(self) -> "AutoRouters": ...
+
+    @property
+    def _core_complexity_routers(self) -> "ComplexityRouters": ...
+
+    @property
+    def _core_quality_routers(self) -> "QualityRouters": ...
+
+    @property
+    def _core_adaptive_routers(self) -> "AdaptiveRouters": ...
+
+    @property
+    def _core_switchyard_routers(self) -> "SwitchyardRouters": ...
+
+    @property
+    def _core_routing_plugins(self) -> "RoutingPlugins": ...
+
+    @property
+    def _core_prompt_caching_pin_cache(self) -> "DualCache": ...
+
+    def _core_get_deployment(self, model_id: str) -> "Deployment | None": ...
+
+    def _core_has_model_id(self, candidate_id: str) -> bool: ...
+
+    def _core_get_model_info(self, id: str) -> "UntypedEntry | None": ...
+
+    def _core_get_deployment_model_info(self, model_id: str, model_name: str) -> "ModelMapInfo | None": ...
+
+    def _core_get_router_model_info(
+        self,
+        deployment: "Mapping[str, object] | Deployment | None",
+        received_model_name: str,
+        id: str | None = None,
+    ) -> "ModelMapInfo": ...
+
+    def _core_get_discovered_model_info(self, model_id: str | None) -> Mapping[str, int]: ...
+
+    def _core_get_model_list(
+        self, model_name: str | None = None, team_id: str | None = None
+    ) -> Sequence[Mapping[str, object]] | None: ...
+
+    def _core_config_deployments(self) -> Iterator[Mapping[str, object]]: ...
+
+    def _core_get_model_list_from_model_alias(
+        self, model_name: str | None = None
+    ) -> Sequence[Mapping[str, object]]: ...
+
+    def _core_get_model_list_from_routing_groups(
+        self, model_name: str | None = None
+    ) -> Sequence[Mapping[str, object]]: ...
+
+    def _core_get_all_deployments(
+        self, model_name: str, model_alias: str | None = None, team_id: str | None = None
+    ) -> Sequence[Mapping[str, object]]: ...
+
+    def _core_deployments_named(self, model_name: str) -> tuple[Mapping[str, object], ...] | None: ...
+
+    def _core_get_model_list_of_routed_group(
+        self, model_group: str, team_id: str | None = None
+    ) -> Sequence[Mapping[str, object]]: ...
+
+    def _core_wildcard_route_deployments(self, model: str, team_id: str | None) -> Sequence[Mapping[str, object]]: ...
+
+    def _core_get_routable_deployments(
+        self, model: str, request_kwargs: Mapping[str, object], call_type: str | None = None
+    ) -> tuple[Mapping[str, object], ...]: ...
+
+    def _core_get_deployment_by_model_group_name(self, model_group_name: str) -> "Deployment | None": ...
+
+    def _core_deployments_for_request(
+        self, model: str, request_kwargs: Mapping[str, object]
+    ) -> Sequence[Mapping[str, object]]: ...
+
+    def _core_should_include_deployment(
+        self, model_name: str, model: Mapping[str, object], team_id: str | None = None
+    ) -> bool: ...
+
+    def _core_get_model_names(self, team_id: str | None = None) -> Sequence[str]: ...
+
+    def _core_get_model_ids(
+        self, model_name: str | None = None, exclude_team_models: bool = False
+    ) -> Sequence[str]: ...
+
+    def team_public_model_names_of(self, team_id: object) -> frozenset[str]: ...
+
+    def _core_resolved_litellm_models(
+        self, model_name: str, team_id: str | None = None, *, use_base_model: bool = False
+    ) -> tuple[str, ...]: ...
+
+    def _core_wildcard_routed_models(self, model: str, team_id: str | None) -> frozenset[str]: ...
+
+    def _core_get_candidate_model_ids_for_route(self, model: str, team_id: str | None = None) -> frozenset[str]: ...
+
+    def _core_resolve_model_name_from_model_id(
+        self, model_id: str | None, custom_llm_provider: str | None = None
+    ) -> str | None: ...
+
+    def _core_map_team_model(
+        self, team_model_name: str | None, team_id: str, custom_llm_provider: str | None = None
+    ) -> str | None: ...
+
+    def _core_routing_group_has_alternatives(self, model_group: str | None) -> bool: ...
+
+    def _core_routable_model_group(self, model_name: str) -> str: ...
+
+    def _core_get_model_from_alias(self, model: str) -> str | None: ...
+
+    def _core_resolve_served_model_name(self, model_name: str, served_model: str) -> str: ...
+
+    def _core_is_recognized_model(self, model: str) -> bool: ...
+
+    def _core_get_model_group(self, id: str) -> Sequence[Mapping[str, object]] | None: ...
+
+    def _core_is_model_access_group_for_wildcard_route(self, model_access_group: str) -> bool: ...
+
+    def _core_team_model_has_alternatives(self, deployment_id: str) -> bool: ...
+
+    def _core_get_routable_upstream_model(self, model_name: str, team_id: str | None = None) -> str | None: ...
+
+    def _core_get_routable_upstream_provider(self, model_name: str, team_id: str | None = None) -> str | None: ...
+
+    def _core_get_search_tool_support(self, model_name: str, team_id: str | None = None) -> tuple[bool | None, ...]: ...
+
+    def _core_get_model_group_info(
+        self, model_group: str, *, include_hidden: bool = False, team_id: str | None = None
+    ) -> "ModelGroupInfo | None": ...
+
+    def _core_cached_model_group_info(self, model_group: str) -> "ModelGroupInfo | None": ...
+
+    def _core_get_configured_display_name(self, model_name: str) -> str | None: ...
+
+    def _core_get_configured_mode(self, model_name: str) -> str | None: ...
+
+    def _core_get_configured_service_tiers(self, model_name: str, team_id: str | None = None) -> tuple[object, ...]: ...
+
+    def _core_get_pinned_reasoning_efforts(self, model_name: str, team_id: str | None = None) -> tuple[object, ...]: ...
+
+    def _core_get_configured_max_input_tokens(
+        self, model_name: str, team_id: str | None = None
+    ) -> tuple[int | None, ...]: ...
+
+    def _core_get_routable_deployment_model_info(
+        self, model_name: str, team_id: str | None = None
+    ) -> "tuple[ModelMapInfo | None, ...]": ...
+
+    def _core_get_configured_token_limits(self, model_name: str) -> tuple[int | None, int | None]: ...
+
+    def _core_get_model_listing_info(self, model_name: str) -> "DeploymentModelListingInfo | None": ...
+
+    def get_routing_group(self, model_name: str) -> "RoutingGroup | None": ...
+
+    def _get_client(
+        self, deployment: Mapping[str, object], kwargs: Mapping[str, object], client_type: str | None = None
+    ) -> object: ...
+
+    def _core_get_model_access_groups(
+        self, model_name: str | None = None, model_access_group: str | None = None, team_id: str | None = None
+    ) -> "AccessGroups": ...
+
+    def _core_get_deployment_credentials(self, model_id: str) -> Mapping[str, object] | None: ...
+
+    def _core_get_deployment_credentials_with_provider(
+        self, model_id: str, team_id: str | None = None
+    ) -> Mapping[str, object] | None: ...
+
+    def _core_get_credential_deployment(self, model_id: str, team_id: str | None = None) -> "Deployment | None": ...
+
+    def _core_get_router_deployment_budget_limiter(self) -> "RouterBudgetLimiting | None": ...
+
+    def _core_decryptable_reasoning(
+        self, model_group: str, request_input: Sequence[object], targets: "Sequence[Deployment]"
+    ) -> tuple[object, ...]: ...
 
 
 class RouterRegistry:
@@ -200,7 +588,7 @@ class RouterRegistry:
 
     __slots__ = ("_router",)
 
-    def __init__(self, router: "Router") -> None:
+    def __init__(self, router: _RegistryHost) -> None:
         self._router = router
 
     @property
@@ -232,6 +620,13 @@ class RouterRegistry:
             return self._router._core_cached_deployment_model_info(id, model_name)
         return self._router._core_get_deployment_model_info(model_id=id, model_name=model_name)
 
+    def deployment_model_info_cache(self) -> "_lru_cache_wrapper[ModelMapInfo | None]":
+        """
+        The lru cache ``deployment_model_info(..., cached=True)`` reads, called as ``(id, model_name)``
+        and cleared with ``cache_clear()`` (was the ``cached_deployment_model_info`` attribute).
+        """
+        return self._router._core_cached_deployment_model_info
+
     def router_model_info(
         self,
         deployment: "dict[str, object] | Deployment | None",  # mutable-ok: the core takes a dict
@@ -239,12 +634,8 @@ class RouterRegistry:
         id: str | None = None,
     ) -> "ModelMapInfo":
         """Model info used for routing decisions (was ``get_router_model_info``)."""
-        r: Final = self._router
-        # The core's overloads split (deployment, id) by which one is None; this forwards either form unchanged.
-        return r._core_get_router_model_info(  # pyright: ignore[reportCallIssue]  # see above
-            deployment=deployment,  # pyright: ignore[reportArgumentType]  # see above
-            received_model_name=received_model_name,
-            id=id,  # pyright: ignore[reportArgumentType]  # see above
+        return self._router._core_get_router_model_info(
+            deployment=deployment, received_model_name=received_model_name, id=id
         )
 
     def discovered_model_info(self, id: str | None) -> Mapping[str, int]:
@@ -448,10 +839,8 @@ class RouterRegistry:
         ``should_include_deployment``), or, without ``model_name``, whether the team may use it at
         all (was ``deployment_usable_by_team``).
         """
-        from litellm.router import Router
-
         if model_name is None:
-            return Router._core_deployment_usable_by_team(deployment, team_id)
+            return deployment_usable_by_team(deployment, team_id)
         return self._router._core_should_include_deployment(model_name=model_name, model=deployment, team_id=team_id)
 
     @overload
@@ -550,7 +939,8 @@ class RouterRegistry:
         - ``group_set``: the set of configured group names (was the ``model_names`` attribute)
         - ``ids``: deployment ids, of one group or all (was ``get_model_ids``)
         - ``deployment_names``: (was the ``deployment_names`` attribute)
-        - ``team_public``: team public model names (was ``team_public_model_names``)
+        - ``team_public``: team public model names (was ``team_public_model_names``), or only the
+          ones ``team_id`` serves its own deployments under (was ``team_public_model_names_of``)
         - ``litellm_models``: upstream model names a group resolves to (was ``resolved_litellm_models``)
         - ``litellm_base_models``: the same, with each deployment's ``base_model`` where it sets one
           (was ``resolved_litellm_models(..., use_base_model=True)``)
@@ -568,7 +958,7 @@ class RouterRegistry:
         if kind == "deployment_names":
             return r._core_deployment_names
         if kind == "team_public":
-            return r._core_team_public_model_names
+            return r._core_team_public_model_names if team_id is None else r.team_public_model_names_of(team_id)
         if model_name is None:
             raise TypeError(f"registry().names(kind={kind!r}) needs a model_name")
         if kind == "litellm_models":
@@ -599,7 +989,7 @@ class RouterRegistry:
         self,
         name: str,
         *,
-        kind: Literal["alias", "upstream"],
+        kind: Literal["alias", "upstream", "upstream_provider"],
         team_id: str | None = None,
         custom_llm_provider: str | None = None,
         served_model: str | None = None,
@@ -615,6 +1005,17 @@ class RouterRegistry:
         custom_llm_provider: str | None = None,
         served_model: str | None = None,
     ) -> tuple[bool | None, ...]: ...
+
+    @overload
+    def resolve(
+        self,
+        name: str,
+        *,
+        kind: Literal["upstreams"],
+        team_id: str | None = None,
+        custom_llm_provider: str | None = None,
+        served_model: str | None = None,
+    ) -> tuple[tuple[str, str | None], ...]: ...
 
     @overload
     def resolve(
@@ -679,6 +1080,8 @@ class RouterRegistry:
         - ``team_model``: a team's public name to its group (was ``map_team_model``; ``team_id`` required)
         - ``recognized``: whether the router knows the name (was ``is_recognized_model``)
         - ``upstream``: the upstream model a name routes to (was ``get_routable_upstream_model``)
+        - ``upstream_provider``: the provider the deployment ``upstream`` reads declares, by its
+          ``custom_llm_provider`` or its model's ``provider/`` prefix
         - ``group_of_id``: the group of a deployment id (was ``get_model_group``)
         - ``wildcard_access_group``: whether an access group grants a wildcard route
           (was ``is_model_access_group_for_wildcard_route``)
@@ -687,6 +1090,8 @@ class RouterRegistry:
         - ``routing_group_alternatives``: (was ``routing_group_has_alternatives``)
         - ``search_tool_support``: per routable deployment, whether it answers Codex's client
           ``tool_search`` (was ``get_search_tool_support``)
+        - ``upstreams``: per routable deployment, its upstream model and the provider it declares, read
+          the way ``upstream`` and ``upstream_provider`` read the first one
         """
         r: Final = self._router
         if kind == "from_id":
@@ -708,10 +1113,8 @@ class RouterRegistry:
             return name if served_model is None else r._core_resolve_served_model_name(name, served_model)
         if kind == "recognized":
             return r._core_is_recognized_model(name)
-        if kind == "upstream":
-            return r._core_get_routable_upstream_model(name, team_id=team_id)
-        if kind == "search_tool_support":
-            return r._core_get_search_tool_support(name, team_id=team_id)
+        if kind in ("upstream", "upstream_provider", "search_tool_support", "upstreams"):
+            return self._resolve_routable(name, kind, team_id)
         if kind == "group_of_id":
             return r._core_get_model_group(id=name)
         if kind == "wildcard_access_group":
@@ -719,6 +1122,21 @@ class RouterRegistry:
         if kind == "team_model_alternatives":
             return r._core_team_model_has_alternatives(name)
         raise ValueError(f"unknown resolve kind {kind!r}")
+
+    def _resolve_routable(
+        self,
+        name: str,
+        kind: Literal["upstream", "upstream_provider", "search_tool_support", "upstreams"],
+        team_id: str | None,
+    ) -> str | tuple[bool | None, ...] | tuple[tuple[str, str | None], ...] | None:
+        r: Final = self._router
+        if kind == "upstream":
+            return r._core_get_routable_upstream_model(name, team_id=team_id)
+        if kind == "upstream_provider":
+            return r._core_get_routable_upstream_provider(name, team_id=team_id)
+        if kind == "upstreams":
+            return r._core_get_routable_upstreams(name, team_id=team_id)
+        return r._core_get_search_tool_support(name, team_id=team_id)
 
     def aliases(
         self,
@@ -766,10 +1184,30 @@ class RouterRegistry:
         self,
         name: str,
         *,
-        field: Literal["service_tiers"],
+        field: Literal["service_tiers", "pinned_reasoning_efforts"],
         include_hidden: bool = False,
         team_id: str | None = None,
     ) -> tuple[object, ...]: ...
+
+    @overload
+    def group(
+        self,
+        name: str,
+        *,
+        field: Literal["max_input_tokens"],
+        include_hidden: bool = False,
+        team_id: str | None = None,
+    ) -> tuple[int | None, ...]: ...
+
+    @overload
+    def group(
+        self,
+        name: str,
+        *,
+        field: Literal["deployment_model_info"],
+        include_hidden: bool = False,
+        team_id: str | None = None,
+    ) -> "tuple[ModelMapInfo | None, ...]": ...
 
     @overload
     def group(
@@ -798,9 +1236,7 @@ class RouterRegistry:
         field: GroupField = "info",
         include_hidden: bool = False,
         team_id: str | None = None,
-    ) -> (
-        "ModelGroupInfo | DeploymentModelListingInfo | tuple[int | None, int | None] | tuple[object, ...] | str | None"
-    ):
+    ) -> "ModelGroupInfo | DeploymentModelListingInfo | tuple[int | None, ...] | tuple[object, ...] | str | None":
         """
         What the router knows about a model group. ``field``:
 
@@ -810,6 +1246,9 @@ class RouterRegistry:
           (were ``get_configured_display_name``, ``get_configured_mode``,
           ``get_configured_token_limits``, ``get_model_listing_info``)
         - ``service_tiers``: (was ``get_configured_service_tiers``)
+        - ``pinned_reasoning_efforts``: the ``reasoning_effort`` each routable deployment pins
+        - ``max_input_tokens``: each routable deployment's own ``model_info.max_input_tokens``
+        - ``deployment_model_info``: each routable deployment's model info, merged with the pricing map
         """
         r: Final = self._router
         if field == "info":
@@ -822,6 +1261,12 @@ class RouterRegistry:
             return r._core_get_configured_mode(name)
         if field == "service_tiers":
             return r._core_get_configured_service_tiers(name, team_id=team_id)
+        if field == "pinned_reasoning_efforts":
+            return r._core_get_pinned_reasoning_efforts(name, team_id=team_id)
+        if field == "max_input_tokens":
+            return r._core_get_configured_max_input_tokens(name, team_id=team_id)
+        if field == "deployment_model_info":
+            return r._core_get_routable_deployment_model_info(name, team_id=team_id)
         if field == "token_limits":
             return r._core_get_configured_token_limits(name)
         if field == "listing_info":
@@ -831,6 +1276,14 @@ class RouterRegistry:
     def routing_groups(self) -> "dict[str, RoutingGroup]":  # mutable-ok: the routing_groups attribute, the live dict
         """Routing groups by name (was the ``routing_groups`` attribute)."""
         return self._router._core_routing_groups
+
+    def routing_group(self, name: str) -> "RoutingGroup | None":
+        """The routing group callable as ``name``, or None (was ``get_routing_group``)."""
+        return self._router.get_routing_group(name)
+
+    def client(self, deployment: Mapping[str, object], *, client_type: str | None = None) -> object:
+        """The SDK client the router cached for a deployment, or None (was ``_get_client``)."""
+        return self._router._get_client(deployment=deployment, kwargs={}, client_type=client_type)
 
     def access_groups(
         self,
@@ -898,6 +1351,11 @@ class RouterRegistry:
     ) -> "dict[str, list[TaggedPreRoutingStrategy[AdaptiveRouter]]]": ...  # mutable-ok: the live dict
 
     @overload
+    def plugins(
+        self, kind: Literal["switchyard"]
+    ) -> "dict[str, list[TaggedPreRoutingStrategy[SwitchyardRouter]]]": ...  # mutable-ok: the live dict
+
+    @overload
     def plugins(self, kind: Literal["routing"]) -> "list[RoutingPlugin]": ...  # mutable-ok: the live list
 
     @overload
@@ -923,6 +1381,8 @@ class RouterRegistry:
             return r._core_quality_routers
         if kind == "adaptive":
             return r._core_adaptive_routers
+        if kind == "switchyard":
+            return r._core_switchyard_routers
         if kind == "routing":
             return r._core_routing_plugins
         if kind == "budget_limiter":
@@ -930,6 +1390,18 @@ class RouterRegistry:
         if kind == "prompt_caching_pins":
             return r._core_prompt_caching_pin_cache
         raise ValueError(f"unknown plugin kind {kind!r}")
+
+    def decryptable_reasoning(
+        self, model_group: str, request_input: Sequence[object], targets: "Sequence[Deployment]"
+    ) -> tuple[object, ...]:
+        """
+        ``request_input`` without the encrypted reasoning that ``targets``, the deployments a
+        ``model_group`` request may go to, cannot decrypt, keeping each item's readable summary.
+        When encrypted content affinity is on for the group, the router sends the request to the
+        reasoning's origin, so reasoning one target can decrypt stays; otherwise every target must
+        decrypt it (was reading ``optional_callbacks`` for ``EncryptedContentAffinityCheck``).
+        """
+        return self._router._core_decryptable_reasoning(model_group, request_input, targets)
 
 
 # Settings a caller may read. Assigning one from outside the router goes through apply(ChangeSet(assign=...)).
@@ -957,20 +1429,36 @@ SETTING_FIELDS: Final[tuple[str, ...]] = (
     "provider_default_deployment_ids",
     "fallback_access_check",
     "fallback_budget_check",
+    "fallback_rate_limit_check",
     "kubernetes_pod_discovery",
     "search_tools",
     "guardrail_list",
     "cache_responses",
 )
 
+# Runtime settings kept as plain router attributes rather than ``settings()`` fields. A write
+# to one (``router.num_retries = 2``) is a changeset too: ``ChangeSet(assign={...})``.
+PLAIN_SETTING_ATTRIBUTES: Final[frozenset[str]] = frozenset({"num_retries", "max_fallbacks", "retry_after", "timeout"})
+# Former attributes whose value lives under another name, assignable through a changeset.
+ASSIGNABLE_ALIASES: Final[Mapping[str, str]] = MappingProxyType({"model_group_alias": "_core_model_group_alias"})
+
 _MISSING: Final = object()
+# The settings fields ``RouterSettings`` copies, so an in-place edit of what a read returns never
+# reaches the router (only ``apply()`` changes settings).
+_COPIED_SETTING_FIELDS: Final = (
+    "fallbacks",
+    "context_window_fallbacks",
+    "content_policy_fallbacks",
+    "default_litellm_params",
+)
 
 
 @dataclass(frozen=True)
 class RouterSettings:
     """
     The router's configuration as one frozen snapshot (``settings()``). Fields hold the router's
-    own objects, not copies: mutating a list in here mutates the router's.
+    own objects, except the fallback lists and ``default_litellm_params``, which are copies: settings
+    change only through ``apply()``, so editing one of those in place changes nothing on any core.
     A field the router never set reads as ``None``.
 
     Each field has the type of the Router attribute it reads (``_core_<field>``), the type the old
@@ -1002,12 +1490,19 @@ class RouterSettings:
     provider_default_deployment_ids: list[str] = None  # pyright: ignore[reportAssignmentType]  # unset only when built directly (see above)  # mutable-ok: the router's live list
     fallback_access_check: "FallbackAccessCheck | None" = None
     fallback_budget_check: "FallbackBudgetCheck | None" = None
+    fallback_rate_limit_check: "FallbackRateLimitCheck | None" = None
     kubernetes_pod_discovery: "KubernetesPodDiscovery" = None  # pyright: ignore[reportAssignmentType]  # unset only when built directly (see above)
     search_tools: "list[SearchToolTypedDict]" = None  # pyright: ignore[reportAssignmentType]  # unset only when built directly (see above)  # mutable-ok: the router's live list
     guardrail_list: "list[GuardrailTypedDict]" = None  # pyright: ignore[reportAssignmentType]  # unset only when built directly (see above)  # mutable-ok: the router's live list
     cache_responses: bool | None = None
     _router: "Router | None" = field(default=None, repr=False, compare=False)
     _unset: frozenset[str] = field(default=frozenset(), repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        for name in _COPIED_SETTING_FIELDS:
+            value: object = getattr(self, name)  # pyright: ignore[reportAny]  # a settings field
+            if isinstance(value, list | dict):
+                object.__setattr__(self, name, copy.deepcopy(value))  # pyright: ignore[reportUnknownArgumentType]  # a settings list or dict
 
     @classmethod
     def of(cls, router: "Router") -> "RouterSettings":
@@ -1040,13 +1535,56 @@ class RouterSettings:
         """The guardrail configured under this name (was ``get_available_guardrail``)."""
         return self._owner("_core_get_available_guardrail")._core_get_available_guardrail(name)
 
+    def timeout_for(self, litellm_params: Mapping[str, object]) -> object:
+        return self._owner("_core_deployment_call_timeout")._core_deployment_call_timeout(litellm_params)
+
+
+class _HealthHost(Protocol):
+    """The router members ``RouterHealth`` reads, typed as the view hands them on."""
+
+    @property
+    def _core_cache(self) -> "DualCache": ...
+
+    @property
+    def _core_cooldown_cache(self) -> "CooldownCache": ...
+
+    @property
+    def _core_health_state_cache(self) -> "DeploymentHealthCache": ...
+
+    @property
+    def _core_deployment_latency_map(self) -> "UntypedDict": ...
+
+    @property
+    def _core_ctx(self) -> "RoutingContext": ...
+
+    @property
+    def _core_cooldown_time(self) -> float | None: ...
+
+    def _core_get_fully_blocked_model_names(self) -> "ModelNameSet": ...
+
+    async def _core_async_get_fully_unhealthy_model_names(self) -> "ModelNameSet": ...
+
+    async def _core_get_model_group_usage(self, model_group: str) -> tuple[int | None, int | None]: ...
+
+    async def _core_get_remaining_model_group_usage(self, model_group: str) -> Mapping[str, int]: ...
+
+    def _core_team_ptu_ceiling(self, team_id: str, model_group: str) -> "PTUTeamCeiling | None": ...
+
+    def _core_split_request_priority(
+        self, model: str, kwargs: Mapping[str, object]
+    ) -> tuple[int | None, Mapping[str, object]]: ...
+
+    def priority_header_update(
+        self, model: str, kwargs: Mapping[str, object], header: str | None
+    ) -> Mapping[str, int | str]: ...
+
 
 class RouterHealth:
     """Cooldowns, blocked deployments, health checks and usage (``health()``)."""
 
     __slots__ = ("_router",)
 
-    def __init__(self, router: "Router") -> None:
+    def __init__(self, router: _HealthHost) -> None:
         self._router = router
 
     @property
@@ -1078,16 +1616,16 @@ class RouterHealth:
     @staticmethod
     def is_blocked(deployment: "Deployment") -> bool:
         """Whether an admin paused this deployment (was ``is_deployment_blocked``)."""
-        from litellm.router import Router
+        from litellm.router_rust.surface.health_routing import is_blocked as deployment_is_blocked
 
-        return Router._core_is_deployment_blocked(deployment)
+        return deployment_is_blocked(deployment)
 
     @staticmethod
     def all_blocked(deployments: "Sequence[DeploymentTypedDict]") -> bool:
         """Whether every deployment in the list is paused (was ``are_all_deployments_blocked``)."""
-        from litellm.router import Router
+        from litellm.router_rust.surface.health_routing import all_blocked as deployments_all_blocked
 
-        return Router._core_are_all_deployments_blocked(deployments)
+        return deployments_all_blocked(deployments)
 
     def fully_blocked_model_names(self) -> set[str]:  # mutable-ok: the core's type, a fresh set
         """Groups whose every deployment is paused (was ``get_fully_blocked_model_names``)."""
@@ -1127,6 +1665,41 @@ class RouterHealth:
     def split_priority(self, model: str, kwargs: Mapping[str, object]) -> tuple[int | None, Mapping[str, object]]:
         """The request priority and the kwargs without it (was ``split_request_priority``)."""
         return self._router._core_split_request_priority(model, kwargs)
+
+    def failures_this_minute(self, deployment_id: str) -> int:
+        """Failures counted against a deployment this minute (was ``get_deployment_failures_for_current_minute``)."""
+        from litellm.router_utils.router_callbacks.track_deployment_metrics import (
+            get_deployment_failures_for_current_minute,
+        )
+
+        return get_deployment_failures_for_current_minute(self._router._core_ctx, deployment_id)
+
+    def record_failure(self, deployment_id: str, exception: Exception, exception_status: str | int) -> bool:
+        """
+        Count a failure against a deployment this minute and cool it down once it is over its allowed
+        fails (was ``increment_deployment_failures_for_current_minute`` then ``set_cooldown_deployments``).
+        Returns whether the deployment was cooled down.
+        """
+        from litellm.router_utils.cooldown_handlers import set_cooldown_deployments
+        from litellm.router_utils.router_callbacks.track_deployment_metrics import (
+            increment_deployment_failures_for_current_minute,
+        )
+
+        ctx: Final = self._router._core_ctx
+        increment_deployment_failures_for_current_minute(ctx, deployment_id)
+        return set_cooldown_deployments(
+            ctx,
+            original_exception=exception,
+            exception_status=exception_status,
+            deployment=deployment_id,
+            time_to_cooldown=self._router._core_cooldown_time,
+        )
+
+    def priority_header_fields(
+        self, model: str, kwargs: Mapping[str, object], header: str | None
+    ) -> Mapping[str, int | str]:
+        """The request fields a priority header sets (was ``priority_header_update``)."""
+        return self._router.priority_header_update(model=model, kwargs=kwargs, header=header)
 
 
 @dataclass
@@ -1171,13 +1744,17 @@ class RoutingObservers:
 def apply_changes(router: "Router", changes: ChangeSet) -> ApplyResult:
     if changes.refresh_model_info:
         raise TypeError("ChangeSet(refresh_model_info=True) needs aapply()")
-    unknown: Final = sorted(set(changes.assign) - set(SETTING_FIELDS))
+    unknown: Final = sorted(set(changes.assign) - {*SETTING_FIELDS, *PLAIN_SETTING_ATTRIBUTES, *ASSIGNABLE_ALIASES})
     if unknown:
         raise ValueError(f"not assignable router settings: {unknown}")
     for name, value in changes.assign.items():
-        setattr(router, "_core_" + name, value)
+        setattr(
+            router,
+            name if name in PLAIN_SETTING_ATTRIBUTES else ASSIGNABLE_ALIASES.get(name, "_core_" + name),
+            detached(value),
+        )
     if changes.settings:
-        router._core_update_settings(**changes.settings)
+        router._core_update_settings(**{name: detached(value) for name, value in changes.settings.items()})
     upserted: Final = [router._core_upsert_deployment(deployment=d) for d in changes.upsert]
     deleted: Final = [router._core_delete_deployment(id=i) for i in changes.delete]
     if changes.redis_cache is not None:
@@ -1202,6 +1779,40 @@ async def aapply_changes(router: "Router", changes: ChangeSet) -> ApplyResult:
     return result
 
 
+def _takes_legacy_llm_router(check: object) -> bool:
+    """Whether a fallback check still declares ``llm_router`` instead of ``ctx`` (the pre-RoutingContext shape)."""
+    try:
+        params: Final = inspect.signature(check).parameters  # pyright: ignore[reportArgumentType]  # any callable
+    except (TypeError, ValueError):
+        return False
+    return "ctx" not in params and "llm_router" in params
+
+
+async def _run_fallback_check(
+    check: "FallbackAccessCheck | FallbackBudgetCheck | FallbackRateLimitCheck",
+    ctx: "RoutingContext",
+    *,
+    model: str,
+    request_kwargs: Mapping[str, object],
+) -> bool:
+    if _takes_legacy_llm_router(check):
+        warnings.warn(
+            f"{type(check).__name__} takes llm_router=; fallback checks now receive ctx: RoutingContext. "
+            "Passing llm_router is deprecated and will be removed",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        legacy: Final = check  # pyright: ignore[reportAny]  # the old protocol shape, checked above
+        return await legacy(model=model, request_kwargs=request_kwargs, llm_router=ctx._router)  # pyright: ignore[reportCallIssue, reportPrivateUsage]  # see above
+    return await check(model=model, request_kwargs=request_kwargs, ctx=ctx)
+
+
+class RegistryReader(Protocol):
+    """Anything that answers ``registry()``: a Router or a RoutingContext. What proxy auth helpers read."""
+
+    def registry(self) -> "RouterRegistry": ...
+
+
 class RoutingContext:
     """
     What a routing plugin (strategy, pre-call check, sub-router) may use of the router. Plugins get
@@ -1216,11 +1827,115 @@ class RoutingContext:
     def registry(self) -> RouterRegistry:
         return self._router.registry()
 
+    def deployment_params(self, request: Mapping[str, object], deployment: "Deployment | None") -> Mapping[str, object]:
+        return self._router._params_sent_to_deployment(request, deployment)
+
+    def default_litellm_params(self) -> Mapping[str, object]:
+        """The router's ``default_litellm_params`` that are set (a None value is no default)."""
+        configured: Final = self.settings().default_litellm_params
+        return {key: value for key, value in (configured or {}).items() if value is not None}
+
     def settings(self) -> RouterSettings:
         return self._router.settings()
 
     def health(self) -> RouterHealth:
         return self._router.health()
+
+    def observers(self) -> RoutingObservers:
+        return self._router.observe()
+
+    def belongs_to(self, router: "Router") -> bool:
+        return self._router is router or router.__dict__.get("_core") is self._router
+
+    @property
+    def explicit_allowed_fails(self) -> int | None:
+        """``allowed_fails`` as the caller passed it, ``None`` when it came from the global default."""
+        return self._router.explicit_allowed_fails
+
+    async def select(
+        self,
+        model: str,
+        request_kwargs: dict[str, object] | None = None,  # mutable-ok: the selection cores take a dict
+        *,
+        kind: SelectKind = "pick",
+        messages: list[dict[str, str]] | None = None,  # mutable-ok: the selection cores take a list
+        input: str | list[object] | None = None,  # mutable-ok: the selection cores take a list
+        specific_deployment: bool | None = False,
+        parent_otel_span: "Span | None" = None,
+        health_check_probe: bool = False,
+    ) -> object:
+        return await self._router.select(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType, reportCallIssue, reportArgumentType]  # the selection cores return untyped deployment dicts
+            model,
+            request_kwargs,
+            kind=kind,  # pyright: ignore[reportArgumentType]  # forwarded as given, the overloads narrow it
+            messages=messages,
+            input=input,
+            specific_deployment=specific_deployment,
+            parent_otel_span=parent_otel_span,
+            health_check_probe=health_check_probe,
+        )
+
+    async def with_fallbacks(
+        self,
+        *args: object,
+        **kwargs: object,  # kwargs-ok: the router's fallback loop takes the request's own keyword payload
+    ) -> object:
+        """Run a call through the router's retry and fallback loop (was ``async_function_with_fallbacks``)."""
+        return await self._router.async_function_with_fallbacks(*args, **kwargs)
+
+    async def acompletion(
+        self,
+        **kwargs: object,  # kwargs-ok: forwarded to the router endpoint as given
+    ) -> "ModelResponse | CustomStreamWrapper":
+        return await self._router.acompletion(**kwargs)  # pyright: ignore[reportCallIssue, reportArgumentType]  # forwarded as given
+
+    async def aresponses(
+        self,
+        **kwargs: object,  # kwargs-ok: forwarded to the router endpoint as given
+    ) -> "ResponsesAPIResponse | BaseResponsesAPIStreamingIterator":
+        return await self._router.aresponses(**kwargs)  # pyright: ignore[reportReturnType, reportArgumentType]  # factory-built endpoint, returns what litellm.aresponses returns
+
+    async def aembedding(
+        self,
+        **kwargs: object,  # kwargs-ok: forwarded to the router endpoint as given
+    ) -> "EmbeddingResponse":
+        return await self._router.aembedding(**kwargs)  # pyright: ignore[reportCallIssue, reportArgumentType]  # forwarded as given
+
+    def embedding(
+        self,
+        **kwargs: object,  # kwargs-ok: forwarded to the router endpoint as given
+    ) -> "EmbeddingResponse":
+        return self._router.embedding(**kwargs)  # pyright: ignore[reportCallIssue, reportArgumentType]  # forwarded as given
+
+    async def adecisions(
+        self,
+        **kwargs: object,  # kwargs-ok: forwarded to the router endpoint as given
+    ) -> "OpenAIDecisionResponse | DecisionsResponse":
+        return await self._router.adecisions(**kwargs)  # pyright: ignore[reportReturnType, reportArgumentType]  # factory-built endpoint, returns what litellm.adecisions returns
+
+    async def aanthropic_messages(
+        self,
+        **kwargs: object,  # kwargs-ok: forwarded to the router endpoint as given
+    ) -> "MessagesResult":
+        return await self._router.aanthropic_messages(**kwargs)  # pyright: ignore[reportReturnType, reportArgumentType]  # factory-built endpoint, returns what litellm.anthropic_messages returns
+
+    def apply(self, changes: ChangeSet) -> ApplyResult:
+        return self._router.apply(changes)
+
+    def register_plugin(self, plugin: "CustomRoutingStrategyBase") -> None:
+        self._router.register_plugin(plugin)
+
+    async def fallback_access_allowed(self, *, model: str, request_kwargs: Mapping[str, object]) -> bool:
+        check: Final = self._router.settings().fallback_access_check
+        return check is None or await _run_fallback_check(check, self, model=model, request_kwargs=request_kwargs)
+
+    async def fallback_budget_allowed(self, *, model: str, request_kwargs: Mapping[str, object]) -> bool:
+        check: Final = self._router.settings().fallback_budget_check
+        return check is None or await _run_fallback_check(check, self, model=model, request_kwargs=request_kwargs)
+
+    async def fallback_rate_limit_allowed(self, *, model: str, request_kwargs: Mapping[str, object]) -> bool:
+        check: Final = self._router.settings().fallback_rate_limit_check
+        return check is None or await _run_fallback_check(check, self, model=model, request_kwargs=request_kwargs)
 
     def pre_call_checks(
         self,
@@ -1260,6 +1975,11 @@ class RoutingContext:
     ) -> None:
         return self._router._update_kwargs_before_fallbacks(model, kwargs, metadata_variable_name)
 
+    def arm_cooldown_prefetch(self) -> None:
+        from litellm.router_utils.routing_read_batch import RoutingPrefetch
+
+        RoutingPrefetch.arm_cooldowns(self)
+
     def arm_read_prefetch(
         self,
         model: str,
@@ -1289,7 +2009,7 @@ class RoutingContext:
         self,
         kwargs: dict[str, object],  # mutable-ok: Router._core_log_retry records the retry into the request kwargs
         e: Exception,
-    ) -> Mapping[str, object]:
+    ) -> dict:  # mutable-ok: the fallback loop edits it; Router._core_log_retry's type
         return self._router._core_log_retry(kwargs=kwargs, e=e)
 
 

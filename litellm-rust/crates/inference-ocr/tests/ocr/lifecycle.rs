@@ -22,6 +22,7 @@ pub(crate) fn event_name(event: &CallEvent) -> &'static str {
         CallEvent::Execution(ExecutionEvent::ResultReady { .. }) => "result_ready",
         CallEvent::Started { .. } => "started",
         CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { .. }) => "response",
+        CallEvent::Execution(ExecutionEvent::ProviderRequestRetried { .. }) => "retried",
         CallEvent::Succeeded { .. } => "success",
         CallEvent::Failed { .. } => "failure",
         CallEvent::Cancelled { .. } => "cancelled",
@@ -239,7 +240,7 @@ impl litellm_host_native::services::HostCallHandler<Ocr> for CallerTokenHost {
             OcrOp::AcquireAzureAdToken(reply) => {
                 self.trace.lock().unwrap().push("token".into());
                 reply.send(litellm_auth::ResolvedCredential::Static(
-                    litellm_auth::SecretValue::new("caller-token"),
+                    litellm_secret_value::SecretValue::new("caller-token"),
                 ));
                 Ok(())
             }

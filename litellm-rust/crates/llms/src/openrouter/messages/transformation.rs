@@ -1,4 +1,9 @@
-use litellm_auth::{CredentialPlacement, SecretValue};
+use crate::anthropic::messages::transformation::retry_anthropic_messages_after_http_error;
+use litellm_auth::CredentialPlacement;
+use litellm_host::interceptors::RetriedRequest;
+use litellm_secret_value::SecretValue;
+use serde_json::Value;
+
 use litellm_core_utils::settings::resolve_non_empty;
 use litellm_http::request::{has_bearer_auth, without_headers};
 use litellm_llms_types::{
@@ -29,6 +34,16 @@ pub const OPENROUTER_MESSAGES_CONFIG: OpenRouterAnthropicMessagesConfig =
     OpenRouterAnthropicMessagesConfig;
 
 impl BaseMessagesConfig for OpenRouterAnthropicMessagesConfig {
+    fn retry_after_http_error(
+        &self,
+        status: u16,
+        error_text: &str,
+        request_body: &Value,
+        context: &MessagesTransformContext,
+    ) -> Option<RetriedRequest> {
+        retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
+    }
+
     fn validate_environment(
         &self,
         headers: Headers,

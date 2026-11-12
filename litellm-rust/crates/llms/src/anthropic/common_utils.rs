@@ -1,5 +1,10 @@
+use std::sync::LazyLock;
+
 use crate::base_llm::messages::context::MessagesModelCapabilities;
-use litellm_auth::{CredentialPlacement, SecretValue};
+use fancy_regex::Regex;
+use litellm_auth::CredentialPlacement;
+use litellm_secret_value::SecretValue;
+
 use litellm_core_utils::settings::resolve_non_empty;
 use litellm_http::request::{
     has_header, header_value, header_values, with_header, without_headers,
@@ -20,7 +25,7 @@ use serde_json::Value;
 
 use crate::{
     anthropic::ANTHROPIC_OAUTH_TOKEN_PREFIX,
-    base_llm::auth::{AuthScheme, Headers},
+    base_llm::auth::{AuthScheme, Headers, ValidatedEnvironment},
 };
 
 pub const ANTHROPIC_API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
@@ -78,10 +83,21 @@ impl<'a> OauthToken<'a> {
     }
 
     pub fn into_auth(self) -> AuthScheme {
-        AuthScheme::Credential {
-            placement: CredentialPlacement::Bearer,
-            secret: SecretValue::new(self.0),
-        }
+        oauth_bearer(SecretValue::new(self.0))
+    }
+}
+
+fn oauth_bearer(secret: SecretValue) -> AuthScheme {
+    AuthScheme::Credential {
+        placement: CredentialPlacement::Bearer,
+        secret,
+    }
+}
+
+pub fn minted_oauth_environment(headers: Headers, token: SecretValue) -> ValidatedEnvironment {
+    ValidatedEnvironment {
+        headers: with_oauth_companions(headers, &[], BrowserAccess::Omitted),
+        auth: oauth_bearer(token),
     }
 }
 
@@ -90,11 +106,23 @@ pub fn get_api_key(
     api_key: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Option<String> {
-    resolve_non_empty(api_key, env_lookup, &[ANTHROPIC_API_KEY_ENV])
+    nonempty_secret(api_key.map(str::to_owned))
+        .or_else(|| nonempty_secret(env_lookup(ANTHROPIC_API_KEY_ENV)))
 }
 
 pub fn get_auth_token(env_lookup: &dyn Fn(&str) -> Option<String>) -> Option<String> {
-    resolve_non_empty(None, env_lookup, &[ANTHROPIC_AUTH_TOKEN_ENV])
+    nonempty_secret(env_lookup(ANTHROPIC_AUTH_TOKEN_ENV))
+}
+
+/// Python's `normalize_nonempty_secret_str`: `str.strip()` also strips the ASCII separators.
+fn nonempty_secret(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| {
+            value
+                .trim_matches(|c: char| c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c))
+                .to_owned()
+        })
+        .filter(|value| !value.is_empty())
 }
 
 /// Python's `AnthropicModelInfo.get_auth_header`, naming the credential instead of building
@@ -152,11 +180,42 @@ pub fn complete_anthropic_url(
 ) -> String {
     let api_base = resolve_anthropic_api_base(api_base, env_lookup);
 
-    let api_base = api_base.trim_end_matches('/');
-    if api_base.ends_with(MESSAGES_PATH) {
+    ensure_api_route(&api_base, MESSAGES_PATH)
+}
+
+/// Python's `urlsplit(url).path`, for the URLs an `api_base` holds.
+fn url_path(url: &str) -> &str {
+    let before_fragment = url.split('#').next().unwrap_or_default();
+    let before_query = before_fragment.split('?').next().unwrap_or_default();
+    match before_query.split_once("://") {
+        Some((_, rest)) => rest.find('/').map_or("", |slash| &rest[slash..]),
+        None => before_query,
+    }
+}
+
+/// Python's `_strip_trailing_slashes_keeping_the_scheme`.
+fn strip_trailing_slashes(api_base: &str) -> String {
+    let stripped = api_base.trim_end_matches('/');
+    if stripped.ends_with(':') && !stripped.contains('/') && !stripped.contains('?') {
         return api_base.to_string();
     }
-    format!("{api_base}{MESSAGES_PATH}")
+    match stripped.split_once('?') {
+        Some((before, query)) if url_path(stripped).ends_with('/') => {
+            format!("{}?{query}", before.trim_end_matches('/'))
+        }
+        _ => stripped.to_string(),
+    }
+}
+
+/// Python's `ensure_api_route`: an `api_base` whose path already ends in the route is kept as
+/// it is, query string included; anything else gets the route appended to the whole string.
+fn ensure_api_route(api_base: &str, route: &str) -> String {
+    let base = strip_trailing_slashes(api_base);
+    let route = route.trim_start_matches('/');
+    if url_path(&base).ends_with(&format!("/{route}")) {
+        return base;
+    }
+    format!("{}/{route}", strip_trailing_slashes(&base))
 }
 
 pub fn existing_betas(headers: &[(String, String)]) -> BetaSet {
@@ -199,14 +258,24 @@ pub fn forwarded_oauth_bearer(headers: &[(String, String)]) -> Option<OauthToken
         .and_then(OauthToken::parse)
 }
 
-fn with_oauth_companions(headers: Headers, dropped: &[&str]) -> Headers {
-    merge_beta_headers(
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BrowserAccess {
+    Granted,
+    Omitted,
+}
+
+fn with_oauth_companions(headers: Headers, dropped: &[&str], browser: BrowserAccess) -> Headers {
+    let headers = merge_beta_headers(
         without_headers(headers, dropped),
         BetaSet::from_iter([AnthropicBeta::Oauth20250420]),
-    )
-    .into_iter()
-    .chain([(DIRECT_BROWSER_ACCESS_HEADER.to_string(), "true".to_string())])
-    .collect()
+    );
+    match browser {
+        BrowserAccess::Granted => headers
+            .into_iter()
+            .chain([(DIRECT_BROWSER_ACCESS_HEADER.to_string(), "true".to_string())])
+            .collect(),
+        BrowserAccess::Omitted => headers,
+    }
 }
 
 pub fn optionally_handle_anthropic_oauth(headers: Headers, api_key: Option<&str>) -> OauthHandling {
@@ -214,13 +283,17 @@ pub fn optionally_handle_anthropic_oauth(headers: Headers, api_key: Option<&str>
         forwarded_oauth_bearer(&headers).map(|token| SecretValue::new(token.as_str()))
     {
         return OauthHandling::Bearer {
-            headers: with_oauth_companions(headers, &[API_KEY_HEADER, AUTHORIZATION]),
+            headers: with_oauth_companions(
+                headers,
+                &[API_KEY_HEADER, AUTHORIZATION],
+                BrowserAccess::Granted,
+            ),
             token,
         };
     }
     if let Some(token) = api_key.and_then(OauthToken::parse) {
         return OauthHandling::Bearer {
-            headers: with_oauth_companions(headers, &[API_KEY_HEADER]),
+            headers: with_oauth_companions(headers, &[API_KEY_HEADER], BrowserAccess::Granted),
             token: SecretValue::new(token.as_str()),
         };
     }
@@ -245,12 +318,19 @@ pub fn has_advisor_tool(tools: Option<&[Recognized<MessagesTool>]>) -> bool {
         .any(|tool| matches!(tool, Recognized::Known(MessagesTool::Advisor { .. })))
 }
 
-pub fn requires_native_compaction_beta(compaction: Option<&Value>, messages: &[Message]) -> bool {
+pub fn requires_native_compaction_beta(
+    compaction: Option<&Value>,
+    messages: &[Recognized<Message>],
+) -> bool {
     compaction.is_some()
-        || messages.iter().flat_map(Message::blocks).any(|block| {
-            block.is_type(ContentBlockType::Compaction)
-                && block.signature.as_deref().is_some_and(|s| !s.is_empty())
-        })
+        || messages
+            .iter()
+            .filter_map(Recognized::known)
+            .flat_map(Message::blocks)
+            .any(|block| {
+                block.is_type(ContentBlockType::Compaction)
+                    && block.signature.as_deref().is_some_and(|s| !s.is_empty())
+            })
 }
 
 fn is_blank(text: Option<&str>) -> bool {
@@ -617,6 +697,113 @@ pub fn flatten_unencrypted_web_search_results(messages: Vec<Message>) -> Vec<Mes
         .collect()
 }
 
+pub fn is_anthropic_invalid_thinking_block_error(error_text: &str) -> bool {
+    let lower = error_text.to_lowercase();
+    if !lower.contains("thinking") {
+        return false;
+    }
+    (lower.contains("signature") && (lower.contains("invalid") || lower.contains("valid string")))
+        || lower.contains("must contain thinking")
+}
+
+pub fn is_anthropic_thinking_binding_mismatch_error(error_text: &str) -> bool {
+    error_text
+        .to_lowercase()
+        .contains("bound to a different conversation")
+}
+
+pub fn anthropic_request_errors_on_thinking_binding_mismatch(request_body: &Value) -> bool {
+    request_body
+        .pointer("/thinking/block_binding/prefix_mismatch_behavior")
+        .and_then(Value::as_str)
+        == Some("error")
+}
+
+fn is_thinking_value_block(block: &Value) -> bool {
+    matches!(
+        block.get("type").and_then(Value::as_str),
+        Some("thinking" | "redacted_thinking")
+    )
+}
+
+fn without_thinking_value_blocks(message: Value) -> Option<Value> {
+    let Value::Object(mut message) = message else {
+        return Some(message);
+    };
+    if let Some(Value::Array(content)) = message.get_mut("content") {
+        content.retain(|block| !is_thinking_value_block(block));
+        if content.is_empty() {
+            return None;
+        }
+    }
+    Some(Value::Object(message))
+}
+
+pub fn strip_thinking_blocks_from_anthropic_messages_request(request_body: Value) -> Value {
+    let Value::Object(mut body) = request_body else {
+        return request_body;
+    };
+    if let Some(Value::Array(messages)) = body.get_mut("messages") {
+        *messages = std::mem::take(messages)
+            .into_iter()
+            .filter_map(without_thinking_value_blocks)
+            .collect();
+    }
+    body.shift_remove("thinking");
+    Value::Object(body)
+}
+
+static CLAUDE_STRICT_TOOLS_REJECTION: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(
+        r"Too many strict tools \(\d+\)",
+        r"|Schemas contains too many (?:optional parameters|parameters with union types)",
+        r"|[Cc]ompiled grammar (?:is too large|size)",
+        r"|tools\.\d+\.custom(?:\.strict)?: ",
+        r"|Grammar compilation timed out",
+    ))
+    .expect("valid regex")
+});
+
+pub fn is_claude_strict_tools_rejection(status: u16, error_text: &str) -> bool {
+    status == 400
+        && CLAUDE_STRICT_TOOLS_REJECTION
+            .is_match(error_text)
+            .unwrap_or(false)
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ToolsWithoutStrict {
+    pub tools: Vec<Value>,
+    pub dropped_count: usize,
+}
+
+pub fn tools_without_strict(tools: Option<&Value>) -> Option<ToolsWithoutStrict> {
+    let tools = tools?.as_array()?;
+    if !tools.iter().all(Value::is_object) {
+        return None;
+    }
+    let dropped_count = tools
+        .iter()
+        .filter(|tool| tool.get("strict") == Some(&Value::Bool(true)))
+        .count();
+    if dropped_count == 0 {
+        return None;
+    }
+    Some(ToolsWithoutStrict {
+        tools: tools
+            .iter()
+            .cloned()
+            .map(|mut tool| {
+                if let Value::Object(fields) = &mut tool {
+                    fields.shift_remove("strict");
+                }
+                tool
+            })
+            .collect(),
+        dropped_count,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use crate::base_llm::messages::context::SupportedEffortTiers;
@@ -635,7 +822,7 @@ mod tests {
         serde_json::from_value(value).unwrap()
     }
 
-    fn history(messages: Value) -> Vec<Message> {
+    fn history(messages: Value) -> Vec<Recognized<Message>> {
         serde_json::from_value(messages).unwrap()
     }
 
@@ -1603,6 +1790,11 @@ mod tests {
         &[("ANTHROPIC_AUTH_TOKEN", "env-token")],
         Some(("Authorization", "env-token")),
     )]
+    #[case::auth_token_stripped_of_whitespace(
+        None,
+        &[("ANTHROPIC_AUTH_TOKEN", "  env-token \t\n\u{1f}")],
+        Some(("Authorization", "env-token")),
+    )]
     #[case::auth_token_when_the_env_key_is_blank(
         None,
         &[("ANTHROPIC_API_KEY", " \t"), ("ANTHROPIC_AUTH_TOKEN", "env-token")],
@@ -1614,7 +1806,19 @@ mod tests {
         &[("ANTHROPIC_API_KEY", OAUTH_BEARER)],
         Some(("Authorization", OAUTH_TOKEN)),
     )]
+    #[case::env_key_stripped_of_whitespace(
+        None,
+        &[("ANTHROPIC_API_KEY", "  sk-env \t\n\u{1f}")],
+        Some(("x-api-key", "sk-env")),
+    )]
+    #[case::api_key_param_stripped_of_separators(Some("\u{1c}sk-param "), &[], Some(("x-api-key", "sk-param")))]
+    #[case::separator_only_env_key_falls_to_the_auth_token(
+        None,
+        &[("ANTHROPIC_API_KEY", "\u{1c}\u{1f}"), ("ANTHROPIC_AUTH_TOKEN", "env-token")],
+        Some(("Authorization", "env-token")),
+    )]
     #[case::no_credentials(None, &[], None)]
+    #[case::separator_only_auth_token(None, &[("ANTHROPIC_AUTH_TOKEN", "\u{1c}\u{1f}")], None)]
     #[case::blank_everything(Some(""), &[("ANTHROPIC_API_KEY", "  "), ("ANTHROPIC_AUTH_TOKEN", " \t")], None)]
     fn auth_header_prefers_the_key_then_the_auth_token(
         #[case] api_key: Option<&str>,
@@ -1880,6 +2084,7 @@ mod tests {
                 supports_reasoning: false,
                 supports_adaptive_thinking: false,
                 thinking_always_on: false,
+                thinking_on_by_default: false,
                 supports_legacy_thinking: false,
                 supports_output_config: false,
                 supports_sampling_params: true,
@@ -1919,5 +2124,187 @@ mod tests {
             serde_json::from_value::<MessagesModelCapabilities>(input).unwrap(),
             expected
         );
+    }
+
+    #[rstest]
+    #[case::bare_host("https://api.example.com", "https://api.example.com/v1/messages")]
+    #[case::trailing_slash("https://api.example.com/", "https://api.example.com/v1/messages")]
+    #[case::route_present(
+        "https://api.example.com/v1/messages/",
+        "https://api.example.com/v1/messages"
+    )]
+    #[case::route_and_query(
+        "https://api.example.com/v1/messages?beta=true",
+        "https://api.example.com/v1/messages?beta=true"
+    )]
+    #[case::query_without_route(
+        "https://api.example.com/?x=1",
+        "https://api.example.com?x=1/v1/messages"
+    )]
+    #[case::scheme_only("https://", "https:///v1/messages")]
+    fn the_messages_url_follows_python_ensure_api_route(#[case] api_base: &str, #[case] url: &str) {
+        assert_eq!(complete_anthropic_url(Some(api_base), &|_| None), url);
+    }
+
+    fn shared_cases(table: &str) -> Vec<(String, String, bool)> {
+        let fixture: Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/anthropic_messages_http_error_retry.json"
+        )))
+        .unwrap();
+        fixture[table]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|case| {
+                (
+                    case["name"].as_str().unwrap().to_string(),
+                    case["error_text"].as_str().unwrap().to_string(),
+                    case["expected"].as_bool().unwrap(),
+                )
+            })
+            .collect()
+    }
+
+    #[rstest]
+    #[case::invalid_thinking_block(
+        "invalid_thinking_block_error",
+        is_anthropic_invalid_thinking_block_error
+    )]
+    #[case::thinking_binding_mismatch(
+        "thinking_binding_mismatch_error",
+        is_anthropic_thinking_binding_mismatch_error
+    )]
+    fn error_texts_match_the_cases_shared_with_python(
+        #[case] table: &str,
+        #[case] recognizes: fn(&str) -> bool,
+    ) {
+        let cases = shared_cases(table);
+        assert!(!cases.is_empty());
+        let mismatched: Vec<&String> = cases
+            .iter()
+            .filter(|(_, error_text, expected)| recognizes(error_text) != *expected)
+            .map(|(name, _, _)| name)
+            .collect();
+        assert_eq!(mismatched, Vec::<&String>::new());
+    }
+
+    #[rstest]
+    #[case::pinned(json!({"thinking": {"block_binding": {"prefix_mismatch_behavior": "error"}}}), true)]
+    #[case::other_behavior(json!({"thinking": {"block_binding": {"prefix_mismatch_behavior": "drop"}}}), false)]
+    #[case::string_binding(json!({"thinking": {"block_binding": "strict"}}), false)]
+    #[case::no_thinking(json!({"messages": []}), false)]
+    #[case::not_an_object(json!(["thinking"]), false)]
+    fn a_pinned_binding_is_the_caller_asking_for_the_error(
+        #[case] body: Value,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            anthropic_request_errors_on_thinking_binding_mismatch(&body),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::mixed_turn(
+        json!({"model": "m", "thinking": {"type": "enabled"}, "messages": [
+            {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "t", "signature": "s"},
+                {"type": "text", "text": "a"},
+                {"type": "redacted_thinking", "data": "d"}
+            ]}
+        ]}),
+        json!({"model": "m", "messages": [{"role": "assistant", "content": [{"type": "text", "text": "a"}]}]})
+    )]
+    #[case::thinking_only_and_empty_turns_are_dropped(
+        json!({"messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": [{"type": "redacted_thinking", "data": "d"}]},
+            {"role": "assistant", "content": []},
+            {"role": "user", "content": "again"}
+        ]}),
+        json!({"messages": [{"role": "user", "content": "hi"}, {"role": "user", "content": "again"}]})
+    )]
+    #[case::non_object_entries_are_kept(
+        json!({"messages": ["raw", {"role": "user", "content": ["raw", {"type": "thinking"}]}]}),
+        json!({"messages": ["raw", {"role": "user", "content": ["raw"]}]})
+    )]
+    #[case::messages_not_a_list(
+        json!({"messages": "hi", "thinking": {"type": "adaptive"}}),
+        json!({"messages": "hi"})
+    )]
+    fn retrying_strips_thinking_from_the_replay_and_the_request(
+        #[case] body: Value,
+        #[case] expected: Value,
+    ) {
+        assert_eq!(
+            strip_thinking_blocks_from_anthropic_messages_request(body),
+            expected
+        );
+    }
+
+    #[test]
+    fn stripping_keeps_the_order_of_the_remaining_fields() {
+        let stripped = strip_thinking_blocks_from_anthropic_messages_request(
+            json!({"model": "m", "thinking": {}, "messages": [], "max_tokens": 1}),
+        );
+        let keys: Vec<&str> = stripped
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(keys, ["model", "messages", "max_tokens"]);
+    }
+
+    fn shared_table(table: &str) -> Vec<Value> {
+        let fixture: Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/anthropic_messages_http_error_retry.json"
+        )))
+        .unwrap();
+        fixture[table].as_array().unwrap().clone()
+    }
+
+    #[test]
+    fn strict_tools_rejections_match_the_cases_shared_with_python() {
+        let cases = shared_table("claude_strict_tools_rejection");
+        assert!(!cases.is_empty());
+        let mismatched: Vec<&str> = cases
+            .iter()
+            .filter(|case| {
+                let status = u16::try_from(case["status"].as_u64().unwrap()).unwrap();
+                is_claude_strict_tools_rejection(status, case["error_text"].as_str().unwrap())
+                    != case["expected"].as_bool().unwrap()
+            })
+            .map(|case| case["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(mismatched, Vec::<&str>::new());
+    }
+
+    #[test]
+    fn tools_without_strict_matches_the_cases_shared_with_python() {
+        let cases = shared_table("tools_without_strict");
+        assert!(!cases.is_empty());
+        let mismatched: Vec<&str> = cases
+            .iter()
+            .filter(|case| {
+                let expected = case["expected"]
+                    .as_object()
+                    .map(|expected| ToolsWithoutStrict {
+                        tools: expected["tools"].as_array().unwrap().clone(),
+                        dropped_count: usize::try_from(expected["dropped_count"].as_u64().unwrap())
+                            .unwrap(),
+                    });
+                tools_without_strict(Some(&case["tools"])) != expected
+            })
+            .map(|case| case["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(mismatched, Vec::<&str>::new());
+    }
+
+    #[test]
+    fn absent_tools_have_no_strict_to_drop() {
+        assert_eq!(tools_without_strict(None), None);
     }
 }

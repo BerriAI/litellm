@@ -1,4 +1,8 @@
-use litellm_auth::{CredentialPlacement, SecretValue};
+use crate::anthropic::messages::transformation::retry_anthropic_messages_after_http_error;
+use litellm_auth::CredentialPlacement;
+use litellm_host::interceptors::RetriedRequest;
+use litellm_secret_value::SecretValue;
+
 use litellm_core_utils::settings::resolve_non_empty;
 use litellm_llms_types::formats::messages::{
     MessagesOptionalParams, MessagesRequest, MessagesResponse,
@@ -31,6 +35,22 @@ pub struct EdenAIAnthropicMessagesConfig;
 pub const EDENAI_MESSAGES_CONFIG: EdenAIAnthropicMessagesConfig = EdenAIAnthropicMessagesConfig;
 
 impl BaseMessagesConfig for EdenAIAnthropicMessagesConfig {
+    fn tool_custom_field(&self, _model: &str) -> crate::base_llm::messages::tools::ToolCustomField {
+        crate::base_llm::messages::tools::ToolCustomField::Rewrite {
+            hoist_defer_loading: false,
+        }
+    }
+
+    fn retry_after_http_error(
+        &self,
+        status: u16,
+        error_text: &str,
+        request_body: &Value,
+        context: &MessagesTransformContext,
+    ) -> Option<RetriedRequest> {
+        retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
+    }
+
     fn validate_environment(
         &self,
         headers: Headers,

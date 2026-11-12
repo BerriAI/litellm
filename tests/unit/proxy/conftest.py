@@ -1,7 +1,9 @@
 # conftest.py
 
+import _hashlib
 import asyncio
 import copy
+import hashlib
 import inspect
 import logging
 import os
@@ -21,6 +23,7 @@ from prisma.errors import ClientNotConnectedError
 import litellm
 import litellm.proxy.proxy_server
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy.common_utils.fips import enforce_fips_mode
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     InitPassThroughEndpointHelpers,
     _registered_pass_through_routes,
@@ -514,3 +517,56 @@ def postgres_span_names() -> Iterator[Callable[[], Awaitable[tuple[str, ...]]]]:
 
     with patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock(service_logging_obj=service_logging)):
         yield rendered
+
+
+@pytest.fixture
+def fips_openssl(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(_hashlib, "get_fips_mode", lambda: 1)
+    monkeypatch.setattr(_hashlib, "scrypt", MagicMock(side_effect=ValueError("[digital envelope routines] unsupported")))
+    monkeypatch.setattr("litellm.proxy.common_utils.encrypt_decrypt_utils._KBKDF_PROPERTIES", None)
+
+
+@pytest.fixture
+def fips_mode(fips_openssl: None, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setattr("litellm.proxy.common_utils.fips.cryptography_enforces_fips", lambda: True)
+    enforce_fips_mode({"fips_mode": True})
+    yield
+    enforce_fips_mode({})
+
+
+@pytest.fixture
+def pbkdf2_on_event_loop(monkeypatch: pytest.MonkeyPatch) -> list[bool]:
+    """One entry per PBKDF2 call: whether it ran on the event loop's thread."""
+    real_pbkdf2: Final = hashlib.pbkdf2_hmac
+    on_event_loop: Final[list[bool]] = []
+
+    def recording_pbkdf2(hash_name: str, password: bytes, salt: bytes, iterations: int, dklen: int) -> bytes:
+        on_event_loop.append(asyncio._get_running_loop() is not None)
+        return real_pbkdf2(hash_name, password, salt, iterations, dklen)
+
+    monkeypatch.setattr(hashlib, "pbkdf2_hmac", recording_pbkdf2)
+    return on_event_loop
+
+
+def _per_token_priced(model_name: str, backend: str, input_cost: float, output_cost: float) -> dict[str, object]:
+    return {
+        "model_name": model_name,
+        "litellm_params": {
+            "model": backend,
+            "api_key": "sk-fixture",
+            "input_cost_per_token": input_cost,
+            "output_cost_per_token": output_cost,
+        },
+    }
+
+
+@pytest.fixture
+def free_and_paid_router() -> "litellm.Router":
+    import litellm
+
+    return litellm.Router(
+        model_list=[
+            _per_token_priced("free-model", "openai/free-backend", 0.0, 0.0),
+            _per_token_priced("paid-model", "openai/paid-backend", 1e-6, 2e-6),
+        ]
+    )
