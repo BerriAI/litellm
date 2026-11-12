@@ -98,7 +98,7 @@ from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.router_usage import RouterUsage, RouterUsageStore
 from litellm.responses.bridge_check import keep_registered_mode
-from litellm.router_api import RouterRegistry, deployment_id
+from litellm.router_api import RouterRegistry, UpsertOutcome, deployment_id
 from litellm.router_rust.invoke.shaping import ROUTER_CLIENTS_TARGET
 from litellm.router_rust.surface.indexes import HostedIndexes
 from litellm.router_rust.surface.model_info import HostModelInfo
@@ -1404,7 +1404,7 @@ class HostRegistry(HostModelInfo):
         self._on_change()
         return build.result
 
-    def _core_upsert_deployment(self, deployment: Deployment) -> Deployment | None:
+    def _core_upsert_deployment(self, deployment: Deployment) -> UpsertOutcome:
         """Add or replace one deployment (``_upsert_deployment``)."""
         model_id: Final = deployment.model_info.id or ""
         on_router: Final = self._core_get_deployment(model_id=model_id)
@@ -1416,7 +1416,7 @@ class HostRegistry(HostModelInfo):
                     and served.litellm_params == on_router.litellm_params
                     and deployment.model_info == on_router.model_info
                 ):
-                    return None
+                    return UpsertOutcome(None)
                 with self._deployment_index_lock:
                     removal_idx: Final = self.model_id_to_deployment_index_map.get(model_id)
                     if removal_idx is not None:
@@ -1441,9 +1441,9 @@ class HostRegistry(HostModelInfo):
                 e,
             )
             self._restore_deployment_after_failed_upsert(on_router, model_id)
-            return None
+            return UpsertOutcome(None, rejected=True)
         else:
-            return deployment
+            return UpsertOutcome(deployment)
 
     def _restore_deployment_after_failed_upsert(self, previous: Deployment | None, model_id: str) -> None:
         if previous is None or self._core_has_model_id(model_id):

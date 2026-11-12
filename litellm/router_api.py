@@ -41,7 +41,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, overload
+from typing import TYPE_CHECKING, Final, Literal, NamedTuple, Protocol, TypeAlias, overload
 
 from litellm.router_config import detached
 
@@ -1458,13 +1458,24 @@ class ChangeSet:
     refresh_client: "AsyncHTTPHandler | None" = None
 
 
+class UpsertOutcome(NamedTuple):
+    deployment: "Deployment | None"
+    rejected: bool = False
+
+
 @dataclass
 class ApplyResult:
-    """What ``apply`` did: the registry version after it, and per upsert/delete the old deployment."""
+    """What ``apply`` did: the registry version after it, per upsert/delete the old deployment, and the
+    ids of the upserts a router with ``ignore_invalid_deployments`` dropped as invalid."""
 
     version: int
     upserted: "Sequence[Deployment | None]" = field(default_factory=list)
     deleted: "Sequence[Deployment | None]" = field(default_factory=list)
+    rejected: Sequence[str] = ()
+
+
+def rejected_upsert_ids(upserts: "Sequence[Deployment]", outcomes: Sequence[UpsertOutcome]) -> tuple[str, ...]:
+    return tuple(deployment.model_info.id or "" for deployment, outcome in zip(upserts, outcomes) if outcome.rejected)
 
 
 @dataclass(frozen=True)
@@ -1488,11 +1499,18 @@ def apply_changes(router: "Router", changes: ChangeSet) -> ApplyResult:
         )
     if changes.settings:
         router._core_update_settings(**{name: detached(value) for name, value in changes.settings.items()})
-    upserted: Final = [router._core_upsert_deployment(deployment=d) for d in changes.upsert]
+    upserts: Final[tuple[UpsertOutcome, ...]] = tuple(
+        router._core_upsert_deployment(deployment=d) for d in changes.upsert
+    )
     deleted: Final = [router._core_delete_deployment(id=i) for i in changes.delete]
     if changes.redis_cache is not None:
         router._core_update_redis_cache(cache=changes.redis_cache)
-    return ApplyResult(version=router._registry_version, upserted=upserted, deleted=deleted)
+    return ApplyResult(
+        version=router._registry_version,
+        upserted=[outcome.deployment for outcome in upserts],
+        deleted=deleted,
+        rejected=rejected_upsert_ids(changes.upsert, upserts),
+    )
 
 
 async def aapply_changes(router: "Router", changes: ChangeSet) -> ApplyResult:

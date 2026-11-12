@@ -87,6 +87,7 @@ from litellm.router_api import (
     RouterSettings,
     RoutingContext,
     RoutingObservers,
+    rejected_upsert_ids,
 )
 from litellm.router_attempt import for_requested_model, request_from_call
 from litellm.router_config import RouterConfig, RouterDynamicConfig, detached
@@ -2045,7 +2046,7 @@ class RustCore(
             raise update.failure
         # Upserts first, then deletes (`apply_changes`), through the host registry, which hands
         # each change to the Rust core.
-        upserted: Final = [self._hosted._core_upsert_deployment(deployment=d) for d in changes.upsert]  # pyright: ignore[reportPrivateUsage]  # see __init__
+        upserts: Final = [self._hosted._core_upsert_deployment(deployment=d) for d in changes.upsert]  # pyright: ignore[reportPrivateUsage]  # see __init__
         deleted: Final = [self._hosted._core_delete_deployment(id=i) for i in changes.delete]  # pyright: ignore[reportPrivateUsage]  # see __init__
         if changes.redis_cache is not None:
             # `_core_update_redis_cache`: the routing state's cache gains the Redis cache.
@@ -2057,8 +2058,9 @@ class RustCore(
             self._prerouter.attach_redis_cache(changes.redis_cache)
         return ApplyResult(
             version=self._hosted._registry_version,  # pyright: ignore[reportPrivateUsage]  # see __init__
-            upserted=upserted,
+            upserted=[outcome.deployment for outcome in upserts],
             deleted=deleted,  # pyright: ignore[reportArgumentType]  # the removed model_list entries, as the core returns them
+            rejected=rejected_upsert_ids(changes.upsert, upserts),
         )
 
     async def aapply(self, changes: ChangeSet) -> ApplyResult:

@@ -38,7 +38,6 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 
 
-
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import (
     LiteLLM_ProjectTable,
@@ -73,14 +72,10 @@ def prisma_client():
     os.environ["DATABASE_URL"] = modified_url
 
     # Assuming PrismaClient is a class that needs to be instantiated
-    prisma_client = PrismaClient(
-        database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj
-    )
+    prisma_client = PrismaClient(database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj)
 
     # Reset litellm.proxy.proxy_server.prisma_client to None
-    litellm.proxy.proxy_server.litellm_proxy_budget_name = (
-        f"litellm-proxy-budget-{time.time()}"
-    )
+    litellm.proxy.proxy_server.litellm_proxy_budget_name = f"litellm-proxy-budget-{time.time()}"
     litellm.proxy.proxy_server.user_custom_key_generate = None
 
     # Enable premium_user for project management tests
@@ -491,7 +486,7 @@ def test_check_team_project_limits_budget_exceeds_team():
         max_budget=150.0,  # exceeds team's 100.0
     )
 
-    with pytest.raises(Exception, match='Project max_budget') as exc_info:
+    with pytest.raises(Exception, match="Project max_budget") as exc_info:
         _check_team_project_limits(team_object=team, data=data)
 
     assert "exceeds team's max_budget" in str(exc_info.value.detail)
@@ -566,7 +561,7 @@ def test_check_team_project_limits_tpm_exceeds_team():
         tpm_limit=20000,  # exceeds team's 10000
     )
 
-    with pytest.raises(Exception, match='Project tpm_limit') as exc_info:
+    with pytest.raises(Exception, match="Project tpm_limit") as exc_info:
         _check_team_project_limits(team_object=team, data=data)
 
     assert "exceeds team's tpm_limit" in str(exc_info.value.detail)
@@ -592,7 +587,7 @@ def test_check_team_project_limits_negative_budget():
         max_budget=-10.0,
     )
 
-    with pytest.raises(Exception, match='max_budget cannot be negative\\. Received') as exc_info:
+    with pytest.raises(Exception, match="max_budget cannot be negative\\. Received") as exc_info:
         _check_team_project_limits(team_object=team, data=data)
 
     assert "cannot be negative" in str(exc_info.value.detail)
@@ -619,7 +614,7 @@ def test_check_team_project_limits_soft_budget_gte_max():
         soft_budget=100.0,  # equal to max, should fail
     )
 
-    with pytest.raises(Exception, match='must be strictly lower than max_budget') as exc_info:
+    with pytest.raises(Exception, match="must be strictly lower than max_budget") as exc_info:
         _check_team_project_limits(team_object=team, data=data)
 
     assert "must be strictly lower" in str(exc_info.value.detail)
@@ -651,10 +646,7 @@ def test_project_model_access_denied_error_type():
     from litellm.proxy._types import ProxyErrorTypes
 
     assert hasattr(ProxyErrorTypes, "project_model_access_denied")
-    assert (
-        ProxyErrorTypes.project_model_access_denied.value
-        == "project_model_access_denied"
-    )
+    assert ProxyErrorTypes.project_model_access_denied.value == "project_model_access_denied"
 
     # Test the classmethod resolves correctly
     result = ProxyErrorTypes.get_model_access_error_type_for_object("project")
@@ -851,9 +843,7 @@ async def test_list_projects_returns_timestamps():
     fake_project.updated_at = now
 
     mock_prisma = MagicMock()
-    mock_prisma.db.litellm_projecttable.find_many = AsyncMock(
-        return_value=[fake_project]
-    )
+    mock_prisma.db.litellm_projecttable.find_many = AsyncMock(return_value=[fake_project])
 
     with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
         response = await list_projects(
@@ -904,9 +894,7 @@ async def test_update_project_invalidates_cached_project_object(monkeypatch):
     mock_prisma.jsonify_object = lambda data: data
     mock_prisma.db.litellm_projecttable.find_unique = AsyncMock(return_value=stale_row)
 
-    seeded = await get_project_object(
-        project_id=project_id, prisma_client=mock_prisma, user_api_key_cache=cache
-    )
+    seeded = await get_project_object(project_id=project_id, prisma_client=mock_prisma, user_api_key_cache=cache)
     assert seeded is not None and seeded.models == []
 
     updated_models = ["gemini-2.5-flash-image", "gemini-3.1-flash-lite-preview"]
@@ -936,9 +924,7 @@ async def test_update_project_invalidates_cached_project_object(monkeypatch):
     )
 
     mock_prisma.db.litellm_projecttable.find_unique = AsyncMock(return_value=updated_row)
-    refreshed = await get_project_object(
-        project_id=project_id, prisma_client=mock_prisma, user_api_key_cache=cache
-    )
+    refreshed = await get_project_object(project_id=project_id, prisma_client=mock_prisma, user_api_key_cache=cache)
     assert refreshed is not None
     assert refreshed.models == updated_models
 
@@ -963,9 +949,7 @@ async def test_delete_project_invalidates_cached_project_object(monkeypatch):
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_projecttable.find_unique = AsyncMock(return_value=row)
 
-    seeded = await get_project_object(
-        project_id=project_id, prisma_client=mock_prisma, user_api_key_cache=cache
-    )
+    seeded = await get_project_object(project_id=project_id, prisma_client=mock_prisma, user_api_key_cache=cache)
     assert seeded is not None
 
     mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
@@ -986,12 +970,7 @@ async def test_delete_project_invalidates_cached_project_object(monkeypatch):
     )
 
     mock_prisma.db.litellm_projecttable.find_unique = AsyncMock(return_value=None)
-    assert (
-        await get_project_object(
-            project_id=project_id, prisma_client=mock_prisma, user_api_key_cache=cache
-        )
-        is None
-    )
+    assert await get_project_object(project_id=project_id, prisma_client=mock_prisma, user_api_key_cache=cache) is None
 
 
 @pytest.mark.asyncio
@@ -1050,9 +1029,7 @@ async def test_project_eviction_publishes_cross_worker_invalidation(monkeypatch)
         "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
         new=AsyncMock(),
     ) as mock_publish:
-        await delete_cached_project_object(
-            project_id=project_id, user_api_key_cache=UserApiKeyCache()
-        )
+        await delete_cached_project_object(project_id=project_id, user_api_key_cache=UserApiKeyCache())
 
     mock_publish.assert_awaited_once_with(cache_key=f"project_id:{project_id}")
 
@@ -1244,9 +1221,7 @@ async def test_new_project_flag_on_missing_rpm_tpm_returns_400(monkeypatch):
 
 
 def _project_update_mocks(monkeypatch, stored_metadata: dict) -> mock.MagicMock:
-    existing_row = mock.MagicMock(
-        team_id=None, budget_id=None, object_permission_id=None, metadata=stored_metadata
-    )
+    existing_row = mock.MagicMock(team_id=None, budget_id=None, object_permission_id=None, metadata=stored_metadata)
     mock_prisma = mock.MagicMock()
     mock_prisma.jsonify_object = lambda data: data
     mock_prisma.db.litellm_projecttable.find_unique = mock.AsyncMock(return_value=existing_row)
@@ -1766,7 +1741,9 @@ def test_quota_policy_team_model_beside_a_shared_one_needs_both_routes_limits():
     assert error is not None and "media-latest (model_tpm_limit)" in error
 
 
-@pytest.mark.parametrize("setting", [True, "true", "false", 1, ["rpm"], {"enabled": True}, {"provider": {"runwayml": []}}])
+@pytest.mark.parametrize(
+    "setting", [True, "true", "false", 1, ["rpm"], {"enabled": True}, {"provider": {"runwayml": []}}]
+)
 def test_quota_setting_truthy_non_policy_value_still_requires_both_limits(setting: object):
     error: Final = _quota_error(["runway-gen4-turbo"], setting=setting)
     assert error is not None
@@ -2249,6 +2226,25 @@ async def test_project_quota_check_refuses_stale_routes_when_the_model_reload_fa
 
     assert (exc_info.value.code, exc_info.value.type) == ("503", "service_unavailable_error")
     assert expected_message in str(exc_info.value.message)
+
+
+@pytest.mark.asyncio
+async def test_project_create_refuses_a_bare_model_name_a_provider_wildcard_that_cannot_load_serves(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _enforced_new_project_mocks(
+        monkeypatch, team_models=["gpt-5.6"], llm_router=None, quota_setting=_CUSTOMER_QUOTA_POLICY
+    )
+    provider_wildcard: Final = litellm.Router(
+        model_list=[{"model_name": "openai/*", "litellm_params": {"model": "openai/*"}}]
+    )
+    _model_reload_returns(monkeypatch, _not_loaded("openai-wildcard-id", "openai/*"), provider_wildcard)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_new_project(NewProjectRequest(team_id="test-team", models=["gpt-5.6"]))
+
+    assert (exc_info.value.code, exc_info.value.type) == ("503", "service_unavailable_error")
+    assert "Could not load every model behind 'gpt-5.6'" in str(exc_info.value.message)
 
 
 @pytest.mark.asyncio

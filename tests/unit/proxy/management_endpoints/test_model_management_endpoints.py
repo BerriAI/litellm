@@ -8250,6 +8250,7 @@ _TEAM_RUNWAY: Final = {"model": "gen4_turbo", "custom_llm_provider": "runwayml"}
 def _media_team_db(public_name: str, project_metadata: Mapping[str, object]) -> MagicMock:
     prisma: Final = MagicMock()
     prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=LiteLLM_TeamTable(team_id="media-team"))
+    prisma.writer_db.litellm_config.find_first = AsyncMock(return_value=None)
     prisma.db.litellm_projecttable.find_many = AsyncMock(
         return_value=[
             LiteLLM_ProjectTable(

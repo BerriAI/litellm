@@ -8,7 +8,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 import litellm
 from litellm.exceptions import BadRequestError
-from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider, is_openai_compatible_endpoint
+from litellm.litellm_core_utils.get_llm_provider_logic import (
+    get_llm_provider,
+    inferred_provider,
+    is_openai_compatible_endpoint,
+)
 from litellm.litellm_core_utils.pattern_match_deployments import PatternMatchRouter, PatternUtils
 from litellm.litellm_core_utils.routing_common_utils import provider_for_generic_call
 from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
@@ -270,11 +274,21 @@ def _wildcards_reach(llm_router: "Router | None", model: str, team_id: str | Non
     return llm_router is None or not _named_deployments(llm_router, _routable_name(llm_router, model), team_id)
 
 
+def _wildcard_spellings(served: frozenset[str]) -> frozenset[str]:
+    return served | frozenset(
+        f"{provider}/{model}" for model in served if (provider := inferred_provider(model)) is not None
+    )
+
+
 def model_routes_through(llm_router: "Router | None", model: str, names: frozenset[str], team_id: str | None) -> bool:
     served: Final = _names_behind(llm_router, model)
     if not names.isdisjoint(served):
         return True
-    return _wildcards_reach(llm_router, model, team_id) and any(_wildcard_serves(name, served) for name in names)
+    wildcards: Final = tuple(name for name in names if "*" in name)
+    if not wildcards or not _wildcards_reach(llm_router, model, team_id):
+        return False
+    spellings: Final = _wildcard_spellings(served)
+    return any(_wildcard_serves(name, spellings) for name in wildcards)
 
 
 def _patterns_tried_before(patterns: Sequence[str], regex: str) -> Sequence[str]:

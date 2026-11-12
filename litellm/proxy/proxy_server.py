@@ -1085,7 +1085,7 @@ from litellm.router import (
     LiteLLM_Params,
     ModelGroupInfo,
 )
-from litellm.router_api import ChangeSet, deployment_id, router_init_args
+from litellm.router_api import ApplyResult, ChangeSet, deployment_id, router_init_args
 from litellm.scheduler import FlowItem, Scheduler
 from litellm.secret_managers.aws_secret_manager import load_aws_kms
 from litellm.secret_managers.google_kms import load_google_kms
@@ -2549,8 +2549,25 @@ def _db_model_team(row: _ProxyModelRow) -> str | None:
     return team_id if isinstance(team_id, str) else None
 
 
+def _unloaded_db_row(row: _ProxyModelRow) -> UnloadedDbModel:
+    return UnloadedDbModel(model_id=row.model_id, names=_db_model_names(row), team_id=_db_model_team(row))
+
+
+def _unloaded_served_deployment(model_id: str, deployment: Deployment) -> UnloadedDbModel:
+    public_name: Final = deployment.model_info.team_public_model_name
+    names: Final = (deployment.model_name,) if public_name is None else (deployment.model_name, public_name)
+    return UnloadedDbModel(model_id=model_id, names=frozenset(names), team_id=deployment.model_info.team_id)
+
+
 def _first_router_reload(rows: Sequence[_ProxyModelRow]) -> ModelRoutesReload:
-    return ModelRoutesReload(routes_current=llm_router is not None or not rows or master_key is None)
+    router: Final = llm_router
+    if router is None:
+        return ModelRoutesReload(routes_current=not rows or master_key is None)
+    held: Final = router.registry()
+    return ModelRoutesReload(
+        routes_current=True,
+        unloaded=frozenset(_unloaded_db_row(row) for row in rows if not held.has_deployment(row.model_id)),
+    )
 
 
 def _is_db_deployment(deployment: Deployment | None) -> bool:
@@ -8062,43 +8079,38 @@ class ProxyConfig:
 
         Return - number of deployments added
         """
-        import base64
-
-        if llm_router is None:
+        router: Final = llm_router
+        if router is None:
             return 0
+        applied: Final = (self._add_db_model(router, m) for m in db_models)
+        return sum(1 for result in applied if result is not None and result.upserted[0] is not None)
 
-        added_models = 0
-        ## ADD MODEL LOGIC
-        for m in db_models:
-            _litellm_params = m.litellm_params
-            if isinstance(_litellm_params, dict):
-                # decrypt values
-                for k, v in _litellm_params.items():
-                    _litellm_params[k] = self._resolve_db_litellm_param(key=k, value=v)
-                _litellm_params = LiteLLM_Params.model_validate(_litellm_params)
+    def _add_db_model(self, router: Router, m: _ProxyModelRow) -> ApplyResult | None:
+        _litellm_params = m.litellm_params
+        if isinstance(_litellm_params, dict):
+            # decrypt values
+            for k, v in _litellm_params.items():
+                _litellm_params[k] = self._resolve_db_litellm_param(key=k, value=v)
+            _litellm_params = LiteLLM_Params.model_validate(_litellm_params)
 
-            else:
-                verbose_proxy_logger.error(
-                    "Invalid model added to proxy db. Invalid litellm params. litellm_params=%s", _litellm_params
-                )
-                continue  # skip to next model
-            _model_info = self.get_model_info_with_id(model=m, db_model=True)  ## 👈 FLAG = True for db_models
+        else:
+            verbose_proxy_logger.error(
+                "Invalid model added to proxy db. Invalid litellm params. litellm_params=%s", _litellm_params
+            )
+            return None
+        _model_info = self.get_model_info_with_id(model=m, db_model=True)  ## 👈 FLAG = True for db_models
 
-            added = llm_router.apply(
-                ChangeSet(
-                    upsert=[
-                        Deployment(
-                            model_name=m.model_name,
-                            litellm_params=_litellm_params,
-                            model_info=_model_info,
-                        )
-                    ]
-                )
-            ).upserted[0]
-
-            if added is not None:
-                added_models += 1
-        return added_models
+        return router.apply(
+            ChangeSet(
+                upsert=[
+                    Deployment(
+                        model_name=m.model_name,
+                        litellm_params=_litellm_params,
+                        model_info=_model_info,
+                    )
+                ]
+            )
+        )
 
     def decrypt_model_list_from_db(self, new_models: list) -> list:
         _model_list: Final[list] = []
@@ -8431,12 +8443,14 @@ class ProxyConfig:
         self,
         llm_router: Router | None,
         prisma_client: PrismaClient | None,
+        *,
+        use_writer: bool = False,
     ) -> None:
         if llm_router is None or prisma_client is None:
             return
-        db_router_settings: Final[_ConfigParamRow | None] = await _config_param_table(prisma_client).find_first(
-            where={"param_name": "router_settings"}
-        )
+        db_router_settings: Final[_ConfigParamRow | None] = await _config_param_table(
+            prisma_client, use_writer=use_writer
+        ).find_first(where={"param_name": "router_settings"})
         db_values: Final = (
             _as_settings_mapping(db_router_settings.param_value)
             if db_router_settings is not None and db_router_settings.param_value is not None
@@ -9113,8 +9127,10 @@ class ProxyConfig:
         if router is None:
             await self._update_llm_router(new_models=rows, proxy_logging_obj=proxy_logging_obj)
             return _first_router_reload(rows)
+        if not await self._reload_db_router_settings(router, prisma_client):
+            return ModelRoutesReload(routes_current=False)
         self._evict_db_models_missing_from(router, frozenset(row.model_id for row in rows))
-        unloaded: Final = frozenset(failure for row in rows if (failure := self._load_db_model(row)) is not None)
+        unloaded: Final = frozenset(itertools.chain.from_iterable(self._load_db_model(router, row) for row in rows))
         return ModelRoutesReload(routes_current=True, unloaded=unloaded)
 
     async def _upsert_db_credentials(self, prisma_client: PrismaClient) -> bool:
@@ -9141,13 +9157,34 @@ class ProxyConfig:
         if missing:
             router.apply(ChangeSet(delete=missing))
 
-    def _load_db_model(self, row: _ProxyModelRow) -> UnloadedDbModel | None:
+    def _load_db_model(self, router: Router, row: _ProxyModelRow) -> tuple[UnloadedDbModel, ...]:
+        served: Final = router.registry().deployment(row.model_id)
+        if self._router_loads(router, row):
+            return ()
+        return (
+            _unloaded_db_row(row),
+            *(() if served is None else (_unloaded_served_deployment(row.model_id, served),)),
+        )
+
+    def _router_loads(self, router: Router, row: _ProxyModelRow) -> bool:
         try:
-            self._add_deployment(db_models=[row])
+            applied: Final = self._add_db_model(router, row)
         except Exception as e:
             verbose_proxy_logger.exception("Could not load model %s from the database: %s", row.model_name, e)
-            return UnloadedDbModel(model_id=row.model_id, names=_db_model_names(row), team_id=_db_model_team(row))
-        return None
+            return False
+        return applied is not None and not applied.rejected
+
+    async def _reload_db_router_settings(self, router: Router, prisma_client: PrismaClient) -> bool:
+        from prisma.errors import PrismaError
+
+        try:
+            await self._add_router_settings_from_db_config(
+                llm_router=router, prisma_client=prisma_client, use_writer=True
+            )
+        except (PrismaError, httpx.HTTPError, asyncio.TimeoutError, ValueError) as e:
+            verbose_proxy_logger.warning("Could not read the router settings from the database: %s", e)
+            return False
+        return True
 
     def start_config_sync_subscriber(
         self,

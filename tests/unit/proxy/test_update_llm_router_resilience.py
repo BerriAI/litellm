@@ -11,6 +11,7 @@ catch-all handler in _update_llm_router.
 import asyncio
 import time
 from collections.abc import Mapping, Sequence
+from types import SimpleNamespace
 from typing import Final
 
 import httpx
@@ -151,12 +152,29 @@ def _router_with(*deployments: tuple[str, str, bool]) -> litellm.Router:
     )
 
 
+_MEDIA_TEAM: Final = {"team_id": "media-team", "team_public_model_name": "clip-studio"}
+
+
+def _proxy_built_router(*model_list: Mapping[str, object]) -> litellm.Router:
+    return litellm.Router(model_list=list(model_list), ignore_invalid_deployments=True)
+
+
+def _pass_through_row(model_id: str, team_info: Mapping[str, str] | None = None) -> LiteLLM_ProxyModelTable:
+    return LiteLLM_ProxyModelTable(
+        model_id=model_id,
+        model_name=model_id,
+        litellm_params={"model": _NEW_ROUTE, "use_in_pass_through": True},
+        model_info={"id": model_id, "db_model": True, **(team_info or {})},
+    )
+
+
 class TestModelRoutesReloadForQuotaChecks:
     async def _reload(
         self,
         monkeypatch: pytest.MonkeyPatch,
         router: litellm.Router | None,
         db_models: Sequence[LiteLLM_ProxyModelTable],
+        read_router_settings: AsyncMock | None = None,
     ) -> ModelRoutesReload:
         monkeypatch.delenv("QA_UNSET_OIDC_TOKEN", raising=False)
         proxy_config: Final = ProxyConfig()
@@ -169,7 +187,78 @@ class TestModelRoutesReloadForQuotaChecks:
             patch("litellm.proxy.proxy_server.llm_model_list", []),
             patch("litellm.proxy.proxy_server.general_settings", {}),
         ):
-            return await _reconcile(proxy_config)
+            return await _reconcile(proxy_config, read_router_settings)
+
+    @pytest.mark.asyncio
+    async def test_a_moved_model_the_router_rejects_is_reported_while_its_old_route_keeps_serving(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        router: Final = _proxy_built_router(
+            {
+                "model_name": "clip-token",
+                "litellm_params": {"model": _OLD_ROUTE},
+                "model_info": {"id": "clip-token", "db_model": True, **_MEDIA_TEAM},
+            }
+        )
+
+        outcome: Final = await self._reload(monkeypatch, router, [_pass_through_row("clip-token", _MEDIA_TEAM)])
+
+        assert outcome == ModelRoutesReload(
+            routes_current=True,
+            unloaded=frozenset(
+                {
+                    UnloadedDbModel(
+                        model_id="clip-token", names=frozenset({"clip-token", "clip-studio"}), team_id="media-team"
+                    )
+                }
+            ),
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_worker_building_its_first_router_reports_the_rows_the_router_dropped(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setattr(ProxyConfig, "get_config", AsyncMock(return_value={}))
+
+        outcome: Final = await self._reload(
+            monkeypatch, None, [_db_row("clip-moved", _NEW_ROUTE), _pass_through_row("clip-token")]
+        )
+
+        assert outcome == ModelRoutesReload(
+            routes_current=True,
+            unloaded=frozenset({UnloadedDbModel(model_id="clip-token", names=frozenset({"clip-token"}), team_id=None)}),
+        )
+
+    @pytest.mark.asyncio
+    async def test_the_reload_routes_names_by_the_model_group_aliases_the_db_writer_holds_before_the_replica(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        router: Final = _router_with(("clip-strict", _NEW_ROUTE, True))
+        stored_settings: Final = SimpleNamespace(
+            param_name="router_settings", param_value={"model_group_alias": {"clip-studio": "clip-strict"}}
+        )
+
+        outcome: Final = await self._reload(
+            monkeypatch, router, [_db_row("clip-strict", _NEW_ROUTE)], AsyncMock(return_value=stored_settings)
+        )
+
+        assert outcome == ModelRoutesReload(routes_current=True)
+        assert router.registry().resolve("clip-studio") == "clip-strict"
+
+    @pytest.mark.asyncio
+    async def test_the_reload_cannot_confirm_routes_while_the_router_settings_cannot_be_read(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        router: Final = _router_with(("clip-strict", _NEW_ROUTE, True))
+
+        outcome: Final = await self._reload(
+            monkeypatch,
+            router,
+            [_db_row("clip-strict", _NEW_ROUTE)],
+            AsyncMock(side_effect=httpx.ConnectError("db unreachable")),
+        )
+
+        assert outcome == ModelRoutesReload(routes_current=False)
 
     @pytest.mark.asyncio
     async def test_a_model_whose_secret_cannot_load_is_reported_while_the_other_models_reload(
@@ -191,13 +280,51 @@ class TestModelRoutesReloadForQuotaChecks:
                 {
                     UnloadedDbModel(
                         model_id="clip-token", names=frozenset({"clip-token", "clip-studio"}), team_id="media-team"
-                    )
+                    ),
+                    UnloadedDbModel(model_id="clip-token", names=frozenset({"clip-token"}), team_id=None),
                 }
             ),
         )
         moved: Final = router.registry().deployment("clip-moved")
         assert moved is not None
         assert moved.litellm_params.model == _NEW_ROUTE
+
+    @pytest.mark.asyncio
+    async def test_a_renamed_model_that_cannot_load_is_also_reported_under_the_name_this_worker_still_serves(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        team_info: Final = {"team_id": "media-team", "team_public_model_name": "clip-studio"}
+        router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "clip-token",
+                    "litellm_params": {"model": _OLD_ROUTE},
+                    "model_info": {"id": "clip-token", "db_model": True, **team_info},
+                }
+            ]
+        )
+        renamed: Final = _db_row(
+            "clip-token",
+            _OLD_ROUTE,
+            api_key="os.environ/oidc/env/QA_UNSET_OIDC_TOKEN",
+            team_info={**team_info, "team_public_model_name": "clip-renamed"},
+        )
+
+        outcome: Final = await self._reload(monkeypatch, router, [renamed])
+
+        assert outcome == ModelRoutesReload(
+            routes_current=True,
+            unloaded=frozenset(
+                {
+                    UnloadedDbModel(
+                        model_id="clip-token", names=frozenset({"clip-token", "clip-renamed"}), team_id="media-team"
+                    ),
+                    UnloadedDbModel(
+                        model_id="clip-token", names=frozenset({"clip-token", "clip-studio"}), team_id="media-team"
+                    ),
+                }
+            ),
+        )
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -557,9 +684,16 @@ def _count_model_reads(
     return read_models_mock
 
 
-async def _reconcile(proxy_config: ProxyConfig) -> ModelRoutesReload:
+def _prisma_client(read_router_settings: AsyncMock | None = None) -> MagicMock:
+    prisma_client: Final = MagicMock()
+    prisma_client.writer_db.litellm_config.find_first = read_router_settings or AsyncMock(return_value=None)
+    prisma_client.db.litellm_config.find_first = AsyncMock(return_value=None)
+    return prisma_client
+
+
+async def _reconcile(proxy_config: ProxyConfig, read_router_settings: AsyncMock | None = None) -> ModelRoutesReload:
     return await proxy_config.reconcile_db_models(
-        prisma_client=MagicMock(), proxy_logging_obj=MagicMock(), requested_at=time.monotonic()
+        prisma_client=_prisma_client(read_router_settings), proxy_logging_obj=MagicMock(), requested_at=time.monotonic()
     )
 
 
@@ -568,7 +702,7 @@ async def test_quota_reload_installs_a_new_db_credential_while_the_config_cannot
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     proxy_config: Final = ProxyConfig()
-    prisma_client: Final = MagicMock()
+    prisma_client: Final = _prisma_client()
     prisma_client.db.litellm_credentialstable.find_many = AsyncMock(
         return_value=[
             {"credential_name": "media-cred", "credential_values": {"api_key": "sk-media"}, "credential_info": {}}
