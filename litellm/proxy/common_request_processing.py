@@ -2365,31 +2365,41 @@ def _per_token_prices(llm_router: Router, model: str) -> tuple[float, float] | N
         return None
 
 
+def _reserved_access_groups(user_api_key_dict: UserAPIKeyAuth) -> frozenset[str] | None:
+    """The model access groups the request's ``budget_reservation`` already holds, None when its entries are
+    unreadable."""
+    reservation: Final = user_api_key_dict.budget_reservation
+    if reservation is None:
+        return frozenset()
+    try:
+        entries: Final = _RESERVATION_ENTRIES.validate_python(reservation.get("entries") or ())
+    except ValidationError:
+        return None
+    return frozenset(
+        str(entry.get("entity_id")) for entry in entries if entry.get("entity_type") == _MODEL_ACCESS_GROUP_ENTITY
+    )
+
+
 def _reservation_covers(
     user_api_key_dict: UserAPIKeyAuth,
     access_groups: Sequence[str],
+    held: frozenset[str] | None,
     requested_model: str,
     fallback_model: str,
     llm_router: Router,
 ) -> bool:
     """Whether the budget auth reserved for ``requested_model`` still fits ``fallback_model``: the fallback costs no
-    more per token than the model the estimate was made for, and every access group reserved against grants the
-    fallback, so settlement never charges a group that did not serve."""
-    reservation: Final = user_api_key_dict.budget_reservation
-    if reservation is None:
+    more per token than the model the estimate was made for, and every access group ``held`` by the reservation
+    grants the fallback, so settlement never charges a group that did not serve."""
+    if user_api_key_dict.budget_reservation is None:
         return True
+    if held is None:
+        return False
     requested: Final = _per_token_prices(llm_router, requested_model)
     fallback: Final = _per_token_prices(llm_router, fallback_model)
     if requested is None or fallback is None or fallback[0] > requested[0] or fallback[1] > requested[1]:
         return False
-    try:
-        entries: Final = _RESERVATION_ENTRIES.validate_python(reservation.get("entries") or ())
-    except ValidationError:
-        return False
-    reserved: Final = frozenset(
-        entry.get("entity_id") for entry in entries if entry.get("entity_type") == _MODEL_ACCESS_GROUP_ENTITY
-    )
-    return reserved <= frozenset(access_groups)
+    return held <= frozenset(access_groups)
 
 
 def _fallback_pricing_admits(requested_model: str, fallback_model: str, llm_router: Router) -> bool:
@@ -2447,12 +2457,13 @@ async def _fallback_grant(
         access_groups: Final = await _fallback_access_groups(
             fallback_model, user_api_key_dict, llm_router, proxy_logging_obj
         )
+        held: Final = _reserved_access_groups(user_api_key_dict)
         await _model_access_group_max_budget_check(
-            matched_model_access_groups=access_groups,
+            matched_model_access_groups=tuple(group for group in access_groups if group not in (held or ())),
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
         )
-        if not _reservation_covers(user_api_key_dict, access_groups, requested_model, fallback_model, llm_router):
+        if not _reservation_covers(user_api_key_dict, access_groups, held, requested_model, fallback_model, llm_router):
             return None
     except Exception as e:  # noqa: BLE001  # fail closed: a budget the walk cannot read must not admit the fallback
         verbose_proxy_logger.warning(

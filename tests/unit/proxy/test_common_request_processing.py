@@ -8571,6 +8571,63 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         assert data["model"] == "claude-3-haiku"
 
     @pytest.mark.asyncio
+    async def test_a_fallback_in_a_group_the_request_already_holds_is_not_refused_by_its_own_hold(self, monkeypatch):
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+        from litellm.proxy._types import UserAPIKeyAuth as ProxyKey
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+        from litellm.types.router import ModelGroupInfo
+
+        processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4"})
+
+        async def mock_pre_call_logic(**kwargs):
+            if processor.data.get("model") == "gpt-4":
+                raise ProxyRateLimitError(detail="TPM limit exceeded", headers={"retry-after": "30"})
+            return processor.data, MagicMock()
+
+        async def every_model_in_the_shared_group(*, model, **kwargs):
+            return ("shared-group",)
+
+        async def the_hold_fills_the_shared_group(*, matched_model_access_groups, **kwargs):
+            if "shared-group" in matched_model_access_groups:
+                raise RuntimeError("shared-group spend plus the request's own hold reached max_budget")
+
+        import litellm.proxy.proxy_server as proxy_server
+
+        monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+        monkeypatch.setattr(
+            "litellm.proxy.auth.auth_checks.collect_matched_model_access_groups", every_model_in_the_shared_group
+        )
+        monkeypatch.setattr(
+            "litellm.proxy.auth.auth_checks._model_access_group_max_budget_check", the_hold_fills_the_shared_group
+        )
+        mock_router = route_entry_points_to_stubs(MagicMock())
+        mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo"]}]
+        mock_router.registry.return_value.group = lambda model_group, **kwargs: ModelGroupInfo(
+            model_group=model_group, providers=["openai"], input_cost_per_token=1e-6, output_cost_per_token=1e-6
+        )
+        held_at_auth = {"entries": [{"entity_type": "Model access group", "entity_id": "shared-group"}]}
+
+        with patch.object(processor, "common_processing_pre_call_logic", side_effect=mock_pre_call_logic):
+            data, _ = await processor._pre_call_with_fallbacks(
+                request=MagicMock(),
+                general_settings={},
+                proxy_logging_obj=MagicMock(),
+                user_api_key_dict=ProxyKey(budget_reservation=held_at_auth),
+                version=None,
+                proxy_config=_proxy_config(),
+                user_model=None,
+                user_temperature=None,
+                user_request_timeout=None,
+                user_max_tokens=None,
+                user_api_base=None,
+                model="gpt-4",
+                route_type="acompletion",
+                llm_router=mock_router,
+            )
+
+        assert data["model"] == "gpt-3.5-turbo"
+
+    @pytest.mark.asyncio
     async def test_a_served_fallback_charges_the_access_groups_that_grant_it(self, monkeypatch):
         from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
         from litellm.proxy._types import UserAPIKeyAuth as ProxyKey
