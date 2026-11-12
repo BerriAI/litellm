@@ -13,6 +13,7 @@ SEARCH_PROVIDERS = [
     "brave",
     "firecrawl",
     "fastcrw",
+    "keenable",
     "searxng",
     "linkup",
     "duckduckgo",
