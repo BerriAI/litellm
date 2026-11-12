@@ -45,11 +45,12 @@ LIT010  Variable assignment without a `Final` declaration. Every local and modul
         of the name trips as an ordinary unannotated assignment, and a later unpack
         or walrus binding trips as a re-bind. A `global`/`nonlocal` statement counts
         as the name's first binding in that scope, so the same re-bind logic applies
-        under it. Exempt: `for`/`with`/`except`/import/def bindings (including as
+        under it. Loop-body assignments are also implicitly final: the first
+        binding needs no Final annotation, but later assignment sites require
+        `# rebind-ok: <reason>`. Executing one site on each iteration is allowed.
+        Exempt: `for`/`with`/`except`/import/def bindings (including as
         re-binds -- a distinct statement form re-using a name is out of scope),
-        assignments inside a `for`/`while` body (pyright forbids Final in a loop;
-        this exemption applies everywhere, including under `global`), valueless
-        declarations (`x: int` binds nothing), dunder names, `_`, class bodies,
+        valueless declarations (`x: int` binds nothing), dunder names, `_`, class bodies,
         `TypeAlias` declarations, and module-level names in `litellm/__init__.py`:
         that namespace is the SDK's runtime-settable config surface (users follow
         the documented `litellm.api_key = ...` pattern and the proxy rebinds these
@@ -646,11 +647,11 @@ def iter_final_violations(path: Path, tree: ast.AST) -> Iterator[Violation]:
         declared = frozenset(b.name for b in bindings if b.form == "declared")
         first = _first_binding_index(bindings)
         for i, b in enumerate(bindings):
-            if b.name in declared or b.name in params or b.in_loop:
+            if b.name in declared or b.name in params:
                 continue
             if _exempt_final_name(b.name):
                 continue
-            if b.form in ASSIGN_FORMS:
+            if b.form in ASSIGN_FORMS and not b.in_loop:
                 yield Violation(
                     path,
                     b.line,
@@ -662,13 +663,13 @@ def iter_final_violations(path: Path, tree: ast.AST) -> Iterator[Violation]:
                     f"a Final alias no longer resolves in type expressions; if rebinding is the "
                     f"point, suppress with `# rebind-ok: <reason>`",
                 )
-            elif b.form in IMPLICIT_FINAL_FORMS and i > first[b.name]:
+            elif b.form in ASSIGN_FORMS | IMPLICIT_FINAL_FORMS and i > first[b.name]:
                 yield Violation(
                     path,
                     b.line,
                     "LIT010",
-                    f"`{b.name}` is re-bound here after an earlier binding: unpacking and "
-                    f"walrus targets cannot carry Final, so their names are implicitly final; "
+                    f"`{b.name}` is re-bound here after an earlier binding: loop-body assignments, "
+                    f"unpacking and walrus targets are implicitly final; "
                     f"bind a fresh name instead, or suppress with `# rebind-ok: <reason>`",
                 )
 
