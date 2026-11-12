@@ -495,6 +495,7 @@ class LiteLLMRoutes(enum.Enum):
         "/claude-code/plugins/{plugin_name}/archive/{digest}.zip",
         "/claude-code/plugins/{plugin_name}/downloads",
         "/claude-code/plugins/{plugin_name}",
+        "/claude-code/plugins/{plugin_name}/archive.zip",
     ]
 
     # MCP tool-call / passthrough routes — data-plane. Gated by DISABLE_LLM_API_ENDPOINTS.

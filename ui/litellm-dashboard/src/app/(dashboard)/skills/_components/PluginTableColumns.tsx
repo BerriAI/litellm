@@ -145,7 +145,34 @@ export const getPluginTableColumns = ({
       />
     ),
   },
+<<<<<<< HEAD
   ...getSkillMetadataColumns<SkillHubSkill>(),
+=======
+  {
+    id: "serve_archive",
+    accessorKey: "serve_archive",
+    meta: { title: "Hosted for Desktop", skeleton: "badge" },
+    header: "Hosted for Desktop",
+    size: 150,
+    enableSorting: false,
+    cell: ({ row }) => (
+      <StatusBadge
+        tone={row.original.serve_archive ? "success" : "neutral"}
+        label={row.original.serve_archive ? "Yes" : "No"}
+      />
+    ),
+  },
+  {
+    id: "created_at",
+    accessorKey: "created_at",
+    sortingFn: "datetime",
+    meta: { title: "Created At" },
+    header: ({ column }) => <DataTableSortHeader column={column} title="Created At" />,
+    size: 160,
+    enableSorting: true,
+    cell: ({ row }) => <DateCell value={row.original.created_at} />,
+  },
+>>>>>>> cf3abb938a (feat(claude-code): host plugin zips for Claude Desktop marketplaces)
   {
     id: "actions",
     meta: { className: "text-right", headerClassName: "text-right" },

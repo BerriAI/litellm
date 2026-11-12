@@ -38,6 +38,7 @@ class httpxSpecialProvider(str, Enum):
     PasswordBreachCheck = "password_breach_check"
     ASGI = "asgi"
     AgentHarness = "agent_harness"
+    PluginArchive = "plugin_archive"
 
 
 VerifyTypes = str | bool | ssl.SSLContext

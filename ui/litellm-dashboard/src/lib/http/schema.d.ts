@@ -2669,7 +2669,11 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+<<<<<<< HEAD
     "/claude-code/plugins/{plugin_name}/archive/{digest}.zip": {
+=======
+    "/claude-code/plugins/{plugin_name}/archive.zip": {
+>>>>>>> cf3abb938a (feat(claude-code): host plugin zips for Claude Desktop marketplaces)
         parameters: {
             query?: never;
             header?: never;
@@ -2677,10 +2681,25 @@ export interface paths {
             cookie?: never;
         };
         /**
+<<<<<<< HEAD
          * Download Plugin Archive
          * @description Download an uploaded ZIP under the same visibility policy as its skill.
          */
         get: operations["download_plugin_archive_claude_code_plugins__plugin_name__archive__digest__zip_get"];
+=======
+         * Get Plugin Archive
+         * @description Download a plugin as a ZIP with the plugin at the archive root.
+         *
+         *     This is the same-origin `archive` source Claude Desktop installs from; marketplace.json
+         *     advertises its URL and sha256 for plugins registered with `serve_archive` (the default for
+         *     `archive` sources). Like marketplace.json it is unauthenticated for enabled plugins, and
+         *     `?key=sk-...` unlocks the disabled plugins granted to that key.
+         *
+         *     The ZIP is built when the plugin is registered or updated and kept on this server. If the
+         *     file is missing (new container, another replica) it is refetched from the plugin's source.
+         */
+        get: operations["get_plugin_archive_claude_code_plugins__plugin_name__archive_zip_get"];
+>>>>>>> cf3abb938a (feat(claude-code): host plugin zips for Claude Desktop marketplaces)
         put?: never;
         post?: never;
         delete?: never;
@@ -42378,6 +42397,7 @@ export interface components {
             name: string;
             /** Namespace */
             namespace?: string | null;
+<<<<<<< HEAD
             /** Published By */
             published_by?: string | null;
             /**
@@ -42385,6 +42405,13 @@ export interface components {
              * @default false
              */
             security_scan_passed: boolean;
+=======
+            /**
+             * Serve Archive
+             * @default false
+             */
+            serve_archive: boolean;
+>>>>>>> cf3abb938a (feat(claude-code): host plugin zips for Claude Desktop marketplaces)
             /** Source */
             source: {
                 [key: string]: string;
@@ -42424,6 +42451,12 @@ export interface components {
              * @description Plugin name
              */
             name: string;
+            /**
+             * Serve Archive
+             * @description Whether LiteLLM hosts this plugin's ZIP archive
+             * @default false
+             */
+            serve_archive: boolean;
             /**
              * Source
              * @description Plugin source reference
@@ -43871,6 +43904,11 @@ export interface components {
              * @description Skill namespace within domain (e.g., 'workflows')
              */
             namespace?: string | null;
+            /**
+             * Serve Archive
+             * @description Have LiteLLM build and host this plugin as a same-origin ZIP (served at /claude-code/plugins/{name}/archive.zip) and advertise it as an 'archive' source with its sha256, which is what Claude Desktop installs from. Defaults to true for 'archive' sources and false for git sources. Git sources must be hosted on GitHub. Claude Code entries are unchanged when false
+             */
+            serve_archive?: boolean | null;
             /**
              * Source
              * @description Plugin source reference. Supported formats:
@@ -50603,6 +50641,11 @@ export interface components {
              * @description Skill namespace within domain (e.g., 'workflows')
              */
             namespace?: string | null;
+            /**
+             * Serve Archive
+             * @description Have LiteLLM build and host this plugin as a same-origin ZIP (served at /claude-code/plugins/{name}/archive.zip) and advertise it as an 'archive' source with its sha256, which is what Claude Desktop installs from. Defaults to true for 'archive' sources and false for git sources. Git sources must be hosted on GitHub. Claude Code entries are unchanged when false
+             */
+            serve_archive?: boolean | null;
             /**
              * Source
              * @description Plugin source reference. Supported formats:
@@ -57377,6 +57420,7 @@ export interface operations {
             };
         };
     };
+<<<<<<< HEAD
     download_plugin_archive_claude_code_plugins__plugin_name__archive__digest__zip_get: {
         parameters: {
             query?: never;
@@ -57384,6 +57428,16 @@ export interface operations {
             path: {
                 plugin_name: string;
                 digest: string;
+=======
+    get_plugin_archive_claude_code_plugins__plugin_name__archive_zip_get: {
+        parameters: {
+            query?: {
+                key?: string | null;
+            };
+            header?: never;
+            path: {
+                plugin_name: string;
+>>>>>>> cf3abb938a (feat(claude-code): host plugin zips for Claude Desktop marketplaces)
             };
             cookie?: never;
         };
@@ -57394,9 +57448,13 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
+<<<<<<< HEAD
                 content: {
                     "application/zip": string;
                 };
+=======
+                content?: never;
+>>>>>>> cf3abb938a (feat(claude-code): host plugin zips for Claude Desktop marketplaces)
             };
             /** @description Validation Error */
             422: {
