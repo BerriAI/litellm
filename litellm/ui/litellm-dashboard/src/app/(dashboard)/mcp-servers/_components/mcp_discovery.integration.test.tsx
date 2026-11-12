@@ -51,7 +51,7 @@ describe("MCPDiscovery", () => {
   it.each(["", "/litellm"])("should render available catalog logos under the %s server root", async (root) => {
     const testDirectory = dirname(fileURLToPath(import.meta.url));
     const registry = JSON.parse(
-      readFileSync(resolve(testDirectory, "../../../../../../../litellm/proxy/mcp_registry.json"), "utf8"),
+      readFileSync(resolve(testDirectory, "../../../../../../../proxy/mcp_registry.json"), "utf8"),
     ) as { servers: DiscoverableMCPServer[] };
     const expectedLogos = [
       ["exa", "/ui/assets/logos/exa_ai.png"],

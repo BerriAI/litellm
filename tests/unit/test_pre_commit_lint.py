@@ -113,7 +113,7 @@ def _sandbox(tmp_path: Path) -> tuple[Path, Path]:
     (repo / "litellm" / "proxy").mkdir(parents=True)
     (repo / "litellm" / "foo.py").write_text("x = 1\n")
     (repo / "litellm" / "proxy" / "spec.py").write_text("y = 2\n")
-    dashboard = repo / "ui" / "litellm-dashboard"
+    dashboard = repo / "litellm" / "ui" / "litellm-dashboard"
     (dashboard / "src").mkdir(parents=True)
     (dashboard / "node_modules").mkdir()
     (dashboard / "src" / "app.ts").write_text("export {}\n")
@@ -241,7 +241,7 @@ def test_deleted_dashboard_file_still_triggers_dashboard_lint(tmp_path: Path) ->
     repo, bin_dir = _sandbox(tmp_path)
     _commit_all(repo, "base")
     _set_base_ref(repo)
-    (repo / "ui" / "litellm-dashboard" / "src" / "app.ts").unlink()
+    (repo / "litellm" / "ui" / "litellm-dashboard" / "src" / "app.ts").unlink()
     _commit_all(repo, "delete dashboard file")
     proc = _run(repo, bin_dir, {})
     assert proc.returncode == 0, proc.stdout + proc.stderr
@@ -452,6 +452,16 @@ def test_a_staged_rust_crate_change_skips_the_api_type_sync(tmp_path: Path) -> N
     _stage_file(repo, "litellm-rust/crates/traces/src/lib.rs", "fn main() {}\n")
     proc = _run(repo, bin_dir, {})
     assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "skipped: dashboard API-type sync (npm run gen:api)" in proc.stdout
+
+
+def test_frontend_python_helpers_do_not_trigger_sdk_checks(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    _commit_all(repo, "base")
+    _stage_file(repo, "litellm/ui/litellm-dashboard/scripts/generate.py", "value = []\n")
+    proc = _run(repo, bin_dir, {})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "linting Python" not in proc.stdout
     assert "skipped: dashboard API-type sync (npm run gen:api)" in proc.stdout
 
 

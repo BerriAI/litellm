@@ -1161,9 +1161,23 @@ def collect_paths(raw: Iterable[str]) -> Iterator[Path]:
             yield from (
                 path
                 for path in sorted(p.rglob("*.py"))
-                if "litellm/proxy/discovery_endpoints/skill_scanner_adapter/" not in path.as_posix()
+                if not any(
+                    excluded in path.as_posix()
+                    for excluded in (
+                        "litellm/proxy/discovery_endpoints/skill_scanner_adapter/",
+                        "litellm/ui/",
+                        "litellm/vscode-extension/",
+                    )
+                )
             )
-        elif p.suffix == ".py" and "litellm/proxy/discovery_endpoints/skill_scanner_adapter/" not in p.as_posix():
+        elif p.suffix == ".py" and not any(
+            excluded in p.as_posix()
+            for excluded in (
+                "litellm/proxy/discovery_endpoints/skill_scanner_adapter/",
+                "litellm/ui/",
+                "litellm/vscode-extension/",
+            )
+        ):
             yield p
 
 

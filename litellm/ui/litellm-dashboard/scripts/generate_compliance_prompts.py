@@ -4,7 +4,7 @@ Generate a TypeScript compliance-prompts data file from a CSV eval file.
 
 Usage example:
     python generate_compliance_prompts.py \
-      --csv ../../litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/guardrail_benchmarks/evals/block_insults.csv \
+      --csv ../../proxy/guardrails/guardrail_hooks/litellm_content_filter/guardrail_benchmarks/evals/block_insults.csv \
       --framework "Insults & Abuse" \
       --framework-icon "alert-triangle" \
       --framework-description "Detects insults, name-calling, and personal attacks — blocks abuse while allowing legitimate complaints." \

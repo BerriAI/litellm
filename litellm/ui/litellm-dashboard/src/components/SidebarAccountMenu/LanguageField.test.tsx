@@ -42,7 +42,7 @@ describe("LanguageField", () => {
 
     expect(screen.getByRole("link", { name: "Help translate" })).toHaveAttribute(
       "href",
-      expect.stringContaining("ui/litellm-dashboard/src/i18n/locales"),
+      expect.stringContaining("litellm/ui/litellm-dashboard/src/i18n/locales"),
     );
   });
 

@@ -38,11 +38,11 @@ ENV NEXT_TELEMETRY_DISABLED=1 \
 
 WORKDIR /ui
 
-COPY ui/litellm-dashboard/package.json ui/litellm-dashboard/package-lock.json ./
-COPY ui/litellm-dashboard/vendor/ ./vendor/
+COPY litellm/ui/litellm-dashboard/package.json litellm/ui/litellm-dashboard/package-lock.json ./
+COPY litellm/ui/litellm-dashboard/vendor/ ./vendor/
 RUN --mount=type=cache,target=/root/.npm npm ci --prefer-offline
 
-COPY ui/litellm-dashboard/ ./
+COPY litellm/ui/litellm-dashboard/ ./
 RUN npm run build
 
 # Builder stage
@@ -191,8 +191,8 @@ COPY --from=builder /app/backend /app/backend
 COPY --from=builder /app/migrations /app/migrations
 COPY --from=builder /opt/prisma /opt/prisma
 COPY --from=builder /var/lib/litellm /var/lib/litellm
-COPY ui/nginx.conf /etc/nginx/nginx.conf
-COPY ui/docker-entrypoint.d/40-litellm-runtime-config.sh /app/ui/docker-entrypoint.d/40-litellm-runtime-config.sh
+COPY litellm/ui/nginx.conf /etc/nginx/nginx.conf
+COPY litellm/ui/docker-entrypoint.d/40-litellm-runtime-config.sh /app/ui/docker-entrypoint.d/40-litellm-runtime-config.sh
 
 RUN find /app/.venv -depth -type d -path "*/tornado/test" -exec rm -rf {} + && \
     mkdir -p /app/.cache /var/run/litellm && \

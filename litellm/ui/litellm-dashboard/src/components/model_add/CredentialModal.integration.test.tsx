@@ -12,10 +12,7 @@ vi.mock("../networking", async () => {
   const { readFileSync } = await import("node:fs");
   const { resolve } = await import("node:path");
   const metadata = JSON.parse(
-    readFileSync(
-      resolve(__dirname, "../../../../../litellm/proxy/public_endpoints/provider_create_fields.json"),
-      "utf8",
-    ),
+    readFileSync(resolve(__dirname, "../../../../../proxy/public_endpoints/provider_create_fields.json"), "utf8"),
   ) as { provider: string }[];
   return {
     ...actual,

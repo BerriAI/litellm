@@ -102,7 +102,7 @@ os.execvp("litellm", ["litellm", *sys.argv[1:]])' "$@"
     ui)
         ui_hook="$(dirname "$0")/ui/docker-entrypoint.d/40-litellm-runtime-config.sh"
         if [ ! -f "$ui_hook" ]; then
-            ui_hook="$(dirname "$0")/../../../ui/docker-entrypoint.d/40-litellm-runtime-config.sh"
+            ui_hook="$(dirname "$0")/../../ui/docker-entrypoint.d/40-litellm-runtime-config.sh"
         fi
         sh "$ui_hook"
         exec nginx -g 'daemon off;' "$@"

@@ -22,7 +22,7 @@ secret:
     
     # Build outputs and static assets
     - "litellm/proxy/_experimental/out/**"
-    - "ui/litellm-dashboard/public/**"
+    - "litellm/ui/litellm-dashboard/public/**"
     - "**/swagger/*.js"
     - "**/*.woff"
     - "**/*.woff2"
@@ -34,7 +34,6 @@ secret:
     - "tests/**/*.txt"
     
     # Documentation and other non-code files
-    - "docs/**"
     - "**/*.md"
     - "**/*.lock"
     - "uv.lock"

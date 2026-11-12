@@ -106,7 +106,7 @@ def _entrypoint_with_runtime_config(tmp_path: Path) -> tuple[Path, Path]:
     runtime_dir: Final = tmp_path / "runtime"
     runtime_dir.mkdir()
     hook.write_text(
-        (REPO_ROOT / "ui" / "docker-entrypoint.d" / hook.name)
+        (REPO_ROOT / "litellm" / "ui" / "docker-entrypoint.d" / hook.name)
         .read_text()
         .replace("runtime_dir=/tmp/litellm-ui", f"runtime_dir={shlex.quote(str(runtime_dir))}")
     )

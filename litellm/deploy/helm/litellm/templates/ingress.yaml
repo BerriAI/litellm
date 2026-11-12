@@ -72,7 +72,7 @@
   irrelevant to path matching). They are not under /ui, /_next, or
   /litellm-asset-prefix, so without /*.txt they fall to the backend catch-all
   → 404 → client-side navigation never settles and the login flow spins in an
-  infinite redirect loop (/ ⇄ /ui/login). ui/nginx.conf already serves *.txt
+  infinite redirect loop (/ ⇄ /ui/login). litellm/ui/nginx.conf already serves *.txt
   from the export; the rule only routes the request to it. It needs an
   ingress controller whose ImplementationSpecific path is a wildcard pattern
   (AWS ALB: `*` = 0+ chars), so it is rendered for ingress.controller=alb
