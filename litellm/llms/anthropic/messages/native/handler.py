@@ -467,6 +467,39 @@ def _short_circuit_safeguards_evaluator(
     return request_safeguards_evaluator(kwargs, messages)
 
 
+def provider_after_pre_request_hooks(
+    model: str, custom_llm_provider: str | None, request_kwargs: Mapping[str, object]
+) -> str | None:
+    if custom_llm_provider:
+        return custom_llm_provider
+    hook_params: Final = cast(  # cast-ok: read as the hooks left it, so a non-mapping raises as Python's handler raises
+        Mapping[str, object], request_kwargs.get("litellm_params", {})
+    )
+    derived: Final = cast(  # cast-ok: handed on unchecked, as Python's handler does
+        str | None, hook_params.get("custom_llm_provider")
+    )
+    if derived:
+        return derived
+    try:
+        _, resolved, _, _ = litellm.get_llm_provider(model=model)
+    except Exception:  # noqa: BLE001  # an unknown model keeps the provider the hooks left
+        return derived
+    return resolved
+
+
+def tools_marked_for_cache_points(
+    tools: object,
+    request_kwargs: dict[str, object],  # mutable-ok: pops the points and records the mark in the handler's kwargs
+) -> Sequence[object] | None:
+    marked: Final = tools_marked_for_a_tool_config_point(
+        tools, request_kwargs.pop("cache_control_injection_points", None)
+    )
+    if marked is None:
+        return None
+    AnthropicCacheControlHook.record_gateway_injection(request_kwargs, 1)
+    return list(marked)
+
+
 @client
 async def anthropic_messages(
     max_tokens: int,
@@ -527,16 +560,7 @@ async def anthropic_messages(
     tool_choice = request_kwargs.pop("tool_choice", tool_choice)
     top_k = request_kwargs.pop("top_k", top_k)
     top_p = request_kwargs.pop("top_p", top_p)
-    # Propagate the provider derived inside pre-request hooks, if not already set.
-    # The litellm_params dict may have been overwritten by **kwargs in
-    # _execute_pre_request_hooks, so fall back to get_llm_provider() if needed.
-    if not custom_llm_provider:
-        custom_llm_provider = request_kwargs.get("litellm_params", {}).get("custom_llm_provider")
-        if not custom_llm_provider:
-            try:
-                _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
-            except Exception:
-                pass
+    custom_llm_provider = provider_after_pre_request_hooks(model, custom_llm_provider, request_kwargs)
     # Remove litellm_params from kwargs (only needed for hooks)
     request_kwargs.pop("litellm_params", None)
     # Merge back any other modifications
@@ -869,12 +893,8 @@ def anthropic_messages_handler(
         )
 
     request_kwargs: Final = cast(dict[str, object], kwargs)  # cast-ok: **kwargs of the handler is untyped
-    marked_tools: Final = tools_marked_for_a_tool_config_point(
-        local_vars.get("tools"), request_kwargs.pop("cache_control_injection_points", None)
-    )
-    if marked_tools is not None:
-        AnthropicCacheControlHook.record_gateway_injection(request_kwargs, 1)
-    local_vars.update({**request_kwargs, **({"tools": list(marked_tools)} if marked_tools is not None else {})})
+    marked_tools: Final = tools_marked_for_cache_points(local_vars.get("tools"), request_kwargs)
+    local_vars.update({**request_kwargs, **({"tools": marked_tools} if marked_tools is not None else {})})
     anthropic_messages_optional_request_params: Final = (
         AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
             params=local_vars,

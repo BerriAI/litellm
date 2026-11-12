@@ -5748,7 +5748,6 @@ def should_load_db_object(object_type: str | SupportedDBObjectType) -> bool:
 _CONFIG_PERSISTED_SECTIONS: Final = ("general_settings", "router_settings", "litellm_settings")
 _CONFIG_UNMANAGED_EXCLUSIONS: Final = frozenset(("environment_variables", "model_list"))
 _CONFIG_SECTION_VALUES: Final = TypeAdapter(Mapping[str, JsonValue])
-_CONFIG_SECTION_LOCK_SQL: Final = "SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtext($1))"
 
 
 class _ConfigParamWhere(TypedDict):
@@ -6301,7 +6300,7 @@ class ProxyConfig:
         prisma_client: PrismaClient,
     ) -> Mapping[str, JsonValue] | None:
         async with prisma_client.tx() as tx:
-            await tx.query_raw(_CONFIG_SECTION_LOCK_SQL, section_name)
+            await tx.query_raw(CONFIG_PARAM_LOCK_SQL, section_name)
             config_table: Final = cast("TableActions[_ConfigParamRow]", tx.litellm_config)
             config_where: Final[_ConfigParamWhere] = {"param_name": section_name}
             existing_row: Final[_ConfigParamRow | None] = await config_table.find_first(where=config_where)
@@ -15287,7 +15286,7 @@ from litellm.llms.anthropic.count_tokens.token_counter import AnthropicTokenCoun
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
-from litellm.repositories.config_repository import ConfigRepository
+from litellm.repositories.config_repository import CONFIG_PARAM_LOCK_SQL, ConfigRepository
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.table_repositories import (
     AccessGroupRepository,

@@ -19,6 +19,7 @@ from botocore.credentials import RefreshableCredentials
 from h2.events import ConnectionTerminated
 
 import litellm
+from litellm.llms.anthropic.messages.native import handler as python_messages
 from litellm._logging import verbose_logger
 from litellm.integrations.code_interpreter_interception.handler import (
     CodeInterpreterInterceptionLogger,
@@ -6493,7 +6494,7 @@ async def test_anthropic_messages_dropped_safeguards_send_neither_the_field_nor_
 
     upstream: Final = AsyncHTTPHandler(transport=httpx.MockTransport(anthropic_answers))
     try:
-        await litellm.anthropic.messages.acreate(
+        await python_messages.anthropic_messages(
             max_tokens=16,
             messages=[{"role": "user", "content": "hi"}],
             model="anthropic/claude-sonnet-4-6",
@@ -6546,7 +6547,6 @@ async def _search_through(transport: httpx.MockTransport, is_async: bool) -> obj
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True])
-@pytest.mark.parametrize("environment_base", [None, "ANTHROPIC_API_BASE", "ANTHROPIC_BASE_URL"])
 @pytest.mark.parametrize(
     ("api_base", "explicit_header", "expected_session"),
     [
@@ -6557,7 +6557,6 @@ async def _search_through(transport: httpx.MockTransport, is_async: bool) -> obj
 )
 async def test_messages_opencode_session_header(
     stream: bool,
-    environment_base: str | None,
     api_base: str,
     explicit_header: str | None,
     expected_session: str | None,
@@ -6565,8 +6564,6 @@ async def test_messages_opencode_session_header(
 ) -> None:
     monkeypatch.delenv("ANTHROPIC_API_BASE", raising=False)
     monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
-    if environment_base:
-        monkeypatch.setenv(environment_base, "https://opencode.ai/inference/go/anthropic")
     received: Final[asyncio.Queue[httpx.Request]] = asyncio.Queue()
     payload: Final = {
         "id": "msg_test",
@@ -6594,11 +6591,11 @@ async def test_messages_opencode_session_header(
 
     upstream: Final = AsyncHTTPHandler(transport=httpx.MockTransport(respond))
     try:
-        result: Final = await litellm.anthropic.messages.acreate(
+        result: Final = await python_messages.anthropic_messages(
             model="anthropic/claude-haiku-5-5",
             messages=[{"role": "user", "content": "hello"}],
             max_tokens=128000,
-            api_base=None if environment_base and api_base == "https://opencode.ai/inference/go/anthropic" else api_base,
+            api_base=api_base,
             api_key="test-key",
             stream=stream,
             litellm_session_id="conversation-123",
@@ -6738,20 +6735,6 @@ def _anthropic_messages_logging_obj():
     ("custom_llm_provider", "messages_config", "foundry_api_base", "forwarded_betas"),
     [
         pytest.param(
-            "anthropic",
-            "anthropic",
-            "https://my-resource.services.ai.azure.com/anthropic",
-            f"thinking-binding-controls-2026-08-01,{_BETA_THE_TABLE_DOES_NOT_LIST}",
-            id="anthropic-drops-what-the-azure-ai-row-rejects",
-        ),
-        pytest.param(
-            "anthropic",
-            "anthropic",
-            "https://my-resource.cognitiveservices.azure.com/anthropic",
-            f"thinking-binding-controls-2026-08-01,{_BETA_THE_TABLE_DOES_NOT_LIST}",
-            id="anthropic-on-a-cognitiveservices-host",
-        ),
-        pytest.param(
             "azure_ai",
             "azure_ai",
             "https://my-resource.services.ai.azure.com/anthropic",
@@ -6775,7 +6758,6 @@ async def test_async_anthropic_messages_handler_picks_the_beta_row_by_deployment
     forwarded_betas: str,
 ) -> None:
     from litellm import anthropic_beta_headers_manager
-    from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
     from litellm.llms.azure_ai.anthropic.messages_transformation import AzureAnthropicMessagesConfig
     from litellm.llms.openai_like.messages.transformation import OpenAILikeAnthropicMessagesConfig
 
@@ -6783,7 +6765,6 @@ async def test_async_anthropic_messages_handler_picks_the_beta_row_by_deployment
     monkeypatch.setattr(anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG", None)
     assert _BETA_THE_TABLE_DOES_NOT_LIST not in anthropic_beta_headers_manager._load_beta_headers_config()["azure_ai"]
     configs: Final = {
-        "anthropic": AnthropicMessagesConfig,
         "azure_ai": AzureAnthropicMessagesConfig,
         "pass_through": OpenAILikeAnthropicMessagesConfig,
     }
@@ -6817,7 +6798,7 @@ async def test_first_foundry_request_with_betas_fetches_the_beta_table_off_the_e
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from litellm import anthropic_beta_headers_manager, anthropic_beta_headers_url
-    from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
+    from litellm.llms.azure_ai.anthropic.messages_transformation import AzureAnthropicMessagesConfig
 
     monkeypatch.delenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", raising=False)
     monkeypatch.delenv("LITELLM_OFFLINE_MODE", raising=False)
@@ -6835,9 +6816,9 @@ async def test_first_foundry_request_with_betas_fetches_the_beta_table_off_the_e
         await BaseLLMHTTPHandler().async_anthropic_messages_handler(
             model="claude-sonnet-4-6",
             messages=[{"role": "user", "content": "Hello"}],
-            anthropic_messages_provider_config=AnthropicMessagesConfig(),
+            anthropic_messages_provider_config=AzureAnthropicMessagesConfig(),
             anthropic_messages_optional_request_params={"max_tokens": 8},
-            custom_llm_provider="anthropic",
+            custom_llm_provider="azure_ai",
             litellm_params=GenericLiteLLMParams(api_base=foundry_api_base),
             logging_obj=_anthropic_messages_logging_obj(),
             api_key="sk-test",

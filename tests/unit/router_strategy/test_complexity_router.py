@@ -15783,6 +15783,21 @@ class TestModalityRouting:
 
 @pytest.mark.usefixtures("local_model_cost_map")
 class TestHealthFallbackDispatch:
+    @pytest.fixture(autouse=True)
+    def _python_messages(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.rust_bridge import catalog
+        from litellm.rust_bridge.configuration import Rollout
+
+        monkeypatch.setattr(
+            catalog,
+            "RULES",
+            tuple(
+                rule
+                for rule in catalog.RULES
+                if not (rule.route is catalog.Route.MESSAGES and rule.rollout is Rollout.RUST_REQUIRED)
+            ),
+        )
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize("classifier", ("capability", "llm_v2"))
     @pytest.mark.parametrize("calibrated", (False, True), ids=("raw", "calibrated"))
