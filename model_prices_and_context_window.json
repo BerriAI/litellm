@@ -25637,6 +25637,22 @@
             "notes": "Nimble Search API pay-as-you-go list price: $5 per 1,000 searches, up to 100 results per search. Volume plans price differently."
         }
     },
+    "nodecode/nodecode-cyber-v1": {
+        "cache_read_input_token_cost": 9e-09,
+        "input_cost_per_token": 3.3e-07,
+        "litellm_provider": "nodecode",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 1.32e-06,
+        "source": "https://nodecode.ai/docs/pricing",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
     "elevenlabs/scribe_v1": {
         "input_cost_per_second": 6.11e-05,
         "litellm_provider": "elevenlabs",
@@ -101084,21 +101100,5 @@
         "supports_web_search": true,
         "tpm": 800000.0,
         "web_search_billing_unit": "per_query"
-    },
-    "nodecode/nodecode-cyber-v1": {
-        "cache_read_input_token_cost": 9e-09,
-        "input_cost_per_token": 3.3e-07,
-        "litellm_provider": "nodecode",
-        "max_input_tokens": 1048576,
-        "max_output_tokens": 131072,
-        "max_tokens": 131072,
-        "mode": "chat",
-        "output_cost_per_token": 1.32e-06,
-        "source": "https://nodecode.ai/docs/pricing",
-        "supports_function_calling": true,
-        "supports_prompt_caching": true,
-        "supports_reasoning": true,
-        "supports_tool_choice": true,
-        "supports_vision": false
     }
 }
