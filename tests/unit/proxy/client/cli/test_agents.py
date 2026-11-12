@@ -33,6 +33,7 @@ from litellm.proxy.client.cli.commands.agents import (
     verify_proxy_key,
     verify_subscription_key,
 )
+from litellm.proxy.client.cli.commands.auth import save_token
 from litellm.proxy.client.cli.commands.claude_settings import ClaudeSettingsError
 from litellm.proxy.client.cli.commands.config import save_config
 from litellm.proxy.client.cli.main import cli as lite
@@ -1670,14 +1671,17 @@ class TestRunAgent:
         assert calls["args"] == ("claude", "--resume")
 
     @pytest.mark.parametrize(
-        ("project_local", "user", "key_from_stored_login", "exports_the_key"),
+        ("args", "project_local", "user", "key_from_stored_login", "exports_the_key"),
         [
-            ({}, {"apiKeyHelper": LITE_HELPER}, True, False),
-            ({}, {"apiKeyHelper": LITE_HELPER}, False, True),
-            ({}, {"apiKeyHelper": LITE_HELPER.replace("localhost:4000", "other-proxy:4000")}, True, True),
-            ({}, {"apiKeyHelper": "/opt/mine/helper"}, True, True),
-            ({"apiKeyHelper": "/opt/mine/helper"}, {"apiKeyHelper": LITE_HELPER}, True, True),
-            ({}, {}, True, True),
+            ((), {}, {"apiKeyHelper": LITE_HELPER}, True, False),
+            ((), {}, {"apiKeyHelper": LITE_HELPER}, False, True),
+            ((), {}, {"apiKeyHelper": LITE_HELPER.replace("localhost:4000", "other-proxy:4000")}, True, True),
+            ((), {}, {"apiKeyHelper": "/opt/mine/helper"}, True, True),
+            ((), {"apiKeyHelper": "/opt/mine/helper"}, {"apiKeyHelper": LITE_HELPER}, True, True),
+            ((), {}, {}, True, True),
+            (("--settings", '{"apiKeyHelper":""}'), {}, {"apiKeyHelper": LITE_HELPER}, True, True),
+            (("--settings={}",), {}, {"apiKeyHelper": LITE_HELPER}, True, False),
+            (("--settings", "missing.json"), {}, {"apiKeyHelper": LITE_HELPER}, True, True),
         ],
         ids=[
             "lites-helper-for-this-proxy",
@@ -1686,20 +1690,24 @@ class TestRunAgent:
             "users-own-helper",
             "project-helper-wins",
             "no-helper",
+            "settings-flag-disables-the-helper",
+            "settings-flag-without-a-helper",
+            "unreadable-settings-flag",
         ],
     )
     def test_claude_takes_the_key_from_lites_renewing_helper_only_when_it_is_the_one_claude_code_runs(
-        self, tmp_path, project_local, user, key_from_stored_login, exports_the_key
+        self, tmp_path, monkeypatch, args, project_local, user, key_from_stored_login, exports_the_key
     ):
         files = {
             tmp_path / "repo" / ".claude" / "settings.local.json": project_local,
             tmp_path / "cfg" / "settings.json": user,
         }
+        monkeypatch.chdir(tmp_path)
         launched = {}
         run_agent(
             "http://localhost:4000",
             "sk-key",
-            ["claude"],
+            ["claude", *args],
             base_env={"CLAUDE_CONFIG_DIR": str(tmp_path / "cfg"), "ANTHROPIC_AUTH_TOKEN": "sk-stale"},
             which=lambda name: f"/usr/local/bin/{name}",
             verify=lambda *a: None,
@@ -1707,9 +1715,56 @@ class TestRunAgent:
             read_settings=lambda path: files.get(path, {}),
             project_dir=tmp_path / "repo",
             key_from_stored_login=key_from_stored_login,
+            which_lite=lambda name: f"/usr/local/bin/{name}",
         )
         assert launched["env"]["ANTHROPIC_BASE_URL"] == "http://localhost:4000"
         assert launched["env"].get("ANTHROPIC_AUTH_TOKEN") == ("sk-key" if exports_the_key else None)
+
+    @pytest.mark.parametrize(
+        ("args", "user", "key_from_stored_login", "expected_args"),
+        [
+            ((), {"apiKeyHelper": LITE_HELPER}, False, ("claude", "--settings", '{"apiKeyHelper":""}')),
+            (
+                (),
+                {"apiKeyHelper": LITE_HELPER.replace("/usr/local/bin/lite", "/opt/old-venv/bin/lite")},
+                True,
+                ("claude", "--settings", '{"apiKeyHelper":""}'),
+            ),
+            ((), {"apiKeyHelper": LITE_HELPER}, True, ("claude",)),
+            ((), {"apiKeyHelper": "/opt/mine/helper"}, False, ("claude",)),
+            (
+                ("--settings", '{"model":"opus"}'),
+                {"apiKeyHelper": LITE_HELPER},
+                False,
+                ("claude", "--settings", '{"model":"opus"}'),
+            ),
+        ],
+        ids=[
+            "key-passed-with-api-key",
+            "helper-from-another-lite-install",
+            "lites-helper-renews-the-stored-key",
+            "users-own-helper",
+            "users-own-settings-flag",
+        ],
+    )
+    def test_claude_runs_lites_helper_only_when_the_launch_does_not_export_a_key_of_its_own(
+        self, tmp_path, args, user, key_from_stored_login, expected_args
+    ):
+        launched = {}
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ["claude", *args],
+            base_env={"CLAUDE_CONFIG_DIR": str(tmp_path / "cfg")},
+            which=lambda name: f"/usr/local/bin/{name}",
+            verify=lambda *a: None,
+            launcher=lambda p, a, e: launched.update(args=tuple(a)),
+            read_settings=lambda path: user if path == tmp_path / "cfg" / "settings.json" else {},
+            project_dir=tmp_path / "repo",
+            key_from_stored_login=key_from_stored_login,
+            which_lite=lambda name: f"/usr/local/bin/{name}",
+        )
+        assert launched["args"] == expected_args
 
     def test_a_malformed_settings_file_still_launches_claude_with_the_key(self, tmp_path):
         def unreadable(path):
@@ -2683,7 +2738,8 @@ class TestAgentCommands:
         vault = secret_vault_factory()
 
         @click.command()
-        def fake_login():
+        @click.option("--pkce", is_flag=True, default=None)
+        def fake_login(pkce):
             pass
 
         with (
@@ -2704,6 +2760,42 @@ class TestAgentCommands:
         assert result.exit_code == 0, result.output
         assert captured["api_key"] == "sk-after-login"
         mock_get.assert_called_once_with(expected_base_url="http://localhost:4000", vault=vault)
+
+    @pytest.mark.parametrize(
+        ("stored", "expected_pkce"),
+        [({"refresh_token": "llm_srefresh_old"}, True), ({}, False)],
+        ids=["renewing-login-stored", "plain-login-stored"],
+    )
+    def test_the_login_lite_claude_starts_again_renews_like_the_stored_one(
+        self, tmp_path, monkeypatch, secret_vault_factory, stored, expected_pkce
+    ):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        vault = secret_vault_factory()
+        save_token(
+            {"base_url": "http://localhost:4000", "key": "sk-lapsed", "user_id": "u1", "timestamp": 1.0, **stored},
+            vault=vault,
+        )
+        logins = []
+
+        @click.command()
+        @click.option("--pkce", is_flag=True, default=None)
+        def fake_login(pkce):
+            logins.append(pkce)
+
+        with (
+            patch(f"{AGENTS_MODULE}._is_interactive", return_value=True),
+            patch(f"{AGENTS_MODULE}.login", fake_login),
+            patch(f"{AGENTS_MODULE}.get_stored_api_key", return_value="sk-after-login"),
+            patch(f"{AGENTS_MODULE}.run_agent"),
+        ):
+            result = self.runner.invoke(
+                _agent_command("claude"),
+                [],
+                obj={"base_url": "http://localhost:4000", "api_key": None, "secret_vault": vault},
+            )
+
+        assert result.exit_code == 0, result.output
+        assert logins == [expected_pkce]
 
     def test_child_exit_code_reaches_the_shell(self):
         with patch(f"{AGENTS_MODULE}.run_agent", side_effect=SystemExit(42)):

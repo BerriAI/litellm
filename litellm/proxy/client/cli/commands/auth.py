@@ -237,6 +237,10 @@ def load_token(*, vault: SecretVault = SYSTEM_KEYRING) -> Mapping[str, object] |
     return None if record is None else record.model_dump(exclude_none=True)
 
 
+def is_pkce_login(token_data: Mapping[str, object] | None) -> bool:
+    return token_data is not None and token_data.get("refresh_token") is not None
+
+
 def save_token(record: CliTokenData, *, vault: SecretVault = SYSTEM_KEYRING) -> SecretSave:
     """Store a credential the PKCE layer produced, secret in the vault and the rest on disk"""
     return save_cli_token(CliTokenRecord(**record), vault=vault)
@@ -1055,6 +1059,13 @@ def logout(ctx: click.Context):
             click.echo("Unlock your keychain and run 'lite logout' again to clear it.")
 
 
+def _renewing_login_command(ctx_obj: CliContextObj | None) -> str:
+    """Claude Code runs `print-token` as its apiKeyHelper with `--base-url`, and only a `--pkce` login renews."""
+    if ctx_obj is None or not ctx_obj.get("base_url_explicit"):
+        return "lite login --pkce"
+    return f"lite --base-url {ctx_obj['base_url'].rstrip('/')} login --pkce"
+
+
 @click.command(name="print-token")
 @click.pass_context
 def print_token(ctx: click.Context):
@@ -1072,7 +1083,7 @@ def print_token(ctx: click.Context):
     vault: Final = context_secret_vault(ctx)
     token_data: Final = load_token(vault=vault)
     if not token_data:
-        click.echo("Not authenticated. Run 'lite login'.", err=True)
+        click.echo(f"Not authenticated. Run '{_renewing_login_command(_optional_cli_context_obj(ctx))}'.", err=True)
         sys.exit(1)
 
     # apiKeyHelper is invoked bare (no --base-url), so unless the caller
@@ -1082,7 +1093,7 @@ def print_token(ctx: click.Context):
     ctx_obj: Final = cli_context_obj(ctx)
     issued_for_this_server: Final = token_data.get("base_url") == ctx_obj.get("base_url", "").rstrip("/")
     if ctx_obj.get("base_url_explicit") and not issued_for_this_server:
-        click.echo("Not authenticated for this server. Run 'lite login'.", err=True)
+        click.echo(f"Not authenticated for this server. Run '{_renewing_login_command(ctx_obj)}'.", err=True)
         sys.exit(1)
 
     renews: Final = "refresh_token" in token_data

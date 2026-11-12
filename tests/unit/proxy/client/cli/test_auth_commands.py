@@ -1,3 +1,4 @@
+import functools
 import json
 import os
 import stat
@@ -34,7 +35,7 @@ from litellm.proxy.client.cli.commands.auth import (
     print_token,
     whoami,
 )
-from litellm.proxy.client.cli.commands.claude_settings import SettingsFileOwner
+from litellm.proxy.client.cli.commands.claude_settings import SettingsFileOwner, installed_executable, lite_api_key_helper
 
 
 @pytest.fixture
@@ -1621,6 +1622,13 @@ class TestLoginConfigClaude:
             patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=None),
             patch("litellm.proxy.client.cli.commands.auth.save_token", return_value=stored),
             patch("litellm.proxy.client.cli.interface.show_commands"),
+            patch(
+                "litellm.proxy.client.cli.commands.auth.lite_api_key_helper",
+                functools.partial(
+                    lite_api_key_helper,
+                    which=lambda name: installed_executable(name, scripts_dir=str(tmp_path / "python-without-lite")),
+                ),
+            ),
         ):
             result = self.runner.invoke(
                 login,
@@ -2254,7 +2262,7 @@ def test_login_shows_the_error_detail_only_when_the_proxy_answers_with_a_json_ob
             {"base_url": "https://other.example.com", "base_url_explicit": True},
             1,
             "",
-            "Not authenticated for this server. Run 'lite login'.\n",
+            "Not authenticated for this server. Run 'lite --base-url https://other.example.com login --pkce'.\n",
         ),
         ({"base_url": "https://other.example.com", "base_url_explicit": False}, 0, "sk-stored\n", ""),
         (
@@ -2294,7 +2302,24 @@ def test_print_token_without_a_context_object_reports_no_login_when_nothing_is_s
 
     assert result.exit_code == 1
     assert result.stdout == ""
-    assert result.stderr == "Not authenticated. Run 'lite login'.\n"
+    assert result.stderr == "Not authenticated. Run 'lite login --pkce'.\n"
+
+
+@pytest.mark.parametrize(
+    ("obj", "expected_command"),
+    [
+        ({"base_url": "https://proxy.example.com/", "base_url_explicit": True}, "lite --base-url https://proxy.example.com login --pkce"),
+        ({"base_url": "https://proxy.example.com", "base_url_explicit": False}, "lite login --pkce"),
+    ],
+    ids=["helper-names-its-proxy", "default-proxy"],
+)
+def test_print_token_with_nothing_stored_names_the_login_that_renews_for_the_proxy_it_was_asked_about(
+    isolated_home, obj, expected_command
+):
+    result = CliRunner().invoke(print_token, obj=obj)
+
+    assert result.exit_code == 1
+    assert result.stderr == f"Not authenticated. Run '{expected_command}'.\n"
 
 
 def test_print_token_without_a_context_object_fails_reading_it_once_a_login_is_stored(isolated_home):

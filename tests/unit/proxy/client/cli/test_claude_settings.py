@@ -37,6 +37,8 @@ from litellm.proxy.client.cli.commands.claude_settings import (
     configure_claude_settings,
     install_statusline_script,
     configure_state_path,
+    installed_executable,
+    is_lite_api_key_helper,
     lite_api_key_helper,
     merge_claude_settings,
     statusline_command,
@@ -211,6 +213,59 @@ class TestLiteApiKeyHelper:
 
     def test_no_lite_on_path_means_no_helper(self):
         assert lite_api_key_helper("https://proxy.example.com", which=lambda name: None) is None
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "/usr/local/bin/lite --base-url https://proxy.example.com auth print-token",
+            "'/home/me/my tools/lite' --base-url https://other.example.com auth print-token",
+            r'"C:\Program Files\lite\lite.exe" "--base-url" "https://proxy.example.com" "auth" "print-token"',
+        ],
+        ids=["posix", "posix-quoted-path", "windows"],
+    )
+    def test_recognizes_a_helper_any_lite_wrote_for_any_proxy(self, command):
+        assert is_lite_api_key_helper(command)
+
+    @pytest.mark.parametrize(
+        "command",
+        ["/opt/mine/helper", "/usr/local/bin/lite auth print-token --verbose", "", None, ["lite", "auth", "print-token"]],
+        ids=["users-own-helper", "other-trailing-args", "disabled", "unset", "not-a-string"],
+    )
+    def test_leaves_every_other_helper_alone(self, command):
+        assert not is_lite_api_key_helper(command)
+
+
+@pytest.mark.skipif(sys.platform.startswith("win"), reason="runs the command through sh, as Claude Code does on POSIX")
+class TestInstalledExecutable:
+    @staticmethod
+    def _script(path, body):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"#!/bin/sh\n{body}\n")
+        path.chmod(0o700)
+
+    def test_the_helper_runs_the_lite_installed_beside_this_python_over_a_shim_earlier_on_path(
+        self, tmp_path, monkeypatch
+    ):
+        self._script(tmp_path / "shims" / "lite", "echo 'pyenv: lite: command not found' >&2; exit 127")
+        self._script(tmp_path / "venv" / "bin" / "lite", "echo real")
+        monkeypatch.setenv("PATH", f"{tmp_path / 'shims'}{os.pathsep}{os.environ['PATH']}")
+
+        helper = lite_api_key_helper(
+            "https://proxy.example.com",
+            platform="linux",
+            which=lambda name: installed_executable(name, scripts_dir=str(tmp_path / "venv" / "bin")),
+        )
+
+        assert helper is not None
+        ran = subprocess.run(["sh", "-c", helper.command], capture_output=True, text=True)
+        assert (ran.returncode, ran.stdout) == (0, "real\n")
+
+    def test_falls_back_to_path_when_this_python_has_no_lite(self, tmp_path, monkeypatch):
+        self._script(tmp_path / "pipx" / "lite", "echo pipx")
+        (tmp_path / "venv" / "bin").mkdir(parents=True)
+        monkeypatch.setenv("PATH", str(tmp_path / "pipx"))
+
+        assert installed_executable("lite", scripts_dir=str(tmp_path / "venv" / "bin")) == str(tmp_path / "pipx" / "lite")
 
 
 class TestConflictingOwnersOfTheSettingsFile:

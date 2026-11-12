@@ -27,18 +27,20 @@ from litellm.proxy.common_utils.codex_model_catalog import (
 )
 from litellm.types.llms.base_model import LiteLLMBaseModel
 
-from .auth import cli_context_obj, context_secret_vault, get_stored_api_key, login
+from .auth import cli_context_obj, context_secret_vault, get_stored_api_key, is_pkce_login, load_token, login
 from .claude_settings import (
     API_KEY_HELPER_KEY,
     ENV_KEY,
     ClaudeSettingsError,
     claude_settings_path,
     install_statusline_script,
+    installed_executable,
+    is_lite_api_key_helper,
     lite_api_key_helper,
     load_json_or_empty,
 )
 from .cmd_quoting import quote_for_cmd
-from .config import subscription_default
+from .config import pkce_default, subscription_default
 from .pi import (
     LITELLM_PROXY_API_KEY_ENV,
     PI_PROVIDER_NAME,
@@ -281,17 +283,42 @@ def claude_settings_files(
         raise AgentRunError(str(e)) from e
 
 
-def lite_helper_renews_key(
-    base_url: str, settings_files: Sequence[Mapping[str, JsonValue]], which: Callable[[str], str | None]
-) -> bool:
-    """Whether the apiKeyHelper Claude Code will run, the first one in settings precedence, is the one
-    `lite login --pkce --config-claude` wrote for this proxy. Claude Code prefers ANTHROPIC_AUTH_TOKEN over a
-    helper and warns when both are set, so exporting the key too would pin a copy that expires mid-session."""
-    configured: Final = next(
-        (settings[API_KEY_HELPER_KEY] for settings in settings_files if API_KEY_HELPER_KEY in settings), None
-    )
+def claude_api_key_helper(
+    args: Sequence[str],
+    read_settings: Callable[[Path], Mapping[str, JsonValue]],
+    environ: Mapping[str, str],
+    project_dir: Path,
+) -> JsonValue:
+    """The apiKeyHelper Claude Code will run, the first one in settings precedence, with the last `--settings`
+    the user passed above every settings file. A `--settings` lite cannot read counts as no helper, so the key
+    stays exported, as it was before lite wrote a helper."""
+    override_value, _ = _split_settings_flags(args)
+    try:
+        override: Final = () if override_value is None else (_load_settings_override(override_value),)
+    except AgentRunError:
+        return None
+    settings_files: Final = (*override, *_readable_settings_files(read_settings, environ, project_dir))
+    return next((settings[API_KEY_HELPER_KEY] for settings in settings_files if API_KEY_HELPER_KEY in settings), None)
+
+
+def lite_helper_renews_key(base_url: str, configured: JsonValue, which: Callable[[str], str | None]) -> bool:
+    """Whether the configured apiKeyHelper is the one `lite login --pkce --config-claude` wrote for this proxy.
+    Claude Code prefers ANTHROPIC_AUTH_TOKEN over a helper, so exporting the key too would pin a copy that
+    expires mid-session."""
     helper: Final = lite_api_key_helper(base_url, which=which)
     return helper is not None and configured == helper.command
+
+
+_NO_API_KEY_HELPER_SETTINGS: Final = json.dumps({API_KEY_HELPER_KEY: ""}, separators=(",", ":"))
+
+
+def _lite_helper_off_args(configured: JsonValue, renews: bool, args: Sequence[str]) -> tuple[str, ...]:
+    """A `--settings` that turns off a `lite auth print-token` helper when the launch exports its own key, since
+    Claude Code warns when it has both and also sends the helper's key in x-api-key. A `--settings` the user
+    passed is left as it is, since Claude Code keeps only the last one."""
+    if renews or not is_lite_api_key_helper(configured) or _settings_flag_spans(args):
+        return ()
+    return (_SETTINGS_FLAG, _NO_API_KEY_HELPER_SETTINGS)
 
 
 def _readable_settings_files(
@@ -1132,6 +1159,7 @@ def run_agent(
     write_overlay: Callable[[str, Mapping[str, str]], Path] = write_settings_overlay,
     project_dir: Path | None = None,
     key_from_stored_login: bool = False,
+    which_lite: Callable[[str], str | None] = installed_executable,
 ) -> None:
     """Validate, wire the environment, and hand off to the agent.
 
@@ -1157,12 +1185,12 @@ def run_agent(
 
     env_before_sync: Final = base_env if base_env is not None else os.environ
     project: Final = project_dir if project_dir is not None else Path.cwd()
-    helper_renews_key: Final = (
-        key_from_stored_login
-        and not subscription
-        and PROFILE_ANTHROPIC in profiles
-        and lite_helper_renews_key(base_url, _readable_settings_files(read_settings, env_before_sync, project), which)
+    configured_helper: Final = (
+        claude_api_key_helper(command[1:], read_settings, env_before_sync, project)
+        if not subscription and PROFILE_ANTHROPIC in profiles
+        else None
     )
+    helper_renews_key: Final = key_from_stored_login and lite_helper_renews_key(base_url, configured_helper, which_lite)
     synced: Final = (
         _NO_EXTRA_ENV if subscription else sync_models(binary, env_before_sync, base_url, api_key, skip_verify)
     )
@@ -1200,7 +1228,7 @@ def run_agent(
             write_overlay,
         )
         if subscription and os.path.basename(command[0]) == "claude"
-        else ((), tuple(command[1:]))
+        else (_lite_helper_off_args(configured_helper, helper_renews_key, command[1:]), tuple(command[1:]))
     )
     if reattach_terminal is not None:
         reattach_terminal()
@@ -1218,15 +1246,17 @@ def resolve_api_key(ctx: click.Context) -> str:
     if api_key:
         return api_key
 
+    vault: Final = context_secret_vault(ctx)
+    pkce: Final = is_pkce_login(load_token(vault=vault)) or pkce_default()
     if not _is_interactive():
         raise click.ClickException(
             "No LiteLLM key found. Set LITELLM_PROXY_API_KEY (or pass --api-key) for "
-            "non-interactive use, or run `lite login` from a terminal."
+            f"non-interactive use, or run `{'lite login --pkce' if pkce else 'lite login'}` from a terminal."
         )
 
     click.echo("No LiteLLM credentials found; starting login...")
-    ctx.invoke(login)
-    api_key = get_stored_api_key(expected_base_url=base_url, vault=context_secret_vault(ctx))
+    ctx.invoke(login, pkce=pkce)
+    api_key = get_stored_api_key(expected_base_url=base_url, vault=vault)
     if not api_key:
         raise click.ClickException("Login did not produce an API key; cannot start the agent.")
     return api_key

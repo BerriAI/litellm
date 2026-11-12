@@ -17,6 +17,7 @@ import posixpath
 import shlex
 import shutil
 import sys
+import sysconfig
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import reduce
@@ -318,10 +319,20 @@ def _land(
         raise ClaudeSettingsError(f"Could not {'remove' if staged is None else 'write'} {path}: {e}") from e
 
 
+def installed_executable(name: str, scripts_dir: str = sysconfig.get_path("scripts")) -> str | None:
+    """`name` from this interpreter's own scripts directory, else the first one on PATH. A version manager's shim
+    that comes first on PATH, such as pyenv's, runs whichever Python the current directory pins, and that one may
+    not have it."""
+    return shutil.which(name, path=scripts_dir) or shutil.which(name)
+
+
+_HELPER_SUBCOMMAND: Final = ("auth", "print-token")
+
+
 def lite_api_key_helper(
-    base_url: str, platform: str = sys.platform, which: Callable[[str], str | None] = shutil.which
+    base_url: str, platform: str = sys.platform, which: Callable[[str], str | None] = installed_executable
 ) -> ApiKeyHelper | None:
-    """The helper for a renewing login, or None when `lite` is not on PATH.
+    """The helper for a renewing login, or None when `lite` is not found.
 
     Claude Code hands the string to `sh` on POSIX and cmd.exe on Windows, so every token is quoted for
     that shell. The path is made absolute, since a relative PATH entry would otherwise run whichever `lite`
@@ -336,7 +347,15 @@ def lite_api_key_helper(
     quote: Final = quote_for_cmd if windows else shlex.quote
     absolute_path: Final = (ntpath if windows else posixpath).abspath(lite_path)
     return ApiKeyHelper(
-        " ".join(quote(token) for token in (absolute_path, "--base-url", base_url.rstrip("/"), "auth", "print-token"))
+        " ".join(quote(token) for token in (absolute_path, "--base-url", base_url.rstrip("/"), *_HELPER_SUBCOMMAND))
+    )
+
+
+def is_lite_api_key_helper(command: JsonValue) -> bool:
+    """Whether a configured apiKeyHelper runs `lite auth print-token`, whichever `lite` and proxy it names."""
+    return isinstance(command, str) and any(
+        command.endswith(" " + " ".join(quote(token) for token in _HELPER_SUBCOMMAND))
+        for quote in (shlex.quote, quote_for_cmd)
     )
 
 
@@ -725,6 +744,8 @@ __all__ = (
     "claude_settings_path",
     "configure_claude_settings",
     "configure_state_path",
+    "installed_executable",
+    "is_lite_api_key_helper",
     "lite_api_key_helper",
     "load_json_or_empty",
     "merge_claude_settings",
