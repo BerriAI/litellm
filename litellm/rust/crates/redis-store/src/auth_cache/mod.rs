@@ -115,18 +115,29 @@ impl AuthCache {
         self.partition(key).get(request, key, None).await
     }
 
-    /// `DualCache.async_set_cache`, writing `json.dumps(value)`.
-    pub async fn set(&self, key: &str, value: Value, ttl: Option<Duration>) -> Result<(), Error> {
-        self.partition(key).set(key, value, ttl).await
-    }
-
-    /// `DualCache.set_cache`, whose `RedisCache.set_cache` writes `str(value)`.
-    pub async fn set_str(
+    /// `DualCache.async_set_cache`, writing `json.dumps(value)`. `request` reads the key again
+    /// from now on.
+    pub async fn set(
         &self,
+        request: Option<&RequestRedis>,
         key: &str,
         value: Value,
         ttl: Option<Duration>,
     ) -> Result<(), Error> {
+        self.forget_misses(request, [key]);
+        self.partition(key).set(key, value, ttl).await
+    }
+
+    /// `DualCache.set_cache`, whose `RedisCache.set_cache` writes `str(value)`. `request` reads the
+    /// key again from now on.
+    pub async fn set_str(
+        &self,
+        request: Option<&RequestRedis>,
+        key: &str,
+        value: Value,
+        ttl: Option<Duration>,
+    ) -> Result<(), Error> {
+        self.forget_misses(request, [key]);
         self.partition(key).set_str(key, value, ttl).await
     }
 
@@ -182,17 +193,20 @@ impl AuthCache {
     }
 
     /// The Redis `SET` of `key`, refused when the key was deleted on any pod since `lease` was
-    /// read: the value may predate the write behind that delete. Memory is the caller's to write.
+    /// read: the value may predate the write behind that delete. Memory is the caller's to write,
+    /// and `request` reads the key again from now on.
     /// Also refused for a key no generation key can share a slot with, which no delete could void.
     /// `true` without Redis, and when Redis failed or `json.dumps` refuses the value, which only
     /// log as in [`AuthCache::set`].
     pub async fn set_leased(
         &self,
+        request: Option<&RequestRedis>,
         key: &str,
         lease: Option<&str>,
         value: Value,
         ttl: Option<Duration>,
     ) -> bool {
+        self.forget_misses(request, [key]);
         let Some(remote) = self.redis.get() else {
             return true;
         };
@@ -226,9 +240,11 @@ impl AuthCache {
     /// the rest in another, each with one TTL.
     pub async fn set_many(
         &self,
+        request: Option<&RequestRedis>,
         entries: Vec<(String, Value)>,
         ttl: Option<Duration>,
     ) -> Result<(), Error> {
+        self.forget_misses(request, entries.iter().map(|(key, _)| key.as_str()));
         let (key_objects, others): (Vec<_>, Vec<_>) =
             entries.into_iter().partition(|(key, _)| is_key_object(key));
         self.key_objects.set_pipeline(key_objects, ttl).await?;
@@ -245,6 +261,10 @@ impl AuthCache {
         send: Send<'_>,
         entries: Vec<(String, Value, Option<Duration>)>,
     ) -> Result<Pending<()>, Error> {
+        self.forget_misses(
+            send.request(),
+            entries.iter().map(|(key, _, _)| key.as_str()),
+        );
         let encoded = self
             .redis
             .get()
@@ -362,6 +382,18 @@ impl AuthCache {
         Ok(client
             .send(commands::eval_source(INCREMENT_IF_PRESENT, &[key], amount))
             .await?)
+    }
+
+    fn forget_misses<'a>(
+        &self,
+        request: Option<&RequestRedis>,
+        keys: impl IntoIterator<Item = &'a str>,
+    ) {
+        let (Some(request), Some(client)) = (request, self.redis.client()) else {
+            return;
+        };
+        let misses = request.misses(client);
+        keys.into_iter().for_each(|key| misses.forget(key));
     }
 
     fn partition(&self, key: &str) -> &DualCache<Value> {
