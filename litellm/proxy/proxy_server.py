@@ -2993,6 +2993,7 @@ _ROUTE_MAX_REQUEST_SIZE_MB: Final[Mapping[tuple[str, str], float]] = MappingProx
         ("POST", "/claude-code/plugins/upload"): 11,
         ("POST", "/skill-hub/skills/upload"): 11,
         ("PUT", "/skill-hub/skills/{name}/upload"): 11,
+        ("PUT", "/skill-hub/submissions/{submission_id}/upload"): 11,
     }
 )
 
@@ -7080,7 +7081,7 @@ class ProxyConfig:
                 elif key == "priority_reservation_settings":
                     from litellm.types.utils import PriorityReservationSettings
 
-                    litellm.priority_reservation_settings = PriorityReservationSettings(**value)
+                    litellm.priority_reservation_settings = PriorityReservationSettings.model_validate(value)
                 elif key == "callbacks":
                     initialize_callbacks_on_proxy(
                         value=value,

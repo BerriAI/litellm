@@ -1926,7 +1926,8 @@
       "status": {
         "pending_review": "Pending review",
         "approved": "Approved",
-        "rejected": "Rejected"
+        "rejected": "Rejected",
+        "withdrawn": "Withdrawn"
       },
       "operation": {
         "create": "New skill",
@@ -1947,7 +1948,15 @@
         "agent_skill": "Portable skill descriptor"
       },
       "nextPatchVersion": "Next patch version on approval",
-      "descriptorUnavailable": "The current portable descriptor is not included in this response"
+      "descriptorUnavailable": "The current portable descriptor is not included in this response",
+      "edit": "Edit submission",
+      "save": "Save submission",
+      "saved": "Submission updated and still awaiting review",
+      "reload": "Discard draft and reload submission",
+      "withdraw": "Withdraw submission",
+      "withdrawNotice": "This removes the unpublished files and proposal details and prevents approval. A withdrawal record remains. You can submit a new proposal later.",
+      "confirmWithdraw": "Confirm withdrawal",
+      "withdrawn": "Submission withdrawn"
     },
     "detail": {
       "subtitle": "Published skill metadata and portable archive",

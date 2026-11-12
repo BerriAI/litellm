@@ -7881,14 +7881,16 @@ class BaseLLMHTTPHandler:
                 provider_config=image_generation_provider_config,
             )
 
-        model_response: Final[ImageResponse] = image_generation_provider_config.transform_image_generation_response(
+        model_response: Final[
+            ImageResponse
+        ] = await image_generation_provider_config.async_transform_image_generation_response(
             model=model,
             raw_response=response,
             model_response=litellm.ImageResponse(),
             logging_obj=logging_obj,
             request_data=data,
-            optional_params=image_generation_optional_request_params,
-            litellm_params=dict(litellm_params),
+            optional_params=image_generation_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
+            litellm_params=dict(litellm_params),  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
             encoding=None,
         )
         set_provider_response_headers_in_hidden_params(model_response, response.headers)

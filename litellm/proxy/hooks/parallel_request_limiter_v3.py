@@ -570,6 +570,15 @@ class CallTypeRateLimiter(Protocol):
     ) -> Exception | str | dict[str, object] | None: ...
 
 
+@dataclass(frozen=True, slots=True)
+class BorrowingTeamModelHold:
+    """A router fallback target's team share with the tokens held on it, settled to actual usage or given back."""
+
+    descriptor: RateLimitDescriptor
+    reserved_tokens: int = 0
+    window: ReservationWindowIdentity | None = None
+
+
 @dataclass(slots=True)
 class RequestRateLimiterStash:
     """
@@ -594,6 +603,7 @@ class RequestRateLimiterStash:
     """
 
     owner_litellm_call_id: str | None = None
+    call_type: str | None = None
     rate_limit_response: RateLimitResponse | None = None
     parallel_slot: ParallelSlotAcquisition | None = None
     parallel_slot_reused_at: datetime | None = None
@@ -615,6 +625,12 @@ class RequestRateLimiterStash:
     batch_enqueued_reservation: BatchEnqueuedTokenReservation | None = None
     batch_tpd_refund_ops: tuple[ReservationOperation, ...] = ()
     borrowing_team_model_limit: RateLimitDescriptor | None = None
+    borrowing_team_model_reserved_tokens: int = 0
+    borrowing_team_model_reserved_window: ReservationWindowIdentity | None = None
+    borrowing_team_model_fallback_limits: Mapping[str, BorrowingTeamModelHold] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
+    priority_class_share: RateLimitDescriptor | None = None
     reservation_released: bool = False
     io_reservation_released: bool = False
     tpm_limited_tags: frozenset[str] = field(default_factory=frozenset)
@@ -760,6 +776,23 @@ def _is_socket_turn(kwargs: Mapping[str, object]) -> bool:
         and connection_call_id is not None
         and connection_call_id == connection_stash.owner_litellm_call_id
     )
+
+
+def callback_kwargs_mapping(kwargs: object) -> Mapping[str, object]:
+    """A logging callback's kwargs as a typed mapping, empty when they are not a mapping."""
+    return _callback_kwargs_mapping(kwargs)
+
+
+def request_stash_for_callback(kwargs: Mapping[str, object]) -> RequestRateLimiterStash | None:
+    """The stash of the request a logging callback settles, or the connection's for a Responses WebSocket turn.
+
+    A nested call (an LLM judge, a silent experiment) mints its own call id and gets None.
+    """
+    call_id: Final = kwargs.get("litellm_call_id")
+    call_stash: Final = get_request_stash_for_call(call_id if isinstance(call_id, str) else None)
+    if call_stash is not None:
+        return call_stash
+    return get_request_stash() if _is_socket_turn(kwargs) else None
 
 
 _AGENT_DESCRIPTOR_KEYS: Final = frozenset({"agent", "agent_session"})
@@ -1058,6 +1091,37 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         existing_cap: Final = data.get(cap_field)
         if existing_cap is None or effective_cap < existing_cap:
             data[cap_field] = effective_cap  # rebind-ok: downstream routing requires the bounded output cap
+
+    def estimate_request_tokens(
+        self,
+        data: object,
+        model: str,
+        min_configured_tpm_limit: int,
+        call_type: str | None,
+        team_id: str | None,
+        rate_limit_type: str = "total",
+    ) -> int:
+        """The reservation this limiter would hold for the request, for another limiter settling the same call."""
+        if rate_limit_type == "total":
+            return self._estimate_tokens_for_request(
+                data=data,
+                model=model,
+                min_configured_tpm_limit=min_configured_tpm_limit,
+                call_type=call_type,
+                team_id=team_id,
+            )
+        estimated_input, output_budget = self._estimate_input_and_output_tokens(
+            data=data,
+            min_configured_tpm_limit=min_configured_tpm_limit,
+            call_type=call_type,
+            team_id=team_id,
+            media_model_resolver=self._media_model_resolver,
+        )
+        return output_budget if rate_limit_type == "output" else estimated_input
+
+    def bound_output_for_limit(self, data: object, min_configured_limit: int, call_type: str | None) -> None:
+        """Cap a request without an explicit output cap the way this limiter does for its own small TPM limits."""
+        self._apply_implicit_output_cap(data=data, min_configured_limit=min_configured_limit, call_type=call_type)
 
     def _estimate_tokens_for_request(
         self,
@@ -3987,6 +4051,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         verbose_proxy_logger.debug("Inside Rate Limit Pre-Call Hook")
 
         stash: Final = claim_request_stash_for_data(data)
+        stash.call_type = call_type
         reuses_request_slot: Final = call_type == CallTypes.call_mcp_tool.value and stash.parallel_slot is not None
         if reuses_request_slot:
             stash.parallel_slot_reused_at = self._get_current_time()
