@@ -34,7 +34,6 @@ export default function TaskBreakdown({ tasks, colors, selectedTaskId, onSelect 
   const { t } = useTranslation();
   const [rank, setRank] = React.useState<Rank>("requests");
   const rows = React.useMemo(() => ranked(tasks, rank), [tasks, rank]);
-  const maxShare = Math.max(0, ...tasks.map((task) => task.share));
   return (
     <div className="flex flex-col gap-2">
       <div
@@ -88,17 +87,10 @@ export default function TaskBreakdown({ tasks, colors, selectedTaskId, onSelect 
                 </button>
               </TableCell>
               <TableCell className={NUMERIC_CELL_CLASS}>
-                <div className="flex items-center justify-end gap-2">
-                  <span
-                    aria-hidden="true"
-                    className="h-1.5 rounded-full bg-primary/60"
-                    style={{ width: `${maxShare > 0 ? (task.share / maxShare) * 48 : 0}px` }}
-                  />
-                  <span>{formatCount(task.request_count)}</span>
-                  <span className="w-12 text-muted-foreground">{formatShare(task.share)}</span>
-                </div>
+                <span>{formatCount(task.request_count)}</span>
+                <span className="block text-xs text-muted-foreground">{formatShare(task.share)}</span>
               </TableCell>
-              <TableCell className={NUMERIC_CELL_CLASS}>
+              <TableCell className={`${NUMERIC_CELL_CLASS} whitespace-normal`}>
                 <span>{formatUsdTotal(task.spend) ?? t("usage.taskInsights.noData")}</span>
                 {task.cost_observations < task.request_count && (
                   <span className="block text-xs text-muted-foreground">

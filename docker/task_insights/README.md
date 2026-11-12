@@ -105,8 +105,9 @@ Evidence and screenshots are in the verification session, https://app.devin.ai/s
   unknown, not zero.
 
 A repeat on a fresh source build whose backend code matches the final commit, with fresh volumes, gave the same
-picture. Discovery over the 44 coding requests drafted "Implement features and refactor code" (25 requests) and
-"Write tests and debug failures" (18), with 2 left as noise. The 30 held-out requests again ended 21 assigned and 9
+picture. Discovery read 45 requests, the 44 coding requests plus 1 failed model call from an earlier check, and
+drafted "Implement features and refactor code" (25 requests) and "Write tests and debug failures" (18), with 2 left as
+noise. The 30 held-out requests again ended 21 assigned and 9
 unknown with none failed, a coverage of 0.70, and the blind agent labels again matched every assignment. Its
 known-priced spend was $0.030, of which $0.026 was synthesis on `claude-sonnet-5-5`, $0.0027 was 75 Jev decisions and
 $0.0019 was 74 coding requests on `claude-haiku-5-5`, with the DashScope embeddings again unpriced.
