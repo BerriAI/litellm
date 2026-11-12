@@ -56,6 +56,7 @@ GATEWAY_PATH_PREFIXES: tuple[str, ...] = (
     "/v1/skills",
     "/v1/a2a/",
     "/a2a/",
+    "/claude_code_gateway/",
     # LiteLLM-native LLM surface
     "/v1/rerank",
     "/v2/rerank",
@@ -117,6 +118,8 @@ GATEWAY_PATH_PREFIXES: tuple[str, ...] = (
     "/milvus/",
     "/openai_passthrough/",
     "/tinyfish/",
+    "/opensearch/",
+    "/backend-api/codex/",
     # Dynamic provider / toolset passthrough (path templates)
     "/{provider}/",
     "/toolset/",
@@ -143,6 +146,10 @@ GATEWAY_EXACT_PATHS: frozenset[str] = frozenset(
         "/debug/memory/summary",
         "/api/event_logging/batch",
         "/eu_jev/v1/systemone",
+        "/laya/v1/systemone",
+        "/bespoke/v1/systemone",
+        "/apply_guardrail",
+        "/guardrails/apply_guardrail",
     }
 )
 
