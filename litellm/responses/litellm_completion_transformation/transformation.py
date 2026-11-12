@@ -2259,6 +2259,9 @@ class LiteLLMCompletionResponsesConfig:
             file_dict["file_data"] = item["file_data"]
         if item.get("filename"):
             file_dict["filename"] = item["filename"]
+        media_format: Final = item.get("format")
+        if media_format is not None:
+            file_dict["format"] = media_format
         bucket_owner: Final = item.get("bucket_owner")
         if bucket_owner is not None and _is_s3_url(file_id or item.get("file_data")):
             file_dict["bucket_owner"] = bucket_owner
@@ -2283,6 +2286,9 @@ class LiteLLMCompletionResponsesConfig:
             if bucket_owner is not None and _is_s3_url(url)
             else ChatCompletionImageUrlObject(url=url, detail=detail)
         )
+        media_format: Final = item.get("format")
+        if media_format is not None:
+            image_url_obj["format"] = media_format
 
         return ChatCompletionImageObject(type="image_url", image_url=image_url_obj)
 
