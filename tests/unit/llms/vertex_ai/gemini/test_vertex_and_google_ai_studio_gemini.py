@@ -9372,68 +9372,36 @@ def test_gemini_31_flash_lite_reasoning_effort_minimal():
 
 
 @pytest.mark.usefixtures("fake_provider_credentials")
-def test_gemini_image_size_limit_exceeded(monkeypatch):
-    """
-    Test that large images exceeding MAX_IMAGE_URL_DOWNLOAD_SIZE_MB are rejected.
-
-    This validates that the 50MB default limit prevents downloading very large images
-    that could cause memory issues and pod crashes.
-
-    The image fetch is mocked (mirroring the LargeImageClient pattern in
-    tests/unit/litellm_core_utils/test_image_handling.py) so the test
-    deterministically exercises the size-limit rejection path without any
-    external network dependency.
-    """
-    from httpx import Request, Response
-
+def test_gemini_image_size_limit_exceeded(monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.litellm_core_utils.prompt_templates import image_handling
 
-    class LargeImageClient:
-        """Returns a response whose Content-Length exceeds the 50MB limit."""
+    def oversized_image(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "image/jpeg", "Content-Length": "1025"},
+            content=b"x" * 1025,
+            request=request,
+        )
 
-        def get(self, url, follow_redirects=True):
-            size_bytes = int(100 * 1024 * 1024)  # 100MB > 50MB default limit
-            return Response(
-                status_code=200,
-                headers={
-                    "Content-Type": "image/jpeg",
-                    "Content-Length": str(size_bytes),
-                },
-                # Empty body: the Content-Length header check in
-                # _process_image_response rejects the image before the body
-                # is ever streamed, so there's no need to allocate 100MB.
-                content=b"",
-                request=Request("GET", url),
-            )
-
-    # Bypass SSRF validation (which would resolve DNS / hit the network) and
-    # route straight to our mocked client.
     monkeypatch.setattr(
         image_handling,
         "safe_get",
         lambda client, url, **kw: client.get(url, follow_redirects=True),
     )
-    monkeypatch.setattr(litellm, "module_level_client", LargeImageClient())
-
-    messages = [
+    monkeypatch.setattr(image_handling, "MAX_IMAGE_URL_DOWNLOAD_SIZE_MB", 1024 / 1024**2)
+    messages: Final = [
         {
             "role": "user",
             "content": [
                 {"type": "text", "text": "What is in this image?"},
-                {
-                    "type": "image_url",
-                    "image_url": "https://example.com/large-image.jpg",
-                },
+                {"type": "image_url", "image_url": "https://example.com/large-image.jpg"},
             ],
         }
     ]
-
-    with pytest.raises(litellm.ImageFetchError) as excinfo:
-        completion(model="gemini/gemini-2.5-flash-lite", messages=messages)
-
-    error_message = str(excinfo.value)
-    assert "Image size" in error_message
-    assert "exceeds maximum allowed size" in error_message
+    with httpx.Client(transport=httpx.MockTransport(oversized_image)) as client:
+        monkeypatch.setattr(litellm, "module_level_client", HTTPHandler(client=client))
+        with pytest.raises(litellm.ImageFetchError, match=r"Image size.*exceeds maximum allowed size"):
+            completion(model="gemini/gemini-2.5-flash-lite", messages=messages)
 
 
 @pytest.fixture

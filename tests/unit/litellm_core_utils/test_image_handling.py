@@ -1047,9 +1047,13 @@ async def test_image_download_accepts_exact_limit_and_rechecks_cached_budget(
             monkeypatch.setattr(litellm, "module_level_client", HTTPHandler(client=client))
             monkeypatch.setattr(litellm, "module_level_aclient", _image_async_handler(aclient))
             result: Final = await _download_image(mode, "https://images.example/boundary.png")
+            assert await _download_image(mode, "https://images.example/boundary.png") == result
             with pytest.raises(litellm.ImageFetchError, match="budget"):
                 await _download_image(mode, "https://images.example/boundary.png", 128)
             assert result == "data:image/png;base64," + base64.b64encode(b"x" * 256).decode()
+            monkeypatch.setattr(image_handling, "MAX_IMAGE_URL_DOWNLOAD_SIZE_MB", 0)
+            with pytest.raises(litellm.ImageFetchError, match="disabled"):
+                await _download_image(mode, "https://images.example/boundary.png")
     assert stream.consumed == 256
     assert stream.closed
 
