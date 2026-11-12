@@ -17,6 +17,7 @@ from typing import (
     cast,  # noqa: TID251  # get_data returns validated rows selected by table_name
 )
 
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from typing_extensions import assert_never
 
 import litellm
@@ -39,6 +40,8 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     LiteLLM_VerificationToken,
 )
+from litellm.proxy.auth.customer_hierarchy_auth import customer_member_cache_key
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import broadcast_evictions
 from litellm.proxy.common_utils.timezone_utils import (
     BudgetResetSettings,
     compute_budget_reset_at,
@@ -55,6 +58,7 @@ from litellm.proxy.db.budget_window_spend_writer import roll_window_spend_row
 from litellm.proxy.db.db_span import db_span, db_spanned
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import POD_LOCK_TARGET, PodLockManager
 from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
+from litellm.proxy.management_helpers.customer_hierarchy import BudgetRecord, PrismaRecord, effective_member_budget
 from litellm.proxy.spend_tracking.committed_spend import committed_spend_keys
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.redis.stores.spend_counters import (
@@ -73,9 +77,12 @@ from litellm.redis.stores.spend_counters import (
     user_counter,
 )
 from litellm.repositories.organization_repository import OrganizationRepository
-from litellm.repositories.prisma_protocols import PrismaBatch, SpendLinkedTable
+from litellm.repositories.prisma_protocols import PrismaBatch, SpendLinkedTable, TableActions
 from litellm.repositories.project_repository import ProjectRepository
 from litellm.repositories.table_repositories import (
+    CustomerMemberRepository,
+    CustomerOrganizationRepository,
+    CustomerTeamRepository,
     EndUserRepository,
     ModelAccessGroupBudgetRepository,
     TagRepository,
@@ -83,9 +90,11 @@ from litellm.repositories.table_repositories import (
 )
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.unit_of_work import (
+    CustomerSpendEntity,
     LinkedSpendResetWrites,
     SpendResetWrites,
     budget_cascade_unit_of_work,
+    customer_spend_reset_unit_of_work,
     enduser_spend_reset_unit_of_work,
     spend_reset_unit_of_work,
 )
@@ -93,6 +102,18 @@ from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 from litellm.types.services import ServiceTypes
+
+
+class _CustomerBudgetRow(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    identity: str = Field(validation_alias=AliasChoices("customer_member_id", "customer_team_id", "customer_org_id"))
+    spend: float
+    budget_reset_at: datetime | None
+    budget: BudgetRecord | None = None
+    budget_template: BudgetRecord | None = None
+    budget_override_expires_at: datetime | None = None
+
 
 _RowT = TypeVar("_RowT")
 
@@ -595,9 +616,127 @@ class ResetBudgetJob:
             await self.reset_budget_for_litellm_teams()
             await self.reset_budget_for_litellm_budget_table()
             await self.reset_budget_windows()
+            await self.reset_budget_for_customer_hierarchy()
         finally:
             if lease is _Lease.LEADER and self.pod_lock_manager is not None:
                 await self.pod_lock_manager.release_lock(cronjob_id=RESET_BUDGET_JOB_NAME)
+
+    async def reset_budget_for_customer_hierarchy(self) -> None:
+        tables: Final[tuple[tuple[CustomerSpendEntity, TableActions[PrismaRecord]], ...]] = (
+            ("org", CustomerOrganizationRepository(self.prisma_client, use_writer=True).table),
+            ("team", CustomerTeamRepository(self.prisma_client, use_writer=True).table),
+            ("member", CustomerMemberRepository(self.prisma_client, use_writer=True).table),
+        )
+        for entity, table in tables:
+            await self._reset_customer_budget_table(entity, table)
+
+    async def _reset_customer_budget_table(
+        self, entity: CustomerSpendEntity, table: TableActions[PrismaRecord]
+    ) -> None:
+        now: Final = datetime.now(timezone.utc)
+        id_field: Final = f"customer_{entity}_id"
+        budget_duration: Final = {"budget": {"is": {"budget_duration": {"not": None}}}}
+        duration_sources: Final = (
+            (
+                {
+                    **budget_duration,
+                    "OR": [
+                        {"budget_override_expires_at": None},
+                        {"budget_override_expires_at": {"gt": now}},
+                    ],
+                },
+                {"budget_template": {"is": {"budget_duration": {"not": None}}}},
+            )
+            if entity == "member"
+            else (budget_duration,)
+        )
+        cursor: str | None = None  # rebind-ok: advances a bounded keyset walk
+        for _ in range(RESET_BUDGET_JOB_MAX_CHUNKS_PER_RUN):
+            where = {
+                **({id_field: {"gt": cursor}} if cursor is not None else {}),
+                "OR": [
+                    {"budget_reset_at": {"lte": now}},
+                    {"budget_reset_at": None, "OR": list(duration_sources)},
+                ],
+            }
+            records = await self._with_db_retry(
+                lambda: table.find_many(
+                    where=where,
+                    include={"budget": True, **({"budget_template": True} if entity == "member" else {})},
+                    order={id_field: "asc"},
+                    take=RESET_BUDGET_JOB_BATCH_SIZE,
+                ),
+                reason="reset_budget_read_customer_failure",
+            )
+            if not records:
+                return
+            rows = tuple(_CustomerBudgetRow.model_validate(record.model_dump()) for record in records)
+            await self._with_db_write_retry(
+                lambda: self._write_customer_budget_resets(entity, rows, now),
+                reason="reset_budget_write_customer_failure",
+            )
+            await self._invalidate_customer_budget_caches(entity, tuple(row.identity for row in rows))
+            if len(records) < RESET_BUDGET_JOB_BATCH_SIZE:
+                return
+            cursor = rows[-1].identity
+
+    async def _invalidate_customer_budget_caches(self, entity: CustomerSpendEntity, identities: Sequence[str]) -> None:
+        if entity == "member":
+            keys: Final = tuple(customer_member_cache_key(identity) for identity in identities)
+            await self._invalidate_cache("user_api_key_cache", keys)
+            await broadcast_evictions(keys)
+            return
+        table: Final = CustomerMemberRepository(self.prisma_client, use_writer=True).table
+        parents: Final = (
+            {"parent_team_id": {"in": list(identities)}}
+            if entity == "team"
+            else {"parent_team": {"is": {"parent_org_id": {"in": list(identities)}}}}
+        )
+        cursor: str | None = None  # rebind-ok: keyset walk must invalidate every descendant after commit
+        while True:
+            records = await self._with_db_retry(
+                lambda: table.find_many(
+                    where={**parents, **({"customer_member_id": {"gt": cursor}} if cursor is not None else {})},
+                    order={"customer_member_id": "asc"},
+                    take=RESET_BUDGET_JOB_BATCH_SIZE,
+                ),
+                reason="reset_budget_read_customer_cache_failure",
+            )
+            if not records:
+                return
+            rows = tuple(_CustomerBudgetRow.model_validate(record.model_dump()) for record in records)
+            await self._invalidate_customer_budget_caches("member", tuple(row.identity for row in rows))
+            if len(rows) < RESET_BUDGET_JOB_BATCH_SIZE:
+                return
+            cursor = rows[-1].identity
+
+    async def _write_customer_budget_resets(
+        self, entity: CustomerSpendEntity, rows: Sequence[_CustomerBudgetRow], now: datetime
+    ) -> None:
+        async with customer_spend_reset_unit_of_work(self._new_batch, entity) as writes:
+            for row in rows:
+                budget = effective_member_budget(row.budget_template, row.budget, row.budget_override_expires_at, now)
+                next_reset = (
+                    compute_budget_reset_at(budget.budget_duration, self.reset_settings)
+                    if budget.budget_duration is not None
+                    else None
+                )
+                # A new duration starts a window without erasing already accrued spend.
+                resetting = row.budget_reset_at is not None and next_reset is not None
+                carried = (
+                    _carried_spend(row.spend, _rollover_cap(budget.max_budget))
+                    if resetting and _rollover_enabled()
+                    else 0.0
+                    if resetting
+                    else row.spend
+                )
+                writes.queue_spend_reset(
+                    identity=row.identity,
+                    budget_reset_at=next_reset,
+                    spend_decrement=row.spend - carried,
+                    expected_reset_at=row.budget_reset_at,
+                    spend_after_reset=carried,
+                )
 
     async def _with_db_retry(self, operation: Callable[[], Awaitable[_RowT]], *, reason: str) -> _RowT:
         """Reconnect and retry once on a transport error, so a dropped connection

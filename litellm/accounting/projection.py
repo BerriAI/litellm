@@ -1,6 +1,6 @@
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import datetime
 from itertools import chain
 from types import MappingProxyType
 from typing import Final
@@ -16,7 +16,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import GuardrailCostByUnitEntry
 from litellm.proxy.db.daily_spend_bulk_upsert import DAILY_SPEND_TABLES, daily_spend_entity_ids
 from litellm.proxy.db.model_insights_tasks import load_model_insight_tasks
-from litellm.proxy.db.model_usage_rollup import date_from_start_time
+from litellm.proxy.db.model_usage_rollup import date_from_start_time, utc_date_from_start_time
 from litellm.proxy.route_llm_request import ROUTE_ENDPOINT_MAPPING
 from litellm.proxy.spend_tracking.compression_savings import extract_compression_saved_tokens
 from litellm.proxy.spend_tracking.savings import extract_cache_creation_tokens, extract_cache_read_tokens
@@ -162,7 +162,12 @@ def _daily_contributions(row: Mapping[str, object], metadata: Mapping[str, objec
     )
     # The legacy daily organization writer uses the charged org argument, not
     # SpendLogs' normalized empty-string identity for a request with no org.
-    daily_row: Final = {**row, "organization_id": _fields(metadata.get("accounting_entities")).get("organization_id")}
+    entities: Final = _fields(metadata.get("accounting_entities"))
+    daily_row: Final = {
+        **row,
+        "organization_id": entities.get("organization_id"),
+        **{key: entities.get(key) for key in ("customer_member_id", "customer_team_id", "customer_org_id")},
+    }
     return tuple(_daily_rows(daily_row, shared_key, counters))
 
 
@@ -172,10 +177,21 @@ def _daily_rows(
     counters: tuple[tuple[str, int | float], ...],
 ) -> Iterator[Contribution]:
     for entity, table in DAILY_SPEND_TABLES.items():
+        customer_date = _utc_date(row) if entity == "customer_member" else None
+        if entity == "customer_member" and customer_date is None:
+            continue
+        daily_key = tuple(
+            (column, customer_date if column == "date" and customer_date is not None else value)
+            for column, value in shared_key
+        )
         for identity in daily_spend_entity_ids(row, entity):
             yield Contribution(
                 table.name,
-                ((table.entity_id_column, _text(identity)), *shared_key),
+                (
+                    (table.entity_id_column, _text(identity)),
+                    *((column, _text(row.get(column))) for column in table.parent_id_columns),
+                    *daily_key,
+                ),
                 counters,
                 (
                     ("model_group", None if row.get("model_group") is None else _text(row.get("model_group"))),
@@ -262,18 +278,7 @@ def _model_contributions(row: Mapping[str, object], metadata: Mapping[str, objec
 
 def _utc_date(row: Mapping[str, object]) -> str | None:
     start: Final = row.get("startTime")
-    try:
-        parsed: Final = datetime.fromisoformat(start.replace("Z", "+00:00")) if isinstance(start, str) else start
-    except ValueError:
-        return None
-    if not isinstance(parsed, datetime):
-        return None
-    return (
-        (parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed)
-        .astimezone(timezone.utc)
-        .date()
-        .isoformat()
-    )
+    return utc_date_from_start_time(start) if isinstance(start, (datetime, str)) else None
 
 
 def _guardrail_contributions(row: Mapping[str, object], metadata: Mapping[str, object]) -> tuple[Contribution, ...]:
