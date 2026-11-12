@@ -63,9 +63,7 @@ def _accepted_reasoning_effort(model: str, requested: str, custom_llm_provider: 
 
 
 _REASONING_LEVELS: Final = frozenset(REASONING_EFFORT_ADVERTISEMENT_ORDER)
-_NON_LEVEL_EFFORT_REASON: Final = (
-    "the Mistral API takes it only as a level such as 'high', so Mistral applies its default effort."
-)
+_NON_LEVEL_EFFORT_REASON: Final = "the Mistral API takes it only as a level such as 'high'."
 
 
 def _reasoning_level_and_summary(reasoning_effort: object) -> tuple[object, object]:
@@ -204,6 +202,15 @@ class MistralConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
+        requested_effort: Final = OPAQUE_VALUE.validate_python(non_default_params.get("reasoning_effort"))
+        reasoning_level: Final = (
+            _sendable_reasoning_level(
+                requested_effort, model=model, provider=self.custom_llm_provider, drop_params=drop_params
+            )
+            if "reasoning_effort" in non_default_params
+            else None
+        )
+        leaves_level_to_mistral: Final = _reasoning_level_and_summary(requested_effort)[0] == "default"
         for param, value in non_default_params.items():
             if param == "max_tokens":
                 optional_params["max_tokens"] = value
@@ -226,22 +233,12 @@ class MistralConfig(OpenAIGPTConfig):
                 optional_params["extra_body"] = {"random_seed": value}
             if param == "response_format":
                 optional_params["response_format"] = value
-            if (
-                param == "reasoning_effort"
-                and (
-                    reasoning_level := _sendable_reasoning_level(
-                        OPAQUE_VALUE.validate_python(value),
-                        model=model,
-                        provider=self.custom_llm_provider,
-                        drop_params=drop_params,
-                    )
-                )
-                is not None
-            ):
+            if param == "reasoning_effort" and reasoning_level is not None:
                 optional_params["reasoning_effort"] = reasoning_level
             if (
                 param == "thinking"
-                and "reasoning_effort" not in non_default_params
+                and reasoning_level is None
+                and not leaves_level_to_mistral
                 and (
                     thinking_effort := _thinking_as_reasoning_effort(
                         OPAQUE_VALUE.validate_python(value), model=model, drop_params=drop_params
