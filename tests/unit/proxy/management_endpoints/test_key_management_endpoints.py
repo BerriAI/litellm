@@ -14265,6 +14265,7 @@ async def test_bulk_update_keys_runs_custom_key_policy_per_key(monkeypatch):
 def _policy_generate_prisma() -> MagicMock:
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_budgettable.create = AsyncMock(return_value=MagicMock(budget_id="budget-1"))
+    mock_prisma.writer_db.litellm_guardrailstable.find_many = AsyncMock(return_value=[SimpleNamespace(guardrail_name="g1")])
     mock_prisma.jsonify_object = MagicMock(side_effect=lambda data: json.loads(data) if isinstance(data, str) else data)
     return mock_prisma
 
@@ -24464,3 +24465,156 @@ def test_non_admin_resaving_referencing_key_metadata_read_back_encrypted_is_not_
         raise_on_logging_credential_change({"note": "unrelated edit"}, key_row, internal_user)
 
     assert removed.value.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "body",
+    ({"guardrails": ["typo"]}, {"metadata": {"guardrails": ["typo"]}}),
+    ids=("top_level", "metadata"),
+)
+def test_key_generate_rejects_an_unregistered_guardrail(
+    spend_permission_client: TestClient, monkeypatch: pytest.MonkeyPatch, body: dict[str, object]
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    prisma_client: Final = proxy_server.prisma_client
+    prisma_client.writer_db.litellm_guardrailstable.find_many = AsyncMock(return_value=[])
+
+    response: Final = spend_permission_client.post("/key/generate", json=body)
+
+    assert response.status_code == 400, response.text
+    assert "typo" in response.json()["error"]["message"]
+    prisma_client.insert_data.assert_not_awaited()
+
+
+def test_key_generate_accepts_a_guardrail_active_in_the_db(
+    spend_permission_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    prisma_client: Final = proxy_server.prisma_client
+    prisma_client.writer_db.litellm_guardrailstable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(guardrail_name="created-on-other-pod")]
+    )
+
+    response: Final = spend_permission_client.post("/key/generate", json={"guardrails": ["created-on-other-pod"]})
+
+    assert response.status_code == 200, response.text
+    prisma_client.insert_data.assert_awaited_once()
+
+
+def _key_with_stale_guardrail() -> LiteLLM_VerificationToken:
+    return LiteLLM_VerificationToken(
+        token=_POLICY_HASHED_TOKEN,
+        user_id="test-user",
+        team_id="team-a",
+        metadata={"guardrails": ["stale"]},
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_key_fn_rejects_an_added_unregistered_guardrail_and_keeps_stale_keys_editable(monkeypatch):
+    from litellm.proxy.management_endpoints.key_management_endpoints import update_key_fn
+
+    mock_prisma_client: Final = _setup_update_key_fn_policy_mocks(monkeypatch, _key_with_stale_guardrail())
+    mock_prisma_client.writer_db.litellm_guardrailstable.find_many = AsyncMock(return_value=[])
+
+    with patch(  # test-quality-ok: cache eviction is outside the guardrail check
+        "litellm.proxy.management_endpoints.key_management_endpoints.delete_cache_key_object",
+        new_callable=AsyncMock,
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await update_key_fn(
+                request=MagicMock(),
+                data=UpdateKeyRequest(key=_POLICY_HASHED_TOKEN, guardrails=["stale", "typo"]),
+                user_api_key_dict=_make_regenerate_user_api_key_dict(),
+                litellm_changed_by=None,
+            )
+        assert str(exc_info.value.code) == "400"
+        assert "typo" in exc_info.value.message
+        assert "stale" not in exc_info.value.message
+        mock_prisma_client.update_data.assert_not_awaited()
+
+        await update_key_fn(
+            request=MagicMock(),
+            data=UpdateKeyRequest(key=_POLICY_HASHED_TOKEN, guardrails=["stale"], max_budget=50.0),
+            user_api_key_dict=_make_regenerate_user_api_key_dict(),
+            litellm_changed_by=None,
+        )
+
+    mock_prisma_client.update_data.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_process_single_key_update_rejects_an_unregistered_guardrail(monkeypatch):
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    mock_prisma_client: Final = AsyncMock()
+    mock_prisma_client.writer_db.litellm_guardrailstable.find_many = AsyncMock(return_value=[])
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _process_single_key_update_under_policy(
+            mock_prisma_client, UpdateKeyRequest(key=_POLICY_HASHED_TOKEN, metadata={"guardrails": ["typo"]}), None
+        )
+
+    assert exc_info.value.status_code == 400
+    mock_prisma_client.update_data.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_regenerate_key_rejects_an_unregistered_guardrail():
+    from litellm.proxy._types import RegenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import regenerate_key_fn
+
+    mock_prisma_client: Final = AsyncMock()
+    mock_prisma_client.writer_db.litellm_guardrailstable.find_many = AsyncMock(return_value=[])
+    mock_repo: Final = MagicMock()
+    mock_repo.table.find_unique = AsyncMock(return_value=_make_regenerate_existing_key())
+
+    with (
+        patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: guardrails are an enterprise field
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),  # test-quality-ok: fake DB
+        patch(  # test-quality-ok: the stored key row is outside the guardrail check
+            "litellm.proxy.management_endpoints.key_management_endpoints.VerificationTokenRepository",
+            return_value=mock_repo,
+        ),
+        pytest.raises(ProxyException) as exc,
+    ):
+        await regenerate_key_fn(
+            key=None,
+            data=RegenerateKeyRequest(key="sk-alice-personal", guardrails=["typo"]),
+            user_api_key_dict=_make_regenerate_user_api_key_dict(),
+            litellm_changed_by=None,
+        )
+
+    assert int(exc.value.code) == 400
+    assert "typo" in str(exc.value.message)
+    mock_repo.table.update.assert_not_called()
+
+
+def test_user_new_rejects_an_unregistered_guardrail_before_creating_anything(
+    spend_permission_client: TestClient,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    prisma_client: Final = proxy_server.prisma_client
+    prisma_client.writer_db.litellm_guardrailstable.find_many = AsyncMock(return_value=[])
+
+    response: Final = spend_permission_client.post("/user/new", json={"guardrails": ["typo"]})
+
+    assert response.status_code == 400, response.text
+    assert "typo" in response.json()["error"]["message"]
+    prisma_client.insert_data.assert_not_awaited()
+
+
+def test_user_new_without_a_key_does_not_check_guardrail_names(spend_permission_client: TestClient) -> None:
+    from litellm.proxy import proxy_server
+
+    find_many: Final = AsyncMock(return_value=[])
+    proxy_server.prisma_client.writer_db.litellm_guardrailstable.find_many = find_many
+
+    response: Final = spend_permission_client.post("/user/new", json={"guardrails": ["typo"], "auto_create_key": False})
+
+    assert response.status_code == 200, response.text
+    find_many.assert_not_awaited()
