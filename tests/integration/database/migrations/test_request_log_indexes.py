@@ -40,7 +40,7 @@ requires_db: Final = pytest.mark.skipif(
 
 REPO: Final = Path(__file__).resolve().parents[4]
 PACKAGE: Final = REPO / "litellm-proxy-extras" / "litellm_proxy_extras"
-PARTITION_SCRIPT: Final = REPO / "db_scripts" / "partition_spend_logs.sql"
+PARTITION_SCRIPT: Final = REPO / "scripts" / "db" / "partition_spend_logs.sql"
 API_KEY_INDEX_MIGRATION: Final = "20260823000000_add_spend_logs_api_key_starttime_index"
 CALL_ID_INDEX_MIGRATION: Final = "20260831120001_spend_logs_litellm_call_id_index"
 API_KEY_INDEX: Final = "LiteLLM_SpendLogs_api_key_startTime_idx"

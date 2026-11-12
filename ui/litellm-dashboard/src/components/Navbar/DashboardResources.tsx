@@ -120,7 +120,7 @@ export function DashboardResources({ children }: { children?: ReactNode }) {
           ))}
         </section>
       )}
-      <div className="border-t border-border bg-muted/25 p-2">
+      <div className="sticky bottom-0 border-t border-border bg-popover p-2">
         <nav aria-label={t("shell.dashboardResources.helpAndResources")} className="grid grid-cols-3 gap-1">
           {links.map(({ href, label, Icon }) => (
             <a

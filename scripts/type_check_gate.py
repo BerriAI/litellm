@@ -34,7 +34,7 @@ was one forgotten env line away from an 80-second crash. The base pass is a
 second basedpyright run over a detached worktree at the merge-base, under the
 same environment so import resolution matches, and scripts/lint_base_counts.py
 spares it whenever it can: the per-rule counts are cached under the repo's git
-common dir keyed by merge-base commit, ``pyrightconfig.json``, ``uv.lock``,
+common dir keyed by merge-base commit, ``pyproject.toml``, ``uv.lock``,
 the Prisma schema, and the dependency-group set, and on a disk-cache miss the
 artifact publish-lint-base-counts.yml uploaded for the merge-base is
 downloaded through the ``gh`` CLI (``--emit-counts-dir`` is the publisher's
@@ -62,6 +62,11 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
+
 from lint_base_counts import (
     Checker,
     base_counts_cached,
@@ -72,7 +77,7 @@ from lint_base_counts import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-PYRIGHT_CONFIG = REPO_ROOT / "pyrightconfig.json"
+PYRIGHT_CONFIG = REPO_ROOT / "pyproject.toml"
 UV_LOCK = REPO_ROOT / "uv.lock"
 
 # The one environment every basedpyright pass measures in. The group set is
@@ -140,12 +145,12 @@ def node_options_with_heap(base_env: Mapping[str, str]) -> str:
     return f"{base_env.get('NODE_OPTIONS', '')} {NODE_HEAP_OPTION}".strip()
 
 
-def typecheck_python_version() -> str | None:
+def typecheck_python_version(config_path: Path = PYRIGHT_CONFIG) -> str | None:
     """The interpreter version to build the owned env with, read from
     pyrightconfig's `pythonVersion` so the packages installed for basedpyright
     to see always come from the same version it type-checks against."""
     try:
-        config = json.loads(PYRIGHT_CONFIG.read_text())
+        config: Final = tomllib.loads(config_path.read_text()).get("tool", {}).get("pyright", {})
     except (OSError, ValueError):
         return None
     version: Final = config.get("pythonVersion") if isinstance(config, dict) else None
@@ -214,6 +219,8 @@ def run_basedpyright(cwd: Path = REPO_ROOT, env_dir: Path = TYPECHECK_ENV_DIR) -
         [
             str(bin_dir / "basedpyright"),
             "--outputjson",
+            "--project",
+            str(cwd / PYRIGHT_CONFIG.name),
             "--pythonpath",
             str(bin_dir / "python"),
         ],
@@ -250,7 +257,7 @@ def base_counts(ref: str) -> dict[str, int]:
     config is copied in so the base is judged by today's rules, and the run uses
     the head environment's basedpyright (on PATH) so imports resolve the same."""
     with _temp_worktree(ref) as worktree:
-        shutil.copy(PYRIGHT_CONFIG, worktree / "pyrightconfig.json")
+        shutil.copy(PYRIGHT_CONFIG, worktree / PYRIGHT_CONFIG.name)
         return count_basedpyright(run_basedpyright(worktree), root=worktree)
 
 
