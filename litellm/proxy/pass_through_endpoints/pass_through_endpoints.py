@@ -143,7 +143,10 @@ from litellm.proxy.common_utils.openai_error_payload import (
 from litellm.proxy.common_utils.sse_keepalive import (
     wrap_passthrough_sse_bytes_with_keepalive_pings,
 )
-from litellm.proxy.hooks.parallel_request_limiter_v3 import ResponsesWebSocketClose
+from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    ResponsesWebSocketClose,
+    leave_reservation_to_socket_close,
+)
 from litellm.proxy.litellm_pre_call_utils import (  # noqa: F401  # legacy module exports
     ROUTER_RESERVED_METADATA_FIELDS,
     LiteLLMProxyRequestSetup,
@@ -3382,6 +3385,8 @@ async def websocket_passthrough_request(
     except Exception:
         await proxy_logging_obj.arelease_responses_websocket_slot(user_api_key_dict, "refused_at_open")
         raise
+    if upstream_frame_kind is not None:
+        leave_reservation_to_socket_close()
 
     unfinished_turn: Final = asyncio.Event()
     try:

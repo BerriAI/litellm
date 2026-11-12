@@ -8,8 +8,8 @@ import logging
 import sys
 import time
 from dataclasses import dataclass
-from collections.abc import AsyncGenerator, Awaitable, Iterator, Sequence
-from contextlib import contextmanager
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Iterator, Sequence
+from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timedelta, timezone
 from functools import partial
 from typing import Any, Dict, Final, List, Optional
@@ -51,6 +51,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _request_stash,
     get_or_create_request_stash,
     get_request_stash,
+    leave_reservation_to_socket_close,
 )
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROXY_MaxParallelRequestsHandler_v3 as _PROXY_MaxParallelRequestsHandler,
@@ -6153,7 +6154,10 @@ class _RefundFailingRateLimits(FakeRateLimits):
 
 
 @pytest.mark.asyncio
-async def test_a_responses_websocket_close_whose_refund_fails_still_frees_its_slot() -> None:
+@pytest.mark.parametrize("close", ["turns_finished", "refused_at_open"])
+async def test_a_responses_websocket_close_whose_refund_fails_still_frees_its_slot(
+    close: ResponsesWebSocketClose, caplog: pytest.LogCaptureFixture
+) -> None:
     cache: Final = DualCache()
     fakes: Final = _RefundFailingRateLimits()
     handler: Final = _PROXY_MaxParallelRequestsHandler(
@@ -6168,9 +6172,14 @@ async def test_a_responses_websocket_close_whose_refund_fails_still_frees_its_sl
     await _admit_responses_websocket(handler, cache, auth, "socket")
     fakes.refunds_fail = True
 
-    await proxy_logging_obj.arelease_responses_websocket_slot(auth, "turns_finished")
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
+        async with _background_work_awaited():
+            await proxy_logging_obj.arelease_responses_websocket_slot(auth, close)
 
     assert handler._gauge_in_flight_from_cache_value(_local(handler, RateLimitScope("api_key", api_key).gauge)) == 0
+    assert [record.getMessage() for record in caplog.records] == [
+        "Error releasing a closed Responses WebSocket's admission: rate limit store unreachable"
+    ]
 
 
 @pytest.mark.asyncio
@@ -6237,11 +6246,166 @@ async def test_a_closed_responses_websocket_refunds_a_project_reservation_stashe
     stash.itpm_reserved_tokens = 100
     stash.itpm_reserved_scopes = frozenset({scope})
 
-    await proxy_logging_obj.arelease_responses_websocket_slot(
-        UserAPIKeyAuth(api_key=hash_token("sk-responses-websocket-windowless")), "turns_finished"
-    )
+    async with _background_work_awaited():
+        await proxy_logging_obj.arelease_responses_websocket_slot(
+            UserAPIKeyAuth(api_key=hash_token("sk-responses-websocket-windowless")), "turns_finished"
+        )
 
     assert int(_local(handler, counter_key) or 0) == 0
+
+
+@asynccontextmanager
+async def _background_work_awaited() -> AsyncIterator[None]:
+    before: Final = asyncio.all_tasks()
+    yield
+    await asyncio.wait_for(asyncio.gather(*(asyncio.all_tasks() - before)), timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_a_responses_websocket_close_frees_its_slot_at_once_and_refunds_its_tpm_once_its_turns_logged() -> None:
+    cache: Final = DualCache()
+    handler, proxy_logging_obj = _responses_websocket_limiter(cache)
+    api_key: Final = hash_token("sk-responses-websocket-close-returns")
+    auth: Final = UserAPIKeyAuth(
+        api_key=api_key, tpm_limit=1_000, max_parallel_requests=1, metadata={"default_estimated_output_tokens": 60}
+    )
+    tokens_key: Final = _counter("api_key", api_key)
+    parallel_key: Final = RateLimitScope("api_key", api_key).gauge
+    await _admit_responses_websocket(handler, cache, auth, "socket")
+    reserved: Final = int(_local(handler, tokens_key) or 0)
+    logged: Final = asyncio.Event()
+
+    async def turns_logged() -> None:
+        await logged.wait()
+
+    async with _background_work_awaited():
+        await asyncio.wait_for(
+            proxy_logging_obj.arelease_responses_websocket_slot(auth, "turns_finished", turns_logged), timeout=1
+        )
+        when_the_close_returned: Final = (
+            int(_local(handler, tokens_key) or 0),
+            handler._gauge_in_flight_from_cache_value(_local(handler, parallel_key)),
+        )
+        logged.set()
+
+    assert reserved > 0
+    assert when_the_close_returned == (reserved, 0)
+    assert int(_local(handler, tokens_key) or 0) == 0
+
+
+@dataclass(frozen=True, slots=True)
+class _AdmittedPtuResponsesWebSocket:
+    handler: PROXY_MaxParallelRequestsHandler_v3
+    proxy_logging_obj: ProxyLogging
+    auth: UserAPIKeyAuth
+    clock: list[datetime]
+
+    @classmethod
+    async def marked_at_admission(cls) -> "_AdmittedPtuResponsesWebSocket":
+        cache: Final = DualCache()
+        clock: Final = [datetime(2026, 11, 9, 12, 0, 0)]
+        resolve, _ = _ptu_ceiling_for("t", "test-model", tpm_limit=2000, ratio=4.0)
+        handler: Final = _PROXY_MaxParallelRequestsHandler(
+            internal_usage_cache=InternalUsageCache(cache),
+            time_provider=lambda: clock[-1],
+            ptu_team_ceiling_resolver=resolve,
+        )
+        proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = handler
+        auth: Final = UserAPIKeyAuth(
+            api_key=hash_token("sk-responses-websocket-failure-row"), team_id="t", tpm_limit=10_000
+        )
+        _request_stash.set(None)
+        await handler.async_pre_call_hook(
+            user_api_key_dict=auth,
+            cache=cache,
+            data={**_ptu_request(), "litellm_call_id": "ptu-socket"},
+            call_type=CallTypes.aresponses_websocket.value,
+        )
+        leave_reservation_to_socket_close()
+        return cls(handler=handler, proxy_logging_obj=proxy_logging_obj, auth=auth, clock=clock)
+
+    def key_and_ptu_tokens(self) -> tuple[int, int]:
+        key_tokens, ptu_tokens = (
+            int(_local(self.handler, entry) or 0)
+            for entry in (_counter("api_key", self.auth.api_key or ""), _counter("model_per_team_ptu", "t:test-model"))
+        )
+        return key_tokens, ptu_tokens
+
+    async def write_failure_row(self, failure_row: str) -> None:
+        if failure_row == "failure_event":
+            await self.handler.async_log_failure_event(
+                kwargs={"model": "test-model", "litellm_call_id": "ptu-socket"},
+                response_obj=None,
+                start_time=self.clock[-1],
+                end_time=self.clock[-1],
+            )
+            return
+        await self.handler.async_post_call_failure_hook(
+            request_data={"model": "test-model", "litellm_call_id": "ptu-socket"},
+            original_exception=RuntimeError("upstream failed"),
+            user_api_key_dict=self.auth,
+        )
+
+    async def roll_the_window_with_usage(self, tokens: int) -> None:
+        self.clock.append(self.clock[-1] + timedelta(seconds=self.handler.window_size + 1))
+        await self.handler.atomic_check_and_increment_by_n(
+            descriptors=[
+                {
+                    "key": "api_key",
+                    "value": self.auth.api_key or "",
+                    "rate_limit": {"tokens_per_unit": 10_000, "window_size": self.handler.window_size},
+                },
+                {
+                    "key": "model_per_team_ptu",
+                    "value": "t:test-model",
+                    "rate_limit": {"tokens_per_unit": 2000, "window_size": self.handler.window_size},
+                },
+            ],
+            increments=[{"tokens": tokens}, {"tokens": tokens}],
+        )
+
+    async def close(self, close: ResponsesWebSocketClose) -> None:
+        async with _background_work_awaited():
+            await self.proxy_logging_obj.arelease_responses_websocket_slot(self.auth, close)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_row", ["post_call_failure_hook", "failure_event"])
+async def test_a_responses_websocket_failure_row_leaves_its_reservation_to_a_close_after_its_turns_finished(
+    failure_row: str,
+) -> None:
+    socket: Final = await _AdmittedPtuResponsesWebSocket.marked_at_admission()
+    reserved: Final = socket.key_and_ptu_tokens()
+
+    await socket.write_failure_row(failure_row)
+    after_the_failure_row: Final = socket.key_and_ptu_tokens()
+    await socket.roll_the_window_with_usage(20)
+    await socket.close("turns_finished")
+
+    assert min(reserved) > 0
+    assert after_the_failure_row == reserved
+    assert socket.key_and_ptu_tokens() == (20, 20)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_row", ["post_call_failure_hook", "failure_event"])
+@pytest.mark.parametrize(
+    ("window_rolls", "key_and_ptu_tokens_after_close"),
+    [(False, (0, 0)), (True, (20, 20))],
+    ids=["same_minute", "later_minute"],
+)
+async def test_a_responses_websocket_whose_relay_crashed_refunds_its_whole_reservation_into_its_own_minute_only(
+    failure_row: str, window_rolls: bool, key_and_ptu_tokens_after_close: tuple[int, int]
+) -> None:
+    socket: Final = await _AdmittedPtuResponsesWebSocket.marked_at_admission()
+    if window_rolls:
+        await socket.roll_the_window_with_usage(20)
+
+    await socket.write_failure_row(failure_row)
+    await socket.close("refused_at_open")
+
+    assert socket.key_and_ptu_tokens() == key_and_ptu_tokens_after_close
 
 
 @pytest.mark.parametrize("disconnect", ["cancel", "aclose"])

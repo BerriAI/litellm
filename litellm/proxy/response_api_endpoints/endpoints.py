@@ -29,7 +29,7 @@ from fastapi.responses import JSONResponse
 from openai.types.responses import ResponseItemList
 from openai.types.responses.response_create_params import ResponseInputParam
 from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
-from starlette.websockets import WebSocket, WebSocketDisconnect, WebSocketState
+from starlette.websockets import WebSocket, WebSocketDisconnect
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
@@ -86,6 +86,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
 )
 from litellm.proxy.common_utils.token_count_log import answered_with_litellm_call_id, rejected_token_count
 from litellm.proxy.common_utils.token_count_settings import count_source_fields
+from litellm.proxy.hooks.parallel_request_limiter_v3 import leave_reservation_to_socket_close
 from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
 from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity, decrypted_response_id
 from litellm.proxy.litellm_pre_call_utils import (
@@ -2711,8 +2712,10 @@ async def _responses_websocket_session(
         await websocket.close(code=1008, reason="Pre-call error")
         return
 
+    leave_reservation_to_socket_close()
     refused_turns: Final = _RefusedTurns()
     unfinished_turn: Final = asyncio.Event()
+    relay_crashed: Final = asyncio.Event()
     routed_data: Final = dict(
         data,
         user_api_key_dict=user_api_key_dict,
@@ -2749,6 +2752,7 @@ async def _responses_websocket_session(
                 _ = bill_socket_failure(refused_turns.first)
             raise
         except Exception as e:
+            relay_crashed.set()
             crash_row: Final = bill_socket_failure(e)
             with contextlib.suppress(Exception):
                 await websocket.send_text(_responses_ws_failure_frame(e))
@@ -2767,24 +2771,18 @@ async def _responses_websocket_session(
         try:
             failure_row: Final = await relay_and_bill_failure()
         finally:
-            try:
-                await _close_if_open(websocket)
-            finally:
-                await proxy_logging_obj.arelease_responses_websocket_slot(
-                    user_api_key_dict,
-                    "turn_unfinished" if unfinished_turn.is_set() else "turns_finished",
-                    socket_logging.finished,
-                )
+            await proxy_logging_obj.arelease_responses_websocket_slot(
+                user_api_key_dict,
+                "turn_unfinished"
+                if unfinished_turn.is_set()
+                else "refused_at_open"
+                if relay_crashed.is_set()
+                else "turns_finished",
+                socket_logging.finished,
+            )
     if failure_row is not None:
         with contextlib.suppress(Exception):
             await asyncio.shield(failure_row)
-
-
-async def _close_if_open(websocket: WebSocket) -> None:
-    if WebSocketState.DISCONNECTED in (websocket.client_state, websocket.application_state):
-        return
-    with contextlib.suppress(WebSocketDisconnect, RuntimeError, OSError):
-        await websocket.close()
 
 
 @router.websocket("/v1/responses")

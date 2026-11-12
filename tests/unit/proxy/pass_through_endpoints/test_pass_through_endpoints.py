@@ -11,7 +11,7 @@ import zlib
 from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from io import BytesIO
 from types import MappingProxyType, ModuleType, SimpleNamespace
 from typing import Final, Optional, cast
@@ -86,6 +86,7 @@ from litellm.proxy.pass_through_endpoints.success_handler import (
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_spend_logs_id
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
+from litellm.redis.stores.rate_limits import RateLimitScope
 from litellm.types import utils as types_utils
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CallTypes
@@ -9091,6 +9092,69 @@ async def test_websocket_passthrough_refused_by_a_later_pre_call_hook_frees_its_
         await asyncio.create_task(refused_session(), context=contextvars.Context())
 
     assert (await opens_another_session(), await opens_another_session()) == (True, False)
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_rejected_by_its_upstream_in_a_later_minute_leaves_that_minutes_tpm_alone():
+    clock: Final = [datetime(2026, 11, 9, 12, 0, 0)]
+    limiter_cache: Final = DualCache()
+    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(
+        internal_usage_cache=InternalUsageCache(limiter_cache), time_provider=lambda: clock[-1]
+    )
+    proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = limiter
+    key: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-rejected-socket"), tpm_limit=1_000, metadata={"default_estimated_output_tokens": 60}
+    )
+    key_tokens: Final = RateLimitScope("api_key", key.api_key or "").counter("tokens")
+
+    async def admit_then_roll_the_window(
+        user_api_key_dict: UserAPIKeyAuth, data: Mapping[str, object], call_type: str
+    ) -> None:
+        await limiter.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict, cache=limiter_cache, data=dict(data), call_type=call_type
+        )
+        clock.append(clock[-1] + timedelta(seconds=limiter.window_size + 1))
+        await limiter.atomic_check_and_increment_by_n(
+            descriptors=[
+                {
+                    "key": "api_key",
+                    "value": key.api_key or "",
+                    "rate_limit": {"tokens_per_unit": 1_000, "window_size": limiter.window_size},
+                }
+            ],
+            increments=[{"tokens": 20}],
+        )
+
+    async def rejected_session() -> None:
+        with (
+            _patched_websocket_passthrough_environment(ScriptedUpstreamWebSocket()) as proxy_logging,
+            patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.connect",
+                side_effect=_websocket_connect_failure("rejected_handshake"),
+            ),
+        ):
+            proxy_logging.pre_call_hook = AsyncMock(side_effect=admit_then_roll_the_window)
+            proxy_logging.post_call_failure_hook = AsyncMock(side_effect=limiter.async_post_call_failure_hook)
+            proxy_logging.arelease_responses_websocket_slot = proxy_logging_obj.arelease_responses_websocket_slot
+            await websocket_passthrough_request(
+                websocket=_client_websocket(_pending_receive),
+                target="wss://api.openai.com/v1/responses",
+                custom_headers={"Authorization": "Bearer sk-provider"},
+                user_api_key_dict=key,
+                forward_headers=False,
+                endpoint="/openai_passthrough/v1/responses",
+                accept_websocket=False,
+                client_frame_model_gate=RecordingFrameModelGate(),
+                upstream_frame_kind=openai_websocket_frame_kind,
+            )
+            proxy_logging.post_call_failure_hook.assert_awaited_once()
+
+    before_the_socket: Final = asyncio.all_tasks()
+    await asyncio.create_task(rejected_session(), context=contextvars.Context())
+    await asyncio.wait_for(asyncio.gather(*(asyncio.all_tasks() - before_the_socket)), timeout=5)
+
+    assert int(limiter.rate_limits.local((key_tokens,))[0] or 0) == 20
 
 
 @pytest.mark.asyncio
