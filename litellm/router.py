@@ -391,6 +391,7 @@ from litellm.utils import (
     provider_rejectable_params,
     set_live_deployment_replay,
 )
+from litellm.vector_stores.search_query import store_search_params
 
 from .router_utils.pattern_match_deployments import PatternMatchRouter
 
@@ -2307,6 +2308,7 @@ class Router:
             update,
         )
 
+        self._vector_store_search_handlers: tuple[Callable[..., object], ...] = (asearch, search)
         self.avector_store_search = self.factory_function(asearch, call_type="avector_store_search")
         self.vector_store_search = self.factory_function(search, call_type="vector_store_search")
         self.vector_store_create = self.factory_function(create, call_type="vector_store_create")
@@ -5753,7 +5755,11 @@ class Router:
             custom_llm_provider: Final = provider_for_generic_call(data)
 
             response_kwargs: Final = {
-                **data,
+                **(
+                    store_search_params(_LITELLM_PARAMS_ADAPTER.validate_python(data))
+                    if original_generic_function in self._vector_store_search_handlers
+                    else data
+                ),
                 "caching": self.cache_responses,
                 **kwargs,
                 "model": model_name,
@@ -6496,7 +6502,11 @@ class Router:
 
             response: Final = original_function(
                 **{
-                    **data,
+                    **(
+                        store_search_params(_LITELLM_PARAMS_ADAPTER.validate_python(data))
+                        if original_function in self._vector_store_search_handlers
+                        else data
+                    ),
                     "custom_llm_provider": custom_llm_provider,
                     "caching": self.cache_responses,
                     **kwargs,
