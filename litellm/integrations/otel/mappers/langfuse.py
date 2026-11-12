@@ -44,7 +44,12 @@ LANGFUSE_VERSION: Final = "langfuse.version"
 LANGFUSE_OBSERVATION_METADATA: Final = "langfuse.observation.metadata"
 LANGFUSE_TRACE_METADATA_PREFIX: Final = "langfuse.trace.metadata."
 LANGFUSE_REQUEST_METADATA_ATTRIBUTES: Final[frozenset[str]] = frozenset(
-    {LANGFUSE_OBSERVATION_METADATA, *(f"{LANGFUSE_TRACE_METADATA_PREFIX}{name}" for name in IDENTITY_METADATA_FIELDS)}
+    {
+        LANGFUSE_OBSERVATION_METADATA,
+        LANGFUSE_RELEASE,
+        LANGFUSE_VERSION,
+        *(f"{LANGFUSE_TRACE_METADATA_PREFIX}{name}" for name in IDENTITY_METADATA_FIELDS),
+    }
 )
 
 

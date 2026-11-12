@@ -3831,6 +3831,21 @@ class TestLangfuseDestinationFields:
             "the generic attributes all survive"
         )
 
+    def test_a_span_at_its_attribute_limit_sheds_the_release_and_version_before_its_other_fields(self) -> None:
+        call: Final = replace(_MODEL_CALL_WITH_CONTENT, trace=TraceControls(release="rel-1", version="v-1"))
+        config: Final = OpenTelemetryV2Config(mapper_names=["genai", "langfuse"])
+
+        def attributes(limit: int | None) -> dict[str, object]:
+            exporter: Final = InMemorySpanExporter()
+            provider: Final = TracerProvider(span_limits=SpanLimits(max_span_attributes=limit))
+            provider.add_span_processor(SimpleSpanProcessor(exporter))
+            SpanEmitter(get_tracer(provider, "litellm"), config).emit(SpanRole.LLM_CALL, call)
+            return dict(exporter.get_finished_spans()[0].attributes or {})
+
+        whole: Final = attributes(None)
+
+        assert whole.keys() - attributes(len(whole) - 2).keys() == {"langfuse.release", "langfuse.version"}
+
     def test_a_span_at_its_attribute_limit_sheds_the_destinations_request_metadata_before_its_other_fields(
         self,
     ) -> None:
