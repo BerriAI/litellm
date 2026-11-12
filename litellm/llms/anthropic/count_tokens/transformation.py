@@ -7,6 +7,7 @@ This module handles the transformation of requests to Anthropic's CountTokens AP
 import copy
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from functools import partial
 from itertools import chain
 from types import MappingProxyType
 from typing import (
@@ -313,10 +314,12 @@ def _message_problem(index: int, message: Mapping[str, object]) -> str | None:
     return None
 
 
-def _chat_message_problem(index: int, message: Mapping[str, object]) -> str | None:
+def _chat_message_problem(
+    roles_without_content: frozenset[str], index: int, message: Mapping[str, object]
+) -> str | None:
     if "role" not in message:
         return f"Message {index} must have a 'role' field"
-    if message.get("content") is None and message["role"] not in _CHAT_ROLES_WITHOUT_CONTENT:
+    if message.get("content") is None and message["role"] not in roles_without_content:
         return f"Message {index} must have a 'content' field"
     return None
 
@@ -336,6 +339,12 @@ def _first_message_problem(
 
 def malformed_message_error(messages: Sequence[Mapping[str, object]]) -> ChatCountTranslationError | None:
     return _first_message_problem(messages, _message_problem)
+
+
+def chat_message_error(
+    messages: Sequence[Mapping[str, object]], roles_without_content: frozenset[str] = _CHAT_ROLES_WITHOUT_CONTENT
+) -> ChatCountTranslationError | None:
+    return _first_message_problem(messages, partial(_chat_message_problem, roles_without_content))
 
 
 def anthropic_fields_for_chat_tool_use(
@@ -362,11 +371,9 @@ def anthropic_fields_for_chat_tool_use(
     try:
         request: Final = _translated_chat_request(model, messages, system, counted_tools, chat_params, translator)
     except (AnthropicError, BadRequestError) as e:
-        return _first_message_problem(messages, _chat_message_problem) or ChatCountTranslationError(
-            message=str(e.message)
-        )
+        return chat_message_error(messages) or ChatCountTranslationError(message=str(e.message))
     except (ValueError, KeyError) as e:
-        return _first_message_problem(messages, _chat_message_problem) or ChatCountTranslationError(
+        return chat_message_error(messages) or ChatCountTranslationError(
             message=f"Invalid request for token counting: {e}"
         )
     translated: Final = _ANTHROPIC_CHAT_REQUEST.validate_python(request)

@@ -14,7 +14,11 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.common_utils import context_management_betas, context_management_with_edits
-from litellm.llms.anthropic.count_tokens.transformation import ChatCountTranslationError, anthropic_count_fields
+from litellm.llms.anthropic.count_tokens.transformation import (
+    ChatCountTranslationError,
+    anthropic_count_fields,
+    chat_message_error,
+)
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.bedrock.common_utils import (
     BEDROCK_INVOKE_CONTEXT_MANAGEMENT_EDIT_BETAS,
@@ -36,6 +40,7 @@ from litellm.types.utils import (
 RUNTIME_TOKENIZER_TYPE: Final = "bedrock_api"
 MANTLE_TOKENIZER_TYPE: Final = "bedrock_mantle_api"
 _RUNTIME_FALLBACK_STATUSES: Final = frozenset({400, 404})
+_CONVERSE_ROLES_WITHOUT_CONTENT: Final = frozenset({"assistant"})
 
 
 class _CountTokensReply(LiteLLMPydanticObjectBase):
@@ -60,16 +65,16 @@ class CountTokensFailure:
 CountTokensOutcome = CountedTokens | CountTokensFailure
 
 
-def _claude_count_translator(litellm_params: Mapping[str, object]) -> AnthropicConfig:
+def _anthropic_chat_config(litellm_params: Mapping[str, object]) -> AnthropicConfig | None:
     deployment_model: Final = litellm_params.get("model")
     if not isinstance(deployment_model, str):
-        return AnthropicConfig()
+        return None
     provider_hint: Final = litellm_params.get("custom_llm_provider")
     model, provider, _, _ = litellm.get_llm_provider(
         model=deployment_model, custom_llm_provider=provider_hint if isinstance(provider_hint, str) else None
     )
     chat_config: Final = litellm.ProviderConfigManager.get_provider_chat_config(model, LlmProviders(provider))
-    return chat_config if isinstance(chat_config, AnthropicConfig) else AnthropicConfig()
+    return chat_config if isinstance(chat_config, AnthropicConfig) else None
 
 
 def _runtime_rejected_claude_model(outcome: CountTokensOutcome, resolved_model: str) -> bool:
@@ -203,6 +208,15 @@ class BedrockTokenCounter(BaseTokenCounter):
         resolved_model: Final = get_bedrock_base_model(counted_model)
         primary_tokenizer: Final = MANTLE_TOKENIZER_TYPE if use_mantle else RUNTIME_TOKENIZER_TYPE
         litellm_params: Final = (deployment or {}).get("litellm_params", {})
+        claude: Final = is_mantle_claude_model(resolved_model)
+        chat_config: Final = _anthropic_chat_config(litellm_params) if claude else None
+        converse_drops: Final = (
+            chat_message_error(messages, _CONVERSE_ROLES_WITHOUT_CONTENT)
+            if claude and chat_config is None and messages_format == "openai"
+            else None
+        )
+        if converse_drops is not None:
+            return converse_drops.response(request_model, model_to_use, primary_tokenizer)
         translated: Final = (
             await anthropic_count_fields(
                 counted_model,
@@ -210,17 +224,15 @@ class BedrockTokenCounter(BaseTokenCounter):
                 system,
                 tools,
                 messages_format,
-                _claude_count_translator(litellm_params),
+                chat_config or AnthropicConfig(),
                 chat_params,
             )
-            if is_mantle_claude_model(resolved_model)
+            if claude
             else None
         )
         if isinstance(translated, ChatCountTranslationError):
             return translated.response(request_model, model_to_use, primary_tokenizer)
-        native_context_management: Final = _invoke_context_management(
-            context_management if is_mantle_claude_model(resolved_model) else None
-        )
+        native_context_management: Final = _invoke_context_management(context_management if claude else None)
         counted_messages: Final = messages if translated is None else translated.messages
         runtime_request: Final = {
             **_request_data(
