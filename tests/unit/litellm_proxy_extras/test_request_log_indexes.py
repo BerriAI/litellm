@@ -15,6 +15,9 @@ SCHEMA: Final = PACKAGE / "schema.prisma"
 INERT_MIGRATIONS: Final = (
     "20260823000000_add_spend_logs_api_key_starttime_index",
     "20260831120001_spend_logs_litellm_call_id_index",
+    "20250510142544_add_session_id_index_spend_logs",
+    "20260228100000_add_spend_logs_composite_index",
+    "20260724000000_add_spend_log_tool_index_start_time_idx",
 )
 CALL_ID_INDEX: Final = RequestLogIndex(
     "LiteLLM_SpendLogs", "LiteLLM_SpendLogs_litellm_call_id_idx", '("litellm_call_id")'

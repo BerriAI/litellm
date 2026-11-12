@@ -1,2 +1,2 @@
--- CreateIndex
-CREATE INDEX IF NOT EXISTS "LiteLLM_SpendLogs_startTime_request_id_idx" ON "LiteLLM_SpendLogs"("startTime", "request_id");
+-- Built after migrate deploy by litellm_proxy_extras/request_log_indexes.py, never by a migration.
+SELECT 1;

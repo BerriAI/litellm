@@ -1492,7 +1492,7 @@ def test_migration_completion_requires_a_matching_successful_script(steps, logs,
     from litellm_proxy_extras.migration_recovery import MigrationProgress
 
     progress = MigrationProgress(hashlib.sha256(b"CREATE TABLE item (id int);").hexdigest(), steps, logs)
-    assert progress.confirms_completion(script) is expected
+    assert progress.confirms_completion(frozenset({hashlib.sha256(script).hexdigest()})) is expected
 
 
 def test_prisma_lock_waiting_has_its_own_deadline():
