@@ -86,10 +86,16 @@ def replicate_prediction_request(
             body=MappingProxyType({"input": prediction_input}),
         )
     if ":" in model:
-        version: Final = model.split(":", 1)[1]
+        model_path, _, version = model.partition(":")
+        if not version:
+            raise ReplicateError(status_code=400, message=f"Invalid Replicate model version: {model!r}", headers={})
         return ReplicatePredictionRequest(
-            url=join_api_base(api_base, "predictions"),
-            body=MappingProxyType({"version": version, "input": prediction_input}),
+            url=join_api_base(
+                api_base,
+                f"models/{replicate_model_path(model_path)}/versions/"
+                f"{encode_url_path_segment(version, field_name='version')}/predictions",
+            ),
+            body=MappingProxyType({"input": prediction_input}),
         )
     return ReplicatePredictionRequest(
         url=join_api_base(api_base, f"models/{replicate_model_path(model)}/predictions"),

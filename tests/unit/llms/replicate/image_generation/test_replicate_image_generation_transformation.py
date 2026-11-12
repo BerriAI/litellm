@@ -111,14 +111,14 @@ def test_request_url_and_body():
     config = ReplicateImageGenerationConfig()
     assert config.get_complete_url(None, None, MODEL, {}, {}) == PREDICTIONS_URL
     assert config.get_complete_url("https://proxy.internal", None, "owner/name:v1", {}, {}) == (
-        "https://proxy.internal/v1/predictions"
+        "https://proxy.internal/v1/models/owner/name/versions/v1/predictions"
     )
     body = config.transform_image_generation_request(
         MODEL, "a red fox", {"num_outputs": 2, "aspect_ratio": "1:1", "response_format": "url"}, {}, {}
     )
     assert body == {"input": {"prompt": "a red fox", "num_outputs": 2, "aspect_ratio": "1:1"}}
     versioned = config.transform_image_generation_request("owner/name:v1", "a red fox", {}, {}, {})
-    assert versioned == {"version": "v1", "input": {"prompt": "a red fox"}}
+    assert versioned == {"input": {"prompt": "a red fox"}}
 
 
 @pytest.mark.parametrize("output", [list(IMAGE_URLS), IMAGE_URLS[0]])
@@ -380,3 +380,12 @@ def test_model_paths_with_dot_or_empty_segments_are_rejected(model: str):
 def test_model_path_segments_are_url_encoded():
     request = common_utils.replicate_prediction_request("https://api.replicate.com/v1", "acme/odd name?x", {})
     assert request.url == "https://api.replicate.com/v1/models/acme/odd%20name%3Fx/predictions"
+
+
+def test_a_pinned_version_stays_under_the_authorized_model_path():
+    request = common_utils.replicate_prediction_request("https://api.replicate.com/v1", "acme/fox:ab12", {})
+    assert request.url == "https://api.replicate.com/v1/models/acme/fox/versions/ab12/predictions"
+    assert "version" not in request.body
+    with pytest.raises(ReplicateError) as refused:
+        common_utils.replicate_prediction_request("https://api.replicate.com/v1", "acme/fox:", {})
+    assert refused.value.status_code == 400

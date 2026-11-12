@@ -117,7 +117,7 @@ def test_validate_environment_requires_key_and_sends_bearer(monkeypatch: pytest.
     ("model", "url", "extra_body"),
     [
         (MODEL, f"{API_BASE}/models/{MODEL}/predictions", {}),
-        ("owner/name:abc123", f"{API_BASE}/predictions", {"version": "abc123"}),
+        ("owner/name:abc123", f"{API_BASE}/models/owner/name/versions/abc123/predictions", {}),
         ("deployments/acme/fast-video", f"{API_BASE}/deployments/acme/fast-video/predictions", {}),
     ],
 )
