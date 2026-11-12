@@ -7,6 +7,9 @@ secrets from strings without depending on the logging-configuration module.
 """
 
 import re
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Final
 
 from litellm.constants import MINIMUM_CUSTOM_KEY_LENGTH
@@ -122,7 +125,194 @@ _TOKEN_SHAPES: Final = (
 )
 # Tokens start at a word boundary or right after a JSON escape like "\n", since tool output is often serialized JSON
 _TOKEN_START: Final = r"(?:(?<!\w)|(?<=\\[nrt]))"
-_TOKEN_RE: Final = re.compile(f"{_PEM_PRIVATE_KEY_BLOCK}|{_TOKEN_START}(?:{'|'.join(_TOKEN_SHAPES)})")
+TOKEN_REDACTION_WINDOW_CHARS: Final = 16_384
+_TOKEN_PREFIX_OVERLAP_CHARS: Final = 128
+_TOKEN_RULE_RE: Final = re.compile(r"(.*)(\[[^\]]+\])(\{[0-9]+(?:,[0-9]*)?\}|\+)(\\b)?")
+_TOKEN_WORD_RE: Final = re.compile(r"\w")
+_JWT_RUN_RE: Final = re.compile(r"[A-Za-z0-9_-]+")
+_PEM_LABEL_RE: Final = re.compile(r"[A-Z \-]+")
+_PEM_FOOTER_LABEL_RE: Final = re.compile(r"[A-Z -]+")
+_PEM_KEY_SUFFIX: Final = "PRIVATE KEY-----"
+_PEM_END_PREFIX: Final = "-----END"
+
+
+@dataclass(frozen=True, slots=True)
+class _TokenRule:
+    prefix: str
+    body: re.Pattern[str]
+    minimum: int
+    maximum: int | None
+    boundary: bool
+
+
+def _token_rule(shape: str) -> _TokenRule:
+    parsed: Final = _TOKEN_RULE_RE.fullmatch(shape)
+    assert parsed is not None
+    prefix, alphabet, quantifier, boundary = parsed.groups()
+    counts: Final = quantifier.strip("{}").split(",")
+    return _TokenRule(
+        prefix=prefix,
+        body=re.compile(f"{alphabet}+"),
+        minimum=1 if quantifier == "+" else int(counts[0]),
+        maximum=None if quantifier == "+" or counts[-1] == "" else int(counts[-1]),
+        boundary=boundary is not None,
+    )
+
+
+_TOKEN_RULES: Final = tuple(_token_rule(shape) for shape in _TOKEN_SHAPES[:-1])
+_TOKEN_RE: Final = re.compile(
+    r"(?P<pem>-----BEGIN)|"
+    + _TOKEN_START
+    + "(?:"
+    + "|".join(f"(?P<t{index}>{rule.prefix})" for index, rule in enumerate(_TOKEN_RULES))
+    + r"|(?P<jwt>eyJ))"
+)
+
+
+def _find_marker(value: str, marker: str, start: int, stop: int, *, reverse: bool = False) -> int:
+    step: Final = TOKEN_REDACTION_WINDOW_CHARS - len(marker) + 1
+    windows: Final = range(stop, start, -step) if reverse else range(start, stop, step)
+    for edge in windows:
+        if reverse:
+            if (found := value.rfind(marker, max(start, edge - TOKEN_REDACTION_WINDOW_CHARS), edge)) >= 0:
+                return found
+        elif (found := value.find(marker, edge, min(stop, edge + TOKEN_REDACTION_WINDOW_CHARS))) >= 0:
+            return found
+    return -1
+
+
+class _TokenScanner:
+    def __init__(self, value: str) -> None:
+        self.value = value
+        self._runs: Mapping[re.Pattern[str], tuple[tuple[int, int], ...]] = MappingProxyType({})
+        self._pem_header_suffix: tuple[int, int] | None = None
+        self._pem_footer_suffix: tuple[int, int] | None = None
+        self._pem_first_header: tuple[int, int] | None = None
+        self._pem_inner_footer: tuple[int, int] | None = None
+        self._missing_pem_footer_from: int | None = None
+
+    def _run_end(self, pattern: re.Pattern[str], start: int) -> int:
+        cached: Final = next((end for begin, end in self._runs.get(pattern, ()) if begin <= start <= end), None)
+        if cached is not None:
+            return cached
+        end: int = start  # rebind-ok: cursor advances through bounded regex windows
+        while end < len(self.value):
+            if (
+                match := pattern.match(self.value, end, min(len(self.value), end + TOKEN_REDACTION_WINDOW_CHARS))
+            ) is None:
+                break
+            end = match.end()
+        self._runs = {**self._runs, pattern: (*self._runs.get(pattern, ()), (start, end))[-3:]}
+        return end
+
+    def _pem_suffix_end(self, start: int, stop: int, *, header: bool = False) -> int | None:
+        cached: Final = self._pem_header_suffix if header else self._pem_footer_suffix
+        suffix_start: Final = (
+            cached[1]
+            if cached is not None and cached[0] == stop
+            else _find_marker(self.value, _PEM_KEY_SUFFIX, start, stop, reverse=True)
+        )
+        if header:
+            self._pem_header_suffix = (stop, suffix_start)
+        else:
+            self._pem_footer_suffix = (stop, suffix_start)
+        return suffix_start + len(_PEM_KEY_SUFFIX) if suffix_start >= start else None
+
+    def _pem_footer_end(self, start: int) -> int | None:
+        if self._missing_pem_footer_from is not None and start >= self._missing_pem_footer_from:
+            return None
+        cursor: int = start  # rebind-ok: cursor advances past each inspected footer label
+        while (marker := _find_marker(self.value, _PEM_END_PREFIX, cursor, len(self.value))) >= 0:
+            if (
+                end := self._pem_suffix_end(
+                    marker + len(_PEM_END_PREFIX), self._run_end(_PEM_FOOTER_LABEL_RE, marker + len(_PEM_END_PREFIX))
+                )
+            ) is not None:
+                return end
+            cursor = self._run_end(_PEM_FOOTER_LABEL_RE, marker + len(_PEM_END_PREFIX))
+        self._missing_pem_footer_from = start
+        return None
+
+    def _pem_end(self, start: int) -> int | None:
+        header_end: Final = self._pem_suffix_end(start, self._run_end(_PEM_LABEL_RE, start), header=True)
+        if header_end is None:
+            return None
+        footer_end: Final = self._pem_footer_end(header_end)
+        if footer_end is not None:
+            return footer_end
+        first_header: Final = (
+            self._pem_first_header[1]
+            if self._pem_first_header is not None
+            and self._pem_first_header[0] == header_end
+            and self._pem_first_header[1] >= start
+            else _find_marker(self.value, _PEM_KEY_SUFFIX, start, header_end)
+        )
+        self._pem_first_header = (header_end, first_header)
+        inner_footer: Final = (
+            self._pem_inner_footer[1]
+            if self._pem_inner_footer is not None and self._pem_inner_footer[0] == header_end
+            else _find_marker(self.value, _PEM_END_PREFIX, start, header_end - len(_PEM_KEY_SUFFIX), reverse=True)
+        )
+        self._pem_inner_footer = (header_end, inner_footer)
+        return header_end if inner_footer >= first_header + len(_PEM_KEY_SUFFIX) else None
+
+    def _jwt_end(self, start: int) -> int | None:
+        header_end: Final = self._run_end(_JWT_RUN_RE, start)
+        if header_end - start < 10 or not self.value.startswith(".eyJ", header_end):
+            return None
+        payload_start: Final = header_end + len(".eyJ")
+        payload_end: Final = self._run_end(_JWT_RUN_RE, payload_start)
+        if payload_end - payload_start < 10 or not self.value.startswith(".", payload_end):
+            return None
+        signature_start: Final = payload_end + 1
+        signature_end: Final = self._run_end(_JWT_RUN_RE, signature_start)
+        return signature_end if signature_end > signature_start else None
+
+    def _token_end(self, match: re.Match[str]) -> int | None:
+        if match.lastgroup == "pem":
+            return self._pem_end(match.end())
+        if match.lastgroup == "jwt":
+            return self._jwt_end(match.end())
+        assert match.lastgroup is not None
+        rule: Final = _TOKEN_RULES[int(match.lastgroup[1:])]
+        body: Final = (
+            rule.body.match(self.value, match.end(), min(len(self.value), match.end() + rule.maximum))
+            if rule.maximum is not None
+            else None
+        )
+        end: Final = body.end() if body is not None else self._run_end(rule.body, match.end())
+        if end - match.end() < rule.minimum or (rule.maximum is not None and end - match.end() != rule.maximum):
+            return None
+        if rule.boundary and bool(_TOKEN_WORD_RE.match(self.value, end - 1, end)) == bool(
+            _TOKEN_WORD_RE.match(self.value, end, min(len(self.value), end + 1))
+        ):
+            return None
+        return end
+
+    def _next_token(self, start: int) -> re.Match[str] | None:
+        for left in range(start, len(self.value), TOKEN_REDACTION_WINDOW_CHARS - _TOKEN_PREFIX_OVERLAP_CHARS):
+            if (
+                match := _TOKEN_RE.search(self.value, left, min(len(self.value), left + TOKEN_REDACTION_WINDOW_CHARS))
+            ) is not None:
+                return match
+        return None
+
+    def _text(self, start: int, stop: int) -> Iterator[str]:
+        for left in range(start, stop, TOKEN_REDACTION_WINDOW_CHARS):
+            yield self.value[left : min(stop, left + TOKEN_REDACTION_WINDOW_CHARS)]
+
+    def pieces(self, replacement: str) -> Iterator[str]:
+        cursor: int = 0  # rebind-ok: scan cursor advances independently of the last replacement
+        consumed: int = 0  # rebind-ok: output cursor advances after each replacement
+        while (match := self._next_token(cursor)) is not None:
+            if (end := self._token_end(match)) is None:
+                cursor = match.start() + 1
+                continue
+            yield from self._text(consumed, match.start())
+            yield replacement
+            cursor = end
+            consumed = end
+        yield from self._text(consumed, len(self.value))
 
 
 def redact_tokens(value: str, replacement: str = REDACTED) -> str:
@@ -131,7 +321,8 @@ def redact_tokens(value: str, replacement: str = REDACTED) -> str:
     Unlike redact_string() this never matches on surrounding words such as ``password:`` or ``Basic``,
     so it is safe to run over free-form prompt and tool content.
     """
-    return _TOKEN_RE.sub(replacement, value)
+    expanded_replacement: Final = re.sub("", replacement, "", count=1)
+    return "".join(_TokenScanner(value).pieces(expanded_replacement))
 
 
 _UNIX_SYSTEM_PATH: Final = r"/(?:etc|var|opt|usr|home|root|private|Users|tmp|mnt|srv)/[^\s'\"\)\]}>,]+"

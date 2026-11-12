@@ -20,11 +20,77 @@ from litellm._logging import (
     verbose_router_logger,
 )
 from litellm.litellm_core_utils.secret_redaction import (
+    TOKEN_REDACTION_WINDOW_CHARS,
     redact_internal_details,
     redact_structured_value,
+    redact_tokens,
 )
 
 SECRET = "sk-proj-abc123def456ghi789jklmnopqrst"
+
+
+@pytest.mark.timeout(10)
+@pytest.mark.parametrize("header", ("-----BEGIN PRIVATE KEY-----\n", "-----BEGIN PRIVATE KEY----- ", "-----BEGIN A"))
+def test_token_redaction_preserves_many_unterminated_pem_blocks(header: str) -> None:
+    text: Final = header * 24_000
+    assert redact_tokens(text) == text
+
+
+@pytest.mark.timeout(10)
+def test_token_redaction_preserves_many_failed_jwt_starts_and_finds_an_inner_key() -> None:
+    text: Final = "eyJaaaaaaaaaa-" * 24_000
+    assert redact_tokens(text + "sk-" + "a" * 20) == text + "REDACTED"
+
+
+@pytest.mark.parametrize("offset", (-30, -1, 0, 1))
+@pytest.mark.parametrize(
+    "token",
+    (
+        "ya29." + "a" * 20,
+        "AKIA" + "A" * 16,
+        "sk-" + "a" * (TOKEN_REDACTION_WINDOW_CHARS * 3),
+        "sk_live_" + "a" * 24,
+        "rk_test_" + "a" * 24,
+        "AIza" + "a" * 35,
+        "dapi" + "a" * 32,
+        "ghp_" + "a" * 36,
+        "github_pat_" + "a" * 82,
+        "glpat-" + "a" * 20,
+        "lin_api_" + "a" * 40,
+        "xoxb-" + "a" * 10,
+        "hf_" + "a" * 34,
+        "npm_" + "a" * 36,
+        "pypi-AgEIcHlwaS5vcmc" + "a" * 50,
+        "SG." + "a" * 22 + "." + "a" * 43,
+        "eyJ" + "a" * (TOKEN_REDACTION_WINDOW_CHARS * 2) + ".eyJ" + "b" * (TOKEN_REDACTION_WINDOW_CHARS * 2) + ".c",
+        "-----BEGIN " + "A" * (TOKEN_REDACTION_WINDOW_CHARS * 2) + " PRIVATE KEY-----\nbody\n-----END PRIVATE KEY-----",
+    ),
+)
+def test_token_redaction_masks_tokens_across_windows(token: str, offset: int) -> None:
+    prefix: Final = " " * (TOKEN_REDACTION_WINDOW_CHARS + offset)
+    assert redact_tokens(prefix + token + " !") == prefix + "REDACTED !"
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    (
+        ("", ""),
+        ("password: ordinary text", "password: ordinary text"),
+        ("sk-short", "sk-short"),
+        ("wordghp_" + "a" * 36, "wordghp_" + "a" * 36),
+        ("éghp_" + "a" * 36, "éghp_" + "a" * 36),
+        (r"\nghp_" + "a" * 36, r"\nREDACTED"),
+        ("AKIA" + "A" * 17, "AKIA" + "A" * 17),
+        ("-----BEGIN PRIVATE KEY-----\nmissing end", "-----BEGIN PRIVATE KEY-----\nmissing end"),
+        ("-----BEGIN PRIVATE KEY----- -----END PRIVATE KEY-----\n-----END PRIVATE KEY-----", "REDACTED"),
+        ("-----BEGIN PRIVATE KEY-----\n-----BEGIN PRIVATE KEY-----\n-----END PRIVATE KEY-----", "REDACTED"),
+        ("-----BEGIN PRIVATE KEY----- -----END PRIVATE KEY-----", "REDACTED"),
+        ("-----BEGIN PRIVATE KEY-----\n-----END RSA PRIVATE KEY-----", "REDACTED"),
+        ("-----BEGIN BAD-----\n-----END PRIVATE KEY-----", "-----BEGIN BAD-----\n-----END PRIVATE KEY-----"),
+    ),
+)
+def test_token_redaction_preserves_matching_rules(text: str, expected: str) -> None:
+    assert redact_tokens(text) == expected
 
 
 @pytest.fixture(autouse=True)
@@ -473,6 +539,7 @@ def test_vertex_error_message_no_credential_leak():
         VertexCredentialsInlineNotJson,
         raise_vertex_credentials_failure,
     )
+
     path = "/etc/litellm/vertexai.json"
     failures = (
         VertexCredentialsFileUnreadable(path, "No such file or directory (FileNotFoundError)"),
