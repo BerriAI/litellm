@@ -784,7 +784,7 @@ class ContentPolicyViolationError(BadRequestError):
         return _message
 
 
-class ServiceUnavailableError(openai.APIStatusError):
+class ServiceUnavailableError(openai.InternalServerError):
     def __init__(
         self,
         message,
@@ -824,7 +824,7 @@ class ServiceUnavailableError(openai.APIStatusError):
         return _message
 
 
-class BadGatewayError(openai.APIStatusError):
+class BadGatewayError(openai.InternalServerError):
     response: httpx.Response  # pyright: ignore[reportIncompatibleVariableOverride]  # LiteLLM constructs an HTTPX response
     request: httpx.Request  # pyright: ignore[reportIncompatibleVariableOverride]  # LiteLLM constructs an HTTPX request
 

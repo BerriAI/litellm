@@ -1680,6 +1680,19 @@ def test_a_mapped_exception_keeps_the_provider_and_model_it_came_from(provider, 
     assert raised.value.model == "test-model"
 
 
+@pytest.mark.parametrize("status_code", (500, 502, 503))
+@pytest.mark.parametrize("provider", ("openai", "anthropic", "bedrock"))
+def test_an_upstream_server_error_is_caught_like_the_openai_sdk_catches_it(
+    provider: str, status_code: int, quiet_exception_mapping: None
+) -> None:
+    with pytest.raises(openai.InternalServerError):
+        exception_type(
+            model="test-model",
+            original_exception=_UpstreamHTTPError(status_code=status_code),
+            custom_llm_provider=provider,
+        )
+
+
 @pytest.mark.parametrize("provider", PROVIDERS_WITH_A_HANDLER)
 def test_an_already_mapped_litellm_exception_passes_through_untouched(provider, quiet_exception_mapping):
     already_mapped = litellm.RateLimitError(message="already mapped", llm_provider=provider, model="test-model")
