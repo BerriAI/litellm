@@ -28,6 +28,11 @@ pub trait PythonBinding: PythonOwned {
     ) -> PyResult<Py<PyAny>>;
 
     /// What the stream carries at hand-off, as the caller's stream receives it.
+    /// The unary response after the deployment transform, before success hooks run.
+    fn deliver_response(&mut self, _py: Python<'_>, response: Py<PyAny>) -> PyResult<Py<PyAny>> {
+        Ok(response)
+    }
+
     fn encode_stream_head(
         &mut self,
         py: Python<'_>,

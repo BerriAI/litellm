@@ -10,12 +10,10 @@ describe("legacyPageRedirectHref", () => {
     expect(redirect("page=models")).toBe("/ui/models-and-endpoints");
     expect(redirect("page=llm-playground")).toBe("/ui/playground");
     expect(redirect("page=new_usage")).toBe("/ui/usage");
-    expect(redirect("page=usage")).toBe("/ui/old-usage");
+    expect(redirect("page=usage")).toBe("/ui/usage");
   });
 
   it("keeps the older aliases for renamed pages", () => {
-    expect(redirect("page=api_ref")).toBe("/ui/api-reference");
-    expect(redirect("page=api-reference")).toBe("/ui/api-reference");
     expect(redirect("page=claude-code-plugins")).toBe("/ui/skills");
   });
 

@@ -325,7 +325,13 @@ nothing here imports outside it:
   on `langfuse_otel`, `arize`, `weave_otel` and `newrelic` callbacks.
 - [`baggage.py`](./model/baggage.py) — the single definition of which request-identity
   values are promoted into Baggage (so child spans inherit them) and under which
-  attribute keys.
+  attribute keys. A team or key destination can list extra `requester_metadata.<key>`
+  paths in `baggage_metadata_keys` in its own `callback_vars`. They are never written
+  into Baggage: the tenant fan-out adds them as `litellm.metadata.<key>` to that
+  destination's view of each span, on top of the global list, so the operator's
+  exporter and other destinations never see them. A key the span already carries
+  wins, and names of proxy identity fields and `requester_metadata.headers.*` (the
+  request headers the proxy copies there) are rejected when saved.
 - [`utils.py`](./model/utils.py) — value coercion, JSON serialization, and
   extractor-table application, shared across the package.
 

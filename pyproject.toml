@@ -1,6 +1,6 @@
 [project]
 name = "litellm"
-version = "1.109.0"
+version = "1.110.0"
 description = "Library to easily interface with LLM API providers"
 readme = "README.md"
 requires-python = ">=3.10, <3.16"
@@ -26,7 +26,7 @@ dependencies = [
     "tiktoken>=0.12.0,<1.0; python_version == '3.14'",
     "tiktoken>=0.14.0,<1.0; python_version >= '3.15'",
     "tokenizers>=0.21.0,<1.0",
-    "huggingface-hub>=0.34.0,<2.0",
+    "huggingface-hub>=0.34.0,<3.0",
     "click>=8.0.0,<9.0",
     "jinja2>=3.1.6,<4.0",
     "aiohttp>=3.14.2,<4.0",
@@ -54,7 +54,9 @@ Documentation = "https://docs.litellm.ai"
 # sub-packages and the opentelemetry trio move in lockstep, and grpcio is
 # supply-chain-pinned to a vetted, aged release.
 [project.optional-dependencies]
+switchyard = ["nemo-switchyard==0.4.0a1"]
 proxy = [
+    "casbin==1.43.0",
     "gunicorn>=23.0.0,<24.0",
     "uvicorn>=0.33.0,<1.0",
     "granian>=2.7.4,<3.0; python_version < '3.15'",
@@ -72,6 +74,7 @@ proxy = [
     "hiredis>=3.0.0,<4.0; python_version < '3.15'",
     "hiredis>=3.5.0,<4.0; python_version >= '3.15'",
     "apscheduler>=3.11.2,<4.0",
+    "tzdata>=2024.1",
     "fastapi-sso>=0.19.0,<1.0",
     "PyJWT>=2.13.0,<3.0",
     "python-multipart>=0.0.27,<1.0",
@@ -84,8 +87,8 @@ proxy = [
     "mcp>=2.3.0,<3",
     "httpx2>=2.10.0,<3",
     "pydantic>=2.12.0,<3",
-    "litellm-proxy-extras==0.4.112",
-    "litellm-enterprise==0.1.81",
+    "litellm-proxy-extras==0.4.114",
+    "litellm-enterprise==0.1.83",
     "RestrictedPython>=8.5,<9.0",
     "rich>=13.9.4,<14.0",
     "InquirerPy>=0.3.4,<1.0",
@@ -95,6 +98,7 @@ proxy = [
     "pyroscope-io>=0.8.16,<1.0; sys_platform != 'win32'",
     "expression>=5.6.0,<6.0",
     "backports-zstd>=1.0.0,<2.0; python_version < '3.14'",
+    "semver>=3.0.4,<4",
 ]
 # Thin client install for the `lite` CLI on developer laptops. The CLI's heavy
 # imports are all guarded, so it runs on the base SDK plus these packages, and
@@ -155,7 +159,8 @@ stt-vertex-chirp = [
 stt-nvidia-riva = [
     # NVIDIA Riva STT provider (gRPC). These are imported lazily inside the
     # provider handler so litellm core remains usable without them.
-    "nvidia-riva-client>=2.15.0",
+    "grpcio>=1.67.1,<2.0",
+    "protobuf>=5.26.1,<7.0",
     "soundfile>=0.12.1",
     "audioread>=3.0.1",
     "numpy>=1.26.0",
@@ -241,6 +246,7 @@ dev = [
     "pytest-timeout==2.4.0",
     "vcrpy==8.2.1",
     "pytest-recording==0.13.4",
+    "nvidia-riva-client==2.16.0",
 ]
 e2e-dev = [
     "playwright==1.61.0",
@@ -265,15 +271,22 @@ proxy-dev = [
     "opentelemetry-instrumentation-fastapi==0.66b1",
     "azure-identity==1.25.2",
     "a2a-sdk==1.1.0",
+    "nemo-switchyard==0.4.0a1",
     "backports-zstd==1.8.0; python_version < '3.14'",
+    "httptools>=0.7.1,<0.8",
+    "semver>=3.0.4,<4",
 ]
 ci = [
     "psutil==7.2.2",
+    "tzdata==2026.2",
     # These are lazily imported at call sites; keep them out of core deps to
     # avoid bloating the base SDK install (google-generativeai pulls grpcio +
     # protobuf, Pillow is a compiled C extension).
     "tenacity==8.5.0",
     "google-generativeai==0.8.6",
+    # The Riva tests serve NVIDIA's own message definitions, which checks
+    # LiteLLM's hand-written copy of them on every run.
+    "nvidia-riva-client==2.16.0",
     "Pillow==12.3.0; python_version == '3.10'",
     "Pillow==13.0.0; python_version >= '3.11'",
     # Azure batch E2E tests still import psycopg2 directly.
@@ -328,16 +341,21 @@ features = ["extension-module"]
 profile = "release"
 editable-profile = "dev"
 include = [
+    "litellm/integrations/prometheus_helpers/grafana_dashboards/**",
     "litellm/proxy/_experimental/out/**",
     "litellm/router_strategy/complexity_router/artifacts/*.json",
     "litellm/router_strategy/complexity_router/fuse_presets.json",
     "litellm/proxy/model_insights_tasks.json",
     "litellm/proxy/public_endpoints/whats_new.json",
     "litellm/proxy/common_utils/codex_base_instructions.md",
-    "litellm/proxy/common_utils/codex_bundled_models_0.159.3.json",
+    "litellm/proxy/common_utils/codex_bundled_models_0.166.0.json",
+    "litellm/proxy/common_utils/codex_bedrock_mantle_models_0.166.0.json",
+    "litellm/proxy/common_utils/codex_bedrock_runtime_models_0.166.0.json",
     { path = "model_prices_and_context_window.json", format = "sdist" },
 ]
 exclude = [
+    "litellm/proxy/discovery_endpoints/skill_scanner_adapter",
+    "litellm/proxy/discovery_endpoints/skill_scanner_adapter/**",
     "litellm/proxy/enterprise",
     "litellm/proxy/enterprise/**",
     "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/guardrail_benchmarks",
@@ -351,8 +369,10 @@ exclude = [
 ]
 
 [tool.uv]
+concurrent-builds = 1
 cache-keys = [
     { file = "pyproject.toml" },
+    { env = "MATURIN_PEP517_ARGS" },
     { file = "rust-toolchain.toml" },
     { file = ".cargo/config.toml" },
     { file = "litellm-rust/Cargo.lock" },
@@ -369,6 +389,8 @@ constraint-dependencies = [
     "httplib2>=0.32.0",
     "setuptools>=84.1.0",
     "dnspython>=2.9.0; python_version >= '3.11'",
+    "filelock<3.20.4; python_version < '3.11'",
+    "filelock>=4.2.1; python_version >= '3.11'",
 ]
 override-dependencies = [
     # a2a-sdk 1.x requires packaging>=24.0; lunary 1.4.x still caps at <24.0.
@@ -383,16 +405,19 @@ exclude-newer = "3 days"
 [tool.uv.exclude-newer-package]
 # TODO: remove after 2026-10-25, once brotli 1.2.1 (CVE-2026-111497) clears the 3-day window
 brotli = "2026-10-22T14:01:00Z"
+# TODO: remove after 2026-10-31, once pypdf 6.21.4 clears the 3-day window
+pypdf = "2026-10-28T17:01:00Z"
 
 [tool.uv.sources]
+litellm-proxy = { workspace = true }
 litellm-proxy-extras = { workspace = true }
 litellm-enterprise = { workspace = true }
 
 [tool.uv.workspace]
-members = ["enterprise", "litellm-proxy-extras"]
+members = ["enterprise", "litellm-proxy-extras", "packaging/litellm-proxy"]
 
 [tool.commitizen]
-version = "1.109.0"
+version = "1.110.0"
 version_files = [
     "pyproject.toml:^version",
 ]
