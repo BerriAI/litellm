@@ -2332,9 +2332,9 @@ async def alist_input_items(
     limit: int = 20,
     order: Literal["asc", "desc"] = "desc",
     extra_headers: dict[str, object] | None = None,
-    extra_query: Mapping[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
+    extra_query: Mapping[str, object] | None = None,
     **kwargs,
 ) -> dict:
     """Async: List input items for a response"""
@@ -2390,9 +2390,9 @@ def list_input_items(
     limit: int = 20,
     order: Literal["asc", "desc"] = "desc",
     extra_headers: dict[str, object] | None = None,
-    extra_query: Mapping[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
+    extra_query: Mapping[str, object] | None = None,
     **kwargs,
 ) -> dict | Coroutine[object, object, dict]:
     """List input items for a response"""

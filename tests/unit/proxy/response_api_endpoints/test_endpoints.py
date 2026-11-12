@@ -1700,7 +1700,10 @@ async def test_a_malformed_resume_query_through_the_proxy_is_a_400(
 
 
 async def _list_items_through_proxy(
-    monkeypatch: pytest.MonkeyPatch, query: tuple[tuple[str, str], ...], drop_params: bool = False
+    monkeypatch: pytest.MonkeyPatch,
+    query: tuple[tuple[str, str], ...],
+    drop_params: bool = False,
+    routing_order: int | None = None,
 ) -> tuple[httpx.Response, tuple[httpx.Request, ...]]:
     import litellm.proxy.proxy_server as ps
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -1714,6 +1717,7 @@ async def _list_items_through_proxy(
                     "api_base": _RESUMED_UPSTREAM,
                     "api_key": "fixture-key",
                     "drop_params": drop_params,
+                    "order": routing_order,
                 },
                 "model_info": {"id": "deployment-read"},
             }
@@ -1761,6 +1765,7 @@ async def _list_items_through_proxy(
             [("include[]", "message.input_image.image_url"), ("limit", "20"), ("order", "desc")],
         ),
         ((), [("limit", "20"), ("order", "desc")]),
+        ((("limit", "+1"),), [("limit", "1"), ("order", "desc")]),
     ],
 )
 async def test_listing_input_items_through_the_proxy_forwards_the_client_list_params(
@@ -1770,6 +1775,20 @@ async def test_listing_input_items_through_the_proxy_forwards_the_client_list_pa
 
     assert result.status_code == 200, result.text
     assert [sorted(request.url.params.multi_items()) for request in upstream_requests] == [forwarded]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "query, forwarded_order",
+    [((), "desc"), ((("order", "asc"),), "asc")],
+)
+async def test_a_deployment_routing_order_never_becomes_the_input_items_order(
+    monkeypatch: pytest.MonkeyPatch, query: tuple[tuple[str, str], ...], forwarded_order: str
+):
+    result, upstream_requests = await _list_items_through_proxy(monkeypatch, query, routing_order=1)
+
+    assert result.status_code == 200, result.text
+    assert [request.url.params.get_list("order") for request in upstream_requests] == [[forwarded_order]]
 
 
 @pytest.mark.asyncio

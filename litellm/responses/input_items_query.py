@@ -35,13 +35,17 @@ def _parsed_cursor(
             return InvalidInputItemsQuery(param, f"Invalid '{param}': expected a single item id, got {value!r}")
 
 
+def _is_decimal(value: str) -> bool:
+    return value.isascii() and value.isdigit() and len(value) <= _MAX_LIMIT_DIGITS
+
+
 def _parsed_limit(value: object, default: int, drop_malformed: bool) -> int | InvalidInputItemsQuery:
     match value:
         case None:
             return default
         case int() if not isinstance(value, bool) and value >= 0:
             return value
-        case str() if value.isascii() and value.isdigit() and len(value) <= _MAX_LIMIT_DIGITS:
+        case str() if _is_decimal(value.removeprefix("+")):
             return int(value)
         case _ if drop_malformed:
             return default

@@ -76,3 +76,32 @@ def test_sdk_extra_query_with_a_malformed_value_is_a_400_before_any_upstream_cal
     assert exc_info.value.status_code == 400
     assert f"Invalid '{param}'" in str(exc_info.value)
     assert route.call_count == 0
+
+
+def test_sdk_positional_arguments_keep_their_pre_extra_query_meaning() -> None:
+    with respx.mock() as mock_router:
+        route: Final = mock_router.get(_ITEMS_URL).mock(return_value=httpx.Response(200, json=_EMPTY_PAGE))
+        litellm.list_input_items(
+            "resp_sdk", "item_a", None, None, 7, "asc", None, 5.0, "openai", api_key="sk-test", api_base=_API_BASE
+        )
+
+    assert sorted(route.calls.last.request.url.params.multi_items()) == [
+        ("after", "item_a"),
+        ("limit", "7"),
+        ("order", "asc"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_async_sdk_positional_arguments_keep_their_pre_extra_query_meaning() -> None:
+    with respx.mock() as mock_router:
+        route: Final = mock_router.get(_ITEMS_URL).mock(return_value=httpx.Response(200, json=_EMPTY_PAGE))
+        await litellm.alist_input_items(
+            "resp_sdk", "item_a", None, None, 7, "asc", None, 5.0, "openai", api_key="sk-test", api_base=_API_BASE
+        )
+
+    assert sorted(route.calls.last.request.url.params.multi_items()) == [
+        ("after", "item_a"),
+        ("limit", "7"),
+        ("order", "asc"),
+    ]
