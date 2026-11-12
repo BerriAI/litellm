@@ -4767,8 +4767,10 @@ class Logging(LiteLLMLoggingBaseClass):
         return any(isinstance(cb, CustomLogger) and cb.wants_failed_prompt_token_estimate for cb in callbacks)
 
     def _prompt_token_estimate(self) -> int | None:
+        from litellm.litellm_core_utils.token_counter import has_only_text_content
+
         messages: Final = self.messages
-        if litellm.disable_token_counter or not messages:
+        if litellm.disable_token_counter or not messages or not has_only_text_content(messages):
             return None
         try:
             return get_token_counter_new()(model=self.model, messages=messages, use_default_image_token_count=True)

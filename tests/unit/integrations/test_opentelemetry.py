@@ -64,6 +64,7 @@ from litellm.constants import (
     REDACTED_BY_LITELLM,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+from litellm.litellm_core_utils import token_counter as token_counter_module
 from litellm.litellm_core_utils.token_counter import token_counter
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.hidden_params import set_hidden_params
@@ -7960,7 +7961,16 @@ class TestOpentelemetryUnitTests:
 
 _PROMPT_SECRET: Final = "confidential-prompt-marker"
 _SECRET_PROMPT: Final = ({"role": "user", "content": " ".join([_PROMPT_SECRET] * 200)},)
-_UNCOUNTABLE_PROMPT: Final = ({"role": "user", "content": [{"type": "not_a_content_block"}]},)
+_UNCOUNTABLE_PROMPT: Final = ({"role": "assistant", "content": None, "tool_calls": [{"id": "call_without_function"}]},)
+_STRUCTURED_TEXT_PROMPT: Final = (
+    {"role": "system", "content": [{"type": "text", "text": "Answer briefly."}]},
+    {"role": "user", "content": ["plain part", {"type": "text", "text": _PROMPT_SECRET}]},
+)
+_PDF_BASE64: Final = "JVBERi0xLjQK"
+_ANTHROPIC_PDF_DOCUMENT: Final = {
+    "type": "document",
+    "source": {"type": "base64", "media_type": "application/pdf", "data": _PDF_BASE64},
+}
 _FAILED_MODEL: Final = "hosted_vllm/test-model"
 _SYNC_THEN_ASYNC: Final = "sync_redaction_first"
 _ASYNC_THEN_SYNC: Final = "async_callback_first"
@@ -8065,6 +8075,56 @@ async def test_failed_chat_span_flags_unknown_usage_without_inventing_an_estimat
     attributes: Final = dict(span.attributes or {})
     _assert_unknown_usage(attributes)
     assert ESTIMATED_INPUT_TOKENS_ATTRIBUTE not in attributes
+
+
+@pytest.mark.asyncio
+async def test_failed_chat_span_estimates_structured_text_prompts(
+    in_memory_otel: tuple[OpenTelemetry, InMemorySpanExporter],
+) -> None:
+    otel, exporter = in_memory_otel
+
+    span: Final = await _fail(_redacted_logging(otel, list(_STRUCTURED_TEXT_PROMPT)), exporter, _SYNC_THEN_ASYNC)
+
+    attributes: Final = dict(span.attributes or {})
+    _assert_unknown_usage(attributes)
+    assert attributes[ESTIMATED_INPUT_TOKENS_ATTRIBUTE] == token_counter(
+        model=_FAILED_MODEL, messages=list(_STRUCTURED_TEXT_PROMPT)
+    )
+    assert _PROMPT_SECRET not in _span_text(span)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "attachment",
+    [
+        {"type": "file", "file": {"filename": "report.pdf", "file_data": f"data:application/pdf;base64,{_PDF_BASE64}"}},
+        _ANTHROPIC_PDF_DOCUMENT,
+        {"type": "tool_result", "tool_use_id": "toolu_report", "content": [_ANTHROPIC_PDF_DOCUMENT]},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}},
+    ],
+    ids=["openai_file", "anthropic_document", "document_inside_tool_result", "image_url"],
+)
+async def test_failed_chat_span_skips_the_estimate_for_prompts_with_attachments(
+    in_memory_otel: tuple[OpenTelemetry, InMemorySpanExporter],
+    monkeypatch: pytest.MonkeyPatch,
+    attachment: dict[str, object],
+) -> None:
+    otel, exporter = in_memory_otel
+    parsed_pdfs: Final[list[str]] = []
+
+    def record_pdf_parse(data_url: str, *_args: object) -> None:
+        parsed_pdfs.append(data_url)
+
+    monkeypatch.setattr(token_counter_module, "_count_inline_pdf_tokens", record_pdf_parse)
+    messages: Final = [{"role": "user", "content": [{"type": "text", "text": _PROMPT_SECRET}, attachment]}]
+
+    span: Final = await _fail(_redacted_logging(otel, messages), exporter, _SYNC_THEN_ASYNC)
+
+    attributes: Final = dict(span.attributes or {})
+    _assert_unknown_usage(attributes)
+    assert ESTIMATED_INPUT_TOKENS_ATTRIBUTE not in attributes
+    assert parsed_pdfs == []
+    assert _PROMPT_SECRET not in _span_text(span)
 
 
 @pytest.mark.asyncio

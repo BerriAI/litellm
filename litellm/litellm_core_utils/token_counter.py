@@ -48,7 +48,7 @@ from litellm.constants import (
     TOKEN_COUNTER_MAX_EXACT_CHARS,
 )
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.chat_template_tools import (
     ChatTemplateToolSection,
     chat_template_tool_section,
@@ -1870,6 +1870,27 @@ def _count_anthropic_content(
 _TEXT_FIELD_BY_BLOCK_TYPE: Final = MappingProxyType(
     {"text": "text", "thinking": "thinking", "redacted_thinking": "thinking", "compaction": "content"}
 )
+
+
+def _is_text_block(block: object) -> bool:
+    mapping: Final = as_str_mapping(block)
+    return isinstance(block, str) or (mapping is not None and mapping.get("type") in _TEXT_FIELD_BY_BLOCK_TYPE)
+
+
+def _has_only_text_content(message: object) -> bool:
+    mapping: Final = as_str_mapping(message)
+    if mapping is None:
+        return False
+    content: Final = mapping.get("content")
+    if content is None or isinstance(content, str):
+        return True
+    blocks: Final = as_object_list(content)
+    return blocks is not None and all(_is_text_block(block) for block in blocks)
+
+
+def has_only_text_content(messages: Sequence[object]) -> bool:
+    """Whether counting ``messages`` stays on the tokenizer, never decoding images, files or documents."""
+    return all(_has_only_text_content(message) for message in messages)
 
 
 def _count_content_list(
