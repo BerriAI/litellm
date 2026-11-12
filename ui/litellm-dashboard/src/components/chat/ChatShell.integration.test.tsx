@@ -154,7 +154,7 @@ describe("ChatShell", () => {
 
     expect(screen.queryByRole("navigation", { name: "Chat workspace" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Open chat navigation" }));
-    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: "LiteLLM Chat" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Models" }));
 
     expect(mockPush).toHaveBeenCalledWith("/ui/chat/models");
@@ -192,7 +192,7 @@ describe("ChatShell", () => {
 
     const trigger = screen.getByRole("button", { name: "Open chat navigation" });
     await user.click(trigger);
-    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: "LiteLLM Chat" })).toBeInTheDocument();
     await user.keyboard("{Escape}");
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());

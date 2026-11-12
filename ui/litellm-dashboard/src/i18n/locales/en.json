@@ -8402,6 +8402,7 @@
       "configure": "Configure the plugin URL in settings"
     },
     "dashboardShell": {
+      "navigation": "Navigation",
       "openNavigation": "Open navigation"
     },
     "telemetryEnvNotice": {
@@ -9112,7 +9113,9 @@
       "settings": "Settings",
       "signOut": "Sign out",
       "chatNavigation": "Chat navigation",
-      "openChatNavigation": "Open chat navigation"
+      "openChatNavigation": "Open chat navigation",
+      "sheetTitle": "LiteLLM Chat",
+      "sheetDescription": "Conversations and chat workspace navigation"
     },
     "conversationList": {
       "yesterday": "Yesterday",

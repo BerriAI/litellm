@@ -1,4 +1,5 @@
 import { SidebarBrand } from "@/components/shared/SidebarBrand";
+import { ShellSidebar } from "@/components/shared/MobileSidebar";
 import { canViewProjectsPage, projectReaderRoles } from "@/app/(dashboard)/hooks/projects/projectAccess";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -7,7 +8,6 @@ import { useLogout } from "@/app/(dashboard)/hooks/useLogout";
 import { useTerminology } from "@/contexts/TerminologyContext";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
-  Sidebar,
   SidebarContent,
   SidebarFooter,
   SidebarGroup,
@@ -700,7 +700,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
   const leafContent = (item: MenuItem) => (
     <>
       {item.icon}
-      <span className="flex-1 truncate">{labelOf(item)}</span>
+      <span className="flex-1 truncate group-data-[collapsible=icon]:hidden">{labelOf(item)}</span>
       {item.external_url && (
         <ExternalLink className="size-3.5 shrink-0 opacity-70 group-data-[collapsible=icon]:hidden" />
       )}
@@ -709,16 +709,11 @@ const Sidebar_: React.FC<SidebarProps> = ({
 
   const renderItem = (item: MenuItem) => {
     const active = selectedKey === item.key;
-    const tooltip = term(labelText(item));
+    const title = collapsed ? term(labelText(item)) : undefined;
     if (!item.children?.length) {
       return (
         <SidebarMenuItem key={item.key}>
-          <SidebarMenuButton
-            isActive={active}
-            tooltip={tooltip}
-            className={navMenuButtonClassName}
-            render={leafLink(item)}
-          >
+          <SidebarMenuButton isActive={active} title={title} className={navMenuButtonClassName} render={leafLink(item)}>
             {leafContent(item)}
           </SidebarMenuButton>
         </SidebarMenuItem>
@@ -734,10 +729,10 @@ const Sidebar_: React.FC<SidebarProps> = ({
         render={<SidebarMenuItem />}
       >
         <CollapsibleTrigger
-          render={<SidebarMenuButton isActive={active} tooltip={tooltip} className={navMenuButtonClassName} />}
+          render={<SidebarMenuButton isActive={active} title={title} className={navMenuButtonClassName} />}
         >
           {item.icon}
-          <span className="flex-1 truncate">{labelOf(item)}</span>
+          <span className="flex-1 truncate group-data-[collapsible=icon]:hidden">{labelOf(item)}</span>
           <ChevronRight
             className={cn(
               "size-4 shrink-0 transition-transform group-data-[collapsible=icon]:hidden",
@@ -765,7 +760,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
   };
 
   return (
-    <Sidebar collapsible="icon" role="complementary" className="border-sidebar-border">
+    <ShellSidebar sheetTitle={t("shell.dashboardShell.navigation")}>
       <div className="contents" onClickCapture={closeMobileSidebarOnLinkClick}>
         <SidebarBrand accessToken={accessToken} homeLabel={t("shell.nav.homeLink")} />
 
@@ -782,7 +777,10 @@ const Sidebar_: React.FC<SidebarProps> = ({
               {visibleGroups.map((group, gi) => (
                 <SidebarGroup key={group.groupLabel} className="gap-0.5 px-0 py-1">
                   {gi > 0 && (
-                    <SidebarSeparator className="my-2 hidden data-horizontal:w-auto group-data-[collapsible=icon]:block" />
+                    <SidebarSeparator
+                      aria-hidden
+                      className="my-2 hidden data-horizontal:w-auto group-data-[collapsible=icon]:block"
+                    />
                   )}
                   <SidebarGroupLabel className="block h-auto pt-3 pb-1.5 text-[11px] font-semibold tracking-wider text-muted-foreground uppercase group-data-[collapsible=icon]:hidden">
                     {term(groupText(group.groupLabel))}
@@ -801,7 +799,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
           <SidebarAccountMenu onLogout={logout} collapsed={collapsed} />
         </SidebarFooter>
       </div>
-    </Sidebar>
+    </ShellSidebar>
   );
 };
 

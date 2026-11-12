@@ -128,7 +128,7 @@ describe("Chat layout product navigation", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "Open chat navigation" }));
-    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: "LiteLLM Chat" })).toBeInTheDocument();
     expect(screen.getByAltText("LiteLLM")).toHaveAttribute("src", `${getProxyBaseUrl()}/get_image`);
   });
 

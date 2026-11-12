@@ -24,7 +24,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
-  Sidebar,
   SidebarFooter,
   SidebarGroup,
   SidebarInset,
@@ -34,8 +33,14 @@ import {
   SidebarProvider,
   useSidebar,
 } from "@/components/ui/sidebar";
-import { MobileSidebarTrigger, useCloseMobileSidebarOn } from "@/components/shared/MobileSidebar";
-import { navMenuButtonClassName, navMenuClassName, sidebarWidthStyle } from "@/components/shared/sidebarStyles";
+import { MobileSidebarTrigger, ShellSidebar, useCloseMobileSidebarOn } from "@/components/shared/MobileSidebar";
+import {
+  navMenuButtonClassName,
+  navMenuClassName,
+  sidebarProviderClassName,
+  sidebarWidthStyle,
+} from "@/components/shared/sidebarStyles";
+import { cn } from "@/lib/cva.config";
 import { SidebarBrand } from "@/components/shared/SidebarBrand";
 import ChatAccountMenu from "./ChatAccountMenu";
 import { Kbd } from "@/components/ui/kbd";
@@ -77,12 +82,12 @@ interface NavItemProps {
 
 function NavItem({ icon, label, onClick, active = false, shortcut }: NavItemProps) {
   return (
-    <SidebarMenuItem>
+    <SidebarMenuItem role="none">
       <SidebarMenuButton
         onClick={onClick}
         isActive={active}
         aria-label={label}
-        tooltip={label}
+        title={label}
         aria-current={active ? "page" : undefined}
         className={navMenuButtonClassName}
       >
@@ -99,7 +104,7 @@ function NavItem({ icon, label, onClick, active = false, shortcut }: NavItemProp
 const ChatShell: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <SidebarProvider
     style={sidebarWidthStyle}
-    className="chat-theme h-full min-h-0 overflow-hidden bg-background text-foreground"
+    className={cn("chat-theme h-full min-h-0 overflow-hidden bg-background text-foreground", sidebarProviderClassName)}
   >
     <ChatShellLayout>{children}</ChatShellLayout>
   </SidebarProvider>
@@ -111,24 +116,14 @@ function ChatShellLayout({ children }: { children: React.ReactNode }) {
   const pathname = stripTrailingSlash(usePathname() ?? "");
   const { accessToken, conversations, activeConversationId, deleteConversation, renameConversation } = useChatShell();
   const handleLogout = useLogout(accessToken);
-  const { state, isMobile, openMobile, setOpen, setOpenMobile } = useSidebar();
+  const { state, isMobile, setOpen, setOpenMobile } = useSidebar();
   const collapsed = state === "collapsed" && !isMobile;
   useCloseMobileSidebarOn();
   const [searchOpen, setSearchOpen] = useState(false);
-  const [searchAwaitingDrawer, setSearchAwaitingDrawer] = useState(false);
   const shortcut = useShortcutLabel();
   const openSearch = () => {
-    if (isMobile && !openMobile) {
-      setSearchAwaitingDrawer(true);
-      setOpenMobile(true);
-      return;
-    }
-    if (!isMobile) setOpen(true);
-    setSearchOpen(true);
-  };
-  const openSearchOnceDrawerHasFocus = () => {
-    if (!searchAwaitingDrawer) return;
-    setSearchAwaitingDrawer(false);
+    if (isMobile) setOpenMobile(true);
+    else setOpen(true);
     setSearchOpen(true);
   };
   useHotkeys("mod+k", openSearch, { enableOnFormTags: true, preventDefault: true, useKey: true });
@@ -155,12 +150,12 @@ function ChatShellLayout({ children }: { children: React.ReactNode }) {
           collapsed={collapsed}
           className="h-9 w-full max-w-none justify-start shadow-none group-data-[collapsible=icon]:size-9 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0 [&_[data-slot=workspace-label]]:flex-1 [&_[data-slot=workspace-label]]:text-left group-data-[collapsible=icon]:[&_[data-slot=workspace-label]]:hidden"
         />
-        <SidebarMenu className={navMenuClassName}>
+        <SidebarMenu role="none" className={navMenuClassName}>
           <NavItem icon={<Plus />} label={t("chat.shell.newChat")} onClick={() => navigate(routes.chats)} />
         </SidebarMenu>
       </SidebarGroup>
       <nav aria-label={t("chat.shell.workspaceNav")} className="flex flex-none flex-col px-3 pb-3">
-        <SidebarMenu className={navMenuClassName}>
+        <SidebarMenu role="none" className={navMenuClassName}>
           <NavItem
             icon={<Network className="size-4" />}
             label={t("chat.shell.models")}
@@ -173,14 +168,14 @@ function ChatShellLayout({ children }: { children: React.ReactNode }) {
             onClick={() => navigate(routes.integrations)}
             active={pathname === routes.integrations}
           />
-          <SidebarMenuItem>
+          <SidebarMenuItem role="none">
             <DropdownMenu>
               <DropdownMenuTrigger
                 render={
                   <SidebarMenuButton
                     isActive={workspaceActive}
                     aria-label={t("chat.shell.workspace")}
-                    tooltip={t("chat.shell.workspace")}
+                    title={t("chat.shell.workspace")}
                     aria-current={workspaceActive ? "page" : undefined}
                     className={navMenuButtonClassName}
                   />
@@ -256,16 +251,14 @@ function ChatShellLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <>
-      <Sidebar
-        collapsible="icon"
-        role="complementary"
-        aria-label={t("chat.shell.chatNavigation")}
-        className="border-sidebar-border"
+      <ShellSidebar
+        label={t("chat.shell.chatNavigation")}
+        sheetTitle={t("chat.shell.sheetTitle")}
+        sheetDescription={t("chat.shell.sheetDescription")}
+        sheetInitialFocus={searchOpen ? false : undefined}
       >
-        <div className="contents" onFocus={openSearchOnceDrawerHasFocus}>
-          {sidebar}
-        </div>
-      </Sidebar>
+        {sidebar}
+      </ShellSidebar>
       <SidebarInset className="min-w-0 overflow-hidden">
         <DashboardHeader
           accessToken={accessToken}

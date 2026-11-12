@@ -28,7 +28,8 @@ import { createApiClient } from "@/lib/http/client";
 import { getProxyBaseUrl } from "@/components/networking";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { MobileSidebarTrigger, useCloseMobileSidebarOn } from "@/components/shared/MobileSidebar";
-import { sidebarWidthStyle } from "@/components/shared/sidebarStyles";
+import { sidebarProviderClassName, sidebarWidthStyle } from "@/components/shared/sidebarStyles";
+import { cn } from "@/lib/cva.config";
 import { CommandPaletteProvider } from "@/components/CommandPalette/CommandPaletteProvider";
 import { recordUiEvent } from "@/lib/telemetry/uiEvents";
 import TelemetryEnvBanner from "@/app/(dashboard)/telemetry/_components/TelemetryEnvBanner";
@@ -178,7 +179,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
         open={!sidebarCollapsed}
         onOpenChange={setSidebarOpen}
         style={sidebarWidthStyle}
-        className="h-screen overflow-hidden bg-background max-md:h-dvh"
+        className={cn("h-screen overflow-hidden bg-background max-md:h-dvh", sidebarProviderClassName)}
       >
         <CloseMobileSidebarOnNavigation navigationKey={navigationKey} />
         <AppSidebar />

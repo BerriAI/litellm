@@ -133,11 +133,11 @@ export function AriaSidebarLink({ active }: { active: boolean }) {
   const state = useContext(LiteAdminContext);
   if (!state) return null;
   return (
-    <SidebarMenu>
-      <SidebarMenuItem>
+    <SidebarMenu role="none">
+      <SidebarMenuItem role="none">
         <SidebarMenuButton
           isActive={active}
-          tooltip={ARIA_AGENT_LABEL}
+          title={ARIA_AGENT_LABEL}
           className={navMenuButtonClassName}
           render={
             <Link href={uiHref("aria")} aria-current={active ? "page" : undefined} aria-label={ARIA_AGENT_LABEL} />

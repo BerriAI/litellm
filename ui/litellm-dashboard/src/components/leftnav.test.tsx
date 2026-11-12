@@ -692,8 +692,10 @@ describe("Sidebar (leftnav)", () => {
     );
     for (const page of ["Virtual Keys", "Playground", "v1.2.3"]) {
       fireEvent.click(await screen.findByRole("button", { name: "Open navigation" }));
-      fireEvent.click(within(await screen.findByRole("dialog")).getByRole("link", { name: page }));
-      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      fireEvent.click(
+        within(await screen.findByRole("dialog", { name: "Navigation" })).getByRole("link", { name: page }),
+      );
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "Navigation" })).not.toBeInTheDocument());
     }
   });
 
@@ -773,14 +775,18 @@ describe("Sidebar (leftnav)", () => {
     expect(container.querySelector('a[href*="projects"]')).toBeNull();
   });
 
-  it.each(["Cost Optimization", "Projects"])(
-    "keeps a readable collapsed-rail tooltip for %s, whose label can carry a badge",
-    async (name) => {
-      renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI collapsed />);
-      act(() => screen.getByRole("link", { name: new RegExp(`^${name}`) }).focus());
-      expect(await screen.findByText(name, { selector: '[data-slot="tooltip-content"]' })).toBeInTheDocument();
-    },
-  );
+  it.each([
+    ["Cost Optimization", "/ui/cost-optimization"],
+    ["Projects", "/ui/projects"],
+  ])("titles the collapsed-rail link for %s without its badge text", (name, href) => {
+    renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI collapsed />);
+    expect(screen.getByTitle(name)).toHaveAttribute("href", href);
+  });
+
+  it("leaves expanded-rail links untitled", () => {
+    renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI />);
+    expect(screen.queryByTitle("Cost Optimization")).not.toBeInTheDocument();
+  });
 });
 
 describe("getBreadcrumb", () => {
