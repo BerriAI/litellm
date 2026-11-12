@@ -85,6 +85,13 @@ describe("provider_info_helpers", () => {
   });
 
   describe("getProviderLogoAndName", () => {
+    it.each(["acedatacloud", "ACEDATACLOUD"])("resolves Ace Data Cloud branding for %s", (provider) => {
+      const result = getProviderLogoAndName(provider);
+      expect(result.displayName).toBe("Ace Data Cloud");
+      expect(result.logo).toContain("acedatacloud");
+      expect(getPlaceholder("ACEDATACLOUD")).toBe("acedatacloud/gpt-6-luna");
+    });
+
     it("shows the Parallel AI logo for the parallel_ai slug", () => {
       const { logo, displayName } = getProviderLogoAndName("parallel_ai");
       expect(displayName).toBe(Providers.PARALLEL_AI);

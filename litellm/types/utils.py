@@ -2020,6 +2020,10 @@ class ServerToolUse(LiteLLMBaseModel):
         return getattr(self, key)
 
 
+def _is_credit_cost(value: object) -> bool:
+    return isinstance(value, dict) and value.get("currency") == "credit"
+
+
 _COST_BREAKDOWN_ADAPTER: Final = TypeAdapter(Mapping[object, object])
 
 
@@ -2148,7 +2152,7 @@ class Usage(SafeAttributeModel, CompletionUsage):
             del self.server_tool_use
 
         dropped_non_finite_cost: Final = cost is not None and _carries_non_finite_number(cost)
-        if cost is None:
+        if cost is None or _is_credit_cost(cost):
             del self.cost
         elif dropped_non_finite_cost:
             verbose_logger.warning("Dropping a non-finite provider usage cost")
@@ -4637,6 +4641,7 @@ GenericBudgetConfigType = dict[str, BudgetConfig]
 
 
 class LlmProviders(str, Enum):
+    ACEDATACLOUD = "acedatacloud"
     REFUSELESS = "refuseless"
     OPENAI = "openai"
     CHATGPT = "chatgpt"
