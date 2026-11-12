@@ -14,7 +14,7 @@ from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStre
 from typing_extensions import assert_never
 
 from litellm.proxy.rust_forward.mode import RUST_HOP
-from litellm.proxy.rust_forward.platform import Platform
+from litellm.proxy.rust_forward.platform import ChildProcess, Platform
 from litellm.proxy.rust_forward.server import PythonServer
 from litellm.proxy.rust_forward.supervisor.children import ChildSpec, python_spec, rust_spec
 from litellm.proxy.rust_forward.supervisor.lifecycle import (
@@ -46,6 +46,27 @@ class Executor(Protocol):
     async def next_event(self) -> Event: ...
 
 
+class ChildControl(Protocol):
+    def signal_child(self, process: ChildProcess, signum: signal.Signals) -> None: ...
+
+    def stop_group(self, process: ChildProcess) -> None: ...
+
+
+class Spawner(Protocol):
+    async def __call__(self, spec: ChildSpec, /) -> ChildProcess: ...
+
+
+async def spawn_subprocess(spec: ChildSpec) -> asyncio.subprocess.Process:
+    return await asyncio.create_subprocess_exec(
+        *spec.argv,
+        stdin=asyncio.subprocess.PIPE,
+        env={**os.environ, **spec.env_overrides},
+        pass_fds=spec.spawn.pass_fds,
+        start_new_session=spec.spawn.start_new_session,
+        creationflags=spec.spawn.creationflags,
+    )
+
+
 async def run(platform: Platform, binary: str, command: Sequence[str], server: PythonServer) -> int | SpawnFailed:
     with platform.private_listener() as private:
         specs: Final = MappingProxyType(
@@ -54,7 +75,7 @@ async def run(platform: Platform, binary: str, command: Sequence[str], server: P
                 Child.RUST: rust_spec(platform, binary, private.port, server),
             }
         )
-        async with open_children(platform, specs, private.port) as children:
+        async with open_children(platform, spawn_subprocess, specs, private.port) as children:
             platform.catch(asyncio.get_running_loop(), children.caught)
             return await drive(children, platform.stop_signals)
 
@@ -100,14 +121,15 @@ def exit_like(
 
 @dataclass(frozen=True, slots=True)
 class Children:
-    platform: Platform
+    platform: ChildControl
+    spawner: Spawner
     specs: Mapping[Child, ChildSpec]
     private_port: int
     stack: contextlib.AsyncExitStack
     tasks: TaskGroup
     events_in: MemoryObjectSendStream[Event]
     events_out: MemoryObjectReceiveStream[Event]
-    processes: dict[Child, asyncio.subprocess.Process]  # mutable-ok: the running children the stack owns
+    processes: dict[Child, ChildProcess]  # mutable-ok: the running children the stack owns
 
     def caught(self, signum: signal.Signals) -> None:
         with contextlib.suppress(anyio.ClosedResourceError):
@@ -115,7 +137,9 @@ class Children:
 
     async def spawn(self, child: Child) -> SpawnFailed | None:
         try:
-            process: Final = await self.stack.enter_async_context(_process(self.platform, self.specs[child]))
+            process: Final = await self.stack.enter_async_context(
+                _process(self.platform, self.spawner, self.specs[child])
+            )
         except OSError as error:
             return SpawnFailed(error)
         self.processes[child] = process
@@ -137,28 +161,21 @@ class Children:
 # unbounded event buffer.
 @contextlib.asynccontextmanager
 async def open_children(
-    platform: Platform, specs: Mapping[Child, ChildSpec], private_port: int
+    platform: ChildControl, spawner: Spawner, specs: Mapping[Child, ChildSpec], private_port: int
 ) -> AsyncGenerator[Children]:
     events_in, events_out = anyio.create_memory_object_stream[Event](math.inf)
     with events_in, events_out:
         async with contextlib.AsyncExitStack() as stack:
             tasks: Final = await stack.enter_async_context(anyio.create_task_group())
-            yield Children(platform, specs, private_port, stack, tasks, events_in, events_out, {})
+            yield Children(platform, spawner, specs, private_port, stack, tasks, events_in, events_out, {})
 
 
 # A child's stdin is a pipe only the supervisor holds open, so the child sees EOF as soon as the supervisor is gone,
 # however it went, and shuts down instead of outliving it. Stopping is shielded so a cancelled supervisor still waits
 # for the child it is stopping.
 @contextlib.asynccontextmanager
-async def _process(platform: Platform, spec: ChildSpec) -> AsyncGenerator[asyncio.subprocess.Process]:
-    process: Final = await asyncio.create_subprocess_exec(
-        *spec.argv,
-        stdin=asyncio.subprocess.PIPE,
-        env={**os.environ, **spec.env_overrides},
-        pass_fds=spec.spawn.pass_fds,
-        start_new_session=spec.spawn.start_new_session,
-        creationflags=spec.spawn.creationflags,
-    )
+async def _process(platform: ChildControl, spawner: Spawner, spec: ChildSpec) -> AsyncGenerator[ChildProcess]:
+    process: Final = await spawner(spec)
     try:
         yield process
     finally:
@@ -169,9 +186,7 @@ async def _process(platform: Platform, spec: ChildSpec) -> AsyncGenerator[asynci
             process.stdin.close()
 
 
-async def _report_exit(
-    child: Child, process: asyncio.subprocess.Process, events: MemoryObjectSendStream[Event]
-) -> None:
+async def _report_exit(child: Child, process: ChildProcess, events: MemoryObjectSendStream[Event]) -> None:
     with events:
         events.send_nowait(ChildExited(child, await process.wait()))
 

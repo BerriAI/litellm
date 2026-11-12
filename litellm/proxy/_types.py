@@ -211,6 +211,7 @@ class LitellmTableNames(str, enum.Enum):
     SSO_CONFIG_TABLE_NAME = "LiteLLM_SSOConfig"
     UI_SETTINGS_TABLE_NAME = "LiteLLM_UISettings"
     AGENT_TABLE_NAME = "LiteLLM_AgentsTable"
+    GUARDRAILS_TABLE_NAME = "LiteLLM_GuardrailsTable"
 
 
 from litellm.types.integrations.slack_alerting import (
@@ -462,12 +463,15 @@ class LiteLLMRoutes(enum.Enum):
         "/skill-hub/skills/{name}/versions",
         "/skill-hub/skills/{name}/versions/{version_id}",
         "/skill-hub/skills/{name}/versions/{version_id}/archive",
+        "/skill-hub/skills/{name}/versions/{version_id}/restore",
         "/skill-hub/skills/{name}/publish",
         "/skill-hub/skills/{name}/unpublish",
         "/skill-hub/skills/{name}/upload",
         "/skill-hub/submissions",
         "/skill-hub/submissions/{submission_id}",
         "/skill-hub/submissions/{submission_id}/archive",
+        "/skill-hub/submissions/{submission_id}/upload",
+        "/skill-hub/submissions/{submission_id}/withdraw",
         "/skill-hub/submissions/{submission_id}/approve",
         "/skill-hub/submissions/{submission_id}/reject",
         "/skill-hub/submissions/{submission_id}/scan",
@@ -2344,6 +2348,14 @@ class PassThroughGenericEndpoint(LiteLLMPydanticObjectBase):
         default=None,
         description="List of HTTP methods this endpoint handles (e.g., ['GET', 'POST']). If None or empty, all methods (GET, POST, PUT, DELETE, PATCH) are supported for backward compatibility. This allows the same path to have different targets for different HTTP methods.",
     )
+    display_name: str | None = Field(
+        default=None,
+        description="Human-readable name for this endpoint. The Model Hub lists the endpoint under this name, falling back to the path when unset.",
+    )
+    show_in_model_hub: bool = Field(
+        default=False,
+        description="If True, this endpoint is published on the public Model Hub as a row in mode 'passthrough'.",
+    )
 
 
 class PassThroughEndpointResponse(LiteLLMPydanticObjectBase):
@@ -2926,6 +2938,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="If True, stores request messages and responses in spend logs. Default is False.",
     )
+    redact_tokens_in_spend_logs: bool = Field(
+        True,
+        description="Masks token-shaped secrets in stored spend log request and response content by default. Set False to opt out.",
+    )
     spend_logs_prompt_storage: Literal["latest_turn"] | None = Field(
         None,
         description="With store_prompts_in_spend_logs on, 'latest_turn' stores only the current turn of a stateless request (/chat/completions, /v1/messages, and /v1/responses without previous_response_id): the model and the latest user message, with the system prompt, tool definitions and earlier turns dropped. Requests that continue a stored conversation and the response are stored as they are today. Unset stores the full request.",
@@ -2964,6 +2980,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "Spreads the proxy's scheduled background jobs (spend flushes, budget resets, "
             "config reloads, exports) across a window instead of firing them together on "
             "every replica. On by default; set to tune the window, pin a job, or turn it off."
+        ),
+    )
+    performance_alerts_enabled: bool = Field(
+        True,
+        description=(
+            "Check yesterday's usage for the gateway, models, teams, users and keys against the week before, "
+            "and save unusual spend, traffic, response time and failure rate changes as alerts. On by default. "
+            "Set false to disable monitoring. Free gateways stop after five saved performance alerts."
         ),
     )
     spend_capture_rate_check: SpendCaptureRateCheckSettings | None = Field(
@@ -3024,7 +3048,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     use_spend_logs_partitioning: bool | None = Field(
         None,
-        description="If True and LiteLLM_SpendLogs has been converted to a range-partitioned table (db_scripts/partition_spend_logs.sql), retention cleanup drops expired partitions instead of deleting rows, and pre-creates upcoming partitions. Default is False.",
+        description="If True and LiteLLM_SpendLogs has been converted to a range-partitioned table (litellm/scripts/db/partition_spend_logs.sql), retention cleanup drops expired partitions instead of deleting rows, and pre-creates upcoming partitions. Default is False.",
     )
     maximum_spend_logs_cleanup_batch_size: int | None = Field(
         None,

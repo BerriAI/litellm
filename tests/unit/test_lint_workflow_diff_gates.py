@@ -23,7 +23,7 @@ DIFF_GATE: Final = re.compile(r'git diff --name-only --diff-filter=\w+ "\$GATE_B
 GATES: Final = tuple(tuple(shlex.split(gate.group(1))) for gate in DIFF_GATE.finditer(WORKFLOW.read_text()))
 PYTHON_GATES: Final = tuple(gate for gate in GATES if gate[0].startswith(":(glob)"))
 REPOSITORY: Final = "BerriAI/litellm"
-UI_DASHBOARD: Final = "ui/litellm-dashboard"
+UI_DASHBOARD: Final = "litellm/ui/litellm-dashboard"
 STACKED_BASE_REF: Final = "litellm_/stacked"
 RELEASE_BASE_REF: Final = "stable/next"
 BASE_REFS: Final = ("main", STACKED_BASE_REF, RELEASE_BASE_REF)
@@ -248,14 +248,14 @@ def test_diff_gate_selects_top_level_and_nested_python_files_only(tmp_path: Path
     (
         "tests/e2e_harness/top_level_module.py",
         "tests/e2e_harness/pkg/sub/nested_module.py",
-        "pyrightconfig.json",
+        "pyproject.toml",
     ),
 )
 def test_e2e_basedpyright_gate_also_fires_on_harness_python_and_pyrightconfig(tmp_path: Path, trigger: str) -> None:
     selected = _changed_files_selected_by(
         tmp_path,
         _gate_rooted_at("tests/e2e/"),
-        (trigger, "tests/e2e_harness/notes.md", "elsewhere/pyrightconfig.json", "tests/e2e_harnessish/module.py"),
+        (trigger, "tests/e2e_harness/notes.md", "elsewhere/pyproject.toml", "tests/e2e_harnessish/module.py"),
     )
     assert selected == frozenset({trigger})
 
@@ -278,7 +278,13 @@ def test_e2e_harness_gate_fires_on_any_e2e_or_harness_file_its_dependency_manife
     selected = _changed_files_selected_by(
         tmp_path,
         _gate_rooted_at("tests/e2e"),
-        (trigger, "tests/e2e/ui/spec.ts", "tests/e2e/ui/pkg/page.py", "elsewhere/pyproject.toml", "tests/e2e_other/module.py"),
+        (
+            trigger,
+            "tests/e2e/ui/spec.ts",
+            "tests/e2e/ui/pkg/page.py",
+            "elsewhere/pyproject.toml",
+            "tests/e2e_other/module.py",
+        ),
     )
     assert selected == frozenset({trigger})
 
@@ -511,7 +517,7 @@ UI_API_TYPES_DETECT: Final[str] = next(
     for step in yaml.safe_load(WORKFLOW.read_text())["jobs"]["ui-api-types"]["steps"]
     if step.get("id") == "changes"
 )
-PRE_COMMIT_LINT: Final = WORKFLOW.parents[2] / "scripts" / "pre_commit_lint.sh"
+PRE_COMMIT_LINT: Final = WORKFLOW.parents[2] / "litellm/scripts" / "pre_commit_lint.sh"
 TERRAFORM_PROVIDER_WORKFLOW: Final = WORKFLOW.with_name("test-terraform-provider.yml")
 
 
@@ -548,12 +554,12 @@ def _ui_api_types_relevant(tmp_path: Path, changed: str) -> bool:
         "litellm/tracing/generated/models.py",
         "litellm/router_strategy/complexity_router/config.py",
         "litellm/models/credentials.py",
-        "enterprise/litellm_enterprise/types/proxy/audit_logging_endpoints.py",
+        "litellm/enterprise/litellm_enterprise/types/proxy/audit_logging_endpoints.py",
         "pyproject.toml",
         "uv.lock",
-        "ui/litellm-dashboard/scripts/gen-api-types.mjs",
-        "ui/litellm-dashboard/package-lock.json",
-        "ui/litellm-dashboard/src/lib/http/schema.d.ts",
+        "litellm/ui/litellm-dashboard/scripts/gen-api-types.mjs",
+        "litellm/ui/litellm-dashboard/package-lock.json",
+        "litellm/ui/litellm-dashboard/src/lib/http/schema.d.ts",
     ),
 )
 def test_ui_api_types_check_runs_on_a_pull_request_touching_any_spec_input(tmp_path: Path, changed: str) -> None:
@@ -563,10 +569,10 @@ def test_ui_api_types_check_runs_on_a_pull_request_touching_any_spec_input(tmp_p
 @pytest.mark.parametrize(
     "changed",
     (
-        "litellm-rust/crates/traces/src/lib.rs",
-        "litellm-proxy-extras/litellm_proxy_extras/utils.py",
+        "litellm/rust/crates/traces/src/lib.rs",
+        "litellm/proxy-extras/litellm_proxy_extras/utils.py",
         "tests/unit/test_router.py",
-        "ui/litellm-dashboard/src/app/page.tsx",
+        "litellm/ui/litellm-dashboard/src/app/page.tsx",
         "docs/my-website/docs/proxy/config.md",
         "litellm-dashboard/pyproject.toml",
     ),
@@ -588,11 +594,24 @@ def _tracked_paths_matching(extended_regex: str) -> frozenset[str]:
 
 
 def test_make_check_runs_the_api_type_sync_on_the_same_tracked_files_as_ci() -> None:
-    ci_trigger: Final = _first_single_quoted_capture(r"grep -Eq '([^']+)'", UI_API_TYPES_DETECT)
+    ci_trigger: Final = _first_single_quoted_capture(r"grep -E '([^']+)'", UI_API_TYPES_DETECT)
+    ci_exclusions: Final = _first_single_quoted_capture(r"grep -Ev '([^']+)'", UI_API_TYPES_DETECT)
+    ci_dashboard_trigger: Final = _first_single_quoted_capture(r"grep -Eq '([^']+)'", UI_API_TYPES_DETECT)
     make_check_trigger: Final = _first_single_quoted_capture(r"^spec_pattern='([^']+)'$", PRE_COMMIT_LINT.read_text())
-    ci_selected: Final = _tracked_paths_matching(ci_trigger)
+    make_check_exclusions: Final = _first_single_quoted_capture(
+        r"""scope_match "\$spec_pattern" \| grep -Ev '([^']+)' """, PRE_COMMIT_LINT.read_text()
+    )
+    make_check_dashboard_trigger: Final = _first_single_quoted_capture(
+        r"^\s+scope_match '([^']+)'", PRE_COMMIT_LINT.read_text()
+    )
+    ci_selected: Final = (
+        _tracked_paths_matching(ci_trigger) - _tracked_paths_matching(ci_exclusions)
+    ) | _tracked_paths_matching(ci_dashboard_trigger)
+    make_check_selected: Final = (
+        _tracked_paths_matching(make_check_trigger) - _tracked_paths_matching(make_check_exclusions)
+    ) | _tracked_paths_matching(make_check_dashboard_trigger)
     assert "pyproject.toml" in ci_selected
-    assert _tracked_paths_matching(make_check_trigger) == ci_selected - {".github/workflows/test-linting.yml"}
+    assert make_check_selected == ci_selected - {".github/workflows/test-linting.yml"}
 
 
 def test_a_pull_request_changing_any_route_file_runs_the_terraform_provider_endpoint_audit() -> None:

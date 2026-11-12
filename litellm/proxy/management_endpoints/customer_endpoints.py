@@ -235,7 +235,7 @@ async def unblock_user(data: BlockUsers):
     ```
     """
     try:
-        from enterprise.enterprise_hooks.blocked_user_list import (
+        from litellm.enterprise.enterprise_hooks.blocked_user_list import (
             ENTERPRISE_BlockedUserList,
         )
     except ImportError:
@@ -815,7 +815,12 @@ async def delete_end_user(
     See below for all params 
     ```
     """
-    from litellm.proxy.proxy_server import prisma_client, spend_counter_store
+    from litellm.proxy.proxy_server import (
+        invalidate_spend_counter,
+        prisma_client,
+        set_spend_counter_with_floor_and_broadcast,
+        spend_counter_store,
+    )
 
     try:
         if prisma_client is None:
@@ -845,9 +850,11 @@ async def delete_end_user(
             verbose_proxy_logger.debug("received response from updating prisma client. response=%s", response)
 
             await _evict_end_user_cache_keys(_end_user_cache_keys(data.user_ids))
-            await drop_committed_spend(
-                spend_counter_store, tuple(end_user_counter(user_id) for user_id in data.user_ids)
-            )
+            counter_keys: Final = tuple(end_user_counter(user_id) for user_id in data.user_ids)
+            for counter_key in counter_keys:
+                await invalidate_spend_counter(counter_key=counter_key)
+                await set_spend_counter_with_floor_and_broadcast(counter_key=counter_key, value=0.0)
+            await drop_committed_spend(spend_counter_store, counter_keys)
 
             return DeleteCustomersResponse(
                 deleted_customers=response,

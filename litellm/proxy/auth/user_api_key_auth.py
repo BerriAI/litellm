@@ -43,6 +43,7 @@ from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.models.end_user import LiteLLM_EndUserTable
+from litellm.models.team import LiteLLM_TeamRebuiltFromToken
 from litellm.proxy._types import *
 from litellm.proxy.agent_endpoints.auth.agent_caller import agent_caller_from_headers
 from litellm.proxy.auth.access_group_rules import access_group_ids_for_identity
@@ -85,6 +86,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     is_model_cost_zero,
     is_user_proxy_admin,
     is_valid_fallback_model,
+    is_video_retrieval_request,
     jwt_key_mapping_cache_key,
     key_access_group_grants_model,
     key_model_aliases_for_auth_check,
@@ -2231,6 +2233,84 @@ async def _read_request_body_deferring_parse_failure(
     return populate_request_with_path_params(request_data=parsed_body, request=request), None
 
 
+async def _reject_from_headers_before_reading_body(
+    request: Request, api_key: str | None, custom_litellm_key_header: str | None, route: str
+) -> None:
+    """Refuse a request its headers already condemn, a blocked key or an exhausted key limit, before reading its body.
+
+    Only a key already in the cache is considered, so a miss changes nothing and the full auth path still runs.
+    A retry flood of large payloads against a limited key used to buffer every payload just to answer 429.
+    """
+    if not RouteChecks.is_llm_api_route(route=route):
+        return
+    from litellm.proxy import proxy_server
+    from litellm.proxy.common_request_processing import proxy_exception_from_http_exception
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+
+    configured_header: Final = proxy_server.general_settings_view().get("litellm_key_header_name")
+    bearer_token: Final = (
+        get_api_key_from_custom_header(request=request, custom_litellm_key_header_name=configured_header)
+        if isinstance(configured_header, str) and configured_header in request.headers
+        else _get_bearer_token_or_received_api_key(custom_litellm_key_header)
+        if isinstance(custom_litellm_key_header, str)
+        else get_bearer_token(api_key=api_key)
+        if isinstance(api_key, str)
+        else ""
+    )
+    if not bearer_token:
+        return
+    hashed_token: Final = hash_token(bearer_token)
+    try:
+        cached_key: Final = IdentityStore.key_from_principal(
+            await IdentityStore(prisma_client, user_api_key_cache, check_cache_only=True).resolve(
+                hashed_token=hashed_token
+            )
+        )
+    except Exception:  # noqa: BLE001  # any cache miss defers to the full auth path below
+        return
+    parent_otel_span: Final[Span | None] = getattr(request.state, "parent_otel_span", None)
+    if cached_key.blocked is True:
+        await UserAPIKeyAuthExceptionHandler.handle_authentication_error(
+            e=ProxyException(
+                message="Authentication Error, Key is blocked. Update via `/key/unblock` if you're an admin.",
+                type=ProxyErrorTypes.auth_error,
+                param=None,
+                code=status.HTTP_401_UNAUTHORIZED,
+            ),
+            request=request,
+            request_data={},
+            route=route,
+            parent_otel_span=parent_otel_span,
+            api_key=bearer_token,
+            resolved_identity=cached_key,
+        )
+        return
+    limiter: Final = proxy_logging_obj.get_proxy_hook("parallel_request_limiter")
+    if not isinstance(limiter, PROXY_MaxParallelRequestsHandler_v3):
+        return
+    rate_limited: Final = cached_key.model_copy(
+        update={
+            "api_key": cached_key.api_key or hashed_token,
+            "parent_otel_span": parent_otel_span,
+            "request_route": normalize_request_route(route),
+        }
+    )
+    try:
+        await limiter.raise_if_over_limit_before_body(rate_limited)
+    except HTTPException as rejection:
+        transformed: Final = await proxy_logging_obj.post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # bare dict in sig
+            request_data={},
+            original_exception=rejection,
+            user_api_key_dict=rate_limited,
+            route=route,
+        )
+        failure: Final = transformed if transformed is not None else rejection
+        if isinstance(failure, ProxyException):
+            raise failure
+        raise proxy_exception_from_http_exception(failure, dict(failure.headers or {}))
+
+
 async def _record_unparsable_body_failure(
     user_api_key_dict: UserAPIKeyAuth,
     body_parse_exception: ProxyException,
@@ -2680,7 +2760,11 @@ async def user_api_key_auth_builder(
                             team_id=valid_token.team_id,
                         )
                         skip_budget_checks = request_skips_budget_checks(
-                            route=route, model=model, llm_router=llm_router, request_body=request_data
+                            route=route,
+                            model=model,
+                            llm_router=llm_router,
+                            request_body=request_data,
+                            http_method=RouteChecks.get_request_method(request),
                         )
 
                         # Fetch project object for JWT path if project_id is set
@@ -3198,6 +3282,7 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
             model=await budget_served_model(model, request_data, request, llm_router, valid_token),
             llm_router=llm_router,
             request_body=request_data,
+            http_method=RouteChecks.get_request_method(request),
         )
 
         # Check 3. Check if user is in their team budget
@@ -3530,13 +3615,13 @@ async def _safe_fetch(label: str, awaitable):
         return None
 
 
-def _team_obj_from_token(valid_token: UserAPIKeyAuth) -> LiteLLM_TeamTableCachedObj:
+def _team_obj_from_token(valid_token: UserAPIKeyAuth) -> LiteLLM_TeamRebuiltFromToken:
     """Reconstruct a cached team object from the fields already on the
     UserAPIKeyAuth. Only called when valid_token.team_id is known to be
     non-None (the caller gates on it)."""
     assert valid_token.team_id is not None
     token_team_models: Final = _token_team_models(valid_token)
-    return LiteLLM_TeamTableCachedObj(
+    return LiteLLM_TeamRebuiltFromToken(
         team_id=valid_token.team_id,
         max_budget=valid_token.team_max_budget,
         soft_budget=valid_token.team_soft_budget,
@@ -4002,7 +4087,11 @@ async def run_centralized_common_checks(
         user_api_key_auth_obj.project_metadata = project_object.metadata
         user_api_key_auth_obj.project_alias = project_object.project_alias
 
-    if end_user_id and key_end_user_budget_id is not None and prisma_client is not None:
+    if (
+        end_user_id
+        and (key_end_user_budget_id is not None or user_api_key_auth_obj.jwt_claims is not None)
+        and prisma_client is not None
+    ):
         await _apply_key_end_user_default_budget_to_token(
             valid_token=user_api_key_auth_obj,
             end_user_object=end_user_object,
@@ -4190,7 +4279,7 @@ async def _noop_none() -> None:
 async def _apply_key_end_user_default_budget_to_token(
     valid_token: UserAPIKeyAuth,
     end_user_object: LiteLLM_EndUserTable | None,
-    key_end_user_budget_id: str,
+    key_end_user_budget_id: str | None,
     prisma_client: PrismaClient,
     user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Span | None,
@@ -4299,6 +4388,7 @@ async def _should_skip_budget_checks(
         model=(model if sub_call else await budget_served_model(model, request_data, request, llm_router, valid_token)),
         llm_router=llm_router,
         request_body=request_data,
+        http_method=RouteChecks.get_request_method(request),
     )
 
 
@@ -4581,9 +4671,12 @@ async def user_api_key_auth(
     # close, and the trace never reaches the backend.
     _ensure_parent_otel_span_on_request_state(request)
 
+    route: Final[str] = get_request_route(request=request)
+    await _reject_from_headers_before_reading_body(
+        request=request, api_key=api_key, custom_litellm_key_header=custom_litellm_key_header, route=route
+    )
     request_data, body_parse_exception = await _read_request_body_deferring_parse_failure(request=request)
     phase_event("litellm.request.body_parsed")
-    route: Final[str] = get_request_route(request=request)
     ## CHECK IF ROUTE IS ALLOWED
 
     # Run the whole auth phase inside a live ``auth`` span so the DB lookups it
@@ -4976,7 +5069,9 @@ async def _run_post_custom_auth_checks(
     # spend some other model accrued. The JWT and virtual-key paths already skip
     # every budget check for these; this path did not, so the same request could
     # be refused under custom auth and served under the other two.
-    skip_budget_checks: Final = (
+    skip_budget_checks: Final = is_video_retrieval_request(
+        route=route, http_method=RouteChecks.get_request_method(request)
+    ) or (
         is_model_cost_zero(
             model=await budget_served_model(current_model, request_data, request, llm_router, valid_token),
             llm_router=llm_router,

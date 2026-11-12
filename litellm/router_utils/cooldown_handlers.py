@@ -149,7 +149,7 @@ _EXCEPTION_POLICY_FIELDS: Final[tuple[tuple[type, str], ...]] = (
 )
 
 
-def _first_present(*sources: Mapping[str, Any] | None, key: str) -> int | float | None:
+def _first_present(*sources: Mapping[str, object] | None, key: str) -> int | float | None:
     """Return *key* from the first source mapping where it's set, so callers can
     support a setting living in more than one deployment config location. Sources
     are checked in order from most to least specific to that setting. Only a number
