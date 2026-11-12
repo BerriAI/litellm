@@ -12,6 +12,7 @@ import os
 import random
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -114,6 +115,14 @@ def _http(method: str, url: str, body: Mapping[str, object] | None = None, timeo
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return response.read()
+
+
+def busy_ports(ports: Sequence[int]) -> tuple[int, ...]:
+    def listening(port: int) -> bool:
+        with socket.socket() as probe:
+            return probe.connect_ex(("127.0.0.1", port)) == 0
+
+    return tuple(port for port in ports if listening(port))
 
 
 def wait_until_up(url: str, process: subprocess.Popen[bytes], timeout_s: float) -> None:
@@ -268,6 +277,9 @@ class RunSpec:
 
 
 def run_once(spec: RunSpec) -> dict[str, object]:
+    busy: Final = busy_ports((PROXY_PORT, MOCK_PORT, S3_PORT))
+    if busy:
+        raise RuntimeError(f"ports {busy} are already in use, another benchmark run is probably still going")
     spec.run_dir.mkdir(parents=True)
     harness_env: Final = {k: v for k, v in os.environ.items() if not k.startswith(STRIPPED_ENV_PREFIXES)}
     python: Final = harness_python()
@@ -490,6 +502,7 @@ def main() -> None:
                 )
             )
         except Exception as error:  # noqa: BLE001  # one failed run is recorded and the matrix moves on
+            run_dir.mkdir(parents=True, exist_ok=True)
             _ = (run_dir / "error.txt").write_text(f"{type(error).__name__}: {error}\n")
             _ = sys.stdout.write(f"FAILED {name} rep {rep}: {error}\n")
             continue
