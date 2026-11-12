@@ -201,6 +201,32 @@ tests:
               scrapeTimeout: 10s
               scheme: http
 
+  - it: scrapes over https with the given tlsConfig, for a mesh with STRICT mTLS
+    template: gateway/servicemonitor.yaml
+    set:
+      gateway.serviceMonitor.enabled: true
+      gateway.metricsServer.enabled: true
+      gateway.serviceMonitor.scheme: https
+      gateway.serviceMonitor.tlsConfig:
+        caFile: /etc/prom-certs/root-cert.pem
+        certFile: /etc/prom-certs/cert-chain.pem
+        keyFile: /etc/prom-certs/key.pem
+        insecureSkipVerify: true
+    asserts:
+      - equal:
+          path: spec.endpoints
+          value:
+            - port: metrics
+              path: /metrics/
+              interval: 15s
+              scrapeTimeout: 10s
+              scheme: https
+              tlsConfig:
+                caFile: /etc/prom-certs/root-cert.pem
+                certFile: /etc/prom-certs/cert-chain.pem
+                keyFile: /etc/prom-certs/key.pem
+                insecureSkipVerify: true
+
   - it: carries litellm-helm annotations, relabelings and namespaceSelector onto the ServiceMonitor
     template: gateway/servicemonitor.yaml
     release:

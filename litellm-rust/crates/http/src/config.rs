@@ -94,6 +94,8 @@ impl From<&HttpSettings> for Resolution {
     }
 }
 
+const MAX_REDIRECTS: usize = 20;
+
 impl TryFrom<&HttpClientConfig> for reqwest::ClientBuilder {
     type Error = Error;
 
@@ -101,7 +103,9 @@ impl TryFrom<&HttpClientConfig> for reqwest::ClientBuilder {
         let base = reqwest::Client::builder()
             .tls_backend_preconfigured(rustls::ClientConfig::try_from(config)?)
             .connect_timeout(config.connect_timeout)
-            .pool_idle_timeout(config.pool_idle_timeout);
+            .pool_idle_timeout(config.pool_idle_timeout)
+            .referer(false)
+            .redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS));
         let with_keepalive = match config.tcp_keepalive {
             None => base,
             Some(keepalive) => base
@@ -186,17 +190,23 @@ mod tests {
         assert_eq!(resolution.unsupported, []);
     }
 
-    #[test]
-    fn unsupported_ecdh_curve_keeps_the_defaults_and_is_reported() {
+    #[rstest]
+    #[case::openssl_lacks_in_rustls("secp521r1")]
+    #[case::nist_name("P-256")]
+    #[case::nist_p384("P-384")]
+    #[case::sec_name("secp256r1")]
+    #[case::lowercase("x25519")]
+    #[case::padded(" X25519 ")]
+    fn unsupported_ecdh_curve_keeps_the_defaults_and_is_reported(#[case] curve: &str) {
         let settings = HttpSettings {
-            ssl_ecdh_curve: Some("secp521r1".into()),
+            ssl_ecdh_curve: Some(curve.into()),
             ..HttpSettings::default()
         };
         let resolution = Resolution::from(&settings);
         assert_eq!(resolution.config.key_exchange_group, None);
         assert_eq!(
             resolution.unsupported,
-            [Unsupported::EcdhCurve("secp521r1".into())]
+            [Unsupported::EcdhCurve(curve.into())]
         );
     }
 

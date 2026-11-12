@@ -55,7 +55,6 @@ jobs:
     services:
       postgres:
         image: postgres:16@sha256:e17e86066e5ef83e0952a9347f5c792b7ece00972e2aa787a6986f471b3dd3d5
-        command: -c max_connections=1000 -c shared_preload_libraries=pg_stat_statements -c pg_stat_statements.track=all -c pg_stat_statements.max=20000
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -81,6 +80,17 @@ jobs:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           persist-credentials: false
+      - name: Configure PostgreSQL for integration workers
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          docker exec "$POSTGRES_CONTAINER" sh -c 'printf "%s\n" "max_connections = 1000" "shared_preload_libraries = pg_stat_statements" "pg_stat_statements.track = all" "pg_stat_statements.max = 20000" >> "$PGDATA/postgresql.conf"'
+          docker restart "$POSTGRES_CONTAINER"
+          for attempt in $(seq 1 30); do
+            if docker exec "$POSTGRES_CONTAINER" pg_isready -U postgres; then exit 0; fi
+            sleep 1
+          done
+          exit 1
 
       - name: Set up Python
         timeout-minutes: 3
@@ -155,8 +165,8 @@ jobs:
           LITELLM_LICENSE: ${{ secrets.LITELLM_LICENSE }}
         run: |
           case "$SUITE" in
-            *-replica) bash .circleci/scripts/run_integration.sh "${SUITE%-replica}" replica ;;
-            *) bash .circleci/scripts/run_integration.sh "$SUITE" ;;
+            *-replica) bash .github/scripts/ci/run_integration.sh "${SUITE%-replica}" replica ;;
+            *) bash .github/scripts/ci/run_integration.sh "$SUITE" ;;
           esac
 
       - name: Verify every case ran exactly once

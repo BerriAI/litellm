@@ -99,6 +99,11 @@ def _post_hook_overridden(callback: CustomLogger) -> bool:
 
 
 _STREAM_OPTIONS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+_HOOK_RESPONSE: Final = TypeAdapter(object)
+
+
+def _plan_response_override(plan: AgenticLoopPlan) -> object | None:
+    return plan.response_override
 
 
 def _stashed_stream_options(kwargs: Mapping[str, object]) -> Mapping[str, object] | None:
@@ -396,8 +401,10 @@ async def _execute_chat_completion_agentic_plan(
             )
         if _post_hook_overridden(callback):
             try:
-                response_followup = await callback.async_post_agentic_loop_response_hook(
-                    response=response_followup, plan=plan, kwargs=kwargs
+                response_followup = _HOOK_RESPONSE.validate_python(
+                    await callback.async_post_agentic_loop_response_hook(
+                        response=response_followup, plan=plan, kwargs=kwargs
+                    )
                 )
             except Exception as e:
                 _call_id = getattr(logging_obj, "litellm_call_id", "unknown")
@@ -646,8 +653,8 @@ async def run_chat_completion_agentic_hooks(
             kwargs=hook_kwargs,
         )
 
-        if plan.response_override is not None:
-            return plan.response_override
+        if (response_override := _plan_response_override(plan)) is not None:
+            return response_override
         if plan.terminate:
             verbose_logger.debug(
                 "Agentic chat loop terminated by callback=%s reason=%s", type(callback).__name__, plan.stop_reason

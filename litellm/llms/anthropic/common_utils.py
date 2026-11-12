@@ -2570,7 +2570,7 @@ def changed_server_tool_call_arguments(
 
 
 def write_anthropic_hosted_web_call_arguments(holder: Message | Delta, arguments_by_tool_id: Mapping[str, str]) -> None:
-    fields: Final = holder.provider_specific_fields
+    fields: Final[Mapping[str, object]] = holder.provider_specific_fields or {}
     if not arguments_by_tool_id or not fields or fields.get("web_search_calls") is None:
         return
     holder.provider_specific_fields = {  # rebind-ok: the hosted copy of a rewritten call must not keep its old input
@@ -2598,7 +2598,7 @@ def _jsonable_hosted_web_call(item: object, arguments_by_tool_id: Mapping[str, s
     call: Final = _with_hosted_web_call_arguments(item, arguments_by_tool_id)
     if not isinstance(call, ResponseFunctionWebSearch):
         return call
-    return _WEB_SEARCH_CALL_ADAPTER.dump_python(call, mode="json", exclude_none=True)
+    return _DECODED_JSON.validate_python(_WEB_SEARCH_CALL_ADAPTER.dump_python(call, mode="json", exclude_none=True))
 
 
 def _with_hosted_web_call_arguments(item: object, arguments_by_tool_id: Mapping[str, str]) -> object:
@@ -2613,7 +2613,7 @@ def _with_hosted_web_call_arguments(item: object, arguments_by_tool_id: Mapping[
 
 
 def without_anthropic_server_tool_calls(holder: Message, tool_ids: frozenset[str]) -> None:
-    fields: Final = holder.provider_specific_fields or {}
+    fields: Final[Mapping[str, object]] = holder.provider_specific_fields or {}
     holder.provider_specific_fields = {  # rebind-ok: a denied call must leave every copy of the message it was on
         **fields,
         "server_tool_calls": [
