@@ -95,6 +95,7 @@ from litellm.types.responses.main import (
     OutputFunctionToolCall,
     OutputImageGenerationCall,
     OutputToolSearchCall,
+    OutputToolSearchOutput,
 )
 
 from .base import CachedTokensDetails
@@ -957,6 +958,7 @@ class ChatCompletionToolMessage(TypedDict):
     role: Literal["tool"]
     content: str | Iterable[ToolMessageContentPart]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
     tool_call_id: str
+    is_error: NotRequired[bool]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
 
 
 class ChatCompletionFunctionMessage(TypedDict):
@@ -1594,6 +1596,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
             | ResponseFunctionWebSearch
             | CustomToolCallOutputItem
             | OutputToolSearchCall
+            | OutputToolSearchOutput
             | ResponseCompactionItem
         ]
     )

@@ -1,5 +1,5 @@
 """
-``RustCore``: the router core served by litellm-rust/crates/router-core through ``_native``.
+``RustCore``: the router core served by litellm/rust/crates/router-core through ``_native``.
 
 The Rust core owns the registry, selection, retries, fallbacks and cooldowns. It reaches outside
 itself only through its host, and the host never calls back into a Python router:
@@ -11,25 +11,27 @@ itself only through its host, and the host never calls back into a Python router
   Python router would have running for the request reach (``OptionalChecks.outcome_callbacks``)
 - sleeps, fallback access and budget checks, and cache reads and writes are host steps
 
-``RustCore`` does not build, wrap or read a ``PythonCore``. Settings are resolved from the
-``RouterConfig`` and the host's process settings; the views (``registry()``, ``settings()``,
-``health()``) are read from the Rust handle. A member the Rust core does not serve raises
-``RustCoreUnsupported`` (an ``AttributeError``) instead of reaching a Python core, so deleting
-``router_python_core.py`` cannot change what this core does.
+Settings are resolved from the ``RouterConfig`` and the host's process settings; the views
+(``registry()``, ``settings()``, ``health()``) are read from the Rust handle. A member the Rust
+core does not serve raises ``RustCoreUnsupported`` (an ``AttributeError``).
 """
 
+import asyncio
 import contextlib
 import dataclasses
 import inspect
 import itertools
 import json
-from collections.abc import Awaitable, Callable, Coroutine, Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Generator, Iterable, Mapping, Sequence
+from contextvars import ContextVar
 from datetime import date, datetime, time
 from functools import partial
 from time import perf_counter
 from time import time as unix_time
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, final
+from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, TypeVar, final, overload
+
+from pydantic import TypeAdapter
 
 from litellm._internal_context import service_target
 from litellm.constants import DEFAULT_COOLDOWN_TIME_SECONDS, HEALTH_CHECKS_TARGET
@@ -45,8 +47,18 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
     prepare_response_for_header_attachment,
 )
 from litellm.litellm_core_utils.agentic_followup_failure import is_agentic_followup_failure
+from litellm.litellm_core_utils.attempt_settlement import (
+    ATTEMPT_SETTLEMENT_GRACE_SECONDS,
+    RoutedAttempt,
+    released,
+    routed_attempt,
+)
 from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
-from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, without
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    get_parent_otel_span_from_kwargs,
+    without,
+)
 from litellm.litellm_core_utils.routing_common_utils import (
     format_content_policy_fallback_hint,
     format_fallback_outcome_message,
@@ -57,6 +69,14 @@ from litellm.litellm_core_utils.routing_common_utils import (
 )
 from litellm.litellm_core_utils.routing_groups import validate_routing_strategy
 from litellm.litellm_core_utils.secret_redaction import redact_string
+from litellm.litellm_core_utils.total_deadline import (
+    TotalTimeoutNotApplicable,
+    current_total_deadline,
+    enforce_total_timeout_scope,
+)
+from litellm.redis.stores.connection import connect
+from litellm.redis.stores.router_cooldowns import ROUTER_COOLDOWNS_TARGET, RouterCooldownStore
+from litellm.redis.stores.router_usage import ROUTER_USAGE_TARGET, RouterUsage
 from litellm.router_api import (
     ROUTER_INIT_ARGS,
     SETTING_FIELDS,
@@ -79,10 +99,13 @@ from litellm.router_rust.invoke.endpoints import (
     attempt_call,
     clean_realtime_session_deployment,
     compacted_attempt,
+    endpoint_names,
     failover_fields,
     generic_plan,
+    is_batch_upload,
     log_refused_call,
     log_refused_call_sync,
+    pinned_vector_store_file_deployment,
     pinned_video_deployment,
     plan_for,
     reports_own_success,
@@ -91,7 +114,7 @@ from litellm.router_rust.invoke.endpoints import (
     stamp_error,
     unrouted_fields,
 )
-from litellm.router_rust.invoke.shaping import Shaping
+from litellm.router_rust.invoke.shaping import Shaping, non_stream_timeout
 from litellm.router_rust.invoke.slots import enter_deployment_slot, max_parallel_requests_limit
 from litellm.router_rust.invoke.streaming import (
     StreamAttempt,
@@ -103,6 +126,8 @@ from litellm.router_rust.invoke.streaming import (
     shape_attempt_kwargs,
 )
 from litellm.router_rust.invoke.walk import FallbackOutcomes, WalkMetadata, await_all, log_retry_into
+from litellm.router_rust.invoke.websocket import turns_counted_their_requests
+from litellm.router_rust.routing_stores import RoutingStores
 from litellm.router_rust.steps.access import caller_fields, selection_refusal
 from litellm.router_rust.steps.callbacks import OptionalChecks, RustOptionalChecks
 from litellm.router_rust.steps.plugins import SYNC_PATH_MESSAGE, candidate_models, run_plugins
@@ -198,8 +223,14 @@ from litellm.router_rust.surface.settings import (
     request_timeout,
     settings_view,
 )
-from litellm.router_strategy.least_busy import CALL_IDENTITY, call_id_of, owning_picks, pick_reserves, picks_reserve
-from litellm.router_utils.cooldown_cache import ROUTER_COOLDOWNS_TARGET
+from litellm.router_strategy.least_busy import (
+    CALL_IDENTITY,
+    call_id_of,
+    owning_picks,
+    pick_reserves,
+    picks_reserve,
+    release_started_attempt,
+)
 from litellm.router_utils.cooldown_handlers import get_cooldown_deployment_info, mark_deployment_selection_failure
 from litellm.router_utils.endpoint_eligibility import endpoint_for_call, selected_endpoint
 from litellm.router_utils.kubernetes_pod_discovery import (
@@ -208,9 +239,11 @@ from litellm.router_utils.kubernetes_pod_discovery import (
     resolve_pods_after_bound,
 )
 from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import EncryptedContentAffinityCheck
+from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import release_io_token_reservation
 from litellm.router_utils.router_callbacks.track_deployment_metrics import find_deployment_metadata
-from litellm.router_utils.routing_read_batch import ROUTER_USAGE_TARGET, RoutingReadBatch
+from litellm.router_utils.routing_read_batch import RoutingReadBatch
 from litellm.types.router import (
+    AllowedFailsPolicy,
     Deployment,
     RouterErrors,
     RouterGeneralSettings,
@@ -218,7 +251,7 @@ from litellm.types.router import (
     RoutingGroup,
     RoutingStrategy,
 )
-from litellm.types.utils import LlmProviders
+from litellm.types.utils import CooldownDeploymentInfo, LlmProviders
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
@@ -298,6 +331,7 @@ _SERVED_ARGUMENTS: Final = frozenset(
         "default_litellm_params",
         "fallback_access_check",
         "fallback_budget_check",
+        "fallback_rate_limit_check",
         "enable_mid_stream_fallback_continuation",
         "redis_url",
         "redis_host",
@@ -386,6 +420,7 @@ _DYNAMIC_SETTINGS: Final = frozenset(
         "default_litellm_params",
         "fallback_access_check",
         "fallback_budget_check",
+        "fallback_rate_limit_check",
         "routing_strategy_args",
         "enable_tag_filtering",
         "tag_filtering_match_any",
@@ -442,6 +477,23 @@ _NUMBER_SETTINGS: Final = frozenset(
 )
 # The settings `_core_update_settings` casts with `int(value)`.
 _UPDATE_INT_SETTINGS: Final = frozenset({"timeout", "num_retries", "retry_after", "allowed_fails", "cooldown_time"})
+
+
+def _raised_before_provider(error: BaseException) -> bool:
+    """A request litellm refused before it reached the provider (a parameter the provider does not
+    take, a malformed priority): neither a failure nor a request of the deployment it picked."""
+    from litellm.exceptions import UnsupportedParamsError
+
+    body: Final = getattr(error, "body", None)
+    return isinstance(error, UnsupportedParamsError) or (isinstance(body, Mapping) and body.get("param") == "priority")
+
+
+def _shares_logging(request: Mapping[str, object]) -> bool:
+    """The caller passed the logging object every attempt of the request logs on, which logs one
+    success a request (``should_run_logging``)."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    return isinstance(request.get("litellm_logging_obj"), Logging)
 
 
 class RustCoreUnsupported(AttributeError):
@@ -541,6 +593,14 @@ def _strategy_name(value: object) -> str | None:
     return None if value is None else normalize_strategy(value) or "simple-shuffle"
 
 
+_U32_MAX: Final = 2**32 - 1
+
+
+def _crate_count(value: int | None) -> int | None:
+    """A count setting as the crate's u32 reads it: a negative one is 0, a huge one the most it holds."""
+    return None if value is None else min(max(value, 0), _U32_MAX)
+
+
 def _lenient_int(value: object, default: int) -> int:
     """A count setting kept as given, as the crate reads it: an int, or a number spelled another way
     (``1.5``, ``"3"``) truncated to one; ``default`` when it is no number. The Python core stores the
@@ -607,6 +667,7 @@ class Resolved:
     default_litellm_params: Mapping[str, object]
     fallback_access_check: object
     fallback_budget_check: object
+    fallback_rate_limit_check: object
     enable_mid_stream_fallback_continuation: bool = False
     routing_groups: "tuple[RoutingGroup, ...]" = ()
     enable_tag_filtering: bool = False
@@ -722,6 +783,7 @@ class Resolved:
             default_litellm_params=MappingProxyType(dict(as_str_mapping(get("default_litellm_params")) or {})),
             fallback_access_check=get("fallback_access_check"),
             fallback_budget_check=get("fallback_budget_check"),
+            fallback_rate_limit_check=get("fallback_rate_limit_check"),
             enable_mid_stream_fallback_continuation=continuation_flag(get("enable_mid_stream_fallback_continuation")),
             enable_tag_filtering=bool(get("enable_tag_filtering")),
             tag_filtering_match_any=_true_unless_given(get("tag_filtering_match_any")),
@@ -763,9 +825,9 @@ class Resolved:
             if name in {"model_group_alias", "default_litellm_params"}:
                 updates[name] = MappingProxyType(dict(as_str_mapping(value) or {}))
             elif name in _NUMBER_SETTINGS:
+                # `allowed_fails` saved later is no explicit one: only the constructor's argument is
+                # (`explicit_allowed_fails`), so a value equal to the default keeps the rate-based default.
                 updates[name] = self._number_setting(name, value)
-                if name == "allowed_fails":
-                    updates["explicit_allowed_fails"] = updates[name]
             elif name in _SELECTION_SETTINGS:
                 updates[name] = self._selection_setting(name, value)
             elif name == "disable_cooldowns":
@@ -823,7 +885,9 @@ class Resolved:
             "routing_strategy": self.routing_strategy,
             "cooldown_time": self.cooldown_time,
             "disable_cooldowns": self.disable_cooldowns,
-            "allowed_fails_policy": _plain(self.allowed_fails_policy),
+            # A policy that is no policy or mapping (an attribute write of a list) is none, as the
+            # Python core's `get_allowed_fails_from_policy` reads no field off it.
+            "allowed_fails_policy": _plain(self.allowed_fails_policy) if self._has_fails_policy() else None,
             "retry_after": self.retry_after,
             "timeout": self.timeout,
             "routing_groups": group_documents(self.routing_groups) if self.routing_groups else None,
@@ -842,6 +906,9 @@ class Resolved:
         # An explicit `routing_strategy=None` reaches the Rust core as "None": no strategy picks.
         return kept if self.routing_strategy is not None else {**kept, "routing_strategy": "None"}
 
+    def _has_fails_policy(self) -> bool:
+        return isinstance(self.allowed_fails_policy, AllowedFailsPolicy | Mapping)
+
     def dynamic_document(self, version: int, model_names: Sequence[str]) -> Mapping[str, object]:
         values: Final = {
             "version": version,
@@ -849,9 +916,11 @@ class Resolved:
             "fallbacks": _plain(self.fallbacks),
             "context_window_fallbacks": _plain(self.context_window_fallbacks),
             "content_policy_fallbacks": _plain(self.content_policy_fallbacks),
-            "num_retries": self.num_retries,
-            "max_fallbacks": self.max_fallbacks,
-            "allowed_fails": self.allowed_fails,
+            # A negative count reads as none at all in the Python core (`range(num_retries)`,
+            # `fallback_depth >= max_fallbacks`, `fails > allowed_fails`); the crate reads a u32.
+            "num_retries": _crate_count(self.num_retries),
+            "max_fallbacks": _crate_count(self.max_fallbacks),
+            "allowed_fails": _crate_count(self.allowed_fails),
             "allowed_fails_is_default": True if self.allowed_fails_is_default() else None,
             "fallback_keys": self._fallback_keys(model_names),
             "default_deployment": _plain(served_default_deployment(self.default_deployment)[0]),
@@ -878,7 +947,9 @@ class Resolved:
             for entry in _as_list(entries)
             if (mapping := as_str_mapping(entry))
         )
-        names: Final = {*model_names, *self.model_group_alias}
+        # A bare name a wildcard serves is in no list of names: the keys' own bare spellings stand for it.
+        bare: Final = (key.split("/", 1)[1] for key in keys if "/" in key)
+        names: Final = {*model_names, *self.model_group_alias, *bare}
         prefixed: Final = {
             name: spelled for name in names if (spelled := _provider_prefixed_model_group(name, keys)) is not None
         }
@@ -1094,6 +1165,14 @@ class RustHealth(RouterHealth):
             core._resolved.allowed_fails_policy,  # pyright: ignore[reportPrivateUsage]  # see store
         )
 
+    @overload
+    async def usage(
+        self, model_group: str, *, kind: Literal["current"] = "current"
+    ) -> tuple[int | None, int | None]: ...
+
+    @overload
+    async def usage(self, model_group: str, *, kind: Literal["remaining"]) -> Mapping[str, int]: ...
+
     async def usage(  # pyright: ignore[reportIncompatibleMethodOverride]  # the same two kinds
         self, model_group: str, *, kind: Literal["current", "remaining"] = "current"
     ) -> tuple[int | None, int | None] | Mapping[str, int]:
@@ -1123,6 +1202,7 @@ _HOSTED_STATE: Final = frozenset(
         "_core_auto_routers",
         "_core_complexity_routers",
         "_core_quality_routers",
+        "_core_switchyard_routers",
         "_core_adaptive_routers",
         "_core_routing_plugins",
         "_core_deployment_latency_map",
@@ -1167,6 +1247,21 @@ _EndpointImpl: TypeAlias = Callable[..., Awaitable[object]]
 _StrategyInputs: TypeAlias = tuple[str, object, str, list[dict[str, object]]]
 
 
+def _pick_answer(
+    step: Mapping[str, object], candidates: Sequence[object], picked: object
+) -> list[object]:  # mutable-ok: a JSON list
+    """A strategy step's answer: the picked id, or its position when the candidates share ids (the
+    step then carries ``records``), so the pick serves the entry it chose as Python's list does."""
+    found: Final = picked_id(picked)
+    if step.get("records") is None or found is None:
+        return [found] if found is not None else []
+    # The entry the selector returned, else (a selector that returned a copy) the first with its id.
+    position: Final = next((index for index, record in enumerate(candidates) if record is picked), None)
+    if position is not None:
+        return [position]
+    return [next((index for index, record in enumerate(candidates) if picked_id(record) == found), 0)]
+
+
 @final
 class _PickCounts(Protocol):
     """The router cache as ``track_deployment_pick`` uses it: each deployment id holds its pick count."""
@@ -1192,6 +1287,14 @@ class _EndpointPort:
     @property
     def router(self) -> "RustCore":
         return self._core
+
+    @property
+    def public(self) -> object:
+        """The ``Router`` that owns the core, which litellm functions taking ``router=`` get; the core
+        itself when built alone."""
+        owner: Final[object] = self._core.__dict__.get("_core_owner")
+        public: Final[object] = owner() if callable(owner) else None
+        return self._core if public is None else public
 
     @property
     def host(self) -> PythonHost:
@@ -1248,6 +1351,9 @@ class _EndpointPort:
     def group_deployments(self, model_name: str) -> Sequence[Mapping[str, object]] | None:
         return self._core._hosted._core_get_model_list(model_name=model_name)  # pyright: ignore[reportPrivateUsage]  # see the class docstring
 
+    def group_members(self, model_name: str) -> Sequence[tuple[object, object]] | None:
+        return self._core._hosted._group_members(model_name)  # pyright: ignore[reportPrivateUsage]  # see the class docstring
+
     def routed_name(self, model: object) -> str:
         return self._core.routed_name(model)
 
@@ -1273,9 +1379,15 @@ class _EndpointPort:
         kind: str = "pick",
         specific_deployment: bool | None = None,
         messages: object = None,
+        batch_upload: bool = False,
     ) -> Mapping[str, object] | Sequence[Mapping[str, object]]:
         return await self._core.select(
-            model, request_kwargs, kind=kind, specific_deployment=specific_deployment, messages=messages
+            model,
+            request_kwargs,
+            kind=kind,
+            specific_deployment=specific_deployment,
+            messages=messages,
+            batch_upload=batch_upload,
         )
 
     async def acompletion(self, *args: object, **kwargs: object) -> object:  # kwargs-ok: endpoint payload
@@ -1313,8 +1425,10 @@ class RustCore(
         self._legacy: Final = legacy
         self._health_view: RustHealth | None = None
         self._cache: DualCache = host.routing_cache(config)
+        redis: Final = connect(self._cache.redis_cache)
+        self._usage: RouterUsage = host.router_usage(redis)
         self._cooldowns: CooldownCache = CooldownCache(
-            cache=self._cache,
+            store=RouterCooldownStore(redis.router_cooldowns()),
             default_cooldown_time=self._cooldown_given,  # pyright: ignore[reportArgumentType]  # the constructor's value, as the Python core passes it
         )
         self._health_checks: DeploymentHealthCache = resolved.health_routing.health_checks(self._cache)
@@ -1342,7 +1456,9 @@ class RustCore(
             on_change=self._sync_registry,
         )
         self._hosted._core_cache = self._cache  # pyright: ignore[reportPrivateUsage]  # usage reads come from the cache the Rust core writes
+        self._hosted._core_usage_store = self._usage  # pyright: ignore[reportPrivateUsage]  # tpm/rpm reads come from the store the Rust core writes
         ctx: Final = RoutingContext(self)  # pyright: ignore[reportArgumentType]  # the strategies read registry(), settings(), health() and select()
+        self._ctx: Final = ctx
         strategies: Final = PreRoutingStrategies(
             self._hosted, host, ctx, config.get("auto_router_capability_limit"), self._cache
         )
@@ -1373,6 +1489,7 @@ class RustCore(
         self._checks: Final = OptionalChecks(self, host, self._cache, self._hosted, ctx, config.arguments)
         self._hosted.checks = self._checks
         strategies.ensure_affinity = self._checks.ensure_deployment_affinity_callback
+        strategies.hand_over_affinity(self._checks.adopt)
         self._checks.build(config.get("optional_pre_call_checks"), config.get("model_list"))
         self._slack_alerting_logger: SlackAlerting | None = initialize_alerting(host, config.get("alerting_config"))  # pyright: ignore[reportArgumentType]  # the argument as passed
         if self._slack_alerting_logger is not None:
@@ -1383,6 +1500,11 @@ class RustCore(
             from litellm.router_strategy.lar1_routing import apply_lar1_routing_strategy
 
             apply_lar1_routing_strategy(ctx, resolved.routing_strategy_args)  # pyright: ignore[reportArgumentType]  # the core's RoutingContext
+
+    @property
+    def _core_ctx(self) -> RoutingContext:
+        """The router's ``RoutingContext``: what a routing helper gets where it once took the router."""
+        return self._ctx
 
     @property
     def _registry_state(self) -> HostRegistry:
@@ -1416,6 +1538,9 @@ class RustCore(
         self._settings = None
         if enabled:
             register_continuation_prefill_check(self._host)
+
+    def __dir__(self) -> list[str]:  # mutable-ok: dir() returns a list
+        return sorted({*super().__dir__(), *endpoint_names()})
 
     def __getattr__(self, name: str) -> object:
         if name in self.__dict__.get("_deleted", ()):
@@ -1480,6 +1605,9 @@ class RustCore(
     @property
     def _shaping(self) -> Shaping:
         return self._endpoints.shaping(self._resolved)
+
+    def _core_deployment_call_timeout(self, litellm_params: Mapping[str, object]) -> object:
+        return non_stream_timeout(self._shaping, MappingProxyType({}), litellm_params)
 
     # -- building --------------------------------------------------------------------------------
 
@@ -1550,6 +1678,31 @@ class RustCore(
                 str(e).replace("\r", "").replace("\n", ""),
             )
 
+    @contextlib.contextmanager
+    def _usage_read_scope(self, model: str, request: Mapping[str, object]) -> Generator[None, None, None]:
+        """``RoutingReadBatch.for_strategy``: a usage-based-routing-v2 pick reads its tpm/rpm counters
+        in the cooldown read's MGET (see ``_batch_read``), and the strategy reads them from there."""
+        from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
+
+        try:
+            selector: Final = self._prefetch_usage_selector(model, request)
+            deployments: Final = (
+                self._hosted._core_get_model_list(model_name=model) or []  # pyright: ignore[reportPrivateUsage]  # see __init__
+                if isinstance(selector, LowestTPMLoggingHandler_v2)
+                else []
+            )
+        except Exception:  # noqa: BLE001  # the batched read is an optimisation: the reads stay apart
+            yield
+            return
+        if not isinstance(selector, LowestTPMLoggingHandler_v2) or not deployments:
+            yield
+            return
+        token: Final = _USAGE_READ.set((RoutingReadBatch(usage_selector=selector), list(deployments)))
+        try:
+            yield
+        finally:
+            _USAGE_READ.reset(token)
+
     def _prefetch_usage_selector(self, model: str, request_kwargs: Mapping[str, object] | None) -> object:
         """``_get_routing_context``'s selector when it is a usage-based-routing-v2 one: the request's
         strategy override, else the routing group ``model`` resolves into, else the router's own."""
@@ -1611,6 +1764,7 @@ class RustCore(
             run_plugins=partial(self._run_plugins, request_kwargs, messages)
             if self._hosted._core_routing_plugins  # pyright: ignore[reportPrivateUsage]  # the live plugin list
             else None,
+            call_type=None,
         )
 
     def _core_log_retry(
@@ -1682,13 +1836,14 @@ class RustCore(
     def _rebuild(self) -> None:
         """A new Rust core for changed static settings, over the same deployments and the
         providers the old one's builds resolved for them."""
-        old: Final = self._handle
-        model_list: Final = list(self._hosted._core_model_list)  # pyright: ignore[reportPrivateUsage]  # see __init__
-        self._handle = self._new_handle(model_list)
-        self._handle.adopt_providers(old)
-        old.retire()
-        # The live list and indexes read the new handle's (the same entries, kept as the same objects).
-        self._hosted.refresh()
+        with self._hosted._deployment_index_lock:  # pyright: ignore[reportPrivateUsage]  # the registry's lock, held across the swap and the read back
+            old: Final = self._handle
+            model_list: Final = list(self._hosted._core_model_list)  # pyright: ignore[reportPrivateUsage]  # see __init__
+            self._handle = self._new_handle(model_list)
+            self._handle.adopt_providers(old)
+            old.retire()
+            # The live list and indexes read the new handle's (the same entries, kept as the same objects).
+            self._hosted.refresh()
         # The new handle builds its indexes from the deployments: written ones are handed again.
         self._index_sent = None
 
@@ -1774,6 +1929,7 @@ class RustCore(
             tag_routing_prefix=r.read("tag_routing_prefix"),  # pyright: ignore[reportArgumentType]  # the value as given, as the Python core stores it
             fallback_access_check=r.fallback_access_check,  # pyright: ignore[reportArgumentType]  # the check as passed
             fallback_budget_check=r.fallback_budget_check,  # pyright: ignore[reportArgumentType]  # the check as passed
+            fallback_rate_limit_check=r.fallback_rate_limit_check,  # pyright: ignore[reportArgumentType]  # the check as passed
             cache_responses=self._endpoints.cache_responses,
             search_tools=self._endpoints.search_tools,  # pyright: ignore[reportArgumentType]  # the configured entries, as passed
             guardrail_list=self._endpoints.guardrail_list,  # pyright: ignore[reportArgumentType]  # same
@@ -1876,6 +2032,7 @@ class RustCore(
     def retire(self) -> None:
         """``_core_discard``: only the router's global registrations go; it keeps serving calls."""
         untrack_live_registry(self._hosted)
+        self._hosted.retire_shared_capabilities()
         self._retire_callbacks()
         if self._hosted.strategies is not None:
             self._hosted.strategies.retire()
@@ -1912,7 +2069,11 @@ class RustCore(
         if changes.redis_cache is not None:
             # `_core_update_redis_cache`: the routing state's cache gains the Redis cache.
             self._cache.attach_redis_cache(changes.redis_cache)
+            redis: Final = connect(changes.redis_cache)
+            self._usage.attach_redis(redis)
+            self._cooldowns.cooldown_store.attach_redis(redis)
             self._checks.prompt_caching_pin_cache.attach_redis_cache(changes.redis_cache)
+            self._prerouter.attach_redis_cache(changes.redis_cache)
         return ApplyResult(
             version=self._hosted._registry_version,  # pyright: ignore[reportPrivateUsage]  # see __init__
             upserted=upserted,
@@ -1967,6 +2128,8 @@ class RustCore(
                 self._settings = None  # the snapshot holds settings fields, not the plain attributes
             if "model_group_alias" in values:
                 self._hosted._core_model_group_alias = dict(resolved.model_group_alias)  # pyright: ignore[reportPrivateUsage, reportAttributeAccessIssue]  # see __init__
+                # A group's info reads through the alias map.
+                self._hosted._invalidate_model_group_info_cache()  # pyright: ignore[reportPrivateUsage]  # see __init__
             self._apply_strategy(previous, resolved, given, settled=settled)
             if "routing_groups" in values:
                 self._settings = None
@@ -2148,6 +2311,8 @@ class RustCore(
     def flush_cache(self) -> None:
         """Drop the host's response cache and the routing state."""
         self._host.set_global_cache(None)
+        self._usage.flush_local_counters()
+        self._cooldowns.cooldown_store.flush_local_counters()
         self._cache.flush_cache()
         self._checks.prompt_caching_pin_cache.in_memory_cache.flush_cache()
 
@@ -2162,11 +2327,15 @@ class RustCore(
 
     def __delattr__(self, name: str) -> None:
         # `del router.<setting>` unsets it: the settings view reports it unset from then on.
-        from litellm.router_api import SETTING_FIELDS
+        from litellm.router_api import PLAIN_SETTING_ATTRIBUTES, SETTING_FIELDS
 
         # The deprecated attribute deletes the core's own name (``_core_<setting>``).
         setting: Final = name.removeprefix("_core_")
-        if setting not in SETTING_FIELDS and setting not in _DELETABLE_ATTRIBUTES:
+        if (
+            setting not in SETTING_FIELDS
+            and setting not in PLAIN_SETTING_ATTRIBUTES
+            and setting not in _DELETABLE_ATTRIBUTES
+        ):
             if name in self.__dict__ or name in self._unset_attributes:
                 object.__delattr__(self, name)
                 return
@@ -2220,6 +2389,10 @@ class RustCore(
         elif name in PLAIN_DEFAULTS or name == "max_retries":
             # Plain attributes on the Python core, outside the setting lists: stored as given.
             self._store_plain({name: value})
+        elif name == "default_priority":
+            # Queued calls read it from the next call on, kept as given, as the Python core's attribute is.
+            self._endpoints.assign_setting(name, value)
+            self._deleted = self._deleted - {name}
         elif name == "scheduler":
             self._endpoints.set_scheduler(value)
             self._deleted = self._deleted - {name}
@@ -2278,6 +2451,7 @@ class RustCore(
         messages: object = None,
         input: object = None,
         health_check_probe: bool = False,
+        batch_upload: bool = False,
         **_: object,  # kwargs-ok: the RouterCore select options this core ignores
     ) -> Mapping[str, object] | Sequence[Mapping[str, object]]:
         """Pick a deployment for ``model`` without calling it (``pick``), list the deployments a
@@ -2296,6 +2470,7 @@ class RustCore(
             messages,
             input,
             probe=kind == "healthy" and health_check_probe,
+            batch_upload=batch_upload,
         )
         # A pick that makes no call holds no least-busy reservation (`select` on the Python core).
         with picks_reserve(False):
@@ -2392,7 +2567,7 @@ class RustCore(
         return await self._endpoints.generic(plan_for("aanthropic_messages"), kwargs)
 
     async def anthropic_messages(self, **kwargs: object) -> object:  # kwargs-ok: endpoint payload
-        """The proxy's ``/v1/messages`` route name for ``aanthropic_messages``; async, as in PythonCore."""
+        """The proxy's ``/v1/messages`` route name for ``aanthropic_messages``; async."""
         return await self._endpoints.generic(plan_for("anthropic_messages"), kwargs)
 
     async def aimage_generation(self, *args: object, **kwargs: object) -> object:  # kwargs-ok: endpoint payload
@@ -2446,18 +2621,24 @@ class RustCore(
         self._refuse_deleted_reads({**request, **(overrides or {})})
         self._sync_routing_state()
         model: Final = request.get("model")
-        if model is None and "model" in request:
-            raise self._no_model_error(plan, request)
         if "model" not in request:
             raise TypeError(f"{plan.endpoint}() needs a model name")
-        name: Final = model if isinstance(model, str) else self.routed_name(model)
+        name: Final = (
+            model if isinstance(model, str) else self._no_model_name() if model is None else self.routed_name(model)
+        )
         field: Final = plan.prepare_field or "metadata"
         if request.get(field) is not None and not isinstance(request.get(field), Mapping):
             raise TypeError(f"{field} must be a mapping")
         prepared: Final = dict(request) if prepared_already else self._endpoints.prepare(plan, request, model)  # pyright: ignore[reportArgumentType]  # the name as given, which the metadata keeps
-        return self._handle.start(
-            plan.endpoint, self._routing_inputs(plan, request, prepared, name, overrides)
-        ), prepared
+        if not prepared_already:
+            # `async_function_with_fallbacks`: a selection the caller sent is not one the router made,
+            # so it never exempts a fallback target from the access gate.
+            from litellm.router_utils.fallback_event_handlers import clear_pre_routing_selection
+
+            clear_pre_routing_selection(prepared)
+        # `async_function_with_fallbacks` raises a pick for no model group as it is, with no fallback.
+        routed: Final = {**(overrides or {}), "disable_fallbacks": True} if model is None else overrides
+        return self._handle.start(plan.endpoint, self._routing_inputs(plan, request, prepared, name, routed)), prepared
 
     def service_logged(self, call_type: str, start_time: float, end_time: float, request: Mapping[str, object]) -> None:
         """The ``ServiceTypes.ROUTER`` success event of a timed step, as a task of the running loop."""
@@ -2523,28 +2704,17 @@ class RustCore(
         _ = inferred_provider(model)  # pyright: ignore[reportArgumentType]  # see above
         return str(model)
 
-    def _no_model_error(self, plan: Plan, request: Mapping[str, object]) -> BaseException:
-        """``model=None``: the pick fails in ``_common_checks_available_deployment``, naming the
-        first default fallback when there is one, and with no group the fallback wrapper raises
-        that error as it is (``async_function_with_fallbacks_common_utils``)."""
-        import litellm.exceptions as litellm_exceptions
-
-        named: Final = next(
+    def _no_model_name(self) -> str:
+        """``model=None``: ``_common_checks_available_deployment`` picks for the first default
+        fallback when there is one, and else for the name ``None``, which only a wildcard matches."""
+        return next(
             (
-                targets[0]
+                str(targets[0])
                 for entry in _as_list(self._resolved.fallbacks)
                 if (targets := _as_list((as_str_mapping(entry) or {}).get("*")))
             ),
-            None,
+            "None",
         )
-        error: Final = litellm_exceptions.BadRequestError(
-            message=f"You passed in model={named}. {RouterErrors.no_healthy_deployments.value}",
-            model=named,  # pyright: ignore[reportArgumentType]  # None, as the Python router passes it
-            llm_provider="",
-        )
-        if not plan.sync:
-            _Driver(self, plan, request)._log_pick_failure(error)  # pyright: ignore[reportPrivateUsage]  # the async pick's own logging
-        return error
 
     def _routing_inputs(
         self,
@@ -2558,6 +2728,7 @@ class RustCore(
         fields: dict[str, object] = {"model": model}  # mutable-ok: built up below, later keys win  # rebind-ok: same
         fields.update(self._routing_fields(prepared, plan.pick_input(prepared)[0]))
         fields.update(pinned_video_deployment(plan, request))
+        fields.update(pinned_vector_store_file_deployment(plan, request))
         fields.update(unrouted_fields(plan))
         fields.update(failover_fields(plan))
         fields.update(scoped_fallback_fields(plan, request))
@@ -2579,7 +2750,10 @@ class RustCore(
         ``make_call``, and a recovered stream is async."""
         sync: Final = plan is not None and plan.sync
         make_call: Final = plan is None or not plan.single_attempt
-        callbacks: Final = self.outcome_callbacks(request, sync=sync, make_call=make_call)
+        callbacks: Final = {
+            **self.outcome_callbacks(request, sync=sync, make_call=make_call),
+            **({"shared_logging": True} if _shares_logging(request) else {}),
+        }
         return {"outcome_callbacks": callbacks} if callbacks else {}
 
     def _selection_fields(self, plan: Plan, request: Mapping[str, object]) -> Mapping[str, object]:
@@ -2590,7 +2764,7 @@ class RustCore(
         web_search: Final = not plan.sync and self._picks_async() and is_web_search_request(request)
         # The generic handler `_route_capability_pin` names: a call only some providers serve
         # drops the others, and a Decisions call carrying media skips the deployments refusing it.
-        handler: Final = plan.host_op.rsplit(".", 1)[-1]
+        handler: Final = plan.handler
         decisions_media: Final = handler in DECISIONS_MEDIA_CALL_TYPES and bool(
             request.get("audio") or request.get("videos")
         )
@@ -2600,6 +2774,11 @@ class RustCore(
             **({"web_search": True} if web_search else {}),
             **({"route_handler": handler} if serves_route_capability(handler) else {}),
             **({"decisions_media": True} if decisions_media else {}),
+            # `batch_create_routing`: a batch create and its file upload keep to the deployments that can run batches.
+            **({"batch_create": True} if _routes_as_batch_create(plan, request) else {}),
+            **({"batch_upload": True} if plan.kind == "create_file" and is_batch_upload(request) else {}),
+            # `deployments_admitting_embedding_batch`: an embedding keeps to the deployments admitting its input.
+            **({"embedding_batch": True} if plan.kind == "embedding" else {}),
         }
 
     def _picks_async(self) -> bool:
@@ -2607,12 +2786,14 @@ class RustCore(
 
     def _process_renamed(self, model: str, group: str) -> str:
         """``model`` as the error names it (``_common_checks_available_deployment``): the group a name
-        resolved to by name, alias or routing group, renamed through the process ``model_alias_map``."""
+        resolved to by name, alias or routing group, or the group of the deployment an id names,
+        renamed through the process ``model_alias_map``."""
         resolution: Final = self._handle.resolve(model)
-        if resolution is None or resolution["kind"] not in ("Group", "Alias", "RoutingGroup"):
+        if resolution is None or resolution["kind"] not in ("Group", "Alias", "RoutingGroup", "Id"):
             return model
+        named: Final = str(resolution["model_group"]) if resolution["kind"] == "Id" else group
         renames: Final = self._host.dynamic().model_alias_map
-        return renames[group] if group in renames else group  # noqa: SIM401  # `renames` is any process mapping, read as Python reads it
+        return renames[named] if named in renames else named  # noqa: SIM401  # `renames` is any process mapping, read as Python reads it
 
     def _max_parallel_requests_client(self, deployment: Mapping[str, object], kwargs: Mapping[str, object]) -> object:
         """``_get_client(client_type="max_parallel_requests")``: the deployment's slot limit."""
@@ -2719,7 +2900,10 @@ class RustCore(
         with owning_picks(self._selectors.reservations, call_id_of(CALL_IDENTITY.validate_python(request))):
             call, prepared = self._start(plan, request, routed, prepared_already=prepared_already)
             arm_compaction_state(self._port, plan, prepared)  # pyright: ignore[reportArgumentType]  # the call's own dict
-            with picks_reserve(plan.endpoint not in _UNRESERVED_OPS):
+            with (
+                picks_reserve(plan.endpoint not in _UNRESERVED_OPS),
+                self._usage_read_scope(str(prepared.get("model")), prepared),
+            ):
                 driver, step = await self._run(plan, call, prepared, fresh=True, passthrough=passthrough)
             if step["kind"] == "failed":
                 raise driver.failed(step)
@@ -2744,6 +2928,16 @@ class RustCore(
         driver: Final = _Driver(
             self, plan, prepared, cut_deployment, stream_failure, fresh=fresh, passthrough=passthrough
         )
+        try:
+            return await self._run_steps(driver, call)
+        except BaseException:
+            driver.close_route_phase()
+            raise
+
+    async def _run_steps(
+        self, driver: "_Driver", call: "RouterCall[_CallSteps]"
+    ) -> "tuple[_Driver, Mapping[str, object]]":
+        """``_run``'s loop over the call's steps."""
         outcome: object = None  # rebind-ok: the answer to the last step
         while True:
             step = call.next(outcome)
@@ -2756,6 +2950,9 @@ class RustCore(
                 case "attempt":
                     outcome = await driver.attempt(step)
                 case "sleep":
+                    if (outlasted := _error_outlasting_total_timeout(driver, _sleep_seconds(step))) is not None:
+                        driver.close_route_phase()
+                        raise outlasted
                     await self._host.sleep(_sleep_seconds(step))
                     outcome = None
                 case "allow_fallback":
@@ -2769,6 +2966,7 @@ class RustCore(
                 case "pre_route":
                     outcome = await driver.pre_route(step)
                 case "done" | "failed":
+                    driver.close_route_phase()
                     return driver, step
                 case other:  # pyright: ignore[reportUnnecessaryComparison]  # a kind the bridge returns but the stub does not list
                     raise RuntimeError(f"router-core returned an unknown step {other!r}")
@@ -2968,6 +3166,7 @@ class RustCore(
         specific_deployment: object = _NO_INPUT,
         *,
         pass_through: bool = False,
+        call_type: str | None = None,
     ) -> object:
         """The host's pre-routing of one pick (router_rust.steps.prerouting): the model group to resolve
         instead of the step's ``model``, a custom strategy's deployment, or ``None``. ``pass_through``
@@ -3003,10 +3202,17 @@ class RustCore(
         if not isinstance(request, dict):
             return None
         depth: Final = step.get("fallback_depth")
+        if isinstance(depth, int) and depth > 0:
+            # A fallback hop routes on its own copy of the metadata buckets (`run_async_fallback`'s
+            # kwargs): what its hook clears and stamps leaves the caller's metadata as the first hop left it.
+            for name in ("metadata", "litellm_metadata"):
+                bucket = request.get(name)
+                if isinstance(bucket, dict):
+                    request[name] = dict(bucket)  # pyright: ignore[reportUnknownArgumentType]  # the request's metadata dict
         r: Final = self._resolved
         owner: Final[object] = self.__dict__.get("_core_owner")
         public: Final[object] = owner() if callable(owner) else None
-        return await self._prerouter.pre_route(
+        routed: Final[object] = await self._prerouter.pre_route(
             str(step.get("model")),
             request,  # pyright: ignore[reportUnknownArgumentType]  # the request kwargs the hook stamps
             messages=request.get("messages") if messages is _NO_INPUT else messages,
@@ -3014,6 +3220,7 @@ class RustCore(
             fallback_depth=depth if isinstance(depth, int) else 0,
             router_strategy=normalize_strategy(r.routing_strategy),
             pass_through=pass_through,
+            call_type=call_type,
             enable_tag_filtering=r.enable_tag_filtering,
             match_any=r.tag_filtering_match_any,
             public_router=public if public is not None else self,
@@ -3023,6 +3230,7 @@ class RustCore(
             if self._hosted._core_routing_plugins  # pyright: ignore[reportPrivateUsage]  # the live plugin list
             else None,
         )
+        return _served_as(routed, request)
 
     async def _run_plugins(
         self,
@@ -3075,9 +3283,15 @@ class RustCore(
         selector: Final = self._selectors.selector_for(
             strategy, str(step.get("scope")), str(group) if group is not None else None, request
         )
-        candidates: Final = [
-            dict(as_str_mapping(self._handle.deployment(str(id))) or {}) for id in _as_list(step.get("candidates"))
-        ]
+        # Candidates sharing an id come with their own records, so the pick can land on any of them.
+        records: Final = step.get("records")
+        candidates: Final = (
+            [dict(as_str_mapping(record) or {}) for record in _as_list(records)]
+            if records is not None
+            else [
+                dict(as_str_mapping(self._handle.deployment(str(id))) or {}) for id in _as_list(step.get("candidates"))
+            ]
+        )
         return strategy, selector, str(step.get("model")), candidates
 
     def _records_of(self, ids: object) -> list[dict[str, object]]:  # mutable-ok: the deployment dicts filters take
@@ -3144,6 +3358,45 @@ class RustCore(
             )
         ]
 
+    def _override_selector(self, step: Mapping[str, object], request: Mapping[str, object]) -> object:
+        """The request's own strategy selector when it overrides the router's (``_override_selectors``),
+        whose pre-call check is in no callback list."""
+        strategy: Final = str(step.get("strategy"))
+        selector: Final = self._selectors.selector_for(strategy, "override", None, request)
+        return selector if selector is not None and self._selectors.is_override(strategy, selector) else None
+
+    def _embedding_batch(
+        self, step: Mapping[str, object], request: Mapping[str, object], input: object, *, tags: bool
+    ) -> list[str]:  # mutable-ok: the step's answer
+        """``deployments_admitting_embedding_batch`` over the candidates; when none admits the input,
+        nothing while a routable, unpaused cooling deployment does (the pick waits out its cooldown),
+        else the candidates with the largest limit, so the 400 names the most the group accepts."""
+        from litellm.router_utils.embedding_batch_size_check import (
+            deployments_admitting_embedding_batch,
+            deployments_when_none_admits_embedding_batch,
+            embedding_deployment_selection,
+        )
+
+        sent: Final = request.get("input", input)
+        candidates: Final = self._records_of(step.get("candidates"))
+        with embedding_deployment_selection():
+            admitting: Final = deployments_admitting_embedding_batch(candidates, sent, dict(request))
+        if admitting is not None:
+            return [found for record in admitting if (found := picked_id(record)) is not None]
+        pool: Final = self._records_of(step.get("pool"))
+        pool_ids: Final = [found for record in pool if (found := picked_id(record)) is not None]
+        cooling: Final = [id for id, _ in self._cooldowns.get_active_cooldowns(pool_ids, None)]  # pyright: ignore[reportArgumentType]  # a list of ids
+        routable: Final = _region_routable(pool, request, True, self._resolved.enable_pre_call_checks)
+        routable_cooling: Final = (
+            self._tag_routable_ids(str(step.get("model")), pool, routable, frozenset(cooling), request)
+            if tags
+            else frozenset(id for record in routable if (id := picked_id(record)) in cooling)
+        )
+        kept: Final = deployments_when_none_admits_embedding_batch(
+            candidates, pool, routable_cooling, sent, dict(request)
+        )
+        return [found for record in kept if (found := picked_id(record)) is not None]
+
     async def _answer_select(
         self,
         step: Mapping[str, object],
@@ -3167,6 +3420,14 @@ class RustCore(
             return self._route_incapable(step)
         if step.get("stage") == "media_refusing":
             return self._media_refusing(step, request)
+        if step.get("stage") == "embedding_batch":
+            return self._embedding_batch(step, request, input, tags=True)
+        if step.get("stage") == "override_check":
+            selector = self._override_selector(step, request)
+            if selector is not None:
+                for record in self._records_of(step.get("candidates")):
+                    await selector.async_pre_call_check(dict(record), None)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # every selector is a CustomLogger
+            return step["candidates"]
         if step.get("stage") == "provider_request":
             return _provider_request(step)
         inputs: Final = self._strategy_inputs(step, request)
@@ -3185,7 +3446,7 @@ class RustCore(
         picked: Final = (
             candidates[0]
             if pinned
-            else await pick_async(
+            else await _pick_with_prefetched_usage(
                 strategy,
                 selector,  # pyright: ignore[reportArgumentType]  # a selector from selector_for
                 model,
@@ -3202,8 +3463,7 @@ class RustCore(
             await selector.async_pre_call_check(dict(as_str_mapping(picked) or {}), None)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # every selector is a CustomLogger
         if picked is not None and timed:
             self.service_logged("<routing_strategy>.async_get_available_deployments", start_time, clock(), request)
-        found: Final = picked_id(picked)
-        return [found] if found is not None else []
+        return _pick_answer(step, candidates, picked)
 
     def _answer_select_sync(
         self, step: Mapping[str, object], request: Mapping[str, object], messages: object, input: object
@@ -3221,6 +3481,14 @@ class RustCore(
             return self._route_incapable(step)
         if step.get("stage") == "media_refusing":
             return self._media_refusing(step, request)
+        if step.get("stage") == "embedding_batch":
+            return self._embedding_batch(step, request, input, tags=False)
+        if step.get("stage") == "override_check":
+            selector = self._override_selector(step, request)
+            if selector is not None:
+                for record in self._records_of(step.get("candidates")):
+                    selector.pre_call_check(dict(record))  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # every selector is a CustomLogger
+            return step["candidates"]
         if step.get("stage") == "provider_request":
             return _provider_request(step)
         inputs: Final = self._strategy_inputs(step, request)
@@ -3242,64 +3510,45 @@ class RustCore(
         )
         if picked is not None and self._selectors.is_override(strategy, selector):
             selector.pre_call_check(dict(as_str_mapping(picked) or {}))  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # see above
-        found: Final = picked_id(picked)
-        return [found] if found is not None else []
+        return _pick_answer(step, candidates, picked)
 
     # -- cache steps -----------------------------------------------------------------------------
 
-    def _store_for(self, key: str) -> "DualCache":
-        """Cooldowns live in the cooldown store; every other routing key in the routing cache."""
-        return self._cooldowns.cooldown_store if key.endswith(":cooldown") else self._cache
-
     async def _batch_read(self, keys: list[str]) -> Sequence[object]:  # mutable-ok: the cache's key list
-        """One batch read, as the Python core makes it: the keys memory cannot serve, at most once per
-        read interval. Cooldowns are ``async_get_cooldown_deployments``' read, through the request's
-        armed prefetch when there is one."""
-        if not keys or not keys[0].endswith(":cooldown"):
-            read: Final[object] = await self._cache.async_batch_get_cache(keys=keys)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # DualCache's reads are untyped
-            return read if isinstance(read, list) else [None] * len(keys)  # pyright: ignore[reportUnknownVariableType]  # see above
-        store: Final = self._cooldowns.cooldown_store
-        with service_target(ROUTER_COOLDOWNS_TARGET):
-            prefetched: Final = await RoutingReadBatch._read_prefetched(((store, keys),))  # pyright: ignore[reportPrivateUsage]  # the batch's own prefetch read
-            results: Final[object] = (
-                prefetched[0] if prefetched is not None else await store.async_batch_get_cache(keys=keys)  # pyright: ignore[reportUnknownMemberType]  # see above
-            )
-        return self._corrected_cooldowns(keys, results)
+        """One batch read: cooldowns and tpm/rpm usage from their stores, every other key from the routing cache."""
+        stored: Final = await self._stored_with_usage(keys)
+        if stored is not None:
+            return stored
+        read: Final[object] = await self._cache.async_batch_get_cache(keys=keys)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # DualCache's reads are untyped
+        return read if isinstance(read, list) else [None] * len(keys)  # pyright: ignore[reportUnknownVariableType]  # see above
+
+    async def _stored_with_usage(self, keys: Sequence[str]) -> tuple[object, ...] | None:
+        """A usage-based-routing-v2 pick reads its tpm/rpm counters alongside its cooldowns (``_usage_read_scope``)."""
+        usage_read: Final = _USAGE_READ.get()
+        if usage_read is None or not keys or not keys[0].endswith(":cooldown"):
+            return await self._stores.batch_get(keys)
+        batch, deployments = usage_read
+        stored, _ = await asyncio.gather(self._stores.batch_get(keys), batch.read_usage(deployments, None))
+        return stored
 
     def _batch_read_sync(self, keys: list[str]) -> Sequence[object]:  # mutable-ok: the cache's key list
-        """``_batch_read`` for a sync pick: ``get_active_cooldowns``' read."""
-        if not keys or not keys[0].endswith(":cooldown"):
-            read: Final[object] = self._cache.batch_get_cache(keys=keys)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # DualCache's reads are untyped
-            return read if isinstance(read, list) else [None] * len(keys)  # pyright: ignore[reportUnknownVariableType]  # see above
-        with service_target(ROUTER_COOLDOWNS_TARGET):
-            results: Final = as_object_list(self._cooldowns.cooldown_store.batch_get_cache(keys=keys))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # see above
-        return self._corrected_cooldowns(keys, results)
+        """``_batch_read`` for a sync pick."""
+        stored: Final = self._stores.batch_get_sync(keys)
+        if stored is not None:
+            return stored
+        read: Final[object] = self._cache.batch_get_cache(keys=keys)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # DualCache's reads are untyped
+        return read if isinstance(read, list) else [None] * len(keys)  # pyright: ignore[reportUnknownVariableType]  # see above
 
-    def _corrected_cooldowns(self, keys: Sequence[str], results: object) -> Sequence[object]:
-        """The cooldowns a batch read found, once ``active_cooldowns_from_results`` corrected the in-memory
-        TTL of each it promoted from Redis and dropped each that expired."""
-        if not isinstance(results, list):
-            return [None] * len(keys)
-        ids: Final = [key.removeprefix("deployment:").removesuffix(":cooldown") for key in keys]
-        _ = self._cooldowns.active_cooldowns_from_results(ids, results)  # pyright: ignore[reportUnknownArgumentType]  # see above
-        return results  # pyright: ignore[reportUnknownVariableType]  # see above
+    async def _increment_usage(self, keys: Sequence[object], amounts: Sequence[object]) -> None:
+        try:
+            counted: Final = await self._stores.increment_usage(keys, amounts)
+        except Exception as e:  # noqa: BLE001  # usage that cannot be written never fails the call, as on the Python router
+            from litellm._logging import verbose_router_logger
 
-    async def _increment_usage(self, keys: Sequence[object], amounts: Sequence[object], ttl: float | None) -> None:
-        """``_increment_deployment_usage``'s write: one pipeline, then this worker's memory holds what
-        Redis answered, so its usage reads see what the other workers counted."""
-        from litellm.types.caching import RedisPipelineIncrementOperation
-
-        operations: Final = [
-            RedisPipelineIncrementOperation(
-                key=str(key), increment_value=_amount(amount), ttl=None if ttl is None else int(ttl)
-            )
-            for key, amount in zip(keys, amounts)
-        ]
-        values: Final = await self._cache.async_increment_cache_pipeline(increment_list=operations)
-        if values is None or self._cache.redis_cache is None:
+            verbose_router_logger.debug("_increment_deployment_usage: usage was not recorded. Got - %s", e)
             return
-        for operation, value in zip(operations, values):
-            await self._cache.async_set_cache(operation["key"], int(value), local_only=True, ttl=operation["ttl"])  # pyright: ignore[reportUnknownMemberType]  # DualCache's writes are untyped
+        if not counted:
+            raise _not_usage(keys)
 
     async def _answer_cache(self, step: Mapping[str, object]) -> object:
         with service_target(_cache_target(str(step.get("key")))):
@@ -3309,32 +3558,33 @@ class RustCore(
         key: Final = str(step.get("key"))
         ttl: Final = _ttl(step)
         local: Final = step.get("local") is True
+        stored: Final = None if local else await self._stores.answer(step.get("op"), key, step.get("value"), ttl)
+        if stored is not None:
+            return _plain(stored.value)
         match step.get("op"):
             case "get":
-                return _plain(await self._store_for(key).async_get_cache(key, local_only=local))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # DualCache's reads are untyped
+                return _plain(await self._cache.async_get_cache(key, local_only=local))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # DualCache's reads are untyped
             case "batch_get":
                 return _plain(await self._batch_read([str(k) for k in _as_list(step.get("keys"))]))
             case "set":
-                store: Final = self._store_for(key)
                 if ttl is None:
-                    await store.async_set_cache(key, step.get("value"))  # pyright: ignore[reportUnknownMemberType]  # DualCache's writes are untyped
+                    await self._cache.async_set_cache(key, step.get("value"))  # pyright: ignore[reportUnknownMemberType]  # DualCache's writes are untyped
                 else:
-                    await store.async_set_cache(key, step.get("value"), ttl=ttl)  # pyright: ignore[reportUnknownMemberType]  # see above
+                    await self._cache.async_set_cache(key, step.get("value"), ttl=ttl)  # pyright: ignore[reportUnknownMemberType]  # see above
                 return None
             case "increment":
                 by: Final = _amount(step.get("value"))
-                counter: Final = self._store_for(key)
                 total: Final = (
-                    await counter.async_increment_cache(key, by, local_only=local)  # pyright: ignore[reportUnknownMemberType]  # see above
+                    await self._cache.async_increment_cache(key, by, local_only=local)  # pyright: ignore[reportUnknownMemberType]  # see above
                     if ttl is None
-                    else await counter.async_increment_cache(key, by, local_only=local, ttl=ttl)  # pyright: ignore[reportUnknownMemberType]  # see above
+                    else await self._cache.async_increment_cache(key, by, local_only=local, ttl=ttl)  # pyright: ignore[reportUnknownMemberType]  # see above
                 )
                 return by if total is None else total
             case "increment_usage":
-                await self._increment_usage(_as_list(step.get("keys")), _as_list(step.get("value")), ttl)
+                await self._increment_usage(_as_list(step.get("keys")), _as_list(step.get("value")))
                 return None
             case "delete":
-                await self._store_for(key).async_delete_cache(key)
+                await self._cache.async_delete_cache(key)
                 return None
             case other:
                 raise RuntimeError(f"router-core asked for an unknown cache op {other!r}")
@@ -3355,6 +3605,16 @@ class RustCore(
         except StopIteration as finished:
             return finished.value  # pyright: ignore[reportAny]  # the coroutine's result
 
+    @property
+    def _stores(self) -> RoutingStores:
+        """The stores router-core's cache steps reach, over the cooldowns as last assigned."""
+        return RoutingStores(self._cooldowns, self._usage)
+
+    def io_token_usage_sync(self, model_group: str) -> tuple[int | None, int | None]:
+        """``get_model_group_io_token_usage``, whose counters stay in the routing cache, on a sync call."""
+        read: Final = self.run_routing_cache_sync(lambda: self._hosted.get_model_group_io_token_usage(model_group))
+        return _IO_TOKEN_USAGE.validate_python(read)
+
     def _answer_cache_sync(self, step: Mapping[str, object]) -> object:
         with service_target(_cache_target(str(step.get("key")))):
             return self._answer_cache_sync_in_target(step)
@@ -3363,39 +3623,116 @@ class RustCore(
         key: Final = str(step.get("key"))
         ttl: Final = _ttl(step)
         local: Final = step.get("local") is True
-        match step.get("op"):
+        op: Final = step.get("op")
+        stored: Final = None if local else self._stores.answer_sync(op, key, step.get("value"), ttl)
+        if stored is not None:
+            return _plain(stored.value)
+        match op:
             case "get":
-                return _plain(self._store_for(key).get_cache(key, local_only=local))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # DualCache's reads are untyped
+                return _plain(self._cache.get_cache(key, local_only=local))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # DualCache's reads are untyped
             case "batch_get":
                 return _plain(self._batch_read_sync([str(k) for k in _as_list(step.get("keys"))]))
             case "set":
-                store: Final = self._store_for(key)
                 if ttl is None:
-                    store.set_cache(key, step.get("value"))  # pyright: ignore[reportUnknownMemberType]  # DualCache's writes are untyped
+                    self._cache.set_cache(key, step.get("value"))  # pyright: ignore[reportUnknownMemberType]  # DualCache's writes are untyped
                 else:
-                    store.set_cache(key, step.get("value"), ttl=ttl)  # pyright: ignore[reportUnknownMemberType]  # see above
+                    self._cache.set_cache(key, step.get("value"), ttl=ttl)  # pyright: ignore[reportUnknownMemberType]  # see above
                 return None
             case "increment":
                 by: Final = _amount(step.get("value"))
-                counter: Final = self._store_for(key)
                 # DualCache.increment_cache is annotated int but adds floats as given.
                 return (
-                    counter.increment_cache(key, by, local_only=local)  # pyright: ignore[reportUnknownMemberType, reportArgumentType]  # see above
+                    self._cache.increment_cache(key, by, local_only=local)  # pyright: ignore[reportUnknownMemberType, reportArgumentType]  # see above
                     if ttl is None
-                    else counter.increment_cache(key, by, local_only=local, ttl=ttl)  # pyright: ignore[reportUnknownMemberType, reportArgumentType]  # see above
+                    else self._cache.increment_cache(key, by, local_only=local, ttl=ttl)  # pyright: ignore[reportUnknownMemberType, reportArgumentType]  # see above
                 )
             case "increment_usage":
                 keys: Final = _as_list(step.get("keys"))
-                amounts: Final = _as_list(step.get("value"))
-                self.run_routing_cache_sync(lambda: self._increment_usage(keys, amounts, ttl))
+                if not self._stores.increment_usage_sync(keys, _as_list(step.get("value"))):
+                    raise _not_usage(keys)
                 return None
             case "delete":
-                self._store_for(key).delete_cache(key)  # pyright: ignore[reportUnknownMemberType]  # DualCache's delete is untyped
+                self._cache.delete_cache(key)  # pyright: ignore[reportUnknownMemberType]  # DualCache's delete is untyped
                 return None
             case other:
                 raise RuntimeError(f"router-core asked for an unknown cache op {other!r}")
 
     # -- errors the core raises when no attempt failed ------------------------------------------
+
+    def _routable_cooled_info(
+        self,
+        step: Mapping[str, object],
+        group: str,
+        cooling: Sequence[str],
+        request: Mapping[str, object],
+        *,
+        has_input: bool,
+        tags: bool,
+    ) -> tuple[CooldownDeploymentInfo, ...] | None:
+        """``RouterRateLimitError.cooldown_deployments``: the cooling deployments the request could
+        route to (region and, on an async pick, tag routing over the deployments the core listed
+        before its cooldown filter); ``None`` when the strategy refused every candidate."""
+        request_ids: Final = step.get("error_request_ids")
+        if request_ids is None:
+            return None
+        records: Final = self._records_of(request_ids)
+        routable: Final = _region_routable(records, request, has_input, self._resolved.enable_pre_call_checks)
+        route: Final = (
+            self._tag_routable_ids(group, records, routable, frozenset(cooling), request)
+            if tags
+            else frozenset(id for record in routable if (id := picked_id(record)) is not None)
+        )
+        return get_cooldown_deployment_info(RoutingContext(self), route, cooling)  # pyright: ignore[reportArgumentType]  # reads registry()
+
+    def _tag_routable_ids(
+        self,
+        group: str,
+        pool: Sequence[Mapping[str, object]],
+        routable: Sequence[Mapping[str, object]],
+        cooled: frozenset[str],
+        request: Mapping[str, object],
+    ) -> frozenset[str]:
+        """The cooling deployments in ``routable`` that tag routing would send the request to, each
+        pick counted along with the picks it falls back to once that one is unavailable, judged
+        without recording a tag match on the request."""
+        from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
+        from litellm.router_strategy.tag_based_routing import get_deployments_for_tag
+
+        field: Final = get_metadata_variable_name_from_kwargs(dict(request))
+        metadata: Final = request.get(field)
+        if field in request and not isinstance(metadata, Mapping):
+            return frozenset()
+        tag_request: Final = {**request, field: {**metadata}} if isinstance(metadata, Mapping) else dict(request)
+        found = frozenset[str]()  # rebind-ok: gains each pass's tag routing picks
+        remaining = [  # rebind-ok: each pass drops what tag routing just picked
+            record for record in routable if picked_id(record) in cooled
+        ]
+        while remaining:
+            try:
+                # Tag routing awaits nothing: its coroutine finishes on the first send.
+                picked = _finished(
+                    get_deployments_for_tag(
+                        ctx=RoutingContext(self),  # pyright: ignore[reportArgumentType]  # reads registry() and settings()
+                        model=group,
+                        healthy_deployments=remaining,  # pyright: ignore[reportArgumentType]  # deployment dicts
+                        request_kwargs=tag_request,  # pyright: ignore[reportArgumentType]  # the request kwargs
+                        metadata_variable_name=field,
+                        request_deployments=pool,  # pyright: ignore[reportArgumentType]  # deployment dicts
+                    )
+                )
+            except ValueError:  # tag routing sends this request to none of the rest
+                break
+            picked_ids = frozenset(
+                id
+                for record in (picked if isinstance(picked, list | tuple) else ())
+                if (id := picked_id(record)) is not None
+            )  # pyright: ignore[reportArgumentType]  # deployment dicts
+            rest = [record for record in remaining if picked_id(record) not in picked_ids]
+            if len(rest) == len(remaining):
+                break
+            found |= picked_ids
+            remaining = rest
+        return found
 
     def _failure_error(  # noqa: C901  # one branch per failure Python tells apart
         self,
@@ -3405,6 +3742,8 @@ class RustCore(
         *,
         pass_through: str = "",
         request: Mapping[str, object] | None = None,
+        has_input: bool = True,
+        tags: bool = True,
     ) -> BaseException:
         """The error a call or pick that failed before any attempt raises; ``pass_through`` names
         the selection kind (``pass_through``/``async_pass_through``) whose errors it words."""
@@ -3534,10 +3873,8 @@ class RustCore(
                 enable_pre_call_checks=self._resolved.enable_pre_call_checks,
                 cooldown_list=cooling,
                 model_ids=list(ids),  # pyright: ignore[reportArgumentType]  # a list of ids
-                cooldown_deployments=get_cooldown_deployment_info(
-                    RoutingContext(self),  # pyright: ignore[reportArgumentType]  # reads registry()
-                    ids,
-                    cooling,
+                cooldown_deployments=self._routable_cooled_info(
+                    step, str(group), cooling, request or {}, has_input=has_input, tags=tags
                 ),
             )
         if last is not None:
@@ -3574,11 +3911,102 @@ def _origin_level(origin: Mapping[str, object]) -> int:
     return level if isinstance(level, int) else 0
 
 
+def _error_outlasting_total_timeout(driver: "_Driver", seconds: float) -> BaseException | None:
+    """The error a retry would have answered when its backoff outlasts the request's total_timeout: the
+    call ends with it now, rather than with a timeout after waiting out the rest of the budget."""
+    deadline: Final = current_total_deadline()
+    if deadline is None or deadline.allows_wait(seconds):
+        return None
+    return driver.last_error
+
+
 def _sleep_seconds(step: Mapping[str, object]) -> float:
     """A retry's sleep: ``_time_to_sleep_before_retry`` returns a plain ``0`` when another
     deployment is healthy, else a backoff in float seconds."""
     seconds: Final = float(str(step["seconds"]))
     return 0 if seconds == 0 else seconds
+
+
+def _served_as(routed: object, request: Mapping[str, object]) -> object:
+    """A pre-routed group, paired with the group the hook stamped the request as served for
+    (``fallback_lookup_groups``' routed group) when that differs: the level's fallbacks look it up."""
+    from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
+
+    if not isinstance(routed, str):
+        return routed
+    metadata: Final = request.get(get_metadata_variable_name_from_kwargs(dict(request)))
+    stamped: Final = metadata.get("model_group") if isinstance(metadata, Mapping) else None
+    return (routed, stamped) if isinstance(stamped, str) and stamped and stamped != routed else routed
+
+
+_USAGE_READ: Final[ContextVar["tuple[RoutingReadBatch, list[Mapping[str, object]]] | None"]] = ContextVar(
+    "rust_core_usage_read", default=None
+)
+
+
+async def _pick_with_prefetched_usage(*args: object, **kwargs: object) -> object:
+    """``pick_async`` with the counters the pick's cooldown read fetched (``PrefetchedUsage``)."""
+    from litellm.router_strategy.lowest_tpm_rpm_v2 import PrefetchedUsage
+
+    usage_read: Final = _USAGE_READ.get()
+    with PrefetchedUsage.scoped(usage_read[0].prefetched_usage if usage_read is not None else None):
+        return await pick_async(*args, **kwargs)  # pyright: ignore[reportArgumentType, reportCallIssue]  # pick_async's own arguments
+
+
+def _deployment_pick_attributes(model: str, request: Mapping[str, object]) -> Mapping[str, str | int]:
+    """Bounded attributes for one deployment pick; the attempt is 1-based within its model group."""
+    metadata: Final = request.get("litellm_metadata", request.get("metadata"))
+    attempted: Final = metadata.get("attempted_retries") if isinstance(metadata, Mapping) else None
+    retries: Final = attempted if isinstance(attempted, int) else 0
+    depth: Final = request.get("fallback_depth")
+    hop: Final = (isinstance(depth, int) and depth > 0) or model != request.get("model")
+    reason: Final = "retry" if retries > 0 else "fallback" if hop else "initial"
+    return MappingProxyType(
+        {
+            "litellm.deployment.attempt": retries + 1,
+            "litellm.deployment.reason": reason,
+            "litellm.deployment.model_group": model,
+        }
+    )
+
+
+def _region_routable(
+    records: Sequence[Mapping[str, object]],
+    request: Mapping[str, object],
+    has_input: bool,
+    pre_call_checks: bool,
+) -> Sequence[Mapping[str, object]]:
+    """``records`` without the ones ``_pre_call_checks`` keeps the request away from for being
+    outside its ``allowed_model_region``."""
+    from litellm.types.router import LiteLLM_Params
+    from litellm.utils import is_region_allowed
+
+    allowed: Final = request.get("allowed_model_region")
+    if allowed is None or not pre_call_checks or not has_input:
+        return records
+    if not isinstance(allowed, str):
+        return ()
+    return [
+        record
+        for record in records
+        if is_region_allowed(
+            litellm_params=LiteLLM_Params.model_validate(record.get("litellm_params") or {}),
+            allowed_model_region=allowed,
+        )
+    ]
+
+
+_Value = TypeVar("_Value")
+
+
+def _finished(coroutine: Coroutine[object, object, _Value]) -> _Value:
+    """The value of a coroutine that awaits nothing, run to its end without an event loop."""
+    try:
+        coroutine.send(None)
+    except StopIteration as finished:
+        return finished.value  # pyright: ignore[reportAny]  # the coroutine's return value
+    coroutine.close()
+    raise RuntimeError("the coroutine awaited something")
 
 
 def _uses_pass_through(record: object) -> bool:
@@ -3591,6 +4019,13 @@ def _seconds(value: object, default: float) -> float | int:
     if isinstance(value, int | float) and not isinstance(value, bool):
         return value
     return int(default) if float(default).is_integer() else default
+
+
+_IO_TOKEN_USAGE: Final = TypeAdapter(tuple[int | None, int | None])
+
+
+def _not_usage(keys: Sequence[object]) -> RuntimeError:
+    return RuntimeError(f"router-core asked to add usage to keys that are not one deployment's tpm/rpm: {keys!r}")
 
 
 def _ttl(step: Mapping[str, object]) -> float | None:
@@ -3627,6 +4062,7 @@ class _Selection:
         input: object,
         *,
         probe: bool = False,
+        batch_upload: bool = False,
     ) -> None:
         self._core: Final = core
         # `_async_get_available_deployment` reads the alias map first, every other pick its names.
@@ -3658,6 +4094,9 @@ class _Selection:
             fields["endpoint"] = endpoint
         if probe:
             fields["health_check_probe"] = True
+        if batch_upload:
+            fields["batch_create"] = True
+            fields["batch_upload"] = True
         if kind in ("pick", "async_pass_through") or (kind == "sync_pick" and core._custom_strategy is not None):  # pyright: ignore[reportPrivateUsage]  # the selection serves its own core
             fields["pre_routes"] = True
         self._specific_deployment: Final = specific_deployment
@@ -3676,28 +4115,46 @@ class _Selection:
             if step.get("single"):
                 # A deployment named by its id is listed alone, as a dict.
                 (record,) = _as_list(step.get("deployments"))
-                return for_requested_model(typed_deployment(as_str_mapping(record) or {}), self._model)
+                return self._served(record)
             # The deployments as served: a priority group's members carry their priority as order.
-            return [
-                for_requested_model(typed_deployment(as_str_mapping(record) or {}), self._model)
-                for record in _as_list(step.get("deployments"))
-            ]
+            return [self._served(record) for record in _as_list(step.get("deployments"))]
         if step.get("deployment_id") in (DEFAULT_DEPLOYMENT_FAILING_ID, DEFAULT_DEPLOYMENT_COPIED_ID):
             # A default deployment every call to fails, or whose id is not a string, is picked as Python copies it.
             picked: Final = default_deployment_copy(self._core._resolved.default_deployment, self._model)  # pyright: ignore[reportPrivateUsage]  # the selection serves its own core
             return picked  # pyright: ignore[reportReturnType]  # the assigned value's copy, as the Python core returns it
-        return for_requested_model(typed_deployment(as_str_mapping(step.get("deployment")) or {}), self._model)
+        return self._served(step.get("deployment"))
 
-    def _failed(self, step: Mapping[str, object]) -> BaseException:
+    def _served(self, record: object) -> Mapping[str, object]:
+        """A deployment as served: its record, with the litellm_params values JSON carries as text."""
+        return _with_live_params(
+            self._core, for_requested_model(typed_deployment(as_str_mapping(record) or {}), self._model)
+        )
+
+    def _failed(self, step: Mapping[str, object], *, sync: bool) -> BaseException:
         core: Final = self._core
         error: Final = core._failure_error(  # pyright: ignore[reportPrivateUsage]  # see above
-            step, self._model, self._filter_error, pass_through=self._kind, request=self._request
+            step,
+            self._model,
+            self._filter_error,
+            pass_through=self._kind,
+            request=self._request,
+            has_input=self._messages is not None or self._input is not None,
+            tags=not sync,
         )
         if self._kind not in ("pass_through", "sync_pick"):
             _log_refused_pick(self._request, error)
         return error
 
     async def run(self) -> Mapping[str, object] | Sequence[Mapping[str, object]]:
+        from litellm.integrations.otel.runtime import phase_span
+
+        with (
+            phase_span(f"route {self._model}"),
+            self._core._usage_read_scope(str(self._model), self._request),  # pyright: ignore[reportPrivateUsage]  # the selection serves its own core
+        ):
+            return await self._run()
+
+    async def _run(self) -> Mapping[str, object] | Sequence[Mapping[str, object]]:
         core: Final = self._core
         outcome: object = None  # rebind-ok: the answer to the last step
         while True:
@@ -3733,7 +4190,7 @@ class _Selection:
                     # `_core_async_get_available_deployment` resolves its pick to a pod.
                     return await self._resolved_pod(core, done)
                 case "failed":
-                    raise self._failed(step)
+                    raise self._failed(step, sync=False)
                 case other:  # pyright: ignore[reportUnnecessaryComparison]  # a kind the bridge returns but the stub does not list
                     raise RuntimeError(f"router-core returned an unknown step {other!r}")
 
@@ -3769,7 +4226,7 @@ class _Selection:
                     # `get_available_deployment` resolves its pick to a pod.
                     return self._resolved_pod_sync(core, done)
                 case "failed":
-                    raise self._failed(step)
+                    raise self._failed(step, sync=True)
                 case other:  # pyright: ignore[reportUnnecessaryComparison]  # a kind the bridge returns but the stub does not list
                     raise RuntimeError(f"router-core returned an unknown step {other!r}")
 
@@ -3809,6 +4266,23 @@ def _log_refused_image_pick(request: Mapping[str, object], error: BaseException)
         _restore_correlation_context_if_supported(logging_obj)
 
 
+def _with_live_params(core: "RustCore", deployment: Mapping[str, object]) -> Mapping[str, object]:
+    """``deployment`` with the values its JSON record carries as text: litellm_params holding an
+    Exception ``mock_response``, a callable or a str subclass that marks the value (an admin's secret
+    reference), and model_info values with keys that are not strings."""
+    info: Final = as_str_mapping(deployment.get("model_info"))
+    model_id: Final = (info or {}).get("id")
+    live: Final = core._hosted.live_params(model_id)  # pyright: ignore[reportPrivateUsage]  # the core's own registry
+    live_info: Final = core._hosted.live_info(model_id)  # pyright: ignore[reportPrivateUsage]  # same
+    if not live and not live_info:
+        return deployment
+    return {
+        **deployment,
+        **({"litellm_params": {**(as_str_mapping(deployment.get("litellm_params")) or {}), **live}} if live else {}),
+        **({"model_info": {**(info or {}), **live_info}} if live_info else {}),
+    }
+
+
 def _custom_pick(picked: object) -> Mapping[str, object]:
     """A custom strategy's answer as the deployment document the Rust core serves."""
     document: Final = as_str_mapping(picked)
@@ -3836,6 +4310,10 @@ def _narrowing_fields(request: dict[str, object], kind: str) -> Mapping[str, obj
     return fields
 
 
+def _routes_as_batch_create(plan: Plan, request: Mapping[str, object]) -> bool:
+    return plan.kind == "batch" or (plan.kind == "create_file" and is_batch_upload(request))
+
+
 def _request_narrowing(request: Mapping[str, object]) -> Mapping[str, object]:
     """The narrowing keys a request carries, as the fields router-core reads them."""
     from litellm.litellm_core_utils.routing_common_utils import (
@@ -3861,6 +4339,65 @@ _NO_ROUTING_PRE_CALL_CHECKS: Final = frozenset({"search", "rerank", "moderation"
 # Attempts whose deployment is no pick (`_core_async_get_available_deployment` /
 # `get_available_deployment`), so Kubernetes pod discovery never resolves it.
 _UNPICKED_KINDS: Final = frozenset({"search", "create_file"})
+
+
+# The info lines the Python router's endpoint helpers logged for an attempt: its success, and for
+# these its failure too.
+_ATTEMPT_LOG_NAMES: Final = MappingProxyType(
+    {
+        "acompletion": "litellm.acompletion",
+        "completion": "litellm.completion",
+        "aembedding": "litellm.aembedding",
+        "embedding": "litellm.embedding",
+        "aimage_generation": "litellm.aimage_generation",
+        "image_generation": "litellm.image_generation",
+        "atranscription": "litellm.atranscription",
+        "aspeech": "litellm.aspeech",
+        "arerank": "litellm.arerank",
+        "atext_completion": "litellm.atext_completion",
+        "aadapter_completion": "litellm.aadapter_completion",
+    }
+)
+_SUCCESS_ONLY_LOG_NAMES: Final = MappingProxyType(
+    {
+        "acancel_batch": "litellm.acancel_batch",
+        "acreate_batch": "litellm.acreate_batch",
+        "acreate_file": "litellm.acreate_file",
+        "avector_store_create": "litellm.avector_store_create",
+    }
+)
+
+
+def _log_level_traceback(error: BaseException | None) -> None:
+    """``async_function_with_fallbacks_common_utils``' DEBUG traceback of the error a level hands
+    its fallbacks: the stack the ERROR line leaves out."""
+    import logging
+    import traceback
+
+    from litellm._logging import redact_string, verbose_router_logger
+
+    if error is None or not verbose_router_logger.isEnabledFor(logging.DEBUG):
+        return
+    formatted: Final = "".join(traceback.format_exception(error))
+    verbose_router_logger.debug("Traceback%s", redact_string(formatted))
+
+
+def _log_attempt(plan: Plan, model_name: object, error: BaseException | None = None) -> None:
+    """``litellm.<endpoint>(model=...) 200 OK`` or ``... Exception ...``, as the Python router logged each attempt."""
+    from litellm._logging import verbose_router_logger
+
+    name: Final = _ATTEMPT_LOG_NAMES.get(plan.endpoint)
+    if error is not None:
+        if name is not None:
+            verbose_router_logger.info("%s(model=%s)\x1b[31m Exception %s\x1b[0m", name, model_name, str(error))
+        return
+    served_name: Final = (
+        name
+        or _SUCCESS_ONLY_LOG_NAMES.get(plan.endpoint)
+        or ("ageneric_api_call_with_fallbacks" if plan.kind == "generic" else None)
+    )
+    if served_name is not None:
+        verbose_router_logger.info("%s(model=%s)\x1b[32m 200 OK\x1b[0m", served_name, model_name)
 
 
 class _Driver:
@@ -3897,6 +4434,8 @@ class _Driver:
         # the level that stream served, on the failure ``async_function_with_fallbacks_common_utils``
         # was handed, which is what it raises when no fallback answers.
         self._base_level: Final = stream_failure[0] if stream_failure is not None else 0
+        # How many fallback hops deep the walk is: the "Successful fallback" lines a served hop logs.
+        self._fallback_depth: int = 0
         self._level_errors: Final[dict[int, BaseException]] = dict(  # mutable-ok: filled as the call runs
             (stream_failure,) if stream_failure else ()
         )
@@ -3907,6 +4446,9 @@ class _Driver:
         self._hop_first: Final[dict[int, BaseException]] = {}  # mutable-ok: filled as the call runs
         # Each level's latest pick error: the one object it logged, recorded and raises.
         self._level_picks: Final[dict[int, BaseException]] = {}  # mutable-ok: filled as the call runs
+        # Failures a retry or a later hop raised past the request's first logged failure, which the
+        # attempt itself recorded: the failed hop's fallback cooldown leaves them alone.
+        self._recorded_blocked: Final[set[int]] = set()  # mutable-ok: filled as the call runs
         self._served: tuple[str | None, Mapping[str, object]] = (None, MappingProxyType({}))
         # The latest attempt's deployment and call, which a blocked response is raised from.
         self._latest_call: tuple[Mapping[str, object], AttemptCall] | None = None
@@ -3916,6 +4458,9 @@ class _Driver:
         # When the latest attempt started: Python reads it off the logging object, when one is set up.
         self._attempt_started: datetime | None = None
         # A single-attempt endpoint runs neither of the wrappers that stamp the walk on the request.
+        # The open ``route {model_group}`` phase span of the pick in progress (async calls only).
+        self._route_phase: contextlib.ExitStack | None = None
+        self._route_model: str = ""
         self._walk: Final = WalkMetadata(
             request, plan.metadata_field, self._params_base_model, live=fresh and not plan.single_attempt
         )
@@ -4025,7 +4570,9 @@ class _Driver:
     def _picked_error(self, event: Mapping[str, object]) -> BaseException:
         """The error a pick an event names raised, as a failed step with that error raises it."""
         model: Final = str(event.get("failed_model") or event.get("model"))
-        return self._core._failure_error(event, model, None, request=self._request)  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
+        return self._core._failure_error(  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
+            event, model, None, request=self._request, has_input=self._has_input(), tags=not self._sync
+        )
 
     def _pick_raised(self, error: Exception, *, logged: bool) -> Mapping[str, object]:
         """A pick raised on the host (a strategy, a tag filter, a pre-routing hook): the try fails with
@@ -4096,6 +4643,16 @@ class _Driver:
             picked.max_retries, picked.num_retries = stamp  # pyright: ignore[reportAttributeAccessIssue]  # Python's router stamps the same attributes
         self._chain_to_hop_first(picked, at_level)
         self._level_errors[at_level] = picked
+
+    def _log_hop(self, event: Mapping[str, object]) -> None:
+        """``run_async_fallback``'s "Falling back to model_group" line, for a hop to ``event``'s target."""
+        from litellm._logging import verbose_router_logger
+        from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
+
+        target: Final = event["unroutable"] if "unroutable" in event else event.get("to")
+        verbose_router_logger.info("Falling back to model_group = %s", mask_sensitive_structure(target))
+        depth: Final = event.get("depth")
+        self._fallback_depth = depth if isinstance(depth, int) else self._fallback_depth + 1
 
     def _carry_superseded_usage(self) -> None:
         """``carry_superseded_attempt_usage``, before each same-group retry and each fallback hop."""
@@ -4198,10 +4755,38 @@ class _Driver:
             primary.message += self._explanation(primary, str(self._request.get("model")))  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # checked above  # rebind-ok: the message is what this explains
             self._explains_failure = False
 
+    def open_route_phase(self, model: object) -> None:
+        """``_async_get_available_deployment_unresolved``'s ``route {model}`` phase: the pick's reads
+        nest in it, until the pick ends."""
+        from litellm.integrations.otel.runtime import phase_span
+
+        if self._sync or self._route_phase is not None:
+            return
+        stack: Final = contextlib.ExitStack()
+        stack.enter_context(phase_span(f"route {model}"))
+        self._route_phase = stack
+        self._route_model = str(model)
+
+    def close_route_phase(self, selected_in: object = None) -> None:
+        """The pick ended: a served pick marks ``litellm.request.deployment_selected`` inside it first."""
+        phase: Final = self._route_phase
+        if phase is None:
+            return
+        if isinstance(selected_in, str):
+            from litellm.integrations.otel.runtime import phase_event
+
+            phase_event("litellm.request.deployment_selected", _deployment_pick_attributes(selected_in, self._request))
+        self._route_phase = None
+        phase.close()
+
     def take_events(self, events: object) -> None:  # noqa: C901  # one branch per router-core event
         for raw_event in _as_list(events):
             event = as_str_mapping(raw_event)
             if event is None:
+                continue
+            if event.get("kind") == "pick_started":
+                self.close_route_phase()
+                self.open_route_phase(event.get("model"))
                 continue
             if event.get("kind") == "retry":
                 self._carry_superseded_usage()
@@ -4211,6 +4796,7 @@ class _Driver:
                 continue
             if event.get("kind") == "selected":
                 self._selected(event)
+                self.close_route_phase(self._route_model)
                 continue
             if event.get("kind") == "retries_opened":
                 self._walk.retries_opened(self._stamped_budget(event))
@@ -4219,6 +4805,7 @@ class _Driver:
                 self._walk.retry_budget(event)
                 continue
             if event.get("kind") == "pick_failed":
+                self.close_route_phase()
                 self._pick_failed(event)
                 continue
             if event.get("kind") == "order_chain_failed":
@@ -4254,6 +4841,7 @@ class _Driver:
                 self._fallbacks_failed(event)
                 continue
             if event.get("kind") == "fallback":
+                self._log_hop(event)
                 hop_to = event.get("level")
                 self._hop_first.pop(hop_to if isinstance(hop_to, int) else 0, None)
                 self._walk.hop(event)
@@ -4273,6 +4861,7 @@ class _Driver:
             if event.get("kind") == "falling_back":
                 level = event.get("level")
                 at = level if isinstance(level, int) else 0
+                _log_level_traceback(self._level_errors.get(at, self._last_error))
                 self._explains_failure = self._explains_failure or at == self._base_level
                 self._hint_level_failure(self._level_errors.get(at, self._last_error), str(event.get("model")))
                 continue
@@ -4286,7 +4875,10 @@ class _Driver:
                     self._level_errors.get(at + 1),
                     self._walk.hop_kwargs(event),
                 )
-                if event.get("succeeded") is not True:
+                if (
+                    event.get("succeeded") is not True
+                    and id(self._level_errors.get(at + 1)) not in self._recorded_blocked
+                ):
                     self._core.trigger_fallback_cooldown(
                         self._request,
                         self._level_errors.get(at + 1),
@@ -4320,12 +4912,14 @@ class _Driver:
     def _call(self, step: Mapping[str, object]) -> "tuple[Mapping[str, object], AttemptCall]":
         name: Final = step.get("model")
         requested: Final = str(name) if name is not None else str(self._request.get("model"))
-        deployment: Final = (
+        deployment: Mapping[str, object] = (  # rebind-ok: given its live params below
             # A default deployment whose id is not a string is called as Python copies it, id and all.
             as_str_mapping(default_deployment_copy(self._core._resolved.default_deployment, requested)) or {}  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
             if step.get("deployment_id") == DEFAULT_DEPLOYMENT_COPIED_ID
             else for_requested_model(typed_deployment(as_str_mapping(step.get("deployment")) or {}), requested)
         )
+        # The values its JSON record carries as text (an Exception `mock_response`) called as configured.
+        deployment = _with_live_params(self._core, deployment)
         self._attempts += 1
         self._attempt_started = datetime.now()  # noqa: DTZ005  # naive to match the logging pipeline's api_call_start_time
         level: Final = step.get("fallback_level")
@@ -4343,7 +4937,7 @@ class _Driver:
         self._strip_undecryptable_reasoning(step, deployment, call.kwargs)
         shaped: Final = shape_attempt_kwargs(call.kwargs, deployment)
         # The walk's metadata for the attempt's level (retries, fallback hops) and its hop kwargs.
-        call.kwargs = self._walk.stamp(step, shaped)
+        call.kwargs = self._walk.stamp(step, shaped, deployment) if self._plan.stamps_walk else shaped
         field: Final = self._plan.metadata_field
         if isinstance(call.served, dict) and field in call.kwargs:
             call.served[field] = call.kwargs[field]
@@ -4387,6 +4981,7 @@ class _Driver:
 
         order: Final = step.get("target_order")
         deployment_id: Final = step.get("deployment_id")
+        routed: Final = step.get("routed")
         return StreamAttempt(
             core=self._core,
             op=self._op,
@@ -4398,6 +4993,7 @@ class _Driver:
             level=number("fallback_level"),
             deployment_id=deployment_id if isinstance(deployment_id, str) else None,
             attempted_retries=number("retry"),
+            routed=routed if isinstance(routed, str) else None,
             slot=slot,
         )
 
@@ -4410,6 +5006,8 @@ class _Driver:
     ) -> Mapping[str, object]:
         # What litellm's failure logging read, before the attempt helper's `except` wrote on it.
         detail: Final = str(error)
+        if call is not None:
+            _log_attempt(self._plan, call.model_name, error)
         served: Final = call.served if call is not None else {}  # pyright: ignore[reportUnknownVariableType]  # litellm's untyped helpers and request values
         stamp_error(self._plan, error, deployment, served)  # pyright: ignore[reportUnknownArgumentType]  # litellm's untyped helpers and request values
         self._core._endpoints.attempt_failed(self._plan, error, deployment, call, str(step.get("model")))  # pyright: ignore[reportPrivateUsage]  # see above
@@ -4425,13 +5023,62 @@ class _Driver:
             self._attempt_started,
         )
         model_info: Final = as_str_mapping(deployment.get("model_info")) or {}
+        exits: Final = self._core.failure_exits(error, logged, model_info.get("id"))
+        # A call under credentials the request supplied ran as a request-scoped deployment
+        # (`_handle_clientside_credential`): its failure is never the shared deployment's.
+        ran_as: Final = (as_str_mapping(as_str_mapping(served).get("model_info") if served else None) or {}).get("id")  # pyright: ignore[reportUnknownArgumentType]  # see above
+        request_scoped: Final = self._core.ran_as_request_deployment(
+            ran_as, model_info.get("id")
+        ) or self._caller_entra_failure(error, served, model_info.get("id"))  # pyright: ignore[reportUnknownArgumentType]  # see above
         return {
             **attempt_failure(error),
             "detail": detail,
-            **self._core.failure_exits(error, logged, model_info.get("id")),
+            **exits,
+            **({"outside_deployment": True} if request_scoped or _raised_before_provider(error) else {}),
             # `async_deployment_callback_on_failure` does not run for a sync call, and skips a batch retrieve.
-            "uncounted_request": self._plan.sync or is_batch_retrieve_call_type(logged.get("call_type")),
+            "uncounted_request": self._plan.sync
+            or is_batch_retrieve_call_type(logged.get("call_type"))
+            or _raised_before_provider(error),
         }
+
+    def _records_blocked(
+        self, failed: Mapping[str, object], call: "AttemptCall | None", error: BaseException, in_call: bool
+    ) -> bool:
+        """Record a failure the shared logging object skipped (a retry or later hop), like the first one."""
+        from litellm.router_utils.fallback_event_handlers import (
+            _failure_callbacks_blocked_logging_object,  # pyright: ignore[reportPrivateUsage]  # the fallback path's own rule
+        )
+
+        if not in_call or call is None or failed.get("outside_deployment") is True:
+            return False
+        if self._plan.sync:
+            if not failure_already_logged(call.kwargs, "sync_failure"):
+                return False
+        elif _failure_callbacks_blocked_logging_object(call.kwargs) is None:
+            return False
+        if not self._core.outcome_callbacks(call.kwargs, sync=self._plan.sync).get("failure", True):
+            return False
+        if self._core.blocked_failure_exempt(error, call.kwargs, self._plan.kind in _GENERIC_API_KINDS):
+            return False
+        self._recorded_blocked.add(id(error))
+        return True
+
+    def _caller_entra_failure(self, error: BaseException, sent: Mapping[str, object], deployment_id: object) -> bool:
+        """``is_caller_entra_credential_failure``: Entra ID rejected a credential the caller sent, not
+        the deployment's own, so the failure is the caller's."""
+        from litellm.router_utils.cooldown_handlers import is_caller_entra_credential_failure
+
+        if not isinstance(deployment_id, str):
+            return False
+        hosted: Final = self._core._hosted  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
+        defaults: Final = {k: v for k, v in self._core._resolved.default_litellm_params.items() if v is not None}  # pyright: ignore[reportPrivateUsage]  # see above
+        return is_caller_entra_credential_failure(
+            hosted._core_get_deployment(deployment_id),  # pyright: ignore[reportPrivateUsage]  # the host registry's id lookup
+            defaults,
+            {"litellm_params": sent},
+            getattr(error, "status_code", ""),
+            error,
+        )
 
     def _chain_to_hop_first(self, error: BaseException, level: int) -> None:
         """A retry's failure is raised while the hop's first failure is handled (the retry loop
@@ -4444,6 +5091,13 @@ class _Driver:
         self, call: "AttemptCall", response: object, host_op: str, stream: "StreamAttempt | None" = None
     ) -> Mapping[str, object]:
         self._last_response = response
+        _log_attempt(self._plan, call.model_name)
+        if self._fallback_depth > 0:
+            from litellm._logging import verbose_router_logger
+
+            # One line per `run_async_fallback` the served hop returns through.
+            for _ in range(self._fallback_depth):
+                verbose_router_logger.info("Successful fallback b/w models.")
         tokens: Final = total_tokens(response)
         # A wrapped stream reports its success or failure when it ends; the attempt counts the
         # request and the tokens read so far, which the end's report leaves out.
@@ -4462,8 +5116,11 @@ class _Driver:
     def _tracks_usage(self, call: "AttemptCall", response: object, deferred: bool) -> bool:
         """Whether the attempt counts against its deployment's usage (``_deployment_tracks_usage``). A
         ``None`` response counts nothing (``increment_deployment_usage_for_response``), and an attempt
-        that reports no success then is a realtime session, which logs none to count it either."""
+        that reports no success then is a realtime session, which logs none to count it either. A
+        Responses socket whose finished turns each counted their own request adds none at close."""
         if deferred and response is None:
+            return False
+        if turns_counted_their_requests(call.kwargs):
             return False
         model: Final = call.kwargs.get("model")
         return self._core.deployment_tracks_usage(
@@ -4564,18 +5221,42 @@ class _Driver:
     async def attempt(self, step: Mapping[str, object]) -> Mapping[str, object]:
         if self._passthrough is not None and not step.get("deployment_id"):
             return await self._passthrough_attempt(step)
+        with routed_attempt() as attempt:
+            return await self._routed_attempt(step, attempt)
+
+    def _release(
+        self, call: AttemptCall, attempt: RoutedAttempt, *, refund_io_tokens: bool
+    ) -> "tuple[asyncio.Task[None], ...]":
+        """What a failed or cancelled attempt still holds, whatever its logging object (shared across
+        attempts, it logs only the first failure). Tokens a provider already spent are kept counted."""
+        core: Final = self._core
+        releases: Final = (
+            release_started_attempt(core._selectors.reservations, core._cache, attempt.attempt_id),  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
+            release_io_token_reservation(
+                core._cache,  # pyright: ignore[reportPrivateUsage]  # see above
+                call.kwargs,  # pyright: ignore[reportArgumentType]  # the call's kwargs dict
+                parent_otel_span=get_parent_otel_span_from_kwargs(call.kwargs),
+            )
+            if refund_io_tokens
+            else None,
+        )
+        return tuple(release for release in releases if release is not None)
+
+    async def _routed_attempt(self, step: Mapping[str, object], attempt: RoutedAttempt) -> Mapping[str, object]:
         step = await self._resolve_pods(step)  # rebind-ok: the picked deployment, resolved to a pod
         deployment: Mapping[str, object] = as_str_mapping(step.get("deployment")) or {}  # rebind-ok: the picked one
         call: AttemptCall | None = None  # rebind-ok: built inside the try
         # Whether a failure raised now runs the failure callbacks: none raised before the litellm
         # call or after it answered does, nor any but the first on a shared logging object.
         logs_failure: bool = False  # rebind-ok: set around the litellm call
+        in_call: bool = False  # rebind-ok: set around the litellm call, whichever attempt logs its failure
         reading_stream: StreamAttempt | None = None  # rebind-ok: set while the first chunk is read
         refused_call: Final = self._default_call_error(step)
         if refused_call is not None:
             return {**self._failed(step, self._default_copy(step), None, refused_call), "recorded": True}
         try:
             deployment, call = self._call(step)  # rebind-ok: rebound as the Python router rebinds it
+            enforce_total_timeout_scope(call.kwargs)
             if call.refused is not None:
                 await log_refused_call(call, call.refused)
                 raise call.refused
@@ -4602,6 +5283,7 @@ class _Driver:
                         return await self._refused(step, deployment, call, refused)
                 first_to_log: Final = not failure_already_logged(call.kwargs, "async_failure")
                 logs_failure = first_to_log  # rebind-ok: whether a failure here is this attempt's to log
+                in_call = True  # rebind-ok: see above
                 pending: Final[object] = (
                     self._core._endpoints.create_file_everywhere(  # pyright: ignore[reportPrivateUsage]  # see above
                         _with_target_order(call.kwargs, step.get("target_order")),
@@ -4615,19 +5297,36 @@ class _Driver:
                 awaited: Final = self._plan.kind == "generic" or inspect.isawaitable(pending)
                 answered: Final[object] = await pending if awaited else pending  # pyright: ignore[reportGeneralTypeIssues, reportUnknownVariableType]  # see above
                 logs_failure = False  # rebind-ok: see above
+                in_call = False  # rebind-ok: see above
                 self._core._endpoints.check_response(self._plan, answered, call)  # pyright: ignore[reportPrivateUsage, reportUnknownArgumentType]  # see above
                 stream: Final = self._stream_attempt(step, call.kwargs, slot)
                 logs_failure = first_to_log  # rebind-ok: the stream's own failure logging, for its first chunk
+                in_call = True  # rebind-ok: see above
                 reading_stream = stream  # rebind-ok: None until the attempt opens a stream
                 response: Final = await open_attempt_stream(stream, answered)  # pyright: ignore[reportUnknownArgumentType]  # see above
                 logs_failure = False  # rebind-ok: see above
+                in_call = False  # rebind-ok: see above
                 # `self.success_calls[model_name] += 1`, inside the try: a counter replaced with a
                 # plain dict fails the attempt.
                 self._core._endpoints.counters.succeeded(self._plan, call)  # pyright: ignore[reportPrivateUsage]  # see above
+        except asyncio.CancelledError:
+            if call is not None:
+                await released(
+                    self._release(call, attempt, refund_io_tokens=not attempt.answered),
+                    ATTEMPT_SETTLEMENT_GRACE_SECONDS,
+                )
+            raise
+        except TotalTimeoutNotApplicable:
+            raise
         except Exception as error:  # noqa: BLE001  # every attempt failure is classified and handed to the Rust call loop
+            if call is not None:
+                await released(self._release(call, attempt, refund_io_tokens=True))
             failed: Final = self._failed(step, deployment, call, error)
             if reading_stream is None or not logs_failure:
-                return {**failed, "recorded": not logs_failure}
+                return {
+                    **failed,
+                    "recorded": not logs_failure and not self._records_blocked(failed, call, error, in_call),
+                }
             # `_dispatch_stream_failure`: the stream logs its failure in a task of its own.
             reading_stream.report_first_chunk_failure(error)
             return {**failed, "recorded": True}
@@ -4645,6 +5344,7 @@ class _Driver:
         deployment: Mapping[str, object] = as_str_mapping(step.get("deployment")) or {}  # rebind-ok: see attempt
         call: AttemptCall | None = None  # rebind-ok: see attempt
         logs_failure: bool = False  # rebind-ok: see attempt
+        in_call: bool = False  # rebind-ok: see attempt
         self._reading_first_chunk = False
         refused_call: Final = self._default_call_error(step)
         if refused_call is not None:
@@ -4661,22 +5361,27 @@ class _Driver:
                 return {**self._failed(step, deployment, call, refused), "recorded": True}
             first_to_log: Final = not failure_already_logged(call.kwargs, "sync_failure")
             logs_failure = first_to_log  # rebind-ok: see attempt
+            in_call = True  # rebind-ok: see attempt
             answered: Final = self._core._host.invoke(call.host_op)(**call.kwargs)  # pyright: ignore[reportPrivateUsage]  # a sync endpoint
             logs_failure = False  # rebind-ok: see attempt
+            in_call = False  # rebind-ok: see attempt
             if inspect.isawaitable(answered):
                 raise _NotSynchronous(f"the host's {call.host_op} endpoint is not synchronous")
             self._core._endpoints.check_response(self._plan, answered, call)  # pyright: ignore[reportPrivateUsage]  # see above
             stream: Final = self._stream_attempt(step, call.kwargs)
             logs_failure = first_to_log  # rebind-ok: see attempt
+            in_call = True  # rebind-ok: see attempt
             self._reading_first_chunk = True
             response: Final = open_attempt_stream_sync(stream, answered)
             self._reading_first_chunk = False
             logs_failure = False  # rebind-ok: see attempt
+            in_call = False  # rebind-ok: see attempt
             self._core._endpoints.counters.succeeded(self._plan, call)  # pyright: ignore[reportPrivateUsage]  # see attempt
         except _NotSynchronous:
             raise
         except Exception as error:  # noqa: BLE001  # see attempt
-            return {**self._failed(step, deployment, call, error), "recorded": not logs_failure}
+            failed: Final = self._failed(step, deployment, call, error)
+            return {**failed, "recorded": not logs_failure and not self._records_blocked(failed, call, error, in_call)}
         return self._succeeded(call, response, "", stream)
 
     async def select(self, step: Mapping[str, object]) -> object:
@@ -4703,7 +5408,9 @@ class _Driver:
     async def pre_route(self, step: Mapping[str, object]) -> object:
         request: Final = self._request
         try:
-            return await self._core._pre_route(step, request, *self._plan.pick_input(request))  # pyright: ignore[reportPrivateUsage]  # see above
+            return await self._core._pre_route(  # pyright: ignore[reportPrivateUsage]  # see above
+                step, request, *self._plan.pick_input(request), call_type=self._plan.handler
+            )
         except Exception as error:  # noqa: BLE001  # see select
             return self._pick_raised(error, logged=True)
 
@@ -4724,6 +5431,10 @@ class _Driver:
 
         ctx: Final = RoutingContext(self._core)  # pyright: ignore[reportArgumentType]  # the checks read registry() and settings()
         request: Final = dict(self._request)
+        if self._plan.kind in _GENERIC_API_KINDS:
+            # The generic helpers' kwargs carry the function they call, which the checks read (a
+            # search fallback runs the search tool grants).
+            request["original_generic_function"] = self._core._host.invoke(self._plan.host_op)  # pyright: ignore[reportPrivateUsage, reportUnknownMemberType]  # the driver serves its own core
         try:
             if target != get_pre_routing_selection(request) and not await ctx.fallback_access_allowed(
                 model=target, request_kwargs=request
@@ -4732,6 +5443,11 @@ class _Driver:
                 return False
             if not await ctx.fallback_budget_allowed(model=target, request_kwargs=request):
                 self._walk.targets().record_skip(target, FallbackSkipReason.OVER_BUDGET)
+                return False
+            if target not in self._walk.targets() and not await ctx.fallback_rate_limit_allowed(
+                model=target, request_kwargs=request
+            ):
+                self._walk.targets().record_skip(target, FallbackSkipReason.RATE_LIMITED)
                 return False
         except Exception as error:  # noqa: BLE001  # handed to the Rust call loop, which ends the chain
             self._level_errors[self._level + 1] = error
@@ -4798,11 +5514,10 @@ class _Driver:
         name: Final = self._served[0]
         if name is not None:
             core: Final = self._core
-            remaining: Final = as_str_mapping(
-                core.run_routing_cache_sync(lambda: core.health().usage(name, kind="remaining"))
+            remaining: Final = core._hosted._core_get_remaining_model_group_usage_sync(  # pyright: ignore[reportPrivateUsage]  # the core reads its own host registry
+                name, core.io_token_usage_sync
             )
-            if remaining is not None:
-                apply_remaining_usage_headers(ensure_response_additional_headers(response), dict(remaining))
+            apply_remaining_usage_headers(ensure_response_additional_headers(response), remaining)
         counted: Final = self._count_response(response, step)
         self.log_outcomes_sync()
         return counted
@@ -4825,11 +5540,17 @@ class _Driver:
         await await_all(self.outcomes.take_pending())
         return counted
 
+    def _has_input(self) -> bool:
+        """The request carries messages or an input, which region routing reads."""
+        return self._request.get("messages") is not None or self._request.get("input") is not None
+
     def failed(self, step: Mapping[str, object]) -> BaseException:
         model: Final = str(self._request.get("model"))
         primary: Final = self._level_errors.get(self._base_level)
         if primary is None:
-            return self._core._failure_error(step, model, self._last_error, request=self._request)  # pyright: ignore[reportPrivateUsage]  # see above
+            return self._core._failure_error(  # pyright: ignore[reportPrivateUsage]  # see above
+                step, model, self._last_error, request=self._request, has_input=self._has_input(), tags=not self._sync
+            )
         if (
             self._base_level == 0
             and self._explains_failure

@@ -79,6 +79,64 @@ from typing import List, Optional
 from litellm.types.utils import LiteLLMCommonStrings
 
 
+@pytest.mark.parametrize("metadata_key", ("metadata", "litellm_metadata"))
+def test_free_usage_uses_deployment_metadata_prices(metadata_key: str) -> None:
+    obj: Final = Logging(
+        model="metadata-free-deployment",
+        messages=[],
+        stream=True,
+        call_type="completion",
+        start_time=1.0,
+        litellm_call_id="metadata-free",
+        function_id="test",
+    )
+    obj.litellm_params = {metadata_key: {"model_info": {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0}}}
+    response: Final = ModelResponse(
+        model="metadata-free-deployment", usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+    )
+
+    assert obj.is_usage_explicitly_free(response) is True
+
+
+@pytest.mark.parametrize("pricing_source", ("model_info", "token_rates"))
+@pytest.mark.parametrize("rate", (0.0, 0.001))
+@pytest.mark.parametrize("calculation_failed", (False, True))
+def test_per_call_free_prices_override_catalog_unless_pricing_failed(
+    monkeypatch: pytest.MonkeyPatch, pricing_source: str, rate: float, calculation_failed: bool
+) -> None:
+    model: Final = "per-call-free-price-test"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 0.01, "output_cost_per_token": 0.02},
+    )
+    obj: Final = Logging(
+        model=model,
+        messages=[],
+        stream=True,
+        call_type="completion",
+        start_time=1.0,
+        litellm_call_id="per-call-free",
+        function_id="test",
+    )
+    obj.litellm_params = {"input_cost_per_token": rate, "output_cost_per_token": rate}
+    if pricing_source == "model_info":
+        obj.set_per_call_pricing(
+            {
+                **litellm.get_model_info(model=model, custom_llm_provider="openai"),
+                "input_cost_per_token": rate,
+                "output_cost_per_token": rate,
+            }
+        )
+    else:
+        obj.custom_cost_per_token = {"input_cost_per_token": rate, "output_cost_per_token": rate}
+    if calculation_failed:
+        obj.model_call_details["response_cost_failure_debug_information"] = {"error": "pricing failed"}
+    response: Final = ModelResponse(model=model, usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15))
+
+    assert obj.is_usage_explicitly_free(response) is (rate == 0.0 and not calculation_failed)
+
+
 @pytest.fixture
 def logging_obj():
     return LitellmLogging(
@@ -2318,6 +2376,7 @@ async def test_anthropic_messages_marks_litellm_params_async():
 
     import litellm
     from litellm.integrations.custom_logger import CustomLogger
+    from litellm.llms.anthropic.messages.native import handler as python_messages
 
     captured = {}
     logged = asyncio.Event()
@@ -2332,7 +2391,7 @@ async def test_anthropic_messages_marks_litellm_params_async():
     original_callbacks = getattr(litellm, "callbacks", [])
     try:
         litellm.callbacks = [logger]
-        await litellm.anthropic_messages(
+        await python_messages.anthropic_messages(
             max_tokens=100,
             messages=[{"role": "user", "content": "Hey"}],
             model="anthropic/claude-sonnet-4-5",
@@ -2699,6 +2758,55 @@ def test_success_handler_runs_sync_callbacks_for_sync_requests(
 
     dummy_logger.log_success_event.assert_called_once()
     dummy_logger.log_stream_event.assert_not_called()
+
+
+def test_sync_success_callbacks_run_when_litellm_params_is_a_params_model(
+    logging_obj: LitellmLogging, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.types.router import GenericLiteLLMParams
+
+    class DummyLogger(CustomLogger):
+        pass
+
+    logging_obj.stream = False
+    logging_obj.call_type = "completion"
+    logging_obj.model_call_details["litellm_params"] = GenericLiteLLMParams()
+    dummy_logger = DummyLogger()
+    dummy_logger.log_success_event = MagicMock()
+    logging_obj.dynamic_success_callbacks = [dummy_logger]
+    logging_obj.dynamic_async_success_callbacks = []
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+
+    logging_obj.success_handler(
+        result=ModelResponse(
+            id="resp-123",
+            model="gpt-4o-mini",
+            choices=[{"message": {"role": "assistant", "content": "hello"}, "finish_reason": "stop", "index": 0}],
+            usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        )
+    )
+
+    dummy_logger.log_success_event.assert_called_once()
+
+
+@pytest.mark.parametrize(("extra_params", "expected"), [({}, True), ({"no-log": True}, False)])
+def test_should_run_callback_reads_no_log_from_a_params_model(
+    logging_obj: LitellmLogging,
+    monkeypatch: pytest.MonkeyPatch,
+    extra_params: dict[str, object],
+    expected: bool,
+) -> None:
+    from litellm.types.router import GenericLiteLLMParams
+
+    monkeypatch.setattr(litellm, "global_disable_no_log_param", False)
+
+    should_run: Final = logging_obj.should_run_callback(
+        callback="langfuse", litellm_params=GenericLiteLLMParams(**extra_params), event_hook="success_handler"
+    )
+
+    assert should_run is expected
 
 
 @pytest.mark.asyncio
@@ -10081,6 +10189,45 @@ def test_get_standard_logging_object_payload_reads_overhead_from_logging_obj_for
     assert payload["hidden_params"]["litellm_overhead_time_ms"] == 100.0
 
 
+@pytest.mark.parametrize(
+    ("stamped_overhead_ms", "first_chunk_overhead_ms", "expected_overhead_ms"),
+    (
+        (100.0, 25.5, 125.5),
+        (None, 25.5, None),
+    ),
+)
+def test_get_standard_logging_object_payload_adds_first_chunk_work_to_overhead(
+    logging_obj, stamped_overhead_ms, first_chunk_overhead_ms, expected_overhead_ms
+):
+    """The overhead stamped when the stream object came back misses the hook and cost injection on
+    the first chunk, the delay every chunk the client sees inherits, so that one chunk's work is
+    added on top. With no stamped overhead the first chunk work alone is not reported."""
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+    )
+
+    logging_obj.set_response_timing_metrics(
+        {"_response_ms": 1000.0}
+        if stamped_overhead_ms is None
+        else {"_response_ms": 1000.0, "litellm_overhead_time_ms": stamped_overhead_ms}
+    )
+    logging_obj.first_chunk_overhead_ms = first_chunk_overhead_ms
+    now = datetime.datetime.now()
+    payload = get_standard_logging_object_payload(
+        kwargs={"litellm_call_id": "call-1", "model": "gpt-4o", "messages": []},
+        init_response_obj={"id": "msg_1", "type": "message", "role": "assistant", "content": []},
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["hidden_params"]["litellm_overhead_time_ms"] == expected_overhead_ms
+
+
 def test_get_standard_logging_object_payload_survives_logging_obj_without_timing_metrics(logging_obj):
     """The payload is built inside a blanket except that returns None, so a logging object without
     the timing carrier (custom subclasses, older pickles) must not silently drop every spend log."""
@@ -14641,3 +14788,66 @@ def test_standard_logging_payload_reports_the_per_call_prices_the_request_was_bi
     model_map_value: Final = payload["model_map_information"]["model_map_value"]
     assert model_map_value is not None
     assert (model_map_value["input_cost_per_token"], model_map_value["output_cost_per_token"]) == (3e-06, 7e-06)
+
+
+@pytest.mark.asyncio
+async def test_a_response_discarded_after_its_success_log_was_parked_is_billed_once_on_the_serving_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+    from litellm.responses.streaming_iterator import drain_logging_tasks
+    from litellm.utils import _schedule_async_success_logging
+
+    class Recorder(CustomLogger):
+        def __init__(self) -> None:
+            super().__init__()
+            self.events: tuple[tuple[dict[str, object], object], ...] = ()
+
+        async def async_log_success_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+        ) -> None:
+            self.events = (*self.events, (dict(kwargs), response_obj))
+
+    recorder: Final = Recorder()
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    logging_obj: Final = LitellmLogging(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="refused-then-served",
+        function_id="refused-then-served",
+        dynamic_async_success_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-4o-mini", user="", optional_params={}, litellm_params={"metadata": {}}, custom_llm_provider="openai"
+    )
+    logging_obj.defer_async_logging = True
+    refused: Final = ModelResponse(
+        id="refused", model="gpt-4o-mini", usage=Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+    )
+    served: Final = ModelResponse(
+        id="served", model="gpt-4o-mini", usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+    )
+    now: Final = datetime.datetime.now()
+
+    _schedule_async_success_logging(logging_obj, refused, now, now, is_completion_with_fallbacks=False)
+    logging_obj.carry_failed_attempt_usage()
+    _schedule_async_success_logging(logging_obj, served, now, now, is_completion_with_fallbacks=False)
+    prepared: Final = logging_obj.prepare_response_cost(served, now)
+    enqueue: Final = logging_obj.enqueue_deferred_logging
+    assert enqueue is not None
+    enqueue()
+    await drain_logging_tasks()
+    await GLOBAL_LOGGING_WORKER.flush()
+
+    both_attempts: Final = litellm.completion_cost(refused, model="gpt-4o-mini") + litellm.completion_cost(
+        served, model="gpt-4o-mini"
+    )
+    ((kwargs, response_obj),) = recorder.events
+    assert getattr(response_obj, "id", None) == "served"
+    assert kwargs["response_cost"] == pytest.approx(both_attempts)
+    assert prepared is not None
+    assert prepared.amount == pytest.approx(both_attempts)
