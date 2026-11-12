@@ -26360,6 +26360,8 @@ export interface components {
              * @default []
              */
             access_vector_store_ids: string[];
+            /** Access Vector Stores */
+            access_vector_stores: components["schemas"]["AccessGroupResource"][];
             /** Assigned Key Ids */
             assigned_key_ids: string[];
             /** Assigned Keys */
