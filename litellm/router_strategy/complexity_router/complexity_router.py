@@ -1204,6 +1204,7 @@ class ClassificationOutcome(NamedTuple):
         "default_model_fallback",
     ]
     classifier_cost: float | None = None
+    classifier_model: str | None = None
     capability_forecast: CapabilityClassifierForecast | None = None
     llm_v2_forecast: LLMV2Decision | None = None
     jev_verdict: JevVerdict | None = None
@@ -2503,6 +2504,31 @@ class ComplexityRouter(CustomLogger):
                 ),
                 provider=accounting_provider,
             )
+            refusal_reason: Final = self._jev_route_down_refusal_reason(
+                config=config,
+                chosen_tier=tier_name,
+                strongest_tier=self.config.tier_names()[-1],
+                confidence=answer.confidence,
+                choice_count=len(criteria),
+            )
+            if refusal_reason is not None:
+                if breaker is not None and permit is not None:
+                    breaker.record_success(permit)
+                refused: Final = self._classifier_failure_outcome(
+                    f"{config.provider} classifier route-down refused ({refusal_reason}, verdict {tier_name}, "
+                    f"confidence {answer.confidence:.4f})",
+                    prompt,
+                    system_prompt,
+                    failure_reason="declined",
+                    signal=f"{config.provider}-refused:{refusal_reason}",
+                )
+                return refused._replace(
+                    signals=(*refused.signals, f"{config.provider}-classifier:{tier_name}"),
+                    classifier_cost=verdict.cost,
+                    classifier_model=f"{verdict.provider}/{verdict.model}",
+                    jev_verdict=verdict,
+                    classifier_input_telemetry=budgeted.telemetry,
+                )
             if breaker is not None and permit is not None:
                 breaker.record_success(permit)
             return ClassificationOutcome(
@@ -2518,6 +2544,7 @@ class ComplexityRouter(CustomLogger):
                 ),
                 cause="jev_classifier",
                 classifier_cost=verdict.cost,
+                classifier_model=f"{verdict.provider}/{verdict.model}",
                 jev_verdict=verdict,
                 classifier_input_telemetry=budgeted.telemetry,
             )
@@ -2535,6 +2562,44 @@ class ComplexityRouter(CustomLogger):
                 failure_reason=_classifier_failure_reason(e),
                 error_type=type(e).__name__,
             )._replace(classifier_input_telemetry=budgeted.telemetry)
+
+    @staticmethod
+    def _jev_route_down_refusal_reason(
+        config: OpenSourceClassifierConfig,
+        chosen_tier: str,
+        strongest_tier: str,
+        confidence: float,
+        complexity_score: float | None = None,
+        complexity_confidence: float | None = None,
+        choice_count: int | None = None,
+    ) -> str | None:
+        """Why a Jev verdict that routes below the strongest tier must not be applied, or None.
+
+        A verdict naming the strongest tier is not a route-down and is never gated. Every
+        configured gate must pass: the verdict's own confidence, plus the complexity answer's
+        score and confidence when the protocol carries one. The confidence gate follows the
+        decision question's shape: a question with exactly two options is yes/no-shaped and
+        uses confidence_threshold_yes_no, a wider one is choice-shaped and uses
+        confidence_threshold_choice, and each per-type value falls back to the single
+        confidence_threshold. Missing complexity data is hard
+        (score 1.0, confidence 0.0), so a configured complexity gate refuses every route-down
+        until the wire carries a complexity answer; complexity_max=1.0 and
+        complexity_confidence_min=0.0 are the values at which missing data passes.
+        """
+        if chosen_tier == strongest_tier:
+            return None
+        threshold: Final = (
+            config.confidence_threshold if choice_count is None else config.confidence_threshold_for(choice_count)
+        )
+        if threshold is not None and confidence < threshold:
+            return "low-confidence"
+        score: Final = 1.0 if complexity_score is None else complexity_score  # unknown complexity is hard
+        if config.complexity_max is not None and score > config.complexity_max:
+            return "high-complexity"
+        verdict_confidence: Final = 0.0 if complexity_confidence is None else complexity_confidence
+        if config.complexity_confidence_min is not None and verdict_confidence < config.complexity_confidence_min:
+            return "low-complexity-confidence"
+        return None
 
     def _classifier_failure_outcome(
         self,
@@ -5080,6 +5145,13 @@ class ComplexityRouter(CustomLogger):
                         conversation_continuing=conversation_continuing,
                         cause=outcome.cause,
                         signals=outcome.signals,
+                        classifier_model=outcome.classifier_model
+                        or (
+                            f"{outcome.jev_verdict.provider}/{outcome.jev_verdict.model}"
+                            if outcome.jev_verdict is not None
+                            else None
+                        ),
+                        classifier_cost=outcome.classifier_cost,
                         classifier_failure_reason=outcome.classifier_failure_reason,
                         classifier_error_type=outcome.classifier_error_type,
                         escalation_keyword=escalation_keyword,
@@ -5157,12 +5229,15 @@ class ComplexityRouter(CustomLogger):
 
         tier_litellm_params: Final = self._litellm_params_for_model(tier, routed_model, request_kwargs)
         classifier_model: Final = (
-            f"{outcome.jev_verdict.provider}/{outcome.jev_verdict.model}"
-            if outcome.cause == "jev_classifier" and outcome.jev_verdict is not None
-            else self.config.classifier_llm_config.model
-            if outcome.cause in ("llm_classifier", "capability_classifier", "llm_v2_classifier", "llm_v2_fallback")
-            and self.config.classifier_llm_config is not None
-            else None
+            outcome.classifier_model
+            or (
+                f"{outcome.jev_verdict.provider}/{outcome.jev_verdict.model}"
+                if outcome.cause == "jev_classifier" and outcome.jev_verdict is not None
+                else self.config.classifier_llm_config.model
+                if outcome.cause in ("llm_classifier", "capability_classifier", "llm_v2_classifier", "llm_v2_fallback")
+                and self.config.classifier_llm_config is not None
+                else None
+            )
         )
         # cause=default_model_fallback means no tier was decided: the classifier failed and the
         # operator asked for default_model. Only the plugin path reaches here (the non-plugin one
