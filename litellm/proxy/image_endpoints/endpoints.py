@@ -37,6 +37,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
 from litellm.proxy.route_llm_request import route_request
 from litellm.types.images.main import ImageEditRequestParams
 from litellm.types.llms.openai import ChatCompletionUserMessage
+from litellm.types.utils import CallTypes
 
 router: Final = APIRouter()
 _IMAGE_GENERATION_MODEL_ADAPTER: Final[TypeAdapter[object]] = TypeAdapter(object)
@@ -221,7 +222,10 @@ async def image_generation(
         return response
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
-            user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
+            user_api_key_dict=user_api_key_dict,
+            original_exception=e,
+            request_data=data,
+            dispatched_call_type=CallTypes.aimage_generation.value,
         )
         log_llm_api_exception(e, litellm_call_id)
         if isinstance(e, HTTPException):
