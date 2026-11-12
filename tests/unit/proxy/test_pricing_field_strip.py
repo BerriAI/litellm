@@ -10,9 +10,12 @@ strips them at the boundary; an opt-in key/team flag preserves the override
 for operators who actually want it.
 """
 
+from typing import Final
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
+import respx
 from fastapi import Request
 
 import litellm
@@ -24,6 +27,9 @@ from litellm.proxy.litellm_pre_call_utils import (
     add_litellm_data_to_request,
     strip_client_guardrail_information,
 )
+from litellm.proxy.proxy_server import ProxyConfig
+from litellm.proxy.route_llm_request import route_request
+from litellm.types.router import RouterGeneralSettings
 from litellm.types.utils import CustomPricingLiteLLMParams
 
 
@@ -51,6 +57,130 @@ def _user_api_key_auth(metadata=None, team_metadata=None) -> UserAPIKeyAuth:
         team_spend=0.0,
         team_max_budget=200.0,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pricing_source", [None, "model_info", "output_cost_per_video_clip"])
+@pytest.mark.parametrize(
+    ("dispatch", "opt_in"),
+    [
+        ("user_model", None),
+        ("pass_through", None),
+        ("user_model", "metadata"),
+        ("user_model", "team_metadata"),
+        ("pass_through", "metadata"),
+        ("pass_through", "team_metadata"),
+        ("deployment_params", None),
+        ("deployment_info", None),
+    ],
+)
+async def test_proxy_video_prices_only_accept_authorized_client_overrides(
+    monkeypatch: pytest.MonkeyPatch, pricing_source: str | None, dispatch: str, opt_in: str | None
+) -> None:
+    model: Final = "fal_ai/fal-ai/pixverse/v5/text-to-video"
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("FAL_AI_API_KEY", "synthetic-fal-key")
+    monkeypatch.setattr(
+        litellm, "model_cost", {**litellm.model_cost, model: {"output_cost_per_video_clip": {"5s": {"720p": 0.61}}}}
+    )
+    price: Final = {"output_cost_per_video_clip": {"5s": {"720p": 0.01}}}
+    deployment_price: Final = {"output_cost_per_video_clip": {"5s": {"720p": 0.73}}}
+    router: Final = (
+        litellm.Router(
+            num_retries=0,
+            model_list=[
+                {
+                    "model_name": "priced-video",
+                    "litellm_params": {
+                        "model": model,
+                        "api_key": "synthetic-fal-key",
+                        **(deployment_price if dispatch == "deployment_params" else {}),
+                    },
+                    "model_info": deployment_price if dispatch == "deployment_info" else {},
+                }
+            ]
+            if dispatch.startswith("deployment_")
+            else [],
+            router_general_settings=RouterGeneralSettings(pass_through_all_models=True),
+        )
+        if dispatch != "user_model"
+        else None
+    )
+    auth: Final = _user_api_key_auth(**({opt_in: {"allow_client_pricing_override": True}} if opt_in else {}))
+    data: Final = await add_litellm_data_to_request(
+        data={
+            "model": "priced-video" if dispatch.startswith("deployment_") else model,
+            "prompt": "clip",
+            "seconds": "5",
+            "size": "720p",
+            **({"model_info": price} if pricing_source == "model_info" else price if pricing_source else {}),
+        },
+        request=Request({"type": "http", "method": "POST", "path": "/v1/videos", "headers": [], "query_string": b""}),
+        user_api_key_dict=auth,
+        proxy_config=ProxyConfig(),
+        general_settings={},
+        version="test-version",
+    )
+    with respx.mock:
+        upstream: Final = respx.post("https://queue.fal.run/fal-ai/pixverse/v5/text-to-video").mock(
+            return_value=httpx.Response(200, json={"request_id": "protected-video"})
+        )
+        pending: Final = await route_request(
+            data=data,
+            llm_router=router,
+            user_model=model if router is None else None,
+            route_type="avideo_generation",
+            user_api_key_dict=auth,
+        )
+        video: Final = await pending
+    expected: Final = 0.01 if opt_in and pricing_source else 0.73 if dispatch.startswith("deployment_") else 0.61
+    assert video._hidden_params["response_cost"] == pytest.approx(expected)
+    assert upstream.call_count == 1
+    assert (
+        upstream.calls[0].request.content
+        == httpx.Request(
+            "POST", "https://queue.fal.run", json={"prompt": "clip", "duration": "5", "resolution": "720p"}
+        ).content
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pricing_source", ["model_info", "output_cost_per_video_clip"])
+async def test_proxy_client_video_price_cannot_admit_an_unpriced_clip(
+    monkeypatch: pytest.MonkeyPatch, pricing_source: str
+) -> None:
+    model: Final = "fal_ai/fal-ai/pixverse/v5/text-to-video"
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("FAL_AI_API_KEY", "synthetic-fal-key")
+    monkeypatch.setattr(
+        litellm, "model_cost", {**litellm.model_cost, model: {"output_cost_per_video_clip": {"5s": {"720p": 0.61}}}}
+    )
+    price: Final = {"output_cost_per_video_clip": {"8s": {"720p": 0.01}}}
+    auth: Final = _user_api_key_auth()
+    data: Final = await add_litellm_data_to_request(
+        data={
+            "model": model,
+            "prompt": "clip",
+            "seconds": "8",
+            "size": "720p",
+            **({"model_info": price} if pricing_source == "model_info" else price),
+        },
+        request=Request({"type": "http", "method": "POST", "path": "/v1/videos", "headers": [], "query_string": b""}),
+        user_api_key_dict=auth,
+        proxy_config=ProxyConfig(),
+        general_settings={},
+        version="test-version",
+    )
+    with respx.mock:
+        upstream: Final = respx.post("https://queue.fal.run/fal-ai/pixverse/v5/text-to-video").mock(
+            return_value=httpx.Response(200, json={"request_id": "must-not-submit"})
+        )
+        pending: Final = await route_request(
+            data=data, llm_router=None, user_model=model, route_type="avideo_generation", user_api_key_dict=auth
+        )
+        with pytest.raises(litellm.BadRequestError, match="has no pricing entry"):
+            await pending
+    assert upstream.call_count == 0
 
 
 class TestStripClientPricingOverrides:
