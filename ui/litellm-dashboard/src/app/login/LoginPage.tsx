@@ -122,7 +122,7 @@ function LoginPageContent() {
         params.delete("code");
         const cleanSearch = params.toString();
         window.history.replaceState(null, "", window.location.pathname + (cleanSearch ? `?${cleanSearch}` : ""));
-        router.replace("/ui/?login=success");
+        window.location.replace("/ui/?login=success");
       });
       return;
     }
@@ -140,9 +140,9 @@ function LoginPageContent() {
       // User already logged in - redirect to return URL or default
       const returnUrl = consumeReturnUrl(getRuntimeBackendBaseUrl());
       if (returnUrl) {
-        router.replace(getUiPageUrl(returnUrl, true));
+        window.location.replace(getUiPageUrl(returnUrl, true));
       } else {
-        router.replace("/ui");
+        window.location.replace("/ui");
       }
       return;
     }
@@ -176,14 +176,14 @@ function LoginPageContent() {
           if (selectedWorker) {
             selectWorker(selectedWorker.worker_id);
             // Stay on the CP's UI — proxyBaseUrl already points at the worker
-            router.push("/ui/?login=success");
+            window.location.assign("/ui/?login=success");
           } else {
             // Normal (non-control-plane) login — follow the server's redirect
             const returnUrl = consumeReturnUrl(getRuntimeBackendBaseUrl());
             if (returnUrl) {
-              router.push(getUiPageUrl(returnUrl, true));
+              window.location.assign(getUiPageUrl(returnUrl, true));
             } else {
-              router.push(getUiPageUrl(data.redirect_url, true));
+              window.location.assign(getUiPageUrl(data.redirect_url, true));
             }
           }
         },
