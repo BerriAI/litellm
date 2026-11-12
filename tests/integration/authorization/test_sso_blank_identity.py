@@ -250,6 +250,23 @@ def saml(saml_idp: SamlIdp, gateway_module: Gateway, tmp_path_factory: pytest.Te
         yield owned
 
 
+@pytest.fixture(scope="module")
+def saml_ui_disabled(
+    saml_idp: SamlIdp, gateway_module: Gateway, tmp_path_factory: pytest.TempPathFactory
+) -> Iterator[OwnedProxy]:
+    with owned_proxy_process(
+        gateway_module,
+        tmp_path_factory.mktemp("sso-blank-identity-saml-ui-disabled"),
+        {
+            "SAML_IDP_METADATA_XML": saml_idp.metadata(),
+            "SAML_SP_ENTITY_ID": SAML_SP_ENTITY,
+            "DISABLE_ADMIN_UI": "true",
+        },
+        remove_environment=("PROXY_BASE_URL",),
+    ) as owned:
+        yield owned
+
+
 def _saml_sign_in(proxy: Gateway, idp: SamlIdp, name_id: str, email: str | None) -> httpx.Response:
     acs: Final = f"{_proxy_url(proxy)}/sso/saml/callback"
     with _browser() as browser:
@@ -497,6 +514,20 @@ def _complete_cli(browser: httpx.Client, callback: httpx.Response, session: CliS
     return browser.post(
         action.group(1), data={"user_code": session.user_code, "browser_complete_token": token.group(1)}
     )
+
+
+def _saml_cli_callback(
+    proxy: Gateway, idp: SamlIdp, browser: httpx.Client, session: CliSession, email: str
+) -> httpx.Response:
+    link: Final = browser.get(
+        f"{_proxy_url(proxy)}/sso/key/generate", params={"source": CLI_SOURCE, "key": session.login_id}
+    )
+    assert link.status_code == 303, f"{link.status_code} {link.text}"
+    relay_state: Final = parse_qs(urlparse(link.headers["location"]).query).get("RelayState")
+    assert relay_state == [f"litellm-session-token:{session.login_id}"], link.headers["location"]
+    acs: Final = f"{_proxy_url(proxy)}/sso/saml/callback"
+    saml_response: Final = idp.response(acs, link.cookies[SAML_STATE_COOKIE], email, email)
+    return browser.post(acs, data={"SAMLResponse": saml_response, "RelayState": relay_state[0]})
 
 
 def _poll(proxy: Gateway, session: CliSession) -> Mapping[str, object]:
@@ -860,6 +891,39 @@ def test_saml_sign_in_with_an_email_signs_in_as_a_real_account(
         assert callback.status_code == 303 and session is not None, f"{callback.status_code} {callback.text}"
         assert session["user_id"] == expected, f"session issued for user_id={session['user_id']!r}"
     assert _blank_accounts() == (), _blank_accounts()
+
+
+def test_cli_sign_in_through_saml_completes(saml: OwnedProxy, saml_idp: SamlIdp, gateway_module: Gateway) -> None:
+    proxy: Final = saml.gateway
+    email: Final = f"saml-cli-{uuid.uuid4().hex[:12]}@example.com"
+    session: Final = _start_cli_login(proxy)
+    with gateway_module.scenario() as scenario, _browser() as browser:
+        _forget_sign_in(scenario, email)
+        callback: Final = _saml_cli_callback(proxy, saml_idp, browser, session, email)
+        done: Final = _complete_cli(browser, callback, session)
+        assert done.status_code == 200 and CLI_SUCCESS_PAGE_TITLE in done.text, f"{done.status_code} {done.text}"
+        ready: Final = _poll(proxy, session)
+        assert ready["status"] == "ready" and ready["user_id"] == email, ready
+
+
+def test_cli_sign_in_through_saml_completes_while_dashboard_sign_in_stays_refused_when_the_ui_is_disabled(
+    saml_ui_disabled: OwnedProxy, saml_idp: SamlIdp, gateway_module: Gateway
+) -> None:
+    proxy: Final = saml_ui_disabled.gateway
+    email: Final = f"saml-cli-ui-off-{uuid.uuid4().hex[:12]}@example.com"
+    session: Final = _start_cli_login(proxy)
+    with gateway_module.scenario() as scenario, _browser() as browser:
+        _forget_sign_in(scenario, email)
+        callback: Final = _saml_cli_callback(proxy, saml_idp, browser, session, email)
+        done: Final = _complete_cli(browser, callback, session)
+        assert done.status_code == 200 and CLI_SUCCESS_PAGE_TITLE in done.text, f"{done.status_code} {done.text}"
+        ready: Final = _poll(proxy, session)
+        assert ready["status"] == "ready" and ready["user_id"] == email, ready
+        dashboard: Final = _post_saml_response(
+            proxy, saml_idp.response(f"{_proxy_url(proxy)}/sso/saml/callback", None, email, email), None
+        )
+    assert dashboard.status_code == 200 and _session(dashboard) is None, f"{dashboard.status_code} {dashboard.text}"
+    assert "Admin UI is Disabled" in dashboard.text, dashboard.text
 
 
 def test_saml_sign_in_started_on_one_proxy_completes_on_another(

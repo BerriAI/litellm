@@ -13,13 +13,14 @@ import logging
 import re
 import time
 from http.cookies import SimpleCookie
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 import pytest
 from fastapi import HTTPException, Request
 
 pytest.importorskip("onelogin", reason="python3-saml (saml extra) is required for SAML SSO tests")
 
-from typing import cast
+from typing import Final, cast
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -718,6 +719,67 @@ async def test_sp_initiated_login_endpoint_ticket_is_accepted_by_another_worker(
     resp = _build_signed_response(key_pem, cert_pem, in_response_to=ticket, email="carol@example.com")
     result = await _acs(_b64(resp), _shared_cache(shared_store), cookies={_SAML_AUTHN_STATE_COOKIE: ticket})
     assert result.email == "carol@example.com"
+
+
+def _browser_post(path: str, form: dict[str, str], cookies: dict[str, str]) -> Request:
+    body: Final = urlencode(form).encode()
+
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "scheme": "https",
+            "server": ("proxy.example.com", 443),
+            "client": ("203.0.113.7", 50000),
+            "path": path,
+            "query_string": b"",
+            "headers": [
+                (b"content-type", b"application/x-www-form-urlencoded"),
+                (b"cookie", "; ".join(f"{name}={value}" for name, value in cookies.items()).encode()),
+            ],
+        },
+        receive,
+    )
+
+
+@pytest.mark.parametrize("disable_admin_ui", ["false", "true"])
+@pytest.mark.asyncio
+async def test_saml_cli_sign_in_reaches_the_cli_login_instead_of_the_dashboard(
+    saml_env: tuple[str, str], monkeypatch: pytest.MonkeyPatch, disable_admin_ui: str
+) -> None:
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.management_endpoints.ui_sso import cli_sso_start, google_login, saml_callback
+
+    key_pem, cert_pem = saml_env
+    for oauth_client in ("MICROSOFT_CLIENT_ID", "GOOGLE_CLIENT_ID", "GENERIC_CLIENT_ID"):
+        monkeypatch.delenv(oauth_client, raising=False)
+    monkeypatch.setenv("DISABLE_ADMIN_UI", disable_admin_ui)
+    monkeypatch.setattr(proxy_server, "saml_sso_cache", _shared_cache())
+    monkeypatch.setattr(proxy_server, "cli_sso_session_cache", DualCache())
+    monkeypatch.setattr(proxy_server, "prisma_client", object())
+    monkeypatch.setattr(proxy_server, "master_key", "sk-saml-cli-test")
+    login_id: Final = str((await cli_sso_start(_browser_post("/sso/cli/start", {}, {})))["login_id"])
+
+    redirect: Final = await google_login(_fake_request(), source="litellm-cli", key=login_id)
+    relay_state: Final = parse_qs(urlsplit(redirect.headers["location"]).query).get("RelayState")
+    assert relay_state == [f"litellm-session-token:{login_id}"], redirect.headers["location"]
+
+    ticket: Final = SimpleCookie(redirect.headers["set-cookie"])[_SAML_AUTHN_STATE_COOKIE].value
+    saml_response: Final = _b64(_build_signed_response(key_pem, cert_pem, in_response_to=ticket, email="dave@example.com"))
+    monkeypatch.setattr(proxy_server, "cli_sso_session_cache", DualCache())
+    with pytest.raises(HTTPException) as exc:
+        await saml_callback(
+            _browser_post(
+                "/sso/saml/callback",
+                {"SAMLResponse": saml_response, "RelayState": relay_state[0]},
+                {_SAML_AUTHN_STATE_COOKIE: ticket},
+            )
+        )
+    assert exc.value.status_code == 400
+    assert "CLI login session not found or expired" in exc.value.detail
 
 
 @pytest.mark.asyncio
