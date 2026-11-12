@@ -6389,6 +6389,7 @@
       "tabs": {
         "loggingCallbacks": "Logging Callbacks",
         "cloudZero": "CloudZero Cost Tracking",
+        "ternary": "Ternary Cost Export",
         "alertingTypes": "Alerting Types",
         "alertingSettings": "Alerting Settings",
         "emailAlerts": "Email Alerts",
@@ -6639,6 +6640,90 @@
           "exportFailed": "Failed to export data",
           "deleted": "CloudZero integration deleted successfully",
           "deleteFailed": "Failed to delete CloudZero integration"
+        }
+      }
+    },
+    "ternary": {
+      "page": {
+        "loading": "Loading Ternary settings...",
+        "loadErrorPrefix": "Error loading Ternary settings: ",
+        "restartTitle": "Restart the proxy to apply"
+      },
+      "emptyPlaceholder": {
+        "title": "No Ternary Integration Found",
+        "description": "Send LiteLLM spend to Ternary as FOCUS data, so AI costs can be allocated across teams.",
+        "add": "Add Ternary Integration"
+      },
+      "form": {
+        "addTitle": "Add Ternary Integration",
+        "editTitle": "Edit Ternary Integration",
+        "description": "Create an AI Gateway integration in Ternary (Admin, Integrations, New Integration) to get a connection ID and API key.",
+        "apiKey": "API Key",
+        "apiKeyHint": "Leave empty to keep the current key",
+        "apiKeyPlaceholder": "Enter your Ternary API key",
+        "newApiKeyPlaceholder": "Enter a new API key",
+        "apiKeyRequired": "Enter the API key from Ternary",
+        "apiKeyRequiredForBaseUrl": "Enter the API key again when changing the base URL",
+        "connectionId": "Connection ID",
+        "connectionIdPlaceholder": "Enter your Ternary connection ID",
+        "connectionIdRequired": "Enter the connection ID from Ternary",
+        "baseUrl": "Base URL",
+        "baseUrlRequired": "Enter the Ternary API base URL",
+        "frequency": "Export Frequency",
+        "frequencyDaily": "Daily",
+        "frequencyInterval": "Fixed interval (setup testing)",
+        "intervalSeconds": "Interval (seconds)",
+        "intervalSecondsInvalid": "Enter a whole number of seconds",
+        "intervalSecondsRequired": "Enter how often to export, in seconds",
+        "cancel": "Cancel",
+        "create": "Create",
+        "update": "Update",
+        "saving": "Saving...",
+        "saveFailed": "Failed to save the Ternary integration"
+      },
+      "settings": {
+        "title": "Ternary Configuration",
+        "statusConfigFile": "Config file",
+        "statusConfigured": "Configured",
+        "edit": "Edit",
+        "delete": "Delete",
+        "configFileNotice": "This proxy sets up Ternary in its config file, with callbacks: [\"ternary\"] and the TERNARY_* environment variables. Change or remove it there.",
+        "fields": {
+          "apiKey": "API Key (Redacted)",
+          "connectionId": "Connection ID",
+          "baseUrl": "Base URL",
+          "frequency": "Export Frequency"
+        },
+        "frequencyDaily": "Daily",
+        "frequencyEvery": "Every {{seconds}} seconds",
+        "restartHint": "Scheduled exports pick up changes saved here after the proxy restarts. Export Now always uses the settings shown.",
+        "actions": "Actions",
+        "preview": "Preview Export",
+        "exportNow": "Export Now",
+        "previewTitle": "Preview (LiteLLM estimated spend)",
+        "previewSummary": "{{records}} FOCUS rows across {{days}} day(s), estimated spend {{spend}}, {{tokens}} tokens, {{teams}} team(s), {{models}} model(s). Nothing was sent to Ternary.",
+        "previewEstimateNote": "Spend is LiteLLM's estimate, not your provider's invoice.",
+        "exportComplete": "Export complete",
+        "nothingToExport": "Nothing to export",
+        "exportUploaded": "Uploaded {{dayCount}} day(s), one file each: {{days}} (UTC).",
+        "exportEmpty": "No usage between {{start}} and {{end}} (UTC). Nothing was sent to Ternary.",
+        "exportDialog": {
+          "title": "Export to Ternary now?",
+          "description": "This uploads LiteLLM usage for today and the two days before (UTC), the same days a scheduled export sends. Each day with usage replaces what Ternary has for that day.",
+          "cancel": "Cancel",
+          "confirm": "Export",
+          "exporting": "Exporting..."
+        },
+        "deleteDialog": {
+          "title": "Delete Ternary Integration?",
+          "message": "This removes the stored Ternary settings. Scheduled exports stop after the proxy restarts.",
+          "infoTitle": "Integration Details",
+          "connectionId": "Connection ID"
+        },
+        "toasts": {
+          "previewFailed": "Failed to preview the export",
+          "exportFailed": "Failed to export to Ternary",
+          "deleteFailed": "Failed to delete the Ternary integration"
         }
       }
     }
