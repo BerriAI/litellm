@@ -722,7 +722,8 @@ class TestFalAIVideoTransformation:
         assert isinstance(provider_config, FalAIVideoConfig)
         assert isinstance(self.config.get_error_class("bad key", 401, {}), FalAIVideoError)
 
-    def test_video_cost_uses_tiered_rows(self):
+    @pytest.mark.parametrize(("duration", "resolution"), [(0, None), (5, "720p"), (17, "9999p")])
+    def test_video_cost_uses_tiered_rows(self, duration: float, resolution: str | None) -> None:
         rows = {
             model: row
             for model, row in litellm.model_cost.items()
@@ -730,6 +731,9 @@ class TestFalAIVideoTransformation:
         }
         assert rows
         for model, row in rows.items():
+            if (flat_cost := row.get("output_cost_per_video")) is not None:
+                assert default_video_cost_calculator(model, duration, "fal_ai", video_resolution=resolution) == flat_cost
+                continue
             for key, value in row.items():
                 if key.startswith("output_cost_per_second_") and value is not None:
                     tier = key.removeprefix("output_cost_per_second_")
