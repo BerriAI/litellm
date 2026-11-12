@@ -179,3 +179,71 @@ class TestLogBatchRegistrationResult:
 
         logger.info.assert_not_called()
         logger.error.assert_called_once()
+
+
+def test_unified_batch_object_id_decodes_to_the_deployment_and_provider_batch_id():
+    import base64
+
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        get_batch_id_from_unified_batch_id,
+        get_model_id_from_unified_batch_id,
+    )
+    from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import unified_batch_object_id
+
+    unified = unified_batch_object_id("gemini/gemini-3.8-flash", "wire7h3x9batch")
+    padded = unified + "=" * (-len(unified) % 4)
+    decoded = base64.urlsafe_b64decode(padded).decode()
+    assert get_model_id_from_unified_batch_id(decoded) == "gemini/gemini-3.8-flash"
+    assert get_batch_id_from_unified_batch_id(decoded) == "wire7h3x9batch"
+
+
+def test_register_passthrough_batch_stores_the_calling_key_team_and_tags():
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
+        register_passthrough_batch,
+    )
+
+    hook = MagicMock()
+    hook.store_unified_object_id = AsyncMock()
+    batch_object = {"id": "b1", "object": "batch", "status": "validating"}
+    metadata = {
+        "user_api_key": "hashed-key",
+        "user_api_key_user_id": "user-7",
+        "user_api_key_team_id": "team-3",
+        "tags": ["pipeline:nightly"],
+    }
+
+    async def run():
+        with patch("litellm.proxy.proxy_server.proxy_logging_obj") as proxy_logging:
+            proxy_logging.get_proxy_hook.return_value = hook
+            register_passthrough_batch("Gemini", "uoi", batch_object, "b1", metadata)
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+
+    asyncio.run(run())
+    hook.store_unified_object_id.assert_awaited_once()
+    stored = hook.store_unified_object_id.await_args.kwargs
+    assert stored["unified_object_id"] == "uoi"
+    assert stored["model_object_id"] == "b1"
+    assert stored["file_object"] is batch_object
+    assert stored["file_purpose"] == "batch"
+    assert stored["persist_attribution"] is True
+    assert stored["request_tags"] == ("pipeline:nightly",)
+    assert stored["user_api_key_dict"].api_key == "hashed-key"
+    assert stored["user_api_key_dict"].user_id == "user-7"
+    assert stored["user_api_key_dict"].team_id == "team-3"
+
+
+def test_register_passthrough_batch_without_a_managed_files_hook_stores_nothing():
+    from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
+        register_passthrough_batch,
+    )
+
+    async def run():
+        with patch("litellm.proxy.proxy_server.proxy_logging_obj") as proxy_logging:
+            proxy_logging.get_proxy_hook.return_value = None
+            register_passthrough_batch("Gemini", "uoi", {"id": "b1"}, "b1", {})
+            await asyncio.sleep(0)
+
+    asyncio.run(run())
