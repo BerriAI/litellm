@@ -1829,6 +1829,8 @@ async def test_post_call_success_hook_priority_header_is_always_http_encodable(t
         ("priority_class", {"priority_class": "batch"}, {"priority_class": "interactive"}, "batch"),
         ("priority_class", None, {"priority_class": "interactive"}, "interactive"),
         ("priority_class", {"priority": "batch"}, {"priority": "interactive"}, None),
+        ("priority_class", {"priority_class": ["batch"]}, {"priority_class": "interactive"}, None),
+        ("priority", None, {"priority": {"tier": "prod"}}, None),
     ),
 )
 def test_priority_is_read_from_the_configured_metadata_field_team_first(

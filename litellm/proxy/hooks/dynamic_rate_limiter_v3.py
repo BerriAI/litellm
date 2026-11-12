@@ -153,7 +153,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         team_priority: Final = (
             user_api_key_dict.team_metadata.get(field) if user_api_key_dict.team_metadata is not None else None
         )
-        return team_priority if team_priority is not None else user_api_key_dict.metadata.get(field)
+        priority: Final = team_priority if team_priority is not None else user_api_key_dict.metadata.get(field)
+        return priority if isinstance(priority, str) else None
 
     def _normalize_priority_weights(self, model_info: ModelGroupInfo) -> dict[str, float]:
         """
