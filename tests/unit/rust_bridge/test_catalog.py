@@ -5,7 +5,8 @@ from typing import Final
 
 import pytest
 
-from litellm.rust_bridge import catalog, configuration
+from litellm.litellm_core_utils.model_latest_aliases import get_model_latest_aliases
+from litellm.rust_bridge import catalog, configuration, detectors
 from litellm.rust_bridge.catalog import (
     Feature,
     Route,
@@ -15,6 +16,26 @@ from litellm.rust_bridge.catalog import (
     Target,
 )
 from litellm.rust_bridge.configuration import Decision, Rollout
+from litellm.rust_bridge.public_call import NativeCall
+
+
+@pytest.mark.parametrize(
+    "model",
+    ("anthropic/claude-opus-latest", f"anthropic/{get_model_latest_aliases()['anthropic']['claude-opus-latest']}"),
+)
+def test_latest_alias_messages_stays_native_like_the_pinned_model(model: str) -> None:
+    request: Final = NativeCall(args=(), kwargs={"model": model}, base={})
+    context: Final = RouteContext(
+        Route.MESSAGES,
+        provider="anthropic",
+        model=model,
+        features=detectors.detected(detectors.COMMON, request),
+    )
+    rules: Final = (
+        RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, features=catalog.MESSAGES_PYTHON_FEATURES),
+        RouteRule(Route.MESSAGES, Rollout.RUST_OPT_IN, providers=frozenset({"anthropic"})),
+    )
+    assert catalog.rollout(context, rules) is Rollout.RUST_OPT_IN
 
 
 @pytest.fixture(autouse=True)
@@ -47,7 +68,7 @@ def test_missing_rule_stays_on_python_even_when_rust_is_enabled(monkeypatch: pyt
         (RouteContext(Route.MESSAGES, target=Target.MESSAGES), Decision.RUST_REQUIRED),
         (RouteContext(Route.MESSAGES, target=Target.CHAT_COMPLETIONS), Decision.PYTHON),
         (RouteContext(Route.MESSAGES), Decision.PYTHON),
-        (RouteContext(Route.OCR, features=frozenset({Feature.SAFEGUARDS_CLASSIFIER})), Decision.PYTHON),
+        (RouteContext(Route.OCR, features=frozenset({Feature.STREAMING})), Decision.PYTHON),
         (RouteContext(Route.OCR), Decision.RUST_REQUIRED),
     ),
 )
@@ -61,7 +82,7 @@ def test_first_matching_rule_respects_every_constraint(context: RouteContext, ex
         ),
         RouteRule(Route.RESPONSES, Rollout.PYTHON_ONLY),
         RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED, targets=frozenset({Target.MESSAGES})),
-        RouteRule(Route.OCR, Rollout.PYTHON_ONLY, features=frozenset({Feature.SAFEGUARDS_CLASSIFIER})),
+        RouteRule(Route.OCR, Rollout.PYTHON_ONLY, features=frozenset({Feature.STREAMING})),
         RouteRule(Route.OCR, Rollout.RUST_REQUIRED),
     )
 
@@ -125,6 +146,7 @@ def test_empty_constraints_match_nothing() -> None:
     )
 
     assert catalog.decision(RouteContext(Route.OCR), rules) is Decision.PYTHON
-    assert catalog.decision(
-        RouteContext(Route.OCR, features=frozenset({Feature.SAFEGUARDS_CLASSIFIER})), rules
-    ) is Decision.PYTHON
+    assert (
+        catalog.decision(RouteContext(Route.OCR, features=frozenset({Feature.STREAMING})), rules)
+        is Decision.PYTHON
+    )

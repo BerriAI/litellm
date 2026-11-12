@@ -1,28 +1,23 @@
 mod credentials;
 
-use std::{
-    collections::BTreeMap,
-    sync::{Arc, LazyLock, Mutex, PoisonError},
-    time::Duration,
-};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use litellm_circuit_breaker::Config as BreakerConfig;
-use litellm_core_utils::settings::ProcessEnvironment;
+use litellm_core_utils::settings::{Lookup, ProcessEnvironment};
 use litellm_host_python::PythonContext;
 use litellm_python_compat::number::{self, SecondsError};
-use litellm_redis_client::{RedisClient, RedisEvents, WeakRedisClient};
+use litellm_redis_client::{RedisClient, RedisEvents};
 use litellm_redis_connect::{CredentialSource, HostServices, SharedEnvironment};
 use litellm_redis_resolve::{Kwargs, PythonException};
-use litellm_redis_types::{ProviderHandle, Resolution};
+use litellm_redis_types::{Endpoint, ProviderHandle, Resolution};
 use pyo3::{
     exceptions::{PyOverflowError, PyTypeError, PyValueError},
     prelude::*,
-    sync::MutexExt,
-    types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple},
+    types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyMapping, PyString, PyTuple},
 };
 
 use self::credentials::PythonCredentialSource;
-use crate::redis::events::{ServiceLoggingEvents, state_label};
+use crate::redis::{breaker::BreakerSettings, events::ServiceLoggingEvents, hosts};
 
 pyo3::import_exception!(redis.exceptions, RedisClusterException);
 
@@ -40,16 +35,18 @@ impl<'a, 'py> FromPyObject<'a, 'py> for RedisSpec {
 
     fn extract(kwargs: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
         let py = kwargs.py();
+        let source = PyDict::new(py);
+        let mapping = kwargs.cast::<PyMapping>()?;
+        source.update(&mapping)?;
         let plain = PyDict::new(py);
         let mut host_objects = Vec::new();
-        for (name, value) in kwargs.cast::<PyDict>()?.iter() {
+        for (name, value) in source.iter() {
             match value.is_none() || is_plain(&value) {
                 true => plain.set_item(&name, value)?,
                 false => host_objects.push(name.extract::<String>()?),
             }
         }
-        let credential_provider = kwargs
-            .cast::<PyDict>()?
+        let credential_provider = source
             .get_item("credential_provider")?
             .filter(|provider| !provider.is_none() && !is_plain(provider))
             .map(Bound::unbind);
@@ -65,25 +62,13 @@ impl<'a, 'py> FromPyObject<'a, 'py> for RedisSpec {
     }
 }
 
-/// `litellm.constants`' `REDIS_CIRCUIT_BREAKER_*`, which Python reads from the environment once.
-pub(crate) struct RedisBreaker(BreakerConfig);
-
-impl<'a, 'py> FromPyObject<'a, 'py> for RedisBreaker {
-    type Error = PyErr;
-
-    fn extract(breaker: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
-        let (failure_threshold, recovery_timeout, timeout_min_duration): (u32, f64, f64) =
-            breaker.extract()?;
-        let seconds = |seconds: f64| {
-            Duration::try_from_secs_f64(seconds)
-                .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))
-        };
-        Ok(Self(BreakerConfig {
-            failure_threshold,
-            recovery_timeout: seconds(recovery_timeout)?,
-            timeout_min_duration: seconds(timeout_min_duration)?,
-        }))
-    }
+/// `litellm.redis.store_settings.RedisStoreSettings`, which a `RedisCache` captures when it is built.
+#[derive(FromPyObject)]
+pub(crate) struct StoreSettings {
+    redis_kwargs: RedisSpec,
+    namespace: Option<String>,
+    default_ttl: f64,
+    breaker: Option<BreakerSettings>,
 }
 
 fn is_plain(value: &Bound<'_, PyAny>) -> bool {
@@ -96,22 +81,6 @@ fn is_plain(value: &Bound<'_, PyAny>) -> bool {
         || value.is_instance_of::<PyDict>()
 }
 
-/// A client the process built, held weakly so a discarded `Router` drops its client and provider.
-struct Shared {
-    resolved: Resolution,
-    client: WeakRedisClient,
-}
-
-static CLIENTS: LazyLock<Mutex<Vec<Shared>>> = LazyLock::new(|| Mutex::new(Vec::new()));
-
-fn live_clients(py: Python<'_>) -> std::sync::MutexGuard<'static, Vec<Shared>> {
-    let mut clients = CLIENTS
-        .lock_py_attached(py)
-        .unwrap_or_else(PoisonError::into_inner);
-    clients.retain(|shared| shared.client.upgrade().is_some());
-    clients
-}
-
 /// The one client for a resolved Redis config and credential provider, so every family in this process shares its pool
 /// and its breaker. A config redis-py refuses building its client raises the same class here. One it only fails on
 /// once a command connects, where `RedisCache` logs every failed call, leaves the family on memory with an error.
@@ -119,20 +88,11 @@ fn shared_client(
     py: Python<'_>,
     spec: RedisSpec,
     namespace: Option<String>,
-    breaker: Option<RedisBreaker>,
+    breaker: Option<BreakerConfig>,
 ) -> PyResult<Option<RedisClient>> {
     let environment: SharedEnvironment = Arc::new(ProcessEnvironment);
-    let RedisSpec {
-        kwargs,
-        credential_provider,
-    } = spec;
-    // The registry entry's client keeps the provider alive, so no live entry shares its address
-    let handle = credential_provider
-        .as_ref()
-        .map(|provider| ProviderHandle::new(provider.as_ptr() as usize as u64));
     let logger = crate::logger::capture(py);
-    let environ = py.import("os")?.getattr("environ")?;
-    let resolved = match logger.scope(|| resolve(&kwargs, handle, &environ))? {
+    let resolved = match logger.scope(|| resolve_spec(&spec)) {
         Ok(resolution) => {
             logger.scope(|| {
                 for ignored in &resolution.ignored {
@@ -156,7 +116,8 @@ fn shared_client(
         events: Some(events),
         http: crate::http::host_client(py, litellm_http::ClientVariant::Provider)?,
         environment,
-        credential_provider: credential_provider
+        credential_provider: spec
+            .credential_provider
             .as_ref()
             .map(|provider| -> PyResult<Arc<dyn CredentialSource>> {
                 Ok(Arc::new(PythonCredentialSource::new(
@@ -166,30 +127,14 @@ fn shared_client(
             })
             .transpose()?,
     };
-    let mut clients = live_clients(py);
-    if let Some(client) = clients
-        .iter()
-        .filter(|shared| shared.resolved == resolved)
-        .find_map(|shared| shared.client.upgrade())
-    {
-        return Ok(Some(client));
-    }
-    let connected = {
+    let connected = py.detach(|| {
         let _runtime = runtime.enter();
-        litellm_redis_connect::connect(resolved.clone(), host, breaker.map(|breaker| breaker.0))
-    };
-    let client = match connected {
-        Ok(client) => client,
-        Err(error) => {
-            drop(clients);
-            return Ok(unconnected(py, &error));
-        }
-    };
-    clients.push(Shared {
-        resolved,
-        client: client.downgrade(),
+        hosts().client(resolved, host, breaker)
     });
-    Ok(Some(client))
+    match connected {
+        Ok(client) => Ok(Some(client)),
+        Err(error) => Ok(unconnected(py, &error)),
+    }
 }
 
 /// The Rust client for one `RedisCache`, built once and handed to every native store, so a store
@@ -205,15 +150,15 @@ pub(crate) struct NativeRedisClient {
 impl NativeRedisClient {
     /// `None` when redis-py would fail only once a command connects, which leaves every store given it on memory.
     #[staticmethod]
-    #[pyo3(signature = (redis_kwargs, *, default_ttl_seconds, namespace = None, breaker = None))]
-    fn connect(
-        py: Python<'_>,
-        redis_kwargs: RedisSpec,
-        default_ttl_seconds: f64,
-        namespace: Option<String>,
-        breaker: Option<RedisBreaker>,
-    ) -> PyResult<Option<Self>> {
-        let default_ttl = number::seconds(default_ttl_seconds).map_err(seconds_error)?;
+    fn connect(py: Python<'_>, settings: StoreSettings) -> PyResult<Option<Self>> {
+        let StoreSettings {
+            redis_kwargs,
+            namespace,
+            default_ttl,
+            breaker,
+        } = settings;
+        let default_ttl = number::seconds(default_ttl).map_err(seconds_error)?;
+        let breaker = breaker.as_ref().map(BreakerSettings::config).transpose()?;
         Ok(
             shared_client(py, redis_kwargs, namespace, breaker)?.map(|client| Self {
                 client,
@@ -228,33 +173,24 @@ impl NativeRedisClient {
     }
 }
 
-/// The breaker state of every native Redis client this process built, so the Prometheus state
-/// gauge counts them next to the Python `RedisCache` breakers.
-#[pyfunction]
-pub(crate) fn native_redis_breaker_states(py: Python<'_>) -> Vec<&'static str> {
-    live_clients(py)
-        .iter()
-        .filter_map(|shared| shared.client.upgrade())
-        .filter_map(|client| client.breaker_state())
-        .map(|state| state_label(&state))
-        .collect()
+/// The Redis server `spec` names, whatever its db, credentials or namespace, or none when the Rust client cannot reach it.
+pub(crate) fn resolved_endpoint(spec: &RedisSpec) -> Option<Endpoint> {
+    resolve_spec(spec)
+        .ok()
+        .and_then(|resolution| resolution.target.endpoint())
 }
 
-/// What redis-py makes of the kwargs, with `REDIS_USERNAME` read from `environ` the way Python's Azure AD auth
-/// reads `os.environ`.
-fn resolve(
-    kwargs: &Kwargs,
-    provider: Option<ProviderHandle>,
-    environ: &Bound<'_, PyAny>,
-) -> PyResult<Result<Resolution, litellm_redis_resolve::Error>> {
-    let redis_username: Option<String> = environ
-        .call_method1("get", ("REDIS_USERNAME",))?
-        .extract()?;
-    Ok(litellm_redis_resolve::interpret(
-        kwargs,
-        provider,
-        redis_username.as_deref(),
-    ))
+// A live registry entry's client keeps its provider alive, so no live entry shares its address
+fn resolve_spec(spec: &RedisSpec) -> Result<Resolution, litellm_redis_resolve::Error> {
+    let handle = spec
+        .credential_provider
+        .as_ref()
+        .map(|provider| ProviderHandle::new(provider.as_ptr() as usize as u64));
+    litellm_redis_resolve::interpret(
+        &spec.kwargs,
+        handle,
+        ProcessEnvironment.get("REDIS_USERNAME").as_deref(),
+    )
 }
 
 fn unresolved(
@@ -305,9 +241,6 @@ fn seconds_error(error: SecondsError) -> PyErr {
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::CStr;
-
-    use litellm_redis_types::Auth;
     use rstest::rstest;
     use serde_json::json;
 
@@ -316,30 +249,6 @@ mod tests {
     fn kwargs(fields: serde_json::Value) -> Kwargs {
         let fields: BTreeMap<String, serde_json::Value> = serde_json::from_value(fields).unwrap();
         litellm_redis_resolve::kwargs(fields)
-    }
-
-    #[rstest]
-    #[case::set(c"environ = {'REDIS_USERNAME': 'azure-user'}", Some("azure-user"))]
-    #[case::empty_is_unset(c"environ = {'REDIS_USERNAME': ''}", None)]
-    fn azure_auth_takes_its_username_from_the_environ_like_python(
-        #[case] source: &CStr,
-        #[case] expected: Option<&str>,
-    ) {
-        Python::initialize();
-        Python::attach(|py| {
-            let locals = PyDict::new(py);
-            py.run(source, Some(&locals), Some(&locals)).unwrap();
-            let environ = locals.get_item("environ").unwrap().unwrap();
-            let kwargs = kwargs(json!({"host": "redis", "azure_redis_ad_token": "true"}));
-
-            let resolved = resolve(&kwargs, None, &environ).unwrap().unwrap();
-
-            assert!(
-                matches!(&resolved.auth, Auth::AzureAd(azure) if azure.username.as_deref() == expected),
-                "{:?}",
-                resolved.auth
-            );
-        });
     }
 
     #[rstest]

@@ -4,7 +4,8 @@ import React, { createContext, useContext, useState, useEffect } from "react";
 import { createApiClient } from "@/lib/http/client";
 import { getProxyBaseUrl } from "@/components/networking";
 
-export type PluginMode = "ai-gateway" | string; // "ai-gateway" or a registered plugin name
+export type PluginMode = "ai-gateway" | "customer-portal" | string;
+export const BUILT_IN_MODES: ReadonlySet<string> = new Set(["ai-gateway", "customer-portal"]);
 
 export interface PluginNavItem {
   key: string;
@@ -84,7 +85,8 @@ export function PluginModeProvider({ children, accessToken }: PluginModeProvider
   // Once plugins have loaded, fall back to ai-gateway if the persisted mode is
   // no longer registered — including when the list came back empty (all plugins
   // removed).  Derived rather than setState-in-effect to avoid cascading renders.
-  const effectiveMode = mode !== "ai-gateway" && loaded && !plugins.some((p) => p.name === mode) ? "ai-gateway" : mode;
+  const effectiveMode =
+    !BUILT_IN_MODES.has(mode) && loaded && !plugins.some((p) => p.name === mode) ? "ai-gateway" : mode;
 
   const setMode = (m: PluginMode) => {
     setModeState(m);

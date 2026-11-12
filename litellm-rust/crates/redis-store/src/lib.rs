@@ -1,23 +1,17 @@
-#![expect(
-    dead_code,
-    reason = "the store families built on these tiers and codecs land in the next PR"
-)]
-#![cfg_attr(
-    not(test),
-    expect(
-        unused_imports,
-        reason = "the store families built on these tiers and codecs land in the next PR"
-    )
-)]
-
+pub mod auth_cache;
 mod codec;
 mod dual_cache;
 mod error;
 mod failure_log;
 mod memory;
 mod number;
+pub mod rate_limits;
 mod remote;
 mod request;
+pub mod router_cooldowns;
+pub mod router_usage;
+pub mod sensitive_route_pins;
+pub mod spend_counters;
 mod value;
 
 pub use codec::DecodeError;

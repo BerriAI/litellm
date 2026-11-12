@@ -1,4 +1,11 @@
+pub(crate) mod auth_cache;
+mod policy;
+pub(crate) mod rate_limits;
 pub(crate) mod request;
+pub(crate) mod router_cooldowns;
+pub(crate) mod router_usage;
+pub(crate) mod sensitive_route_pins;
+pub(crate) mod spend_counters;
 mod value;
 
 use value::PyValue;
@@ -159,6 +166,7 @@ where
 }
 
 /// A Python `int` or `float` across the bridge, keeping which one it is.
+#[derive(Clone, Copy, PartialEq)]
 pub(crate) struct PyNumber(Number);
 
 impl<'a, 'py> FromPyObject<'a, 'py> for PyNumber {
@@ -185,6 +193,21 @@ impl<'py> IntoPyObject<'py> for PyNumber {
             Number::Int(value) => value.into_pyobject(py)?.into_any(),
             Number::Float(value) => value.into_pyobject(py)?.into_any(),
         })
+    }
+}
+
+/// A store enum read from its wire spelling, so the bridge names no variant.
+pub(crate) struct Spelled<T>(pub(crate) T);
+
+impl<'a, 'py, T: std::str::FromStr> FromPyObject<'a, 'py> for Spelled<T> {
+    type Error = PyErr;
+
+    fn extract(value: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
+        let spelling: String = value.extract()?;
+        spelling
+            .parse()
+            .map(Self)
+            .map_err(|_| PyValueError::new_err(format!("unknown spelling {spelling:?}")))
     }
 }
 

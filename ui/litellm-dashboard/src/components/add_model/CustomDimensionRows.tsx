@@ -9,6 +9,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Slider } from "@/components/ui/slider";
 import type { CustomDimensionRow } from "./custom_dimensions";
 
+const MATCH_FIELDS = ["keywords", "patterns"] as const;
+
 const SCORING_MODES = [
   { value: "binary", labelKey: "addModel.customDimensionRows.scoringModes.binary" },
   { value: "match_count", labelKey: "addModel.customDimensionRows.scoringModes.matchCount" },
@@ -87,7 +89,7 @@ export default function CustomDimensionRows({ rows, disabled, onChange, onWeight
             />
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            {(["keywords", "patterns"] as const).map((field) => (
+            {MATCH_FIELDS.map((field) => (
               <div key={field} className="min-w-0 space-y-1">
                 <Label htmlFor={`${row.id}-${field}`}>
                   {field === "keywords"

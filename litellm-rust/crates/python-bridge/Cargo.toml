@@ -19,6 +19,7 @@ huggingface = ["litellm-token-counter/huggingface"]
 tiktoken = ["litellm-token-counter/tiktoken"]
 
 [dependencies]
+rustls.workspace = true
 litellm-secret-value.workspace = true
 fancy-regex.workspace = true
 litellm-tracing.workspace = true
@@ -59,8 +60,10 @@ litellm-router-types.workspace = true
 litellm-router-core.workspace = true
 litellm-host-python.workspace = true
 litellm-model-catalog.workspace = true
+litellm-model-catalog-refresh.workspace = true
 litellm-token-counter = { path = "../token-counter", default-features = false }
-pyo3.workspace = true
+indexmap = "2.14.0"
+pyo3 = { workspace = true, features = ["indexmap"] }
 prost.workspace = true
 pyo3-async-runtimes.workspace = true
 reqwest.workspace = true

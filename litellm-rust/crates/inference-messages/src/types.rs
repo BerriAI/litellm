@@ -2,7 +2,10 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use litellm_host::call::CallOutput;
-use litellm_llms::{ErrorDetail, base_llm::messages::context::MessagesModelCapabilities};
+use litellm_llms::{
+    ErrorDetail,
+    base_llm::messages::context::{MessagesModelCapabilities, MessagesShapeOptions},
+};
 use litellm_llms_types::{
     formats::messages::{MessagesRequest, MessagesResponse},
     headers::ProviderSpecificHeaders,
@@ -42,7 +45,16 @@ pub(super) fn invalid_request(err: serde_json::Error) -> Error {
 }
 
 pub type MessagesCallResponse =
-    CallOutput<Box<MessagesResponse>, super::route::MessagesStreamHead, Bytes, Error>;
+    CallOutput<MessagesBody, super::route::MessagesStreamHead, Bytes, Error>;
+
+// Python's `transform_anthropic_messages_response` returns any JSON object the provider sends
+// with a 200, message or not, so one that is not a message passes through as sent.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum MessagesBody {
+    Message(Box<MessagesResponse>),
+    Unchecked(Map<String, Value>),
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct MessagesShaping {
@@ -62,9 +74,38 @@ pub struct MessagesSettings {
     pub additional_drop_params: Vec<String>,
     #[serde(default)]
     pub request_timeout: Option<f64>,
+    #[serde(default)]
+    pub mock_response: Option<Map<String, Value>>,
+    #[serde(default)]
+    pub whole_sse_frames: bool,
+    #[serde(default)]
+    pub joined_reads: bool,
+    #[serde(default)]
+    pub presanitized: bool,
+    #[serde(default)]
+    pub drops_unsupported_params: bool,
+    #[serde(default)]
+    pub intercepted: bool,
+    #[serde(default)]
+    pub mcp_gateway: bool,
+    #[serde(default)]
+    pub ascii_response_headers: bool,
+    #[serde(default)]
+    pub unencodable_request_header: Option<Vec<u8>>,
+    /// Python's HTTP client encodes every header value it sends as ASCII, so a value it cannot
+    /// encode fails the call before the send.
+    #[serde(default)]
+    pub ascii_request_headers: bool,
 }
 
 impl MessagesSettings {
+    pub fn shape_options(&self) -> MessagesShapeOptions {
+        MessagesShapeOptions {
+            reasoning_auto_summary: self.reasoning_auto_summary,
+            presanitized: self.presanitized,
+        }
+    }
+
     pub fn request_timeout(&self) -> Option<Duration> {
         self.request_timeout
             .and_then(|secs| Duration::try_from_secs_f64(secs).ok())
@@ -131,7 +172,8 @@ mod tests {
             "drop_params": true,
             "reasoning_auto_summary": true,
             "additional_drop_params": ["metadata.user_id", "thinking"],
-            "request_timeout": 1800.0
+            "request_timeout": 1800.0,
+            "drops_unsupported_params": true
         }),
         MessagesShaping {
             settings: MessagesSettings {
@@ -139,11 +181,14 @@ mod tests {
                 reasoning_auto_summary: true,
                 additional_drop_params: vec!["metadata.user_id".to_string(), "thinking".to_string()],
                 request_timeout: Some(1800.0),
+                drops_unsupported_params: true,
+                ..MessagesSettings::default()
             },
             capabilities: MessagesModelCapabilities {
                 supports_reasoning: true,
                 supports_adaptive_thinking: true,
                 thinking_always_on: false,
+                thinking_on_by_default: false,
                 supports_legacy_thinking: false,
                 supports_output_config: true,
                 supports_sampling_params: false,
@@ -174,6 +219,10 @@ mod tests {
         assert_eq!(
             serialized["reasoning_auto_summary"],
             json!(expected.settings.reasoning_auto_summary)
+        );
+        assert_eq!(
+            serialized["drops_unsupported_params"],
+            json!(expected.settings.drops_unsupported_params)
         );
         assert_eq!(
             serialized["additional_drop_params"],

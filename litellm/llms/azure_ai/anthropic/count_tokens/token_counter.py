@@ -11,6 +11,7 @@ from pydantic import JsonValue
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.llms.anthropic.count_tokens.transformation import (
     AnthropicCountFields,
     ChatCountTranslationError,
@@ -19,7 +20,7 @@ from litellm.llms.anthropic.count_tokens.transformation import (
 from litellm.llms.azure_ai.anthropic.count_tokens.handler import (
     AzureAIAnthropicCountTokensHandler,
 )
-from litellm.llms.base_llm.base_utils import BaseTokenCounter
+from litellm.llms.base_llm.base_utils import BaseTokenCounter, deployment_timeout
 from litellm.types.utils import CountContextManagement, LlmProviders, TokenCountMessagesFormat, TokenCountResponse
 
 # Global handler instance - reuse across all token counting requests
@@ -136,16 +137,18 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
                 system=system,
                 optional_params=count_options,
                 context_management=None if context_management is None else context_management.spec,
+                timeout=deployment_timeout(litellm_params),
             )
 
             if result is not None:
+                response_fields: Final = decoded_json_object(result)
                 return TokenCountResponse.model_validate(
                     {
-                        "total_tokens": result.get("input_tokens", 0),
+                        "total_tokens": response_fields.get("input_tokens", 0),
                         "request_model": request_model,
                         "model_used": model_to_use,
                         "tokenizer_type": "azure_ai_anthropic_api",
-                        "original_response": result,
+                        "original_response": response_fields,
                     }
                 )
         except AnthropicError as e:

@@ -2587,36 +2587,7 @@ export const modelPatchUpdateCall = async (
   accessToken: string,
   formValues: Record<string, any>, // Assuming formValues is an object
   modelId: string,
-) => {
-  try {
-    // Intentionally not logging the payload: it can contain freshly-entered
-    // provider secrets (api_key, vertex_credentials, AWS creds).
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/model/${modelId}/update` : `/model/${modelId}/update`;
-    const response = await fetch(url, {
-      method: "PATCH",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        ...formValues, // Include formValues in the request body
-      }),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error update from the server:", errorData);
-      throw new Error("Network response was not ok");
-    }
-    const data = await response.json();
-    return data;
-    // Handle success - you might want to update some state or UI based on the created key
-  } catch (error) {
-    console.error("Failed to update model:", error);
-    throw error;
-  }
-};
+) => apiClient.patch(`/model/${encodeURIComponent(modelId)}/update`, { accessToken, body: formValues });
 
 export interface Member {
   role: string;

@@ -1,8 +1,9 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { Trans, useTranslation } from "react-i18next";
+import { useTranslation } from "react-i18next";
 import { SimpleTooltip } from "@/components/ui/tooltip";
+import type { FieldErrors } from "react-hook-form";
 import { z } from "zod";
 import { fetchUserModels } from "@/components/organisms/create_key_button";
 import { getModelDisplayName } from "@/components/key_team_helpers/fetch_available_models_team_key";
@@ -25,38 +26,64 @@ import { useZodForm } from "@/lib/forms/useZodForm";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { CheckIcon, ChevronRight, CopyIcon } from "lucide-react";
 
+const isBlank = (value: string | number | null | undefined): value is "" | null | undefined =>
+  value == null || value === "";
+const isNonnegativeNumber = (value: string | number): boolean => Number.isFinite(Number(value)) && Number(value) >= 0;
+const isNonnegativeInteger = (value: string | number): boolean => Number.isInteger(Number(value)) && Number(value) >= 0;
+
+const optionalLimit = z
+  .union([z.string(), z.number()])
+  .nullish()
+  .refine((value) => isBlank(value) || isNonnegativeInteger(value), {
+    error: () => i18n.t("tagManagement.editForm.validation.limitNonnegativeInteger"),
+  });
+
 const tagEditShape = {
   name: z.string().min(1, { error: () => i18n.t("tagManagement.editForm.validation.nameRequired") }),
-  description: z.string().optional(),
+  description: z.string().nullish(),
   models: z.array(z.string()).optional(),
   max_budget: z
     .union([z.string(), z.number()])
-    .refine((value) => value === "" || (Number.isFinite(Number(value)) && Number(value) >= 0), {
+    .nullish()
+    .refine((value) => isBlank(value) || isNonnegativeNumber(value), {
       error: () => i18n.t("tagManagement.editForm.validation.budgetNonnegative"),
-    })
-    .optional(),
+    }),
   budget_duration: z.string().nullish(),
+  tpm_limit: optionalLimit,
+  rpm_limit: optionalLimit,
 };
 
 const tagEditSchema = z.object(tagEditShape);
 
 type TagEditFormValues = z.output<typeof tagEditSchema>;
 
-const budgetPayload = (value: TagEditFormValues["max_budget"]): number | null | undefined => {
+const budgetFieldNames = ["max_budget", "budget_duration", "tpm_limit", "rpm_limit"] as const;
+
+const withoutBudgetFields = (values: TagEditFormValues): TagEditFormValues => ({
+  ...values,
+  max_budget: undefined,
+  budget_duration: undefined,
+  tpm_limit: undefined,
+  rpm_limit: undefined,
+});
+
+const onlyBudgetFieldErrors = (errors: FieldErrors<TagEditFormValues>): boolean =>
+  Object.keys(errors).every((name) => (budgetFieldNames as readonly string[]).includes(name));
+
+const numericPayload = (value: string | number | null | undefined): number | null | undefined => {
   if (value === undefined) return undefined;
-  if (value === "") return null;
+  if (isBlank(value)) return null;
   return Number(value);
 };
 
 interface TagEditFormProps {
   tag: Tag;
-  seedBudgetFields: boolean;
   userModels: string[];
   onCancel: () => void;
   onSave: (values: TagEditFormValues) => Promise<void>;
 }
 
-const TagEditForm: React.FC<TagEditFormProps> = ({ tag, seedBudgetFields, userModels, onCancel, onSave }) => {
+const TagEditForm: React.FC<TagEditFormProps> = ({ tag, userModels, onCancel, onSave }) => {
   const { t } = useTranslation();
   const [budgetSectionOpen, setBudgetSectionOpen] = useState(false);
   const form = useZodForm(tagEditSchema, {
@@ -64,18 +91,26 @@ const TagEditForm: React.FC<TagEditFormProps> = ({ tag, seedBudgetFields, userMo
       name: tag.name,
       description: tag.description,
       models: tag.models,
-      max_budget: seedBudgetFields ? tag.litellm_budget_table?.max_budget : undefined,
-      budget_duration: seedBudgetFields ? tag.litellm_budget_table?.budget_duration : undefined,
+      max_budget: tag.litellm_budget_table?.max_budget,
+      budget_duration: tag.litellm_budget_table?.budget_duration,
+      tpm_limit: tag.litellm_budget_table?.tpm_limit,
+      rpm_limit: tag.litellm_budget_table?.rpm_limit,
     },
   });
 
   const submitVisibleValues = (values: TagEditFormValues): Promise<void> =>
-    onSave(budgetSectionOpen ? values : { ...values, max_budget: undefined, budget_duration: undefined });
+    onSave(budgetSectionOpen ? values : withoutBudgetFields(values));
+
+  const submitIgnoringHiddenBudgetErrors = (errors: FieldErrors<TagEditFormValues>): Promise<void> | undefined => {
+    if (budgetSectionOpen || !onlyBudgetFieldErrors(errors)) return undefined;
+    form.clearErrors([...budgetFieldNames]);
+    return submitVisibleValues(form.getValues());
+  };
 
   const modelOptions = userModels.map((modelId) => ({ label: getModelDisplayName(modelId), value: modelId }));
 
   return (
-    <form onSubmit={form.handleSubmit(submitVisibleValues)} noValidate>
+    <form onSubmit={form.handleSubmit(submitVisibleValues, submitIgnoringHiddenBudgetErrors)} noValidate>
       <FieldGroup>
         <FormField control={form.control} name="name" label={t("tagManagement.editForm.fields.name")}>
           {({ ref, ...field }) => <Input {...field} ref={ref} />}
@@ -132,25 +167,25 @@ const TagEditForm: React.FC<TagEditFormProps> = ({ tag, seedBudgetFields, userMo
                 <BudgetDurationDropdown id={id} value={value ?? null} onChange={onChange} />
               )}
             </FormField>
-          </FieldGroup>
 
-          <div className="mt-4 rounded-md border border-border bg-muted p-3">
-            <p className="text-sm text-muted-foreground">
-              <Trans
-                i18nKey="tagManagement.editForm.rateLimitsNotice"
-                components={{
-                  issue: (
-                    <a
-                      href="https://github.com/BerriAI/litellm/issues/new"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-info underline hover:text-info/80"
-                    />
-                  ),
-                }}
-              />
-            </p>
-          </div>
+            <FormField
+              control={form.control}
+              name="tpm_limit"
+              label={t("tagManagement.editForm.fields.tpmLimit")}
+              description={t("tagManagement.editForm.fields.tpmLimitDescription")}
+            >
+              {({ ref, value, ...field }) => <NumericalInput {...field} value={value ?? ""} step={1} min={0} />}
+            </FormField>
+
+            <FormField
+              control={form.control}
+              name="rpm_limit"
+              label={t("tagManagement.editForm.fields.rpmLimit")}
+              description={t("tagManagement.editForm.fields.rpmLimitDescription")}
+            >
+              {({ ref, value, ...field }) => <NumericalInput {...field} value={value ?? ""} step={1} min={0} />}
+            </FormField>
+          </FieldGroup>
         </CollapsibleContent>
       </Collapsible>
 
@@ -222,9 +257,9 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
         name: values.name,
         description: values.description,
         models: values.models,
-        max_budget: budgetPayload(values.max_budget),
-        tpm_limit: undefined,
-        rpm_limit: undefined,
+        max_budget: numericPayload(values.max_budget),
+        tpm_limit: numericPayload(values.tpm_limit),
+        rpm_limit: numericPayload(values.rpm_limit),
         budget_duration: values.budget_duration,
       });
       toast.success(t("tagManagement.info.toasts.updated"));
@@ -279,7 +314,6 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
           <CardContent>
             <TagEditForm
               tag={tagDetails}
-              seedBudgetFields={editTag}
               userModels={userModels}
               onCancel={() => setIsEditing(false)}
               onSave={handleSave}
