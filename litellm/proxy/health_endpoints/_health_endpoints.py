@@ -318,6 +318,7 @@ services = (
         "arize",
         "galileo",
         "newrelic",
+        "nops",
         "pointfive",
         "signoz",
         "sqs",
