@@ -175,8 +175,8 @@ def modify_max_tokens(
 
 
 def _anthropic_metadata(params: Mapping[str, object]) -> Mapping[str, object]:
-    metadata: Final = params.get("metadata")
-    if not isinstance(metadata, Mapping):
+    metadata: Final = as_str_mapping(params.get("metadata"))
+    if metadata is None:
         return params
     return {**params, "metadata": only(metadata, "user_id")}
 
