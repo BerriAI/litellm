@@ -22,7 +22,11 @@ import litellm
 from litellm import verbose_logger
 from litellm.caching.caching import InMemoryCache
 from litellm.constants import MAX_IMAGE_URL_DOWNLOAD_SIZE_MB, NON_LLM_CONNECTION_TIMEOUT
-from litellm.litellm_core_utils.prompt_templates.common_utils import REMOTE_URL_PREFIXES, is_pdf_file_part
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    REMOTE_URL_PREFIXES,
+    is_pdf_file_part,
+    is_pdf_link,
+)
 from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     infer_content_type_from_url_and_content,
 )
@@ -241,8 +245,7 @@ def is_pdf_media_type(media_type: str) -> bool:
 
 
 def is_unformatted_pdf_link(url: str, image_format: str | None) -> bool:
-    lowered: Final = url.lower()
-    return not image_format and (urlparse(lowered).path.endswith(".pdf") or lowered.endswith(".pdf"))
+    return not image_format and is_pdf_link(url)
 
 
 def is_unformatted_pdf_link_image(media: RemoteMedia) -> bool:
@@ -253,11 +256,7 @@ def is_unformatted_pdf_link_image(media: RemoteMedia) -> bool:
 
 
 def inline_remote_pdf_files(media: RemoteMedia) -> bool:
-    file_format: Final = media.fields.get("format")
-    return inline_remote_files(media) and (
-        is_pdf_file_part({"type": "file", "file": media.fields})
-        or is_unformatted_pdf_link(media.url, file_format if isinstance(file_format, str) else None)
-    )
+    return inline_remote_files(media) and is_pdf_file_part({"type": "file", "file": media.fields})
 
 
 def _serves_pdf(response: Response) -> bool:

@@ -1,7 +1,8 @@
 import asyncio
 import json
 import time
-from collections.abc import Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
+from functools import partial
 from typing import Final, Protocol
 
 import httpx
@@ -144,6 +145,21 @@ def check_dynamic_azure_params(
 _check_dynamic_azure_params = check_dynamic_azure_params
 
 
+class _SendAzureRequest(Protocol):
+    def __call__(
+        self,
+        *,
+        data: dict[str, object],  # mutable-ok: acompletion and async_streaming take the request dict
+    ) -> Coroutine[object, object, object]: ...
+
+
+async def _send_transformed_request(
+    request: Awaitable[dict[str, object]],  # mutable-ok: async_transform_request returns the request dict
+    send: _SendAzureRequest,
+) -> object:
+    return await send(data=await request)
+
+
 class AzureChatCompletion(BaseAzureLLM, BaseLLM):
     def __init__(self) -> None:
         super().__init__()
@@ -250,7 +266,8 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
 
             ### CHECK IF CLOUDFLARE AI GATEWAY ###
             ### if so - set the model as part of the base url
-            if api_base is not None and "gateway.ai.cloudflare.com" in api_base:
+            is_cloudflare_gateway: Final = api_base is not None and "gateway.ai.cloudflare.com" in api_base
+            if is_cloudflare_gateway:
                 client = self._init_azure_client_for_cloudflare_ai_gateway(
                     api_base=api_base,
                     model=model,
@@ -264,60 +281,72 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     client=client,
                     litellm_params=litellm_params,
                 )
+            request_config: Final = (
+                litellm.AzureOpenAIGPT5Config()
+                if litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(model=litellm_params.get("base_model") or model)
+                else litellm.AzureOpenAIConfig()
+            )
 
-                data: dict[str, object] = {"model": None, "messages": messages, **optional_params}
-            elif litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(model=litellm_params.get("base_model") or model):
-                data = litellm.AzureOpenAIGPT5Config().transform_request(
+            send_async: Final = (
+                partial(
+                    self.async_streaming,
+                    logging_obj=logging_obj,
+                    api_base=api_base,
+                    dynamic_params=dynamic_params,
+                    model=model,
+                    api_key=api_key,
+                    api_version=api_version,
+                    azure_ad_token=azure_ad_token,
+                    azure_ad_token_provider=azure_ad_token_provider,
+                    timeout=timeout,
+                    client=client,
+                    max_retries=max_retries,
+                    litellm_params=litellm_params,
+                )
+                if optional_params.get("stream", False)
+                else partial(
+                    self.acompletion,
+                    api_base=api_base,
+                    model_response=model_response,
+                    api_key=api_key,
+                    api_version=api_version,
+                    model=model,
+                    azure_ad_token=azure_ad_token,
+                    azure_ad_token_provider=azure_ad_token_provider,
+                    dynamic_params=dynamic_params,
+                    timeout=timeout,
+                    client=client,
+                    logging_obj=logging_obj,
+                    max_retries=max_retries,
+                    convert_tool_call_to_json_mode=json_mode,
+                    litellm_params=litellm_params,
+                )
+            )
+            if acompletion is True and not is_cloudflare_gateway:
+                return _send_transformed_request(
+                    request_config.async_transform_request(
+                        model=model,
+                        messages=messages,
+                        optional_params=optional_params,
+                        litellm_params=litellm_params,
+                        headers=headers or {},
+                    ),
+                    send_async,
+                )
+            data: Final[dict[str, object]] = (
+                {"model": None, "messages": messages, **optional_params}
+                if is_cloudflare_gateway
+                else request_config.transform_request(
                     model=model,
                     messages=messages,
                     optional_params=optional_params,
                     litellm_params=litellm_params,
                     headers=headers or {},
                 )
-            else:
-                data = litellm.AzureOpenAIConfig().transform_request(
-                    model=model,
-                    messages=messages,
-                    optional_params=optional_params,
-                    litellm_params=litellm_params,
-                    headers=headers or {},
-                )
+            )
 
             if acompletion is True:
-                if optional_params.get("stream", False):
-                    return self.async_streaming(
-                        logging_obj=logging_obj,
-                        api_base=api_base,
-                        dynamic_params=dynamic_params,
-                        data=data,
-                        model=model,
-                        api_key=api_key,
-                        api_version=api_version,
-                        azure_ad_token=azure_ad_token,
-                        azure_ad_token_provider=azure_ad_token_provider,
-                        timeout=timeout,
-                        client=client,
-                        max_retries=max_retries,
-                        litellm_params=litellm_params,
-                    )
-                else:
-                    return self.acompletion(
-                        api_base=api_base,
-                        data=data,
-                        model_response=model_response,
-                        api_key=api_key,
-                        api_version=api_version,
-                        model=model,
-                        azure_ad_token=azure_ad_token,
-                        azure_ad_token_provider=azure_ad_token_provider,
-                        dynamic_params=dynamic_params,
-                        timeout=timeout,
-                        client=client,
-                        logging_obj=logging_obj,
-                        max_retries=max_retries,
-                        convert_tool_call_to_json_mode=json_mode,
-                        litellm_params=litellm_params,
-                    )
+                return send_async(data=data)
             elif "stream" in optional_params and optional_params["stream"] is True:
                 return self.streaming(
                     logging_obj=logging_obj,

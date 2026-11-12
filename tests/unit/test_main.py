@@ -11477,8 +11477,9 @@ def test_drop_params_drops_a_pdf_the_model_cannot_read(respx_mock: respx.MockRou
         {"filename": "report.pdf", "file_data": "JVBERi0xLjQK"},
         {"file_id": "file-report", "format": "application/pdf"},
         {"file_id": "file-report", "filename": "Report.PDF"},
+        {"file_id": "https://docs.example/reports/q3.pdf"},
     ],
-    ids=["bare_base64_named_pdf", "file_id_with_pdf_format", "file_id_named_pdf"],
+    ids=["bare_base64_named_pdf", "file_id_with_pdf_format", "file_id_named_pdf", "pdf_link"],
 )
 def test_drop_params_drops_a_pdf_file_part_without_a_data_url(
     respx_mock: respx.MockRouter, pdf_file: dict[str, str]

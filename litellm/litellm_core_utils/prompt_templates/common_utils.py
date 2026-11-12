@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from itertools import chain, groupby
 from types import MappingProxyType, ModuleType
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias, cast
+from urllib.parse import urlparse
 
 from pydantic import TypeAdapter
 
@@ -583,12 +584,21 @@ def anthropic_remote_document(document: Mapping[str, object]) -> RemoteDocument 
             return None
 
 
+def is_pdf_link(url: str) -> bool:
+    lowered: Final = url.lower()
+    return urlparse(lowered).path.endswith(".pdf") or lowered.endswith(".pdf")
+
+
 def is_pdf_file_part(part: object) -> bool:
     match part:
         case {"type": "file", "file": {"file_data": str() as file_data}} if file_data.startswith("data:"):
             return file_data.startswith("data:application/pdf")
         case {"type": "file", "file": {"format": str() as file_format}}:
             return file_format == "application/pdf"
+        case {"type": "file", "file": {"file_id": str() as file_id}} if file_id.startswith(
+            REMOTE_URL_PREFIXES
+        ) and is_pdf_link(file_id):
+            return True
         case {"type": "file", "file": {"filename": str() as filename}}:
             return filename.lower().endswith(".pdf")
         case _:

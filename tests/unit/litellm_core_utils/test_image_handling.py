@@ -4,6 +4,7 @@ import copy
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Final
@@ -11,6 +12,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from httpx import Request, Response
+from respx import MockRouter
 
 import litellm
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -455,23 +457,28 @@ def test_inline_remote_media_inlines_every_remote_part_shape(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("file", "filename"),
+    ("link_path", "caller_fields", "filename"),
     [
-        ({"file_id": "https://docs.example/reports/q3%20summary.pdf"}, "q3 summary.pdf"),
-        ({"file_id": "https://docs.example/download?id=7"}, "document.pdf"),
-        ({"file_id": "https://docs.example/reports/q3.pdf", "filename": "caller.pdf"}, "caller.pdf"),
+        ("reports/q3%20summary.pdf", {}, "q3 summary.pdf"),
+        ("download?id=7", {}, "document.pdf"),
+        ("reports/q3.pdf", {"filename": "caller.pdf"}, "caller.pdf"),
     ],
     ids=["named_by_the_url", "url_without_a_file_name", "caller_filename_kept"],
 )
-def test_inline_remote_media_names_an_inlined_file_so_openai_shaped_apis_accept_it(monkeypatch, file, filename):
-    monkeypatch.setattr(image_handling, "convert_url_to_base64", lambda url: "data:application/pdf;base64,JVBERi0=")
-    messages: Final = [{"role": "user", "content": [{"type": "file", "file": file}]}]
+def test_inline_remote_media_names_an_inlined_file_so_openai_shaped_apis_accept_it(
+    respx_mock: MockRouter, link_path: str, caller_fields: dict[str, str], filename: str
+) -> None:
+    pdf_link: Final = f"https://docs.example/{uuid.uuid4().hex}/{link_path}"
+    respx_mock.get(pdf_link).mock(
+        return_value=Response(200, content=PDF_BODY, headers={"Content-Type": "application/pdf"})
+    )
+    messages: Final = [{"role": "user", "content": [{"type": "file", "file": {"file_id": pdf_link, **caller_fields}}]}]
 
     inlined: Final = inline_remote_media(messages, should_inline=image_handling.inline_remote_files)
 
     inlined_file: Final = inlined[0]["content"][0]["file"]
     assert "file_id" not in inlined_file
-    assert inlined_file["file_data"] == "data:application/pdf;base64,JVBERi0="
+    assert inlined_file["file_data"] == f"data:application/pdf;base64,{base64.b64encode(PDF_BODY).decode()}"
     assert inlined_file["filename"] == filename
 
 
@@ -1023,3 +1030,45 @@ async def test_format_pdf_links_leaves_messages_without_pdf_links_alone(probe_se
 
     assert await _format_pdf_links(mode, messages) == tuple(messages)
     assert probe_server.seen == []
+
+
+async def _until_requested(probe_server: _ProbeServer, path: str) -> None:
+    deadline: Final = time.monotonic() + 10
+    while path not in (seen_path for seen_path, _ in probe_server.seen):
+        assert time.monotonic() < deadline, f"{path} was never requested"
+        await asyncio.sleep(0.01)
+
+
+@pytest.mark.parametrize(
+    ("model", "provider_kwargs"),
+    [
+        ("azure/gpt-4.1", {"api_key": "fake-key", "api_version": "2025-04-01-preview"}),
+        ("azure_ai/gpt-4.1", {"api_key": "fake-key"}),
+        ("gigachat/GigaChat-2", {}),
+    ],
+    ids=["azure", "azure_ai", "gigachat"],
+)
+async def test_a_stalled_pdf_link_leaves_the_shared_executor_free_for_other_requests(
+    probe_server: _ProbeServer, monkeypatch: pytest.MonkeyPatch, model: str, provider_kwargs: dict[str, str]
+) -> None:
+    monkeypatch.setenv("GIGACHAT_ACCESS_TOKEN", "fake-token")
+    pdf_host_answers: Final = threading.Event()
+    pdf_path: Final = f"/{uuid.uuid4().hex}/report.pdf"
+    pdf_link: Final = probe_server.serve(pdf_path, _Served(content_type="application/pdf", respond_after=pdf_host_answers))
+    loop: Final = asyncio.get_running_loop()
+    loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+    request: Final = asyncio.create_task(
+        litellm.acompletion(
+            model=model,
+            messages=[{"role": "user", "content": [{"type": "text", "text": "summarize"}, {"type": "file", "file": {"file_id": pdf_link}}]}],
+            api_base="http://127.0.0.1:1",
+            max_retries=0,
+            **provider_kwargs,
+        )
+    )
+    try:
+        await _until_requested(probe_server, pdf_path)
+        assert await asyncio.wait_for(loop.run_in_executor(None, lambda: "served"), timeout=5) == "served"
+    finally:
+        pdf_host_answers.set()
+        await asyncio.gather(request, return_exceptions=True)

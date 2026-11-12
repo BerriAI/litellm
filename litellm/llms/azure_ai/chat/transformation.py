@@ -23,7 +23,11 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     is_pdf_file_part,
     message_without_file_formats,
 )
-from litellm.litellm_core_utils.prompt_templates.image_handling import inline_remote_media, inline_remote_pdf_files
+from litellm.litellm_core_utils.prompt_templates.image_handling import (
+    async_inline_remote_media,
+    inline_remote_media,
+    inline_remote_pdf_files,
+)
 from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
     prompt_cache_breakpoint_for_wire,
     with_prompt_cache_breakpoint,
@@ -431,10 +435,10 @@ class AzureAIStudioConfig(OpenAIConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         extra_body: Final = optional_params.pop("extra_body", {})
         if extra_body and isinstance(extra_body, dict):
             optional_params.update(extra_body)
@@ -450,6 +454,26 @@ class AzureAIStudioConfig(OpenAIConfig):
             ),
             **optional_params,
         }
+
+    @property
+    def uses_async_transform_request(self) -> bool:
+        return True
+
+    async def async_transform_request(
+        self,
+        model: str,
+        messages: list[AllMessageValues],  # mutable-ok: BaseConfig signature
+        optional_params: dict[str, object],  # mutable-ok: BaseConfig signature
+        litellm_params: dict[str, object],  # mutable-ok: BaseConfig signature
+        headers: dict[str, object],  # mutable-ok: BaseConfig signature
+    ) -> dict[str, object]:  # mutable-ok: BaseConfig signature
+        return self.transform_request(
+            model=model,
+            messages=await async_inline_remote_media(messages, should_inline=inline_remote_pdf_files),
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
 
     def transform_response(
         self,
