@@ -72,11 +72,19 @@ def test_staging_stamps_release_version_without_modifying_sources(
     source: Final = source_repository
     for name in SOURCES:
         path: Final = source / name
-        path.write_text(f"shared {name}")
+        if name == "litellm":
+            path.mkdir()
+            (path / "__init__.py").write_text("shared litellm")
+        elif name == "litellm/rust":
+            path.mkdir()
+            (path / "Cargo.toml").write_text("shared rust")
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(f"shared {name}")
     (source / "pyproject.toml").write_text('[project]\nname = "litellm"\nversion = "9.8.7rc1"\n')
-    manifest: Final = source / "packaging" / package / "pyproject.toml"
+    manifest: Final = source / "litellm" / "packaging" / package / "pyproject.toml"
     manifest.parent.mkdir(parents=True)
-    manifest.write_bytes((ROOT / "packaging" / package / "pyproject.toml").read_bytes())
+    manifest.write_bytes((ROOT / "litellm" / "packaging" / package / "pyproject.toml").read_bytes())
     original: Final = manifest.read_bytes()
     stage: Final = tmp_path / "stage"
     stage_core_distribution(source, stage, package=package)
@@ -85,15 +93,22 @@ def test_staging_stamps_release_version_without_modifying_sources(
     assert staged_project["project"]["version"] == "9.8.7rc1"
     if package == "litellm-proxy":
         assert staged_project["tool"]["maturin"]["targets"] == [{"name": "litellm-gateway", "kind": "bin"}]
-        assert not (stage / "litellm").exists()
+        assert not (stage / "litellm" / "__init__.py").exists()
         assert all(
             (stage / name).exists()
-            for name in ("litellm-rust", ".cargo", "rust-toolchain.toml", "model_prices_and_context_window.json")
+            for name in ("litellm/rust", ".cargo", "rust-toolchain.toml", "model_prices_and_context_window.json")
         )
     assert manifest.read_bytes() == original
     assert (source / "pyproject.toml").read_text() == '[project]\nname = "litellm"\nversion = "9.8.7rc1"\n'
     expected: Final = tuple(name for name in SOURCES if package == "litellm-core" or name != "litellm")
-    assert all((stage / name).read_bytes() == (source / name).read_bytes() for name in expected)
+    assert all(
+        (stage / name).read_bytes() == (source / name).read_bytes()
+        for name in expected
+        if (source / name).is_file()
+    )
+    if package == "litellm-core":
+        assert (stage / "litellm" / "__init__.py").read_text() == "shared litellm"
+    assert (stage / "litellm/rust/Cargo.toml").read_text() == "shared rust"
 
 
 def test_gateway_staging_refuses_manifest_without_in_tree_rust_path(tmp_path: Path, source_repository: Path) -> None:
@@ -101,14 +116,21 @@ def test_gateway_staging_refuses_manifest_without_in_tree_rust_path(tmp_path: Pa
 
     source: Final = source_repository
     for name in SOURCES:
-        (source / name).write_text(f"shared {name}")
+        path: Final = source / name
+        if name == "litellm":
+            path.mkdir()
+        elif name == "litellm/rust":
+            path.mkdir()
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(f"shared {name}")
     (source / "pyproject.toml").write_text('[project]\nname = "litellm"\nversion = "9.8.7"\n')
-    manifest: Final = source / "packaging" / "litellm-proxy" / "pyproject.toml"
-    manifest.parent.mkdir(parents=True)
+    manifest: Final = source / "litellm" / "packaging" / "litellm-proxy" / "pyproject.toml"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
     manifest.write_text(
-        (ROOT / "packaging" / "litellm-proxy" / "pyproject.toml")
+        (ROOT / "litellm" / "packaging" / "litellm-proxy" / "pyproject.toml")
         .read_text()
-        .replace("../../litellm-rust/", "../../rust/")
+        .replace("../../rust/", "../../missing-rust/")
     )
     with pytest.raises(SystemExit, match="no longer points at"):
         stage_core_distribution(source, tmp_path / "stage", package="litellm-proxy")
@@ -140,7 +162,7 @@ def test_core_wheel_metadata_and_resources(distributions: tuple[Path, Path]) -> 
         assert metadata["Version"] == tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
         assert not metadata.get_all("Provides-Extra")
         assert not any(n.endswith(".dist-info/entry_points.txt") for n in names)
-        requirements: Final = tomllib.loads((ROOT / "packaging/litellm-core/pyproject.toml").read_text())["project"][
+        requirements: Final = tomllib.loads((ROOT / "litellm/packaging/litellm-core/pyproject.toml").read_text())["project"][
             "dependencies"
         ]
         for python_version in ("3.10", "3.11", "3.12", "3.13", "3.14"):
@@ -221,9 +243,9 @@ def test_staging_copies_sources_without_build_artifacts(tmp_path: Path, source_r
         (source / name / "__pycache__").mkdir()
         (source / name / "__pycache__/old.pyc").write_bytes(b"stale bytecode")
     (source / "pyproject.toml").write_text('[project]\nname = "litellm"\nversion = "1.2.3"\n')
-    manifest: Final = source / "packaging/litellm-core/pyproject.toml"
+    manifest: Final = source / "litellm/packaging/litellm-core/pyproject.toml"
     manifest.parent.mkdir(parents=True)
-    manifest.write_bytes((ROOT / "packaging/litellm-core/pyproject.toml").read_bytes())
+    manifest.write_bytes((ROOT / "litellm/packaging/litellm-core/pyproject.toml").read_bytes())
     stage: Final = tmp_path / "stage"
     stage_core_distribution(source, stage)
     assert all((stage / name / "shared.txt").read_text() == "source payload" for name in SOURCES)
@@ -240,9 +262,9 @@ def test_staging_preserves_gitignore_rules(tmp_path: Path, source_repository: Pa
         (source / name).mkdir()
         (source / name / "shared.txt").write_text("shared payload")
     (source / "pyproject.toml").write_text('[project]\nname = "litellm"\nversion = "1.2.3"\n')
-    manifest: Final = source / "packaging/litellm-core/pyproject.toml"
+    manifest: Final = source / "litellm/packaging/litellm-core/pyproject.toml"
     manifest.parent.mkdir(parents=True)
-    manifest.write_bytes((ROOT / "packaging/litellm-core/pyproject.toml").read_bytes())
+    manifest.write_bytes((ROOT / "litellm/packaging/litellm-core/pyproject.toml").read_bytes())
     (source / ".gitignore").write_text("*.cfg\n!keep.cfg\nbuild-artifacts/\n")
     (source / "litellm/.gitignore").write_text(".env\n")
     (source / ".git/info/exclude").write_text("litellm/private-local.json\n")
@@ -267,9 +289,9 @@ def test_staging_preserves_gitignore_rules(tmp_path: Path, source_repository: Pa
 def test_staging_rejects_missing_release_version(tmp_path: Path) -> None:
     from scripts.build_core_distribution import stage_core_distribution
 
-    manifest: Final = tmp_path / "packaging/litellm-core/pyproject.toml"
+    manifest: Final = tmp_path / "litellm/packaging/litellm-core/pyproject.toml"
     manifest.parent.mkdir(parents=True)
-    manifest.write_bytes((ROOT / "packaging/litellm-core/pyproject.toml").read_bytes())
+    manifest.write_bytes((ROOT / "litellm/packaging/litellm-core/pyproject.toml").read_bytes())
     (tmp_path / "pyproject.toml").write_text('[project]\nname = "litellm"\n')
     with pytest.raises(subprocess.CalledProcessError):
         stage_core_distribution(tmp_path, tmp_path / "stage")

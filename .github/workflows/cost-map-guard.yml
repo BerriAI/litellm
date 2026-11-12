@@ -74,5 +74,5 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           git show "${HEAD_SHA}:model_prices_and_context_window.json" > "$RUNNER_TEMP/model_prices_and_context_window.json"
-          cargo run --locked --quiet --manifest-path litellm-rust/Cargo.toml -p litellm-model-catalog --bin check-registry \
+          cargo run --locked --quiet --manifest-path litellm/rust/Cargo.toml -p litellm-model-catalog --bin check-registry \
             -- "$RUNNER_TEMP/model_prices_and_context_window.json"

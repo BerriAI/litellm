@@ -3,7 +3,7 @@ name: LiteLLM Rust
 on:
   push:
     paths:
-      - "litellm-rust/**"
+      - "litellm/rust/**"
       - "model_prices_and_context_window.json"
       - "litellm/rust_bridge/**"
       - "scripts/generate_trace_types.py"
@@ -38,7 +38,7 @@ on:
       - main
       - "litellm_**"
     paths:
-      - "litellm-rust/**"
+      - "litellm/rust/**"
       - "model_prices_and_context_window.json"
       - "litellm/rust_bridge/**"
       - "scripts/generate_trace_types.py"
@@ -90,7 +90,7 @@ jobs:
     timeout-minutes: 15
     defaults:
       run:
-        working-directory: litellm-rust
+        working-directory: litellm/rust
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
@@ -102,7 +102,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: litellm-rust
+          workspaces: litellm/rust
           cache-on-failure: true
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
@@ -121,7 +121,7 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
     defaults:
       run:
-        working-directory: litellm-rust
+        working-directory: litellm/rust
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
@@ -149,7 +149,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: litellm-rust
+          workspaces: litellm/rust
           cache-on-failure: true
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
@@ -200,7 +200,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: litellm-rust
+          workspaces: litellm/rust
           cache-on-failure: true
           save-if: ${{ github.ref == 'refs/heads/main' }}
 

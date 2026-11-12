@@ -1167,6 +1167,10 @@ def collect_paths(raw: Iterable[str]) -> Iterator[Path]:
                         "litellm/proxy/discovery_endpoints/skill_scanner_adapter/",
                         "litellm/ui/",
                         "litellm/vscode-extension/",
+                        "litellm/enterprise/",
+                        "litellm/proxy-extras/",
+                        "litellm/packaging/",
+                        "litellm/rust/",
                     )
                 )
             )
@@ -1176,6 +1180,10 @@ def collect_paths(raw: Iterable[str]) -> Iterator[Path]:
                 "litellm/proxy/discovery_endpoints/skill_scanner_adapter/",
                 "litellm/ui/",
                 "litellm/vscode-extension/",
+                "litellm/enterprise/",
+                "litellm/proxy-extras/",
+                "litellm/packaging/",
+                "litellm/rust/",
             )
         ):
             yield p

@@ -140,6 +140,10 @@ def test_accepts_expected_release_wheel_tags(tmp_path: Path) -> None:
         "litellm/ui/litellm-dashboard/package.json",
         "litellm/ui/litellm-dashboard/node_modules/example/index.js",
         "litellm/vscode-extension/package.json",
+        "litellm/enterprise/litellm_enterprise/__init__.py",
+        "litellm/proxy-extras/litellm_proxy_extras/__init__.py",
+        "litellm/rust/crates/config/src/lib.rs",
+        "litellm/packaging/litellm-core/pyproject.toml",
     ),
 )
 def test_rejects_repository_sources_in_the_wheel(

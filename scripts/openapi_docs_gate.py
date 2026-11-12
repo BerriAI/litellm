@@ -78,7 +78,9 @@ def _check(root: Path, checker: Path) -> tuple[Violation, ...]:
     resolved: Final = root.resolve()
     env: Final = {
         **os.environ,
-        "PYTHONPATH": os.pathsep.join((str(resolved), str(resolved / "enterprise"), os.environ.get("PYTHONPATH", ""))),
+        "PYTHONPATH": os.pathsep.join(
+            (str(resolved), str(resolved / "litellm" / "enterprise"), os.environ.get("PYTHONPATH", ""))
+        ),
     }
     return parse_violations(_run([sys.executable, str(checker)], cwd=resolved, env=env))
 
@@ -105,7 +107,7 @@ def _install_base_native(worktree: Path, repo_root: Path) -> None:
     env: Final = {
         **os.environ,
         "CARGO_TARGET_DIR": str(
-            Path(os.environ.get("CARGO_TARGET_DIR", repo_root / "litellm-rust" / "target")).resolve()
+            Path(os.environ.get("CARGO_TARGET_DIR", repo_root / "litellm/rust" / "target")).resolve()
         ),
     }
     _run(
