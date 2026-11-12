@@ -1078,6 +1078,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         saturation: Final = await self._check_model_saturation(requested_model, model_group_info)
         saturated: Final = saturation >= _get_priority_settings().saturation_threshold
         enforced_team: Final = None if borrowing is None else borrowing.enforced(saturated)
+        if connection_stash is not None and borrowing is not None:
+            connection_stash.borrowing_team_model_limit = enforced_team
         descriptors: Final = (share_descriptors if saturated else ()) + (
             () if enforced_team is None else (enforced_team,)
         )
@@ -1221,10 +1223,10 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         # All-or-nothing: if any enforced descriptor would exceed its limit,
         # no counter is modified and the response carries "OVER_LIMIT".
         team_share: Final = self._borrowing_team_share(model=model, user_api_key_dict=user_api_key_dict)
-        get_or_create_request_stash().borrowing_team_model_limit = None if team_share is None else team_share.share
         if team_share is not None:
             descriptors_to_check.append(team_share.share)
         enforced_team_share: Final = None if team_share is None else team_share.enforced(should_enforce_priority)
+        get_or_create_request_stash().borrowing_team_model_limit = enforced_team_share
 
         enforced_descriptors: Final[list[RateLimitDescriptor]] = [model_wide_descriptor]
         if priority_descriptors and should_enforce_priority:
@@ -1355,26 +1357,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             _reserved_window(atomic_response, enforced_team_share) if team_reservation else None
         )
         self._cap_admitted_output(enforced_team_share, team_reservation, data, call_type)
-        if team_share is not None and enforced_team_share is None:
-            await self.v3_limiter.atomic_check_and_increment_by_n(
-                descriptors=[team_share.share],
-                increments=[per_request_increment],
-                parent_otel_span=user_api_key_dict.parent_otel_span,
-            )
         if priority_descriptors and share is not None and not should_enforce_priority:
-            tracking_only: Final = tuple(
-                RateLimitDescriptor(
-                    key=descriptor["key"],
-                    value=descriptor["value"],
-                    rate_limit=model_wide_descriptor["rate_limit"],
-                )
-                for descriptor in priority_descriptors
-            )
-            await self.v3_limiter.atomic_check_and_increment_by_n(
-                descriptors=list(tracking_only),
-                increments=[per_request_increment for _ in tracking_only],
-                parent_otel_span=user_api_key_dict.parent_otel_span,
-            )
             get_or_create_request_stash().rate_limit_response = atomic_response
         elif priority_descriptors and not should_enforce_priority:
             priority_tracking_response: Final = await self.v3_limiter.should_rate_limit(
@@ -1439,8 +1422,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
     ) -> bool:
         """Hold a router fallback target to the team's share on it once it saturates, and to its borrow ceiling before.
 
-        With ``commit`` the attempt is counted toward the target's saturation and the team's counter, holding the
-        prompt's estimated tokens when the share is enforced, otherwise only checked.
+        With ``commit`` the attempt is counted toward the target's saturation, and toward the team's counter only
+        while the share is enforced, holding the prompt's estimated tokens there. An idle target is only checked.
         """
         team_share: Final = self._borrowing_team_share(model=model, user_api_key_dict=user_api_key_dict)
         model_group_info: Final = self.llm_router.registry().group(model)
@@ -1474,13 +1457,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         )
         if response["overall_code"] == "OVER_LIMIT":
             return False
-        if enforced is None:
-            await self.v3_limiter.atomic_check_and_increment_by_n(
-                descriptors=[team_share.share],
-                increments=[{"requests": 1, "tokens": reservation}],
-                parent_otel_span=user_api_key_dict.parent_otel_span,
-            )
-        self._hold_fallback_share(model, team_share.share, reservation, _reserved_window(response, enforced))
+        self._hold_fallback_share(model, team_share.share, enforced, reservation, _reserved_window(response, enforced))
         return True
 
     async def _share_has_room(
@@ -1496,13 +1473,23 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         )
 
     def _hold_fallback_share(
-        self, model: str, share: RateLimitDescriptor, reserved_tokens: int, window: ReservationWindowIdentity | None
+        self,
+        model: str,
+        share: RateLimitDescriptor,
+        charged: RateLimitDescriptor | None,
+        reserved_tokens: int,
+        window: ReservationWindowIdentity | None,
     ) -> None:
-        """Remember the hold under the requested name and the resolved group, so settlement finds it either way."""
+        """Remember the hold under the requested name and the resolved group, so settlement finds it either way.
+
+        ``charged`` is the share the target's usage settles to, or None for an idle target whose usage is forgiven.
+        """
         stash: Final = get_or_create_request_stash()
         earlier: Final = stash.borrowing_team_model_fallback_limits.get(model)
         carried: Final = earlier.reserved_tokens if earlier is not None and earlier.window == window else 0
-        hold: Final = BorrowingTeamModelHold(descriptor=share, reserved_tokens=reserved_tokens + carried, window=window)
+        hold: Final = BorrowingTeamModelHold(
+            descriptor=charged, reserved_tokens=reserved_tokens + carried, window=window
+        )
         stash.borrowing_team_model_fallback_limits = MappingProxyType(
             {**stash.borrowing_team_model_fallback_limits, model: hold, share["value"].rpartition(":")[2]: hold}
         )
