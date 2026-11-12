@@ -117,6 +117,7 @@ jobs:
         run: .github/scripts/uv_sync_with_retries.sh --frozen --all-groups --all-extras
 
       - name: Install the Rust gateway
+        if: matrix.suite == 'management' || matrix.suite == 'management-replica'
         timeout-minutes: 15
         working-directory: packaging/litellm-proxy
         env:
