@@ -4339,13 +4339,16 @@ async def test_create_pass_through_route_custom_body_url_target():
 
 
 @pytest.mark.asyncio
-async def test_pass_through_request_non_streaming_uses_content_for_state_raw_body():
+@pytest.mark.parametrize("body_type", [bytes, bytearray])
+async def test_pass_through_request_non_streaming_uses_content_for_state_raw_body(
+    body_type: type[bytes] | type[bytearray],
+) -> None:
     """
     Bedrock SigV4 path: exact signed bytes live on request.state; upstream must receive
     content=... even if pre_call_hook mutates the parsed dict (would change json=).
     """
     # Bytes that were signed (simulated); parsed body + hook will diverge on purpose.
-    raw_signed = b'{"retrievalQuery":{"text":"signed"},"sig":"intact"}'
+    raw_signed: Final = body_type(b'{"retrievalQuery":{"text":"signed"},"sig":"intact"}')
     parsed_from_wire = {"retrievalQuery": {"text": "signed"}, "sig": "intact"}
 
     mock_request = MagicMock(spec=Request)

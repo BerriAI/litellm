@@ -88,7 +88,7 @@ def test_opaque_controls_reject_restrictions_nested_in_lists_and_mappings(contro
 @pytest.mark.parametrize(
     "scope,expected",
     [("project", "model restrictions"), ("user", "model restrictions"), ("member", "model restrictions"),
-     ("missing-user", "owner"), ("personal-key", "personal-key")],
+     ("missing-user", "owner"), ("missing-project", "inherited policies"), ("personal-key", "personal-key")],
 )
 async def test_cursor_opaque_admission_rejects_inherited_model_scopes(
     monkeypatch: pytest.MonkeyPatch, scope: str, expected: str
@@ -119,7 +119,10 @@ async def test_cursor_opaque_admission_rejects_inherited_model_scopes(
         user_id="opaque-user", models=["scoped-model"] if scope == "user" else [],
         teams=["restricted-owner-team"] if scope == "personal-key" else [], user_role=LitellmUserRoles.PROXY_ADMIN
     )
-    identity: Final = UserAPIKeyAuth(user_id="opaque-user" if scope in {"member", "missing-user", "personal-key"} else None)
+    identity: Final = UserAPIKeyAuth(
+        user_id="opaque-user" if scope in {"member", "missing-user", "personal-key"} else None,
+        project_id="missing-project" if scope == "missing-project" else None,
+    )
     with pytest.raises(HTTPException) as denied:
         await common_checks(
             request_body={},

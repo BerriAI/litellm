@@ -127,6 +127,17 @@ def test_separate_valid_gateway_and_cursor_credentials_are_required(
     assert not respx_mock.calls
 
 
+def test_gateway_bearer_cannot_replace_the_separate_gateway_header(
+    client: TestClient, respx_mock: respx.MockRouter
+) -> None:
+    response: Final = client.post(
+        f"/cursor-cli/{_RUN}", headers={"authorization": f"Bearer {MASTER_KEY}"}, content=b"\xff"
+    )
+    assert response.status_code == 401
+    assert response.json()["detail"] == "A separate LiteLLM gateway credential is required"
+    assert not respx_mock.calls
+
+
 @pytest.mark.parametrize("restriction", ["role", "scope"])
 def test_signed_jwt_with_model_permissions_cannot_enter_an_opaque_relay(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, restriction: str
