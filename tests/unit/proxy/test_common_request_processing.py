@@ -1021,6 +1021,49 @@ class TestProxyBaseLLMRequestProcessing:
         tag_budget_check.assert_not_awaited()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "http_method, route, route_type, expect_rejected",
+        [
+            ("GET", "/v1/videos/video_abc", "avideo_status", False),
+            ("GET", "/videos/video_abc/content", "avideo_content", False),
+            ("POST", "/v1/videos", "avideo_generation", True),
+            ("POST", "/v1/videos/video_abc/remix", "avideo_remix", True),
+            ("GET", "/v1/videos", "avideo_list", True),
+        ],
+    )
+    async def test_common_processing_pre_call_logic_spares_only_video_retrieval_from_exhausted_guardrail_tags(
+        self, monkeypatch: pytest.MonkeyPatch, http_method: str, route: str, route_type: str, expect_rejected: bool
+    ) -> None:
+        processing_obj, mock_request, mock_proxy_logging_obj, mock_proxy_config, tag_budget_check = (
+            self._guardrail_tag_budget_harness(
+                monkeypatch,
+                request_body={"model": "paid-model", "metadata": {"tags": ["existing-tag"]}},
+                guardrail_tags=["guardrail-tag"],
+                route=route,
+            )
+        )
+        tag_budget_check.side_effect = litellm.BudgetExceededError(current_cost=0.4, max_budget=0.3)
+        mock_request.method = http_method
+
+        async def pre_call() -> None:
+            await processing_obj.common_processing_pre_call_logic(
+                request=mock_request,
+                general_settings={},
+                user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+                proxy_logging_obj=mock_proxy_logging_obj,
+                proxy_config=mock_proxy_config,
+                route_type=route_type,
+                llm_router=self._router_with_free_and_paid_models(),
+            )
+
+        if not expect_rejected:
+            await pre_call()
+            return
+        with pytest.raises(ProxyException) as exc_info:
+            await pre_call()
+        assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
+
+    @pytest.mark.asyncio
     async def test_enforce_guardrail_added_tag_budgets_raises_budget_exceeded_proxy_exception(self, monkeypatch):
         from litellm.proxy.common_request_processing import _enforce_guardrail_added_tag_budgets
 

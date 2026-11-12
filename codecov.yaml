@@ -60,6 +60,12 @@ flag_management:
       carryforward: false
     - name: proxy-infra-root
       carryforward: false
+    - name: proxy-infra-root-a-p
+      carryforward: false
+    - name: proxy-infra-root-q-z
+      carryforward: false
+    - name: proxy-subprocess
+      carryforward: false
     - name: caching-local
       carryforward: false
     - name: proxy-extras
