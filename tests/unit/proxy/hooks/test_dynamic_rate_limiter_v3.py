@@ -2080,3 +2080,128 @@ async def test_a_websocket_turn_still_borrows_while_the_model_is_idle(monkeypatc
     handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.5)
     await _admit_then_settle(handler, _team_key(), 150)
     await handler.enforce_token_limits_for_frame(user_api_key_dict=_team_key(), requested_model="shared-model")
+
+
+def _capped_team_key(multiple: object, limit: str = "model_tpm_limit", share: int = 100) -> UserAPIKeyAuth:
+    return _team_key(team_limits={limit: {"shared-model": share}, "team_model_limit_max_borrow_multiple": multiple})
+
+
+def _held_to_borrow_cap(exc: ProxyRateLimitError, rate_limit_type: str, limit_sentence: str) -> None:
+    assert exc.status_code == 429
+    assert exc.headers is not None
+    assert exc.headers["rate_limited_by"] == "model_per_team_max_borrow_multiple"
+    assert exc.headers["rate_limit_type"] == rate_limit_type
+    assert str(exc.detail).startswith(
+        "{'error': 'Team " + limit_sentence + " borrow cap reached for shared-model: the team may use at most "
+    ), exc.detail
+
+
+@pytest.mark.asyncio
+async def test_team_borrows_past_its_share_while_it_stays_under_its_max_borrow_multiple(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    await _admit_then_settle(handler, _capped_team_key(2), 190)
+    await _check(handler, _capped_team_key(2), saturation=0.49)
+
+
+@pytest.mark.asyncio
+async def test_team_at_its_max_borrow_multiple_is_refused_while_the_model_is_idle(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    await _admit_then_settle(handler, _capped_team_key(2), 200)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _capped_team_key(2), saturation=0.0)
+    _held_to_borrow_cap(exc.value, "tokens", "model_tpm_limit")
+    assert (
+        "2.0x its model_tpm_limit while borrowing idle capacity. Team: team-a, Rate limit type: tokens, "
+        "Team model_tpm_limit: 100, Borrow cap: 200, Remaining: 0, Model saturation: 0.0%"
+    ) in str(exc.value.detail), exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_a_fractional_max_borrow_multiple_caps_the_team_at_that_fraction_of_its_share(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    await _admit_then_settle(handler, _capped_team_key(1.5), 149)
+    await _check(handler, _capped_team_key(1.5), saturation=0.0)
+    await _settle_tokens(handler, 1)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _capped_team_key(1.5), saturation=0.0)
+    _held_to_borrow_cap(exc.value, "tokens", "model_tpm_limit")
+    assert "Borrow cap: 150," in str(exc.value.detail), exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_the_max_borrow_multiple_caps_requests_as_well_as_tokens(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    auth: Final = _capped_team_key(2, limit="model_rpm_limit", share=2)
+    for _ in range(4):
+        await _check(handler, auth, saturation=0.0)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, auth, saturation=0.0)
+    _held_to_borrow_cap(exc.value, "requests", "model_rpm_limit")
+    assert "Team model_rpm_limit: 2, Borrow cap: 4, Remaining: 0," in str(exc.value.detail), exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_a_team_under_its_max_borrow_multiple_is_still_held_to_its_share_once_the_model_saturates(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    await _admit_then_settle(handler, _capped_team_key(5), 150)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _capped_team_key(5), saturation=0.5)
+    _held_to_team_limit(exc.value, "tokens", "model_tpm_limit")
+
+
+@pytest.mark.asyncio
+async def test_a_team_at_its_max_borrow_multiple_is_held_to_its_share_not_its_cap_once_the_model_saturates(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    await _admit_then_settle(handler, _capped_team_key(2), 100)
+    await _check(handler, _capped_team_key(2), saturation=0.49)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _capped_team_key(2), saturation=0.5)
+    _held_to_team_limit(exc.value, "tokens", "model_tpm_limit")
+
+
+@pytest.mark.asyncio
+async def test_another_teams_borrowing_does_not_count_against_a_teams_max_borrow_multiple(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    await _admit_then_settle(handler, _team_key("team-b"), 150)
+    await _admit_then_settle(handler, _capped_team_key(2), 150)
+    await _check(handler, _capped_team_key(2), saturation=0.0)
+
+
+@pytest.mark.parametrize("multiple", [0.5, 0, -2, "two", None], ids=["below-one", "zero", "negative", "text", "null"])
+@pytest.mark.asyncio
+async def test_an_unusable_max_borrow_multiple_is_ignored_so_the_team_borrows_up_to_the_model_limit(
+    monkeypatch: pytest.MonkeyPatch, multiple: object
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    await _admit_then_settle(handler, _capped_team_key(multiple), 300)
+    await _check(handler, _capped_team_key(multiple), saturation=0.49)
+
+
+@pytest.mark.asyncio
+async def test_a_websocket_turn_is_refused_at_the_teams_max_borrow_multiple_while_the_model_is_idle(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.5)
+    await _admit_then_settle(handler, _capped_team_key(2), 200)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await handler.enforce_token_limits_for_frame(
+            user_api_key_dict=_capped_team_key(2), requested_model="shared-model"
+        )
+    _held_to_borrow_cap(exc.value, "tokens", "model_tpm_limit")
+
+
+@pytest.mark.asyncio
+async def test_a_websocket_turn_under_the_teams_max_borrow_multiple_still_borrows(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.5)
+    await _admit_then_settle(handler, _capped_team_key(2), 190)
+    await handler.enforce_token_limits_for_frame(user_api_key_dict=_capped_team_key(2), requested_model="shared-model")
