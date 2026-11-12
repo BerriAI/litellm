@@ -458,16 +458,15 @@ _CONTENTLESS_TURN: Final = ({"role": "user"}, {"role": "user", "content": None})
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("message", _CONTENTLESS_TURN)
 @pytest.mark.parametrize("deployment", (DEPLOYMENT, _deployment("bedrock/us.anthropic.claude-opus-5-5")))
-async def test_claude_count_rejects_a_chat_message_converse_inference_drops_without_calling_bedrock(
-    message: dict[str, JsonValue], deployment: dict[str, JsonValue]
+async def test_claude_converse_count_rejects_a_chat_message_without_a_content_key_without_calling_bedrock(
+    deployment: dict[str, JsonValue],
 ) -> None:
     bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 412}), mantle=(200, {"input_tokens": 2177}))
 
     result: Final = await _counter(bedrock).count_tokens(
         model_to_use="us.anthropic.claude-opus-5-5",
-        messages=[{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello"}, message],
+        messages=[{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello"}, {"role": "user"}],
         contents=None,
         deployment=deployment,
         request_model="claude-opus-5-5",
@@ -516,26 +515,43 @@ _TOOL_CALL: Final = {
 }
 
 
+_WEATHER_TOOL: Final = {"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "messages",
+    ("messages", "tools"),
     (
-        [
-            {"role": "user", "content": "Weather in SF?"},
-            _TOOL_CALL,
-            {"role": "tool", "tool_call_id": "call_1", "content": None},
-        ],
-        [
-            {"role": "user", "content": "Hi"},
-            {"role": "assistant", "content": "Hello"},
-            {"role": "user", "name": "bob", "content": None},
-        ],
-        [{"role": "system", "content": None}, {"role": "user", "content": "Hi"}],
+        (
+            [
+                {"role": "user", "content": "Weather in SF?"},
+                _TOOL_CALL,
+                {"role": "tool", "tool_call_id": "call_1", "content": None},
+            ],
+            None,
+        ),
+        (
+            [
+                {"role": "user", "content": "Hi"},
+                {"role": "assistant", "content": "Hello"},
+                {"role": "user", "name": "bob", "content": None},
+            ],
+            None,
+        ),
+        ([{"role": "system", "content": None}, {"role": "user", "content": "Hi"}], None),
+        ([{"role": "user", "content": None}, {"role": "user", "content": "Hi"}], None),
+        ([{"role": "user"}, {"role": "user", "content": "Weather in SF?"}], [_WEATHER_TOOL]),
     ),
-    ids=("null-content-tool-result", "null-content-named-user-turn", "null-content-system-turn"),
+    ids=(
+        "null-content-tool-result",
+        "null-content-named-user-turn",
+        "null-content-system-turn",
+        "null-content-user-turn",
+        "contentless-user-turn-with-chat-tools",
+    ),
 )
 async def test_claude_converse_count_sends_a_null_content_message_converse_inference_serves(
-    messages: list[dict[str, JsonValue]],
+    messages: list[dict[str, JsonValue]], tools: list[dict[str, JsonValue]] | None
 ) -> None:
     bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 412}), mantle=(200, {"input_tokens": 2177}))
 
@@ -545,6 +561,7 @@ async def test_claude_converse_count_sends_a_null_content_message_converse_infer
         contents=None,
         deployment=_deployment("bedrock/us.anthropic.claude-opus-5-5"),
         request_model="claude-opus-5-5",
+        tools=tools,
         messages_format="openai",
     )
 

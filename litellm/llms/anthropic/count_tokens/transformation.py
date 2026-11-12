@@ -46,6 +46,7 @@ _IMAGE_BLOCK: Final = TypeAdapter(ChatCompletionImageObject)
 COUNT_TOKEN_OPTION_NAMES: Final = ("thinking", "tool_choice", "output_config")
 _PLAIN_MESSAGE_KEYS: Final = frozenset({"role", "content"})
 _CHAT_ROLES_WITHOUT_CONTENT: Final = frozenset({"user", "assistant"})
+_NULL_CONTENT_CHAT_ROLES: Final = frozenset({"user", "assistant", "system"})
 
 
 def _count_image(block: JsonValue) -> JsonValue:
@@ -160,8 +161,12 @@ def _is_plain_message(message: Mapping[str, object]) -> bool:
     return message.get("role") != "tool" and _PLAIN_MESSAGE_KEYS.issuperset(message.keys())
 
 
-def _needs_chat_translation(message: Mapping[str, object]) -> bool:
-    return message.get("content") is None or not _is_plain_message(message)
+def _is_contentless_chat_turn(message: Mapping[str, object]) -> bool:
+    return message.get("content") is None and message.get("role") in _NULL_CONTENT_CHAT_ROLES
+
+
+def _needs_chat_translation(translate_contentless_turns: bool, message: Mapping[str, object]) -> bool:
+    return (translate_contentless_turns and _is_contentless_chat_turn(message)) or not _is_plain_message(message)
 
 
 def _is_chat_tool(tool: Mapping[str, object]) -> bool:
@@ -318,12 +323,6 @@ def _chat_message_problem(index: int, message: Mapping[str, object]) -> str | No
     return None if message.get("role") in _CHAT_ROLES_WITHOUT_CONTENT else _message_problem(index, message)
 
 
-def _contentless_plain_message_problem(roles: frozenset[str], index: int, message: Mapping[str, object]) -> str | None:
-    if message.get("content") is None and message.get("role") in roles and _is_plain_message(message):
-        return f"Message {index} must have a 'content' field"
-    return None
-
-
 def _first_message_problem(
     messages: Sequence[Mapping[str, object]], problem_of: Callable[[int, Mapping[str, object]], str | None]
 ) -> ChatCountTranslationError | None:
@@ -345,12 +344,6 @@ def chat_message_error(messages: Sequence[Mapping[str, object]]) -> ChatCountTra
     return _first_message_problem(messages, _chat_message_problem)
 
 
-def contentless_plain_message_error(
-    messages: Sequence[Mapping[str, object]], roles: frozenset[str]
-) -> ChatCountTranslationError | None:
-    return _first_message_problem(messages, partial(_contentless_plain_message_problem, roles))
-
-
 def anthropic_fields_for_chat_tool_use(
     model: str,
     messages: Sequence[Mapping[str, object]],
@@ -358,12 +351,14 @@ def anthropic_fields_for_chat_tool_use(
     tools: Sequence[Mapping[str, object]] | None,
     translator: _ChatRequestTranslator,
     chat_params: Mapping[str, object] = MappingProxyType({}),
+    *,
+    translate_contentless_turns: bool = True,
 ) -> AnthropicCountFields | ChatCountTranslationError | None:
     counted_tools: Final = tools or ()
     if (
         not chat_params
         and not any(map(_needs_tool_translation, counted_tools))
-        and not any(map(_needs_chat_translation, messages))
+        and not any(map(partial(_needs_chat_translation, translate_contentless_turns), messages))
     ):
         return None
     untranslatable: Final = _untranslatable_input(messages, counted_tools)
@@ -399,10 +394,14 @@ async def anthropic_count_fields(
     messages_format: TokenCountMessagesFormat,
     translator: _ChatRequestTranslator,
     chat_params: Mapping[str, object] = MappingProxyType({}),
+    *,
+    translate_contentless_turns: bool = True,
 ) -> AnthropicCountFields | ChatCountTranslationError | None:
     if messages_format != "openai":
         return None
-    return await asyncify(anthropic_fields_for_chat_tool_use)(model, messages, system, tools, translator, chat_params)
+    return await asyncify(anthropic_fields_for_chat_tool_use)(
+        model, messages, system, tools, translator, chat_params, translate_contentless_turns=translate_contentless_turns
+    )
 
 
 class AnthropicCountTokensConfig:
