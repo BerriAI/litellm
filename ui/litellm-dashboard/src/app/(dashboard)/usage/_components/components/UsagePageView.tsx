@@ -67,7 +67,7 @@ import {
   type GatewayActivity,
 } from "./gatewayActivity";
 import ErrorsTab from "./errors/ErrorsTab";
-import TaskInsightsTab from "./taskInsights/TaskInsightsTab";
+import { TaskInsightsTabPanel, TaskInsightsTabTrigger, showsTaskInsights } from "./taskInsights/TaskInsightsEntry";
 import type { RequestErrorActivity } from "./errors/errorsData";
 import EndpointUsage from "./EndpointUsage/EndpointUsage";
 import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
@@ -162,6 +162,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
   const selectedUsageView = usageViewFromParams(urlParams);
   const selectedTab = usageTabFromParams(urlParams, isAdmin);
   const usageView = allowedViews.includes(selectedUsageView) ? selectedUsageView : DEFAULT_USAGE_VIEW;
+  const taskInsightsVisible = showsTaskInsights(isAdmin, usageView);
 
   const selectedClient = CLIENT_USAGE_VIEWS.includes(usageView) ? urlParams.client : null;
 
@@ -535,11 +536,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
                         {t("usage.pageView.tabs.errors")}
                       </TabsTrigger>
                     )}
-                    {isAdmin && usageView === "global" && (
-                      <TabsTrigger value="tasks" className="flex-none px-3">
-                        {t("usage.pageView.tabs.taskInsights")}
-                      </TabsTrigger>
-                    )}
+                    <TaskInsightsTabTrigger visible={taskInsightsVisible} />
                   </TabsList>
                   <div className="flex items-center gap-2">
                     <AriaUsageTrigger />
@@ -687,17 +684,13 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
                     />
                   </TabsContent>
                 )}
-                {isAdmin && usageView === "global" && (
-                  <TabsContent value="tasks">
-                    <TaskInsightsTab
-                      startTime={startTime}
-                      endTime={endTime}
-                      teams={teams}
-                      canEdit={!isViewOnly && isProxyAdminRole(userRole || "")}
-                      active={selectedTab === "tasks"}
-                    />
-                  </TabsContent>
-                )}
+                <TaskInsightsTabPanel
+                  visible={taskInsightsVisible}
+                  active={selectedTab === "tasks"}
+                  startTime={startTime}
+                  endTime={endTime}
+                  teams={teams}
+                />
               </Tabs>
             </>
           )}

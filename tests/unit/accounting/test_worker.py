@@ -120,9 +120,15 @@ async def test_cleanup_keeps_unobserved_deliveries_only_while_task_insights_is_o
     database.tx.return_value.__aenter__ = AsyncMock(return_value=transaction)
     database.tx.return_value.__aexit__ = AsyncMock(return_value=False)
     analytics: Final = MagicMock()
-    analytics.query_raw = AsyncMock(
-        side_effect=OSError("analytics down") if observation_fails else None, return_value=()
-    )
+    applied: Final = {
+        "delivery_id": "applied",
+        "request_id": "applied",
+        "is_batch": False,
+        "accounting_payload": json.dumps({"startTime": "2026-11-02T12:00:00", "spend": 0.1}),
+        "turns": "[]",
+    }
+    analytics.query_raw = AsyncMock(side_effect=OSError("analytics down") if observation_fails else [[applied], []])
+    analytics.execute_raw = AsyncMock(return_value=1)
     database.writer_db = analytics
 
     await flush_accounting_deliveries(

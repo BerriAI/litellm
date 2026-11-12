@@ -226,6 +226,19 @@ export interface UsageUrlCleanup {
   readonly deniedAccess: boolean;
 }
 
+const TASK_INSIGHTS_KEYS = ["ti_task", "ti_model", "ti_team", "ti_metric"] as const;
+
+const tabAllowed = (tab: string, view: UsageOption, isAdmin: boolean): boolean => {
+  if (!TABBED_VIEWS.includes(view) || !isUsageTab(tab)) return false;
+  if (ADMIN_TABS.includes(tab) && !isAdmin) return false;
+  return tab !== "tasks" || view === "global";
+};
+
+const strayTaskInsightsPatch = (params: UsageUrlParams, onTaskInsights: boolean): UsageUrlPatch =>
+  onTaskInsights
+    ? {}
+    : Object.fromEntries(TASK_INSIGHTS_KEYS.filter((key) => params[key] !== null).map((key) => [key, null]));
+
 export const cleanUsageUrl = (params: UsageUrlParams, access: UsageUrlAccess): UsageUrlCleanup | null => {
   const view = usageViewFromParams(params);
   const deniedView = !access.allowedViews.includes(view);
@@ -238,16 +251,7 @@ export const cleanUsageUrl = (params: UsageUrlParams, access: UsageUrlAccess): U
   const strayEntityKeys = (["user", "team", "org", "customer", "tag", "agent"] as const).filter(
     (key) => !viewKeys.includes(key) && hasEntityValue(params, key),
   );
-  const invalidTab =
-    params.tab !== null &&
-    (!TABBED_VIEWS.includes(view) ||
-      !isUsageTab(params.tab) ||
-      (!access.isAdmin && ADMIN_TABS.includes(params.tab)) ||
-      (params.tab === "tasks" && view !== "global"));
-  const onTaskInsights = !invalidTab && params.tab === "tasks";
-  const strayTaskInsightsKeys = (["ti_task", "ti_model", "ti_team", "ti_metric"] as const).filter(
-    (key) => !onTaskInsights && params[key] !== null,
-  );
+  const invalidTab = params.tab !== null && !tabAllowed(params.tab, view, access.isAdmin);
   const panelOpen = CLIENT_USAGE_VIEWS.includes(view) && params.client !== null;
   const canFilterClientUser = access.isAdmin || Boolean(access.canViewTeamClients && params.client_team);
   const panelDates = clientDateParams(params);
@@ -268,7 +272,7 @@ export const cleanUsageUrl = (params: UsageUrlParams, access: UsageUrlAccess): U
       ? { client_team: null }
       : {}),
     ...Object.fromEntries(strayEntityKeys.map((key) => [key, null])),
-    ...Object.fromEntries(strayTaskInsightsKeys.map((key) => [key, null])),
+    ...strayTaskInsightsPatch(params, !invalidTab && params.tab === "tasks"),
     ...invalidDatePatch(params),
   };
   return Object.keys(patch).length > 0 ? { patch, deniedAccess: false } : null;

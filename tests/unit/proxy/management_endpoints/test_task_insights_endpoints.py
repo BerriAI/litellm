@@ -258,7 +258,11 @@ def test_a_freeze_that_finds_nothing_left_to_freeze_conflicts():
 
 def test_the_model_catalog_keeps_deployments_with_an_id_and_survives_an_unreadable_list():
     deployments = (
-        {"model_name": "claude-opus", "litellm_params": {"model": "anthropic/claude-opus"}, "model_info": {"id": "opus"}},
+        {
+            "model_name": "claude-opus",
+            "litellm_params": {"model": "anthropic/claude-opus"},
+            "model_info": {"id": "opus"},
+        },
         {"model_name": "no-id", "litellm_params": {"model": "anthropic/x"}, "model_info": {}},
     )
 
