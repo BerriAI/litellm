@@ -119,7 +119,8 @@ describe("TaskInsightsTab", () => {
 
   it("shows a retryable error when the overview fails", async () => {
     const refetch = vi.fn();
-    hooks.overview.mockReturnValue({ ...idle, isError: true, error: new Error("boom"), refetch });
+    const failed = { ...idle, isError: true, error: new Error("boom"), refetch };
+    hooks.overview.mockReturnValue(failed);
 
     renderTab();
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));

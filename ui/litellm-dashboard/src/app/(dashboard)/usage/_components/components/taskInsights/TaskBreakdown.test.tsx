@@ -6,9 +6,9 @@ import { renderWithProviders } from "@/../tests/test-utils";
 import TaskBreakdown from "./TaskBreakdown";
 import { taskColors, type TaskSummary } from "./taskInsightsData";
 
-const task = (overrides: Partial<TaskSummary>): TaskSummary => ({
-  task_id: "t",
-  name: "Task",
+const task = (task_id: string, name: string, overrides: Partial<TaskSummary>): TaskSummary => ({
+  task_id,
+  name,
   description: "",
   kind: "task",
   request_count: 0,
@@ -23,10 +23,14 @@ const task = (overrides: Partial<TaskSummary>): TaskSummary => ({
   ...overrides,
 });
 
+const busy: Partial<TaskSummary> = { request_count: 80, share: 0.8, spend: 1, cost_observations: 80 };
+const costly: Partial<TaskSummary> = { request_count: 15, share: 0.15, spend: 9, cost_observations: 12 };
+const unknown: Partial<TaskSummary> = { kind: "unknown", request_count: 5, share: 0.05 };
+
 const tasks = [
-  task({ task_id: "busy", name: "Busy cheap task", request_count: 80, share: 0.8, spend: 1, cost_observations: 80 }),
-  task({ task_id: "costly", name: "Costly task", request_count: 15, share: 0.15, spend: 9, cost_observations: 12 }),
-  task({ task_id: "unknown", name: "Unknown", kind: "unknown", request_count: 5, share: 0.05 }),
+  task("busy", "Busy cheap task", busy),
+  task("costly", "Costly task", costly),
+  task("unknown", "Unknown", unknown),
 ];
 
 const rowNames = () =>

@@ -223,6 +223,120 @@ function TaskInsightsStats({ totals }: { totals: TaskInsightsOverview["totals"] 
   );
 }
 
+function TaskInsightsContent({
+  data,
+  tasks,
+  colors,
+  matrix,
+  metric,
+  selectedTaskId,
+  selectedModelId,
+  canEdit,
+  onSelectTask,
+  onSelectCell,
+  onMetricChange,
+}: {
+  data: TaskInsightsOverview;
+  tasks: TaskInsightsOverview["tasks"];
+  colors: ReadonlyMap<string, string>;
+  matrix: ReturnType<typeof useTaskInsightsMatrix>;
+  metric: TaskInsightsMetric;
+  selectedTaskId: string | null;
+  selectedModelId: string | null;
+  canEdit: boolean;
+  onSelectTask: (taskId: string) => void;
+  onSelectCell: (taskId: string, modelConfigId: string) => void;
+  onMetricChange: (metric: TaskInsightsMetric) => void;
+}) {
+  const { t } = useTranslation();
+  if (data.status.frozen_task_count === 0) {
+    return (
+      <Empty className="rounded-xl border">
+        <EmptyHeader>
+          <EmptyTitle>{t("usage.taskInsights.emptyTitle")}</EmptyTitle>
+          <EmptyDescription>
+            {canEdit ? t("usage.taskInsights.emptyDescriptionAdmin") : t("usage.taskInsights.emptyDescription")}
+          </EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    );
+  }
+  const refreshed = data.last_refreshed_at
+    ? new Date(data.last_refreshed_at).toLocaleString()
+    : t("usage.taskInsights.never");
+  return (
+    <>
+      <TaskInsightsStats totals={data.totals} />
+      <div className="grid gap-3 xl:grid-cols-5">
+        <Panel
+          icon={MapIcon}
+          className="xl:col-span-3"
+          title={t("usage.taskInsights.map.title")}
+          subtitle={t("usage.taskInsights.map.subtitle")}
+        >
+          <TaskClusterMap
+            tasks={tasks}
+            points={data.points}
+            colors={colors}
+            selectedTaskId={selectedTaskId}
+            onSelect={onSelectTask}
+          />
+        </Panel>
+        <Panel
+          icon={ListOrdered}
+          className="xl:col-span-2"
+          title={t("usage.taskInsights.breakdown.title")}
+          subtitle={t("usage.taskInsights.breakdown.subtitle")}
+        >
+          <TaskBreakdown tasks={tasks} colors={colors} selectedTaskId={selectedTaskId} onSelect={onSelectTask} />
+        </Panel>
+      </div>
+      <Panel
+        icon={Grid3x3}
+        title={t("usage.taskInsights.heatmap.title")}
+        subtitle={t("usage.taskInsights.heatmap.subtitle")}
+      >
+        <MatrixBody
+          matrix={matrix}
+          metric={metric}
+          selectedTaskId={selectedTaskId}
+          selectedModelId={selectedModelId}
+          onMetricChange={onMetricChange}
+          onSelectCell={onSelectCell}
+        />
+      </Panel>
+      <p className="text-xs text-muted-foreground">
+        {t("usage.taskInsights.footer", {
+          start: data.window.start_date,
+          end: data.window.end_date,
+          refreshed,
+        })}
+      </p>
+    </>
+  );
+}
+
+function DraftReview({ draftCount, canEdit, active }: { draftCount: number; canEdit: boolean; active: boolean }) {
+  const { t } = useTranslation();
+  const taxonomy = useTaskInsightsTaxonomy(active && draftCount > 0);
+  const editDraft = useEditDraftTask();
+  const freeze = useFreezeTaxonomy();
+  const drafts = (taxonomy.data?.definitions ?? []).filter((task) => task.status === "draft");
+  if (drafts.length === 0) return null;
+  return (
+    <Panel title={t("usage.taskInsights.review.title")} subtitle={t("usage.taskInsights.review.subtitle")}>
+      <TaxonomyReview
+        drafts={drafts}
+        canEdit={canEdit}
+        saving={editDraft.isPending}
+        freezing={freeze.isPending}
+        onSave={(taskId, edit) => editDraft.mutate({ taskId, edit })}
+        onFreeze={() => freeze.mutate(drafts.length)}
+      />
+    </Panel>
+  );
+}
+
 export default function TaskInsightsTab({ startTime, endTime, teams, canEdit, active }: TaskInsightsTabProps) {
   const { t } = useTranslation();
   const [params, setParams] = useQueryStates(usageUrlParsers);
@@ -230,19 +344,12 @@ export default function TaskInsightsTab({ startTime, endTime, teams, canEdit, ac
   const overview = useTaskInsightsOverview(filter, active);
   const matrix = useTaskInsightsMatrix(filter, active);
   const detail = useTaskInsightsTask(filter, active ? params.ti_task : null, params.ti_model);
-  const status = overview.data?.status;
-  const taxonomy = useTaskInsightsTaxonomy(active && (status?.draft_task_count ?? 0) > 0);
   const discovery = useRequestDiscovery();
-  const editDraft = useEditDraftTask();
-  const freeze = useFreezeTaxonomy();
-  const metric = params.ti_metric ?? "share";
   const tasks = React.useMemo(() => overview.data?.tasks ?? [], [overview.data]);
   const colors = React.useMemo(() => taskColors(tasks), [tasks]);
 
   const selectTask = (taskId: string) =>
     void setParams({ ti_task: params.ti_task === taskId && params.ti_model === null ? null : taskId, ti_model: null });
-  const selectCell = (taskId: string, modelConfigId: string) =>
-    void setParams({ ti_task: taskId, ti_model: modelConfigId });
 
   if (overview.isError) {
     return (
@@ -253,7 +360,7 @@ export default function TaskInsightsTab({ startTime, endTime, teams, canEdit, ac
       />
     );
   }
-  if (overview.isLoading || !overview.data) {
+  if (!overview.data) {
     return (
       <div role="status" aria-label={t("usage.taskInsights.loading")} className="grid gap-3 lg:grid-cols-2">
         <Skeleton className="h-80 w-full" />
@@ -265,8 +372,6 @@ export default function TaskInsightsTab({ startTime, endTime, teams, canEdit, ac
 
   const data = overview.data;
   const busy = isDiscoveryBusy(data.status);
-  const drafts = (taxonomy.data?.definitions ?? []).filter((task) => task.status === "draft");
-
   return (
     <div className="flex flex-col gap-3">
       <TaskInsightsToolbar
@@ -279,85 +384,23 @@ export default function TaskInsightsTab({ startTime, endTime, teams, canEdit, ac
         discovering={discovery.isPending}
         onDiscover={() => discovery.mutate(filter)}
       />
-
-      {data.status.discovery_status === "failed" && data.status.discovery_error && (
+      {data.status.discovery_error && data.status.discovery_status === "failed" && (
         <ErrorState title={t("usage.taskInsights.discoveryFailed")} message={data.status.discovery_error} />
       )}
-
-      {drafts.length > 0 && (
-        <Panel title={t("usage.taskInsights.review.title")} subtitle={t("usage.taskInsights.review.subtitle")}>
-          <TaxonomyReview
-            drafts={drafts}
-            canEdit={canEdit}
-            saving={editDraft.isPending}
-            freezing={freeze.isPending}
-            onSave={(taskId, edit) => editDraft.mutate({ taskId, edit })}
-            onFreeze={() => freeze.mutate(drafts.length)}
-          />
-        </Panel>
-      )}
-
-      {data.status.frozen_task_count === 0 ? (
-        <Empty className="rounded-xl border">
-          <EmptyHeader>
-            <EmptyTitle>{t("usage.taskInsights.emptyTitle")}</EmptyTitle>
-            <EmptyDescription>
-              {canEdit ? t("usage.taskInsights.emptyDescriptionAdmin") : t("usage.taskInsights.emptyDescription")}
-            </EmptyDescription>
-          </EmptyHeader>
-        </Empty>
-      ) : (
-        <>
-          <TaskInsightsStats totals={data.totals} />
-          <div className="grid gap-3 xl:grid-cols-5">
-            <Panel
-              icon={MapIcon}
-              className="xl:col-span-3"
-              title={t("usage.taskInsights.map.title")}
-              subtitle={t("usage.taskInsights.map.subtitle")}
-            >
-              <TaskClusterMap
-                tasks={tasks}
-                points={data.points}
-                colors={colors}
-                selectedTaskId={params.ti_task}
-                onSelect={selectTask}
-              />
-            </Panel>
-            <Panel
-              icon={ListOrdered}
-              className="xl:col-span-2"
-              title={t("usage.taskInsights.breakdown.title")}
-              subtitle={t("usage.taskInsights.breakdown.subtitle")}
-            >
-              <TaskBreakdown tasks={tasks} colors={colors} selectedTaskId={params.ti_task} onSelect={selectTask} />
-            </Panel>
-          </div>
-          <Panel
-            icon={Grid3x3}
-            title={t("usage.taskInsights.heatmap.title")}
-            subtitle={t("usage.taskInsights.heatmap.subtitle")}
-          >
-            <MatrixBody
-              matrix={matrix}
-              metric={metric}
-              selectedTaskId={params.ti_task}
-              selectedModelId={params.ti_model}
-              onMetricChange={(next) => void setParams({ ti_metric: next === "share" ? null : next })}
-              onSelectCell={selectCell}
-            />
-          </Panel>
-          <p className="text-xs text-muted-foreground">
-            {t("usage.taskInsights.footer", {
-              start: data.window.start_date,
-              end: data.window.end_date,
-              refreshed: data.last_refreshed_at
-                ? new Date(data.last_refreshed_at).toLocaleString()
-                : t("usage.taskInsights.never"),
-            })}
-          </p>
-        </>
-      )}
+      <DraftReview draftCount={data.status.draft_task_count} canEdit={canEdit} active={active} />
+      <TaskInsightsContent
+        data={data}
+        tasks={tasks}
+        colors={colors}
+        matrix={matrix}
+        metric={params.ti_metric ?? "share"}
+        selectedTaskId={params.ti_task}
+        selectedModelId={params.ti_model}
+        canEdit={canEdit}
+        onSelectTask={selectTask}
+        onSelectCell={(taskId, modelConfigId) => void setParams({ ti_task: taskId, ti_model: modelConfigId })}
+        onMetricChange={(next) => void setParams({ ti_metric: next === "share" ? null : next })}
+      />
       <TaskDetailSheet
         open={params.ti_task !== null}
         detail={detail.data}
