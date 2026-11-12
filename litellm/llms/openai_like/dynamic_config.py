@@ -44,13 +44,23 @@ def web_search_requests_from_tool_usage(payload: object) -> int | None:
 
 
 def _function_calling_disabled(model: str, provider: SimpleProviderConfig) -> bool:
-    from litellm.utils import has_catalog_entry, is_explicitly_disabled_factory, supports_function_calling
+    from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+    from litellm.utils import (
+        ModelInfoLookupMiss,
+        is_explicitly_disabled_factory,
+        lookup_catalog_model_info,
+        supports_function_calling,
+    )
 
+    provider_disables: Final = provider.provider_info.get("supports_function_calling") is False
+    row: Final = lookup_catalog_model_info(model, provider.slug)
+    if isinstance(row, ModelInfoLookupMiss):
+        return provider_disables
     if supports_function_calling(model=model, custom_llm_provider=provider.slug):
         return False
     return (
-        has_catalog_entry(model, provider.slug)
-        or provider.provider_info.get("supports_function_calling") is False
+        provider_disables
+        or row["key"] in GetModelCostMap.loaded_model_cost_map()
         or is_explicitly_disabled_factory(
             model=model, custom_llm_provider=provider.slug, key="supports_function_calling"
         )

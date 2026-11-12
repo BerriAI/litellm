@@ -25,7 +25,6 @@ def _isolate_generated_class_cache():
 
 
 class TestClassCaching:
-
     def test_cache_is_keyed_on_slug_not_on_the_provider_instance(self):
         first = create_responses_config_class(_provider("cache_by_slug"))
         second = create_responses_config_class(_provider("cache_by_slug"))
@@ -200,9 +199,13 @@ class TestToolParamsFollowTheModelMap:
         assert ("tools" in optional_params) is tools_forwarded
         assert ("tool_choice" in optional_params) is tools_forwarded
 
-    @pytest.mark.parametrize(("shipped", "tools_forwarded"), [(True, False), (False, True)], ids=["shipped", "registered"])
-    def test_a_row_that_leaves_function_calling_unset_drops_tools_only_when_shipped(
-        self, shipped: bool, tools_forwarded: bool, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize(
+        ("shipped", "provider_supports_fc", "tools_forwarded"),
+        [(True, None, False), (False, None, True), (False, False, False)],
+        ids=["shipped", "registered", "registered_provider_unsupported"],
+    )
+    def test_a_row_that_leaves_function_calling_unset_drops_tools_when_shipped_or_the_provider_says_so(
+        self, shipped: bool, provider_supports_fc: bool | None, tools_forwarded: bool, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         row: Final = {"litellm_provider": "tools_map", "mode": "chat"}
         if shipped:
@@ -212,7 +215,12 @@ class TestToolParamsFollowTheModelMap:
             )
         else:
             monkeypatch.setitem(litellm.model_cost, "tools_map/row-model", row)
-        config: Final = create_config_class(_provider("tools_map"))()
+        provider_overrides: Final = (
+            {}
+            if provider_supports_fc is None
+            else {"provider_info": {"supports_function_calling": provider_supports_fc}}
+        )
+        config: Final = create_config_class(_provider("tools_map", **provider_overrides))()
 
         optional_params: Final = config.map_openai_params(
             non_default_params={"tools": self._TOOLS, "tool_choice": "auto"},
@@ -248,7 +256,9 @@ class TestToolParamsFollowTheModelMap:
 
 class TestWebSearchRequestsFromToolUsage:
     def test_counts_only_paid_search_tools(self):
-        payload = {"usage": {"tool_usage": {"web_search": 2, "image_search": 1, "code_interpreter": 3, "web_extractor": 1}}}
+        payload = {
+            "usage": {"tool_usage": {"web_search": 2, "image_search": 1, "code_interpreter": 3, "web_extractor": 1}}
+        }
         assert dynamic_config.web_search_requests_from_tool_usage(payload) == 3
 
     @pytest.mark.parametrize(
