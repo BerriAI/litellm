@@ -37,6 +37,9 @@ class RequestMetrics:
     overhead_s: float | None
     ttft_overhead_s: float | None
     header_overhead_ms: float | None
+    pre_upstream_s: float | None = None
+    stream_start_s: float | None = None
+    tail_s: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +60,9 @@ class RunMetrics:
     ttft_overheads_s: tuple[float, ...]
     header_overheads_ms: tuple[float, ...]
     sustained_rps: float | None
+    pre_upstream_s: tuple[float, ...] = ()
+    stream_start_s: tuple[float, ...] = ()
+    tail_s: tuple[float, ...] = ()
 
 
 def _interpolate(samples: Sequence[Mapping[str, float]], key: str, at: float) -> float:
@@ -78,6 +84,34 @@ def percentile(values: Sequence[float], q: float) -> float:
     return ordered[low] + (ordered[high] - ordered[low]) * (rank - low)
 
 
+@dataclass(frozen=True, slots=True)
+class Segments:
+    """Where one request's added time went, split at the moments the mock provider saw: before the whole body
+    reached it, between its first byte and the client's first token, and after its last byte."""
+
+    pre_upstream_s: float
+    stream_start_s: float | None
+    tail_s: float
+
+
+def segments(record: Mapping[str, object], upstream: Mapping[str, float]) -> Segments | None:
+    received_at: Final = upstream.get("received_at")
+    if received_at is None or record["ok"] is not True:
+        return None
+    started: Final = float(str(record["started_at"]))
+    first_byte_at: Final = received_at + upstream["delay_s"]
+    first_token: Final = record.get("first_token_s")
+    return Segments(
+        pre_upstream_s=received_at - started,
+        stream_start_s=(
+            started + float(str(first_token)) - first_byte_at
+            if record["stream"] is True and first_token is not None
+            else None
+        ),
+        tail_s=started + float(str(record["total_s"])) - first_byte_at - upstream["generation_s"],
+    )
+
+
 def request_metrics(
     record: Mapping[str, object], send_at_s: float, mock: Mapping[str, Mapping[str, float]]
 ) -> RequestMetrics:
@@ -86,6 +120,7 @@ def request_metrics(
     total: Final = float(str(record["total_s"]))
     first_token: Final = record.get("first_token_s")
     header_ms: Final = record.get("litellm_overhead_ms")
+    split: Final = segments(record, upstream) if upstream is not None else None
     return RequestMetrics(
         send_at_s=send_at_s,
         ok=ok,
@@ -98,6 +133,9 @@ def request_metrics(
             else None
         ),
         header_overhead_ms=float(str(header_ms)) if isinstance(header_ms, (int, float)) else None,
+        pre_upstream_s=split.pre_upstream_s if split else None,
+        stream_start_s=split.stream_start_s if split else None,
+        tail_s=split.tail_s if split else None,
     )
 
 
@@ -129,7 +167,11 @@ def run_metrics(run_dir: Path) -> RunMetrics:
     send_at: Final = {int(item["seq"]): float(item["send_at_s"]) for item in plan}
     records: Final = [json.loads(line) for line in (run_dir / "records.jsonl").read_text().splitlines() if line]
     mock: Final = {
-        str(entry["marker"]): {"delay_s": float(entry["delay_s"]), "generation_s": float(entry.get("generation_s", 0))}
+        str(entry["marker"]): {
+            "delay_s": float(entry["delay_s"]),
+            "generation_s": float(entry.get("generation_s", 0)),
+            **({"received_at": float(entry["received_at"])} if entry.get("received_at") is not None else {}),
+        }
         for entry in json.loads((run_dir / "mock.json").read_text())["requests"]
         if entry["marker"]
     }
@@ -163,6 +205,9 @@ def run_metrics(run_dir: Path) -> RunMetrics:
         overheads_s=tuple(r.overhead_s for r in ok if r.overhead_s is not None),
         ttft_overheads_s=tuple(r.ttft_overhead_s for r in ok if r.ttft_overhead_s is not None),
         header_overheads_ms=tuple(r.header_overhead_ms for r in ok if r.header_overhead_ms is not None),
+        pre_upstream_s=tuple(r.pre_upstream_s for r in ok if r.pre_upstream_s is not None),
+        stream_start_s=tuple(r.stream_start_s for r in ok if r.stream_start_s is not None),
+        tail_s=tuple(r.tail_s for r in ok if r.tail_s is not None),
         sustained_rps=sustained(measured, steps) if len(steps) > 1 else None,
     )
 
@@ -197,6 +242,9 @@ METRICS: Final[Mapping[str, RunStat]] = {
     "ttft_overhead_p50_ms": _pooled_percentile(lambda run: run.ttft_overheads_s, 50),
     "ttft_overhead_p99_ms": _pooled_percentile(lambda run: run.ttft_overheads_s, 99),
     "header_overhead_p50_ms": _pooled_percentile(lambda run: tuple(v / 1000 for v in run.header_overheads_ms), 50),
+    "pre_upstream_p50_ms": _pooled_percentile(lambda run: run.pre_upstream_s, 50),
+    "stream_start_p50_ms": _pooled_percentile(lambda run: run.stream_start_s, 50),
+    "tail_p50_ms": _pooled_percentile(lambda run: run.tail_s, 50),
     "peak_rss_mb": _run_level(lambda run: run.peak_rss_mb),
 }
 

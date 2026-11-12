@@ -73,6 +73,7 @@ class MockEntry(BaseModel):
     stream: bool
     output_tokens: int
     user_agent: str | None = None
+    received_at: float | None = None
 
 
 class MockLog(BaseModel):

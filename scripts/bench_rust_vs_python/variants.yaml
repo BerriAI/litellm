@@ -8,6 +8,8 @@ variants:
   A0: {worktree: base, path: messages, env: {}}
   A0b: {worktree: base, path: messages, env: {}}
   A1: {worktree: main, path: messages, env: {LITELLM_RUST: "true"}, expect_rust: true}
+  HP: {worktree: head, path: messages, env: {}}
+  HR: {worktree: head, path: messages, env: {LITELLM_RUST: "true"}, expect_rust: true}
   B0: {worktree: base, path: chat, env: {}}
   B1: {worktree: main, path: chat, env: {LITELLM_RUST: "true"}}
   R0-messages: {worktree: router, path: messages, env: {LITELLM_RUST: "0"}}

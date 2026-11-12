@@ -12,7 +12,9 @@ from scripts.bench_rust_vs_python.report import (
     RequestMetrics,
     RunMetrics,
     delta,
+    request_metrics,
     run_metrics,
+    segments,
     sustained,
     verdict,
 )
@@ -201,3 +203,25 @@ def test_run_log_keeps_the_upstream_user_agent_the_mock_recorded() -> None:
     )
 
     assert MockLog.model_validate_json(served).requests[0].user_agent == "litellm/1.0"
+
+
+def test_segments_split_the_added_time_at_the_moments_the_provider_saw() -> None:
+    record: Final = {
+        "marker": "perfreq-000001-n",
+        "ok": True,
+        "stream": True,
+        "started_at": 100.0,
+        "total_s": 3.0,
+        "first_token_s": 1.0,
+    }
+    upstream: Final = {"received_at": 100.05, "delay_s": 0.8, "generation_s": 2.0}
+    split: Final = segments(record, upstream)
+    overhead: Final = request_metrics(record, 0.0, {"perfreq-000001-n": upstream}).overhead_s
+
+    assert split is not None and overhead is not None
+    assert split.pre_upstream_s == pytest.approx(0.05)
+    assert split.stream_start_s == pytest.approx(0.15)
+    assert split.tail_s == pytest.approx(0.15)
+    assert split.pre_upstream_s + split.tail_s == pytest.approx(overhead)
+    assert segments({**record, "stream": False}, upstream).stream_start_s is None
+    assert segments(record, {"delay_s": 0.8, "generation_s": 2.0}) is None

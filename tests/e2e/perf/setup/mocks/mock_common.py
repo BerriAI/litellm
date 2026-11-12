@@ -16,6 +16,7 @@ import asyncio
 import hashlib
 import json
 import re
+import time
 from collections import deque
 from dataclasses import dataclass
 from typing import Final, Literal, cast
@@ -95,6 +96,8 @@ class MockRequest(BaseModel):
     delay_s: float
     generation_s: float = 0.0
     user_agent: str | None = None
+    received_at: float | None = None
+    """Epoch seconds when the whole request body had arrived, on the same clock as the client's records."""
 
 
 class MockRequestsResponse(BaseModel):
@@ -187,6 +190,7 @@ class RequestLog:
                 delay_s=decision.delay_s,
                 generation_s=decision.generation_s,
                 user_agent=user_agent,
+                received_at=time.time(),
             )
         )
         return decision
