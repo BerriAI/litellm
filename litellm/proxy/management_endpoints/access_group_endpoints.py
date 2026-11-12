@@ -1,7 +1,7 @@
 import asyncio
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from types import MappingProxyType
+from types import MappingProxyType, TracebackType
 from typing import TYPE_CHECKING, Final, Protocol
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -98,11 +98,11 @@ class _KeyRecord(Protocol):
 class _AccessGroupTable(Protocol):
     async def find_unique(self, where: Mapping[str, object]) -> _AccessGroupRecord | None: ...
 
-    async def find_many(self, order: Mapping[str, object]) -> Sequence[_AccessGroupRecord]: ...
+    async def find_many(self, *, order: Mapping[str, object]) -> Sequence[_AccessGroupRecord]: ...
 
     async def create(self, data: Mapping[str, object]) -> _AccessGroupRecord: ...
 
-    async def update(self, where: Mapping[str, object], data: Mapping[str, object]) -> _AccessGroupRecord: ...
+    async def update(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> _AccessGroupRecord | None: ...
 
     async def delete(self, where: Mapping[str, object]) -> object: ...
 
@@ -118,9 +118,9 @@ class _TeamTable(Protocol):
 class _KeyTable(Protocol):
     async def find_unique(self, where: Mapping[str, object]) -> _KeyRecord | None: ...
 
-    async def find_many(self, where: Mapping[str, object]) -> Sequence[_KeyRecord]: ...
+    async def find_many(self, *, where: Mapping[str, object]) -> Sequence[_KeyRecord]: ...
 
-    async def update(self, where: Mapping[str, object], data: Mapping[str, object]) -> object: ...
+    async def update(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> object: ...
 
 
 class _AgentRecord(Protocol):
@@ -132,9 +132,9 @@ class _AgentRecord(Protocol):
 
 
 class _AgentTable(Protocol):
-    async def find_many(self, where: Mapping[str, object]) -> Sequence[_AgentRecord]: ...
+    async def find_many(self, *, where: Mapping[str, object]) -> Sequence[_AgentRecord]: ...
 
-    async def update(self, where: Mapping[str, object], data: Mapping[str, object]) -> object: ...
+    async def update(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> object: ...
 
 
 class _HasSomeFilter(TypedDict):
@@ -170,7 +170,13 @@ class _AccessGroupTx(Protocol):
 class _AccessGroupTransaction(Protocol):
     async def __aenter__(self) -> _AccessGroupTx: ...
 
-    async def __aexit__(self, *exc_info: object) -> None: ...
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+        /,
+    ) -> None: ...
 
 
 def _access_group_transaction(prisma_client: PrismaClient) -> _AccessGroupTransaction:
@@ -572,6 +578,7 @@ async def create_access_group(
                     "mcp_tool_permissions": _tool_permissions_json(data.mcp_tool_permissions),
                     "access_agent_ids": data.access_agent_ids or [],
                     "access_skill_names": list(data.access_skill_names or ()),
+                    "access_vector_store_ids": list(data.access_vector_store_ids or ()),
                     "assigned_team_ids": data.assigned_team_ids or [],
                     "assigned_key_ids": data.assigned_key_ids or [],
                     "created_by": user_api_key_dict.user_id,
@@ -670,6 +677,7 @@ async def update_access_group(
             "access_mcp_server_ids",
             "access_agent_ids",
             "access_skill_names",
+            "access_vector_store_ids",
         ):
             value = list(iter_items(value or ()))
         update_data[field] = (
@@ -731,6 +739,8 @@ async def update_access_group(
 
     from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
 
+    if record is None:
+        raise AttributeError("'NoneType' object has no attribute 'dict'", name="dict", obj=None)
     await _cache_access_group_record(record)
     await _patch_team_caches_add_access_group(teams_to_add, access_group_id, user_api_key_cache, proxy_logging_obj)
     await _patch_team_caches_remove_access_group(

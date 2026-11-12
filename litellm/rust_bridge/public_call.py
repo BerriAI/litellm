@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, TypeVar, cast  # noqa: TID251  # narrows caller-owned containers without copying them
 
+import httpx
+
 from litellm.utils import (
     _get_wrapper_timeout,  # pyright: ignore[reportPrivateUsage]  # the @client wrapper's own failure stamp
 )
@@ -47,6 +49,14 @@ def optional_sequence(value: object) -> Sequence[object] | None:
     if isinstance(value, str | bytes) or not isinstance(value, Sequence):
         return None
     return cast("Sequence[object]", value)  # cast-ok: the same caller-owned object is handed on unchanged
+
+
+def timeout_to_seconds(timeout: float | httpx.Timeout | None) -> float | None:
+    if timeout is None:
+        return None
+    if isinstance(timeout, httpx.Timeout):
+        return timeout.read
+    return float(timeout)
 
 
 def known_params(names: Collection[str], request: Mapping[str, object]) -> Mapping[str, object]:
