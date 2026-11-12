@@ -9,6 +9,8 @@ from types import MappingProxyType
 from typing import Any, Final, cast
 from urllib.parse import quote, unquote
 
+from pydantic import TypeAdapter
+
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 
@@ -56,6 +58,8 @@ _EMBEDDED_S3_URI: Final = re.compile(r"s3://[^;]*")
 _MODEL_FILE_ID_MAPPING_KEY: Final = "model_file_id_mapping"
 _KEYS_THAT_MAY_HOLD_A_FILE_ID: Final = frozenset({"file_id", "file_url", "file_uri", "fileUri"})
 _KEYS_THAT_MAY_HIDE_AN_S3_URI: Final = _KEYS_THAT_MAY_HOLD_A_FILE_ID | {_MODEL_FILE_ID_MAPPING_KEY}
+_SCALAR_TYPES: Final = frozenset({int, float, bool, type(None)})
+_OBJECT_TUPLE: Final = TypeAdapter(tuple[object, ...])
 
 
 def is_s3_uri(value: str) -> bool:
@@ -82,6 +86,12 @@ def _with_embedded_s3_uris(file_id: str) -> Iterator[str]:
     return chain((file_id,), _s3_uris_embedded_in_file_id(file_id))
 
 
+def _sequence_items(value: object) -> Sequence[object] | None:
+    if isinstance(value, tuple):
+        return _OBJECT_TUPLE.validate_python(value)
+    return as_object_list(value)
+
+
 @dataclass(frozen=True, slots=True)
 class _BodyNode:
     value: object
@@ -99,7 +109,7 @@ def _child_nodes(node: _BodyNode) -> Iterator[_BodyNode]:
     if fields is not None:
         inside_media_part: Final = node.inside_media_part or _is_media_part(fields, node.key)
         return (_BodyNode(child, child_key, inside_media_part) for child_key, child in fields.items())
-    items: Final = as_object_list(node.value)
+    items: Final = _sequence_items(node.value)
     return (_BodyNode(item, None, node.inside_media_part) for item in items) if items is not None else iter(())
 
 
@@ -163,8 +173,8 @@ def _may_name_an_s3_uri(value: object) -> bool:
     fields: Final = as_str_mapping(value)
     if fields is not None:
         return not _KEYS_THAT_MAY_HIDE_AN_S3_URI.isdisjoint(fields) or any(map(_may_name_an_s3_uri, fields.values()))
-    items: Final = as_object_list(value)
-    return items is not None and any(map(_may_name_an_s3_uri, items))
+    items: Final = _sequence_items(value)
+    return items is not None and not _SCALAR_TYPES.issuperset(map(type, items)) and any(map(_may_name_an_s3_uri, items))
 
 
 def _may_carry_s3_media(request_body: Mapping[str, object]) -> bool:
