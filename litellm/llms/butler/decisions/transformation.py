@@ -42,6 +42,10 @@ class ButlerDecisionsConfig(BaseDecisionsConfig):
     supports_images = True
     inlines_remote_images = True
     max_images = 4
+    # Butler takes a decisions body of up to 64 MiB of JSON; base64 makes 32 MiB of images about 43 MiB. Remote images
+    # are fetched against this budget, so a caller's URLs cannot make the proxy buffer more.
+    max_image_bytes = 16 * 1024 * 1024
+    max_total_image_bytes = 32 * 1024 * 1024
 
     def get_default_api_base(self) -> str | None:
         return "https://api.butlercompute.com"

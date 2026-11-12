@@ -665,7 +665,7 @@ def _with_data_urls(call: DecisionsCall, data_urls: Mapping[str, str]) -> Decisi
 
 def _remaining_image_bytes(call: DecisionsCall) -> int | None:
     total: Final = call.provider_config.max_total_image_bytes
-    if call.custom_llm_provider != "gemini" or total is None:
+    if total is None:
         return None
     _checked_image_sizes(call)
     return total - sum(_decoded_image_bytes(image) for image in input_images(call.ir_request.input))

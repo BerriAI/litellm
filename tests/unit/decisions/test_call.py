@@ -215,6 +215,39 @@ async def test_gemini_accepts_remote_images_within_the_request_budget(
     assert image_route.call_count == 1
 
 
+@pytest.mark.usefixtures("gemini_httpx_transport")
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", (False, True))
+async def test_butler_stops_image_downloads_at_the_request_budget(
+    sync: bool, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    monkeypatch.setattr(litellm, "module_level_aclient", AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport()))
+    budget: Final = 32 * 1024 * 1024
+    image: Final = b"x" * (budget // 2 + 1)
+    first: Final = respx_mock.get("https://images.example/first.png").mock(
+        return_value=httpx.Response(200, content=image, headers={"content-type": "image/png"})
+    )
+    second: Final = respx_mock.get("https://images.example/second.png").mock(
+        return_value=httpx.Response(200, content=image, headers={"content-type": "image/png"})
+    )
+    last: Final = respx_mock.get("https://images.example/last.png").mock(
+        return_value=httpx.Response(200, content=b"unused")
+    )
+    provider: Final = respx_mock.post("https://api.butlercompute.com/v1/decisions").mock(
+        return_value=httpx.Response(200, json={"answers": {"ok": {"type": "noul", "noul": 0.5}}})
+    )
+    urls: Final = [
+        "https://images.example/first.png",
+        "https://images.example/second.png",
+        "https://images.example/last.png",
+    ]
+    with pytest.raises(litellm.ImageFetchError, match="remaining request budget"):
+        await _call_butler(sync, urls)
+    assert first.call_count == second.call_count == 1
+    assert last.call_count == provider.call_count == 0
+
+
 @pytest.fixture
 def gemini_httpx_transport(monkeypatch: pytest.MonkeyPatch) -> None:
     in_memory_cache.flush_cache()
@@ -350,3 +383,17 @@ async def _call_gemini(sync: bool, images: Sequence[str]) -> None:
         images=images,
         api_key="test",
     )
+
+
+async def _call_butler(sync: bool, images: Sequence[str]) -> None:
+    options: Final = {
+        "model": "butler/cicero",
+        "state": "Inspect",
+        "questions": {"ok": {"type": "noul", "instructions": "Is it damaged?"}},
+        "images": images,
+        "api_key": "test",
+    }
+    if sync:
+        litellm.systemone(**options)
+        return
+    await litellm.asystemone(**options)
