@@ -289,23 +289,19 @@ def _exact_comparison(
     comparison: _Equality | _Range | _Membership, mappings: Mapping[str, _IndexMapping]
 ) -> _Equality | _Range | _Membership | _InexactKey:
     key: Final = comparison.key
-    exact: Final = tuple(
-        field
-        for field in (_queried_field(key, index.mappings, comparison) for index in mappings.values())
-        if field is not None
-    )
+    queried: Final = tuple(_queried_field(key, index.mappings, comparison) for index in mappings.values())
+    exact: Final = tuple(field for field in queried if field is not None)
+    differently: Final = _InexactKey(key=key, reason=f"the indexes behind this store map {key} differently")
+    if 0 < len(exact) < len(queried):
+        return differently
     inexact: Final = next((field for field in exact if isinstance(field, _InexactKey)), None)
     if inexact is not None:
         return inexact
     fields: Final = tuple(field for field in exact if isinstance(field, _ExactField))
     names: Final = frozenset(field.name for field in fields)
     name: Final = next(iter(names), key)
-    reaches_other_fields: Final = name != key and any(
-        _resolved_field(index.mappings, key) is None and _mapped_field(index.mappings, name) is not None
-        for index in mappings.values()
-    )
-    if len(names) > 1 or reaches_other_fields:
-        return _InexactKey(key=key, reason=f"the indexes behind this store map {key} differently")
+    if len(names) > 1:
+        return differently
     ignore_above: Final = min((field.ignore_above for field in fields if field.ignore_above), default=None)
     if ignore_above is not None and any(len(value) > ignore_above for value in _string_values(comparison)):
         return _InexactKey(key=key, reason=f"the index ignores {key} values longer than {ignore_above} characters")

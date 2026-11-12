@@ -828,6 +828,26 @@ TEXT_ONLY: Final = {"litellm-qa-docs": {"properties": {"tenant": {"type": "text"
             id="alias-rewrite-reaches-an-index-without-the-alias",
         ),
         pytest.param(
+            {
+                "docs-2025": {"properties": {"team": {"type": "keyword"}}},
+                "docs-2026": {"properties": {"category": {"type": "keyword"}}},
+            },
+            {"type": "eq", "key": "team", "value": "HR"},
+            "the indexes behind this store map team differently",
+            id="only-some-indexes-map-the-key",
+        ),
+        pytest.param(
+            {
+                "docs-2025": {
+                    "properties": {"category": {"type": "keyword"}, "team": {"type": "alias", "path": "category"}}
+                },
+                "docs-2026": {"properties": {"category": {"type": "keyword"}}},
+            },
+            {"type": "eq", "key": "team", "value": "HR"},
+            "the indexes behind this store map team differently",
+            id="only-some-indexes-alias-the-key",
+        ),
+        pytest.param(
             {"litellm-qa-docs": {"properties": {"tenant": {"type": "keyword", "normalizer": "lowercase"}}}},
             {"type": "eq", "key": "tenant", "value": "Acme"},
             "the index normalizes every keyword mapping of tenant",

@@ -405,7 +405,10 @@ class _AgenticLoopParamsView(TypedDict):
 
 
 _GOAWAY_RETRY_MESSAGE: Final = "Vector store search connection was closed by an HTTP/2 GOAWAY, retrying once"
-_SEARCH_HEADERS: Final = TypeAdapter(dict[str, str])
+
+
+def _str_headers(headers: Mapping[str, object]) -> Mapping[str, str]:
+    return MappingProxyType({name: value for name, value in headers.items() if isinstance(value, str)})
 
 
 def _closed_by_http2_goaway(error: httpx.RemoteProtocolError) -> bool:
@@ -10673,7 +10676,7 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers = await asyncio.to_thread(
+        headers: Final[dict[str, object]] = await asyncio.to_thread(
             vector_store_provider_config.validate_environment,
             headers=extra_headers or {},
             litellm_params=litellm_params,
@@ -10681,7 +10684,7 @@ class BaseLLMHTTPHandler:
 
         if extra_headers:
             headers.update(extra_headers)
-        search_headers: Final = _SEARCH_HEADERS.validate_python(headers)
+        search_headers: Final = _str_headers(headers)
 
         api_base: Final = await run_off_loop_if_aws(
             vector_store_provider_config,
@@ -10748,7 +10751,7 @@ class BaseLLMHTTPHandler:
             signed_headers, signed_json_body = await run_off_loop_if_aws(
                 vector_store_provider_config,
                 vector_store_provider_config.sign_request,
-                headers=search_headers,
+                headers=headers,
                 optional_params={**dict(litellm_params), **(params or {})},
                 request_data=request_body,
                 api_base=url,
@@ -10869,13 +10872,13 @@ class BaseLLMHTTPHandler:
         else:
             sync_httpx_client = client
 
-        headers = vector_store_provider_config.validate_environment(
+        headers: Final[dict[str, object]] = vector_store_provider_config.validate_environment(
             headers=extra_headers or {}, litellm_params=litellm_params
         )
 
         if extra_headers:
             headers.update(extra_headers)
-        search_headers: Final = _SEARCH_HEADERS.validate_python(headers)
+        search_headers: Final = _str_headers(headers)
 
         api_base: Final = vector_store_provider_config.get_complete_url(
             api_base=litellm_params.api_base,
@@ -10939,7 +10942,7 @@ class BaseLLMHTTPHandler:
                 )
 
             signed_headers, signed_json_body = vector_store_provider_config.sign_request(
-                headers=search_headers,
+                headers=headers,
                 optional_params={**dict(litellm_params), **(params or {})},
                 request_data=request_body,
                 api_base=url,
