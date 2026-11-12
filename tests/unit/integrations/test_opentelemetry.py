@@ -8063,6 +8063,43 @@ async def test_failed_chat_span_flags_unknown_usage_without_inventing_an_estimat
 
 
 @pytest.mark.asyncio
+async def test_failed_chat_span_flags_unknown_usage_without_estimate_when_token_counter_is_disabled(
+    in_memory_otel: tuple[OpenTelemetry, InMemorySpanExporter], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    otel, exporter = in_memory_otel
+    monkeypatch.setattr(litellm, "disable_token_counter", True)
+
+    span: Final = await _fail(_redacted_logging(otel, list(_SECRET_PROMPT)), exporter, _SYNC_THEN_ASYNC)
+
+    attributes: Final = dict(span.attributes or {})
+    _assert_unknown_usage(attributes)
+    assert ESTIMATED_INPUT_TOKENS_ATTRIBUTE not in attributes
+
+
+@pytest.mark.asyncio
+async def test_failure_inside_active_parent_span_records_unknown_usage_on_the_parent(
+    in_memory_otel: tuple[OpenTelemetry, InMemorySpanExporter], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    otel, exporter = in_memory_otel
+    monkeypatch.delenv("USE_OTEL_LITELLM_REQUEST_SPAN", raising=False)
+    logging_obj: Final = _redacted_logging(otel, list(_SECRET_PROMPT))
+    error: Final = litellm.Timeout(message="timed out", model="test-model", llm_provider="hosted_vllm")
+
+    with trace.use_span(otel.tracer.start_span("caller_request"), end_on_exit=True):
+        logging_obj.failure_handler(error, "tb")
+        await logging_obj.async_failure_handler(error, "tb")
+
+    (parent,) = exporter.get_finished_spans()
+    attributes: Final = dict(parent.attributes or {})
+    assert parent.name == "caller_request"
+    _assert_unknown_usage(attributes)
+    assert attributes[ESTIMATED_INPUT_TOKENS_ATTRIBUTE] == token_counter(
+        model=_FAILED_MODEL, messages=list(_SECRET_PROMPT)
+    )
+    assert _PROMPT_SECRET not in _span_text(parent)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "recovered",
     [

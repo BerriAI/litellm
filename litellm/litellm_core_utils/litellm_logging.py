@@ -4772,7 +4772,7 @@ class Logging(LiteLLMLoggingBaseClass):
             return None
         try:
             return token_counter(model=self.model, messages=messages, use_default_image_token_count=True)
-        except Exception:
+        except (ValueError, TypeError, LookupError, AttributeError):
             return None
 
     async def special_failure_handlers(self, exception: Exception):
