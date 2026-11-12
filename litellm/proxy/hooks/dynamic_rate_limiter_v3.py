@@ -125,6 +125,7 @@ async def caller_may_use_model(user_api_key_dict: UserAPIKeyAuth, model: str) ->
         prisma_client=prisma_client,
         team_membership=team_membership,
         project_object=project_object,
+        refuse_agent_keys=True,
     ):
         return False
     return await _is_within_every_model_budget(

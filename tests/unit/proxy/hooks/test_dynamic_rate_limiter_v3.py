@@ -1841,7 +1841,7 @@ def _steering_router(preferred: str, alternate: str, preferred_rpm: int = 2, alt
     )
 
 
-def _team_user(team_models: list, preferences: object) -> UserAPIKeyAuth:
+def _team_user(team_models: list[str], preferences: object) -> UserAPIKeyAuth:
     return UserAPIKeyAuth(
         team_id="flexible-team", team_models=team_models, team_metadata={"model_preferences": preferences}
     )
@@ -1861,20 +1861,22 @@ async def _saturate(handler: DynamicRateLimitHandler, model: str, requests: int 
 
 
 @pytest.mark.asyncio
-async def test_flexible_team_is_steered_to_its_alternate_once_the_preferred_model_saturates(monkeypatch):
+async def test_flexible_team_is_steered_to_its_alternate_once_the_preferred_model_saturates(
+    monkeypatch: pytest.MonkeyPatch,
+):
     monkeypatch.setattr(litellm, "priority_reservation", None)
     monkeypatch.setattr(litellm.priority_reservation_settings, "saturation_threshold", 0.5)
-    handler = _steering_handler()
+    handler: Final = _steering_handler()
     handler.update_variables(llm_router=_steering_router("luna", "opus"))
-    flexible = _team_user(["luna", "opus"], [{"model": "luna", "alternates": ["opus"]}])
+    flexible: Final = _team_user(["luna", "opus"], [{"model": "luna", "alternates": ["opus"]}])
 
     assert await handler.async_pre_call_hook(flexible, DualCache(), {"model": "luna"}, "completion") is None
 
     await _saturate(handler, "luna")
-    steered = await handler.async_pre_call_hook(flexible, DualCache(), {"model": "luna", "n": 1}, "completion")
+    steered: Final = await handler.async_pre_call_hook(flexible, DualCache(), {"model": "luna", "n": 1}, "completion")
     assert steered == {"model": "opus", "n": 1}
 
-    headers = await handler.async_post_call_response_headers_hook(
+    headers: Final = await handler.async_post_call_response_headers_hook(
         data={"model": "opus", "stream": True}, user_api_key_dict=flexible, response=None
     )
     assert headers == {"x-litellm-model-steered-from": "luna"}
@@ -1888,18 +1890,18 @@ async def test_flexible_team_is_steered_to_its_alternate_once_the_preferred_mode
 
 
 @pytest.mark.asyncio
-async def test_teams_without_a_permitted_idle_alternate_stay_on_the_preferred_model(monkeypatch):
+async def test_teams_without_a_permitted_idle_alternate_stay_on_the_preferred_model(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "priority_reservation", None)
     monkeypatch.setattr(litellm.priority_reservation_settings, "saturation_threshold", 0.5)
-    handler = _steering_handler()
+    handler: Final = _steering_handler()
     handler.update_variables(llm_router=_steering_router("luna", "opus", preferred_rpm=10, alternate_rpm=1))
     await _saturate(handler, "luna", requests=5)
     await _saturate(handler, "opus")
 
-    forbidden = _team_user(["luna"], [{"model": "luna", "alternates": ["opus"]}])
-    unknown = _team_user([], [{"model": "luna", "alternates": ["missing-model"]}])
-    malformed = _team_user([], {"luna": "opus"})
-    both_saturated = _team_user([], [{"model": "luna", "alternates": ["opus"]}])
+    forbidden: Final = _team_user(["luna"], [{"model": "luna", "alternates": ["opus"]}])
+    unknown: Final = _team_user([], [{"model": "luna", "alternates": ["missing-model"]}])
+    malformed: Final = _team_user([], {"luna": "opus"})
+    both_saturated: Final = _team_user([], [{"model": "luna", "alternates": ["opus"]}])
     for team in (forbidden, unknown, malformed, both_saturated):
         assert await handler.async_pre_call_hook(team, DualCache(), {"model": "luna"}, "completion") is None
         assert (
