@@ -81,6 +81,7 @@ const defaultProps = {
   accessToken: "test-token",
   token: "test-token",
   userRole: "Admin",
+  isViewOnly: false,
   userID: "admin-user-id",
   teams: [],
 };
@@ -102,6 +103,23 @@ describe("ViewUserDashboard", () => {
       page_size: 25,
       total_pages: 1,
     });
+  });
+
+  it("offers the budget quick action to a write-capable proxy admin", async () => {
+    const user = userEvent.setup();
+    renderDashboard();
+    await user.click(await screen.findByTestId("user-actions-user-1"));
+    await user.click(await screen.findByRole("menuitem", { name: "Adjust budget" }));
+    expect(screen.getByRole("dialog", { name: "Adjust budget" })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Unlimited budget" })).toBeChecked();
+  });
+
+  it("hides budget updates from a read-only session even when its display role is Admin", async () => {
+    const user = userEvent.setup();
+    renderDashboard({ isViewOnly: true });
+    await user.click(await screen.findByTestId("user-actions-user-1"));
+    await screen.findByTestId("user-action-edit");
+    expect(screen.queryByRole("menuitem", { name: "Adjust budget" })).not.toBeInTheDocument();
   });
 
   it("should render the ViewUserDashboard component", async () => {

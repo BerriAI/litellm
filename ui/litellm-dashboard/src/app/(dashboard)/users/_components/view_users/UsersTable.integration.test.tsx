@@ -40,6 +40,7 @@ interface HarnessOverrides {
   onUserClick?: (userId: string, openInEditMode?: boolean) => void;
   onDeleteUser?: (user: UserInfo) => void;
   onResetPassword?: (userId: string) => void;
+  onAdjustBudget?: (user: UserInfo) => void;
   onSortingChange?: Mock;
 }
 
@@ -56,6 +57,7 @@ function Harness({
   onUserClick = vi.fn(),
   onDeleteUser = vi.fn(),
   onResetPassword = vi.fn(),
+  onAdjustBudget,
   onSortingChange,
 }: HarnessOverrides) {
   const [sorting, setSorting] = useState<SortingState>([{ id: "created_at", desc: true }]);
@@ -94,6 +96,7 @@ function Harness({
         onUserClick={onUserClick}
         onDeleteUser={onDeleteUser}
         onResetPassword={onResetPassword}
+        onAdjustBudget={onAdjustBudget}
       />
     </>
   );
@@ -104,6 +107,24 @@ const openRowMenu = async (user: ReturnType<typeof userEvent.setup>, userId: str
 };
 
 describe("UsersTable", () => {
+  it("opens the budget editor for the selected row when the action is allowed", async () => {
+    const user = userEvent.setup();
+    const onAdjustBudget = vi.fn();
+    const selected = makeUser({ user_id: "budget-user", max_budget: 25 });
+    render(<Harness data={[selected]} onAdjustBudget={onAdjustBudget} />);
+    await openRowMenu(user, "budget-user");
+    await user.click(await screen.findByRole("menuitem", { name: "Adjust budget" }));
+    expect(onAdjustBudget).toHaveBeenCalledWith(selected);
+  });
+
+  it("does not offer a budget update without permission", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    await openRowMenu(user, "user-1");
+    await screen.findByTestId("user-action-edit");
+    expect(screen.queryByRole("menuitem", { name: "Adjust budget" })).not.toBeInTheDocument();
+  });
+
   it("renders every migrated column header", () => {
     render(<Harness />);
 

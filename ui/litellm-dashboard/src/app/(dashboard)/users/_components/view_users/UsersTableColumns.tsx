@@ -32,9 +32,17 @@ interface UserRowActionsProps {
   onUserClick: (userId: string, openInEditMode?: boolean) => void;
   onDeleteUser: (user: UserInfo) => void;
   onResetPassword: (userId: string) => void;
+  onAdjustBudget?: (user: UserInfo) => void;
 }
 
-function UserRowActions({ user, canViewUserUsage, onUserClick, onDeleteUser, onResetPassword }: UserRowActionsProps) {
+function UserRowActions({
+  user,
+  canViewUserUsage,
+  onUserClick,
+  onDeleteUser,
+  onResetPassword,
+  onAdjustBudget,
+}: UserRowActionsProps) {
   const { t } = useTranslation();
   return (
     <DropdownMenu>
@@ -50,6 +58,12 @@ function UserRowActions({ user, canViewUserUsage, onUserClick, onDeleteUser, onR
           <Pencil />
           {t("users.table.rowActions.edit")}
         </DropdownMenuItem>
+        {onAdjustBudget && (
+          <DropdownMenuItem onClick={() => onAdjustBudget(user)}>
+            <Pencil />
+            {t("users.table.rowActions.adjustBudget")}
+          </DropdownMenuItem>
+        )}
         <DropdownMenuItem onClick={() => onResetPassword(user.user_id)} data-testid="user-action-reset-password">
           <KeyRound />
           {t("users.table.rowActions.resetPassword")}
@@ -87,6 +101,7 @@ export interface UsersTableColumnsDeps {
   onUserClick: (userId: string, openInEditMode?: boolean) => void;
   onDeleteUser: (user: UserInfo) => void;
   onResetPassword: (userId: string) => void;
+  onAdjustBudget?: (user: UserInfo) => void;
   t: TFunction;
 }
 
@@ -97,6 +112,7 @@ export const getUsersTableColumns = ({
   onUserClick,
   onDeleteUser,
   onResetPassword,
+  onAdjustBudget,
   t,
 }: UsersTableColumnsDeps): ColumnDef<UserInfo>[] => {
   const baseColumns: ColumnDef<UserInfo>[] = [
@@ -302,6 +318,7 @@ export const getUsersTableColumns = ({
             onUserClick={onUserClick}
             onDeleteUser={onDeleteUser}
             onResetPassword={onResetPassword}
+            onAdjustBudget={onAdjustBudget}
           />
         </div>
       ),

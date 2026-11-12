@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import BulkEditUserModal from "./BulkEditUsers";
+import UserBudgetDialog from "./UserBudgetDialog";
 import BulkCreateUsersButton from "@/components/bulk_create_users_button";
 import { CreateUserButton } from "@/components/CreateUserButton";
 import { Button } from "@/components/ui/button";
@@ -40,6 +41,7 @@ interface ViewUserDashboardProps {
   accessToken: string | null;
   token: string | null;
   userRole: string | null;
+  isViewOnly?: boolean;
   userID: string | null;
   teams: any[] | null;
   orgAdminOrgIds?: Array<{ organization_id: string; organization_alias: string }> | null;
@@ -55,6 +57,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   accessToken,
   token,
   userRole,
+  isViewOnly,
   userID,
   teams,
   orgAdminOrgIds,
@@ -79,6 +82,9 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isDeletingUser, setIsDeletingUser] = useState(false);
   const [userToDelete, setUserToDelete] = useState<UserInfo | null>(null);
+  const [budgetUser, setBudgetUser] = useState<UserInfo | null>(null);
+  const canAdjustBudget = isProxyAdmin && isViewOnly === false;
+  const budgetDialogUser = canAdjustBudget ? budgetUser : null;
   const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] = useState(false);
   const [invitationLinkData, setInvitationLinkData] = useState<InvitationLink | null>(null);
   const [baseUrl, setBaseUrl] = useState<string | null>(null);
@@ -315,6 +321,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       onUserClick={handleUserClick}
       onDeleteUser={handleDelete}
       onResetPassword={handleResetPassword}
+      onAdjustBudget={canAdjustBudget ? setBudgetUser : undefined}
     />
   );
 
@@ -401,6 +408,10 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
         </Tabs>
       ) : (
         usersTable
+      )}
+
+      {budgetDialogUser && accessToken && (
+        <UserBudgetDialog user={budgetDialogUser} accessToken={accessToken} onClose={() => setBudgetUser(null)} />
       )}
 
       {/* Existing Modals */}
