@@ -58,6 +58,7 @@ if TYPE_CHECKING:
     from litellm.types.llms.openai import AllMessageValues
 
 BEDROCK_INVOKE_TRACE_FIELD: Final = "amazon-bedrock-trace"
+BEDROCK_SERVICE_TIER_HEADER: Final = "X-Amzn-Bedrock-Service-Tier"
 BEDROCK_INVOKE_CONTEXT_MANAGEMENT_EDIT_BETAS: Final[Mapping[str, str]] = MappingProxyType(
     {
         "compact_20260112": ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value,

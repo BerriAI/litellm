@@ -22,7 +22,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.invoke_handler import make_call, make_sync_call
-from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.llms.bedrock.common_utils import BEDROCK_SERVICE_TIER_HEADER, BedrockError
 from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,
     merge_bedrock_invoke_headers,
@@ -48,7 +48,6 @@ else:
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 
 _GUARDRAIL_CONFIG_VALIDATOR: Final["TypeAdapter[GuardrailConfigBlock]"] = TypeAdapter(GuardrailConfigBlock)
-_BEDROCK_SERVICE_TIER_HEADER: Final = "X-Amzn-Bedrock-Service-Tier"
 
 
 @with_config(ConfigDict(extra="allow", strict=True))
@@ -88,7 +87,7 @@ def _response_header(headers: Mapping[str, str], name: str) -> str | None:
 def _bedrock_invoke_service_tier_headers(optional_params: _InvokeServiceTierParams) -> tuple[tuple[str, str], ...]:
     match optional_params.get("serviceTier"):
         case {"type": str(tier)}:
-            return ((_BEDROCK_SERVICE_TIER_HEADER, tier),)
+            return ((BEDROCK_SERVICE_TIER_HEADER, tier),)
         case _:
             return ()
 
@@ -469,8 +468,10 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             if raw_guardrail_config is None
             else tuple(bedrock_invoke_guardrail_headers(raw_guardrail_config).items())
         )
-        service_tier_headers: Final = _bedrock_invoke_service_tier_headers(
-            _INVOKE_SERVICE_TIER_PARAMS.validate_python(optional_params)
+        service_tier_headers: Final = (
+            _bedrock_invoke_service_tier_headers(_INVOKE_SERVICE_TIER_PARAMS.validate_python(optional_params))
+            if self.get_bedrock_invoke_provider(model) == "nova"
+            else ()
         )
         owned_names, metadata_headers = bedrock_request_metadata_headers(litellm_params)
         return merge_bedrock_invoke_headers(

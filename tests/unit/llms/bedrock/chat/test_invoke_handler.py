@@ -2084,3 +2084,76 @@ def test_invoke_stream_decoder_carries_the_guardrail_trace_of_the_message_stop_c
     assert (plain.provider_specific_fields or {}).get("amazon-bedrock-trace") is None
     assert traced.provider_specific_fields is not None
     assert traced.provider_specific_fields["amazon-bedrock-trace"] == trace
+
+
+NOVA_INVOKE_STREAM_EVENTS: Final = (
+    {"messageStart": {"role": "assistant"}},
+    {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": "hi"}}},
+    {"contentBlockStop": {"contentBlockIndex": 0}},
+    {"messageStop": {"stopReason": "end_turn"}},
+    {"metadata": {"usage": {"inputTokens": 1000, "outputTokens": 1000, "totalTokens": 2000}, "metrics": {}}},
+)
+
+
+def _nova_invoke_served_flex(request: httpx.Request) -> httpx.Response:
+    if request.url.path.endswith("/invoke-with-response-stream"):
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/vnd.amazon.eventstream", "X-Amzn-Bedrock-Service-Tier": "flex"},
+            content=b"".join(_bedrock_event_stream_frame(event) for event in NOVA_INVOKE_STREAM_EVENTS),
+        )
+    return httpx.Response(
+        200,
+        headers={"X-Amzn-Bedrock-Service-Tier": "flex"},
+        json={
+            "output": {"message": {"role": "assistant", "content": [{"text": "hi"}]}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 1000, "outputTokens": 1000, "totalTokens": 2000},
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    "requested_tier",
+    [
+        pytest.param({"serviceTier": {"type": "priority"}}, id="native"),
+        pytest.param({"service_tier": "priority"}, id="openai"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_nova_invoke_stream_reports_and_bills_the_tier_bedrock_served_like_a_non_streaming_call(
+    requested_tier: Mapping[str, object],
+) -> None:
+    def completion(stream: bool) -> object:
+        return litellm.completion(
+            model="bedrock/invoke/us.amazon.nova-pro-v1:0",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=stream,
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_nova_invoke_served_flex))),
+            aws_access_key_id="fake",
+            aws_secret_access_key="fake",
+            aws_region_name="us-east-1",
+            **requested_tier,
+        )
+
+    async_stream: Final = await litellm.acompletion(
+        model="bedrock/invoke/us.amazon.nova-pro-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(_nova_invoke_served_flex)),
+        aws_access_key_id="fake",
+        aws_secret_access_key="fake",
+        aws_region_name="us-east-1",
+        **requested_tier,
+    )
+    non_streaming: Final = completion(stream=False)
+    sync_streamed: Final = litellm.stream_chunk_builder(list(completion(stream=True)))
+    async_streamed: Final = litellm.stream_chunk_builder([chunk async for chunk in async_stream])
+
+    assert isinstance(non_streaming, litellm.ModelResponse)
+    assert sync_streamed.service_tier == async_streamed.service_tier == non_streaming.service_tier == "flex"
+    assert (
+        litellm.completion_cost(sync_streamed)
+        == litellm.completion_cost(async_streamed)
+        == non_streaming._hidden_params["response_cost"]
+    )

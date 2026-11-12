@@ -21,8 +21,7 @@ def get_served_service_tier(standard_logging_payload: StandardLoggingPayload) ->
     The tier the provider reports it actually served the request on.
 
     Providers report it either at the top level of the response (OpenAI, Bedrock,
-    Groq) or on the usage object (Anthropic). Streaming responses carry no served
-    tier.
+    Groq) or on the usage object (Anthropic).
     """
     response: Final = standard_logging_payload.get("response")
     usage_object: Final = standard_logging_payload.get("metadata", {}).get("usage_object")

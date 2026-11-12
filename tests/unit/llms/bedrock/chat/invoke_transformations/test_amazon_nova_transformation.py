@@ -1,4 +1,5 @@
 import json
+from collections.abc import Mapping
 from typing import Final
 from unittest.mock import MagicMock
 
@@ -162,3 +163,36 @@ def test_invoke_sends_the_service_tier_in_the_header_invoke_model_takes(service_
     request: Final = send.call_args.args[0]
     assert request.headers.get("X-Amzn-Bedrock-Service-Tier") == sent_tier
     assert "serviceTier" not in json.loads(request.content)
+
+
+def test_invoke_reports_and_bills_the_tier_bedrock_served_over_the_tier_requested():
+    reply: Final = {
+        "output": {"message": {"role": "assistant", "content": [{"text": "hi"}]}},
+        "stopReason": "end_turn",
+        "usage": {"inputTokens": 1000, "outputTokens": 1000, "totalTokens": 2000},
+    }
+
+    def invoke(tier: Mapping[str, object]) -> litellm.ModelResponse:
+        send: Final = MagicMock(
+            return_value=httpx.Response(200, json=reply, headers={"X-Amzn-Bedrock-Service-Tier": "flex"})
+        )
+        return litellm.completion(
+            model=f"bedrock/invoke/{MODEL}",
+            messages=[{"role": "user", "content": "hi"}],
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(send))),
+            aws_access_key_id="fake",
+            aws_secret_access_key="fake",
+            aws_region_name="us-east-1",
+            **tier,
+        )
+
+    native_priority: Final = invoke({"serviceTier": {"type": "priority"}})
+    openai_priority: Final = invoke({"service_tier": "priority"})
+    openai_flex: Final = invoke({"service_tier": "flex"})
+
+    assert native_priority.service_tier == openai_priority.service_tier == "flex"
+    assert (
+        native_priority._hidden_params["response_cost"]
+        == openai_priority._hidden_params["response_cost"]
+        == openai_flex._hidden_params["response_cost"]
+    )
