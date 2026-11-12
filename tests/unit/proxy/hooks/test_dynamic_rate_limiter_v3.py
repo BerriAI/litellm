@@ -6,7 +6,9 @@ Core tests to validate that priority weights are respected (0.9/0.1) instead of 
 
 import asyncio
 import time
+from collections.abc import Mapping
 from datetime import datetime, timedelta
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
@@ -14,9 +16,11 @@ import pytest
 
 import litellm
 from litellm import DualCache, Router
+from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (
+    AlternateGrant,
     PROXY_DynamicRateLimitHandlerV3,
 )
 from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (
@@ -1824,7 +1828,13 @@ async def test_post_call_success_hook_priority_header_is_always_http_encodable(t
     assert http_response.headers["x-litellm-rate-limiter-version"] == "v3"
 
 
-def _steering_router(preferred: str, alternate: str, preferred_rpm: int = 2, alternate_rpm: int = 1000) -> Router:
+def _steering_router(
+    preferred: str,
+    alternate: str,
+    preferred_rpm: int = 2,
+    alternate_rpm: int = 1000,
+    extra_params: Mapping[str, Mapping[str, object]] = MappingProxyType({}),
+) -> Router:
     return Router(
         model_list=[
             {
@@ -1834,6 +1844,7 @@ def _steering_router(preferred: str, alternate: str, preferred_rpm: int = 2, alt
                     "api_key": "test-key",
                     "api_base": "test-base",
                     "rpm": rpm,
+                    **extra_params.get(name, {}),
                 },
             }
             for name, rpm in ((preferred, preferred_rpm), (alternate, alternate_rpm))
@@ -1847,8 +1858,12 @@ def _team_user(team_models: list[str], preferences: object) -> UserAPIKeyAuth:
     )
 
 
-async def _team_allowlist(user_api_key_dict: UserAPIKeyAuth, model: str) -> bool:
-    return model in user_api_key_dict.team_models
+async def _team_allowlist(user_api_key_dict: UserAPIKeyAuth, model: str) -> AlternateGrant | None:
+    return AlternateGrant() if model in user_api_key_dict.team_models else None
+
+
+async def _pooled_team_allowlist(user_api_key_dict: UserAPIKeyAuth, model: str) -> AlternateGrant | None:
+    return AlternateGrant(access_groups=(f"{model}-pool",)) if model in user_api_key_dict.team_models else None
 
 
 def _steering_handler() -> DynamicRateLimitHandler:
@@ -1901,12 +1916,70 @@ async def test_teams_without_a_permitted_idle_alternate_stay_on_the_preferred_mo
     forbidden: Final = _team_user(["luna"], [{"model": "luna", "alternates": ["opus"]}])
     unknown: Final = _team_user([], [{"model": "luna", "alternates": ["missing-model"]}])
     malformed: Final = _team_user([], {"luna": "opus"})
-    both_saturated: Final = _team_user([], [{"model": "luna", "alternates": ["opus"]}])
+    both_saturated: Final = _team_user(["luna", "opus"], [{"model": "luna", "alternates": ["opus"]}])
     for team in (forbidden, unknown, malformed, both_saturated):
         assert await handler.async_pre_call_hook(team, DualCache(), {"model": "luna"}, "completion") is None
         assert (
             await handler.async_post_call_response_headers_hook(data={}, user_api_key_dict=team, response=None) is None
         )
+
+
+@pytest.mark.asyncio
+async def test_a_zero_cost_preferred_model_is_never_steered_to_a_priced_alternate(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "priority_reservation", None)
+    monkeypatch.setattr(litellm.priority_reservation_settings, "saturation_threshold", 0.5)
+    handler: Final = _steering_handler()
+    free_luna: Final = {"luna": {"input_cost_per_token": 0, "output_cost_per_token": 0}}
+    handler.update_variables(llm_router=_steering_router("luna", "opus", extra_params=free_luna))
+    await _saturate(handler, "luna")
+
+    flexible: Final = _team_user(["luna", "opus"], [{"model": "luna", "alternates": ["opus"]}])
+    assert await handler.async_pre_call_hook(flexible, DualCache(), {"model": "luna"}, "completion") is None
+    assert (
+        await handler.async_post_call_response_headers_hook(data={}, user_api_key_dict=flexible, response=None) is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_alternate_that_adds_model_level_guardrails_is_never_used(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "priority_reservation", None)
+    monkeypatch.setattr(litellm.priority_reservation_settings, "saturation_threshold", 0.5)
+    handler: Final = _steering_handler()
+    guarded_opus: Final = {"opus": {"guardrails": ["opus-only-input-scan"]}}
+    handler.update_variables(llm_router=_steering_router("luna", "opus", extra_params=guarded_opus))
+    await _saturate(handler, "luna")
+
+    flexible: Final = _team_user(["luna", "opus"], [{"model": "luna", "alternates": ["opus"]}])
+    assert await handler.async_pre_call_hook(flexible, DualCache(), {"model": "luna"}, "completion") is None
+    assert (
+        await handler.async_post_call_response_headers_hook(data={}, user_api_key_dict=flexible, response=None) is None
+    )
+
+    already_scanned: Final = {"model": "luna", "metadata": {"guardrails": ["opus-only-input-scan"]}}
+    steered: Final = await handler.async_pre_call_hook(flexible, DualCache(), already_scanned, "completion")
+    assert isinstance(steered, dict)
+    assert steered["model"] == "opus"
+    assert steered["metadata"]["guardrails"] == ["opus-only-input-scan"]
+
+
+@pytest.mark.asyncio
+async def test_a_steered_request_is_charged_to_the_groups_that_granted_the_alternate(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "priority_reservation", None)
+    monkeypatch.setattr(litellm.priority_reservation_settings, "saturation_threshold", 0.5)
+    handler: Final = DynamicRateLimitHandler(
+        internal_usage_cache=DualCache(), is_model_authorized=_pooled_team_allowlist
+    )
+    handler.update_variables(llm_router=_steering_router("luna", "opus"))
+    await _saturate(handler, "luna")
+
+    flexible: Final = _team_user(["luna", "opus"], [{"model": "luna", "alternates": ["opus"]}])
+    flexible.matched_model_access_groups = ["luna-pool"]
+    data: Final = {"model": "luna", "metadata": {MODEL_ACCESS_GROUP_METADATA_KEY: ["luna-pool"], "tags": ["t"]}}
+    steered: Final = await handler.async_pre_call_hook(flexible, DualCache(), data, "completion")
+    assert isinstance(steered, dict)
+    assert steered["model"] == "opus"
+    assert steered["metadata"] == {MODEL_ACCESS_GROUP_METADATA_KEY: ["opus-pool"], "tags": ["t"]}
+    assert flexible.matched_model_access_groups == ["opus-pool"]
 
 
 def _borrowing_handler(

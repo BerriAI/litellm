@@ -34,13 +34,16 @@ def _reply() -> bytes:
 @pytest.fixture(scope="module")
 def steering_proxy(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[Gateway, str]]:
     directory: Final = tmp_path_factory.mktemp("model-preference-steering")
-    configuration: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
-    configuration["litellm_settings"] = {
-        **configuration["litellm_settings"],
-        "callbacks": ["dynamic_rate_limiter_v3"],
-        "priority_reservation_settings": {
-            "saturation_threshold": SATURATION_THRESHOLD,
-            "saturation_check_cache_ttl": 1,
+    base: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    configuration: Final = {
+        **base,
+        "litellm_settings": {
+            **base["litellm_settings"],
+            "callbacks": ["dynamic_rate_limiter_v3"],
+            "priority_reservation_settings": {
+                "saturation_threshold": SATURATION_THRESHOLD,
+                "saturation_check_cache_ttl": 1,
+            },
         },
     }
     path: Final = directory / "model_preference_steering.yaml"
