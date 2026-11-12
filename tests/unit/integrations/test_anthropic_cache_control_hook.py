@@ -5789,7 +5789,10 @@ _BEDROCK_INVOKE_REPLY: Final = MappingProxyType(
 async def test_a_bedrock_claude_deployment_declaring_the_breakpoint_flag_keeps_bedrocks_own_cache_marks(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, entrypoint: str, expected_system: list[object]
 ) -> None:
+    from litellm.llms.anthropic.messages.native import handler as python_messages
+
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "anthropic_messages", python_messages.anthropic_messages)
     bedrock: Final = respx_mock.post(host="bedrock-runtime.us-east-1.amazonaws.com").mock(
         side_effect=lambda request: Response(
             200,

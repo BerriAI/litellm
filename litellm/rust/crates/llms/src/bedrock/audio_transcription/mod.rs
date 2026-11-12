@@ -1,8 +1,7 @@
 use litellm_auth::AwsParams;
 use litellm_auth_aws::{
-    AwsCredentialSource, bedrock_model_id_and_region,
-    constants::{BEDROCK_RUNTIME_ENDPOINT_TEMPLATE, BEDROCK_SERVICE},
-    resolve_bedrock_region,
+    AwsCredentialSource, CallerSigningHeaders, bedrock_model_id_and_region,
+    bedrock_runtime_endpoint, constants::BEDROCK_SERVICE, resolve_bedrock_region,
 };
 use litellm_core_utils::core_helpers::json_type_name;
 use litellm_llms_types::{
@@ -161,7 +160,7 @@ impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(str::to_string)
-            .unwrap_or_else(|| BEDROCK_RUNTIME_ENDPOINT_TEMPLATE.replace("{region}", &region));
+            .unwrap_or_else(|| bedrock_runtime_endpoint(&region));
         Ok(format!(
             "{}/model/{model_id}/converse",
             endpoint.trim_end_matches('/')
@@ -187,6 +186,7 @@ impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
                 region: resolve_bedrock_region(model_region.as_deref(), &params, env_lookup),
                 service: BEDROCK_SERVICE,
                 credentials: Box::new(AwsCredentialSource::from_params(&params, env_lookup)),
+                caller_headers: CallerSigningHeaders::Dropped,
             },
         })
     }

@@ -5,7 +5,7 @@ use std::sync::LazyLock;
 use litellm_auth::{AwsParams, CredentialPlacement, ParamKind, ParamSpec};
 use litellm_secret_value::SecretValue;
 
-use litellm_auth_aws::{AwsCredentialSource, resolve_aws_region};
+use litellm_auth_aws::{AwsCredentialSource, CallerSigningHeaders, resolve_aws_region};
 use litellm_core_utils::settings::resolve_non_empty;
 use litellm_http::request::{header_value, with_header, without_headers};
 use litellm_llms_types::{
@@ -123,6 +123,7 @@ impl BaseMessagesConfig for BedrockClaudePlatformMessagesConfig {
                 region: platform_region(base.as_deref(), params, env)?,
                 service: SERVICE,
                 credentials: Box::new(AwsCredentialSource::from_params(&params.aws, env)),
+                caller_headers: CallerSigningHeaders::Botocore,
             },
         })
     }

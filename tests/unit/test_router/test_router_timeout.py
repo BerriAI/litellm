@@ -4,7 +4,8 @@ import asyncio
 import json
 import os
 from datetime import datetime, timedelta
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping
+from contextlib import contextmanager
 from typing import Final
 from unittest.mock import AsyncMock, Mock
 
@@ -23,6 +24,7 @@ from litellm.types.llms.openai import AllMessageValues
 import time
 from unittest.mock import patch, MagicMock
 
+from tests.test_litellm_rust.support.recording_server import ResponseSpec, recording_service
 from tests.unit.llms.bedrock.slow_upstream import (
     CONVERSE_ANSWER,
     STREAM_TIMEOUT_SECONDS,
@@ -320,12 +322,26 @@ async def _streamed_messages_text(router: Router) -> str:
     return "".join(event["delta"]["text"] for event in events if event["type"] == "content_block_delta")
 
 
+@contextmanager
+def _slow_upstream(respx_mock: respx.MockRouter, served_by_rust: bool, answer: bytes = b"") -> Iterator[str | None]:
+    if not served_by_rust:
+        respx_mock.post(url__regex=r"https://(bedrock-runtime\.us-east-1\.amazonaws\.com|api\.openai\.com)/.*").mock(
+            side_effect=slow_upstream_answer(answer)
+        )
+        yield None
+        return
+    with recording_service() as server:
+        server.expected_requests = None
+        server.default_response = ResponseSpec(body=answer, delay=UPSTREAM_FIRST_BYTE_SECONDS)
+        yield server.base_url
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("model", "answer", "streamed_text"),
+    ("model", "answer", "streamed_text", "served_by_rust"),
     [
-        ("bedrock/converse/anthropic.claude-sonnet-4-5-v1:0", CONVERSE_ANSWER, _streamed_chat_text),
-        ("bedrock/invoke/anthropic.claude-sonnet-4-5-v1:0", _INVOKE_ANSWER, _streamed_messages_text),
+        ("bedrock/converse/anthropic.claude-sonnet-4-5-v1:0", CONVERSE_ANSWER, _streamed_chat_text, False),
+        ("bedrock/invoke/anthropic.claude-sonnet-4-5-v1:0", _INVOKE_ANSWER, _streamed_messages_text, True),
     ],
     ids=["chat_completions", "anthropic_messages"],
 )
@@ -333,32 +349,32 @@ async def test_stream_a_deployment_hook_answers_in_one_piece_gets_the_longer_lim
     model: str,
     answer: bytes,
     streamed_text: Callable[[Router], Awaitable[str]],
+    served_by_rust: bool,
     respx_mock: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "callbacks", [_AnswersStreamsInOnePiece()])
-    respx_mock.post(url__regex=r"https://bedrock-runtime\.us-east-1\.amazonaws\.com/.*").mock(
-        side_effect=slow_upstream_answer(answer)
-    )
-    router: Final = Router(
-        model_list=[
-            {
-                "model_name": "claude",
-                "litellm_params": {
-                    "model": model,
-                    "aws_access_key_id": "fake",
-                    "aws_secret_access_key": "fake",
-                    "aws_region_name": "us-east-1",
-                    "timeout": STREAM_TIMEOUT_SECONDS,
-                    "stream_timeout": UPSTREAM_FIRST_BYTE_SECONDS * 2,
-                },
-            }
-        ],
-        num_retries=0,
-    )
+    with _slow_upstream(respx_mock, served_by_rust, answer) as api_base:
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "claude",
+                    "litellm_params": {
+                        "model": model,
+                        "api_base": api_base,
+                        "aws_access_key_id": "fake",
+                        "aws_secret_access_key": "fake",
+                        "aws_region_name": "us-east-1",
+                        "timeout": STREAM_TIMEOUT_SECONDS,
+                        "stream_timeout": UPSTREAM_FIRST_BYTE_SECONDS * 2,
+                    },
+                }
+            ],
+            num_retries=0,
+        )
 
-    assert await streamed_text(router) == "hi"
+        assert await streamed_text(router) == "hi"
 
 
 class _FailureDetails(CustomLogger):
@@ -392,46 +408,46 @@ async def _drain_native_responses_stream(router: Router) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("model", "drain"),
+    ("model", "drain", "served_by_rust"),
     [
-        ("bedrock/invoke/anthropic.claude-sonnet-4-5-v1:0", _drain_messages_stream),
-        ("openai/gpt-4.1", _drain_native_responses_stream),
+        ("bedrock/invoke/anthropic.claude-sonnet-4-5-v1:0", _drain_messages_stream, True),
+        ("openai/gpt-4.1", _drain_native_responses_stream, False),
     ],
     ids=["anthropic_messages", "responses"],
 )
 async def test_native_live_stream_cut_at_the_stream_timeout_is_not_blamed_on_the_deployment(
     model: str,
     drain: Callable[[Router], Awaitable[None]],
+    served_by_rust: bool,
     respx_mock: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     failure_details: Final = _FailureDetails()
     monkeypatch.setattr(litellm, "callbacks", [failure_details])
-    respx_mock.post(url__regex=r"https://(bedrock-runtime\.us-east-1\.amazonaws\.com|api\.openai\.com)/.*").mock(
-        side_effect=slow_upstream_answer()
-    )
-    router: Final = Router(
-        model_list=[
-            {
-                "model_name": "native",
-                "litellm_params": {
-                    "model": model,
-                    "api_key": "fake",
-                    "aws_access_key_id": "fake",
-                    "aws_secret_access_key": "fake",
-                    "aws_region_name": "us-east-1",
-                },
-            }
-        ],
-        timeout=UPSTREAM_FIRST_BYTE_SECONDS * 2,
-        stream_timeout=STREAM_TIMEOUT_SECONDS,
-        num_retries=0,
-    )
+    with _slow_upstream(respx_mock, served_by_rust) as api_base:
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "native",
+                    "litellm_params": {
+                        "model": model,
+                        "api_base": api_base,
+                        "api_key": "fake",
+                        "aws_access_key_id": "fake",
+                        "aws_secret_access_key": "fake",
+                        "aws_region_name": "us-east-1",
+                    },
+                }
+            ],
+            timeout=UPSTREAM_FIRST_BYTE_SECONDS * 2,
+            stream_timeout=STREAM_TIMEOUT_SECONDS,
+            num_retries=0,
+        )
 
-    with pytest.raises(litellm.Timeout):
-        await drain(router)
-    await asyncio.wait_for(failure_details.logged.wait(), timeout=10)
+        with pytest.raises(litellm.Timeout):
+            await drain(router)
+        await asyncio.wait_for(failure_details.logged.wait(), timeout=10)
 
     started: Final = failure_details.details.get("api_call_start_time")
     assert isinstance(started, datetime)

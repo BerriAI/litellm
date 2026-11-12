@@ -11,6 +11,18 @@ pub trait Protocol: Send + Sync + 'static {
     type HostCall: Send + 'static;
     type Chunk: Send + 'static;
     type StreamHead: Send + 'static;
+
+    fn detached_drain(_head: &Self::StreamHead) -> Option<DetachedDrain> {
+        None
+    }
+}
+
+/// A stream whose upstream is read to its end after the caller detaches, so the provider's
+/// terminal usage still reaches the stream hooks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DetachedDrain {
+    pub timeout: std::time::Duration,
+    pub limit: usize,
 }
 
 pub enum HostRequest<P: Protocol> {

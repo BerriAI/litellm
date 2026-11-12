@@ -2110,6 +2110,7 @@ mod tests {
                 supports_speed: false,
                 supports_mid_conversation_system: false,
                 effort_tiers: tiers(false, false, false, false, false, false),
+                bedrock: Default::default(),
             }
         );
         assert_eq!(

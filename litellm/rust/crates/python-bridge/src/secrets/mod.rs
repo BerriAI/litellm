@@ -8,6 +8,7 @@ mod python;
 pub(crate) mod resolved;
 pub(crate) mod runtime;
 mod vault;
+mod web_identity;
 
 use std::sync::Arc;
 
@@ -18,6 +19,7 @@ use litellm_secrets::source::{EnvironmentSecrets, SecretSource};
 use pyo3::prelude::*;
 use python::PythonSecrets;
 use resolved::ResolvedSecrets;
+pub(crate) use web_identity::HostWebIdentityTokens;
 
 use crate::{coercion::FieldSpec, python_settings::PythonSettings};
 

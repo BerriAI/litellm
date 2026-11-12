@@ -1384,7 +1384,7 @@ _BATCH_FILE_ID: Final = "s3://batch-inputs/litellm-bedrock-files/batch.jsonl"
 _BEDROCK_ENTRY_POINTS: Final[tuple[tuple[str, Callable[[], Awaitable[object]], httpx.Response], ...]] = (
     (
         "anthropic_messages",
-        lambda: litellm.anthropic.messages.acreate(
+        lambda: python_messages.anthropic_messages(
             model="bedrock/invoke/us.anthropic.claude-sonnet-5-5",
             messages=[{"role": "user", "content": "hi"}],
             max_tokens=16,

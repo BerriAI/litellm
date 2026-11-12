@@ -2,6 +2,7 @@ use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use aws_credential_types::provider::{SharedCredentialsProvider, error::CredentialsError};
+use aws_smithy_runtime_api::client::http::SharedHttpClient;
 use litellm_secret_value::SecretValue;
 use moka::{Expiry, future::Cache};
 use std::{future::Future, pin::Pin, sync::Arc};
@@ -16,18 +17,27 @@ use aws_sigv4::sign::v4;
 use aws_smithy_runtime_api::client::identity::Identity;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 
-use litellm_auth_types::AwsParams;
+use litellm_auth_types::{AwsParams, AwsSessionTag, ParamSpec};
 
 use super::constants::{
-    AWS_ACCESS_KEY_ID, AWS_EXTERNAL_ID, AWS_PROFILE_NAME, AWS_REGION_NAME, AWS_ROLE_ARN,
-    AWS_ROLE_NAME, AWS_SECRET_ACCESS_KEY, AWS_SESSION_NAME, AWS_SESSION_TOKEN,
-    AWS_SIGNED_HEADER_NAMES, AWS_STS_ENDPOINT, AWS_WEB_IDENTITY_TOKEN, AWS_WEB_IDENTITY_TOKEN_FILE,
-    DEFAULT_BEDROCK_REGION, DEFAULT_SESSION_NAME_PREFIX, SIGV4_COMPUTED_HEADER_NAMES,
+    AWS_ACCESS_KEY_ID, AWS_DEFAULT_REGION, AWS_EXTERNAL_ID, AWS_PROFILE_NAME, AWS_REGION,
+    AWS_REGION_NAME, AWS_ROLE_ARN, AWS_ROLE_NAME, AWS_SECRET_ACCESS_KEY, AWS_SESSION_NAME,
+    AWS_SESSION_TOKEN, AWS_SIGNED_HEADER_NAMES, AWS_STS_ENDPOINT, AWS_WEB_IDENTITY_TOKEN,
+    AWS_WEB_IDENTITY_TOKEN_FILE, BEDROCK_SESSION_POLICY, DEFAULT_BEDROCK_REGION,
+    DEFAULT_SESSION_NAME_PREFIX, SIGV4_COMPUTED_HEADER_NAMES, WEB_IDENTITY_SESSION_SECONDS,
 };
 use crate::error::{CredentialFlow, Error, SigningStage};
+use crate::region::{session_region, sts_endpoint_region};
 
 const CREDENTIAL_CACHE_TTL: Duration = Duration::from_secs(600);
 const EXPIRY_BUFFER: Duration = Duration::from_secs(60);
+
+pub type WebIdentityTokenFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Option<SecretValue>, litellm_error::Source>> + Send + 'a>>;
+
+pub trait WebIdentityTokenSource: Send + Sync + std::fmt::Debug {
+    fn web_identity_token<'a>(&'a self, reference: &'a str) -> WebIdentityTokenFuture<'a>;
+}
 
 #[derive(Clone)]
 pub struct AwsAuthService {
@@ -38,7 +48,7 @@ pub struct AwsAuthService {
 
 impl Default for AwsAuthService {
     fn default() -> Self {
-        Self::new(Arc::new(NativeProviderLoader))
+        Self::new(Arc::new(NativeProviderLoader::default()))
     }
 }
 
@@ -52,6 +62,13 @@ impl AwsAuthService {
                 .build(),
             loader,
         }
+    }
+
+    pub fn with_web_identity_tokens(tokens: Arc<dyn WebIdentityTokenSource>) -> Self {
+        Self::new(Arc::new(NativeProviderLoader {
+            tokens: Some(tokens),
+            ..NativeProviderLoader::default()
+        }))
     }
 }
 
@@ -81,11 +98,74 @@ trait ProviderLoader: Send + Sync {
     fn load(&self, config: AwsAuthConfig, flow: AwsAuthFlow) -> ProviderFuture<'_>;
 }
 
-struct NativeProviderLoader;
+#[derive(Clone, Default)]
+struct NativeProviderLoader {
+    tokens: Option<Arc<dyn WebIdentityTokenSource>>,
+    http_client: Option<SharedHttpClient>,
+    ambient: Option<SharedCredentialsProvider>,
+}
+
+impl std::fmt::Debug for NativeProviderLoader {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("NativeProviderLoader")
+            .finish_non_exhaustive()
+    }
+}
 
 impl ProviderLoader for NativeProviderLoader {
     fn load(&self, config: AwsAuthConfig, flow: AwsAuthFlow) -> ProviderFuture<'_> {
-        Box::pin(build_provider(config, flow))
+        Box::pin(build_provider(config, flow, self))
+    }
+}
+
+impl NativeProviderLoader {
+    async fn ambient(&self) -> SharedCredentialsProvider {
+        match &self.ambient {
+            Some(provider) => provider.clone(),
+            None => SharedCredentialsProvider::new(
+                aws_config::default_provider::credentials::DefaultCredentialsChain::builder()
+                    .build()
+                    .await,
+            ),
+        }
+    }
+
+    async fn sts_config(
+        &self,
+        config: &AwsAuthConfig,
+        region: Option<String>,
+    ) -> aws_types::SdkConfig {
+        let loader = aws_config::defaults(aws_config::BehaviorVersion::latest());
+        let loader = match region {
+            Some(region) => loader.region(aws_types::region::Region::new(region)),
+            None => loader,
+        };
+        let loader = match config.sts_endpoint.clone() {
+            Some(endpoint) => loader.endpoint_url(endpoint),
+            None => loader,
+        };
+        let loader = match self.http_client.clone() {
+            Some(client) => loader.http_client(client),
+            None => loader,
+        };
+        let loader = match (&config.access_key_id, &config.secret_access_key) {
+            (Some(key), Some(secret)) => loader.credentials_provider(Credentials::new(
+                key.expose(),
+                secret.expose(),
+                config
+                    .session_token
+                    .as_ref()
+                    .map(|token| token.expose().to_owned()),
+                None,
+                "litellm-role-source",
+            )),
+            _ => match &self.ambient {
+                Some(ambient) => loader.credentials_provider(ambient.clone()),
+                None => loader,
+            },
+        };
+        loader.load().await
     }
 }
 
@@ -101,6 +181,8 @@ pub struct AwsAuthConfig {
     pub web_identity_token: Option<SecretValue>,
     pub sts_endpoint: Option<String>,
     pub external_id: Option<SecretValue>,
+    pub session_tags: Option<Vec<AwsSessionTag>>,
+    pub session_policy: Option<&'static str>,
 }
 
 impl AwsAuthConfig {
@@ -126,7 +208,19 @@ impl AwsAuthConfig {
             external_id: self
                 .external_id
                 .or_else(|| env_lookup(AWS_EXTERNAL_ID).map(SecretValue::new)),
+            session_tags: self.session_tags,
+            session_policy: self.session_policy,
         }
+    }
+
+    fn sts_region(&self, env_lookup: &(dyn Fn(&str) -> Option<String> + Sync)) -> Option<String> {
+        let present = |value: Option<String>| value.filter(|value| !value.is_empty());
+        self.sts_endpoint
+            .as_deref()
+            .and_then(sts_endpoint_region)
+            .or_else(|| present(env_lookup(AWS_REGION)))
+            .or_else(|| present(env_lookup(AWS_DEFAULT_REGION)))
+            .or_else(|| present(self.region_name.clone()))
     }
 }
 
@@ -136,11 +230,13 @@ pub enum AwsAuthFlow {
         token: SecretValue,
         role: String,
         session_name: String,
+        sts_region: Option<String>,
     },
     AssumeRole {
         role: String,
         session_name: Option<String>,
         web_identity_role: Option<String>,
+        sts_region: Option<String>,
     },
     Profile {
         name: String,
@@ -190,6 +286,7 @@ pub fn classify_auth(
         .filter(|token_file| !token_file.is_empty())
         .and_then(|_| env_lookup(AWS_ROLE_ARN));
     let config = config.with_environment(env_lookup);
+    let sts_region = config.sts_region(env_lookup);
     if let (Some(token), Some(role), Some(session_name)) = (
         config.web_identity_token.clone(),
         config.role_name.clone(),
@@ -199,6 +296,7 @@ pub fn classify_auth(
             token,
             role,
             session_name,
+            sts_region,
         };
     }
     if let Some(role) = config.role_name.clone() {
@@ -206,6 +304,7 @@ pub fn classify_auth(
             role,
             session_name: config.session_name.clone(),
             web_identity_role,
+            sts_region,
         };
     }
     if let Some(name) = config.profile_name {
@@ -268,6 +367,11 @@ impl AwsAuthService {
     ) -> Result<Credentials, Error> {
         let resolved = config.clone().with_environment(env_lookup);
         let flow = classify_auth(config, env_lookup);
+        if let AwsAuthFlow::WebIdentity { token, .. } = &flow
+            && names_the_environment(token.expose(), env_lookup)
+        {
+            return Err(Error::WebIdentityTokenReference);
+        }
         self.fresh_credentials(&resolved, &flow).await
     }
 
@@ -325,6 +429,13 @@ impl AwsAuthService {
     }
 }
 
+fn names_the_environment(
+    reference: &str,
+    env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
+) -> bool {
+    reference.starts_with("os.environ/") || env_lookup(reference).is_some()
+}
+
 fn fresh(credentials: &Credentials) -> bool {
     credentials
         .expiry()
@@ -347,6 +458,7 @@ impl AwsAuthFlow {
 async fn build_provider(
     resolved: AwsAuthConfig,
     flow: AwsAuthFlow,
+    loader: &NativeProviderLoader,
 ) -> Result<SharedCredentialsProvider, Error> {
     match flow {
         AwsAuthFlow::SessionToken {
@@ -393,67 +505,143 @@ async fn build_provider(
             role,
             session_name,
             web_identity_role,
+            sts_region,
         } => {
-            if is_already_running_as_role(&role, web_identity_role.as_deref(), &resolved).await? {
-                return Ok(SharedCredentialsProvider::new(
-                    aws_config::default_provider::credentials::DefaultCredentialsChain::builder()
-                        .build()
-                        .await,
-                ));
+            let running_as = RunningAs {
+                role: role.clone(),
+                config: resolved.clone(),
+                sts_region: sts_region.clone(),
+                loader: loader.clone(),
+            };
+            if running_as.is_target(web_identity_role.as_deref()).await {
+                return Ok(loader.ambient().await);
             }
-            let sdk_config = sdk_config(resolved.clone()).await;
+            let sdk_config = loader.sts_config(&resolved, sts_region).await;
             let builder = aws_config::sts::AssumeRoleProvider::builder(role)
                 .session_name(session_name.unwrap_or_else(default_session_name));
             let builder = match resolved.external_id {
                 Some(id) => builder.external_id(id.expose()),
                 None => builder,
             };
-            Ok(SharedCredentialsProvider::new(
-                builder.configure(&sdk_config).build().await,
-            ))
+            let builder = match resolved.session_tags {
+                Some(tags) => builder.tags(tags.into_iter().map(|tag| (tag.key, tag.value))),
+                None => builder,
+            };
+            Ok(SharedCredentialsProvider::new(AssumedRole {
+                provider: builder.configure(&sdk_config).build().await,
+                fallback: web_identity_role.is_none().then_some(running_as),
+            }))
         }
         AwsAuthFlow::WebIdentity {
             token,
             role,
             session_name,
+            sts_region,
         } => Ok(SharedCredentialsProvider::new(WebIdentityProvider {
-            client: aws_sdk_sts::Client::new(&sdk_config(resolved).await),
+            client: aws_sdk_sts::Client::new(&loader.sts_config(&resolved, sts_region).await),
+            tokens: loader.tokens.clone(),
             token,
             role,
             session_name,
+            policy: resolved.session_policy,
         })),
     }
 }
 
-async fn sdk_config(config: AwsAuthConfig) -> aws_types::SdkConfig {
-    let loader = aws_config::defaults(aws_config::BehaviorVersion::latest());
-    let loader = match config.region_name {
-        Some(region) => loader.region(aws_types::region::Region::new(region)),
-        None => loader,
-    };
-    let loader = match config.sts_endpoint {
-        Some(endpoint) => loader.endpoint_url(endpoint),
-        None => loader,
-    };
-    let loader = match (config.access_key_id, config.secret_access_key) {
-        (Some(key), Some(secret)) => loader.credentials_provider(Credentials::new(
-            key.expose(),
-            secret.expose(),
-            config.session_token.map(|token| token.expose().to_owned()),
-            None,
-            "litellm-role-source",
-        )),
-        _ => loader,
-    };
-    loader.load().await
+#[derive(Debug)]
+struct RunningAs {
+    role: String,
+    config: AwsAuthConfig,
+    sts_region: Option<String>,
+    loader: NativeProviderLoader,
+}
+
+impl RunningAs {
+    async fn is_target(&self, web_identity_role: Option<&str>) -> bool {
+        if self.config.access_key_id.is_some() || self.config.secret_access_key.is_some() {
+            return false;
+        }
+        if role_identity(&self.role).is_none() {
+            return false;
+        }
+        if let Some(current_role) = web_identity_role {
+            return same_role_arns(&self.role, current_role);
+        }
+        let caller = AwsAuthConfig {
+            sts_endpoint: self.config.sts_endpoint.clone(),
+            ..Default::default()
+        };
+        let sdk_config = self
+            .loader
+            .sts_config(&caller, self.sts_region.clone())
+            .await;
+        aws_sdk_sts::Client::new(&sdk_config)
+            .get_caller_identity()
+            .send()
+            .await
+            .ok()
+            .and_then(|response| response.arn)
+            .is_some_and(|caller| same_role_arns(&self.role, &caller))
+    }
+}
+
+#[derive(Debug)]
+struct AssumedRole {
+    provider: aws_config::sts::AssumeRoleProvider,
+    fallback: Option<RunningAs>,
+}
+
+impl ProvideCredentials for AssumedRole {
+    fn provide_credentials<'a>(
+        &'a self,
+    ) -> aws_credential_types::provider::future::ProvideCredentials<'a>
+    where
+        Self: 'a,
+    {
+        aws_credential_types::provider::future::ProvideCredentials::new(async {
+            let error = match self.provider.provide_credentials().await {
+                Ok(credentials) => return Ok(credentials),
+                Err(error) => error,
+            };
+            match &self.fallback {
+                Some(running_as)
+                    if format!("{error:?}").contains("AccessDenied")
+                        && running_as.is_target(None).await =>
+                {
+                    running_as
+                        .loader
+                        .ambient()
+                        .await
+                        .provide_credentials()
+                        .await
+                }
+                _ => Err(error),
+            }
+        })
+    }
 }
 
 #[derive(Debug)]
 struct WebIdentityProvider {
     client: aws_sdk_sts::Client,
+    tokens: Option<Arc<dyn WebIdentityTokenSource>>,
     token: SecretValue,
     role: String,
     session_name: String,
+    policy: Option<&'static str>,
+}
+
+impl WebIdentityProvider {
+    async fn token(&self) -> Result<SecretValue, Error> {
+        let Some(tokens) = &self.tokens else {
+            return Ok(self.token.clone());
+        };
+        tokens
+            .web_identity_token(self.token.expose())
+            .await
+            .map_err(Error::WebIdentityToken)?
+            .ok_or(Error::MissingWebIdentityToken)
+    }
 }
 
 impl ProvideCredentials for WebIdentityProvider {
@@ -464,12 +652,18 @@ impl ProvideCredentials for WebIdentityProvider {
         Self: 'a,
     {
         aws_credential_types::provider::future::ProvideCredentials::new(async {
+            let token = self
+                .token()
+                .await
+                .map_err(CredentialsError::provider_error)?;
             let response = self
                 .client
                 .assume_role_with_web_identity()
                 .role_arn(&self.role)
                 .role_session_name(&self.session_name)
-                .web_identity_token(self.token.expose())
+                .web_identity_token(token.expose())
+                .duration_seconds(WEB_IDENTITY_SESSION_SECONDS)
+                .set_policy(self.policy.map(str::to_owned))
                 .send()
                 .await
                 .map_err(CredentialsError::provider_error)?;
@@ -487,42 +681,6 @@ impl ProvideCredentials for WebIdentityProvider {
             ))
         })
     }
-}
-
-async fn is_already_running_as_role(
-    role: &str,
-    web_identity_role: Option<&str>,
-    config: &AwsAuthConfig,
-) -> Result<bool, Error> {
-    if config.access_key_id.is_some() || config.secret_access_key.is_some() {
-        return Ok(false);
-    }
-    if role_identity(role).is_none() {
-        return Ok(false);
-    }
-    if let Some(current_role) = web_identity_role {
-        return Ok(same_role_arns(role, current_role));
-    }
-
-    let mut loader = aws_config::defaults(aws_config::BehaviorVersion::latest());
-    if let Some(region) = config.region_name.clone() {
-        loader = loader.region(aws_types::region::Region::new(region));
-    }
-    if let Some(endpoint) = config.sts_endpoint.clone() {
-        loader = loader.endpoint_url(endpoint);
-    }
-    let sdk_config = loader.load().await;
-    let response = match aws_sdk_sts::Client::new(&sdk_config)
-        .get_caller_identity()
-        .send()
-        .await
-    {
-        Ok(response) => response,
-        Err(_) => return Ok(false),
-    };
-    Ok(response
-        .arn()
-        .is_some_and(|caller| same_role_arns(role, caller)))
 }
 
 fn default_session_name() -> String {
@@ -720,36 +878,64 @@ pub fn resolve_bedrock_region(
     params: &AwsParams,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> String {
+    bedrock_region(model_region, params, env_lookup, &|name| {
+        std::env::var(name).ok()
+    })
+}
+
+fn bedrock_region(
+    model_region: Option<&str>,
+    params: &AwsParams,
+    env_lookup: &dyn Fn(&str) -> Option<String>,
+    process_env: &dyn Fn(&str) -> Option<String>,
+) -> String {
     resolve_aws_region(model_region, params, env_lookup)
+        .or_else(|| session_region(env_lookup, process_env))
         .unwrap_or_else(|| DEFAULT_BEDROCK_REGION.to_string())
+}
+
+fn configured(
+    params: &AwsParams,
+    spec: &ParamSpec,
+    env_lookup: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
+    spec.wire
+        .iter()
+        .find_map(|name| params.get(name))
+        .or_else(|| spec.env.iter().find_map(|name| env_lookup(name)))
 }
 
 pub fn aws_auth_config(
     params: &AwsParams,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> AwsAuthConfig {
+    let secret = |spec: &ParamSpec| configured(params, spec, env_lookup).map(SecretValue::new);
+    let setting = |spec: &ParamSpec| configured(params, spec, env_lookup);
     AwsAuthConfig {
-        access_key_id: params
-            .resolve(&AwsParams::ACCESS_KEY_ID, env_lookup)
-            .map(SecretValue::new),
-        secret_access_key: params
-            .resolve(&AwsParams::SECRET_ACCESS_KEY, env_lookup)
-            .map(SecretValue::new),
-        session_token: params
-            .resolve(&AwsParams::SESSION_TOKEN, env_lookup)
-            .map(SecretValue::new),
-        region_name: params.resolve(&AwsParams::REGION, env_lookup),
-        session_name: params.resolve(&AwsParams::SESSION_NAME, env_lookup),
-        profile_name: params.resolve(&AwsParams::PROFILE_NAME, env_lookup),
-        role_name: params.resolve(&AwsParams::ROLE_NAME, env_lookup),
-        web_identity_token: params
-            .resolve(&AwsParams::WEB_IDENTITY_TOKEN, env_lookup)
-            .map(SecretValue::new),
-        sts_endpoint: params.resolve(&AwsParams::STS_ENDPOINT, env_lookup),
-        external_id: params
-            .resolve(&AwsParams::EXTERNAL_ID, env_lookup)
-            .map(SecretValue::new),
+        access_key_id: secret(&AwsParams::ACCESS_KEY_ID),
+        secret_access_key: secret(&AwsParams::SECRET_ACCESS_KEY),
+        session_token: secret(&AwsParams::SESSION_TOKEN),
+        region_name: setting(&AwsParams::REGION),
+        session_name: setting(&AwsParams::SESSION_NAME),
+        profile_name: setting(&AwsParams::PROFILE_NAME),
+        role_name: setting(&AwsParams::ROLE_NAME),
+        web_identity_token: secret(&AwsParams::WEB_IDENTITY_TOKEN),
+        sts_endpoint: setting(&AwsParams::STS_ENDPOINT),
+        external_id: secret(&AwsParams::EXTERNAL_ID),
+        session_tags: params.aws_session_tags.clone().map(|mut tags| {
+            tags.sort_by(|left, right| left.key.cmp(&right.key));
+            tags
+        }),
+        session_policy: None,
     }
+}
+
+pub fn web_identity_session_policy(service: &str) -> Option<&'static str> {
+    matches!(
+        service,
+        "bedrock" | "bedrock-agentcore" | "bedrock-mantle" | "aws-external-anthropic"
+    )
+    .then_some(BEDROCK_SESSION_POLICY)
 }
 
 /// Where the credentials that sign a request come from, decided when the request is
@@ -757,37 +943,75 @@ pub fn aws_auth_config(
 #[derive(Clone, Debug, PartialEq)]
 pub enum AwsCredentialSource {
     HostSupplied(Credentials),
-    Chain(AwsAuthConfig),
+    Chain(Box<AwsAuthConfig>),
 }
 
 impl AwsCredentialSource {
     pub fn from_params(params: &AwsParams, env_lookup: &dyn Fn(&str) -> Option<String>) -> Self {
         match host_supplied_credentials(params) {
-            Some(credentials) => Self::HostSupplied(credentials),
-            None => Self::Chain(aws_auth_config(params, env_lookup)),
+            Some(credentials) if names_only_static_keys(params) => Self::HostSupplied(credentials),
+            _ => Self::Chain(Box::new(aws_auth_config(params, env_lookup))),
         }
     }
 
     pub async fn resolve(
         self,
         auth: &AwsAuthService,
+        region: &str,
+        service: &str,
         env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
     ) -> Result<Credentials, Error> {
-        match self {
-            Self::HostSupplied(credentials) => Ok(credentials),
-            Self::Chain(config) => auth.resolve_credentials(config, env_lookup).await,
-        }
+        let config = match self {
+            Self::HostSupplied(credentials) => AwsAuthConfig {
+                access_key_id: Some(SecretValue::new(credentials.access_key_id())),
+                secret_access_key: Some(SecretValue::new(credentials.secret_access_key())),
+                session_token: credentials.session_token().map(SecretValue::new),
+                ..AwsAuthConfig::default()
+            },
+            Self::Chain(config) => *config,
+        };
+        auth.resolve_credentials(
+            AwsAuthConfig {
+                region_name: Some(region.to_owned()),
+                session_policy: config
+                    .session_policy
+                    .or_else(|| web_identity_session_policy(service)),
+                ..config
+            },
+            env_lookup,
+        )
+        .await
     }
 }
 
-/// Credentials a host resolved through its own chain and handed down verbatim.
-///
-/// A host with its own resolution (LiteLLM's Python `BaseAWSLLM`, which reads
-/// profiles, STS and boto sessions) passes the result here so the core signs
-/// with exactly those. Without this the core would re-derive from ambient
-/// state, where an unrelated `AWS_ROLE_NAME` or `AWS_PROFILE_NAME` in the
-/// environment outranks explicit keys in [`classify_auth`] and the two sides
-/// would sign as different principals.
+fn names_only_static_keys(params: &AwsParams) -> bool {
+    let AwsParams {
+        aws_session_token,
+        aws_session_name,
+        aws_profile_name,
+        aws_role_name,
+        aws_web_identity_token,
+        aws_sts_endpoint,
+        aws_external_id,
+        aws_session_tags,
+        ..
+    } = params;
+    aws_session_token
+        .as_deref()
+        .is_none_or(|token| !token.trim().is_empty())
+        && [
+            aws_session_name,
+            aws_profile_name,
+            aws_role_name,
+            aws_web_identity_token,
+            aws_sts_endpoint,
+            aws_external_id,
+        ]
+        .iter()
+        .all(|value| value.is_none())
+        && aws_session_tags.is_none()
+}
+
 pub fn host_supplied_credentials(params: &AwsParams) -> Option<Credentials> {
     let value = |value: &Option<String>| {
         value
@@ -928,16 +1152,17 @@ mod tests {
         #[case] secret_key: Option<&str>,
     ) {
         let role = "arn:aws:iam::123456789012:role/target";
-        let config = AwsAuthConfig {
-            access_key_id: access_key.map(SecretValue::new),
-            secret_access_key: secret_key.map(SecretValue::new),
-            ..Default::default()
+        let running_as = RunningAs {
+            role: role.to_string(),
+            config: AwsAuthConfig {
+                access_key_id: access_key.map(SecretValue::new),
+                secret_access_key: secret_key.map(SecretValue::new),
+                ..Default::default()
+            },
+            sts_region: None,
+            loader: NativeProviderLoader::default(),
         };
-        assert!(
-            !is_already_running_as_role(role, Some(role), &config)
-                .await
-                .unwrap()
-        );
+        assert!(!running_as.is_target(Some(role)).await);
     }
 
     #[test]
@@ -950,7 +1175,7 @@ mod tests {
             recorded.lock().unwrap().insert(name.to_string());
             None
         };
-        resolve_aws_region(None, &AwsParams::default(), &env);
+        bedrock_region(None, &AwsParams::default(), &env, &|_| None);
         aws_auth_config(&AwsParams::default(), &env);
         assert!(
             seen.lock()
@@ -962,7 +1187,8 @@ mod tests {
 
     #[rstest::rstest]
     #[case::param_wins(Some("from-params"), &[(AWS_SECRET_ACCESS_KEY, "from-env")], Some("from-params"))]
-    #[case::blank_param_falls_to_environment(Some("  "), &[(AWS_SECRET_ACCESS_KEY, "from-env")], Some("from-env"))]
+    #[case::blank_param_counts_as_set(Some("  "), &[(AWS_SECRET_ACCESS_KEY, "from-env")], Some("  "))]
+    #[case::blank_environment_counts_as_set(None, &[(AWS_SECRET_ACCESS_KEY, "")], Some(""))]
     #[case::absent_param_falls_to_environment(None, &[(AWS_SECRET_ACCESS_KEY, "from-env")], Some("from-env"))]
     #[case::nothing(None, &[], None)]
     fn auth_config_reads_each_spec_from_params_then_the_environment(
@@ -1001,7 +1227,7 @@ mod tests {
     #[case::call_params(Some("us-east-2"), Some("eu-west-1"), &[(AWS_REGION_NAME, "ap-south-1")], Some("eu-west-1"))]
     #[case::model_region(Some("us-east-2"), None, &[(AWS_REGION_NAME, "ap-south-1")], Some("us-east-2"))]
     #[case::aws_region_name(None, None, &[(AWS_REGION_NAME, "ap-south-1")], Some("ap-south-1"))]
-    #[case::aws_region(None, None, &[(AWS_REGION, "sa-east-1")], Some("sa-east-1"))]
+    #[case::aws_region(None, None, &[(AWS_REGION, "sa-east-1"), (AWS_DEFAULT_REGION, "eu-north-1")], Some("sa-east-1"))]
     #[case::nothing(None, None, &[], None)]
     fn a_region_comes_from_the_call_then_the_model_then_the_environment(
         #[case] model_region: Option<&str>,
@@ -1025,8 +1251,29 @@ mod tests {
             expected
         );
         assert_eq!(
-            resolve_bedrock_region(model_region, &params, &env),
+            bedrock_region(model_region, &params, &env, &|_| None),
             expected.unwrap_or(DEFAULT_BEDROCK_REGION)
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::default_region(&[(AWS_DEFAULT_REGION, "eu-north-1")], "eu-north-1")]
+    #[case::blank_default_region(&[(AWS_DEFAULT_REGION, "")], DEFAULT_BEDROCK_REGION)]
+    #[case::aws_region_outranks_it(&[(AWS_DEFAULT_REGION, "eu-north-1"), (AWS_REGION, "sa-east-1")], "sa-east-1")]
+    fn bedrock_falls_back_to_the_boto3_session_region(
+        #[case] environment: &[(&str, &str)],
+        #[case] expected: &str,
+    ) {
+        let env = |key: &str| {
+            environment
+                .iter()
+                .find(|(name, _)| *name == key)
+                .map(|(_, value)| value.to_string())
+        };
+
+        assert_eq!(
+            bedrock_region(None, &AwsParams::default(), &env, &|_| None),
+            expected
         );
     }
 
@@ -1395,7 +1642,7 @@ mod tests {
     #[rstest::rstest]
     #[case::session(AwsAuthFlow::SessionToken { access_key_id: "credential-value".into(), secret_access_key: "credential-value".into(), session_token: "credential-value".into() })]
     #[case::static_keys(AwsAuthFlow::StaticKeys { access_key_id: "credential-value".into(), secret_access_key: "credential-value".into(), region_name: "region".into() })]
-    #[case::web_identity(AwsAuthFlow::WebIdentity { token: "credential-value".into(), role: "role".into(), session_name: "session".into() })]
+    #[case::web_identity(AwsAuthFlow::WebIdentity { token: "credential-value".into(), role: "role".into(), session_name: "session".into(), sts_region: None })]
     fn auth_flow_debug_never_discloses_credentials(#[case] flow: AwsAuthFlow) {
         let output = format!("{flow:?}");
         assert!(!output.contains("credential-value"));
@@ -1576,6 +1823,448 @@ mod tests {
             "{report}"
         );
         assert_eq!(report.matches("profile not found").count(), 1, "{report}");
+    }
+
+    #[derive(Clone, Debug, Default)]
+    struct Sts {
+        requests: Arc<std::sync::Mutex<Vec<StsRequest>>>,
+        deny_assume_role: bool,
+        caller_arns: Arc<std::sync::Mutex<Vec<Option<&'static str>>>>,
+    }
+
+    #[derive(Clone, Debug)]
+    struct StsRequest {
+        host: String,
+        authorization: Option<String>,
+        form: std::collections::BTreeMap<String, String>,
+    }
+
+    impl StsRequest {
+        fn action(&self) -> &str {
+            self.form["Action"].as_str()
+        }
+    }
+
+    const STS_XMLNS: &str = "https://sts.amazonaws.com/doc/2011-06-15/";
+
+    impl Sts {
+        fn response(&self, request: &StsRequest) -> (u16, String) {
+            let credentials = |prefix: &str| {
+                format!(
+                    "<Credentials><AccessKeyId>{prefix}-access</AccessKeyId><SecretAccessKey>{prefix}-secret</SecretAccessKey><SessionToken>{prefix}-session</SessionToken><Expiration>2100-01-01T00:00:00Z</Expiration></Credentials><AssumedRoleUser><Arn>arn:aws:sts::123456789012:assumed-role/{prefix}/s</Arn><AssumedRoleId>id:s</AssumedRoleId></AssumedRoleUser>"
+                )
+            };
+            let error = |code: &str| {
+                format!(
+                    "<ErrorResponse xmlns=\"{STS_XMLNS}\"><Error><Type>Sender</Type><Code>{code}</Code><Message>denied</Message></Error><RequestId>r</RequestId></ErrorResponse>"
+                )
+            };
+            match request.action() {
+                "AssumeRole" if self.deny_assume_role => (403, error("AccessDenied")),
+                "AssumeRole" => (
+                    200,
+                    format!(
+                        "<AssumeRoleResponse xmlns=\"{STS_XMLNS}\"><AssumeRoleResult>{}</AssumeRoleResult></AssumeRoleResponse>",
+                        credentials("role")
+                    ),
+                ),
+                "AssumeRoleWithWebIdentity" => (
+                    200,
+                    format!(
+                        "<AssumeRoleWithWebIdentityResponse xmlns=\"{STS_XMLNS}\"><AssumeRoleWithWebIdentityResult>{}</AssumeRoleWithWebIdentityResult></AssumeRoleWithWebIdentityResponse>",
+                        credentials("web")
+                    ),
+                ),
+                "GetCallerIdentity" => match self.caller_arns.lock().unwrap().remove(0) {
+                    Some(arn) => (
+                        200,
+                        format!(
+                            "<GetCallerIdentityResponse xmlns=\"{STS_XMLNS}\"><GetCallerIdentityResult><Arn>{arn}</Arn><UserId>u</UserId><Account>123456789012</Account></GetCallerIdentityResult></GetCallerIdentityResponse>"
+                        ),
+                    ),
+                    None => (400, error("InvalidClientTokenId")),
+                },
+                action => panic!("unexpected STS action {action}"),
+            }
+        }
+
+        fn sent(&self) -> Vec<StsRequest> {
+            self.requests.lock().unwrap().clone()
+        }
+    }
+
+    impl aws_smithy_runtime_api::client::http::HttpConnector for Sts {
+        fn call(
+            &self,
+            request: aws_smithy_runtime_api::client::orchestrator::HttpRequest,
+        ) -> aws_smithy_runtime_api::client::http::HttpConnectorFuture {
+            let recorded = StsRequest {
+                host: url::Url::parse(request.uri())
+                    .unwrap()
+                    .host_str()
+                    .unwrap()
+                    .to_string(),
+                authorization: request.headers().get("authorization").map(str::to_string),
+                form: url::form_urlencoded::parse(request.body().bytes().unwrap_or_default())
+                    .into_owned()
+                    .collect(),
+            };
+            let (status, body) = self.response(&recorded);
+            self.requests.lock().unwrap().push(recorded);
+            aws_smithy_runtime_api::client::http::HttpConnectorFuture::new(async move {
+                Ok(
+                    aws_smithy_runtime_api::client::orchestrator::HttpResponse::new(
+                        status.try_into().unwrap(),
+                        aws_smithy_types::body::SdkBody::from(body),
+                    ),
+                )
+            })
+        }
+    }
+
+    #[derive(Debug)]
+    struct Tokens(Option<&'static str>);
+
+    impl WebIdentityTokenSource for Tokens {
+        fn web_identity_token<'a>(&'a self, reference: &'a str) -> WebIdentityTokenFuture<'a> {
+            Box::pin(async move {
+                assert_eq!(reference, "oidc/file/var/run/secrets/token");
+                Ok(self.0.map(SecretValue::new))
+            })
+        }
+    }
+
+    fn sts_service(sts: &Sts, tokens: Option<Arc<dyn WebIdentityTokenSource>>) -> AwsAuthService {
+        use aws_smithy_runtime_api::client::http::{SharedHttpConnector, http_client_fn};
+        let connector = sts.clone();
+        AwsAuthService::new(Arc::new(NativeProviderLoader {
+            tokens,
+            http_client: Some(SharedHttpClient::new(http_client_fn(move |_, _| {
+                SharedHttpConnector::new(connector.clone())
+            }))),
+            ambient: Some(SharedCredentialsProvider::new(Credentials::new(
+                "ambient-access",
+                "ambient-secret",
+                None,
+                None,
+                "ambient",
+            ))),
+        }))
+    }
+
+    fn lookup(
+        environment: &'static [(&'static str, &'static str)],
+    ) -> impl Fn(&str) -> Option<String> + Sync {
+        |key: &str| {
+            environment
+                .iter()
+                .find(|(name, _)| *name == key)
+                .map(|(_, value)| value.to_string())
+        }
+    }
+
+    const TARGET_ROLE: &str = "arn:aws:iam::123456789012:role/target";
+
+    #[rstest::rstest]
+    #[case::regional_endpoint(Some("https://sts.eu-west-1.amazonaws.com"), &[(AWS_REGION, "ap-south-1")], "sts.eu-west-1.amazonaws.com", "eu-west-1")]
+    #[case::aws_region(None, &[(AWS_REGION, "ap-south-1"), (AWS_DEFAULT_REGION, "ca-central-1")], "sts.ap-south-1.amazonaws.com", "ap-south-1")]
+    #[case::aws_default_region(None, &[(AWS_DEFAULT_REGION, "ca-central-1")], "sts.ca-central-1.amazonaws.com", "ca-central-1")]
+    #[case::the_signing_region(None, &[], "sts.us-east-1.amazonaws.com", "us-east-1")]
+    #[case::custom_endpoint_signs_for_the_signing_region(Some("https://sts.internal.test"), &[], "sts.internal.test", "us-east-1")]
+    #[tokio::test]
+    async fn params_keys_assume_the_role_with_tags_in_the_python_sts_region(
+        #[case] sts_endpoint: Option<&str>,
+        #[case] environment: &'static [(&'static str, &'static str)],
+        #[case] host: &str,
+        #[case] sts_region: &str,
+    ) {
+        let sts = Sts::default();
+        let params = AwsParams {
+            aws_access_key_id: Some("source-access".into()),
+            aws_secret_access_key: Some("source-secret".into()),
+            aws_role_name: Some(TARGET_ROLE.into()),
+            aws_session_name: Some("attributed".into()),
+            aws_sts_endpoint: sts_endpoint.map(str::to_string),
+            aws_session_tags: Some(vec![
+                AwsSessionTag {
+                    key: "team".into(),
+                    value: "genai".into(),
+                },
+                AwsSessionTag {
+                    key: "cost".into(),
+                    value: "42".into(),
+                },
+            ]),
+            ..AwsParams::default()
+        };
+
+        let credentials = AwsCredentialSource::from_params(&params, &no_env)
+            .resolve(
+                &sts_service(&sts, None),
+                "us-east-1",
+                BEDROCK_SERVICE,
+                &lookup(environment),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(credentials.access_key_id(), "role-access");
+        let [request] = sts.sent().try_into().unwrap();
+        assert_eq!(request.action(), "AssumeRole");
+        assert_eq!(request.host, host);
+        assert!(
+            request
+                .authorization
+                .as_deref()
+                .unwrap()
+                .contains("Credential=source-access/")
+        );
+        assert!(
+            request
+                .authorization
+                .unwrap()
+                .contains(&format!("/{sts_region}/sts/aws4_request"))
+        );
+        assert_eq!(request.form["RoleArn"], TARGET_ROLE);
+        assert_eq!(request.form["RoleSessionName"], "attributed");
+        assert_eq!(
+            [
+                request.form["Tags.member.1.Key"].as_str(),
+                request.form["Tags.member.1.Value"].as_str(),
+                request.form["Tags.member.2.Key"].as_str(),
+                request.form["Tags.member.2.Value"].as_str(),
+            ],
+            ["cost", "42", "team", "genai"]
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::caller_is_the_target_role(
+        vec![None, Some("arn:aws:sts::123456789012:assumed-role/target/i-1")],
+        Ok("ambient-access")
+    )]
+    #[case::caller_is_another_role(
+        vec![None, Some("arn:aws:sts::123456789012:assumed-role/other/i-1")],
+        Err(())
+    )]
+    #[tokio::test]
+    async fn an_access_denied_assume_role_falls_back_only_when_already_running_as_the_role(
+        #[case] caller_arns: Vec<Option<&'static str>>,
+        #[case] expected: Result<&str, ()>,
+    ) {
+        let sts = Sts {
+            deny_assume_role: true,
+            caller_arns: Arc::new(std::sync::Mutex::new(caller_arns)),
+            ..Sts::default()
+        };
+        let source = AwsCredentialSource::Chain(Box::new(AwsAuthConfig {
+            role_name: Some(TARGET_ROLE.into()),
+            ..AwsAuthConfig::default()
+        }));
+
+        let result = source
+            .resolve(
+                &sts_service(&sts, None),
+                "us-east-1",
+                BEDROCK_SERVICE,
+                &no_env,
+            )
+            .await;
+
+        assert_eq!(
+            result
+                .as_ref()
+                .map(Credentials::access_key_id)
+                .map_err(|_| ()),
+            expected
+        );
+        assert_eq!(
+            sts.sent()
+                .iter()
+                .map(StsRequest::action)
+                .collect::<Vec<_>>(),
+            ["GetCallerIdentity", "AssumeRole", "GetCallerIdentity"]
+        );
+    }
+
+    fn web_identity_source(token: &str) -> AwsCredentialSource {
+        AwsCredentialSource::from_params(
+            &AwsParams {
+                aws_access_key_id: Some("ignored-access".into()),
+                aws_secret_access_key: Some("ignored-secret".into()),
+                aws_web_identity_token: Some(token.into()),
+                aws_role_name: Some(TARGET_ROLE.into()),
+                aws_session_name: Some("oidc-session".into()),
+                ..AwsParams::default()
+            },
+            &no_env,
+        )
+    }
+
+    #[rstest::rstest]
+    #[case::bedrock_carries_the_session_policy(BEDROCK_SERVICE, Some(BEDROCK_SESSION_POLICY))]
+    #[case::another_service_does_not("textract", None)]
+    #[tokio::test]
+    async fn a_web_identity_reference_is_resolved_before_sts_sees_it(
+        #[case] service: &'static str,
+        #[case] policy: Option<&str>,
+    ) {
+        let sts = Sts::default();
+
+        let credentials = web_identity_source("oidc/file/var/run/secrets/token")
+            .resolve(
+                &sts_service(&sts, Some(Arc::new(Tokens(Some("resolved.jwt.value"))))),
+                "us-east-1",
+                service,
+                &no_env,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(credentials.access_key_id(), "web-access");
+        let [request] = sts.sent().try_into().unwrap();
+        assert_eq!(request.action(), "AssumeRoleWithWebIdentity");
+        assert_eq!(request.form["WebIdentityToken"], "resolved.jwt.value");
+        assert_eq!(request.form["RoleArn"], TARGET_ROLE);
+        assert_eq!(request.form["RoleSessionName"], "oidc-session");
+        assert_eq!(request.form["DurationSeconds"], "3600");
+        assert_eq!(request.form.get("Policy").map(String::as_str), policy);
+    }
+
+    #[rstest::rstest]
+    #[case::environment_prefix("os.environ/OIDC_TOKEN")]
+    #[case::environment_name("OIDC_TOKEN")]
+    #[tokio::test]
+    async fn a_web_identity_reference_to_the_environment_is_refused(#[case] token: &str) {
+        let sts = Sts::default();
+
+        let error = web_identity_source(token)
+            .resolve(
+                &sts_service(&sts, Some(Arc::new(Tokens(Some("unused"))))),
+                "us-east-1",
+                BEDROCK_SERVICE,
+                &lookup(&[("OIDC_TOKEN", "raw.jwt.value")]),
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(error, Error::WebIdentityTokenReference);
+        assert!(sts.sent().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_web_identity_reference_that_resolves_to_nothing_never_reaches_sts() {
+        let sts = Sts::default();
+
+        let error = web_identity_source("oidc/file/var/run/secrets/token")
+            .resolve(
+                &sts_service(&sts, Some(Arc::new(Tokens(None)))),
+                "us-east-1",
+                BEDROCK_SERVICE,
+                &no_env,
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            litellm_error::find::<Error>(&error),
+            Some(Error::Credentials {
+                flow: CredentialFlow::WebIdentity,
+                ..
+            })
+        ));
+        assert!(
+            litellm_error::Report::new(&error)
+                .to_string()
+                .contains("resolved to no token")
+        );
+        assert!(sts.sent().is_empty());
+    }
+
+    fn recorded_flow(
+        source: AwsCredentialSource,
+        environment: &'static [(&'static str, &'static str)],
+    ) -> (AwsAuthConfig, AwsAuthFlow) {
+        let loader = Arc::new(RecordingLoader::default());
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(source.resolve(
+                &AwsAuthService::new(loader.clone()),
+                "eu-central-1",
+                BEDROCK_SERVICE,
+                &lookup(environment),
+            ))
+            .unwrap();
+        loader.loads.lock().unwrap().remove(0)
+    }
+
+    fn params_keys(extra: AwsParams) -> AwsParams {
+        AwsParams {
+            aws_access_key_id: Some("params-access".into()),
+            aws_secret_access_key: Some("params-secret".into()),
+            ..extra
+        }
+    }
+
+    #[rstest::rstest]
+    #[case::keys_alone_sign_as_static_keys_in_the_signing_region(
+        params_keys(AwsParams::default()),
+        &[],
+        AwsAuthFlow::StaticKeys { access_key_id: "params-access".into(), secret_access_key: "params-secret".into(), region_name: "eu-central-1".into() }
+    )]
+    #[case::keys_pick_up_an_ambient_session_token(
+        params_keys(AwsParams::default()),
+        &[(AWS_SESSION_TOKEN, "ambient-token")],
+        AwsAuthFlow::SessionToken { access_key_id: "params-access".into(), secret_access_key: "params-secret".into(), session_token: "ambient-token".into() }
+    )]
+    #[case::keys_with_a_role_assume_it(
+        params_keys(AwsParams { aws_role_name: Some(TARGET_ROLE.into()), ..AwsParams::default() }),
+        &[],
+        AwsAuthFlow::AssumeRole { role: TARGET_ROLE.into(), session_name: None, web_identity_role: None, sts_region: Some("eu-central-1".into()) }
+    )]
+    #[case::keys_under_an_ambient_role_assume_it(
+        params_keys(AwsParams::default()),
+        &[(AWS_ROLE_NAME, TARGET_ROLE)],
+        AwsAuthFlow::AssumeRole { role: TARGET_ROLE.into(), session_name: None, web_identity_role: None, sts_region: Some("eu-central-1".into()) }
+    )]
+    #[case::keys_with_a_profile_use_the_profile(
+        params_keys(AwsParams { aws_profile_name: Some("work".into()), ..AwsParams::default() }),
+        &[],
+        AwsAuthFlow::Profile { name: "work".into() }
+    )]
+    #[case::a_blank_role_is_still_a_role(
+        params_keys(AwsParams { aws_role_name: Some(String::new()), ..AwsParams::default() }),
+        &[],
+        AwsAuthFlow::AssumeRole { role: String::new(), session_name: None, web_identity_role: None, sts_region: Some("eu-central-1".into()) }
+    )]
+    fn params_keys_follow_python_credential_precedence(
+        #[case] params: AwsParams,
+        #[case] environment: &'static [(&'static str, &'static str)],
+        #[case] expected: AwsAuthFlow,
+    ) {
+        let (config, flow) = recorded_flow(
+            AwsCredentialSource::from_params(&params, &no_env),
+            environment,
+        );
+
+        assert_eq!(flow, expected);
+        assert_eq!(
+            config.access_key_id.as_ref().map(SecretValue::expose),
+            Some("params-access")
+        );
+        assert_eq!(config.region_name.as_deref(), Some("eu-central-1"));
+    }
+
+    #[rstest::rstest]
+    #[case::bedrock(BEDROCK_SERVICE, Some(BEDROCK_SESSION_POLICY))]
+    #[case::claude_platform("aws-external-anthropic", Some(BEDROCK_SESSION_POLICY))]
+    #[case::textract("textract", None)]
+    fn the_session_policy_follows_the_signing_service(
+        #[case] service: &str,
+        #[case] expected: Option<&str>,
+    ) {
+        assert_eq!(web_identity_session_policy(service), expected);
     }
 
     #[ignore]

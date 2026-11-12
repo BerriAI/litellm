@@ -622,18 +622,25 @@ def stream_success(
 ) -> None:
     from litellm.llms.anthropic.messages.native.streaming_iterator import (
         GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
+        _incomplete_stream_error_sse_event,  # pyright: ignore[reportPrivateUsage]  # the frame Python's relay adds after billing
     )
     from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler
     from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 
+    relayed_only: Final = (
+        logger.model_call_details.get("custom_llm_provider") == "bedrock"
+        and bool(chunks)
+        and chunks[-1] == _incomplete_stream_error_sse_event()
+    )
+    billed: Final = chunks[:-1] if relayed_only else chunks
     if first_chunk is not None:
         logger.completion_start_time = first_chunk
         logger.model_call_details["completion_start_time"] = first_chunk
     superseded_error_event: Final = PassThroughStreamingHandler._error_frame_closed_at(  # pyright: ignore[reportPrivateUsage]  # the Messages stream's own close-at-frame check
-        EndpointType(endpoint_type), chunks
+        EndpointType(endpoint_type), billed
     )
     if superseded_error_event is not None:
-        _log_superseded_stream_failure(logger, endpoint_type, request_body, chunks, superseded_error_event)
+        _log_superseded_stream_failure(logger, endpoint_type, request_body, billed, superseded_error_event)
         return
     build: Final = cast(  # cast-ok: bounded adapter for the untyped pass-through logging builder
         StreamingLogBuilder,
@@ -646,7 +653,7 @@ def stream_success(
         request_body=request_body,
         endpoint_type=EndpointType(endpoint_type),
         start_time=start,
-        raw_bytes=chunks,
+        raw_bytes=billed,
         end_time=end,
     )
     if not stream_teardown and getattr(logger, "_on_deferred_stream_complete", None) is not None:
@@ -709,7 +716,8 @@ def stream_failure(
     from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler
     from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 
-    verbose_proxy_logger.error("Error in chunk_processor: %s", error)
+    if logger.model_call_details.get("custom_llm_provider") != "bedrock":
+        verbose_proxy_logger.error("Error in chunk_processor: %s", error)
     # Python's stream fails before its success handler records `cache_hit`; only a cache hit
     # stamps it earlier.
     if logger.model_call_details.get("cache_hit") is not True:

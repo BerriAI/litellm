@@ -6,6 +6,9 @@ from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding sele
 from litellm.exceptions import BadRequestError, UnsupportedParamsError
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.anthropic.messages.native import handler as main
+from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (
+    AmazonAnthropicClaudeMessagesConfig,
+)
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.rust_bridge import catalog, detectors
 from litellm.rust_bridge.catalog import Feature, Route, RouteContext, Target
@@ -107,7 +110,7 @@ def _route_target(
 ) -> Target:
     native_config: Final = main._native_messages_config(model, provider, model_info, api_base)  # pyright: ignore[reportPrivateUsage]  # the handler's own passthrough lookup
     if native_config is not None:
-        return Target.MESSAGES
+        return Target.BEDROCK_INVOKE if type(native_config) is AmazonAnthropicClaudeMessagesConfig else Target.MESSAGES
     if not compacting and main._should_route_to_responses_api(provider, requested_model, model, model_info):  # pyright: ignore[reportPrivateUsage]  # the handler's own translation choice
         return Target.RESPONSES
     return Target.CHAT_COMPLETIONS

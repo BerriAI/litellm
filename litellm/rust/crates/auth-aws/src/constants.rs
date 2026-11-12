@@ -42,5 +42,6 @@ pub const SIGV4_COMPUTED_HEADER_NAMES: &[&str] = &[
 pub const BEDROCK_SERVICE: &str = "bedrock";
 pub const DEFAULT_SESSION_NAME_PREFIX: &str = "litellm-session";
 pub const DEFAULT_BEDROCK_REGION: &str = "us-west-2";
-pub const BEDROCK_RUNTIME_ENDPOINT_TEMPLATE: &str =
-    "https://bedrock-runtime.{region}.amazonaws.com";
+pub const BEDROCK_SESSION_POLICY: &str = include_str!("bedrock_session_policy.json");
+pub const WEB_IDENTITY_SESSION_SECONDS: i32 = 3600;
+pub const AWS4_AUTHORIZATION_PREFIX: &str = "AWS4-HMAC-SHA256";

@@ -26,6 +26,7 @@ litellm-router-types.workspace = true
 litellm-tracing.workspace = true
 base64.workspace = true
 bytes.workspace = true
+crc32fast = "1.5"
 data-url = "0.3.2"
 fancy-regex.workspace = true
 futures-util.workspace = true
@@ -38,6 +39,7 @@ strum.workspace = true
 thiserror.workspace = true
 time.workspace = true
 tokio = { workspace = true, features = ["sync"] }
+tokio-util = { version = "0.7", features = ["codec"] }
 url.workspace = true
 
 [dev-dependencies]

@@ -52,8 +52,6 @@ pub(crate) enum Repr {
     RequestUrl(#[source] reqwest::Error),
     #[error("invalid request URL")]
     ParseUrl(#[source] url::ParseError),
-    #[error("request forwards the header {0:?}, which the signer computes")]
-    ComputedHeader(String),
     #[error("request signing failed: a streaming body cannot be signed")]
     UnsignableBody,
     #[error("request forwards a header that cannot be signed")]
@@ -247,10 +245,6 @@ impl Error {
         }
     }
 
-    pub fn computed_header(name: impl Into<String>) -> Self {
-        Repr::ComputedHeader(name.into()).into()
-    }
-
     pub fn request_body(error: serde_json::Error) -> Self {
         Repr::RequestBody(error).into()
     }
@@ -292,7 +286,6 @@ impl Error {
             | Repr::Request(_)
             | Repr::RequestUrl(_)
             | Repr::ParseUrl(_)
-            | Repr::ComputedHeader(_)
             | Repr::UnsignableBody
             | Repr::UnsignableHeader(_)
             | Repr::Signature(_)
@@ -318,7 +311,6 @@ impl Error {
             Repr::Request(_)
             | Repr::RequestUrl(_)
             | Repr::ParseUrl(_)
-            | Repr::ComputedHeader(_)
             | Repr::UnsignableHeader(_)
             | Repr::WebSocketUrl(_)
             | Repr::WebSocketScheme(_)
@@ -364,7 +356,6 @@ impl Error {
             | Repr::Request(_)
             | Repr::RequestUrl(_)
             | Repr::ParseUrl(_)
-            | Repr::ComputedHeader(_)
             | Repr::UnsignableBody
             | Repr::UnsignableHeader(_)
             | Repr::Signature(_)
@@ -386,46 +377,6 @@ impl Error {
             | Repr::DownloadDisabled
             | Repr::DownloadTooLarge
             | Repr::TooManyRedirects
-            | Repr::DownloadStatus(_)
-            | Repr::Download(_)
-            | Repr::DownloadTimeout(_) => false,
-        }
-    }
-
-    pub fn is_computed_header(&self) -> bool {
-        match &*self.0 {
-            Repr::ComputedHeader(_) => true,
-            Repr::Read { .. }
-            | Repr::InvalidPem { .. }
-            | Repr::Client(_)
-            | Repr::TlsConfig(_)
-            | Repr::RequestBody(_)
-            | Repr::Request(_)
-            | Repr::RequestUrl(_)
-            | Repr::ParseUrl(_)
-            | Repr::UnsignableBody
-            | Repr::UnsignableHeader(_)
-            | Repr::Signature(_)
-            | Repr::Connect(_)
-            | Repr::Network(_)
-            | Repr::BodyCut { .. }
-            | Repr::Timeout(_)
-            | Repr::ReadTimeout { .. }
-            | Repr::Status { .. }
-            | Repr::WebSocketUrl(_)
-            | Repr::WebSocketScheme(_)
-            | Repr::WebSocketSchemeRewrite(_)
-            | Repr::Handshake(_)
-            | Repr::HandshakeTimeout(_)
-            | Repr::WebSocket(_)
-            | Repr::WebSocketClosed
-            | Repr::BlockedUrl
-            | Repr::Resolve(_)
-            | Repr::DownloadDisabled
-            | Repr::DownloadTooLarge
-            | Repr::TooManyRedirects
-            | Repr::MissingRedirectLocation
-            | Repr::InvalidRedirect(_)
             | Repr::DownloadStatus(_)
             | Repr::Download(_)
             | Repr::DownloadTimeout(_) => false,
@@ -435,8 +386,7 @@ impl Error {
     pub fn is_connect(&self) -> bool {
         match &*self.0 {
             Repr::Connect(_) => true,
-            Repr::ComputedHeader(_)
-            | Repr::Read { .. }
+            Repr::Read { .. }
             | Repr::InvalidPem { .. }
             | Repr::Client(_)
             | Repr::TlsConfig(_)
@@ -486,7 +436,6 @@ impl Error {
             | Repr::Request(_)
             | Repr::RequestUrl(_)
             | Repr::ParseUrl(_)
-            | Repr::ComputedHeader(_)
             | Repr::UnsignableBody
             | Repr::UnsignableHeader(_)
             | Repr::Signature(_)
@@ -523,7 +472,6 @@ impl Error {
             | Repr::Request(_)
             | Repr::RequestUrl(_)
             | Repr::ParseUrl(_)
-            | Repr::ComputedHeader(_)
             | Repr::UnsignableBody
             | Repr::UnsignableHeader(_)
             | Repr::Signature(_)
@@ -564,7 +512,6 @@ impl Error {
             | Repr::Request(_)
             | Repr::RequestUrl(_)
             | Repr::ParseUrl(_)
-            | Repr::ComputedHeader(_)
             | Repr::UnsignableBody
             | Repr::UnsignableHeader(_)
             | Repr::Signature(_)
@@ -600,7 +547,6 @@ impl Error {
             | Repr::Request(_)
             | Repr::RequestUrl(_)
             | Repr::ParseUrl(_)
-            | Repr::ComputedHeader(_)
             | Repr::UnsignableBody
             | Repr::UnsignableHeader(_)
             | Repr::Signature(_)
