@@ -1822,19 +1822,18 @@ async def test_post_call_success_hook_priority_header_is_always_http_encodable(t
 
 
 @pytest.fixture
-def team_share_settings():
+def team_share_settings(monkeypatch):
     from litellm.types.utils import PriorityReservationSettings
 
-    saved = (litellm.priority_reservation, litellm.priority_reservation_settings)
-
     def configure(**overrides):
-        litellm.priority_reservation = {"interactive": 0.6, "batch": 0.4}
-        litellm.priority_reservation_settings = PriorityReservationSettings(
-            guaranteed_team_shares=True, saturation_check_cache_ttl=1, **overrides
+        monkeypatch.setattr(litellm, "priority_reservation", {"interactive": 0.6, "batch": 0.4})
+        monkeypatch.setattr(
+            litellm,
+            "priority_reservation_settings",
+            PriorityReservationSettings(guaranteed_team_shares=True, saturation_check_cache_ttl=1, **overrides),
         )
 
-    yield configure
-    litellm.priority_reservation, litellm.priority_reservation_settings = saved
+    return configure
 
 
 def _team_share_handler(model: str, tpm: int) -> tuple[DynamicRateLimitHandler, DualCache]:
@@ -2009,7 +2008,7 @@ async def test_team_shares_stay_off_by_default_so_teams_share_their_priority_poo
 
     monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
     team_share_settings(saturation_threshold=0.5)
-    litellm.priority_reservation_settings = PriorityReservationSettings(saturation_threshold=0.5)
+    monkeypatch.setattr(litellm, "priority_reservation_settings", PriorityReservationSettings(saturation_threshold=0.5))
     model = "team-shares-off"
     handler, cache = _team_share_handler(model, tpm=1000)
     state_generation = _team("state-generation", "batch")
