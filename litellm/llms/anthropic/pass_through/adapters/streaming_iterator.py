@@ -2,7 +2,6 @@
 ## Translates OpenAI call to Anthropic `/v1/messages` format
 import copy
 import itertools
-import json
 import traceback
 from collections import deque
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
@@ -14,6 +13,7 @@ from typing import (
     Final,
     Literal,
     Protocol,
+    TypeAlias,
     cast,
     get_args,
 )
@@ -33,6 +33,7 @@ from litellm.types.llms.anthropic import (
     AppliedEdit,
     CompactionBlock,
     ContentBlockDelta,
+    ContentThinkingSignatureBlockDelta,
     ContextManagementResponse,
     MessageBlockDelta,
     MessageDelta,
@@ -51,6 +52,7 @@ if TYPE_CHECKING:
 
 _STREAMING_DELTA_TYPES: Final = frozenset(get_args(StreamingContentBlockDeltaType))
 _SSE_EVENT: Final = TypeAdapter(Mapping[str, object])
+_AnthropicStreamEvent: TypeAlias = dict[str, object] | MessageBlockDelta | ContentBlockDelta
 
 
 class _UsageDeltaWithIterations(UsageDelta, total=False):
@@ -533,6 +535,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             type="text",
             text="",
         )
+        self._unsigned_thinking_block_index: int | None = None
 
     @property
     def chunks(self) -> "list[ModelResponseStream] | None":
@@ -714,7 +717,36 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             cache_read_input_tokens=0,
         )
 
-    def __next__(self):
+    def __next__(self) -> _AnthropicStreamEvent:
+        return self._signed_thinking_event(self._next_event())
+
+    async def __anext__(self) -> _AnthropicStreamEvent:
+        return self._signed_thinking_event(await self._anext_event())
+
+    def _signed_thinking_event(self, event: _AnthropicStreamEvent) -> _AnthropicStreamEvent:
+        match event:
+            case {"type": "content_block_start", "index": int() as index, "content_block": {"type": "thinking"}}:
+                self._unsigned_thinking_block_index = index
+                return event
+            case {"type": "content_block_delta", "index": int() as index, "delta": {"type": "signature_delta"}} if (
+                index == self._unsigned_thinking_block_index
+            ):
+                self._unsigned_thinking_block_index = None
+                return event
+            case {"type": "content_block_stop", "index": int() as index} if (
+                index == self._unsigned_thinking_block_index
+            ):
+                self._unsigned_thinking_block_index = None
+                self.chunk_queue.appendleft(event)
+                return ContentBlockDelta(
+                    type="content_block_delta",
+                    index=index,
+                    delta=ContentThinkingSignatureBlockDelta(type="signature_delta", signature=""),
+                )
+            case _:
+                return event
+
+    def _next_event(self) -> _AnthropicStreamEvent:
         from .transformation import LiteLLMAnthropicMessagesAdapter
 
         try:
@@ -949,7 +981,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             verbose_logger.error("Anthropic Adapter - %s\n%s", e, traceback.format_exc())
             raise StopIteration
 
-    async def __anext__(self):
+    async def _anext_event(self) -> _AnthropicStreamEvent:
         from .transformation import LiteLLMAnthropicMessagesAdapter
 
         try:
@@ -1187,13 +1219,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         This wrapper ensures dict chunks are SSE formatted with both event and data lines.
         """
         for chunk in self:
-            if isinstance(chunk, dict):
-                event_type: str = str(chunk.get("type", "message"))
-                payload = f"event: {event_type}\ndata: {json.dumps(chunk)}\n\n"
-                yield payload.encode()
-            else:
-                # For non-dict chunks, forward the original value unchanged
-                yield chunk
+            yield anthropic_sse_frame(chunk)
 
     async def async_anthropic_sse_wrapper(self) -> AsyncIterator[bytes]:
         """
@@ -1205,9 +1231,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         )
         try:
             async for chunk in self:
-                if not isinstance(chunk, dict):
-                    yield chunk
-                elif safeguard_results is None:
+                if safeguard_results is None:
                     yield anthropic_sse_frame(chunk)
                 else:
                     yield anthropic_sse_frame(await safeguard_results.observe(_SSE_EVENT.validate_python(chunk)))
