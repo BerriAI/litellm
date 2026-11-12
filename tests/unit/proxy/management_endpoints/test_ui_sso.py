@@ -9484,10 +9484,30 @@ async def test_legacy_login_page_hides_credentials_hint_when_ui_password_set():
 async def test_saml_callback_blocked_when_admin_ui_disabled():
     """An IdP-initiated assertion must not mint a UI session when the admin UI is
     disabled; the ACS enforces DISABLE_ADMIN_UI like the SP-initiated login route."""
+    from starlette.requests import Request as StarletteRequest
+
     from litellm.proxy.management_endpoints.ui_sso import saml_callback
 
+    form: Final = b"SAMLResponse=PHNhbWxwOlJlc3BvbnNlLz4%3D&RelayState=%2Fui%2F"
+
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": form, "more_body": False}
+
+    acs_request: Final = StarletteRequest(
+        {
+            "type": "http",
+            "method": "POST",
+            "scheme": "https",
+            "server": ("proxy.example.com", 443),
+            "path": "/sso/saml/callback",
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/x-www-form-urlencoded")],
+        },
+        receive,
+    )
+
     with patch.dict(os.environ, {"DISABLE_ADMIN_UI": "true"}):
-        response = await saml_callback(SimpleNamespace(cookies={}))
+        response = await saml_callback(acs_request)
 
     assert response.status_code == 200
     assert "Admin UI is Disabled" in response.body.decode()
