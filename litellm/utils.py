@@ -4709,9 +4709,6 @@ def get_optional_params_image_gen(
     return optional_params
 
 
-EMBEDDING_PROVIDERS_WITH_NATIVE_HANDLERS: Final = frozenset({"bedrock", "gemini", "ollama", "sagemaker", "vertex_ai"})
-
-
 def get_optional_params_embeddings(
     # 2 optional params
     model: str,
@@ -5058,11 +5055,6 @@ def get_optional_params_embeddings(
         openai_params=list(DEFAULT_EMBEDDING_PARAM_VALUES.keys()),
         additional_drop_params=kwargs.get("additional_drop_params", None),
     )
-
-    if custom_llm_provider in EMBEDDING_PROVIDERS_WITH_NATIVE_HANDLERS and "extra_body" in final_params:
-        extra_body: Final = final_params["extra_body"]
-        del final_params["extra_body"]
-        return {**(extra_body if isinstance(extra_body, dict) else {}), **final_params}
 
     if "extra_body" in final_params and not final_params["extra_body"]:
         final_params.pop("extra_body", None)

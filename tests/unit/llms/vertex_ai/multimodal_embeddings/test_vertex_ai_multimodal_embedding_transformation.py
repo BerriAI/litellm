@@ -199,7 +199,7 @@ def test_extra_body_fields_reach_the_multimodal_predict_body(
         input="Hello world",
         vertex_project="test-project",
         vertex_location="us-central1",
-        extra_body={"outputDimensionality": 128},
+        extra_body={"dimension": 128},
     )
 
     assert json.loads(route.calls.last.request.content) == {

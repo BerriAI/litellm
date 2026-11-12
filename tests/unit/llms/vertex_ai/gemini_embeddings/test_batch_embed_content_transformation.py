@@ -663,7 +663,12 @@ def test_gemini_embedding_sends_extra_body_fields_on_each_request(respx_mock: re
         model="gemini/gemini-embedding-001",
         input="Hello, world!",
         api_key="gemini-test-key",
-        extra_body={"title": "Greeting", "taskType": "RETRIEVAL_DOCUMENT", "outputDimensionality": 256},
+        extra_body={
+            "title": "Greeting",
+            "taskType": "RETRIEVAL_DOCUMENT",
+            "outputDimensionality": 256,
+            "documentOcr": True,
+        },
     )
 
     assert json.loads(route.calls.last.request.content)["requests"] == [
@@ -673,5 +678,6 @@ def test_gemini_embedding_sends_extra_body_fields_on_each_request(respx_mock: re
             "title": "Greeting",
             "taskType": "RETRIEVAL_DOCUMENT",
             "outputDimensionality": 256,
+            "documentOcr": True,
         }
     ]

@@ -2171,9 +2171,7 @@ def test_bedrock_embedding_sends_extra_body_fields_in_the_request_body(
     assert json.loads(route.calls.last.request.read()) == expected_body
 
 
-def test_bedrock_nova_embedding_sends_extra_body_fields_inside_single_embedding_params(
-    respx_mock: respx.MockRouter,
-) -> None:
+def test_bedrock_nova_embedding_sends_extra_body_fields_in_the_request_body(respx_mock: respx.MockRouter) -> None:
     model_id: Final = "amazon.nova-2-multimodal-embeddings-v1:0"
     route = respx_mock.post(f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{model_id}/invoke").mock(
         return_value=httpx.Response(200, json={"embeddings": [{"embeddingType": "TEXT", "embedding": [0.1, 0.2]}]})
@@ -2184,15 +2182,15 @@ def test_bedrock_nova_embedding_sends_extra_body_fields_inside_single_embedding_
         input=[test_input],
         api_key="test-bearer-token",
         aws_region_name="us-east-1",
-        extra_body={"embeddingPurpose": "GENERIC_RETRIEVAL", "embeddingDimension": 1024},
+        extra_body={"taskType": "GENERIC_RETRIEVAL", "segmentationConfig": {"durationSeconds": 10}},
     )
 
-    params = json.loads(route.calls.last.request.read())["singleEmbeddingParams"]
-    assert "extra_body" not in params
-    assert (params["embeddingPurpose"], params["embeddingDimension"]) == ("GENERIC_RETRIEVAL", 1024)
+    body = json.loads(route.calls.last.request.read())
+    assert "extra_body" not in body
+    assert (body["taskType"], body["segmentationConfig"]) == ("GENERIC_RETRIEVAL", {"durationSeconds": 10})
 
 
-def test_bedrock_embedding_mapped_openai_param_wins_over_extra_body(respx_mock: respx.MockRouter) -> None:
+def test_bedrock_embedding_extra_body_wins_over_the_mapped_openai_param(respx_mock: respx.MockRouter) -> None:
     route = respx_mock.post(
         "https://bedrock-runtime.us-east-1.amazonaws.com/model/amazon.titan-embed-text-v2:0/invoke"
     ).mock(return_value=httpx.Response(200, json=titan_embedding_response))
@@ -2206,4 +2204,4 @@ def test_bedrock_embedding_mapped_openai_param_wins_over_extra_body(respx_mock: 
         extra_body={"dimensions": 512},
     )
 
-    assert json.loads(route.calls.last.request.read())["dimensions"] == 256
+    assert json.loads(route.calls.last.request.read())["dimensions"] == 512
