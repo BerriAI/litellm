@@ -2267,6 +2267,26 @@ def _timing_values(
     return getattr(logging_obj, "response_timing_metrics", None) or {}
 
 
+def _fallback_refusal_ends_the_walk(
+    exc: Exception, at_saturation: bool, general_settings: Mapping[str, object]
+) -> bool:
+    """At saturation the requested model still has room, so a fallback refused for any reason is a miss. Otherwise a
+    fallback's own non-rate-limit failure, or a hard per-model 429, is the answer the caller gets."""
+    from litellm.proxy.common_utils.proxy_rate_limit_error import (
+        PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS,
+        ProxyRateLimitError,
+        per_model_rate_limits_disable_fallbacks,
+    )
+
+    if at_saturation:
+        return False
+    if not isinstance(exc, ProxyRateLimitError):
+        return True
+    return exc.descriptor_key in PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS and per_model_rate_limits_disable_fallbacks(
+        general_settings
+    )
+
+
 async def _fallback_access_groups(
     fallback_model: str, user_api_key_dict: UserAPIKeyAuth, llm_router: Router, proxy_logging_obj: ProxyLogging
 ) -> tuple[str, ...]:
@@ -3160,20 +3180,10 @@ class ProxyBaseLLMRequestProcessing:
                             llm_router=llm_router,
                             rate_limited_model=original_model,
                         )
-                    except ProxyRateLimitError as fallback_exc:
+                    except Exception as fallback_exc:  # noqa: BLE001  # the helper decides which refusals end the walk
                         user_api_key_dict.matched_model_access_groups = requested_groups  # rebind-ok: undo the fallback
-                        if is_hard_per_model_limit(fallback_exc) and not at_saturation:
+                        if _fallback_refusal_ends_the_walk(fallback_exc, at_saturation, general_settings_view):
                             raise
-                        continue
-                    except Exception as fallback_exc:  # noqa: BLE001  # at saturation the requested model still has room, so a fallback refused for any reason is a miss, not the answer
-                        user_api_key_dict.matched_model_access_groups = requested_groups  # rebind-ok: undo the fallback
-                        if not at_saturation:
-                            raise
-                        verbose_proxy_logger.info(
-                            "Fallback model=%s refused the request at saturation, moving on: %s",
-                            fallback_model.replace("\r", "").replace("\n", ""),
-                            fallback_exc,
-                        )
                         continue
                     else:
                         admitted_data, admitted_logging_obj = admitted
