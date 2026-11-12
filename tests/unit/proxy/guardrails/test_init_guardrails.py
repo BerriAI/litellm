@@ -474,6 +474,7 @@ def test_init_guardrails_v2_stops_boot_when_a_custom_guardrail_path_names_an_ins
     assert "'my-guard'" in message
     assert "custom_callbacks.proxy_handler_instance" in message
     assert f"guardrail: {class_path}`" in message
+    assert "constructor arguments under litellm_params" in message
     assert issubclass(get_instance_fn(class_path, config_file_path=config_file_path), CustomGuardrail)
 
 

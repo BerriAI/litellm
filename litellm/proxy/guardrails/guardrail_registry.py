@@ -84,8 +84,8 @@ class CustomGuardrailPathError(Exception):
 
 def _class_path(instance_path: str, cls: type) -> str:
     entry_module: Final = instance_path.rsplit(".", 1)[0]
-    defined_in_entry_module: Final = entry_module == cls.__module__ or entry_module.endswith(f"/{cls.__module__}")
-    return f"{entry_module if defined_in_entry_module else cls.__module__}.{cls.__name__}"
+    module: Final = entry_module if entry_module.endswith(f"/{cls.__module__}") else cls.__module__
+    return f"{module}.{cls.__name__}"
 
 
 def _guardrail_path_error(
@@ -97,12 +97,14 @@ def _guardrail_path_error(
         return CustomGuardrailPathError(
             f"Guardrail '{guardrail_name}' sets guardrail: {guardrail_path}, which is a {type(resolved).__name__} "
             "instance, but the proxy builds each guardrail itself and needs the class. Point it at the class, e.g. "
-            f"`guardrail: {_class_path(guardrail_path, type(resolved))}`."
+            f"`guardrail: {_class_path(guardrail_path, type(resolved))}`. The proxy calls it with guardrail_name, "
+            "event_hook, default_on, and this guardrail's other litellm_params as keyword arguments, so set any "
+            "constructor arguments under litellm_params."
         )
     if isinstance(resolved, CustomLogger):
         return CustomGuardrailPathError(
             f"Guardrail '{guardrail_name}' sets guardrail: {guardrail_path}, which is a {type(resolved).__name__} "
-            "instance. It is a CustomLogger but not a CustomGuardrail, so the proxy cannot run it as a guardrail. "
+            "instance. It is a CustomLogger but not a CustomGuardrail, so it does not work as a guardrail. "
             f"To run it on every request, list `{guardrail_path}` under litellm_settings.callbacks instead. "
             "To run it as a guardrail, subclass CustomGuardrail and point guardrail: at that class."
         )
