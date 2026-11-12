@@ -72,6 +72,18 @@ def test_search_sends_max_results_in_request_body(respx_mock: respx.MockRouter) 
     assert [result.url for result in response.results] == ["https://example.com/ml"]
 
 
+def test_search_authenticates_with_perplexity_api_key_env_var(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("PERPLEXITYAI_API_KEY", raising=False)
+    monkeypatch.setenv("PERPLEXITY_API_KEY", "server-perplexity-key")
+    route: Final = respx_mock.post(PERPLEXITY_SEARCH_URL).respond(json={"results": []})
+
+    litellm.search(query="machine learning", search_provider="perplexity")
+
+    assert route.calls.last.request.headers["Authorization"] == "Bearer server-perplexity-key"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("is_async", [False, True])
 async def test_search_forwards_provider_filters_without_internal_params(
