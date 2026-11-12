@@ -12,6 +12,8 @@ from collections.abc import Mapping
 from copy import deepcopy
 from typing import Final, Literal
 
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
+
 SupportedA2AVersion = Literal["0.3", "1.0"]
 
 # Protocol versions LiteLLM can serve to A2A clients. The admin pins one per agent;
@@ -20,7 +22,6 @@ SUPPORTED_A2A_PROTOCOL_VERSIONS: Final[tuple[SupportedA2AVersion, ...]] = ("0.3"
 
 # Default served version when the agent card does not pin one.
 LITELLM_A2A_PROTOCOL_VERSION: Final = "1.0"
-
 
 _PROTOCOL_VERSION_PATTERN: Final = re.compile(
     r"^(\d+\.\d+)(?:\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?)?$"
@@ -48,6 +49,24 @@ def resolve_served_protocol_version(card: Mapping[str, object] | None) -> str:
     """Return the validated protocol version an agent card pins, else the default."""
     normalized: Final = normalize_protocol_version(card.get("protocolVersion") if card else None)
     return normalized if normalized is not None else LITELLM_A2A_PROTOCOL_VERSION
+
+
+def point_agent_card_at_proxy(
+    agent_card: Mapping[str, object],
+    proxy_url: str,
+) -> dict[str, object]:  # mutable-ok: the public helper contract requires a dictionary
+    interfaces: Final = agent_card.get("supportedInterfaces")
+    interface_items: Final = (
+        tuple(iter_items(agent_card.get("supportedInterfaces"))) if isinstance(interfaces, list) else ()
+    )
+    first: Final[object] = interface_items[0] if interface_items else None
+    first_mapping: Final = as_str_mapping(first)
+    pointed_interfaces: Final = (
+        {"supportedInterfaces": [{**first_mapping, "url": proxy_url}, *interface_items[1:]]}
+        if isinstance(first, dict) and first_mapping is not None
+        else {}
+    )
+    return deepcopy({**agent_card, "url": proxy_url, **pointed_interfaces})
 
 
 # Security scheme exposed by the LiteLLM-fronted agent card. Always replaces

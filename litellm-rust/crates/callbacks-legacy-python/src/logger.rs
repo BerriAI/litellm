@@ -77,8 +77,12 @@ pub fn finalize(
     kwargs: &Py<PyDict>,
     start: &Py<PyAny>,
     end: &Option<Py<PyAny>>,
+    cache_hit: bool,
 ) -> PyResult<()> {
-    Wrapper::Finalize.call(py, (response, logger.object(py), kwargs, start, end))?;
+    Wrapper::Finalize.call(
+        py,
+        (response, logger.object(py), kwargs, start, end, cache_hit),
+    )?;
     Ok(())
 }
 

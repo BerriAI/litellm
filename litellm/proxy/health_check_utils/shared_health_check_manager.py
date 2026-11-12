@@ -13,10 +13,10 @@ from litellm.caching.redis_cache import RedisCache
 from litellm.constants import (
     DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL,
     DEFAULT_SHARED_HEALTH_CHECK_TTL,
+    HEALTH_CHECKS_TARGET,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.health_check import perform_health_check
-from litellm.router_utils.health_state_cache import HEALTH_CHECKS_TARGET
 
 if TYPE_CHECKING:
     from litellm.router import Router

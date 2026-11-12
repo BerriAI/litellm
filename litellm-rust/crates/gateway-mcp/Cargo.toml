@@ -7,11 +7,11 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+litellm-secret-value.workspace = true
 axum = { workspace = true, features = ["json", "query"] }
 futures-util.workspace = true
 litellm-config.workspace = true
 litellm-secrets.workspace = true
-litellm-auth-types.workspace = true
 litellm-error.workspace = true
 base64.workspace = true
 http.workspace = true

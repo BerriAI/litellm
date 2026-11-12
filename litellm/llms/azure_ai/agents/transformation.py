@@ -323,7 +323,7 @@ class AzureAIAgentsConfig(BaseConfig):
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
         litellm_params: dict,
-        timeout: float | Any,
+        timeout: float | str | httpx.Timeout | None,
         acompletion: bool,
         stream: bool | None = False,
         headers: dict | None = None,

@@ -6,16 +6,17 @@ import {
   TEAM_INFO_TAB_KEYS,
   TEAM_INFO_TAB_LABELS,
 } from "./tabVisibilityUtils";
+import i18n from "@/i18n/i18n";
 
 describe("team_info_tabs", () => {
   describe("TEAM_INFO_TAB_LABELS", () => {
     it("should have label for every tab key", () => {
-      expect(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.OVERVIEW]).toBe("Overview");
-      expect(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.MY_USER]).toBe("My User");
-      expect(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS]).toBe("Virtual Keys");
-      expect(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.MEMBERS]).toBe("Members");
-      expect(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.MEMBER_PERMISSIONS]).toBe("Member Permissions");
-      expect(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.SETTINGS]).toBe("Settings");
+      expect(i18n.t(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.OVERVIEW])).toBe("Overview");
+      expect(i18n.t(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.MY_USER])).toBe("My User");
+      expect(i18n.t(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS])).toBe("Virtual Keys");
+      expect(i18n.t(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.MEMBERS])).toBe("Members");
+      expect(i18n.t(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.MEMBER_PERMISSIONS])).toBe("Member Permissions");
+      expect(i18n.t(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.SETTINGS])).toBe("Settings");
     });
   });
 
