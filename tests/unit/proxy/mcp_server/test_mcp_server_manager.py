@@ -17269,28 +17269,33 @@ async def test_tools_list_page_from_an_upstream_that_declares_no_freshness_comes
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("ttl_ms", "next_cursor", "discovery_seconds"),
+    ("outcome", "ttl_ms", "discovery_seconds"),
     (
-        pytest.param(0, None, "60", id="no_lifetime"),
-        pytest.param(60000, "more", "60", id="continuing_page"),
-        pytest.param(60000, None, "0", id="caching_disabled"),
+        pytest.param("supported", 0, "60", id="no_lifetime"),
+        pytest.param("paged", 60000, "60", id="continuing_page"),
+        pytest.param("supported", 60000, "0", id="caching_disabled"),
     ),
 )
 async def test_tools_list_that_will_not_be_cached_lists_without_the_credential_fingerprint(
-    ttl_ms: int, next_cursor: str | None, discovery_seconds: str, monkeypatch: pytest.MonkeyPatch
+    outcome: str, ttl_ms: int, discovery_seconds: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("LITELLM_MCP_DISCOVERY_CACHE_TTL", discovery_seconds)
-    client: Final = AsyncMock()
-    client.discovery_auth_fingerprint = AsyncMock(side_effect=RuntimeError("the credential fingerprint is unavailable"))
-    client.list_tools_page = AsyncMock(
-        return_value=ListToolsResult(
-            tools=[MCPTool(name="example", inputSchema={"type": "object"})], ttl_ms=ttl_ms, next_cursor=next_cursor
-        )
-    )
     manager: Final = MCPServerManager(discovery_clock=_DiscoveryClock())
-    manager.create_mcp_client = AsyncMock(return_value=client)
-    first_page: Final = await _list_discovery_tools(manager, None)
+    create_client: Final = manager.create_mcp_client
+
+    async def create_client_without_a_fingerprint(*args: object, **kwargs: object) -> MCPClient:
+        client: Final = await create_client(*args, **kwargs)
+        client.discovery_auth_fingerprint = AsyncMock(side_effect=RuntimeError("the fingerprint is unavailable"))
+        return client
+
+    manager.create_mcp_client = create_client_without_a_fingerprint
+    upstream: Final = _DiscoveryUpstream()
+    upstream.outcome = outcome
+    upstream.ttl_ms = ttl_ms
+    with _mcp_upstream(upstream.respond):
+        first_page: Final = await _list_discovery_tools(manager, None)
     assert len(first_page.tools) == 1
+    assert sum(method == "tools/list" for method, _auth in upstream.requests) == 1
 
 
 @pytest.mark.asyncio
