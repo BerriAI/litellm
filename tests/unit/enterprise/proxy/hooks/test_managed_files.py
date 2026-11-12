@@ -58,15 +58,30 @@ class _InMemoryManagedFileTable:
         self, where: Mapping[str, object]
     ) -> LiteLLM_ManagedFileTable | None:
         self.find_first_calls.append(where)
+        or_filters: Final = where.get("OR")
+        if isinstance(or_filters, list):
+            for clause in or_filters:
+                matched: Final = await self.find_first(clause)
+                if matched is not None:
+                    return matched
+            return None
         unified_file_id: Final = where.get("unified_file_id")
         if isinstance(unified_file_id, str):
             return self.rows.get(unified_file_id)
+        if isinstance(unified_file_id, Mapping):
+            return next((self.rows[uid] for uid in unified_file_id.get("in", ()) if uid in self.rows), None)
         raw_file_filter: Final = where.get("flat_model_file_ids")
         if isinstance(raw_file_filter, Mapping):
             raw_file_id: Final = raw_file_filter.get("has")
             if isinstance(raw_file_id, str):
                 return next(
                     (row for row in self.rows.values() if raw_file_id in row.flat_model_file_ids),
+                    None,
+                )
+            raw_file_ids: Final = raw_file_filter.get("hasSome")
+            if isinstance(raw_file_ids, list):
+                return next(
+                    (row for row in self.rows.values() if set(raw_file_ids) & set(row.flat_model_file_ids)),
                     None,
                 )
         return None
@@ -6573,3 +6588,58 @@ async def test_register_provider_file_returns_none_when_the_managed_row_cannot_b
     )
 
     assert managed_file_id is None
+
+
+_GEMINI_OUTPUT_SPELLINGS: Final = (
+    "files/batch-out1",
+    "files%2Fbatch-out1",
+    "batch-out1/",
+    "https://generativelanguage.googleapis.com/v1beta/files/batch-out1",
+)
+
+
+def _gemini_batch_output_row() -> LiteLLM_ManagedFileTable:
+    return LiteLLM_ManagedFileTable(
+        unified_file_id="file-encoded-gemini-output",
+        file_object=OpenAIFileObject(
+            id="file-encoded-gemini-output",
+            object="file",
+            bytes=0,
+            created_at=1,
+            filename="output.jsonl",
+            purpose="batch_output",
+            status="processed",
+        ),
+        model_mappings={"model-gemini": "batch-out1"},
+        flat_model_file_ids=["batch-out1"],
+        created_by="owner",
+        team_id="team-owner",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("spelling", _GEMINI_OUTPUT_SPELLINGS)
+async def test_enforce_provider_file_access_denies_every_spelling_of_another_keys_output_file(spelling: str):
+    managed_files, _ = _managed_files_with_fake_prisma(_gemini_batch_output_row())
+    stranger: Final = UserAPIKeyAuth(user_id="stranger", team_id="team-stranger")
+
+    with pytest.raises(HTTPException) as denied:
+        await managed_files.enforce_provider_file_access(spelling, stranger)
+
+    assert denied.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("spelling", (*_GEMINI_OUTPUT_SPELLINGS, "batch-out1"))
+async def test_enforce_provider_file_access_lets_the_owner_read_any_spelling(spelling: str):
+    managed_files, _ = _managed_files_with_fake_prisma(_gemini_batch_output_row())
+
+    await managed_files.enforce_provider_file_access(spelling, UserAPIKeyAuth(user_id="owner", team_id="team-owner"))
+    await managed_files.enforce_provider_file_access(spelling, UserAPIKeyAuth(user_id="teammate", team_id="team-owner"))
+
+
+@pytest.mark.asyncio
+async def test_enforce_provider_file_access_still_passes_a_file_nobody_registered():
+    managed_files, _ = _managed_files_with_fake_prisma(_gemini_batch_output_row())
+
+    await managed_files.enforce_provider_file_access("files/batch-other", UserAPIKeyAuth(user_id="stranger"))

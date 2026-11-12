@@ -82,6 +82,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     TeamProviderDeployment,
     _is_base64_encoded_unified_file_id,
     apply_unified_file_ids,
+    canonical_provider_file_id,
     decode_model_from_file_id,
     ensure_batch_response_managed_file_ids,
     get_batch_id_from_unified_batch_id,
@@ -1094,8 +1095,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         """
         if self.prisma_client is None:
             return
+        spellings: Final = list(dict.fromkeys((file_id, canonical_provider_file_id(file_id))))
         managed_file = await _managed_file_table(self.prisma_client).find_first(
-            where={"OR": [{"unified_file_id": file_id}, {"flat_model_file_ids": {"has": file_id}}]}
+            where={"OR": [{"unified_file_id": {"in": spellings}}, {"flat_model_file_ids": {"hasSome": spellings}}]}
         )
         if managed_file is None:
             return
@@ -1139,7 +1141,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         )
         for file_id in provider_file_ids:
             model_name = decode_model_from_file_id(file_id)
-            raw_file_id = get_original_file_id(file_id)
+            raw_file_id = canonical_provider_file_id(get_original_file_id(file_id))
             await self.store_batch_output_file(
                 unified_file_id=file_id,
                 provider_file_id=raw_file_id,
