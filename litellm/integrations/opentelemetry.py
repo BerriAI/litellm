@@ -166,6 +166,7 @@ class _CacheHitView(TypedDict, total=False):
 
 
 _CACHE_HIT_VIEW: Final = TypeAdapter(_CacheHitView)
+_OPAQUE_VALUE: Final = TypeAdapter(object)
 
 # Dedicated so a slow exporter shutdown cannot starve the shared logging executor.
 _PROVIDER_SHUTDOWN_EXECUTOR: Final = ThreadPoolExecutor(max_workers=4, thread_name_prefix="OtelProviderShutdown")
@@ -2535,8 +2536,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             #############################################
 
             # The name of the LLM a request is being made to
-            raw_request_model: Final[object] = kwargs.get("model")
-            request_model: Final = as_str(raw_request_model)
+            request_model: Final = as_str(_OPAQUE_VALUE.validate_python(kwargs.get("model")))
             if request_model:
                 self.safe_set_attribute(
                     span=span,
