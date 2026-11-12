@@ -54,7 +54,7 @@ def _prepare_ollama_embedding_payload(
             data.setdefault("options", {})
             if isinstance(data["options"], dict):
                 data["options"].update({k: v})
-    return {**data, **extra_body}
+    return {**extra_body, **data}
 
 
 def _process_ollama_embedding_response(

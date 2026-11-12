@@ -168,7 +168,7 @@ class VertexAITextEmbeddingConfig(LiteLLMBaseModel):
         body_params, extra_body = split_extra_body(optional_params)
         vertex_request["parameters"] = (
             cast(  # cast-ok: extra_body carries raw Vertex fields the TypedDict does not list
-                EmbeddingParameters, {**body_params, **extra_body}
+                EmbeddingParameters, {**extra_body, **body_params}
             )
         )
         if labels:
@@ -214,7 +214,7 @@ class VertexAITextEmbeddingConfig(LiteLLMBaseModel):
         body_params, extra_body = split_extra_body(optional_params)
         vertex_request["parameters"] = (
             cast(  # cast-ok: extra_body carries raw Vertex fields the TypedDict does not list
-                TextEmbeddingFineTunedParameters, {**body_params, **extra_body}
+                TextEmbeddingFineTunedParameters, {**extra_body, **body_params}
             )
         )
         # Remove 'shared_session' from parameters if present

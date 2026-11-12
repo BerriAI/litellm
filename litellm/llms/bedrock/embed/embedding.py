@@ -296,7 +296,7 @@ class BedrockEmbedding(BaseAWSLLM):
         extra_body: Mapping[str, object] = MappingProxyType({}),
     ):
         responses: Final[list[dict]] = []
-        for data in ({**item, **extra_body} for item in batch_data):
+        for data in ({**extra_body, **item} for item in batch_data):
             headers = {"Content-Type": "application/json"}
             if extra_headers is not None:
                 headers = {"Content-Type": "application/json", **extra_headers}
@@ -366,7 +366,7 @@ class BedrockEmbedding(BaseAWSLLM):
         extra_body: Mapping[str, object] = MappingProxyType({}),
     ):
         responses: Final[list[dict]] = []
-        for data in ({**item, **extra_body} for item in batch_data):
+        for data in ({**extra_body, **item} for item in batch_data):
             headers = {"Content-Type": "application/json"}
             if extra_headers is not None:
                 headers = {"Content-Type": "application/json", **extra_headers}
@@ -542,7 +542,7 @@ class BedrockEmbedding(BaseAWSLLM):
                 )
                 batch_data.append(nova_request)
 
-        request_data: Final = None if data is None else {**data, **extra_body}
+        request_data: Final = None if data is None else {**extra_body, **data}
 
         ### SET RUNTIME ENDPOINT ###
         endpoint_url, proxy_endpoint_url = self.get_runtime_endpoint(

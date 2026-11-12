@@ -2144,8 +2144,8 @@ img_base_64 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGQAAABkBAMAAACCzIh
         (
             "cohere.embed-english-v3",
             cohere_embedding_response,
-            {"input_type": "search_query", "truncate": "END"},
-            {"texts": [test_input], "input_type": "search_query", "truncate": "END"},
+            {"truncate": "END", "embedding_types": ["float"]},
+            {"texts": [test_input], "truncate": "END", "embedding_types": ["float"]},
         ),
     ],
 )
@@ -2168,7 +2168,9 @@ def test_bedrock_embedding_sends_extra_body_fields_in_the_request_body(
         extra_body=extra_body,
     )
 
-    assert json.loads(route.calls.last.request.read()) == expected_body
+    body = json.loads(route.calls.last.request.read())
+    assert "extra_body" not in body
+    assert expected_body.items() <= body.items()
 
 
 def test_bedrock_nova_embedding_sends_extra_body_fields_in_the_request_body(respx_mock: respx.MockRouter) -> None:
@@ -2182,15 +2184,25 @@ def test_bedrock_nova_embedding_sends_extra_body_fields_in_the_request_body(resp
         input=[test_input],
         api_key="test-bearer-token",
         aws_region_name="us-east-1",
-        extra_body={"taskType": "GENERIC_RETRIEVAL", "segmentationConfig": {"durationSeconds": 10}},
+        extra_body={"segmentationConfig": {"durationSeconds": 10}},
     )
 
     body = json.loads(route.calls.last.request.read())
     assert "extra_body" not in body
-    assert (body["taskType"], body["segmentationConfig"]) == ("GENERIC_RETRIEVAL", {"durationSeconds": 10})
+    assert body["segmentationConfig"] == {"durationSeconds": 10}
 
 
-def test_bedrock_embedding_extra_body_wins_over_the_mapped_openai_param(respx_mock: respx.MockRouter) -> None:
+@pytest.mark.parametrize(
+    ("extra_body", "field", "expected"),
+    [
+        ({"dimensions": 512}, "dimensions", 256),
+        ({"inputText": "text the guardrails never saw"}, "inputText", test_input),
+    ],
+    ids=["mapped_param", "input"],
+)
+def test_bedrock_embedding_extra_body_cannot_replace_the_input_or_a_mapped_param(
+    respx_mock: respx.MockRouter, extra_body: dict[str, object], field: str, expected: object
+) -> None:
     route = respx_mock.post(
         "https://bedrock-runtime.us-east-1.amazonaws.com/model/amazon.titan-embed-text-v2:0/invoke"
     ).mock(return_value=httpx.Response(200, json=titan_embedding_response))
@@ -2201,7 +2213,7 @@ def test_bedrock_embedding_extra_body_wins_over_the_mapped_openai_param(respx_mo
         api_key="test-bearer-token",
         aws_region_name="us-east-1",
         dimensions=256,
-        extra_body={"dimensions": 512},
+        extra_body=extra_body,
     )
 
-    assert json.loads(route.calls.last.request.read())["dimensions"] == 512
+    assert json.loads(route.calls.last.request.read())[field] == expected

@@ -436,7 +436,7 @@ def transform_openai_input_gemini_content(
         )
         requests.append(
             cast(  # cast-ok: extra_body carries raw Gemini fields the TypedDict does not list
-                EmbedContentRequest, {**request, **extra_body}
+                EmbedContentRequest, {**extra_body, **request}
             )
         )
 
@@ -478,9 +478,9 @@ def transform_openai_input_gemini_embed_content(
         parts.append(_build_part_for_input(element, resolved_files=resolved_files, drop_params=drop_params))
 
     request_body: Final[dict] = {
+        **extra_body_fields(optional_params),
         "content": ContentType(parts=parts),
         **gemini_params,
-        **extra_body_fields(optional_params),
     }
 
     return request_body

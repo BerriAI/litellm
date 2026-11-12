@@ -22,7 +22,8 @@ _BODY_FIELDS: Final = TypeAdapter(dict[str, object])
 
 
 def extra_body_fields(optional_params: Mapping[str, object] | None) -> Mapping[str, object]:
-    """The caller's ``extra_body`` fields, merged into the provider body after the transform as the OpenAI SDK does."""
+    """The caller's ``extra_body`` fields, merged under the provider body after the transform so they add fields but never
+    replace the input or a mapped param."""
     extra_body: Final = (optional_params or {}).get("extra_body")
     return _BODY_FIELDS.validate_python(extra_body) if isinstance(extra_body, Mapping) else {}
 

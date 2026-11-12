@@ -191,7 +191,7 @@ class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
 
         extra_body: Final = extra_body_fields(optional_params)
         if "outputDimensionality" in optional_params:
-            request_data["parameters"] = {"dimension": optional_params["outputDimensionality"], **extra_body}
+            request_data["parameters"] = {**extra_body, "dimension": optional_params["outputDimensionality"]}
         elif extra_body:
             request_data["parameters"] = dict(extra_body)
 
