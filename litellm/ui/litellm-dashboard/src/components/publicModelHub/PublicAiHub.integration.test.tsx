@@ -191,6 +191,36 @@ beforeEach(() => {
 });
 
 describe("PublicAiHub", () => {
+  it.each([
+    { name: "Clinical NER", path: "/clinical-ner", methods: null, method: "POST", body: true },
+    { name: "LPR Catalog", path: "/lpr-catalog", methods: ["GET"], method: "GET", body: false },
+  ])("shows a route-specific curl example without the chat SDK for $name", async (endpoint) => {
+    failModelsWith(() =>
+      Promise.resolve(
+        page([
+          {
+            model_group: endpoint.name,
+            mode: "passthrough",
+            providers: [],
+            pass_through_path: endpoint.path,
+            pass_through_methods: endpoint.methods,
+          },
+        ]),
+      ),
+    );
+    renderWithProviders(<PublicAiHub accessToken={null} />);
+
+    fireEvent.click(await screen.findByRole("link", { name: new RegExp(endpoint.name) }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Details" });
+    expect(dialog).toHaveTextContent(`curl -X "${endpoint.method}" "https://gateway.example.com${endpoint.path}"`);
+    expect(dialog).toHaveTextContent("Passthrough");
+    expect(dialog.textContent?.includes(`-d '{"input": "Hello, how are you?"}'`)).toBe(endpoint.body);
+    expect(dialog).not.toHaveTextContent("import openai");
+    expect(dialog).not.toHaveTextContent("chat.completions");
+    expect(dialog).not.toHaveTextContent("/v1/chat/completions");
+  });
+
   it("shows only Models and Skills without selecting an item or reading retired hubs", async () => {
     const user = userEvent.setup();
     renderWithProviders(<PublicAiHub accessToken={null} />);

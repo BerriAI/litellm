@@ -5938,18 +5938,18 @@
           "description": "Add your SMTP settings and public gateway URL in Email Settings. Send a test email to verify delivery."
         },
         "enable": {
-          "title": "Enable model deprecation emails",
-          "description": "In Email events, turn on Model Deprecations and save. This is off by default."
+          "title": "Choose your email alerts",
+          "description": "In Email events, enable Model Deprecations, Performance Alerts, or both, then save. Both are off by default."
         },
         "reminders": {
-          "title": "Owners get two reminders",
-          "description": "Affected key owners and team admins receive a reminder 30 days before retirement, and one final reminder 1 day before. Recipients are based on actual usage in the last 30 days. Dates are checked in UTC."
+          "title": "Know what gets sent",
+          "description": "Model deprecations notify affected key owners and team admins 30 days and 1 day before retirement. Performance alerts send gateway admins one daily summary when there are new findings, with up to five alerts and a link to the rest."
         }
       },
-      "summary": "Give affected owners time to migrate. Email reminders at 30 days and 1 day.",
+      "summary": "Get model retirement reminders and daily performance summaries by email.",
       "trigger": "Set up email reminders",
-      "title": "Set up model deprecation emails",
-      "description": "Help key owners and team admins act before a provider retires a model. Only their affected usage is included.",
+      "title": "Set up alert emails",
+      "description": "Choose which alerts to send through your existing email connection.",
       "openSettings": "Open Email Settings"
     },
     "migrationDetail": {
@@ -6017,9 +6017,18 @@
       "more": "+{{hidden}} more"
     },
     "monitoring": {
+      "manage": "Manage alerts",
+      "description": "These settings apply to everyone using this gateway.",
+      "deprecations": "Model deprecations",
+      "deprecationsDescription": "Show retirement alerts and send configured email and Slack reminders.",
+      "adminOnly": "Only gateway admins can change these settings.",
+      "notifications": "Opt in to Performance Alerts in email or Slack settings to receive a daily summary of new findings. Email summaries go to gateway admins.",
+      "connections": "Manage email and Slack connections",
+      "freeNote": "Model deprecation alerts are unlimited. Performance monitoring includes 5 free alerts, then requires Enterprise.",
+      "enterpriseNote": "Unlimited model deprecation and performance alerts with Enterprise.",
       "title": "Performance monitoring",
       "loading": "Loading monitoring settings…",
-      "allowance": "{{used}} of {{limit}} free alerts used.",
+      "allowance": "{{used}} of {{limit}} free alerts generated.",
       "enterprise": "On with Enterprise.",
       "off": "Off. Saved alerts remain available.",
       "exhausted": "You’ve used all 5 free alerts. New performance alerts are paused.",
@@ -6518,7 +6527,8 @@
         "dailyReports": "Weekly/Monthly Spend Reports",
         "outageAlerts": "Outage Alerts",
         "regionOutageAlerts": "Region Outage Alerts",
-        "modelDeprecationWarnings": "Model Deprecation Warnings"
+        "modelDeprecationWarnings": "Model Deprecation Warnings",
+        "performanceAlerts": "Performance Alerts"
       },
       "enterpriseFeature": "✨ Enterprise Feature",
       "saveChanges": "Save Changes",
@@ -6625,6 +6635,7 @@
       "description": "Select which events should trigger email notifications.",
       "descriptions": {
         "modelDeprecations": "Email affected key owners and team admins 30 days and 1 day before model deprecation. Uses requests from the last 30 days. Off by default.",
+        "performanceAlerts": "Email gateway admins a daily summary when there are new performance alerts. Shows up to five alerts with a link to see all.",
         "virtualKeyCreated": "An email will be sent to the user when a new virtual key is created with their user ID",
         "newUserInvitation": "An email will be sent to the email address of the user when a new user is created",
         "generic": "Receive an email notification when {{event}}"
@@ -8131,7 +8142,6 @@
         "toolPolicies": "Tool Policies",
         "usage": "Usage",
         "alerts": "Alerts",
-        "modelLeaderboard": "Model Leaderboard",
         "costOptimization": "Cost Optimization",
         "logs": "Logs",
         "lens": "Lens",
@@ -8178,7 +8188,6 @@
       "newUsage": "View usage analytics and metrics",
       "alerts": "Review and resolve model deprecation alerts across keys and teams",
       "costOptimization": "Track and configure cost-saving features: prompt compression, caching, and auto routing",
-      "modelInsights": "Model Leaderboard: compare usage, spend, tokens, and task mix across this gateway",
       "logs": "Access request and response logs",
       "lens": "Review agent activity and investigate patterns with supporting evidence",
       "guardrailsMonitor": "Monitor guardrail performance and view logs",
@@ -19278,6 +19287,18 @@
       }
     }
   },
+  "passThroughModelHub": {
+    "title": "Model Hub",
+    "description": "Optionally list this endpoint on the public Model Hub page",
+    "displayName": "Display Name",
+    "displayNameCreateHint": "Shown on the Model Hub instead of the path. Example: Clinical NER",
+    "displayNameHint": "Shown on the Model Hub instead of the path",
+    "displayNamePlaceholder": "Clinical NER",
+    "show": "Show on Model Hub",
+    "showHint": "Publish this endpoint on the public Model Hub page",
+    "published": "On Model Hub",
+    "endpoint": "Endpoint:"
+  },
   "addPassThrough": {
     "validation": {
       "pathRequired": "Path is required",
@@ -19955,38 +19976,6 @@
       "deleted": "Alias deleted successfully"
     }
   },
-  "modelInsights": {
-    "modelInsightsView": {
-      "granularity": {
-        "day": "Daily",
-        "week": "Weekly"
-      },
-      "metrics": {
-        "requests": "requests",
-        "spend": "spend",
-        "tokens": "tokens"
-      },
-      "byProvider": "by {{provider}}",
-      "loadError": "Could not load model insights",
-      "title": "Model Leaderboard",
-      "description": "See which models your gateway used from {{start}} through {{end}}",
-      "topModels": {
-        "title": "Top models",
-        "description": "{{granularity}} {{metric}} across your gateway"
-      },
-      "bucketSize": "Bucket size",
-      "gatewayTotal": "Gateway total",
-      "leaderboard": {
-        "title": "Leaderboard",
-        "description": "Share of {{metric}}, with the change between the first and second half of the period"
-      },
-      "costPerSession": {
-        "title": "Cost per session",
-        "description": "Session cost is not estimated from request counts",
-        "hint": "Add a stable session_id to requests to unlock accurate session-level model comparisons in a future bounded session rollup"
-      }
-    }
-  },
   "transformRequest": {
     "transformRequestPanel": {
       "title": "Playground",
@@ -20655,6 +20644,11 @@
       },
       "unnamedKey": "Unnamed key",
       "back": "Back to customers"
+    },
+    "usage": {
+      "title": "Usage",
+      "description": "Daily activity by model across this customer's keys.",
+      "error": "Could not load customer usage"
     },
     "createDialog": {
       "title": "Create customer",
