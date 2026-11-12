@@ -162,8 +162,9 @@ was borrowed from regains its full share within one rate limit window (`LITELLM_
 model saturating, plus at most `saturation_check_cache_ttl` seconds for every worker to see the saturation. Keep the
 cache TTL at or below a quarter of the window when team shares are on; the limiter logs a warning otherwise.
 
-Active teams are tracked per model in `dynamic_rate_limiter:team_shares:{model}` (Redis for one window, locally for
-`saturation_check_cache_ttl`) and per-team usage in the `team_share` descriptor `{model}:{team_id}`. Team
+Active teams are tracked per model in the Redis sorted set `dynamic_rate_limiter:team_shares:{model}` (one entry per
+team scored by its last request, pruned after a window, snapshotted in memory for `saturation_check_cache_ttl`, held
+for a full window in memory when there is no Redis) and per-team usage in the `team_share` descriptor `{model}:{team_id}`. Team
 `model_tpm_limit` / `model_rpm_limit` and every key, end-user and organization limit stay hard limits enforced by the
 parallel request limiter, so borrowing never bypasses them. Keys outside a team keep using their priority pool.
 
