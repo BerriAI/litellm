@@ -4767,7 +4767,8 @@ class Logging(LiteLLMLoggingBaseClass):
         callbacks: Final = (
             *(self.dynamic_failure_callbacks or ()),
             *(self.dynamic_async_failure_callbacks or ()),
-            *litellm.logging_callback_manager.get_all_callbacks(),
+            *litellm.callbacks,
+            *litellm.logging_callback_manager.get_failure_callbacks(),
         )
         return any(isinstance(cb, CustomLogger) and cb.wants_failed_prompt_token_estimate for cb in callbacks)
 

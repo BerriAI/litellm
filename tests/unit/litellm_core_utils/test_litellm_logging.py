@@ -14915,3 +14915,63 @@ async def test_failed_chat_prompt_is_counted_only_for_loggers_that_want_the_esti
     assert {k: v for k, v in received.items() if k == FAILED_PROMPT_TOKEN_ESTIMATE_KEY} == (
         expected if expects_estimate else {}
     )
+
+
+_GLOBAL_CALLBACK_LISTS: Final = (
+    "callbacks",
+    "success_callback",
+    "_async_success_callback",
+    "failure_callback",
+    "_async_failure_callback",
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("registration", "expects_estimate"),
+    [
+        ("success_callback", False),
+        ("_async_success_callback", False),
+        ("callbacks", True),
+        ("failure_callback", True),
+        ("_async_failure_callback", True),
+        ("dynamic_failure_callbacks", True),
+        ("dynamic_async_failure_callbacks", True),
+    ],
+)
+async def test_failed_chat_prompt_is_counted_only_when_an_opted_in_logger_receives_failures(
+    monkeypatch: pytest.MonkeyPatch, registration: str, expects_estimate: bool
+) -> None:
+    for callback_list in _GLOBAL_CALLBACK_LISTS:
+        monkeypatch.setattr(litellm, callback_list, [])
+    recorder: Final = _EstimateWantingRecorder()
+    if registration in _GLOBAL_CALLBACK_LISTS:
+        monkeypatch.setattr(litellm, registration, [recorder])
+    counted_prompts: Final[list[object]] = []
+
+    def recording_token_counter(**kwargs: object) -> int:
+        counted_prompts.append(kwargs["messages"])
+        return 7
+
+    monkeypatch.setattr(litellm_logging, "get_token_counter_new", lambda: recording_token_counter)
+    messages: Final = [{"role": "user", "content": "count these prompt words"}]
+    logging_obj: Final = LitellmLogging(
+        model="hosted_vllm/test-model",
+        messages=messages,
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.datetime(2026, 1, 1),
+        litellm_call_id="failed-request-call-id",
+        function_id="failed-request-function-id",
+        **{registration: [recorder]} if registration.startswith("dynamic_") else {},
+    )
+    logging_obj.update_environment_variables(
+        model="hosted_vllm/test-model", user="", optional_params={}, litellm_params={}
+    )
+
+    await logging_obj.async_failure_handler(
+        litellm.Timeout(message="timed out", model="test-model", llm_provider="hosted_vllm"), "tb"
+    )
+
+    assert counted_prompts == ([messages] if expects_estimate else [])
+    assert logging_obj.model_call_details.get(FAILED_PROMPT_TOKEN_ESTIMATE_KEY) == (7 if expects_estimate else None)
