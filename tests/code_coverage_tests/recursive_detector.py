@@ -1,5 +1,11 @@
 import ast
 import os
+from itertools import filterfalse
+from typing import Final
+
+NON_SDK_SOURCE_DIRS: Final = frozenset(
+    {"cli", "deploy", "enterprise", "packaging", "proxy-extras", "runtime", "rust", "scripts", "ui", "vscode-extension"}
+)
 
 IGNORE_FUNCTIONS = [
     "_json_cost",  # bounded at depth 32 and consumed under byte/node limits.
@@ -141,7 +147,9 @@ def find_recursive_functions_in_file(file_path):
 def find_recursive_functions_in_directory(directory):
     recursive_functions = {}
     ignored_recursive_functions = {}
-    for root, _, files in os.walk(directory):
+    for root, dirs, files in os.walk(directory):
+        if os.path.normpath(root) == os.path.normpath(directory):
+            dirs[:] = filterfalse(NON_SDK_SOURCE_DIRS.__contains__, dirs)
         for file in files:
             print("file: ", file)
             if file.endswith(".py"):

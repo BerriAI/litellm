@@ -21,7 +21,7 @@ from litellm.llms.deepseek.messages.transformation import DeepSeekAnthropicMessa
 from litellm.llms.base_llm.anthropic_messages.transformation import BaseAnthropicMessagesConfig
 
 FIXTURE_PATH: Final = (
-    Path(__file__).parents[4] / "litellm-rust/crates/llms/tests/fixtures/anthropic_messages_http_error_retry.json"
+    Path(__file__).parents[4] / "litellm/rust/crates/llms/tests/fixtures/anthropic_messages_http_error_retry.json"
 )
 
 
