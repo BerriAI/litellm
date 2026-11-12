@@ -2473,15 +2473,16 @@ _ACCESS_GROUP_CACHED_RESULTS = {
 
 @contextmanager
 def _proxy_health_globals(
-    llm_model_list: Sequence[Mapping[str, object]],
+    llm_model_list: Sequence[Mapping[str, object]] | None,
     llm_router: object,
     use_background_health_checks: bool = False,
     health_check_results: Mapping[str, object] | None = None,
     prisma_client: object = None,
+    user_model: str | None = None,
 ) -> Iterator[None]:
     with (
         patch(  # test-quality-ok: proxy module global, no injection seam
-            "litellm.proxy.proxy_server.llm_model_list", list(llm_model_list)
+            "litellm.proxy.proxy_server.llm_model_list", None if llm_model_list is None else list(llm_model_list)
         ),
         patch(  # test-quality-ok: proxy module global, no injection seam
             "litellm.proxy.proxy_server.llm_router", llm_router
@@ -2493,7 +2494,7 @@ def _proxy_health_globals(
             "litellm.proxy.proxy_server.use_background_health_checks", use_background_health_checks
         ),
         patch(  # test-quality-ok: proxy module global, no injection seam
-            "litellm.proxy.proxy_server.user_model", None
+            "litellm.proxy.proxy_server.user_model", user_model
         ),
         patch(  # test-quality-ok: proxy module global, no injection seam
             "litellm.proxy.proxy_server.health_check_results", dict(health_check_results or {})
@@ -2703,9 +2704,7 @@ async def test_targeted_health_answers_without_probing_billed_media(use_backgrou
         ),
     ):
         results = {
-            model_id: await health_endpoint(
-                response=response, user_api_key_dict=admin, model=None, model_id=model_id
-            )
+            model_id: await health_endpoint(response=response, user_api_key_dict=admin, model=None, model_id=model_id)
             for model_id, response in responses.items()
         }
 
@@ -2723,7 +2722,7 @@ async def test_targeted_health_answers_without_probing_billed_media(use_backgrou
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("use_background_health_checks", [True, False])
-async def test_health_names_the_media_models_it_left_out(use_background_health_checks):
+async def test_health_names_the_media_models_it_left_out_and_never_lists_them(use_background_health_checks):
     from fastapi import Response
 
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
@@ -2745,6 +2744,15 @@ async def test_health_names_the_media_models_it_left_out(use_background_health_c
         "healthy_count": 1,
         "unhealthy_count": 0,
     }
+    cached_before_the_skip = {
+        "healthy_endpoints": [
+            *checked["healthy_endpoints"],
+            {"model": "gemini/gemini-3-pro-image", "model_id": "image-in-mixed"},
+        ],
+        "unhealthy_endpoints": [{"model": "gemini/gemini-3-pro-image", "model_id": "image-2"}],
+        "healthy_count": 2,
+        "unhealthy_count": 1,
+    }
 
     async def fake_perform(**kwargs):
         return dict(checked)
@@ -2755,7 +2763,7 @@ async def test_health_names_the_media_models_it_left_out(use_background_health_c
             model_list,
             litellm.Router(model_list=copy.deepcopy(model_list)),
             use_background_health_checks=use_background_health_checks,
-            health_check_results=checked,
+            health_check_results=cached_before_the_skip,
         ),
         patch(  # test-quality-ok: the live probe is the outside call; the answer built around it is under test
             "litellm.proxy.health_endpoints._health_endpoints._perform_health_check_and_save",
@@ -2767,13 +2775,54 @@ async def test_health_names_the_media_models_it_left_out(use_background_health_c
         mixed = await health_endpoint(response=mixed_response, user_api_key_dict=admin, model="mixed", model_id=None)
         one_chat = await health_endpoint(response=Response(), user_api_key_dict=admin, model=None, model_id="chat-1")
 
-    assert everything["healthy_count"] == 1
+    for answer in (everything, mixed):
+        assert answer["healthy_endpoints"] == checked["healthy_endpoints"]
+        assert answer["unhealthy_endpoints"] == []
+        assert (answer["healthy_count"], answer["unhealthy_count"]) == (1, 0)
     assert everything["warnings"] == [f"{BILLED_MEDIA_NOT_CHECKED_WARNING} Model ids: image-2, image-in-mixed"]
     assert mixed_response.status_code == 200
-    assert mixed["healthy_count"] == 1
     assert mixed["warnings"] == [f"{BILLED_MEDIA_NOT_CHECKED_WARNING} Model ids: image-in-mixed"]
     assert "warnings" not in one_chat
     assert "warnings" not in checked
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("cli_model", "probed"), [("gemini/gemini-3-pro-image", False), ("openai/gpt-4o-mini", True)])
+async def test_cli_model_health_names_a_billed_media_model_without_probing_it(cli_model, probed):
+    from fastapi import Response
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.health_check import BILLED_MEDIA_NOT_CHECKED_WARNING
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    probed_models: list[str] = []
+
+    async def fake_perform(**kwargs):
+        probed_models.append(kwargs["cli_model"])
+        return {
+            "healthy_endpoints": [{"model": kwargs["cli_model"]}],
+            "unhealthy_endpoints": [],
+            "healthy_count": 1,
+            "unhealthy_count": 0,
+        }
+
+    with (
+        _proxy_health_globals(None, None, user_model=cli_model),
+        patch(  # test-quality-ok: the live probe and its saved row are the outside effects under test
+            "litellm.proxy.health_endpoints._health_endpoints._perform_health_check_and_save",
+            side_effect=fake_perform,
+        ),
+    ):
+        result = await health_endpoint(
+            response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, token="admin-token"),
+            model=None,
+            model_id=None,
+        )
+
+    assert probed_models == ([cli_model] if probed else [])
+    assert result.get("warnings") == (None if probed else [BILLED_MEDIA_NOT_CHECKED_WARNING])
+    assert result["healthy_count"] == (1 if probed else 0)
 
 
 @pytest.mark.asyncio

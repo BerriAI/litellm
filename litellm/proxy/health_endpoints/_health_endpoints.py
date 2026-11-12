@@ -88,6 +88,7 @@ from litellm.proxy.health_check import (  # noqa: F401  # legacy module exports
     _update_litellm_params_for_health_check,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     all_bill_media_on_probe,
     billed_media_model_ids,
+    bills_media_on_probe,
     clean_endpoint_data,
     deployments_targeted_by_name,
     health_check_filter_kwargs_from_general_settings,
@@ -1459,7 +1460,10 @@ def _resolve_targeted_model_ids(
     }
 
 
-def _filter_health_check_results_by_model_ids(results: dict, allowed_model_ids: set) -> dict:
+_ENDPOINTS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+def _filter_health_check_results_by_model_ids(results: Mapping[str, object], allowed_model_ids: set) -> dict:
     """
     Restrict a cached background health-check result dict to endpoints whose
     model_id is in ``allowed_model_ids``.
@@ -1472,11 +1476,49 @@ def _filter_health_check_results_by_model_ids(results: dict, allowed_model_ids: 
     downstream transform (e.g. _strip_admin_only_fields_from_health_result)
     cannot accidentally mutate the shared ``health_check_results`` cache.
     """
-    healthy = [dict(ep) for ep in (results.get("healthy_endpoints") or []) if ep.get("model_id") in allowed_model_ids]
+    healthy: Final = [
+        dict(ep)
+        for ep in _ENDPOINTS.validate_python(results.get("healthy_endpoints") or ())
+        if ep.get("model_id") in allowed_model_ids
+    ]
     unhealthy: Final = [
-        dict(ep) for ep in (results.get("unhealthy_endpoints") or []) if ep.get("model_id") in allowed_model_ids
+        dict(ep)
+        for ep in _ENDPOINTS.validate_python(results.get("unhealthy_endpoints") or ())
+        if ep.get("model_id") in allowed_model_ids
     ]
     return {
+        "healthy_endpoints": healthy,
+        "unhealthy_endpoints": unhealthy,
+        "healthy_count": len(healthy),
+        "unhealthy_count": len(unhealthy),
+    }
+
+
+def _billed_media_skipped_result() -> Mapping[str, object]:
+    return {
+        "healthy_endpoints": [],
+        "unhealthy_endpoints": [],
+        "healthy_count": 0,
+        "unhealthy_count": 0,
+        "warnings": [BILLED_MEDIA_NOT_CHECKED_WARNING],
+    }
+
+
+def _without_model_ids(results: Mapping[str, object], model_ids: frozenset[str]) -> Mapping[str, object]:
+    if not model_ids:
+        return results
+    healthy: Final = [
+        ep
+        for ep in _ENDPOINTS.validate_python(results.get("healthy_endpoints") or ())
+        if ep.get("model_id") not in model_ids
+    ]
+    unhealthy: Final = [
+        ep
+        for ep in _ENDPOINTS.validate_python(results.get("unhealthy_endpoints") or ())
+        if ep.get("model_id") not in model_ids
+    ]
+    return {
+        **results,
         "healthy_endpoints": healthy,
         "unhealthy_endpoints": unhealthy,
         "healthy_count": len(healthy),
@@ -1640,6 +1682,10 @@ async def health_endpoint(
         if llm_model_list is None:
             # if no router set, check if user set a model using litellm --model ollama/llama2
             if user_model is not None:
+                if await asyncio.to_thread(
+                    bills_media_on_probe, {"model_name": user_model, "litellm_params": {"model": user_model}}
+                ):
+                    return _billed_media_skipped_result()
                 cli_result: Final = await _perform_health_check_and_save(
                     model_list=[],
                     target_model=None,
@@ -1705,13 +1751,7 @@ async def health_endpoint(
         if probe_ids is not None and await asyncio.to_thread(
             all_bill_media_on_probe, deployments, probe_ids, **_hc_filter
         ):
-            return {
-                "healthy_endpoints": [],
-                "unhealthy_endpoints": [],
-                "healthy_count": 0,
-                "unhealthy_count": 0,
-                "warnings": [BILLED_MEDIA_NOT_CHECKED_WARNING],
-            }
+            return _billed_media_skipped_result()
         not_checked_ids: Final = await asyncio.to_thread(billed_media_model_ids, deployments, probe_ids, **_hc_filter)
         media_warning: Final = (
             {"warnings": [f"{BILLED_MEDIA_NOT_CHECKED_WARNING} Model ids: {', '.join(not_checked_ids)}"]}
@@ -1719,6 +1759,7 @@ async def health_endpoint(
             else {}
         )
         if use_background_health_checks:
+            cached_results: Final = _without_model_ids(health_check_results, frozenset(not_checked_ids))
             # The cached background result covers every model. When the
             # caller targets a specific model/model_id we have to narrow the
             # cache to that deployment before _post_process evaluates
@@ -1735,7 +1776,7 @@ async def health_endpoint(
                 # model_names above, so targeted_ids is implicitly the
                 # intersection of "targeted" and "allowed."
                 filter_ids: Final = targeted_ids if targeted_ids is not None else allowed_model_ids
-                filtered: Final = _filter_health_check_results_by_model_ids(health_check_results, filter_ids)
+                filtered: Final = _filter_health_check_results_by_model_ids(cached_results, filter_ids)
                 if targeted_ids is None and _llm_model_list and not allowed_model_ids:
                     # Caller has accessible model_names but none of the
                     # matching deployments expose a model_info.id, so the
@@ -1763,11 +1804,11 @@ async def health_endpoint(
                 # that deployment, not the global aggregate.
                 return _post_process(
                     {
-                        **_filter_health_check_results_by_model_ids(health_check_results, targeted_ids),
+                        **_filter_health_check_results_by_model_ids(cached_results, targeted_ids),
                         **media_warning,
                     }
                 )
-            return _post_process({**health_check_results, **media_warning})
+            return _post_process({**cached_results, **media_warning})
         else:
             router_result: Final = await _perform_health_check_and_save(
                 model_list=_llm_model_list,
