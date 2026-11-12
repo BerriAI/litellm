@@ -216,10 +216,11 @@ _FAIL_DISCOVERY: Final = """UPDATE "LiteLLM_TaskInsightsState" SET discovery_sta
     discovery_error = left($1, 500), discovery_finished_at = $2::timestamp, updated_at = $2::timestamp
 WHERE id = 'default' AND discovery_status IN ('requested', 'running')"""
 
-_FINISH_DISCOVERY: Final = """UPDATE "LiteLLM_TaskInsightsState" SET discovery_status = 'completed',
-    discovery_error = NULL, discovery_finished_at = $1::timestamp, discovery_provenance = $2::jsonb,
-    updated_at = $1::timestamp
-WHERE id = 'default'"""
+_FINISH_DISCOVERY: Final = """INSERT INTO "LiteLLM_TaskInsightsState" (id, discovery_status, discovery_finished_at,
+    discovery_provenance, updated_at)
+VALUES ('default', 'completed', $1::timestamp, $2::jsonb, $1::timestamp)
+ON CONFLICT (id) DO UPDATE SET discovery_status = 'completed', discovery_error = NULL,
+    discovery_finished_at = $1::timestamp, discovery_provenance = $2::jsonb, updated_at = $1::timestamp"""
 
 _INSERT_DRAFTS: Final = """INSERT INTO "LiteLLM_TaskDefinition" (task_id, name, description, inclusion_criteria,
     exclusion_criteria, examples, required_capabilities, status, source, map_x, map_y, discovery_size, created_at)

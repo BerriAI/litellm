@@ -21,6 +21,7 @@ from litellm.models.task_insights import (
     MapPlacement,
 )
 from litellm.repositories.accounting_delivery_repository import AccountingDeliveryRepository
+from litellm.repositories.task_insights_demo_repository import TaskInsightsDemoRepository
 from litellm.repositories.task_insights_repository import TaskInsightsRepository
 from litellm.task_insights.demo_content import DEMO_PREFIX
 from litellm.task_insights.demo_seed import ForeignTaxonomyError, demo_requests, seed_demo
@@ -358,6 +359,14 @@ async def test_seeding_twice_gives_the_same_sample_and_leaves_other_records_alon
     )
     assert totals.request_count == expected_requests
     assert totals.analysis_request_count > 0
+    assert (await TaskInsightsRepository(insights_client).get_state()).discovery_provenance["source"] == "sample"
+
+    await TaskInsightsDemoRepository(insights_client, DEMO_PREFIX).reset()
+
+    assert insights_database.execute(
+        'SELECT (SELECT COUNT(*) FROM "LiteLLM_TaskObservation"), (SELECT COUNT(*) FROM "LiteLLM_TaskDefinition"), '
+        '(SELECT COUNT(*) FROM "LiteLLM_SpendLogs"), (SELECT COUNT(*) FROM "LiteLLM_TeamTable")'
+    ).fetchone() == (0, 0, 1, 0)
 
 
 @pytest.mark.asyncio

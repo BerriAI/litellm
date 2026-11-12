@@ -8447,3 +8447,23 @@ def test_spend_log_metadata_retention_drops_accounting_inputs_it_was_not_told_to
     parsed: Final = json.loads(str(stored["metadata"]))
     assert "user_api_key_alias" not in parsed
     assert parsed == {"usage_object": metadata["usage_object"], "status": metadata["status"]}
+
+
+def test_user_turn_texts_reads_every_api_shape_and_skips_tool_output():
+    from litellm.proxy.spend_tracking.spend_tracking_utils import user_turn_texts
+
+    chat = [
+        {"role": "system", "content": "be brief"},
+        {"role": "user", "content": "first ask"},
+        {"role": "assistant", "content": "ok"},
+        {"role": "user", "content": [{"type": "text", "text": "second"}, {"type": "text", "text": "ask"}]},
+    ]
+    anthropic_tool_turn = [{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "a", "content": "x"}]}]
+    responses_input = [{"role": "user", "content": [{"type": "input_text", "text": "responses ask"}]}]
+
+    assert user_turn_texts(chat) == ("first ask", "second\nask")
+    assert user_turn_texts(anthropic_tool_turn) == ()
+    assert user_turn_texts(responses_input) == ("responses ask",)
+    assert user_turn_texts("plain input") == ("plain input",)
+    assert user_turn_texts("") == ()
+    assert user_turn_texts(None) == ()
