@@ -677,7 +677,6 @@ class UsageObservation(Enum):
 
 
 _CHAT_CALL_TYPES: Final = frozenset({CallTypes.completion.value, CallTypes.acompletion.value})
-_REQUEST_MESSAGES: Final = TypeAdapter(list[object] | None)
 
 
 class _UsageFields(TypedDict, total=False, extra_items=object):
@@ -833,7 +832,7 @@ class Logging(LiteLLMLoggingBaseClass):
         # Shallow copy of the outer list only (inner message dicts are shared).
         # Safe because the logging layer does not mutate individual message dicts.
         _copy_start: Final = time.time()
-        self.messages = copy.copy(messages) if messages is not None else None
+        self.messages: Sequence[object] | None = copy.copy(messages) if messages is not None else None
         self.message_copy_duration_ms: float = (time.time() - _copy_start) * 1000
         self.callback_duration_ms: float = 0.0
         self.stream = stream
@@ -4768,15 +4767,11 @@ class Logging(LiteLLMLoggingBaseClass):
         return any(isinstance(cb, CustomLogger) and cb.wants_failed_prompt_token_estimate for cb in callbacks)
 
     def _prompt_token_estimate(self) -> int | None:
-        if litellm.disable_token_counter:
+        messages: Final = self.messages
+        if litellm.disable_token_counter or not messages:
             return None
         try:
-            messages: Final = _REQUEST_MESSAGES.validate_python(self.messages)
-            return (
-                get_token_counter_new()(model=self.model, messages=messages, use_default_image_token_count=True)
-                if messages
-                else None
-            )
+            return get_token_counter_new()(model=self.model, messages=messages, use_default_image_token_count=True)
         except (ValueError, TypeError, LookupError, AttributeError):
             return None
 
