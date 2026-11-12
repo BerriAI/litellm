@@ -79,6 +79,9 @@ func expandAllowedModels(raw []interface{}) []string {
 }
 
 func applyAddOnlySettings(d *schema.ResourceData, payload map[string]interface{}) {
+	if v, ok := d.GetOk("max_budget_in_team"); ok {
+		payload["max_budget_in_team"] = v.(float64)
+	}
 	if v, ok := d.GetOk("budget_duration"); ok {
 		payload["budget_duration"] = v.(string)
 	}
@@ -98,7 +101,7 @@ func applyLimits(d *schema.ResourceData, payload map[string]interface{}) {
 func applyUpdateSettings(d *schema.ResourceData, payload map[string]interface{}) {
 	applyAddOnlySettings(d, payload)
 	applyLimits(d, payload)
-	for _, key := range []string{"tpm_limit", "rpm_limit", "budget_duration"} {
+	for _, key := range []string{"max_budget_in_team", "tpm_limit", "rpm_limit", "budget_duration"} {
 		if _, ok := d.GetOk(key); !ok && d.HasChange(key) {
 			payload[key] = nil
 		}
@@ -153,7 +156,6 @@ func resourceLiteLLMTeamMemberAddCreate(d *schema.ResourceData, m interface{}) e
 
 	teamID := d.Get("team_id").(string)
 	members := d.Get("member").(*schema.Set)
-	maxBudget := d.Get("max_budget_in_team").(float64)
 
 	// Convert members to the expected format
 	membersList := make([]map[string]interface{}, 0, members.Len())
@@ -172,9 +174,8 @@ func resourceLiteLLMTeamMemberAddCreate(d *schema.ResourceData, m interface{}) e
 	}
 
 	memberData := map[string]interface{}{
-		"member":             membersList,
-		"team_id":            teamID,
-		"max_budget_in_team": maxBudget,
+		"member":  membersList,
+		"team_id": teamID,
 	}
 	applyAddOnlySettings(d, memberData)
 
@@ -208,7 +209,6 @@ func resourceLiteLLMTeamMemberAddRead(d *schema.ResourceData, m interface{}) err
 func resourceLiteLLMTeamMemberAddUpdate(d *schema.ResourceData, m interface{}) error {
 	client := m.(*Client)
 	teamID := d.Get("team_id").(string)
-	maxBudget := d.Get("max_budget_in_team").(float64)
 
 	o, n := d.GetChange("member")
 	oldMembers := o.(*schema.Set)
@@ -249,9 +249,8 @@ func resourceLiteLLMTeamMemberAddUpdate(d *schema.ResourceData, m interface{}) e
 		for key, newMember := range newMemberMap {
 			if _, exists := oldMemberMap[key]; exists {
 				updateData := map[string]interface{}{
-					"team_id":            teamID,
-					"role":               newMember["role"].(string),
-					"max_budget_in_team": maxBudget,
+					"team_id": teamID,
+					"role":    newMember["role"].(string),
 				}
 				applyUpdateSettings(d, updateData)
 				memberIdentity(newMember, updateData)
@@ -313,9 +312,8 @@ func resourceLiteLLMTeamMemberAddUpdate(d *schema.ResourceData, m interface{}) e
 			// Check if member attributes have changed
 			if memberAttributesChanged(oldMember, newMember) {
 				updateData := map[string]interface{}{
-					"team_id":            teamID,
-					"role":               newMember["role"].(string),
-					"max_budget_in_team": maxBudget,
+					"team_id": teamID,
+					"role":    newMember["role"].(string),
 				}
 				applyUpdateSettings(d, updateData)
 				memberIdentity(newMember, updateData)
@@ -354,9 +352,8 @@ func resourceLiteLLMTeamMemberAddUpdate(d *schema.ResourceData, m interface{}) e
 
 	if len(membersToAdd) > 0 {
 		memberData := map[string]interface{}{
-			"member":             membersToAdd,
-			"team_id":            teamID,
-			"max_budget_in_team": maxBudget,
+			"member":  membersToAdd,
+			"team_id": teamID,
 		}
 		applyAddOnlySettings(d, memberData)
 
