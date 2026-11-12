@@ -108,6 +108,7 @@ from litellm.litellm_core_utils.bug_report import (
     bug_report_notice,
     should_report_bug,
 )
+from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
 from litellm.litellm_core_utils.litellm_logging import (
     _init_custom_logger_compatible_class,
     initialize_sentry,
@@ -16076,15 +16077,20 @@ def _deployment_llm_provider(
     deployment: _TokenCountDeployment, request_model: str, responses_request: Mapping[str, object] | None
 ) -> tuple[str, str] | None:
     params: Final = deployment.get("litellm_params", {})
+    model: Final = _non_empty_str(params.get("model")) or request_model
+    custom_llm_provider: Final = _non_empty_str(params.get("custom_llm_provider"))
+    declared: Final = declared_authenticating_provider(model, custom_llm_provider)
+    if declared is not None:
+        return model.removeprefix(f"{declared}/"), declared
     try:
-        model, provider, _, _ = litellm.get_llm_provider(
-            model=_non_empty_str(params.get("model")) or request_model,
-            custom_llm_provider=_non_empty_str(params.get("custom_llm_provider")),
+        resolved_model, provider, _, _ = litellm.get_llm_provider(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
             api_base=_deployment_api_base(deployment, responses_request),
         )
     except litellm.BadRequestError:
         return None
-    return model, provider
+    return resolved_model, provider
 
 
 def _xai_tool_choice_off_xai(
@@ -16557,8 +16563,6 @@ async def supported_openai_params(model: str):
         --header "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
-    from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
-
     global llm_router
     try:
         resolved_models: Final = (

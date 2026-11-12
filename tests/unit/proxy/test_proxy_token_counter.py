@@ -44,7 +44,7 @@ from starlette.types import Message
 
 import litellm
 from litellm import Router
-from litellm._logging import JsonFormatter, verbose_proxy_logger
+from litellm._logging import JsonFormatter, verbose_logger, verbose_proxy_logger
 from litellm.llms.anthropic.count_tokens import handler as anthropic_count_tokens_handler
 from litellm.llms.azure_ai.anthropic.count_tokens import handler as azure_ai_count_tokens_http
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
@@ -5805,7 +5805,10 @@ _AZURE_GROK_PARAMS: Final = {"api_base": "https://example.services.ai.azure.com"
     [
         ({"litellm_params": {"model": "xai/grok-4-1-fast-reasoning", "api_key": "sk-test"}}, True),
         ({"litellm_params": {"model": "openrouter/x-ai/grok-4.3", "api_key": "sk-test"}}, True),
-        ({"litellm_params": {"model": "openai/grok-4.3", "api_base": "https://api.x.ai/v1", "api_key": "sk-test"}}, True),
+        (
+            {"litellm_params": {"model": "openai/grok-4.3", "api_base": "https://api.x.ai/v1", "api_key": "sk-test"}},
+            True,
+        ),
         ({"litellm_params": {"model": "openai/grok-4.3", "api_base": "http://[bad", "api_key": "sk-test"}}, False),
         (
             {
@@ -5845,6 +5848,45 @@ async def test_utils_token_counter_counts_xai_tool_choice_costs_only_on_grok_tha
 
     assert route_added == (sdk_added if served_by_xai else 0)
     assert sdk_added > 0
+
+
+def _litellm_warnings(caplog: pytest.LogCaptureFixture) -> tuple[str, ...]:
+    return tuple(record.getMessage() for record in caplog.records if record.name == verbose_logger.name)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route_count", "tool_choice"),
+    [(_utils_route_count, "none"), (_messages_route_count, {"type": "none"}), (_responses_route_count, "none")],
+    ids=["utils", "messages", "responses"],
+)
+@pytest.mark.parametrize("model", ["chatgpt/gpt-6.1-sol", "github_copilot/kimi-k3"])
+async def test_count_routes_leave_the_provider_login_alone_when_counting_a_tool_choice(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    route_count: Callable[[Mapping[str, JsonValue]], Coroutine[None, None, int]],
+    tool_choice: JsonValue,
+    model: str,
+) -> None:
+    (tmp_path / "auth.json").write_text("not a saved login")
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(model_list=[{"model_name": "no-count-api", "litellm_params": {"model": model}}]),
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "proxy_config", litellm.proxy.proxy_server.ProxyConfig())
+
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        without_choice: Final = await route_count({})
+        warnings_without_choice: Final = _litellm_warnings(caplog)
+        caplog.clear()
+        with_choice: Final = await route_count({"tool_choice": tool_choice})
+
+    assert with_choice > without_choice
+    assert _litellm_warnings(caplog) == warnings_without_choice
 
 
 @pytest.mark.asyncio
