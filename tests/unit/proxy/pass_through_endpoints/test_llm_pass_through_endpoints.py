@@ -10735,6 +10735,29 @@ class TestFalAIPassthroughRoute:
             assert "no pricing entry" in response.text
             assert not route.calls
 
+    def test_submit_to_endpoint_billed_by_reported_units_returns_400_without_upstream_call(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "fal_ai/acme/unit-billed-model",
+            {
+                "litellm_provider": "fal_ai",
+                "mode": "image_generation",
+                "output_cost_per_billable_unit": 1.0,
+                "output_cost_per_image": 0.04,
+            },
+        )
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.post("https://queue.fal.run/acme/unit-billed-model").mock(
+                return_value=httpx.Response(200, json={"request_id": "req-1"})
+            )
+            response = client.post("/fal_ai/acme/unit-billed-model", json={"prompt": "a red boat"})
+
+            assert response.status_code == 400, response.text
+            assert "no pricing entry" in response.text
+            assert not route.calls
+
     def test_submit_gate_prices_the_request_body_not_an_empty_one(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:

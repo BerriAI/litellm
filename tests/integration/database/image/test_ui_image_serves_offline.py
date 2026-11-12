@@ -5,7 +5,7 @@ arbitrary uid in GID 0. A stock nginx install expects to start as root, so
 its cache (``/var/cache/nginx``) and pid (``/run``) paths are root-owned
 755 and the master process dies at startup with
 ``mkdir() "/var/cache/nginx/client_temp" failed (13: Permission denied)``.
-The fix anchors everything nginx writes under ``/tmp`` in ``ui/nginx.conf``.
+The fix anchors everything nginx writes under ``/tmp`` in ``litellm/ui/nginx.conf``.
 
 Booting the image the way that deployment does, with a read-only root
 filesystem and ``/tmp`` as the only writable mount, is what catches the

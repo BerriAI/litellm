@@ -7490,6 +7490,7 @@ def get_model_info_helper(
                 output_cost_per_image=_model_info.get("output_cost_per_image", None),
                 output_cost_per_image_1K=_model_info.get("output_cost_per_image_1K", None),
                 output_cost_per_image_2K=_model_info.get("output_cost_per_image_2K", None),
+                output_cost_per_billable_unit=_model_info.get("output_cost_per_billable_unit", None),
                 output_cost_per_pixel=_model_info.get("output_cost_per_pixel", None),
                 output_cost_per_image_token=_model_info.get("output_cost_per_image_token", None),
                 output_cost_per_image_token_batches=_model_info.get("output_cost_per_image_token_batches", None),
@@ -11074,6 +11075,10 @@ class ProviderConfigManager:
             )
 
             return get_fal_ai_image_generation_config(model)
+        elif LlmProviders.REPLICATE == provider:
+            from litellm.llms.replicate.image_generation.transformation import ReplicateImageGenerationConfig
+
+            return ReplicateImageGenerationConfig()
         elif LlmProviders.STABILITY == provider:
             from litellm.llms.stability.image_generation import (
                 get_stability_image_generation_config,
@@ -11175,6 +11180,10 @@ class ProviderConfigManager:
             from litellm.llms.fal_ai.videos.transformation import FalAIVideoConfig
 
             return FalAIVideoConfig()
+        elif LlmProviders.REPLICATE == provider:
+            from litellm.llms.replicate.videos.transformation import ReplicateVideoConfig
+
+            return ReplicateVideoConfig()
         elif LlmProviders.HOSTED_VLLM == provider:
             from litellm.llms.hosted_vllm.videos import get_hosted_vllm_video_config
 
@@ -11559,6 +11568,10 @@ class ProviderConfigManager:
             )
 
             return MistralTextToSpeechConfig()
+        elif litellm.LlmProviders.REPLICATE == provider:
+            from litellm.llms.replicate.text_to_speech.transformation import ReplicateTextToSpeechConfig
+
+            return ReplicateTextToSpeechConfig()
         elif litellm.LlmProviders.AWS_POLLY == provider:
             from litellm.llms.aws_polly.text_to_speech.transformation import (
                 AWSPollyTextToSpeechConfig,

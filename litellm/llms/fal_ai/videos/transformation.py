@@ -2,7 +2,7 @@ import math
 import sys
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
@@ -103,7 +103,7 @@ _ALLOWED_ASPECT_RATIOS: Final[frozenset[str]] = frozenset({"auto", "16:9", "9:16
 class _ModelProfile:
     resolutions: frozenset[str]
     resolution_tiers: tuple[tuple[int, str], ...]
-    default_resolution: str
+    default_resolution: str | None
     integer_duration: bool
     reference_key: str
     reference_as_list: bool
@@ -131,6 +131,19 @@ _H3_PROFILE: Final[_ModelProfile] = _ModelProfile(
     default_resolution="2K",
     integer_duration=True,
     reference_key="reference_image_urls",
+    reference_as_list=True,
+)
+_H3_MAX_PROFILE: Final[_ModelProfile] = _ModelProfile(
+    resolutions=frozenset({"480P", "768P", "1080P"}),
+    resolution_tiers=((480, "480P"), (768, "768P"), (sys.maxsize, "1080P")),
+    default_resolution=None,
+    integer_duration=False,
+    reference_key="image_url",
+    reference_as_list=False,
+)
+_SEEDANCE_REFERENCE_PROFILE: Final[_ModelProfile] = replace(
+    _SEEDANCE_PROFILE,
+    reference_key="image_urls",
     reference_as_list=True,
 )
 _QUEUE_NAMESPACES: Final[frozenset[str]] = frozenset(("workflows", "comfy"))
@@ -169,7 +182,12 @@ def _duration_value(value: object) -> str | None:
 def _profile_for_model(model: str) -> _ModelProfile:
     if model.removeprefix("fal_ai/").startswith("fal-ai/pixverse/"):
         return _PIXVERSE_PROFILE
-    return _H3_PROFILE if model.startswith("minimax/h3/") else _SEEDANCE_PROFILE
+    if model.startswith("minimax/h3/"):
+        return _H3_PROFILE
+    if model.startswith("minimax/h3-max"):
+        return _H3_MAX_PROFILE
+    is_seedance_reference: Final = model.startswith("bytedance/seedance-") and model.endswith("/reference-to-video")
+    return _SEEDANCE_REFERENCE_PROFILE if is_seedance_reference else _SEEDANCE_PROFILE
 
 
 def _resolution_for_short_side(short_side: int, profile: _ModelProfile) -> str:

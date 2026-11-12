@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 _MODULE_PATH = (
-    Path(__file__).resolve().parents[2] / "scripts" / "prisma_generate_if_needed.py"
+    Path(__file__).resolve().parents[2] / "litellm/scripts" / "prisma_generate_if_needed.py"
 )
 _spec = importlib.util.spec_from_file_location("prisma_generate_if_needed", _MODULE_PATH)
 mod = importlib.util.module_from_spec(_spec)

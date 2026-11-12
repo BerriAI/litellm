@@ -470,6 +470,8 @@ class LiteLLMRoutes(enum.Enum):
         "/skill-hub/submissions",
         "/skill-hub/submissions/{submission_id}",
         "/skill-hub/submissions/{submission_id}/archive",
+        "/skill-hub/submissions/{submission_id}/upload",
+        "/skill-hub/submissions/{submission_id}/withdraw",
         "/skill-hub/submissions/{submission_id}/approve",
         "/skill-hub/submissions/{submission_id}/reject",
         "/skill-hub/submissions/{submission_id}/scan",
@@ -2346,6 +2348,14 @@ class PassThroughGenericEndpoint(LiteLLMPydanticObjectBase):
         default=None,
         description="List of HTTP methods this endpoint handles (e.g., ['GET', 'POST']). If None or empty, all methods (GET, POST, PUT, DELETE, PATCH) are supported for backward compatibility. This allows the same path to have different targets for different HTTP methods.",
     )
+    display_name: str | None = Field(
+        default=None,
+        description="Human-readable name for this endpoint. The Model Hub lists the endpoint under this name, falling back to the path when unset.",
+    )
+    show_in_model_hub: bool = Field(
+        default=False,
+        description="If True, this endpoint is published on the public Model Hub as a row in mode 'passthrough'.",
+    )
 
 
 class PassThroughEndpointResponse(LiteLLMPydanticObjectBase):
@@ -3034,7 +3044,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     use_spend_logs_partitioning: bool | None = Field(
         None,
-        description="If True and LiteLLM_SpendLogs has been converted to a range-partitioned table (scripts/db/partition_spend_logs.sql), retention cleanup drops expired partitions instead of deleting rows, and pre-creates upcoming partitions. Default is False.",
+        description="If True and LiteLLM_SpendLogs has been converted to a range-partitioned table (litellm/scripts/db/partition_spend_logs.sql), retention cleanup drops expired partitions instead of deleting rows, and pre-creates upcoming partitions. Default is False.",
     )
     maximum_spend_logs_cleanup_batch_size: int | None = Field(
         None,

@@ -5,6 +5,8 @@ import pytest
 
 from litellm.models.alert import AlertDetection, MetricEvidence
 from litellm.models.performance_alert import (
+    SCOPES,
+    PerformanceScope,
     ResourceWindow,
     SweepState,
     advance,
@@ -29,7 +31,6 @@ STEADY: Final = {
     "base_timed": 7000,
     "active_days": 7,
     "timed_days": 7,
-    "exists": True,
 }
 
 
@@ -45,6 +46,19 @@ def test_steady_usage_raises_nothing() -> None:
     assert _types() == ()
 
 
+@pytest.mark.parametrize("scope", SCOPES)
+@pytest.mark.parametrize("requests", (0, 100))
+def test_quiet_or_idle_resources_do_not_raise_traffic_alerts(scope: PerformanceScope, requests: int) -> None:
+    window: Final = _window(
+        resource_id="a" * 64 if scope == "key" else "resource-a",
+        requests=requests,
+        failed=0,
+        response_ms=requests * 100,
+        timed=requests,
+    )
+    assert detect(scope, window, DAY) == ()
+
+
 @pytest.mark.parametrize(
     ("changes", "expected"),
     (
@@ -57,11 +71,6 @@ def test_steady_usage_raises_nothing() -> None:
         ({"requests": 1100, "failed": 0, "response_ms": 110_000, "timed": 1100, "base_requests": 700}, ("traffic",)),
         ({"requests": 1099, "failed": 0, "response_ms": 109_900, "timed": 1099, "base_requests": 700}, ()),
         ({"requests": 50_000, "failed": 0, "active_days": 3}, ()),
-        ({"requests": 99, "failed": 0, "timed": 99, "response_ms": 9900, "base_requests": 3500}, ("traffic",)),
-        ({"requests": 100, "failed": 0, "timed": 100, "response_ms": 10_000, "base_requests": 3500}, ()),
-        ({"requests": 0, "failed": 0, "timed": 0, "response_ms": 0, "base_requests": 3500, "active_days": 6}, ()),
-        ({"requests": 0, "failed": 0, "timed": 0, "response_ms": 0, "base_requests": 3500, "exists": False}, ()),
-        ({"requests": 0, "failed": 0, "timed": 0, "response_ms": 0, "base_requests": 3493}, ()),
         ({"response_ms": 600_000}, ("latency",)),
         ({"response_ms": 599_000}, ()),
         ({"response_ms": 60_000_000, "timed": 99}, ()),
