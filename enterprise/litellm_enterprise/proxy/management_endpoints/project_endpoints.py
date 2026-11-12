@@ -26,7 +26,7 @@ from litellm._uuid import uuid
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import delete_cached_project_object
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.guardrails.guardrail_name_validation import validate_guardrail_names
+from litellm.proxy.guardrails.guardrail_helpers import validate_guardrail_names
 from litellm.proxy.management.teams.authz import TEAM_OR_ORG_ADMIN, TeamAccess, is_team_admin, is_team_member
 from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management.users.service import org_admin_org_ids

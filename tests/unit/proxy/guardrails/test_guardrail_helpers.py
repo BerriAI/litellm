@@ -8,7 +8,7 @@ from fastapi import HTTPException
 
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.proxy.guardrails.guardrail_name_validation import validate_guardrail_names
+from litellm.proxy.guardrails.guardrail_helpers import validate_guardrail_names
 
 DB_ROWS: Final = MappingProxyType({"valid": "active", "also-valid": "active", "submitted": "pending_review"})
 

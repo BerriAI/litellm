@@ -58,7 +58,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     user_object_permission_id_cache_key,
 )
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
-from litellm.proxy.guardrails.guardrail_name_validation import validate_guardrail_names
+from litellm.proxy.guardrails.guardrail_helpers import validate_guardrail_names
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import build_model_max_budget_usage
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
