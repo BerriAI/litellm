@@ -2,7 +2,10 @@ use std::collections::BTreeMap;
 
 use litellm_auth_gcp::{
     VertexConfig,
-    constants::{GOOGLE_APPLICATION_CREDENTIALS_ENV, VERTEX_LOCATION_ENV},
+    constants::{
+        CLOUDSDK_CONFIG_ENV, CLOUDSDK_CORE_PROJECT_ENV, GCLOUD_PROJECT_ENV,
+        GOOGLE_APPLICATION_CREDENTIALS_ENV, GOOGLE_CLOUD_PROJECT_ENV, VERTEX_LOCATION_ENV,
+    },
     get_vertex_ai_location, get_vertex_ai_project, get_vertex_ai_project_from_credentials,
 };
 use litellm_auth_types::VertexParams;
@@ -88,9 +91,78 @@ fn project_is_read_from_the_credentials_that_would_authenticate() {
         .as_deref(),
         Some("file-project")
     );
+    let empty_gcloud = tempfile::tempdir().unwrap();
+    let empty_gcloud = empty_gcloud.path().to_str().unwrap().to_string();
     assert_eq!(
-        get_vertex_ai_project_from_credentials(&empty, &|_| None),
+        get_vertex_ai_project_from_credentials(&empty, &|name| (name == CLOUDSDK_CONFIG_ENV)
+            .then(|| empty_gcloud.clone())),
         None
+    );
+}
+
+const USER: &str = r#"{"type":"authorized_user","client_id":"c","client_secret":"s","refresh_token":"r","quota_project_id":"quota-project"}"#;
+const SERVICE_ACCOUNT: &str = r#"{"type":"service_account","project_id":"key-project"}"#;
+
+#[rstest]
+#[case::authorized_user_bills_its_quota_project(Some(USER), None, &[], &[], Some("quota-project"))]
+#[case::explicit_credentials_ignore_the_adc_project_variable(
+    Some(SERVICE_ACCOUNT), None, &[(GOOGLE_CLOUD_PROJECT_ENV, "env-project")], &[], Some("key-project")
+)]
+#[case::adc_project_variable(None, None, &[(GOOGLE_CLOUD_PROJECT_ENV, "env-project")], &[], Some("env-project"))]
+#[case::legacy_adc_project_variable(None, None, &[(GCLOUD_PROJECT_ENV, "legacy-project")], &[], Some("legacy-project"))]
+#[case::adc_project_variable_outranks_the_key_file(
+    None, Some(SERVICE_ACCOUNT), &[(GOOGLE_CLOUD_PROJECT_ENV, "env-project")], &[], Some("env-project")
+)]
+#[case::gcloud_service_account_key(None, Some(SERVICE_ACCOUNT), &[], &[], Some("key-project"))]
+#[case::gcloud_user_reads_the_active_configuration(
+    None, Some(USER), &[], &[("configurations/config_default", "[core]\naccount = a@b.c\nproject = gcloud-project\n")], Some("gcloud-project")
+)]
+#[case::gcloud_user_reads_a_named_configuration(
+    None, Some(USER), &[],
+    &[("active_config", "work\n"), ("configurations/config_work", "[compute]\nproject = wrong\n[core]\nproject = work-project\n")],
+    Some("work-project")
+)]
+#[case::gcloud_core_project_variable(
+    None, Some(USER), &[(CLOUDSDK_CORE_PROJECT_ENV, "override-project")],
+    &[("configurations/config_default", "[core]\nproject = gcloud-project\n")], Some("override-project")
+)]
+#[case::gcloud_user_without_a_configured_project(None, Some(USER), &[], &[], None)]
+fn project_is_resolved_like_python_load_auth(
+    #[case] credentials: Option<&str>,
+    #[case] gcloud_credentials: Option<&str>,
+    #[case] environment: &[(&str, &str)],
+    #[case] gcloud_files: &[(&str, &str)],
+    #[case] expected: Option<&str>,
+) {
+    let gcloud = tempfile::tempdir().unwrap();
+    std::fs::create_dir(gcloud.path().join("configurations")).unwrap();
+    if let Some(contents) = gcloud_credentials {
+        std::fs::write(
+            gcloud.path().join("application_default_credentials.json"),
+            contents,
+        )
+        .unwrap();
+    }
+    for (name, contents) in gcloud_files {
+        std::fs::write(gcloud.path().join(name), contents).unwrap();
+    }
+    let directory = gcloud.path().to_str().unwrap().to_string();
+    let lookup = |name: &str| {
+        if name == CLOUDSDK_CONFIG_ENV {
+            return Some(directory.clone());
+        }
+        environment
+            .iter()
+            .find(|(key, _)| *key == name)
+            .map(|(_, value)| value.to_string())
+    };
+    let config = VertexConfig::from_params(&VertexParams {
+        vertex_credentials: credentials.map(str::to_string),
+        ..VertexParams::default()
+    });
+    assert_eq!(
+        get_vertex_ai_project_from_credentials(&config, &lookup).as_deref(),
+        expected
     );
 }
 

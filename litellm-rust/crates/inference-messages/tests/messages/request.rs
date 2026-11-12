@@ -776,13 +776,27 @@ async fn vertex_ai_addresses_the_model_in_the_url_and_not_in_the_body(
         "event: message_start\ndata: {\"type\":\"message_start\"}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
         "text/event-stream",
     );
+    let tokens = upstream([json_response(json!({
+        "access_token": "vertex-token",
+        "expires_in": 3600,
+        "token_type": "Bearer",
+    }))])
+    .await;
     let upstream = upstream([if stream { streamed } else { message_response() }]).await;
+    let credentials = json!({
+        "type": "authorized_user",
+        "client_id": "vertex-client",
+        "client_secret": "vertex-secret",
+        "refresh_token": "vertex-refresh",
+        "token_uri": format!("{}/token", tokens.uri()),
+    });
 
     run(with_fields(
         MessagesCall {
             custom_llm_provider: Some("vertex_ai".into()),
             litellm_params: LitellmParams {
                 vertex: VertexParams {
+                    vertex_credentials: Some(credentials.to_string()),
                     vertex_project: Some("proj".into()),
                     vertex_location: Some("us-east5".into()),
                     ..VertexParams::default()
@@ -805,7 +819,7 @@ async fn vertex_ai_addresses_the_model_in_the_url_and_not_in_the_body(
             "/v1/projects/proj/locations/us-east5/publishers/anthropic/models/claude-sonnet-4-5@20250929{suffix}"
         )
     );
-    assert_eq!(request.header("authorization"), Some("Bearer caller-token"));
+    assert_eq!(request.header("authorization"), Some("Bearer vertex-token"));
     assert_eq!(request.header("anthropic-version"), None);
     let body = request.json();
     assert_eq!(body.get("model"), None);

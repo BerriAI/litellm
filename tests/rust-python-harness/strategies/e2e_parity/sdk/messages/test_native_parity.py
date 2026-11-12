@@ -532,8 +532,6 @@ KNOWN_GAPS: Final[Mapping[str, Mapping[str, str | None]]] = MappingProxyType(
                 "speed_on_model_without_speed",
                 "temperature_on_adaptive_model",
                 "top_k_on_adaptive_model",
-                "legacy_thinking_non_numeric_budget_on_adaptive_model",
-                "legacy_thinking_null_budget_on_adaptive_model",
                 "missing_api_key",
                 "tls_security_level_python_cannot_apply",
                 "max_tokens_none",
@@ -3374,6 +3372,13 @@ _PUBLIC_MESSAGES: Final = cast(Callable[..., object], dispatch.anthropic_message
 
 @pytest.fixture
 def native_messages() -> Iterator[FallbackProbe]:
+    with fallback_probe() as probe:
+        yield probe
+
+
+@contextmanager
+def fallback_probe() -> Iterator[FallbackProbe]:
+    """Counts each call the native entry hands to the Python implementation."""
     probe: Final = FallbackProbe()
 
     async def python_afallback(*args: object, **kwargs: object) -> object:
@@ -3880,6 +3885,10 @@ async def test_native_messages_match_python(
     case: Case, aspect: str, parity_server: RecordingServer, native_messages: FallbackProbe
 ) -> None:
     python, native = await _legs(case, parity_server, native_messages)
+    assert_aspect_matches(python, native, aspect)
+
+
+def assert_aspect_matches(python: Leg, native: Leg, aspect: str) -> None:
     match aspect:
         case "dispatch":
             assert not native.fell_back

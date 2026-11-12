@@ -7,6 +7,7 @@ from typing import Final
 
 import httpx
 import pytest
+from google.auth.exceptions import RefreshError
 from pydantic import ValidationError
 
 import litellm
@@ -296,6 +297,83 @@ def test_body_params_forward_the_thread_like_the_python_handler(
     assert messages_host.body_params(request, asynchronous=True).get("thread") == expected
 
 
+@pytest.mark.parametrize("model", ["vertex_ai/claude-sonnet-4-5", "bedrock/anthropic.claude-sonnet-4-5"])
+def test_body_params_leave_out_a_thread_the_provider_cannot_serve(model: str) -> None:
+    request: Final[dict[str, object]] = {
+        "model": model,
+        "messages": [],
+        "max_tokens": 8,
+        "thread": {"type": "create"},
+        "drop_params": True,
+    }
+
+    assert "thread" not in messages_host.body_params(request, asynchronous=True)
+
+
+@pytest.mark.parametrize(
+    ("thread", "error_class", "status"),
+    [
+        pytest.param({"type": "create"}, litellm.BadRequestError, 400, id="create"),
+        pytest.param({"type": "continue", "previous_message_id": "msg_1"}, litellm.NotFoundError, 404, id="continue"),
+    ],
+)
+@pytest.mark.parametrize("asynchronous", [True, False])
+def test_settings_refuse_a_thread_the_provider_cannot_serve_as_python_does(
+    thread: dict[str, str], error_class: type[Exception], status: int, asynchronous: bool
+) -> None:
+    logger: Final = _logger("vertex_ai/claude-sonnet-4-5")
+
+    with pytest.raises(error_class) as raised:
+        messages_host.settings(
+            {},
+            {
+                **_CALL,
+                "model": "vertex_ai/claude-sonnet-4-5",
+                "thread": thread,
+                "drop_params": False,
+                "litellm_logging_obj": logger,
+            },
+            asynchronous,
+        )
+
+    assert getattr(raised.value, "status_code", None) == status
+    assert "message threads are not supported for provider vertex_ai" in str(raised.value)
+    assert logger.model_call_details["litellm_params"]["aanthropic_messages"] is asynchronous
+
+
+@pytest.mark.parametrize("model", ["vertex_ai/claude-sonnet-4-5", "anthropic/claude-sonnet-4-5"])
+def test_settings_serve_a_thread_the_provider_serves_or_drop_params_drops(model: str) -> None:
+    settings: Final = messages_host.settings(
+        {"drop_params": True}, {**_CALL, "model": model, "thread": {"type": "create"}, "drop_params": True}
+    )
+
+    assert settings["model"] == model
+
+
+@pytest.mark.parametrize(
+    ("call", "expected"),
+    [
+        pytest.param({"model": "vertex_ai/claude-sonnet-4-5"}, "vertex_ai", id="prefixed"),
+        pytest.param({"model": "claude-sonnet-4-5", "custom_llm_provider": "bedrock"}, "bedrock", id="explicit"),
+        pytest.param({"model": "not-a-known-model"}, "anthropic", id="unresolved"),
+    ],
+)
+def test_failure_provider_falls_back_to_anthropic(call: Mapping[str, object], expected: str) -> None:
+    assert messages_host.failure_provider(call) == expected
+
+
+def _logger(model: str) -> Logging:
+    return Logging(
+        model=model,
+        messages=[],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="failure",
+        function_id="failure",
+    )
+
+
 def _marked(phase: str | None = None, *args: object) -> ValueError:
     error: Final = ValueError(*args)
     if phase is not None:
@@ -432,6 +510,112 @@ def test_a_late_rejection_tells_the_logger_the_resolved_call_first() -> None:
     assert isinstance(mapped, litellm.BadRequestError)
     assert logger.model_call_details["custom_llm_provider"] == "anthropic"
     assert logger.model_call_details["optional_params"] == {"max_tokens": 8}
+
+
+@pytest.mark.parametrize("asynchronous", [True, False])
+def test_a_late_rejection_flags_the_messages_call(asynchronous: bool) -> None:
+    logger: Final = _logger(_ADAPTIVE_OPUS)
+    rejected: Final = ValueError("budget_tokens must be a number")
+    rejected.messages_late_rejection = True  # pyright: ignore[reportAttributeAccessIssue]  # marker the native host sets
+    rejected.messages_request_error = True  # pyright: ignore[reportAttributeAccessIssue]  # marker the native host sets
+
+    messages_host.map_failure(
+        rejected,
+        {"model": _ADAPTIVE_OPUS, "messages": [], "max_tokens": 8, "litellm_logging_obj": logger},
+        "anthropic",
+        asynchronous,
+    )
+
+    assert logger.model_call_details["litellm_params"]["aanthropic_messages"] is asynchronous
+
+
+def test_an_attributed_rejection_names_the_provider_and_model() -> None:
+    rejected: Final = ValueError("thinking is not supported")
+    rejected.messages_request_error = True  # pyright: ignore[reportAttributeAccessIssue]  # marker the native host sets
+    rejected.messages_attributed_rejection = True  # pyright: ignore[reportAttributeAccessIssue]  # marker the native host sets
+
+    mapped: Final = messages_host.map_failure(rejected, {"model": "vertex_ai/claude-sonnet-4-5"}, "vertex_ai")
+
+    assert isinstance(mapped, litellm.UnsupportedParamsError)
+    assert mapped.status_code == 400
+    assert mapped.llm_provider == "vertex_ai"  # pyright: ignore[reportUnknownMemberType]  # the public error leaves llm_provider untyped
+    assert mapped.model == "claude-sonnet-4-5"  # pyright: ignore[reportUnknownMemberType]  # the public error leaves model untyped
+    assert "thinking is not supported" in str(mapped)
+
+
+_AUTHORIZED_USER: Final = MappingProxyType(
+    {"type": "authorized_user", "client_id": "id", "client_secret": "secret", "refresh_token": "token"}
+)
+
+
+@pytest.mark.parametrize(
+    ("extra", "error_class", "text"),
+    [
+        pytest.param(
+            {"vertex_credentials": json.dumps(dict(_AUTHORIZED_USER)), "vertex_location": "us-central1"},
+            ValueError,
+            "Could not resolve project_id",
+            id="no-project",
+        ),
+        pytest.param(
+            {"vertex_credentials": "{not json", "vertex_project": "project"},
+            ValueError,
+            "not valid JSON",
+            id="credentials-not-json",
+        ),
+        pytest.param(
+            {
+                "vertex_credentials": dict(_AUTHORIZED_USER),
+                "vertex_project": "project",
+                "vertex_location": "bad/location",
+            },
+            ValueError,
+            "Invalid vertex_location format",
+            id="location",
+        ),
+        pytest.param(
+            {
+                "vertex_credentials": dict(_AUTHORIZED_USER),
+                "vertex_project": "project",
+                "vertex_location": "bad/location",
+                "api_base": "https://vertex.example.com",
+            },
+            RefreshError,
+            "token exchange failed",
+            id="location-behind-api-base",
+        ),
+        pytest.param(
+            {
+                "vertex_credentials": json.dumps(dict(_AUTHORIZED_USER)),
+                "vertex_project": "project",
+                "vertex_location": "us-central1",
+            },
+            RefreshError,
+            "token exchange failed",
+            id="token-exchange",
+        ),
+    ],
+)
+@pytest.mark.parametrize("asynchronous", [True, False])
+def test_a_vertex_auth_failure_is_what_pythons_vertex_config_raises(
+    extra: dict[str, object], error_class: type[Exception], text: str, asynchronous: bool
+) -> None:
+    logger: Final = _logger("vertex_ai/claude-sonnet-4-5")
+    failed: Final = ValueError("token exchange failed")
+    failed.messages_auth_failure = True  # pyright: ignore[reportAttributeAccessIssue]  # marker the native host sets
+    request: Final[dict[str, object]] = {
+        "model": "vertex_ai/claude-sonnet-4-5",
+        "messages": [],
+        "max_tokens": 8,
+        "litellm_logging_obj": logger,
+        **extra,
+    }
+
+    mapped: Final = messages_host.map_failure(failed, request, "vertex_ai", asynchronous)
+
+    assert type(mapped) is error_class
+    assert text in str(mapped)
+    assert logger.model_call_details["litellm_params"]["aanthropic_messages"] is asynchronous
 
 
 @pytest.mark.parametrize(

@@ -500,6 +500,33 @@ def tools_marked_for_cache_points(
     return list(marked)
 
 
+def serves_message_threads(config: BaseAnthropicMessagesConfig | None) -> bool:
+    return config is not None and config.supports_message_threads()
+
+
+def unserved_thread_refusal(
+    thread: object, custom_llm_provider: str | None, drop_params: object
+) -> AnthropicError | None:
+    """The error Python raises for a `thread` its provider cannot serve, or None when drop_params drops it."""
+    if continues_message_thread(thread):
+        return AnthropicError(
+            status_code=404,
+            message=message_thread_not_found_body(
+                f"message threads are not supported for provider {custom_llm_provider}, "
+                "so this thread cannot be continued. Send the full conversation to start over"
+            ),
+        )
+    if not drops_unsupported_params(drop_params):
+        return AnthropicError(
+            status_code=400,
+            message=message_thread_unsupported_body(
+                f"message threads are not supported for provider {custom_llm_provider}. "
+                "Send the request without thread, or set drop_params to serve it without a server-side thread"
+            ),
+        )
+    return None
+
+
 @client
 async def anthropic_messages(
     max_tokens: int,
@@ -803,25 +830,14 @@ def anthropic_messages_handler(
         model, custom_llm_provider, kwargs.get("model_info"), api_base
     )
     thread: Final[object] = kwargs.get("thread")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # **kwargs of the handler is untyped
-    if thread is not None and (
-        anthropic_messages_provider_config is None or not anthropic_messages_provider_config.supports_message_threads()
-    ):
-        if continues_message_thread(thread):
-            raise AnthropicError(
-                status_code=404,
-                message=message_thread_not_found_body(
-                    f"message threads are not supported for provider {custom_llm_provider}, "
-                    "so this thread cannot be continued. Send the full conversation to start over"
-                ),
-            )
-        if not drops_unsupported_params(litellm_params.drop_params):
-            raise AnthropicError(
-                status_code=400,
-                message=message_thread_unsupported_body(
-                    f"message threads are not supported for provider {custom_llm_provider}. "
-                    "Send the request without thread, or set drop_params to serve it without a server-side thread"
-                ),
-            )
+    if thread is not None and not serves_message_threads(anthropic_messages_provider_config):
+        refusal: Final = unserved_thread_refusal(
+            thread,  # pyright: ignore[reportUnknownArgumentType]  # read from the handler's untyped **kwargs
+            custom_llm_provider,  # pyright: ignore[reportUnknownArgumentType]  # the handler's untyped provider
+            litellm_params.drop_params,
+        )
+        if refusal is not None:
+            raise refusal
         verbose_logger.warning(
             "Dropping thread for provider %s: message threads are not supported there, "
             "so the request is served without a server-side thread",
