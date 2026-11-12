@@ -269,7 +269,7 @@ def test_failure_of_a_sync_call_keeps_the_sync_failure_hook(earlier_async_call: 
     assert hooks.hooks == ["sync_failure"]
 
 
-CONTRACT_PATH: Final = Path(__file__).parents[4] / "litellm-rust/crates/callbacks-legacy-python/python_contract.json"
+CONTRACT_PATH: Final = Path(__file__).parents[4] / "litellm/rust/crates/callbacks-legacy-python/python_contract.json"
 
 
 def test_the_rust_contract_matches_the_shim_signatures() -> None:
