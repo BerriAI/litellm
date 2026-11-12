@@ -39,7 +39,6 @@ MOCK_PORT: Final = 8090
 S3_PORT: Final = 9000
 BUCKET: Final = "bench-logs"
 SAMPLE_INTERVAL_S: Final = 1.0
-PROFILE_RATE_HZ: Final = 200
 CLK_TCK: Final = os.sysconf("SC_CLK_TCK")
 PAGE_SIZE: Final = os.sysconf("SC_PAGE_SIZE")
 MOCK_KIND: Final = {"messages": "anthropic", "chat": "openai"}
@@ -276,6 +275,7 @@ class RunSpec:
     latency: Latency
     users: int
     profile_seconds: float | None
+    profile_rate_hz: int
 
 
 def run_once(spec: RunSpec) -> dict[str, object]:
@@ -383,7 +383,7 @@ def run_once(spec: RunSpec) -> dict[str, object]:
                     "--native",
                     "--subprocesses",
                     "--rate",
-                    str(PROFILE_RATE_HZ),
+                    str(spec.profile_rate_hz),
                     "--format",
                     "raw",
                     "-o",
@@ -426,7 +426,7 @@ def run_once(spec: RunSpec) -> dict[str, object]:
             "s3_objects": s3_objects,
             "locust_exit": loadgen.returncode,
             "profiled": profiler is not None,
-            "profile_rate_hz": PROFILE_RATE_HZ,
+            "profile_rate_hz": spec.profile_rate_hz,
             "profile_requests": sum(
                 1
                 for record in records
@@ -458,6 +458,7 @@ def main() -> None:
     _ = parser.add_argument("--plan-name", default="{path}", help="plan file stem, {path} is substituted")
     _ = parser.add_argument("--users", type=int, default=400)
     _ = parser.add_argument("--profile-seconds", type=float)
+    _ = parser.add_argument("--profile-rate", type=int, default=200, help="py-spy samples per second")
     _ = parser.add_argument("--proxy-cores", default="0,1")
     _ = parser.add_argument("--loadgen-cores", default="2")
     _ = parser.add_argument("--service-cores", default="3")
@@ -501,6 +502,7 @@ def main() -> None:
                     latency=latency,
                     users=int(args.users),  # pyright: ignore[reportAny]
                     profile_seconds=args.profile_seconds,  # pyright: ignore[reportAny]
+                    profile_rate_hz=int(args.profile_rate),  # pyright: ignore[reportAny]
                 )
             )
         except Exception as error:  # noqa: BLE001  # one failed run is recorded and the matrix moves on

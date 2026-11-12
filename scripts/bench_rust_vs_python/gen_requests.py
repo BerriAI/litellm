@@ -50,7 +50,15 @@ def _arrivals(rng: random.Random, step: Step, start: float) -> Iterator[float]:
     return (start + gap for gap in takewhile(lambda gap: gap < step.seconds, gaps))
 
 
-def wire_request(rng: random.Random, *, path: BenchPath, seq: int, send_at_s: float, master_key: str) -> WireRequest:
+def wire_request(
+    rng: random.Random,
+    *,
+    path: BenchPath,
+    seq: int,
+    send_at_s: float,
+    master_key: str,
+    input_tokens: tuple[int, int] = INPUT_TOKENS,
+) -> WireRequest:
     max_tokens: Final = rng.choice(MAX_TOKENS)
     return WireRequest(
         seq=seq,
@@ -60,7 +68,10 @@ def wire_request(rng: random.Random, *, path: BenchPath, seq: int, send_at_s: fl
         path=URL_PATHS[path],
         model=MODELS[path],
         shape=WireShape(
-            name="coding-agent-50k", input_tokens=rng.randint(*INPUT_TOKENS), tools=True, output_tokens=max_tokens
+            name=f"coding-agent-{input_tokens[1] // 1000}k",
+            input_tokens=rng.randint(*input_tokens),
+            tools=True,
+            output_tokens=max_tokens,
         ),
         authorization=f"Bearer {master_key}",
         stream=rng.random() < STREAM_SHARE,
@@ -70,17 +81,30 @@ def wire_request(rng: random.Random, *, path: BenchPath, seq: int, send_at_s: fl
 
 
 def build_plan(
-    *, path: BenchPath, seed: int, warmup: Step, measured: tuple[Step, ...], master_key: str
+    *,
+    path: BenchPath,
+    seed: int,
+    warmup: Step,
+    measured: tuple[Step, ...],
+    master_key: str,
+    input_tokens: tuple[int, int] = INPUT_TOKENS,
 ) -> tuple[WireRequest, ...]:
     rng: Final = random.Random(seed)
     warmup_offsets: Final = poisson_offsets(rng, (warmup,))
     measured_offsets: Final = tuple(warmup.seconds + offset for offset in poisson_offsets(rng, measured))
     warm: Final = tuple(
-        wire_request(rng, path=path, seq=WARMUP_SEQ_START + index, send_at_s=offset, master_key=master_key)
+        wire_request(
+            rng,
+            path=path,
+            seq=WARMUP_SEQ_START + index,
+            send_at_s=offset,
+            master_key=master_key,
+            input_tokens=input_tokens,
+        )
         for index, offset in enumerate(warmup_offsets, start=1)
     )
     timed: Final = tuple(
-        wire_request(rng, path=path, seq=index, send_at_s=offset, master_key=master_key)
+        wire_request(rng, path=path, seq=index, send_at_s=offset, master_key=master_key, input_tokens=input_tokens)
         for index, offset in enumerate(measured_offsets, start=1)
     )
     return (*warm, *timed)
@@ -92,6 +116,11 @@ def step_windows(warmup_seconds: float, measured: tuple[Step, ...]) -> list[dict
         {"rps": step.rps, "start_s": start, "end_s": start + step.seconds}
         for step, start in zip(measured, starts, strict=False)
     ]
+
+
+def parse_range(spec: str) -> tuple[int, int]:
+    low, high = (int(part) for part in spec.split(","))
+    return (low, high)
 
 
 def parse_ramp(spec: str) -> tuple[Step, ...]:
@@ -110,6 +139,7 @@ def main() -> None:
     _ = parser.add_argument("--warmup-rps", type=float)
     _ = parser.add_argument("--warmup-seconds", type=float, default=60.0)
     _ = parser.add_argument("--master-key", default="sk-bench-master")
+    _ = parser.add_argument("--input-tokens", default="45000,55000", help="low,high input tokens per request")
     _ = parser.add_argument("--out", type=Path, required=True)
     args: Final = parser.parse_args()
     ramp_spec: Final[str | None] = args.ramp  # pyright: ignore[reportAny]
@@ -124,6 +154,7 @@ def main() -> None:
         warmup=Step(warmup_rps, float(args.warmup_seconds)),  # pyright: ignore[reportAny]
         measured=measured,
         master_key=str(args.master_key),  # pyright: ignore[reportAny]
+        input_tokens=parse_range(str(args.input_tokens)),  # pyright: ignore[reportAny]
     )
     out: Final[Path] = args.out  # pyright: ignore[reportAny]
     _ = out.write_bytes(_PLAN.dump_json(list(plan)))
