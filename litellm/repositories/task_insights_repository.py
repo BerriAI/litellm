@@ -289,6 +289,13 @@ _MARK_BUCKETED: Final = """INSERT INTO "LiteLLM_TaskInsightsState" (id, last_buc
 VALUES ('default', $1::timestamp, $1::timestamp)
 ON CONFLICT (id) DO UPDATE SET last_bucketed_at = $1::timestamp, updated_at = $1::timestamp"""
 
+_ASSIGNED_NAMES: Final = """SELECT DISTINCT ON (o.request_text) o.request_text, d.name
+FROM "LiteLLM_TaskObservation" o
+LEFT JOIN "LiteLLM_TaskAssignment" a ON a.request_id = o.request_id
+LEFT JOIN "LiteLLM_TaskDefinition" d ON d.task_id = a.task_id AND d.status = 'frozen'
+WHERE o.request_text = ANY($1::text[])
+ORDER BY o.request_text, o.start_time DESC"""
+
 _RECOVER_DISCOVERY: Final = """UPDATE "LiteLLM_TaskInsightsState" SET discovery_status = 'failed',
     discovery_error = 'The analysis worker restarted during discovery', updated_at = CURRENT_TIMESTAMP
 WHERE id = 'default' AND discovery_status = 'running'"""
@@ -452,6 +459,13 @@ class TaskInsightsRepository:
             _REQUEST_DISCOVERY, _db_time(requested_at), _db_time(window.start), _db_time(window.end), max_requests
         )
         return bool(rows)
+
+    async def assigned_task_names(self, request_texts: tuple[str, ...]) -> Mapping[str, str | None]:
+        """The frozen task each request text was last assigned to, or None when it is unknown or not assigned."""
+        if not request_texts:
+            return {}
+        rows: Final = await self._database.query_raw(_ASSIGNED_NAMES, list(request_texts))
+        return {str(row["request_text"]): row["name"] if isinstance(row["name"], str) else None for row in rows}
 
     async def recover_discovery(self) -> int:
         return await self._database.execute_raw(_RECOVER_DISCOVERY)

@@ -8,7 +8,7 @@ with the analysis tag, so it is billed like other traffic and never analyzed its
 
 import argparse
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Final, Protocol
@@ -48,6 +48,8 @@ def _now() -> datetime:
 
 class WorkerStore(TaskAnalysisStore, Protocol):
     async def get_state(self) -> TaskInsightsState: ...
+
+    async def recover_discovery(self) -> int: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,11 +91,31 @@ def _pipeline(gateway: AsyncOpenAI, settings: WorkerSettings) -> DiscoveryPipeli
     )
 
 
+async def serve(
+    store: WorkerStore,
+    *,
+    pipeline: DiscoveryPipeline | None,
+    decider: TaskDecider | None,
+    batch_size: int,
+    poll_seconds: float,
+    now: Callable[[], datetime],
+    sleep: Callable[[float], Awaitable[None]],
+    once: bool,
+) -> None:
+    """A discovery left running by a stopped worker is failed first, so it can be queued again. A full bucketing batch
+    is followed straight away by the next one, a partial one waits for the poll interval."""
+    await store.recover_discovery()
+    while True:
+        bucketed = await run_once(store, pipeline=pipeline, decider=decider, batch_size=batch_size, now=now)
+        if once:
+            return
+        if bucketed < batch_size:
+            await sleep(poll_seconds)
+
+
 async def _serve(once: bool) -> None:
     settings: Final = WorkerSettings()
     async with connected_database() as database, httpx.AsyncClient(timeout=120) as http:
-        repository: Final = TaskInsightsRepository(database)
-        await repository.recover_discovery()
         key: Final = settings.gateway_key.get_secret_value() if settings.gateway_key is not None else None
         if key is None:
             verbose_proxy_logger.warning(
@@ -116,15 +138,16 @@ async def _serve(once: bool) -> None:
             if key is not None
             else None
         )
-        pipeline: Final = _pipeline(gateway, settings) if gateway is not None else None
-        while True:
-            bucketed = await run_once(
-                repository, pipeline=pipeline, decider=decider, batch_size=settings.bucket_batch_size, now=_now
-            )
-            if once:
-                return
-            if bucketed < settings.bucket_batch_size:
-                await asyncio.sleep(settings.poll_seconds)
+        await serve(
+            TaskInsightsRepository(database),
+            pipeline=_pipeline(gateway, settings) if gateway is not None else None,
+            decider=decider,
+            batch_size=settings.bucket_batch_size,
+            poll_seconds=settings.poll_seconds,
+            now=_now,
+            sleep=asyncio.sleep,
+            once=once,
+        )
 
 
 def main() -> None:

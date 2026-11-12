@@ -411,3 +411,68 @@ async def test_a_freeze_during_bucketing_discards_the_stale_batch(insights_datab
     assert await batch == 0
     assert insights_database.execute('SELECT COUNT(*) FROM "LiteLLM_TaskAssignment"').fetchone() == (0,)
     assert [pending.request_id for pending in await repository.pending_requests(10)] == ["r"]
+
+
+@pytest.mark.asyncio
+async def test_request_samples_follow_the_task_and_deployment_filters(insights_database, insights_client):
+    repository = TaskInsightsRepository(insights_client)
+    _log(insights_database, "on-sonnet", messages=[{"role": "user", "content": "Explain the cache lock"}], session_id="s1")
+    _deliver(insights_database, "on-sonnet", "on-sonnet", spend=0.2, model="claude-sonnet", request_duration_ms=900)
+    _log(insights_database, "on-opus", model="claude-opus", model_id="config-opus", messages=[{"role": "user", "content": "Explain the router"}])
+    _deliver(insights_database, "on-opus", "on-opus", spend=0.9, model="claude-opus")
+    await _observe(insights_client)
+    await _freeze(repository, _task("explain", "Explain code"))
+    pending = await repository.pending_requests(10)
+    await repository.save_decisions(tuple((item, _assigned("explain")) for item in pending), _NOW, await repository.taxonomy_version())
+
+    every = await repository.request_samples(_WINDOW, "explain", None, 10)
+    on_sonnet = await repository.request_samples(_WINDOW, "explain", "config-sonnet", 10)
+
+    assert {sample.request_id for sample in every} == {"on-sonnet", "on-opus"}
+    assert [(sample.request_id, sample.excerpt, sample.session_id, sample.latency_ms) for sample in on_sonnet] == [
+        ("on-sonnet", "Explain the cache lock", "s1", 900.0)
+    ]
+    assert await repository.request_samples(_WINDOW, UNKNOWN_TASK_ID, None, 10) == ()
+    assert (await repository.freshness()).last_bucketed_at is not None
+    assert await repository.assigned_task_names(("Explain the router", "never sent")) == {"Explain the router": "Explain code"}
+
+
+@pytest.mark.asyncio
+async def test_discovery_samples_are_distinct_texts_inside_the_window_without_analysis_traffic(insights_database, insights_client):
+    repository = TaskInsightsRepository(insights_client)
+    for request_id in ("first", "replay"):
+        _log(insights_database, request_id, messages=[{"role": "user", "content": "Fix the build"}])
+        _deliver(insights_database, request_id, request_id, spend=0.1, model="claude-sonnet")
+    _log(insights_database, "analysis", messages=[{"role": "user", "content": "Distill these"}])
+    _deliver(insights_database, "analysis", "analysis", spend=0.1, model="claude-sonnet", request_tags='["litellm-task-insights-analysis"]')
+    await _observe(insights_client)
+
+    assert await repository.request_discovery(_WINDOW, 50, _NOW)
+    run = await repository.claim_discovery()
+    samples = await repository.discovery_samples(run)
+    outside = await repository.discovery_samples(run.model_copy(update={"window": (_NOW, _NOW)}))
+
+    assert [sample.request_text for sample in samples] == ["Fix the build"]
+    assert outside == ()
+
+
+@pytest.mark.asyncio
+async def test_a_discovery_left_running_by_a_stopped_worker_is_failed_on_restart(insights_client):
+    repository = TaskInsightsRepository(insights_client)
+    await repository.request_discovery(_WINDOW, 50, _NOW)
+    await repository.claim_discovery()
+
+    assert await repository.recover_discovery() == 1
+    state = await repository.get_state()
+    assert (state.discovery_status, state.discovery_error) == ("failed", "The analysis worker restarted during discovery")
+    assert await repository.recover_discovery() == 0
+
+
+@pytest.mark.asyncio
+async def test_empty_writes_and_lookups_touch_nothing(insights_client):
+    repository = TaskInsightsRepository(insights_client)
+
+    assert await repository.insert_observations(()) == 0
+    assert await repository.decisions_by_hash(()) == {}
+    assert await repository.save_decisions((), _NOW, None) == 0
+    assert await repository.assigned_task_names(()) == {}

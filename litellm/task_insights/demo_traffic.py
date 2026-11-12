@@ -116,20 +116,17 @@ def batch_prompts(batch: str) -> tuple[tuple[str, str], ...]:
     return tuple((f"{LIVE_PREFIX}heldout-{index:03d}", prompt) for index, (_, prompt) in enumerate(HELDOUT_PROMPTS))
 
 
-async def send(batch: str, settings: TrafficSettings) -> int:
-    if settings.gateway_key is None:
-        print("Set LITELLM_TASK_INSIGHTS_GATEWAY_KEY to send live traffic", file=sys.stderr)  # noqa: T201  # CLI output
-        return 1
-    client: Final = AsyncOpenAI(base_url=settings.gateway_url, api_key=settings.gateway_key.get_secret_value())
-    for request_id, prompt in batch_prompts(batch):
+async def send(client: AsyncOpenAI, batch: str, *, model: str, max_tokens: int) -> int:
+    """Each request is its own session, so the held-out set never inherits another request's context."""
+    requests: Final = batch_prompts(batch)
+    for request_id, prompt in requests:
         await client.chat.completions.create(
-            model=settings.traffic_model,
+            model=model,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=settings.traffic_max_tokens,
+            max_tokens=max_tokens,
             extra_headers={"x-litellm-session-id": request_id},
         )
-    print(f"Sent {len(batch_prompts(batch))} {batch} requests to {settings.traffic_model}")  # noqa: T201  # CLI output
-    return 0
+    return len(requests)
 
 
 def export_heldout(path: str) -> None:
@@ -154,24 +151,32 @@ def read_labels(path: str) -> Mapping[str, str]:
         return {row["prompt"]: row["label"].strip() for row in csv.DictReader(handle)}
 
 
-async def score(labels: Mapping[str, str]) -> int:
-    from litellm.task_insights.database import connected_database
-
-    async with connected_database() as database:
-        rows: Final = await database.query_raw(
-            """SELECT DISTINCT ON (o.request_text) o.request_text, d.name
-            FROM "LiteLLM_TaskObservation" o
-            LEFT JOIN "LiteLLM_TaskAssignment" a ON a.request_id = o.request_id
-            LEFT JOIN "LiteLLM_TaskDefinition" d ON d.task_id = a.task_id AND d.status = 'frozen'
-            WHERE o.request_text = ANY($1::text[]) ORDER BY o.request_text, o.start_time DESC""",
-            [prompt for _, prompt in HELDOUT_PROMPTS],
-        )
-    assigned: Final = {str(row["request_text"]): row["name"] if isinstance(row["name"], str) else None for row in rows}
+def score_report(labels: Mapping[str, str], assigned: Mapping[str, str | None]) -> str:
     total, covered, agreed = agreement(labels, assigned)
-    print(  # noqa: T201  # CLI output
+    return (
         f"labeled={total} assigned={covered} coverage={covered / total if total else 0:.2f} "
         f"agreement={agreed / total if total else 0:.2f}"
     )
+
+
+async def _score(labels: Mapping[str, str]) -> str:
+    from litellm.repositories.task_insights_repository import TaskInsightsRepository
+    from litellm.task_insights.database import connected_database
+
+    async with connected_database() as database:
+        assigned: Final = await TaskInsightsRepository(database).assigned_task_names(
+            tuple(prompt for _, prompt in HELDOUT_PROMPTS)
+        )
+    return score_report(labels, assigned)
+
+
+async def _send(batch: str, settings: TrafficSettings) -> int:
+    if settings.gateway_key is None:
+        print("Set LITELLM_TASK_INSIGHTS_GATEWAY_KEY to send live traffic", file=sys.stderr)  # noqa: T201  # CLI output
+        return 1
+    client: Final = AsyncOpenAI(base_url=settings.gateway_url, api_key=settings.gateway_key.get_secret_value())
+    sent: Final = await send(client, batch, model=settings.traffic_model, max_tokens=settings.traffic_max_tokens)
+    print(f"Sent {sent} {batch} requests to {settings.traffic_model}")  # noqa: T201  # CLI output
     return 0
 
 
@@ -185,11 +190,11 @@ def main() -> None:
     args: Final = vars(parser.parse_args())
     command: Final = str(args["command"])
     if command == "send":
-        raise SystemExit(asyncio.run(send(str(args["batch"]), TrafficSettings())))
+        raise SystemExit(asyncio.run(_send(str(args["batch"]), TrafficSettings())))
     if command == "export":
         export_heldout(str(args["path"]))
         return
-    raise SystemExit(asyncio.run(score(read_labels(str(args["path"])))))
+    print(asyncio.run(_score(read_labels(str(args["path"])))))  # noqa: T201  # CLI output
 
 
 if __name__ == "__main__":
