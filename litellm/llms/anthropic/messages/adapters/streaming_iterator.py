@@ -65,6 +65,24 @@ _PROMPT_MESSAGES: Final = TypeAdapter(list[AllMessageValues])
 _PROMPT_TOOLS: Final = TypeAdapter(list[ChatCompletionToolParam])
 
 
+def estimated_chat_prompt_tokens(model: str, messages: object, tools: object = None) -> int:
+    try:
+        prompt_messages: Final = _PROMPT_MESSAGES.validate_python(messages)
+        if not prompt_messages:
+            return 0
+        materialized_messages: Final = cast(  # cast-ok: JSON-mode serialization preserves validated message types and materializes iterable content
+            list[AllMessageValues], _PROMPT_MESSAGES.dump_python(prompt_messages, mode="json")
+        )
+        return litellm.token_counter(  # pyright: ignore[reportUnknownMemberType]  # token_counter's public signature is partially untyped
+            model=model,
+            messages=materialized_messages,
+            tools=_PROMPT_TOOLS.validate_python(tools) if tools is not None else None,
+            use_default_image_token_count=True,
+        )
+    except Exception:  # noqa: BLE001  # prompt estimation must not interrupt the stream
+        return 0
+
+
 class _UsageDeltaWithIterations(UsageDelta, total=False):
     iterations: list[UsageIteration]
 
@@ -883,24 +901,13 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         )
 
     def _estimate_initial_input_tokens(self) -> int:
-        try:
-            request: Final = self.completion_request or {}
-            messages: Final = _PROMPT_MESSAGES.validate_python(request.get("messages", self.messages))
-            if not messages:
-                return 0
-            materialized_messages: Final = cast(  # cast-ok: JSON-mode serialization preserves validated message types and materializes iterable content
-                list[AllMessageValues], _PROMPT_MESSAGES.dump_python(messages, mode="json")
-            )
-            model: Final = request.get("model", self.model)
-            tools: Final = request.get("tools")
-            return litellm.token_counter(  # pyright: ignore[reportUnknownMemberType]  # token_counter's public signature is partially untyped
-                model=model if isinstance(model, str) else self.model,
-                messages=materialized_messages,
-                tools=_PROMPT_TOOLS.validate_python(tools) if tools is not None else None,
-                use_default_image_token_count=True,
-            )
-        except Exception:  # noqa: BLE001  # prompt estimation must not interrupt the stream
-            return 0
+        request: Final = self.completion_request or {}
+        model: Final = request.get("model", self.model)
+        return estimated_chat_prompt_tokens(
+            model=model if isinstance(model, str) else self.model,
+            messages=request.get("messages", self.messages),
+            tools=request.get("tools"),
+        )
 
     def __next__(self):
         from .transformation import LiteLLMAnthropicMessagesAdapter

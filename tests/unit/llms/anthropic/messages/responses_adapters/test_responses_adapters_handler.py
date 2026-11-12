@@ -1,4 +1,5 @@
 import datetime
+import inspect
 import json
 import os
 import sys
@@ -6,11 +7,12 @@ from collections.abc import AsyncIterator, Mapping
 from contextlib import nullcontext
 from itertools import chain
 from typing import Final, cast
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
 import pytest
 import respx
+from pydantic import ConfigDict, TypeAdapter
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../..")))
 
@@ -27,6 +29,7 @@ from litellm.llms.anthropic.messages.responses_adapters.handler import (
 )
 from litellm.router import Router
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS, converted_stream_requested
+from litellm.types.llms.anthropic import AllAnthropicToolsValues
 
 MESSAGES = [{"role": "user", "content": "hello"}]
 CLAUDE_CODE_USER_ID = json.dumps({"device_id": "d" * 64, "account_uuid": "", "session_id": "session-abc"})
@@ -232,6 +235,182 @@ async def test_streaming_hands_the_logging_object_the_message_id_the_caller_is_s
     message_start = next(e for e in events if e["type"] == "message_start")
     assert message_start["message"]["id"].startswith("msg_")
     assert logging_obj.streamed_anthropic_message_id == message_start["message"]["id"]
+
+
+WEATHER_SYSTEM: Final = "Answer in one word."
+WEATHER_QUESTION: Final = "What is the weather in Paris?"
+WEATHER_SCHEMA: Final = {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}
+WEATHER_TOOL: Final = {
+    "name": "get_weather",
+    "description": "Look up the current weather",
+    "input_schema": WEATHER_SCHEMA,
+}
+
+
+def _weather_prompt_tokens_as_chat() -> int:
+    return litellm.token_counter(
+        model="openai/gpt-5.6-luna",
+        messages=[{"role": "system", "content": WEATHER_SYSTEM}, {"role": "user", "content": WEATHER_QUESTION}],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Look up the current weather",
+                    "parameters": WEATHER_SCHEMA,
+                },
+            }
+        ],
+        use_default_image_token_count=True,
+    )
+
+
+BLOCK_WEATHER_SYSTEM: Final = [{"type": "text", "text": WEATHER_SYSTEM, "cache_control": {"type": "ephemeral"}}]
+
+
+async def _bridged_events(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    is_async: bool,
+    messages: list[dict[str, object]],
+    system: str | list[dict[str, object]] | None = None,
+    tools: list[AllAnthropicToolsValues | dict[str, object]] | None = None,
+    context_management: dict[str, object] | None = None,
+    failures: tuple[httpx.Response, ...] = (),
+) -> list[Mapping[str, object]]:
+    _upstream_after(respx_mock, monkeypatch, failures, True)
+    response: Final = LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
+        max_tokens=64,
+        messages=messages,
+        model="openai/gpt-5.6-luna",
+        system=cast(str | None, system),
+        tools=tools,
+        stream=True,
+        custom_llm_provider="openai",
+        context_management=context_management,
+        _is_async=is_async,
+    )
+    sse: Final = await response if inspect.isawaitable(response) else response
+    return [json.loads(chunk.decode().split("data: ", 1)[1]) async for chunk in cast(AsyncIterator[bytes], sse)]
+
+
+async def _weather_events(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    is_async: bool,
+    system: str | list[dict[str, object]] = WEATHER_SYSTEM,
+    extra_tools: tuple[dict[str, object], ...] = (),
+) -> list[Mapping[str, object]]:
+    return await _bridged_events(
+        respx_mock,
+        monkeypatch,
+        is_async=is_async,
+        messages=[{"role": "user", "content": WEATHER_QUESTION}],
+        system=system,
+        tools=[dict(WEATHER_TOOL), *extra_tools],
+    )
+
+
+_EVENTS: Final = TypeAdapter(list[Mapping[str, object]])
+_EVENT: Final = TypeAdapter(Mapping[str, object])
+_USAGE: Final = TypeAdapter(dict[str, int], config=ConfigDict(strict=True))
+
+
+def _opening_usage(events: object) -> dict[str, int]:
+    message_start: Final = next(
+        event for event in _EVENTS.validate_python(events) if event.get("type") == "message_start"
+    )
+    return _USAGE.validate_python(_EVENT.validate_python(message_start["message"])["usage"])
+
+
+def _message_start_usage(input_tokens: int) -> dict[str, int]:
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("system", [WEATHER_SYSTEM, BLOCK_WEATHER_SYSTEM], ids=["string_system", "block_system"])
+@pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
+@pytest.mark.parametrize("estimate_enabled", [None, False, True, "false"])
+async def test_streamed_message_start_estimates_input_tokens_only_when_opted_in(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    is_async: bool,
+    estimate_enabled: bool | str | None,
+    system: str | list[dict[str, object]],
+) -> None:
+    if estimate_enabled is not None:
+        monkeypatch.setattr(litellm, "anthropic_messages_estimate_initial_input_tokens", estimate_enabled)
+    chat_prompt_tokens: Final = _weather_prompt_tokens_as_chat()
+    assert chat_prompt_tokens > 0
+
+    events: Final = await _weather_events(respx_mock, monkeypatch, is_async=is_async, system=system)
+
+    assert _opening_usage(events) == _message_start_usage(chat_prompt_tokens if estimate_enabled is True else 0)
+    message_delta: Final = next(event for event in events if event["type"] == "message_delta")
+    assert message_delta["usage"] == {"input_tokens": 3, "output_tokens": 4}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
+async def test_disabled_opening_estimate_never_counts_tokens(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, is_async: bool
+) -> None:
+    counter: Final = Mock(side_effect=AssertionError("disabled estimation must not count tokens"))
+    monkeypatch.setattr(litellm, "anthropic_messages_estimate_initial_input_tokens", False)
+    monkeypatch.setattr(litellm, "token_counter", counter)
+
+    events: Final = await _weather_events(respx_mock, monkeypatch, is_async=is_async)
+
+    assert _opening_usage(events) == _message_start_usage(0)
+    counter.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
+@pytest.mark.parametrize(
+    "anthropic_defined_tool",
+    [
+        {"type": "bash_20250124", "name": "bash"},
+        {"type": "text_editor_20250728", "name": "str_replace_based_edit_tool"},
+    ],
+    ids=["bash", "text_editor"],
+)
+async def test_anthropic_defined_tool_does_not_zero_the_opening_estimate(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    is_async: bool,
+    anthropic_defined_tool: dict[str, object],
+) -> None:
+    monkeypatch.setattr(litellm, "anthropic_messages_estimate_initial_input_tokens", True)
+
+    events: Final = await _weather_events(
+        respx_mock, monkeypatch, is_async=is_async, extra_tools=(anthropic_defined_tool,)
+    )
+
+    assert _opening_usage(events) == _message_start_usage(_weather_prompt_tokens_as_chat())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
+async def test_opening_estimate_stays_zero_when_the_chat_translator_rejects_the_prompt(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, is_async: bool
+) -> None:
+    monkeypatch.setattr(litellm, "anthropic_messages_estimate_initial_input_tokens", True)
+
+    events: Final = await _bridged_events(
+        respx_mock, monkeypatch, is_async=is_async, messages=[{"role": "user", "content": ["x"]}]
+    )
+
+    assert _opening_usage(events) == _message_start_usage(0)
+    message_delta: Final = next(event for event in events if event["type"] == "message_delta")
+    assert message_delta["usage"] == {"input_tokens": 3, "output_tokens": 4}
 
 
 SAFEGUARDS: Final = [{"type": "dangerous_tool_use", "classifier_context": {"permission_mode": "auto"}}]
@@ -566,7 +745,9 @@ def _gpt_5_6_input_for_a_cached_block(drop_params: bool, raw_mark: Mapping[str, 
         model="openai/gpt-5.6",
         extra_kwargs={**OPENAI_API, "drop_params": drop_params},
         max_tokens=1024,
-        messages=[{"role": "user", "content": [{"type": "text", "text": "look", "cache_control": EPHEMERAL, **raw_mark}]}],
+        messages=[
+            {"role": "user", "content": [{"type": "text", "text": "look", "cache_control": EPHEMERAL, **raw_mark}]}
+        ],
     )
     return responses_kwargs["input"]
 
@@ -1141,6 +1322,38 @@ async def test_the_sync_path_reports_its_edits_on_the_streamed_message_delta(
     assert message_delta["context_management"]["applied_edits"][0]["cleared_tool_uses"] == 2
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
+async def test_streamed_opening_estimate_counts_the_history_left_after_clear_tool_uses(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, is_async: bool
+) -> None:
+    monkeypatch.setattr(litellm, "anthropic_messages_estimate_initial_input_tokens", True)
+    never_triggers: Final = {**CLEAR_EDIT, "trigger": {"type": "tool_uses", "value": 99}}
+
+    kept: Final = await _bridged_events(
+        respx_mock,
+        monkeypatch,
+        is_async=is_async,
+        messages=_three_reads(),
+        tools=[dict(BASH_TOOL)],
+        context_management={"edits": [never_triggers]},
+    )
+    cleared: Final = await _bridged_events(
+        respx_mock,
+        monkeypatch,
+        is_async=is_async,
+        messages=_three_reads(),
+        tools=[dict(BASH_TOOL)],
+        context_management={"edits": [dict(CLEAR_EDIT)]},
+    )
+
+    kept_tokens: Final = _opening_usage(kept)["input_tokens"]
+    cleared_tokens: Final = _opening_usage(cleared)["input_tokens"]
+    assert 0 < cleared_tokens < kept_tokens, (
+        f"cleared history opened at {cleared_tokens}, full history at {kept_tokens}"
+    )
+
+
 REJECTED_REPLAYED_REASONING: Final = {
     "error": {
         "message": "The encrypted content gAAA_foreign could not be verified.",
@@ -1154,17 +1367,30 @@ UNVERIFIED_ORGANIZATION: Final = {
 }
 
 
+SUMMARIZED_FOREIGN_REASONING: Final = {
+    "type": "thinking",
+    "thinking": "I should list the log files before I answer. " * 8,
+    "signature": encrypted_reasoning_signature("gAAA_foreign"),
+}
+
+
+def _bash_history_after(reasoning: tuple[dict[str, object], ...]) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "List the logs."},
+        {
+            "role": "assistant",
+            "content": [*reasoning, {"type": "tool_use", "id": "call_1", "name": "Bash", "input": {}}],
+        },
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "app.log"}]},
+    ]
+
+
 def _history(*, replayed_reasoning: bool) -> list[dict[str, object]]:
-    reasoning: Final = (
+    return _bash_history_after(
         ({"type": "redacted_thinking", "data": encrypted_reasoning_signature("gAAA_foreign")},)
         if replayed_reasoning
         else ()
     )
-    return [
-        {"role": "user", "content": "List the logs."},
-        {"role": "assistant", "content": [*reasoning, {"type": "tool_use", "id": "call_1", "name": "Bash", "input": {}}]},
-        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "app.log"}]},
-    ]
 
 
 def _replayed_reasoning_counts(upstream: respx.Route) -> list[int]:
@@ -1249,6 +1475,36 @@ async def test_openai_turn_with_num_retries_sends_the_rejected_reasoning_only_on
     )
 
     assert _replayed_reasoning_counts(upstream) == [1, 0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
+async def test_opening_estimate_after_a_rejected_reasoning_replay_counts_the_resent_history(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, is_async: bool
+) -> None:
+    monkeypatch.setattr(litellm, "anthropic_messages_estimate_initial_input_tokens", True)
+
+    replayed: Final = await _bridged_events(
+        respx_mock,
+        monkeypatch,
+        is_async=is_async,
+        messages=_bash_history_after((dict(SUMMARIZED_FOREIGN_REASONING),)),
+        tools=[dict(BASH_TOOL)],
+        failures=(httpx.Response(400, json=REJECTED_REPLAYED_REASONING),),
+    )
+    reasoning_items_per_attempt: Final = [
+        sum(item.get("type") == "reasoning" for item in json.loads(call.request.content)["input"])
+        for call in respx_mock.calls
+    ]
+    resent_history_only: Final = await _bridged_events(
+        respx_mock, monkeypatch, is_async=is_async, messages=_bash_history_after(()), tools=[dict(BASH_TOOL)]
+    )
+
+    assert reasoning_items_per_attempt == [1, 0]
+    resent_tokens: Final = _opening_usage(resent_history_only)["input_tokens"]
+    assert 0 < _opening_usage(replayed)["input_tokens"] == resent_tokens, (
+        f"resent history alone opens at {resent_tokens}"
+    )
 
 
 def test_sync_openai_turn_with_global_num_retries_sends_the_rejected_reasoning_once_and_keeps_the_setting(
