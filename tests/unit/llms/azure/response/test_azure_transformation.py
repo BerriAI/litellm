@@ -1342,6 +1342,23 @@ def test_azure_responses_sends_the_deployment_name_when_azure_ai_prefix_survives
     assert request["model"] == "gpt-5.4-nano"
 
 
+def test_gpt5_series_selector_is_not_sent_as_part_of_the_deployment_name(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(host="example-resource.openai.azure.com").mock(
+        return_value=httpx.Response(200, json=_COMPLETED_RESPONSE)
+    )
+
+    response: Final = litellm.responses(
+        model="azure/gpt5_series/my-gpt-5-deployment",
+        input="hi",
+        api_base=_AZURE_RESOURCE,
+        api_key="azure-test-key",
+    )
+
+    assert response.output[0].content[0].text == "Done."
+    assert route.call_count == 1
+    assert json.loads(route.calls[0].request.content)["model"] == "my-gpt-5-deployment"
+
+
 @pytest.mark.asyncio
 async def test_azure_responses_api_status_error():
     """
