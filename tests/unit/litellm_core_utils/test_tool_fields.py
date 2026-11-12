@@ -257,8 +257,8 @@ _FORCED_DEEPWIKI: Final = {"type": "function", "function": {"name": "deepwiki"}}
 )
 @pytest.mark.parametrize(
     "functions",
-    [None, [{"name": "get_weather", "parameters": {"type": "object"}}]],
-    ids=["tools_kept", "legacy_functions_kept"],
+    [None, [{"name": "get_weather", "parameters": {"type": "object"}}], ["deepwiki"]],
+    ids=["tools_kept", "legacy_functions_kept", "malformed_legacy_function_kept"],
 )
 def test_dropping_a_hosted_mcp_tool_clears_a_tool_choice_that_forces_it(
     functions: object, tool_choice: Mapping[str, object]
