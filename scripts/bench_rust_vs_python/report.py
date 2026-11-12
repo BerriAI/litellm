@@ -279,6 +279,8 @@ def html_report(runs: Sequence[RunMetrics], deltas: Mapping[str, Sequence[Delta]
 
 
 def verdict(d: Delta, floor: float | None) -> str:
+    if d.ci_low_pct == d.ci_high_pct:
+        return "single run, no CI"
     excludes_zero: Final = d.ci_low_pct > 0 or d.ci_high_pct < 0
     above_floor: Final = floor is None or abs(d.change_pct) > floor
     if not (excludes_zero and above_floor):

@@ -24,3 +24,4 @@ model_list:
       model: openai/gpt-6.1-sol
       api_base: os.environ/BENCH_MOCK_OPENAI_URL
       api_key: bench-mock-not-checked
+      drop_params: true

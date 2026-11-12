@@ -137,6 +137,7 @@ def test_delta_reports_a_clear_change_and_no_change_for_equal_variants() -> None
     assert verdict(improvement, floor=30.0) == "no change"
     assert unchanged.ci_low_pct < 0 < unchanged.ci_high_pct
     assert verdict(unchanged, floor=None) == "no change"
+    assert verdict(delta("cpu_ms_per_request", old[:1], faster[:1], seed=1), floor=None) == "single run, no CI"
 
 
 def test_plan_is_deterministic_open_loop_with_warmup_first() -> None:
