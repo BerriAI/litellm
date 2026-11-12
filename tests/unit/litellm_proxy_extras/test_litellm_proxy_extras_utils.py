@@ -31,7 +31,7 @@ from litellm_proxy_extras.utils import (
 _MIGRATIONS_DIR = os.path.abspath(
     os.path.join(
         os.path.dirname(__file__),
-        "../../../litellm-proxy-extras/litellm_proxy_extras/migrations",
+        "../../../litellm/proxy-extras/litellm_proxy_extras/migrations",
     )
 )
 
@@ -621,7 +621,7 @@ DROP TABLE "LiteLLM_SpendLogs_legacy";
 
 
 class TestPartitionedSpendLogsDriftFilter:
-    """A doc-partitioned LiteLLM_SpendLogs (db_scripts/partition_spend_logs.sql) has a
+    """A doc-partitioned LiteLLM_SpendLogs (litellm/scripts/db/partition_spend_logs.sql) has a
     composite primary key that schema.prisma cannot express, so `prisma migrate diff`
     emits a primary-key rewrite that Postgres rejects, aborting the whole drift script
     before its legitimate statements run."""

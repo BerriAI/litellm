@@ -1080,7 +1080,7 @@ def _prepare_mcp_server_headers(
         )
 
         for header in server.extra_headers:
-            if not isinstance(header, str) or header.lower() == "x-litellm-api-key":
+            if not isinstance(header, str):
                 continue
             if header.lower() == "authorization" and (strip_caller_authorization or withhold_forwarded_authorization):
                 continue
@@ -2080,7 +2080,7 @@ async def _list_tools_before_first_call(
 
 async def execute_mcp_tool(
     name: str,
-    arguments: dict[str, object],
+    arguments: Mapping[str, object],
     allowed_mcp_servers: list[MCPServer],
     start_time: datetime,
     user_api_key_auth: UserAPIKeyAuth | None = None,
