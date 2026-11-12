@@ -133,6 +133,7 @@ def _daily_counters(row: Mapping[str, object], metadata: Mapping[str, object]) -
         ("prompt_caching_savings_spend", _number(savings.get("prompt_caching"))),
         ("gateway_injected_caching_savings_spend", _number(savings.get("gateway_injected_caching"))),
         ("autorouter_savings_spend", 0.0 if internal else _number(savings.get("autorouter"))),
+        ("guardrail_spend", _number(metadata.get("accounting_guardrail_spend"))),
         ("total_response_time_ms", _number(duration) if timed else 0),
         ("timed_requests", int(timed)),
     )
@@ -230,6 +231,8 @@ def _model_contributions(row: Mapping[str, object], metadata: Mapping[str, objec
     model: Final = _text(row.get("model")) or "unknown"
     caller: Final = not origin
     success: Final = row.get("status") == "success"
+    duration: Final = row.get("request_duration_ms")
+    timed: Final = caller and success and isinstance(duration, int) and duration >= 0
     return (
         Contribution(
             "LiteLLM_DailyModelUsage",
@@ -247,6 +250,8 @@ def _model_contributions(row: Mapping[str, object], metadata: Mapping[str, objec
                 ("request_count", int(caller)),
                 ("successful_requests", int(caller and success)),
                 ("failed_requests", int(caller and not success)),
+                ("total_response_time_ms", _number(duration) if timed else 0),
+                ("timed_requests", int(timed)),
             ),
         ),
     )

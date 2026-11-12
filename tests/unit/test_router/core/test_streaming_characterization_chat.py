@@ -10,14 +10,17 @@ while one that raises later fails while the caller iterates.
 
 import asyncio
 from collections.abc import Callable, Mapping
-from typing import Final
+from typing import Final, NoReturn
 
+import httpx
 import pytest
 
 import litellm
 from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
+from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.router_core import RouterCore
 from litellm.types.utils import Usage
 from tests.unit.test_router.core.scripted_host import (
@@ -35,6 +38,7 @@ from tests.unit.test_router.core.streaming_helpers import (
     collect_texts,
     collect_texts_sync,
     drain_into,
+    request_logging,
 )
 
 MakeCore = Callable[..., RouterCore]
@@ -105,6 +109,51 @@ async def test_a_first_chunk_bad_request_is_raised_from_the_call_without_retry(
     with pytest.raises(litellm.BadRequestError, match="nope"):
         await open_stream(core)
     assert host.deployments_called() == ["a"]
+
+
+def _gemini_stream_that_fails_to_open(sync: bool) -> Callable[..., CustomStreamWrapper]:
+    request: Final = httpx.Request("POST", "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash")
+    body: Final = b'{"error": {"code": 400, "message": "gemini said no", "status": "INVALID_ARGUMENT"}}'
+    sync_error: Final = MaskedHTTPStatusError(
+        httpx.HTTPStatusError("gemini said no", request=request, response=httpx.Response(400, request=request)),
+        message=body,  # pyright: ignore[reportArgumentType]  # the sync stream handler passes the raw body bytes
+        text=body,  # pyright: ignore[reportArgumentType]  # the sync stream handler passes the raw body bytes
+    )
+
+    def make_sync_call(client: object) -> NoReturn:
+        raise sync_error
+
+    async def make_call(client: object) -> NoReturn:
+        raise VertexAIError(status_code=400, message=body.decode(), headers=None)
+
+    def answer(**_request: object) -> CustomStreamWrapper:  # kwargs-ok: the host passes the request kwargs
+        return CustomStreamWrapper(
+            completion_stream=None,
+            model="gemini-2.5-flash",
+            custom_llm_provider="gemini",
+            logging_obj=request_logging(),
+            make_call=make_sync_call if sync else make_call,
+        )
+
+    return answer
+
+
+async def test_a_gemini_stream_that_fails_to_open_raises_the_mapped_bad_request(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer("openai/a", _gemini_stream_that_fails_to_open(sync=False))
+    core: Final = make_core(model_list=[deployment("a", "a")], num_retries=0)
+    with pytest.raises(litellm.BadRequestError, match="gemini said no"):
+        await open_stream(core)
+
+
+def test_a_sync_gemini_stream_that_fails_to_open_raises_the_mapped_bad_request(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer("openai/a", _gemini_stream_that_fails_to_open(sync=True))
+    core: Final = make_core(model_list=[deployment("a", "a")], num_retries=0)
+    with pytest.raises(litellm.BadRequestError, match="gemini said no"):
+        core.completion(model="a", messages=MESSAGES, stream=True)  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
 
 
 async def test_the_first_chunk_already_read_is_still_delivered_to_the_caller(
@@ -512,6 +561,18 @@ async def test_continuation_declines_a_fallback_target_that_overrides_request_pa
     core = continuation_core(make_core, fallbacks=[{"a": [{"model": "b", "temperature": 0.1}]}])
     stream = await open_stream(core)
     with pytest.raises(litellm.RateLimitError, match="override"):
+        await collect_texts(stream)
+    assert host.deployments_called() == ["a"]
+
+
+async def test_continuation_reads_the_request_fallbacks_over_the_routers(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer("openai/a", chat_stream("he", "llo", error=rate_limit(message="request override")))
+    host.answer(PREFILL_MODEL, chat_stream(" world"))
+    core = continuation_core(make_core, fallbacks=[{"a": ["b"]}])
+    stream = await open_stream(core, fallbacks=[{"model": "b", "messages": [{"role": "user", "content": "again"}]}])
+    with pytest.raises(litellm.RateLimitError, match="request override"):
         await collect_texts(stream)
     assert host.deployments_called() == ["a"]
 

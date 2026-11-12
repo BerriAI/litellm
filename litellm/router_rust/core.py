@@ -1,5 +1,5 @@
 """
-``RustCore``: the router core served by litellm-rust/crates/router-core through ``_native``.
+``RustCore``: the router core served by litellm/rust/crates/router-core through ``_native``.
 
 The Rust core owns the registry, selection, retries, fallbacks and cooldowns. It reaches outside
 itself only through its host, and the host never calls back into a Python router:
@@ -102,8 +102,10 @@ from litellm.router_rust.invoke.endpoints import (
     endpoint_names,
     failover_fields,
     generic_plan,
+    is_batch_upload,
     log_refused_call,
     log_refused_call_sync,
+    pinned_vector_store_file_deployment,
     pinned_video_deployment,
     plan_for,
     reports_own_success,
@@ -112,7 +114,7 @@ from litellm.router_rust.invoke.endpoints import (
     stamp_error,
     unrouted_fields,
 )
-from litellm.router_rust.invoke.shaping import Shaping
+from litellm.router_rust.invoke.shaping import Shaping, non_stream_timeout
 from litellm.router_rust.invoke.slots import enter_deployment_slot, max_parallel_requests_limit
 from litellm.router_rust.invoke.streaming import (
     StreamAttempt,
@@ -124,6 +126,7 @@ from litellm.router_rust.invoke.streaming import (
     shape_attempt_kwargs,
 )
 from litellm.router_rust.invoke.walk import FallbackOutcomes, WalkMetadata, await_all, log_retry_into
+from litellm.router_rust.invoke.websocket import turns_counted_their_requests
 from litellm.router_rust.routing_stores import RoutingStores
 from litellm.router_rust.steps.access import caller_fields, selection_refusal
 from litellm.router_rust.steps.callbacks import OptionalChecks, RustOptionalChecks
@@ -328,6 +331,7 @@ _SERVED_ARGUMENTS: Final = frozenset(
         "default_litellm_params",
         "fallback_access_check",
         "fallback_budget_check",
+        "fallback_rate_limit_check",
         "enable_mid_stream_fallback_continuation",
         "redis_url",
         "redis_host",
@@ -416,6 +420,7 @@ _DYNAMIC_SETTINGS: Final = frozenset(
         "default_litellm_params",
         "fallback_access_check",
         "fallback_budget_check",
+        "fallback_rate_limit_check",
         "routing_strategy_args",
         "enable_tag_filtering",
         "tag_filtering_match_any",
@@ -662,6 +667,7 @@ class Resolved:
     default_litellm_params: Mapping[str, object]
     fallback_access_check: object
     fallback_budget_check: object
+    fallback_rate_limit_check: object
     enable_mid_stream_fallback_continuation: bool = False
     routing_groups: "tuple[RoutingGroup, ...]" = ()
     enable_tag_filtering: bool = False
@@ -777,6 +783,7 @@ class Resolved:
             default_litellm_params=MappingProxyType(dict(as_str_mapping(get("default_litellm_params")) or {})),
             fallback_access_check=get("fallback_access_check"),
             fallback_budget_check=get("fallback_budget_check"),
+            fallback_rate_limit_check=get("fallback_rate_limit_check"),
             enable_mid_stream_fallback_continuation=continuation_flag(get("enable_mid_stream_fallback_continuation")),
             enable_tag_filtering=bool(get("enable_tag_filtering")),
             tag_filtering_match_any=_true_unless_given(get("tag_filtering_match_any")),
@@ -1344,6 +1351,9 @@ class _EndpointPort:
     def group_deployments(self, model_name: str) -> Sequence[Mapping[str, object]] | None:
         return self._core._hosted._core_get_model_list(model_name=model_name)  # pyright: ignore[reportPrivateUsage]  # see the class docstring
 
+    def group_members(self, model_name: str) -> Sequence[tuple[object, object]] | None:
+        return self._core._hosted._group_members(model_name)  # pyright: ignore[reportPrivateUsage]  # see the class docstring
+
     def routed_name(self, model: object) -> str:
         return self._core.routed_name(model)
 
@@ -1369,9 +1379,15 @@ class _EndpointPort:
         kind: str = "pick",
         specific_deployment: bool | None = None,
         messages: object = None,
+        batch_upload: bool = False,
     ) -> Mapping[str, object] | Sequence[Mapping[str, object]]:
         return await self._core.select(
-            model, request_kwargs, kind=kind, specific_deployment=specific_deployment, messages=messages
+            model,
+            request_kwargs,
+            kind=kind,
+            specific_deployment=specific_deployment,
+            messages=messages,
+            batch_upload=batch_upload,
         )
 
     async def acompletion(self, *args: object, **kwargs: object) -> object:  # kwargs-ok: endpoint payload
@@ -1590,6 +1606,9 @@ class RustCore(
     def _shaping(self) -> Shaping:
         return self._endpoints.shaping(self._resolved)
 
+    def _core_deployment_call_timeout(self, litellm_params: Mapping[str, object]) -> object:
+        return non_stream_timeout(self._shaping, MappingProxyType({}), litellm_params)
+
     # -- building --------------------------------------------------------------------------------
 
     def _new_handle(self, model_list: Sequence[object]) -> "RouterCoreHandle":
@@ -1667,7 +1686,11 @@ class RustCore(
 
         try:
             selector: Final = self._prefetch_usage_selector(model, request)
-            deployments: Final = self._hosted._core_get_model_list(model_name=model) or []  # pyright: ignore[reportPrivateUsage]  # see __init__
+            deployments: Final = (
+                self._hosted._core_get_model_list(model_name=model) or []  # pyright: ignore[reportPrivateUsage]  # see __init__
+                if isinstance(selector, LowestTPMLoggingHandler_v2)
+                else []
+            )
         except Exception:  # noqa: BLE001  # the batched read is an optimisation: the reads stay apart
             yield
             return
@@ -1813,13 +1836,14 @@ class RustCore(
     def _rebuild(self) -> None:
         """A new Rust core for changed static settings, over the same deployments and the
         providers the old one's builds resolved for them."""
-        old: Final = self._handle
-        model_list: Final = list(self._hosted._core_model_list)  # pyright: ignore[reportPrivateUsage]  # see __init__
-        self._handle = self._new_handle(model_list)
-        self._handle.adopt_providers(old)
-        old.retire()
-        # The live list and indexes read the new handle's (the same entries, kept as the same objects).
-        self._hosted.refresh()
+        with self._hosted._deployment_index_lock:  # pyright: ignore[reportPrivateUsage]  # the registry's lock, held across the swap and the read back
+            old: Final = self._handle
+            model_list: Final = list(self._hosted._core_model_list)  # pyright: ignore[reportPrivateUsage]  # see __init__
+            self._handle = self._new_handle(model_list)
+            self._handle.adopt_providers(old)
+            old.retire()
+            # The live list and indexes read the new handle's (the same entries, kept as the same objects).
+            self._hosted.refresh()
         # The new handle builds its indexes from the deployments: written ones are handed again.
         self._index_sent = None
 
@@ -1905,6 +1929,7 @@ class RustCore(
             tag_routing_prefix=r.read("tag_routing_prefix"),  # pyright: ignore[reportArgumentType]  # the value as given, as the Python core stores it
             fallback_access_check=r.fallback_access_check,  # pyright: ignore[reportArgumentType]  # the check as passed
             fallback_budget_check=r.fallback_budget_check,  # pyright: ignore[reportArgumentType]  # the check as passed
+            fallback_rate_limit_check=r.fallback_rate_limit_check,  # pyright: ignore[reportArgumentType]  # the check as passed
             cache_responses=self._endpoints.cache_responses,
             search_tools=self._endpoints.search_tools,  # pyright: ignore[reportArgumentType]  # the configured entries, as passed
             guardrail_list=self._endpoints.guardrail_list,  # pyright: ignore[reportArgumentType]  # same
@@ -2007,6 +2032,7 @@ class RustCore(
     def retire(self) -> None:
         """``_core_discard``: only the router's global registrations go; it keeps serving calls."""
         untrack_live_registry(self._hosted)
+        self._hosted.retire_shared_capabilities()
         self._retire_callbacks()
         if self._hosted.strategies is not None:
             self._hosted.strategies.retire()
@@ -2425,6 +2451,7 @@ class RustCore(
         messages: object = None,
         input: object = None,
         health_check_probe: bool = False,
+        batch_upload: bool = False,
         **_: object,  # kwargs-ok: the RouterCore select options this core ignores
     ) -> Mapping[str, object] | Sequence[Mapping[str, object]]:
         """Pick a deployment for ``model`` without calling it (``pick``), list the deployments a
@@ -2443,6 +2470,7 @@ class RustCore(
             messages,
             input,
             probe=kind == "healthy" and health_check_probe,
+            batch_upload=batch_upload,
         )
         # A pick that makes no call holds no least-busy reservation (`select` on the Python core).
         with picks_reserve(False):
@@ -2700,6 +2728,7 @@ class RustCore(
         fields: dict[str, object] = {"model": model}  # mutable-ok: built up below, later keys win  # rebind-ok: same
         fields.update(self._routing_fields(prepared, plan.pick_input(prepared)[0]))
         fields.update(pinned_video_deployment(plan, request))
+        fields.update(pinned_vector_store_file_deployment(plan, request))
         fields.update(unrouted_fields(plan))
         fields.update(failover_fields(plan))
         fields.update(scoped_fallback_fields(plan, request))
@@ -2745,8 +2774,9 @@ class RustCore(
             **({"web_search": True} if web_search else {}),
             **({"route_handler": handler} if serves_route_capability(handler) else {}),
             **({"decisions_media": True} if decisions_media else {}),
-            # `batch_create_routing`: a batch create keeps to the deployments that can run batches.
-            **({"batch_create": True} if plan.kind == "batch" else {}),
+            # `batch_create_routing`: a batch create and its file upload keep to the deployments that can run batches.
+            **({"batch_create": True} if _routes_as_batch_create(plan, request) else {}),
+            **({"batch_upload": True} if plan.kind == "create_file" and is_batch_upload(request) else {}),
             # `deployments_admitting_embedding_batch`: an embedding keeps to the deployments admitting its input.
             **({"embedding_batch": True} if plan.kind == "embedding" else {}),
         }
@@ -4032,6 +4062,7 @@ class _Selection:
         input: object,
         *,
         probe: bool = False,
+        batch_upload: bool = False,
     ) -> None:
         self._core: Final = core
         # `_async_get_available_deployment` reads the alias map first, every other pick its names.
@@ -4063,6 +4094,9 @@ class _Selection:
             fields["endpoint"] = endpoint
         if probe:
             fields["health_check_probe"] = True
+        if batch_upload:
+            fields["batch_create"] = True
+            fields["batch_upload"] = True
         if kind in ("pick", "async_pass_through") or (kind == "sync_pick" and core._custom_strategy is not None):  # pyright: ignore[reportPrivateUsage]  # the selection serves its own core
             fields["pre_routes"] = True
         self._specific_deployment: Final = specific_deployment
@@ -4274,6 +4308,10 @@ def _narrowing_fields(request: dict[str, object], kind: str) -> Mapping[str, obj
     for key in ("_target_order", "_excluded_deployment_ids", "_retry_skipped_deployment_ids"):
         request.pop(key, None)
     return fields
+
+
+def _routes_as_batch_create(plan: Plan, request: Mapping[str, object]) -> bool:
+    return plan.kind == "batch" or (plan.kind == "create_file" and is_batch_upload(request))
 
 
 def _request_narrowing(request: Mapping[str, object]) -> Mapping[str, object]:
@@ -5078,8 +5116,11 @@ class _Driver:
     def _tracks_usage(self, call: "AttemptCall", response: object, deferred: bool) -> bool:
         """Whether the attempt counts against its deployment's usage (``_deployment_tracks_usage``). A
         ``None`` response counts nothing (``increment_deployment_usage_for_response``), and an attempt
-        that reports no success then is a realtime session, which logs none to count it either."""
+        that reports no success then is a realtime session, which logs none to count it either. A
+        Responses socket whose finished turns each counted their own request adds none at close."""
         if deferred and response is None:
+            return False
+        if turns_counted_their_requests(call.kwargs):
             return False
         model: Final = call.kwargs.get("model")
         return self._core.deployment_tracks_usage(
@@ -5402,6 +5443,11 @@ class _Driver:
                 return False
             if not await ctx.fallback_budget_allowed(model=target, request_kwargs=request):
                 self._walk.targets().record_skip(target, FallbackSkipReason.OVER_BUDGET)
+                return False
+            if target not in self._walk.targets() and not await ctx.fallback_rate_limit_allowed(
+                model=target, request_kwargs=request
+            ):
+                self._walk.targets().record_skip(target, FallbackSkipReason.RATE_LIMITED)
                 return False
         except Exception as error:  # noqa: BLE001  # handed to the Rust call loop, which ends the chain
             self._level_errors[self._level + 1] = error
