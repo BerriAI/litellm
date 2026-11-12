@@ -3,8 +3,8 @@ from typing import Final
 import pytest
 
 import litellm
-from litellm.litellm_core_utils.llm_cost_calc.utils import CostCalculatorUtils
 from litellm.litellm_core_utils.core_helpers import set_provider_response_headers_in_hidden_params
+from litellm.litellm_core_utils.llm_cost_calc.utils import CostCalculatorUtils
 from litellm.llms.fal_ai.cost_calculator import FAL_BILLABLE_UNITS_HEADER, cost_calculator, fal_ai_passthrough_cost
 from litellm.types.utils import ImageObject, ImageResponse
 
@@ -329,7 +329,7 @@ def _image_response_with_headers(headers: dict[str, str], num_images: int = 1) -
 
 
 @pytest.mark.parametrize("model", BILLABLE_UNIT_MODELS)
-def test_reported_billable_units_set_the_cost_over_the_per_image_price(model):
+def test_reported_billable_units_set_the_cost_over_the_per_image_price(model: str) -> None:
     unit_price: Final = litellm.model_cost[f"fal_ai/{model}"]["output_cost_per_billable_unit"]
     cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
         model=model,
@@ -342,7 +342,7 @@ def test_reported_billable_units_set_the_cost_over_the_per_image_price(model):
 
 @pytest.mark.parametrize("headers", [{}, {FAL_BILLABLE_UNITS_HEADER: "nan"}, {FAL_BILLABLE_UNITS_HEADER: "-1"}])
 @pytest.mark.parametrize("model", BILLABLE_UNIT_MODELS)
-def test_unusable_billable_units_fall_back_to_the_resolution_price(model, headers):
+def test_unusable_billable_units_fall_back_to_the_resolution_price(model: str, headers: dict[str, str]) -> None:
     entry: Final = litellm.model_cost[f"fal_ai/{model}"]
     cost: Final = cost_calculator(
         model=f"fal_ai/{model}",
@@ -352,7 +352,7 @@ def test_unusable_billable_units_fall_back_to_the_resolution_price(model, header
     assert cost == 2 * entry["output_cost_per_image_2K"] > 0
 
 
-def test_billable_units_are_ignored_without_a_unit_price():
+def test_billable_units_are_ignored_without_a_unit_price() -> None:
     entry: Final = litellm.model_cost["fal_ai/fal-ai/nano-banana-2"]
     assert "output_cost_per_billable_unit" not in entry
     cost: Final = cost_calculator(
@@ -363,7 +363,7 @@ def test_billable_units_are_ignored_without_a_unit_price():
     assert cost == entry["output_cost_per_image"]
 
 
-def test_billable_unit_price_scales_the_reported_units(monkeypatch):
+def test_billable_unit_price_scales_the_reported_units(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(
         litellm.model_cost,
         "fal_ai/fal-ai/megapixel-billed-model",
@@ -376,10 +376,33 @@ def test_billable_unit_price_scales_the_reported_units(monkeypatch):
     assert cost == pytest.approx(0.006)
 
 
-def test_deployment_price_overrides_reported_billable_units():
+def test_deployment_price_overrides_reported_billable_units() -> None:
     cost: Final = cost_calculator(
         model="fal_ai/google/nano-banana-2.1",
         image_response=_image_response_with_headers({FAL_BILLABLE_UNITS_HEADER: "0.5"}, num_images=2),
         model_info={"output_cost_per_image": 0.01},
     )
     assert cost == pytest.approx(0.02)
+
+
+@pytest.mark.parametrize(
+    ("deployment_prices", "headers", "expected"),
+    [
+        ({"output_cost_per_billable_unit": 2.0}, {FAL_BILLABLE_UNITS_HEADER: "0.5"}, 1.0),
+        (
+            {"output_cost_per_billable_unit": 2.0, "output_cost_per_image": 0.01},
+            {FAL_BILLABLE_UNITS_HEADER: "0.5"},
+            1.0,
+        ),
+        ({"output_cost_per_billable_unit": 2.0, "output_cost_per_image": 0.01}, {}, 0.02),
+    ],
+)
+def test_deployment_unit_price_replaces_the_catalog_unit_price(
+    deployment_prices: dict[str, float], headers: dict[str, str], expected: float
+) -> None:
+    cost: Final = cost_calculator(
+        model="fal_ai/google/nano-banana-2.1",
+        image_response=_image_response_with_headers(headers, num_images=2),
+        model_info=deployment_prices,
+    )
+    assert cost == pytest.approx(expected)

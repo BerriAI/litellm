@@ -164,8 +164,8 @@ def _billable_units(response: object) -> float | None:
     return units if isfinite(units) and units >= 0 else None
 
 
-def _billable_units_cost(entry: Mapping[str, object] | None, response: object) -> float | None:
-    unit_cost: Final = None if entry is None else entry.get("output_cost_per_billable_unit")
+def _billable_units_cost(prices: Mapping[str, object] | None, response: object) -> float | None:
+    unit_cost: Final = None if prices is None else prices.get("output_cost_per_billable_unit")
     units: Final = _billable_units(response)
     if isinstance(unit_cost, bool) or not isinstance(unit_cost, (int, float)) or units is None:
         return None
@@ -209,6 +209,9 @@ def cost_calculator(
     normalized_model: Final = model.removeprefix(f"{litellm.LlmProviders.FAL_AI.value}/")
     images: Final = tuple(image_response.data or ())
     deployment_prices: Final = deployment_pricing(model_info)
+    deployment_billable_units_cost: Final = _billable_units_cost(deployment_prices, image_response)
+    if deployment_billable_units_cost is not None:
+        return deployment_billable_units_cost
     deployment_cost_per_image: Final = (
         None if deployment_prices is None else deployment_prices.get("output_cost_per_image")
     )
