@@ -54217,6 +54217,8 @@ export interface operations {
         parameters: {
             query?: {
                 api_key_limit?: number;
+                /** @description Include per-entity usage and key counts. */
+                include_entity_breakdown?: boolean;
                 agent_ids?: string | null;
                 start_date?: string | null;
                 end_date?: string | null;
@@ -59905,6 +59907,8 @@ export interface operations {
         parameters: {
             query?: {
                 api_key_limit?: number;
+                /** @description Include per-entity usage and key counts. */
+                include_entity_breakdown?: boolean;
                 end_user_ids?: string | null;
                 start_date?: string | null;
                 end_date?: string | null;
@@ -60962,6 +60966,8 @@ export interface operations {
         parameters: {
             query?: {
                 api_key_limit?: number;
+                /** @description Include per-entity usage and key counts. */
+                include_entity_breakdown?: boolean;
                 end_user_ids?: string | null;
                 start_date?: string | null;
                 end_date?: string | null;
@@ -70581,6 +70587,8 @@ export interface operations {
         parameters: {
             query?: {
                 api_key_limit?: number;
+                /** @description Include per-entity usage and key counts. */
+                include_entity_breakdown?: boolean;
                 organization_ids?: string | null;
                 start_date?: string | null;
                 end_date?: string | null;
@@ -76853,6 +76861,8 @@ export interface operations {
         parameters: {
             query?: {
                 api_key_limit?: number;
+                /** @description Include per-entity usage and key counts. */
+                include_entity_breakdown?: boolean;
                 start_date?: string | null;
                 end_date?: string | null;
                 model?: string | null;
@@ -77543,6 +77553,8 @@ export interface operations {
         parameters: {
             query?: {
                 api_key_limit?: number;
+                /** @description Include per-entity usage and key counts. */
+                include_entity_breakdown?: boolean;
                 team_ids?: string | null;
                 start_date?: string | null;
                 end_date?: string | null;
@@ -79966,6 +79978,8 @@ export interface operations {
         parameters: {
             query?: {
                 api_key_limit?: number;
+                /** @description Include per-entity usage and key counts. */
+                include_entity_breakdown?: boolean;
                 /** @description Start date in YYYY-MM-DD format */
                 start_date?: string | null;
                 /** @description End date in YYYY-MM-DD format */
