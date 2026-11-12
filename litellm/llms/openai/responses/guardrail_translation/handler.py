@@ -270,6 +270,15 @@ _TERMINAL_ENVELOPE_EVENT_TYPES: Final = frozenset(
 
 
 _TOOL_CALL_ITEM_TYPES: Final = frozenset({"function_call", "custom_tool_call"})
+# Every output item the client acts on, as the Responses stream iterator classes them. Wider than the items
+# whose payload a guardrail scans.
+_CLIENT_RUN_TOOL_CALL_ITEM_TYPES: Final = _TOOL_CALL_ITEM_TYPES | {
+    "mcp_approval_request",
+    "computer_call",
+    "local_shell_call",
+    "shell_call",
+    "apply_patch_call",
+}
 _TOOL_SEARCH_CALL_TYPE: Final = "tool_search_call"
 _WEB_SEARCH_CALL_TYPE: Final = "web_search_call"
 _ITEM_ID_KEYED_TOOL_CALL_TYPES: Final = frozenset({_TOOL_SEARCH_CALL_TYPE, _WEB_SEARCH_CALL_TYPE})
@@ -1819,6 +1828,12 @@ class OpenAIResponsesHandler(BaseTranslation):
         incomplete: Final = ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE.value
         envelope: Final = {"type": incomplete, "response": response}
         return (*responses_so_far, envelope)
+
+    def starts_client_tool_call(self, item: object) -> bool:
+        return self._has_streamed_tool_call_events((item,)) or (
+            stream_item_field(item, "type") in _OUTPUT_ITEM_EVENT_TYPES
+            and stream_item_field(stream_item_field(item, "item"), "type") in _CLIENT_RUN_TOOL_CALL_ITEM_TYPES
+        )
 
     @staticmethod
     def _has_streamed_tool_call_events(responses_so_far: Sequence[object]) -> bool:

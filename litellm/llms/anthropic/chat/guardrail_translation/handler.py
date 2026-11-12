@@ -2068,6 +2068,18 @@ class AnthropicMessagesHandler(BaseTranslation):
             return tuple(responses_so_far)
         return (*responses_so_far, _RELEASED_TOOL_USE_STOP)
 
+    def starts_client_tool_call(self, item: object) -> bool:
+        return bool(self._streamed_tool_use_fingerprints((item,)))
+
+    def split_whole_stream_frames(self, carried: object | None, item: object) -> tuple[object | None, object | None]:
+        """Native ``/v1/messages`` relays raw transport reads, so an SSE event can arrive split across two."""
+        from litellm.proxy.common_utils.sse_keepalive import split_complete_sse_frames
+
+        if not isinstance(item, bytes):
+            return item, carried
+        whole, rest = split_complete_sse_frames((carried if isinstance(carried, bytes) else b"") + item)
+        return whole or None, rest or None
+
     @classmethod
     def _streamed_tool_use_fingerprints(cls, responses_so_far: Sequence[object]) -> tuple[str, ...]:
         return tuple(

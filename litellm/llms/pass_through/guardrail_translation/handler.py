@@ -353,6 +353,10 @@ class LlmPassthroughRouteHandler(BaseTranslation):
         translation: Final = self._event_stream_translation(responses_so_far)
         return translation.get_streaming_scan_key(responses_so_far) if translation is not None else None
 
+    def starts_client_tool_call(self, item: object) -> bool:
+        translation: Final = self._event_stream_translation((item,))
+        return translation is not None and translation.starts_client_tool_call(item)
+
     def needs_ended_stream_scan(self, guardrail: "CustomGuardrail", responses_so_far: Sequence[object]) -> bool:
         translation: Final = self._event_stream_translation(responses_so_far)
         return translation is not None and translation.needs_ended_stream_scan(guardrail, responses_so_far)

@@ -218,6 +218,17 @@ class BaseTranslation(ABC):
         text, because this translation hands that guardrail marks only the ended round carries."""
         return False
 
+    def starts_client_tool_call(self, item: object) -> bool:
+        """Whether this one stream item starts or carries a tool call the client runs. Read from the item alone,
+        so holding tool calls for a guardrail's end-of-stream verdict never re-walks the stream."""
+        return False
+
+    def split_whole_stream_frames(self, carried: object | None, item: object) -> tuple[object | None, object | None]:
+        """Cut a stream item at the last frame boundary of the wire format. Returns the whole frames in ``carried``
+        plus ``item`` (None while no frame has completed) and the unterminated rest to carry into the next item
+        (None when ``item`` ends on a boundary). A stream whose items are whole events keeps ``item`` as it is."""
+        return item, carried
+
     def released_stream_as_ended(self, responses_so_far: Sequence[object]) -> tuple[object, ...]:
         """The chunks a client left the stream with, closed the way this endpoint ends a stream, so the
         end-of-stream scan also inspects tool calls the stream never finished"""

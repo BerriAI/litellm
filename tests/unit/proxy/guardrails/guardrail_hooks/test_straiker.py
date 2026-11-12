@@ -151,6 +151,8 @@ def test_litellm_streaming_hook_reads_the_flags_stream_mode_sets(stream_mode, bu
     # that never reached the hook would fail the assertion.
     assert hook.resolve_streaming_flag(g, "streaming_buffer_until_moderated", not buffered) is buffered
     assert hook.resolve_streaming_flag(g, "streaming_end_of_stream_only", False) is True
+    # Only a live stream needs its tool calls held for the verdict: a buffered one holds everything.
+    assert hook.resolve_streaming_flag(g, "streaming_hold_tool_calls", buffered) is not buffered
 
 
 def test_streaming_flags_not_configurable():
