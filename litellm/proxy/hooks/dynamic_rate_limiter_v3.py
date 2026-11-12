@@ -67,7 +67,8 @@ class _SettlementMetadata(BaseModel):
 
 
 def _usage_of(response_obj: object) -> Usage | None:
-    return get_usage_object(response_obj)
+    usage: Final = getattr(response_obj, "usage", None)
+    return usage if isinstance(usage, Usage) else get_usage_object(response_obj)
 
 
 TEAM_MODEL_LIMIT_AT_SATURATION: Final = "model_per_team_saturated"
