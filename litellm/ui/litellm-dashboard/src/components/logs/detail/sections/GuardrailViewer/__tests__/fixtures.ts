@@ -32,6 +32,8 @@ export interface GuardrailInformation {
   guardrail_cost?: number;
   guardrail_cost_in_spend?: boolean;
   guardrail_provider?: string;
+  classification?: Record<string, unknown> | string;
+  match_details?: Array<{ type: string; detection_method?: string; action_taken?: string }> | string;
 }
 
 // ===== Builders =====
