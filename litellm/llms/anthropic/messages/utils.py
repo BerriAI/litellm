@@ -59,31 +59,32 @@ def openai_strict_json_schema(schema: object) -> object:
     """
     source: Final = object_mapping(schema)
     if source is None:
-        return schema
+        return copy.deepcopy(schema)
     properties: Final = object_mapping(source.get("properties"))
-    closed_object: Final[Mapping[str, object]] = (
-        {
-            "properties": {name: openai_strict_json_schema(prop) for name, prop in properties.items()},
-            "required": list(properties),
-            "additionalProperties": False,
-        }
+    closing: Final[Mapping[str, object]] = (
+        {"required": list(properties), "additionalProperties": False}
         if source.get("type") == "object" and properties is not None
         else {}
     )
-    items: Final[Mapping[str, object]] = (
-        {"items": openai_strict_json_schema(source["items"])} if "items" in source else {}
-    )
-    variants: Final[Mapping[str, object]] = {
-        key: [openai_strict_json_schema(variant) for variant in subschemas]
-        for key in _SUBSCHEMA_LIST_KEYWORDS
-        if (subschemas := _json_array(source.get(key))) is not None
-    }
-    definitions: Final[Mapping[str, object]] = {
-        key: {name: openai_strict_json_schema(definition) for name, definition in defs.items()}
-        for key in _SUBSCHEMA_MAP_KEYWORDS
-        if (defs := object_mapping(source.get(key))) is not None
-    }
-    return {**copy.deepcopy(dict(source)), **closed_object, **items, **variants, **definitions}
+    return {**{key: _strict_subschema(key, value) for key, value in source.items()}, **closing}
+
+
+def _strict_subschema(key: str, value: object) -> object:
+    if key == "items":
+        return openai_strict_json_schema(value)
+    if key == "properties" or key in _SUBSCHEMA_MAP_KEYWORDS:
+        named: Final = object_mapping(value)
+        return (
+            copy.deepcopy(value)
+            if named is None
+            else {name: openai_strict_json_schema(subschema) for name, subschema in named.items()}
+        )
+    if key in _SUBSCHEMA_LIST_KEYWORDS:
+        variants: Final = _json_array(value)
+        return (
+            copy.deepcopy(value) if variants is None else [openai_strict_json_schema(variant) for variant in variants]
+        )
+    return copy.deepcopy(value)
 
 
 class _ClaudeCodeUserId(LiteLLMBaseModel):
