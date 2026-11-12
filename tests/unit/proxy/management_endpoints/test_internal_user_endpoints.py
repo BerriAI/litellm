@@ -50,6 +50,18 @@ from tests.unit.proxy.management_endpoints.jwt_key_mapping_doubles import (
 client = TestClient(app)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("binding", ["customer_org_id", "customer_team_id", "customer_member_id"])
+async def test_new_user_cannot_mint_customer_bound_keys_without_proxy_admin(binding: str) -> None:
+    with pytest.raises(HTTPException) as caught:
+        await new_user(
+            data=NewUserRequest(metadata={binding: "another-customer"}),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER),
+        )
+    assert caught.value.status_code == 403
+    assert caught.value.detail == "Only proxy admins can change a key's customer organization, team, or member binding."
+
+
 @pytest.mark.parametrize("user_id", ["", " \t\n", "user\x00id", 123, True, [], {}])
 def test_new_user_rejects_invalid_custom_id(user_id: object) -> None:
     with pytest.raises(ValidationError) as exc:

@@ -82,6 +82,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (  # noq
     generate_key_helper_fn,
     prepare_metadata_fields,
     raise_on_logging_credential_change,
+    validated_customer_key_metadata,
 )
 from litellm.proxy.management_helpers.bulk_user_deletion import delete_users_from_current_teams
 from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
@@ -560,6 +561,8 @@ async def new_user(
      }'
     ```
     """
+    if data.auto_create_key and isinstance(user_api_key_dict, UserAPIKeyAuth):
+        validated_customer_key_metadata(data.metadata, None, user_api_key_dict)
     try:
         from litellm.proxy.proxy_server import _license_check, prisma_client
 
@@ -629,7 +632,12 @@ async def new_user(
             teams = check_if_default_team_set()
         organization_ids: Final = cast(list[str] | None, data_json.pop("organizations", None))
 
-        response: Final = await generate_key_helper_fn(request_type="user", **data_json, llm_router=None)
+        response: Final = await generate_key_helper_fn(
+            request_type="user",
+            **data_json,
+            llm_router=None,
+            actor=user_api_key_dict if isinstance(user_api_key_dict, UserAPIKeyAuth) else None,
+        )
         created_user_id: Final = cast(str | None, response.get("user_id", None))
         if created_user_id is not None:
             forget_missing_user(created_user_id)
