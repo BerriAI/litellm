@@ -26,7 +26,7 @@ Open http://localhost:4000/ui, sign in as `admin` with the `LITELLM_MASTER_KEY` 
 4. **Models by task** is the heatmap. Switch between requests, mean cost and p95 latency. Grey striped cells have no evidence for that metric. `claude-haiku-5-5-fallback` is configured but has no traffic, so its column stays empty. A warning icon marks a deployment whose model metadata says it lacks a capability the task needs.
 5. Click a bubble, a row or a cell. The side sheet shows the task definition, what it includes and excludes, examples, per-model metrics and the recent requests behind it, including requests with unknown cost or latency. A cell click filters the requests to that deployment.
 6. Change the date range or pick a team (`Sample: Platform`, `Sample: Mobile`, `Sample: Data`). The URL keeps the tab, team, metric and selection, so the link is shareable.
-7. Sign in as a non-admin and the tab is not offered, the API answers 403.
+7. Sign in as an internal user and the tab is not offered. The API refuses the request too, with the proxy's usual 401 for management routes. An admin viewer can read everything but gets a 403 when trying to discover or freeze.
 
 ## Optional live flow
 

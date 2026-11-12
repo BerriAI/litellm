@@ -2200,6 +2200,7 @@ model LiteLLM_TaskObservation {
   context_text    String?
   text_hash       String?
   excluded        Boolean  @default(false)
+  inference       Boolean  @default(true)
   observed_at     DateTime @default(now())
 
   @@index([request_id])

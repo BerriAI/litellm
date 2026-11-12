@@ -22,6 +22,7 @@ def _delivery(payload: dict[str, object] | None = None, **fields: object) -> Uno
             "is_batch": False,
             "accounting_payload": {
                 "startTime": "2026-11-02T12:00:00+00:00",
+                "call_type": "anthropic_messages",
                 "spend": 0.4,
                 "model": "claude-sonnet",
                 "status": "success",
@@ -164,3 +165,13 @@ def test_feature_flag(monkeypatch, value, enabled):
     monkeypatch.setenv("LITELLM_TASK_INSIGHTS_ENABLED", value)
 
     assert task_insights_enabled() is enabled
+
+
+def test_a_failed_management_request_is_observed_but_never_counted_as_traffic():
+    management = observe(
+        _delivery({"call_type": "/management/v1/users/me", "status": "failure", "spend": 0.0, "model": ""}), _AT
+    )
+    failed_inference = observe(_delivery({"status": "failure", "spend": 0.005}), _AT)
+
+    assert (management.excluded, management.inference) == (True, False)
+    assert (failed_inference.excluded, failed_inference.inference, failed_inference.spend) == (False, True, 0.005)

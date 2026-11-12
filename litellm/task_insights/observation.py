@@ -10,6 +10,7 @@ from pydantic import TypeAdapter, ValidationError
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.models.task_insights import TASK_INSIGHTS_ANALYSIS_TAG, TaskObservation, UnobservedDelivery
 from litellm.proxy.spend_tracking.spend_tracking_utils import user_turn_texts
+from litellm.types.utils import CallTypes
 
 MAX_REQUEST_TEXT_CHARS: Final = 2000
 MAX_CONTEXT_TEXT_CHARS: Final = 1000
@@ -17,6 +18,7 @@ MAX_CONTEXT_TEXT_CHARS: Final = 1000
 _FIELDS: Final = TypeAdapter(dict[str, object])
 _VALUES: Final = TypeAdapter(tuple[object, ...])
 _TIMESTAMP: Final = TypeAdapter(datetime)
+_INFERENCE_CALL_TYPES: Final = frozenset(call_type.value for call_type in CallTypes)
 
 
 def _mapping(value: object) -> Mapping[str, object]:
@@ -86,14 +88,18 @@ def observe(delivery: UnobservedDelivery, observed_at: datetime) -> TaskObservat
     """Every applied delivery yields exactly one observation, so a cleanup that waits for it never waits forever.
 
     A charge is kept whatever the outcome, since failed and retried attempts can be billed. Latency is kept for
-    successful attempts only, so a timeout never reads as serving speed.
+    successful attempts only, so a timeout never reads as serving speed. A delivery that is not a model call, such as
+    a failed management request logged under its route, is observed but excluded from every figure.
     """
     payload: Final = delivery.accounting_payload
     metadata: Final = _mapping(payload.get("metadata"))
     status: Final = _text(payload.get("status")) or _text(metadata.get("status"))
     model: Final = _text(payload.get("model"))
-    excluded: Final = bool(metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY)) or TASK_INSIGHTS_ANALYSIS_TAG in _tags(
-        payload.get("request_tags")
+    inference: Final = _text(payload.get("call_type")) in _INFERENCE_CALL_TYPES
+    excluded: Final = (
+        not inference
+        or bool(metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY))
+        or TASK_INSIGHTS_ANALYSIS_TAG in _tags(payload.get("request_tags"))
     )
     request_text, context_text = (None, None) if excluded else _request_texts(delivery)
     latency: Final = _number(payload.get("request_duration_ms"))
@@ -114,6 +120,7 @@ def observe(delivery: UnobservedDelivery, observed_at: datetime) -> TaskObservat
         context_text=context_text,
         text_hash=text_hash(request_text, context_text) if request_text is not None else None,
         excluded=excluded,
+        inference=inference,
     )
 
 

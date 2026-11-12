@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS "LiteLLM_TaskObservation" (
     "context_text" TEXT,
     "text_hash" TEXT,
     "excluded" BOOLEAN NOT NULL DEFAULT false,
+    "inference" BOOLEAN NOT NULL DEFAULT true,
     "observed_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "LiteLLM_TaskObservation_pkey" PRIMARY KEY ("delivery_id")
 );

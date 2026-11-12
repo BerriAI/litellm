@@ -12,7 +12,8 @@ from pydantic import TypeAdapter, ValidationError
 from litellm.models.task_insights import TASK_INSIGHTS_ANALYSIS_TAG
 from litellm.task_insights.discovery import SynthesizedTask
 
-_EMBED_BATCH: Final = 32
+# DashScope's compatible endpoint rejects more than 20 inputs per call (400 InvalidParameter, 2026-11-12).
+EMBED_BATCH_SIZE: Final = 20
 ANALYSIS_HEADERS: Final = {"x-litellm-tags": TASK_INSIGHTS_ANALYSIS_TAG}
 _SYNTHESIS: Final = TypeAdapter(SynthesizedTask)
 _INTENTS: Final = TypeAdapter(tuple[str, ...])
@@ -54,7 +55,9 @@ class GatewayEmbedder:
         return self._model
 
     async def embed(self, texts: tuple[str, ...]) -> tuple[tuple[float, ...], ...]:
-        batches: Final = tuple(texts[offset : offset + _EMBED_BATCH] for offset in range(0, len(texts), _EMBED_BATCH))
+        batches: Final = tuple(
+            texts[offset : offset + EMBED_BATCH_SIZE] for offset in range(0, len(texts), EMBED_BATCH_SIZE)
+        )
         responses: Final = tuple(
             [await self._client.embeddings.create(model=self._model, input=list(batch)) for batch in batches]
         )

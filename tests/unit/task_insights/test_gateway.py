@@ -5,7 +5,7 @@ import pytest
 from openai import AsyncOpenAI
 
 from litellm.models.task_insights import TASK_INSIGHTS_ANALYSIS_TAG
-from litellm.task_insights.gateway import ANALYSIS_HEADERS, GatewayEmbedder, GatewaySynthesizer
+from litellm.task_insights.gateway import ANALYSIS_HEADERS, EMBED_BATCH_SIZE, GatewayEmbedder, GatewaySynthesizer
 
 
 def _client(handler) -> AsyncOpenAI:
@@ -44,12 +44,15 @@ async def test_embeddings_are_batched_returned_in_input_order_and_tagged_as_anal
         ]
         return httpx.Response(200, json={"object": "list", "data": list(reversed(data)), "model": "qwen"})
 
-    texts = tuple("x" * length for length in range(1, 41))
+    texts = tuple("x" * length for length in range(1, 45))
 
     vectors = await GatewayEmbedder(_client(handler), "qwen").embed(texts)
 
     assert vectors == tuple((float(len(text)),) for text in texts)
-    assert [len(json.loads(request.content)["input"]) for request in seen] == [32, 8]
+    sizes = [len(json.loads(request.content)["input"]) for request in seen]
+    assert sum(sizes) == len(texts)
+    assert max(sizes) <= EMBED_BATCH_SIZE <= 20
+    assert len(seen) == -(-len(texts) // EMBED_BATCH_SIZE)
     assert {request.headers["x-litellm-tags"] for request in seen} == {TASK_INSIGHTS_ANALYSIS_TAG}
 
 

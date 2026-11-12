@@ -124,7 +124,7 @@ async def test_cleanup_keeps_unobserved_deliveries_only_while_task_insights_is_o
         "delivery_id": "applied",
         "request_id": "applied",
         "is_batch": False,
-        "accounting_payload": json.dumps({"startTime": "2026-11-02T12:00:00", "spend": 0.1}),
+        "accounting_payload": json.dumps({"startTime": "2026-11-02T12:00:00", "call_type": "acompletion", "spend": 0.1}),
         "turns": "[]",
     }
     analytics.query_raw = AsyncMock(side_effect=OSError("analytics down") if observation_fails else [[applied], []])

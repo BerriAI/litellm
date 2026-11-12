@@ -101,7 +101,14 @@ def _deliver(
         (
             delivery_id,
             request_id,
-            Jsonb({"request_id": request_id, "startTime": "2026-11-02T12:00:00+00:00", **payload}),
+            Jsonb(
+                {
+                    "request_id": request_id,
+                    "startTime": "2026-11-02T12:00:00+00:00",
+                    "call_type": "acompletion",
+                    **payload,
+                }
+            ),
             state,
             state,
             applied_days_ago,
@@ -503,3 +510,29 @@ async def test_empty_writes_and_lookups_touch_nothing(insights_client):
     assert await repository.decisions_by_hash(()) == {}
     assert await repository.save_decisions((), _NOW, None) == 0
     assert await repository.assigned_task_names(()) == {}
+
+
+@pytest.mark.asyncio
+async def test_a_failed_management_request_is_left_out_while_a_failed_model_call_counts(
+    insights_database, insights_client
+):
+    repository = TaskInsightsRepository(insights_client)
+    _log(insights_database, "login", model="", model_id=None)
+    _deliver(
+        insights_database, "login", "login", call_type="/management/v1/users/me", status="failure", spend=0.0, model=""
+    )
+    _log(insights_database, "model-call", messages=[{"role": "user", "content": "Fix the flaky test"}])
+    _deliver(insights_database, "model-call", "model-call", status="failure", spend=0.005, model="claude-sonnet")
+
+    assert await _observe(insights_client) == 2
+
+    totals = await repository.window_totals(_WINDOW)
+    assert (totals.request_count, totals.analysis_request_count) == (1, 0)
+    volume = (await repository.task_volumes(_WINDOW))[0]
+    assert (volume.request_count, volume.spend) == (1, pytest.approx(0.005))
+    assert [request.request_id for request in await repository.pending_requests(10)] == ["model-call"]
+    ledger = AccountingDeliveryRepository(insights_client)
+    insights_database.execute(
+        'UPDATE "LiteLLM_SpendLogDelivery" SET applied_at = CURRENT_TIMESTAMP - make_interval(days => 3)'
+    )
+    assert await ledger.cleanup_applied(retention_days=1, keep_unobserved=True) == 2

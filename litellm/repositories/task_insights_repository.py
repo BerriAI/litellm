@@ -77,12 +77,13 @@ LIMIT $1::integer"""
 
 _INSERT_OBSERVATIONS: Final = """INSERT INTO "LiteLLM_TaskObservation" (delivery_id, request_id, is_batch, start_time,
     team_id, model_group, model, model_config_id, session_id, spend, latency_ms, status, request_text, context_text,
-    text_hash, excluded)
+    text_hash, excluded, inference)
 SELECT delivery_id, request_id, is_batch, start_time, team_id, model_group, model, model_config_id, session_id, spend,
-    latency_ms, status, request_text, context_text, text_hash, excluded
+    latency_ms, status, request_text, context_text, text_hash, excluded, inference
 FROM jsonb_to_recordset($1::jsonb) AS r(delivery_id text, request_id text, is_batch boolean, start_time timestamp(3),
     team_id text, model_group text, model text, model_config_id text, session_id text, spend double precision,
-    latency_ms double precision, status text, request_text text, context_text text, text_hash text, excluded boolean)
+    latency_ms double precision, status text, request_text text, context_text text, text_hash text, excluded boolean,
+    inference boolean)
 ON CONFLICT (delivery_id) DO NOTHING"""
 
 _SCOPED_CTE: Final = (
@@ -164,8 +165,8 @@ ORDER BY start_time DESC, request_id LIMIT $6::integer"""
 _WINDOW_TOTALS: Final = """SELECT COUNT(DISTINCT request_id) FILTER (WHERE NOT excluded)::bigint AS request_count,
     COUNT(*) FILTER (WHERE NOT excluded)::bigint AS delivery_count,
     COUNT(DISTINCT session_id) FILTER (WHERE NOT excluded)::bigint AS session_count,
-    COUNT(DISTINCT request_id) FILTER (WHERE excluded)::bigint AS analysis_request_count,
-    (SUM(spend) FILTER (WHERE excluded))::double precision AS analysis_spend
+    COUNT(DISTINCT request_id) FILTER (WHERE excluded AND inference)::bigint AS analysis_request_count,
+    (SUM(spend) FILTER (WHERE excluded AND inference))::double precision AS analysis_spend
 FROM "LiteLLM_TaskObservation"
 WHERE start_time >= $1::timestamp AND start_time < $2::timestamp AND ($3::text IS NULL OR team_id = $3::text)"""
 

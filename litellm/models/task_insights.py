@@ -252,3 +252,4 @@ class TaskObservation(_Frozen):
     context_text: str | None
     text_hash: str | None
     excluded: bool
+    inference: bool = True
