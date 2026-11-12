@@ -722,8 +722,9 @@ impl Core {
     }
 
     /// `async_function_with_fallbacks_common_utils` raises before looking for any fallback:
-    /// fallbacks are off, the error is a guardrail's, a bad request without
-    /// `fallback_on_unsupported_params`, or no fallback serves the error at all.
+    /// fallbacks are off, the error is a guardrail's or a stored conversation litellm cannot
+    /// replay, a bad request without `fallback_on_unsupported_params`, or no fallback serves the
+    /// error at all.
     fn raises_without_fallback(
         &self,
         snapshot: &RouterStateSnapshot,
@@ -738,6 +739,7 @@ impl Core {
         // pick raises (no Python exception stands behind it) has no fallback.
         retried_failure(error).is_none_or(|failure| {
             failure.kind == FailureKind::GuardrailIntervention
+                || failure.is_a("PreviousResponseNotReplayableError")
                 || (!snapshot.settings.fallback_on_unsupported_params
                     && is_bad_request_without_fallback(&failure))
         })
