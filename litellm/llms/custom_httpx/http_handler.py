@@ -1729,7 +1729,7 @@ class HTTPHandler:
         return self.client.send(hop.next_request, auth=None, stream=True, follow_redirects=False)
 
     def _last_redirect_hop(self, response: httpx.Response, *, follow_redirects: bool) -> httpx.Response:
-        hop = response  # rebind-ok: walks the redirect chain without recursion
+        hop = response
         for _ in range(10):
             if hop.next_request is None or not follow_redirects:
                 return hop
