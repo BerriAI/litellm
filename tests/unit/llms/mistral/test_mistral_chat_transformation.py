@@ -43,21 +43,15 @@ class TestMistralReasoningSupport:
         mistral_config = MistralConfig()
 
         # Test magistral model supports reasoning parameters
-        supported_params = mistral_config.get_supported_openai_params(
-            "mistral/magistral-medium-2506"
-        )
+        supported_params = mistral_config.get_supported_openai_params("mistral/magistral-medium-2506")
         assert "reasoning_effort" in supported_params
         assert "thinking" in supported_params
 
-        supported_params_reasoning = mistral_config.get_supported_openai_params(
-            "mistral/mistral-medium-latest"
-        )
+        supported_params_reasoning = mistral_config.get_supported_openai_params("mistral/mistral-medium-latest")
         assert "reasoning_effort" in supported_params_reasoning
         assert "thinking" not in supported_params_reasoning
 
-        supported_params_normal = mistral_config.get_supported_openai_params(
-            "mistral/mistral-large-latest"
-        )
+        supported_params_normal = mistral_config.get_supported_openai_params("mistral/mistral-large-latest")
         assert "reasoning_effort" not in supported_params_normal
         assert "thinking" not in supported_params_normal
 
@@ -189,14 +183,15 @@ class TestMistralReasoningSupport:
         ],
     )
     def test_magistral_sends_only_the_level_of_a_reasoning_effort_with_a_summary(
-        self, local_model_cost_map, reasoning_effort, sent
-    ):
+        self, local_model_cost_map: None, reasoning_effort: object, sent: str
+    ) -> None:
         import litellm
 
         optional_params: Final = litellm.get_optional_params(
             model="magistral-small-latest",
             custom_llm_provider="mistral",
             reasoning_effort=reasoning_effort,
+            drop_params=True,
         )
         assert optional_params["reasoning_effort"] == sent
 
@@ -209,21 +204,28 @@ class TestMistralReasoningSupport:
             ({"effort": 5}, True),
             ("", True),
             ("HIGH", True),
-            ("default", True),
-            ({"effort": "default"}, True),
             ({"effort": "auto"}, True),
             ({"summary": "detailed"}, False),
             ({"effort": None, "summary": "auto"}, False),
         ],
     )
-    def test_reasoning_effort_without_a_level_is_sent_as_medium(
-        self, local_model_cost_map, caplog, reasoning_effort, warned, drop_params, model
-    ):
+    def test_unusable_reasoning_effort_is_rejected_or_dropped(
+        self,
+        local_model_cost_map: None,
+        caplog: pytest.LogCaptureFixture,
+        reasoning_effort: object,
+        warned: bool,
+        drop_params: bool,
+        model: str,
+    ) -> None:
         import litellm
 
-        medium: Final = litellm.get_optional_params(
-            model=model, custom_llm_provider="mistral", reasoning_effort="medium"
-        )
+        if not drop_params:
+            with pytest.raises(litellm.UnsupportedParamsError, match="reasoning_effort"):
+                litellm.get_optional_params(
+                    model=model, custom_llm_provider="mistral", reasoning_effort=reasoning_effort
+                )
+            return
         with caplog.at_level("WARNING", logger="LiteLLM"):
             optional_params: Final = litellm.get_optional_params(
                 model=model,
@@ -231,20 +233,41 @@ class TestMistralReasoningSupport:
                 reasoning_effort=reasoning_effort,
                 drop_params=drop_params,
             )
-        assert optional_params["reasoning_effort"] == medium["reasoning_effort"]
-        assert ("Ignoring reasoning_effort=" in caplog.text) is warned
+        assert "reasoning_effort" not in optional_params
+        assert ("Dropping reasoning_effort=" in caplog.text) is warned
+
+    @pytest.mark.parametrize("reasoning_effort", ["default", {"effort": "default"}])
+    def test_default_reasoning_effort_leaves_the_level_to_mistral(
+        self, local_model_cost_map: None, reasoning_effort: object
+    ) -> None:
+        import litellm
+
+        optional_params: Final = litellm.get_optional_params(
+            model="magistral-small-latest", custom_llm_provider="mistral", reasoning_effort=reasoning_effort
+        )
+        assert "reasoning_effort" not in optional_params
 
     @pytest.mark.parametrize("model", ["magistral-small-latest", "my-magistral-finetune"])
     @pytest.mark.parametrize("drop_params", [False, True])
     @pytest.mark.parametrize("budget_tokens", ["1024", True, None])
-    def test_magistral_non_numeric_thinking_budget_is_read_as_left_out_with_a_warning(
-        self, local_model_cost_map, caplog, budget_tokens, drop_params, model
-    ):
+    def test_magistral_non_numeric_thinking_budget_is_rejected_or_dropped(
+        self,
+        local_model_cost_map: None,
+        caplog: pytest.LogCaptureFixture,
+        budget_tokens: object,
+        drop_params: bool,
+        model: str,
+    ) -> None:
         import litellm
 
-        left_out: Final = litellm.get_optional_params(
-            model=model, custom_llm_provider="mistral", thinking={"type": "enabled"}
-        )
+        if not drop_params:
+            with pytest.raises(litellm.UnsupportedParamsError, match="budget_tokens"):
+                litellm.get_optional_params(
+                    model=model,
+                    custom_llm_provider="mistral",
+                    thinking={"type": "enabled", "budget_tokens": budget_tokens},
+                )
+            return
         with caplog.at_level("WARNING", logger="LiteLLM"):
             optional_params: Final = litellm.get_optional_params(
                 model=model,
@@ -252,9 +275,9 @@ class TestMistralReasoningSupport:
                 thinking={"type": "enabled", "budget_tokens": budget_tokens},
                 drop_params=drop_params,
             )
-        assert optional_params["reasoning_effort"] == left_out["reasoning_effort"]
+        assert "reasoning_effort" not in optional_params
         assert "thinking" not in optional_params
-        assert "Ignoring thinking.budget_tokens=" in caplog.text
+        assert "Dropping thinking.budget_tokens=" in caplog.text
 
     def test_magistral_thinking_without_a_type_sends_no_reasoning_effort(self, local_model_cost_map):
         import litellm
@@ -309,9 +332,7 @@ class TestMistralReasoningSupport:
 
 def test_mistral_streaming_chunk_preserves_thinking_blocks():
     """Ensure streaming chunks keep magistral reasoning content."""
-    iterator = MistralChatResponseIterator(
-        streaming_response=iter([]), sync_stream=True, json_mode=False
-    )
+    iterator = MistralChatResponseIterator(streaming_response=iter([]), sync_stream=True, json_mode=False)
 
     streamed_chunk = {
         "id": "chunk-1",
@@ -388,9 +409,7 @@ class TestMistralParallelToolCalls:
     def test_get_supported_openai_params_includes_parallel_tool_calls(self):
         """Test that parallel_tool_calls is in supported parameters."""
         mistral_config = MistralConfig()
-        supported_params = mistral_config.get_supported_openai_params(
-            "mistral/mistral-large-latest"
-        )
+        supported_params = mistral_config.get_supported_openai_params("mistral/mistral-large-latest")
         assert "parallel_tool_calls" in supported_params
 
     def test_transform_request_preserves_parallel_tool_calls(self):
@@ -556,9 +575,7 @@ class TestMistralEmptyContentHandling:
 
         result = MistralConfig._handle_empty_content_response(response_data)
 
-        assert (
-            result["choices"][0]["message"]["content"] == "Hello, how can I help you?"
-        )
+        assert result["choices"][0]["message"]["content"] == "Hello, how can I help you?"
 
     def test_handle_empty_content_response_handles_multiple_choices(self):
         """Test that only the first choice is processed for empty content."""
@@ -799,9 +816,7 @@ def test_mistral_transform_request_hoists_tool_message_image():
             {
                 "role": "assistant",
                 "content": "",
-                "tool_calls": [
-                    {"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{}"}}
-                ],
+                "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{}"}}],
             },
             {
                 "role": "tool",

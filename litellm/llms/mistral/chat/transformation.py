@@ -11,7 +11,9 @@ from typing import TYPE_CHECKING, Final, Literal, cast, get_type_hints, overload
 
 import httpx
 
+import litellm
 from litellm._logging import verbose_logger
+from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -22,7 +24,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.reasoning_effort_utils import (
     OPAQUE_VALUE,
     reasoning_effort_from_thinking,
-    warn_ignored_reasoning,
+    warn_dropped_reasoning,
 )
 from litellm.llms.openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
@@ -62,32 +64,48 @@ def _accepted_reasoning_effort(model: str, requested: str, custom_llm_provider: 
 
 _REASONING_LEVELS: Final = frozenset(REASONING_EFFORT_ADVERTISEMENT_ORDER)
 _NON_LEVEL_EFFORT_REASON: Final = (
-    "it is not a reasoning level such as 'high', so LiteLLM sends 'medium', or the nearest level the model takes."
+    "the Mistral API takes it only as a level such as 'high', so Mistral applies its default effort."
 )
 
 
-def _requested_reasoning_level(reasoning_effort: object) -> object:
+def _reasoning_level_and_summary(reasoning_effort: object) -> tuple[object, object]:
     requested: Final = as_str_mapping(reasoning_effort)
-    return reasoning_effort if requested is None else requested.get("effort")
+    return (reasoning_effort, None) if requested is None else (requested.get("effort"), requested.get("summary"))
 
 
-def _sendable_reasoning_level(reasoning_effort: object, *, model: str, provider: str) -> str:
-    level: Final = _requested_reasoning_level(reasoning_effort)
-    if isinstance(level, str) and level in _REASONING_LEVELS:
-        return _accepted_reasoning_effort(model, level, provider)
-    if level is not None:
-        warn_ignored_reasoning("reasoning_effort", reasoning_effort, model, _NON_LEVEL_EFFORT_REASON)
-    return _accepted_reasoning_effort(model, "medium", provider)
+def _sendable_reasoning_level(reasoning_effort: object, *, model: str, provider: str, drop_params: bool) -> str | None:
+    level, summary = _reasoning_level_and_summary(reasoning_effort)
+    leaves_level_to_mistral: Final = level == "default"
+    sendable: Final = (
+        _accepted_reasoning_effort(model, level, provider)
+        if isinstance(level, str) and level in _REASONING_LEVELS
+        else None
+    )
+    if summary is None and (sendable is not None or leaves_level_to_mistral):
+        return sendable
+    if drop_params or litellm.drop_params is True:
+        if sendable is None and level is not None and not leaves_level_to_mistral:
+            warn_dropped_reasoning("reasoning_effort", reasoning_effort, model, _NON_LEVEL_EFFORT_REASON)
+        return sendable
+    raise UnsupportedParamsError(
+        message=(
+            f"{provider} does not support parameters: ['reasoning_effort'], for model={model}, "
+            "since the Mistral API takes it only as a level such as 'high', with no reasoning summary. "
+            "To drop it, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
+        ),
+        llm_provider=provider,
+        model=model,
+    )
 
 
-def _thinking_as_reasoning_effort(thinking: object, *, model: str) -> str | None:
+def _thinking_as_reasoning_effort(thinking: object, *, model: str, drop_params: bool) -> str | None:
     match thinking:
         case {"type": "disabled"}:
             return "none"
         case {"type": "adaptive"}:
             return "medium"
         case _:
-            return reasoning_effort_from_thinking(thinking, model=model)
+            return reasoning_effort_from_thinking(thinking, model=model, drop_params=drop_params)
 
 
 class MistralConfig(OpenAIGPTConfig):
@@ -208,14 +226,27 @@ class MistralConfig(OpenAIGPTConfig):
                 optional_params["extra_body"] = {"random_seed": value}
             if param == "response_format":
                 optional_params["response_format"] = value
-            if param == "reasoning_effort":
-                optional_params["reasoning_effort"] = _sendable_reasoning_level(
-                    OPAQUE_VALUE.validate_python(value), model=model, provider=self.custom_llm_provider
+            if (
+                param == "reasoning_effort"
+                and (
+                    reasoning_level := _sendable_reasoning_level(
+                        OPAQUE_VALUE.validate_python(value),
+                        model=model,
+                        provider=self.custom_llm_provider,
+                        drop_params=drop_params,
+                    )
                 )
+                is not None
+            ):
+                optional_params["reasoning_effort"] = reasoning_level
             if (
                 param == "thinking"
                 and "reasoning_effort" not in non_default_params
-                and (thinking_effort := _thinking_as_reasoning_effort(OPAQUE_VALUE.validate_python(value), model=model))
+                and (
+                    thinking_effort := _thinking_as_reasoning_effort(
+                        OPAQUE_VALUE.validate_python(value), model=model, drop_params=drop_params
+                    )
+                )
                 is not None
             ):
                 optional_params["reasoning_effort"] = _accepted_reasoning_effort(
