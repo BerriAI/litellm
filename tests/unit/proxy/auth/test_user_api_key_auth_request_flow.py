@@ -16,6 +16,7 @@ from textwrap import dedent
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
+from urllib.parse import parse_qs
 
 
 import fastapi
@@ -3044,6 +3045,69 @@ async def test_jwt_auto_register_forwards_bound_agent_id():
     assert auto_register.await_args.kwargs["agent_id"] == "canonical-agent-id"
     assert result.agent_id == "canonical-agent-id"
     assert result.api_key == "hashed-auto-key"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ("/team/list", "/model/info"))
+@pytest.mark.parametrize("jwt_override", (False, True))
+@pytest.mark.parametrize("active", (True, False))
+async def test_oauth2_info_routes_validate_introspection_request(
+    route: str, jwt_override: bool, active: bool
+) -> None:
+    import httpx
+    import jwt
+
+    token: Final = (
+        jwt.encode({"iss": "oauth-fixture", "sub": "fixture-client"}, "fixture-signing-key-for-dispatch-only")
+        if jwt_override
+        else "fixture-opaque-token+with/slash="
+    )
+    handler: Final = JWTHandler()
+    handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=DualCache(),
+        litellm_jwtauth=LiteLLM_JWTAuth(routing_overrides=[JWTRoutingOverride(iss="oauth-fixture", path="oauth2")]),
+    )
+    settings: Final = {"enable_oauth2_auth": not jwt_override, "enable_jwt_auth": True, "enforce_user_param": True}
+    request: Final = Request({"type": "http", "method": "GET", "path": route, "headers": [], "query_string": b""})
+
+    async def token_info(outbound: httpx.Request, **kwargs: object) -> httpx.Response:
+        assert str(outbound.url) == "https://oauth.fixture.test/introspect"
+        assert outbound.method == "POST"
+        assert outbound.headers["content-type"] == "application/x-www-form-urlencoded"
+        assert parse_qs(outbound.content.decode()) == {"token": [token]}
+        return httpx.Response(
+            200,
+            request=outbound,
+            json={"active": active, "sub": "oauth-user", "role": "proxy_admin"},
+        )
+
+    with (
+        patch("litellm.proxy.proxy_server.general_settings", settings),
+        patch("litellm.proxy.proxy_server.jwt_handler", handler),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.proxy_server.master_key", "sk-fixture-master"),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
+        patch.dict(
+            os.environ,
+            {
+                "OAUTH_TOKEN_INFO_ENDPOINT": "https://oauth.fixture.test/introspect",
+                "OAUTH_CLIENT_ID": "fixture-client",
+                "OAUTH_CLIENT_SECRET": "fixture-client-secret",
+                "OAUTH_USER_ID_FIELD_NAME": "sub",
+                "OAUTH_USER_ROLE_FIELD_NAME": "role",
+            },
+        ),
+        patch("httpx.AsyncClient.send", side_effect=token_info) as network,
+    ):
+        if active:
+            identity: Final = await user_api_key_auth(request=request, api_key=f"Bearer {token}")
+            assert (identity.user_id, identity.user_role) == ("oauth-user", LitellmUserRoles.PROXY_ADMIN)
+        else:
+            with pytest.raises(ProxyException, match="Token is not active"):
+                await user_api_key_auth(request=request, api_key=f"Bearer {token}")
+    assert network.call_count == 1
 
 
 class TestJWTOAuth2Coexistence:
