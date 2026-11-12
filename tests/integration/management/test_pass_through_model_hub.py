@@ -417,8 +417,10 @@ def test_hub_reads_stay_200_while_an_endpoint_is_created_and_deleted_under_load(
             results: Final = [future.result() for future in (*before, *during)]
     assert all(status == 200 for status, _count in results), results
     assert all(count in (0, 1) for _status, count in results), results
-    assert display_name not in names_of(hub_rows(gateway))
-    assert display_name not in names_of(hub_rows(peer))
+    gateway_rows: Final = eventually(lambda: hub_rows(gateway), lambda rows: display_name not in names_of(rows))
+    peer_rows: Final = eventually(lambda: hub_rows(peer), lambda rows: display_name not in names_of(rows))
+    assert display_name not in names_of(gateway_rows), gateway_rows
+    assert display_name not in names_of(peer_rows), peer_rows
 
 
 def test_hub_reads_survive_a_killed_proxy_worker(gateway: Gateway, tmp_path: Path) -> None:

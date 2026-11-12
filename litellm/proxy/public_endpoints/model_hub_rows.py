@@ -11,7 +11,7 @@ from litellm.proxy._types import PassThroughGenericEndpoint
 from litellm.types.proxy.management_endpoints.model_management_endpoints import ModelGroupInfoProxy
 
 PASS_THROUGH_MODE: Final = "passthrough"
-_SERVING_ENTRIES: Final = TypeAdapter(list[dict[str, object]])
+_SERVING_ENTRY: Final = TypeAdapter(dict[str, object])
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,9 +50,9 @@ def _serving_pass_through_endpoints() -> Iterator[PassThroughGenericEndpoint]:
     from litellm.proxy.proxy_server import proxy_config
 
     configured: Final = proxy_config.settings.get("pass_through_endpoints")
-    for entry in _SERVING_ENTRIES.validate_python(configured) if isinstance(configured, list) else ():
+    for entry in configured if isinstance(configured, list) else ():
         try:
-            yield PassThroughGenericEndpoint.model_validate(entry)
+            yield PassThroughGenericEndpoint.model_validate(_SERVING_ENTRY.validate_python(entry))
         except ValidationError:
             continue
 

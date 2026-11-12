@@ -563,6 +563,27 @@ def test_a_pass_through_endpoint_opted_into_the_hub_is_listed_under_its_display_
     ]
 
 
+@pytest.mark.parametrize("route", [MODEL_HUB_PATH, LEGACY_MODEL_HUB_PATH])
+@pytest.mark.parametrize("invalid", [None, "invalid", 17, [], {}, {"path": "/missing-target"}])
+def test_invalid_pass_through_entries_do_not_hide_valid_hub_rows(monkeypatch: pytest.MonkeyPatch, route, invalid):
+    _publish(monkeypatch, ())
+    monkeypatch.setitem(
+        proxy_config.settings,
+        "pass_through_endpoints",
+        [
+            {"path": "/first", "target": PASS_THROUGH_TARGET, "show_in_model_hub": True},
+            invalid,
+            {"path": "/last", "target": PASS_THROUGH_TARGET, "show_in_model_hub": True},
+        ],
+    )
+
+    response = client.get(route)
+
+    assert response.status_code == 200, response.text
+    rows = response.json()["data"] if route == MODEL_HUB_PATH else response.json()
+    assert rows == [_pass_through_row("/first", "/first"), _pass_through_row("/last", "/last")]
+
+
 def test_a_pass_through_row_carries_the_methods_its_route_accepts(monkeypatch: pytest.MonkeyPatch):
     _publish(monkeypatch, (_info("gpt-4o"),))
     _configure_pass_throughs(
