@@ -5891,9 +5891,11 @@ def completion(
     try:
         if base_url is not None:
             api_base = base_url
-        probe_metadata: Final = kwargs.get("litellm_metadata")
+        probe_metadata: Final = cast(  # cast-ok: untyped kwargs
+            Mapping[str, object] | None, kwargs.get("litellm_metadata")
+        )
         is_health_check_probe: Final = (
-            isinstance(probe_metadata, dict)
+            probe_metadata is not None
             and probe_metadata.get("user_api_key_hash") == LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
         )
         is_router_call: Final = not is_health_check_probe and any(
