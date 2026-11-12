@@ -612,6 +612,7 @@ class RequestRateLimiterStash:
     reserved_model: RateLimitedModel | None = None
     reserved_scopes: frozenset[tuple[str, str]] = field(default_factory=frozenset)
     fallback_models: frozenset[str] = field(default_factory=frozenset)
+    steered_from_model: str | None = None
     ptu_ceiling: PTUTeamCeiling | None = None
     ptu_reserved_tokens: int = 0
     ptu_reserved_window_identities: frozenset[ReservationWindowIdentity] = field(default_factory=frozenset)
@@ -721,7 +722,7 @@ def get_or_create_request_stash() -> RequestRateLimiterStash:
     return stash
 
 
-def claim_request_stash_for_data(data: dict) -> RequestRateLimiterStash:
+def claim_request_stash_for_data(data: Mapping[str, object]) -> RequestRateLimiterStash:
     stash: Final = get_or_create_request_stash()
     owner_call_id: Final = data.get("litellm_call_id")
     if isinstance(owner_call_id, str):
