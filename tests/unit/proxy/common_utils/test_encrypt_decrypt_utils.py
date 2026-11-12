@@ -391,6 +391,11 @@ def _raise_no_key(value: str, signing_key: str | None) -> bytes:
 
 @_needs_shared_openssl
 @pytest.mark.skipif(_hashlib.get_fips_mode() == 1, reason="this OpenSSL runs a FIPS provider")
-def test_fips_seal_refuses_an_openssl_without_a_fips_provider() -> None:
+@pytest.mark.usefixtures("fips_mode")
+def test_fips_mode_refuses_to_encrypt_on_an_openssl_without_a_fips_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", _FIPS_SALT_KEY)
+    key: Final = encrypt_decrypt_utils._fips_at_rest_key(_FIPS_SALT_KEY)
+    monkeypatch.setattr(encrypt_decrypt_utils, "_FIPS_PROPERTIES", b"fips=yes")
+    monkeypatch.setattr(encrypt_decrypt_utils, "_fips_at_rest_key", lambda signing_key: key)
     with pytest.raises(ValueError, match="OpenSSL could not run AES-256-GCM"):
-        encrypt_decrypt_utils._fips_seal_aes_gcm(bytes(32), b"sk-secret-value")
+        encrypt_value_helper("sk-secret-value")

@@ -126,9 +126,10 @@ def _fips_at_rest_key(signing_key: str) -> bytes:
     return _kbkdf_from_hex_key(signing_key, _FIPS_AT_REST_KEY_LABEL, b"")
 
 
-def _fips_seal_aes_gcm(key: bytes, plaintext: bytes) -> bytes:
-    """nonce(12) || ciphertext || tag(16) from the FIPS provider's AES-256-GCM. No nonce is passed in, so the provider
-    draws it from its own DRBG, which FIPS 140-3 IG C.H requires and cryptography's AESGCM cannot ask for."""
+def _fips_seal_aes_gcm(key: bytes, plaintext: bytes) -> bytes | None:
+    """nonce(12) || ciphertext || tag(16) from the FIPS provider's AES-256-GCM, or None when OpenSSL cannot run it. No
+    nonce is passed in, so the provider draws it from its own DRBG, which FIPS 140-3 IG C.H requires and cryptography's
+    AESGCM cannot ask for."""
     import _hashlib
 
     libcrypto: Final = ctypes.CDLL(_hashlib.__file__)
@@ -162,16 +163,15 @@ def _fips_seal_aes_gcm(key: bytes, plaintext: bytes) -> bytes:
     cipher: Final = fetch(None, b"AES-256-GCM", _FIPS_PROPERTIES)
     ctx: Final = ctx_new()
     try:
-        if (
-            not cipher
-            or not ctx
-            or init(ctx, cipher, key, None, None) != 1
-            or update(ctx, ciphertext, ctypes.byref(written), plaintext, len(plaintext)) != 1
-            or final(ctx, ciphertext, ctypes.byref(written)) != 1
-            or get_params(ctx, nonce_and_tag) != 1
-        ):
-            raise ValueError("OpenSSL could not run AES-256-GCM")
-        return nonce.raw + ciphertext.raw + tag.raw
+        sealed: Final = (
+            bool(cipher)
+            and bool(ctx)
+            and init(ctx, cipher, key, None, None) == 1
+            and update(ctx, ciphertext, ctypes.byref(written), plaintext, len(plaintext)) == 1
+            and final(ctx, ciphertext, ctypes.byref(written)) == 1
+            and get_params(ctx, nonce_and_tag) == 1
+        )
+        return nonce.raw + ciphertext.raw + tag.raw if sealed else None
     finally:
         ctx_free(ctx)
         cipher_free(cipher)
@@ -234,15 +234,16 @@ def _open_aes_gcm(sealed: bytes, signing_key: str, aad: bytes | None) -> str:
     return AESGCM(_derive_key(signing_key)).decrypt(sealed[:12], sealed[12:], aad).decode("utf-8")
 
 
-def _encrypt_aes_gcm(value: str, signing_key: str) -> str:
+def _encrypt_aes_gcm(value: str, signing_key: str) -> str | None:
     """Encrypt under AES-256-GCM and return the versioned ``v2:gcm:`` string. With general_settings.fips_mode on, the
-    key comes from the FIPS provider's KBKDF over the salt key and the nonce from the provider itself."""
+    key comes from the FIPS provider's KBKDF over the salt key and the nonce from the provider itself, and the result
+    is None when the provider cannot encrypt."""
     sealed: Final = (
         _fips_seal_aes_gcm(_fips_at_rest_key(signing_key), value.encode("utf-8"))
         if fips_mode_active()
         else _seal_aes_gcm(value=value, signing_key=signing_key, aad=None)
     )
-    return V2_GCM_PREFIX + base64.urlsafe_b64encode(sealed).decode("utf-8")
+    return None if sealed is None else V2_GCM_PREFIX + base64.urlsafe_b64encode(sealed).decode("utf-8")
 
 
 def _decrypt_aes_gcm(value: str, signing_key: str) -> str:
@@ -297,7 +298,10 @@ def encrypt_value_helper(value: object, new_encryption_key: str | None = None) -
             if _get_encryption_algorithm() == ALGO_AES_GCM:
                 # AES path: the v2:gcm: output is already a base64url string, so it
                 # is returned directly with no extra base64 wrapper.
-                return _encrypt_aes_gcm(value=value, signing_key=cast(str, signing_key))
+                encrypted: Final = _encrypt_aes_gcm(value=value, signing_key=cast(str, signing_key))
+                if encrypted is None:
+                    raise ValueError("OpenSSL could not run AES-256-GCM")
+                return encrypted
 
             encrypted_value = encrypt_value(value=value, signing_key=signing_key)
             # Use urlsafe_b64encode for URL-safe base64 encoding (replaces + with - and / with _)
