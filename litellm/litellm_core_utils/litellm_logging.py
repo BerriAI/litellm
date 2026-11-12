@@ -1028,12 +1028,12 @@ class Logging(LiteLLMLoggingBaseClass):
                 "start_time": self.start_time,
                 "stream": self.stream,
                 "user": user,
-                "call_type": str(self.call_type),
                 "litellm_call_id": self.litellm_call_id,
                 "completion_start_time": self.completion_start_time,
                 "standard_callback_dynamic_params": self.standard_callback_dynamic_params,
                 **self.optional_params,
                 **additional_params,
+                "call_type": str(self.call_type),
             }
         )
 

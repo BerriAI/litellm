@@ -351,3 +351,36 @@ async def test_update_spend_logs_drops_row_prisma_cannot_encode_and_keeps_the_re
     assert sorted(written) == ["good-1", "good-2"]
     assert prisma_client.spend_log_transactions == []
     proxy_logging_obj.failure_handler.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_update_spend_logs_drops_row_prisma_validation_rejects_and_keeps_the_rest():
+    from prisma.errors import FieldNotFoundError
+
+    prisma_client = MockPrismaClient()
+    proxy_logging_obj = create_mock_proxy_logging()
+    prisma_client.spend_log_transactions = [
+        {"request_id": "good-1", "call_type": "acompletion"},
+        {"request_id": "poison", "call_type": 5},
+        {"request_id": "good-2", "call_type": "acompletion"},
+    ]
+    written = []
+
+    async def create_many(data, skip_duplicates):
+        if any(not isinstance(row["call_type"], str) for row in data):
+            raise FieldNotFoundError(
+                {
+                    "user_facing_error": {
+                        "error_code": "P2009",
+                        "message": "Could not find field at `createManyLiteLLM_SpendLogs.data.call_type`",
+                    }
+                }
+            )
+        written.extend(row["request_id"] for row in data)
+
+    prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=create_many)
+
+    await update_spend(prisma_client, None, proxy_logging_obj)
+
+    assert sorted(written) == ["good-1", "good-2"]
+    assert prisma_client.spend_log_transactions == []

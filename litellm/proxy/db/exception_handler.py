@@ -222,6 +222,14 @@ class PrismaDBExceptionHandler:
         return type(e) is prisma.errors.DataError
 
     @staticmethod
+    def is_prisma_query_validation_error(e: Exception) -> bool:
+        """True iff prisma's query validation refused a row's value, such as a number in a text column, which fails
+        the same way on every retry."""
+        import prisma
+
+        return isinstance(e, _exception_types(prisma.errors.FieldNotFoundError))
+
+    @staticmethod
     def is_database_transport_error(e: Exception) -> bool:
         """
         Returns True only for transport/connectivity failures where a reconnect
