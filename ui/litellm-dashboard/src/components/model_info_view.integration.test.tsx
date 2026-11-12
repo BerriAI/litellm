@@ -1,3 +1,4 @@
+import { NuqsTestingAdapter } from "nuqs/adapters/testing";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -197,8 +198,11 @@ describe("ModelInfoView", () => {
     mockCredentialCreateCall.mockResolvedValue({});
   });
 
-  const wrapper = ({ children }: { children: ReactNode }) =>
-    React.createElement(QueryClientProvider, { client: queryClient }, children);
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <NuqsTestingAdapter hasMemory>
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    </NuqsTestingAdapter>
+  );
 
   it("loads Activity for the underlying model only when its tab is opened", async () => {
     vi.mocked(networking.dailyActivityAggregatedCall).mockReset().mockResolvedValue(EMPTY_DAILY_ACTIVITY_RESPONSE);

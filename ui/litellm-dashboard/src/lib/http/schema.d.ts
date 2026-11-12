@@ -1011,7 +1011,7 @@ export interface paths {
         };
         /**
          * List saved alerts
-         * @description Read saved alerts, newest first. Gateway admins and view-only admins can read. No usage queries run.
+         * @description Read saved alerts with current resource names and eight days of Usage history. Requires a gateway admin.
          */
         get: operations["list_alerts_alerts_get"];
         put?: never;
@@ -27215,18 +27215,19 @@ export interface components {
              */
             window_start: string;
         };
-        /** AlertPage */
-        AlertPage: {
+        /** AlertHistoryPoint */
+        AlertHistoryPoint: {
             /**
-             * Data
-             * @description Alerts ordered newest first.
+             * Date
+             * Format: date
+             * @description UTC day represented by this value.
              */
-            data: components["schemas"]["Alert"][];
+            date: string;
             /**
-             * Next Cursor
-             * @description Pass as cursor to fetch the next page, or null at the end.
+             * Value
+             * @description Recorded daily value in the alert metric's unit.
              */
-            next_cursor?: string | null;
+            value: number;
         };
         /**
          * AlertType
@@ -27242,6 +27243,94 @@ export interface components {
              * @enum {string}
              */
             status: "open" | "resolved" | "dismissed";
+        };
+        /** AlertView */
+        AlertView: {
+            /**
+             * Created At
+             * Format: date-time
+             * @description When the alert was first saved.
+             */
+            created_at: string;
+            /**
+             * Evidence
+             * @description Small saved snapshot explaining the alert.
+             */
+            evidence: components["schemas"]["MetricEvidence"] | components["schemas"]["DeprecationEvidence"];
+            /**
+             * History
+             * @description Current Usage values for the seven baseline days and observed day. Null if unavailable.
+             */
+            history?: components["schemas"]["AlertHistoryPoint"][] | null;
+            /**
+             * Id
+             * @description Opaque alert ID, also used as a pagination cursor.
+             */
+            id: string;
+            /**
+             * Resource Id
+             * @description Resource ID. Whole-gateway alerts use 'gateway'. Keys use their SHA-256 hash, never a secret.
+             */
+            resource_id: string;
+            /**
+             * Resource Name
+             * @description Current resource display name.
+             */
+            resource_name?: string | null;
+            /**
+             * Resource Type
+             * @description Kind of affected resource.
+             * @enum {string}
+             */
+            resource_type: "gateway" | "key" | "team" | "user" | "model";
+            /**
+             * Status
+             * @description Current review status.
+             * @enum {string}
+             */
+            status: "open" | "resolved" | "dismissed";
+            /**
+             * Type
+             * @description Built-in alert category.
+             * @enum {string}
+             */
+            type: "spend" | "traffic" | "latency" | "reliability" | "model_deprecation";
+            /**
+             * Updated At
+             * Format: date-time
+             * @description When its status last changed.
+             */
+            updated_at: string;
+            /**
+             * Updated By
+             * @description User who last changed the status.
+             */
+            updated_by?: string | null;
+            /**
+             * Window End
+             * Format: date-time
+             * @description Exclusive end of the observed window, normalized to UTC milliseconds.
+             */
+            window_end: string;
+            /**
+             * Window Start
+             * Format: date-time
+             * @description Inclusive start of the observed window, normalized to UTC milliseconds.
+             */
+            window_start: string;
+        };
+        /** AlertViewPage */
+        AlertViewPage: {
+            /**
+             * Data
+             * @description Alerts ordered newest first, with current Usage history.
+             */
+            data: components["schemas"]["AlertView"][];
+            /**
+             * Next Cursor
+             * @description Cursor for the next page, or null at the end.
+             */
+            next_cursor?: string | null;
         };
         /** AllowedVectorStoreIndexItem */
         AllowedVectorStoreIndexItem: {
@@ -54715,6 +54804,8 @@ export interface operations {
                 limit?: number;
                 /** @description next_cursor from the preceding page. */
                 cursor?: string | null;
+                /** @description Alert category, or all performance alerts. */
+                type?: ("spend" | "traffic" | "latency" | "reliability" | "model_deprecation") | "performance" | null;
             };
             header?: never;
             path?: never;
@@ -54728,7 +54819,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["AlertPage"];
+                    "application/json": components["schemas"]["AlertViewPage"];
                 };
             };
             /** @description Validation Error */
@@ -54760,7 +54851,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Alert"];
+                    "application/json": components["schemas"]["AlertView"];
                 };
             };
             /** @description Validation Error */

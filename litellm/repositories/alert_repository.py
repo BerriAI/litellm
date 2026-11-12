@@ -1,6 +1,9 @@
 import hashlib
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from contextlib import AbstractAsyncContextManager
+from datetime import date as Date
+from datetime import timedelta
 from typing import (
     TYPE_CHECKING,
     Final,
@@ -8,11 +11,101 @@ from typing import (
     cast,  # noqa: TID251  # Prisma exposes generated table actions dynamically
 )
 
-from litellm.models.alert import Alert, AlertDetection, AlertPage, AlertStatus
+from pydantic import BaseModel, ConfigDict, TypeAdapter
+from typing_extensions import LiteralString
+
+from litellm._logging import verbose_proxy_logger
+from litellm.models.alert import (
+    Alert,
+    AlertDetection,
+    AlertFilter,
+    AlertHistoryPoint,
+    AlertPage,
+    AlertResourceType,
+    AlertStatus,
+    AlertView,
+)
 from litellm.repositories.prisma_protocols import PrismaRecord, TableActions
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
+
+
+class _HistoryTransaction(Protocol):
+    async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]: ...
+
+
+class _HistoryDatabase(Protocol):
+    def tx(self, *, timeout: timedelta) -> AbstractAsyncContextManager[_HistoryTransaction]: ...
+
+
+class _HistoryRow(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    resource_name: str | None
+    date: Date | None
+    spend: float
+    requests: int
+    failed: int
+    response_ms: int
+    timed: int
+
+    def point(self, kind: str) -> AlertHistoryPoint | None:
+        if self.date is None or (kind == "latency" and not self.timed) or (kind == "reliability" and not self.requests):
+            return None
+        value: Final = {
+            "spend": self.spend,
+            "traffic": float(self.requests),
+            "latency": self.response_ms / self.timed if self.timed else 0,
+            "reliability": min(1.0, self.failed / self.requests) if self.requests else 0,
+        }[kind]
+        return AlertHistoryPoint(date=self.date, value=value)
+
+
+_HISTORY_ROWS: Final = TypeAdapter(tuple[_HistoryRow, ...])
+_HISTORY_SOURCES: Final[
+    Mapping[AlertResourceType, tuple[LiteralString, LiteralString, LiteralString, LiteralString, LiteralString]]
+] = {
+    "gateway": ('"LiteLLM_DailyModelUsage"', "'gateway'", "request_count", "", "'Gateway'"),
+    "model": ('"LiteLLM_DailyModelUsage"', "d.model_group", "request_count", "", "r.resource_id"),
+    "team": (
+        '"LiteLLM_DailyTeamSpend"',
+        "d.team_id",
+        "api_requests",
+        'LEFT JOIN "LiteLLM_TeamTable" m ON m.team_id = r.resource_id',
+        "m.team_alias",
+    ),
+    "user": (
+        '"LiteLLM_DailyUserSpend"',
+        "d.user_id",
+        "api_requests",
+        'LEFT JOIN "LiteLLM_UserTable" m ON m.user_id = r.resource_id',
+        "m.user_alias",
+    ),
+    "key": (
+        '"LiteLLM_DailyUserSpend"',
+        "d.api_key",
+        "api_requests",
+        'LEFT JOIN "LiteLLM_VerificationToken" m ON m.token = r.resource_id',
+        "m.key_alias",
+    ),
+}
+
+
+def _history_sql(scope: AlertResourceType) -> LiteralString:
+    table, resource, requests, metadata, name = _HISTORY_SOURCES[scope]
+    return f"""SELECT r.id, LEFT({name}, 1024) AS resource_name, d.date,
+        COALESCE(SUM(d.spend), 0)::float8 AS spend,
+        COALESCE(SUM(d.{requests}), 0)::bigint AS requests,
+        COALESCE(SUM(d.failed_requests), 0)::bigint AS failed,
+        COALESCE(SUM(d.total_response_time_ms), 0)::bigint AS response_ms,
+        COALESCE(SUM(d.timed_requests), 0)::bigint AS timed
+    FROM requested r
+    LEFT JOIN {table} d ON {resource} = r.resource_id AND d.date BETWEEN r.start AND r.day
+    {metadata}
+    WHERE r.resource_type = '{scope}'
+    GROUP BY r.id, LEFT({name}, 1024), d.date"""
 
 
 class AlertTransaction(Protocol):
@@ -52,6 +145,9 @@ def _alert(row: PrismaRecord) -> Alert:
 
 class AlertRepository:
     def __init__(self, prisma_client: "PrismaClient") -> None:
+        self._database: Final = cast(  # cast-ok: Prisma transaction exposes bounded raw query methods
+            _HistoryDatabase, prisma_client.writer_db
+        )
         self._table = cast(  # cast-ok: the generated Prisma client delegates typed table actions dynamically
             TableActions[PrismaRecord], prisma_client.writer_db.litellm_alert
         )
@@ -76,10 +172,17 @@ class AlertRepository:
                 raise
             return _alert(existing)
 
-    async def list(self, status: AlertStatus, limit: int, cursor: int | None) -> AlertPage:
+    async def list(
+        self, status: AlertStatus, limit: int, cursor: int | None, alert_type: AlertFilter | None = None
+    ) -> AlertPage:
         size: Final = max(1, min(limit, 100))
+        category: Final = {"not": "model_deprecation"} if alert_type == "performance" else alert_type
         rows: Final = await self._table.find_many(
-            where={"status": status, **({"id": {"lt": cursor}} if cursor is not None else {})},
+            where={
+                "status": status,
+                **({"id": {"lt": cursor}} if cursor is not None else {}),
+                **({"type": category} if category is not None else {}),
+            },
             order={"id": "desc"},
             take=size + 1,
         )
@@ -95,3 +198,49 @@ class AlertRepository:
     async def set_status(self, alert_id: int, status: AlertStatus, actor: str) -> Alert | None:
         row: Final = await self._table.update(where={"id": alert_id}, data={"status": status, "updated_by": actor})
         return None if row is None else _alert(row)
+
+    async def enrich(self, alerts: tuple[Alert, ...]) -> tuple[AlertView, ...]:
+        from prisma.errors import PrismaError
+
+        requested: Final = tuple(
+            {
+                "id": alert.id,
+                "resource_id": alert.resource_id,
+                "resource_type": alert.resource_type,
+                "day": alert.window_start.date().isoformat(),
+                "start": (alert.window_start.date() - timedelta(days=7)).isoformat(),
+            }
+            for alert in alerts
+            if alert.type != "model_deprecation"
+        )
+        if not requested:
+            return tuple(AlertView.model_validate(alert.model_dump()) for alert in alerts)
+        scopes: Final = frozenset[AlertResourceType](alert.resource_type for alert in alerts)
+        histories: Final = " UNION ALL ".join(_history_sql(scope) for scope in scopes)
+        query: Final = f"""WITH requested AS (
+            SELECT * FROM jsonb_to_recordset($1::jsonb)
+            AS r(id text, resource_id text, resource_type text, day text, start text)
+        ) {histories} ORDER BY id, date"""
+        try:
+            async with self._database.tx(timeout=timedelta(seconds=3)) as transaction:
+                await transaction.query_raw(
+                    "SELECT set_config('statement_timeout', '2s', true), set_config('work_mem', '1MB', true), "
+                    "set_config('max_parallel_workers_per_gather', '0', true)"
+                )
+                rows: Final = _HISTORY_ROWS.validate_python(await transaction.query_raw(query, json.dumps(requested)))
+            return tuple(_view(alert, rows) for alert in alerts)
+        except (PrismaError, TimeoutError, ValueError) as error:
+            verbose_proxy_logger.warning("Alert Usage history unavailable (%s)", type(error).__name__)
+            return tuple(AlertView.model_validate(alert.model_dump()) for alert in alerts)
+
+
+def _view(alert: Alert, rows: tuple[_HistoryRow, ...]) -> AlertView:
+    history: Final = tuple(row for row in rows if row.id == alert.id)
+    points: Final = tuple(point for row in history if (point := row.point(alert.type)) is not None)
+    return AlertView.model_validate(
+        {
+            **alert.model_dump(),
+            "resource_name": history[0].resource_name if history else None,
+            "history": points,
+        }
+    )
