@@ -310,7 +310,10 @@ mod tests {
             Some(TierSuffix::Batches)
         )
     )]
-    #[case::video("output_cost_per_video", key(Meter::Output(OutputUnit::Video), Band::Base, None))]
+    #[case::video(
+        "output_cost_per_video",
+        key(Meter::Output(OutputUnit::Video), Band::Base, None)
+    )]
     #[case::wall_clock("cost_per_second", key(Meter::WallClockSecond, Band::Base, None))]
     #[case::browser_open(
         "browser_open_cost_per_request",
