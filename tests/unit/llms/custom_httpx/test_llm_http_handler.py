@@ -5594,6 +5594,8 @@ def _messages_reply(message_id: str, input_tokens: int, output_tokens: int) -> d
 
 @pytest.mark.asyncio
 async def test_anthropic_agentic_follow_up_keeps_the_first_rounds_spend_row_on_its_own_id() -> None:
+    from datetime import datetime, timezone
+
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.proxy.spend_tracking.spend_tracking_utils import get_spend_logs_id
 
@@ -5603,7 +5605,7 @@ async def test_anthropic_agentic_follow_up_keeps_the_first_rounds_spend_row_on_i
         messages=request_messages,
         stream=False,
         call_type="anthropic_messages",
-        start_time=time.time(),
+        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
         litellm_call_id="first-round",
         function_id="first-round",
     )
