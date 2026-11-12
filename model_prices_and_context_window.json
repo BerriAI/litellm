@@ -1031,7 +1031,8 @@
         "output_cost_per_token": 0.0,
         "output_vector_size": 512,
         "supports_embedding_image_input": true,
-        "supports_image_input": true
+        "supports_image_input": true,
+        "deprecation_date": "2027-03-22"
     },
     "us.twelvelabs.marengo-embed-3-0-v1:0": {
         "input_cost_per_query": 7e-05,
@@ -1044,7 +1045,8 @@
         "output_cost_per_token": 0.0,
         "output_vector_size": 512,
         "supports_embedding_image_input": true,
-        "supports_image_input": true
+        "supports_image_input": true,
+        "deprecation_date": "2027-03-22"
     },
     "eu.twelvelabs.marengo-embed-3-0-v1:0": {
         "input_cost_per_query": 7e-05,
@@ -1057,7 +1059,8 @@
         "output_cost_per_token": 0.0,
         "output_vector_size": 512,
         "supports_embedding_image_input": true,
-        "supports_image_input": true
+        "supports_image_input": true,
+        "deprecation_date": "2027-03-22"
     },
     "twelvelabs.pegasus-1-2-v1:0": {
         "deprecation_date": "2027-03-22",
@@ -1211,7 +1214,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "cache_creation_input_token_cost": 3.75e-06,
-        "cache_read_input_token_cost": 3e-07
+        "cache_read_input_token_cost": 3e-07,
+        "deprecation_date": "2026-11-13"
     },
     "anthropic.claude-3-5-sonnet-20241022-v2:0": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -1229,7 +1233,8 @@
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "deprecation_date": "2026-11-13"
     },
     "anthropic.claude-3-7-sonnet-20240620-v1:0": {
         "cache_creation_input_token_cost": 4.5e-06,
@@ -1267,7 +1272,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "deprecation_date": "2026-11-13"
     },
     "anthropic.claude-3-opus-20240229-v1:0": {
         "input_cost_per_token": 1.5e-05,
@@ -12969,8 +12975,8 @@
         "supports_vision": true
     },
     "azure/whisper-1": {
-        "deprecation_date": "2027-02-26",
-        "deprecation_source": "https://management.azure.com/subscriptions/a88257a5-3323-4ef9-95bf-5681a46c9624/providers/Microsoft.CognitiveServices/locations/eastus/models?api-version=2024-10-01",
+        "deprecation_date": "2026-12-15",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "input_cost_per_second": 0.0001,
         "litellm_provider": "azure",
         "mode": "audio_transcription",
@@ -15197,7 +15203,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "cache_read_input_token_cost": 3e-07,
-        "cache_creation_input_token_cost": 3.75e-06
+        "cache_creation_input_token_cost": 3.75e-06,
+        "deprecation_date": "2026-11-13"
     },
     "bedrock/sa-east-1/meta.llama3-70b-instruct-v1:0": {
         "deprecation_date": "2027-03-30",
@@ -25930,7 +25937,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "cache_read_input_token_cost": 3e-07,
-        "cache_creation_input_token_cost": 3.75e-06
+        "cache_creation_input_token_cost": 3.75e-06,
+        "deprecation_date": "2026-11-13"
     },
     "eu.anthropic.claude-3-5-sonnet-20241022-v2:0": {
         "input_cost_per_token": 3e-06,
@@ -25948,7 +25956,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "cache_read_input_token_cost": 3e-07,
-        "cache_creation_input_token_cost": 3.75e-06
+        "cache_creation_input_token_cost": 3.75e-06,
+        "deprecation_date": "2026-11-13"
     },
     "eu.anthropic.claude-3-7-sonnet-20250219-v1:0": {
         "input_cost_per_token": 3e-06,
@@ -25967,7 +25976,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "cache_read_input_token_cost": 3e-07,
-        "cache_creation_input_token_cost": 3.75e-06
+        "cache_creation_input_token_cost": 3.75e-06,
+        "deprecation_date": "2026-11-13"
     },
     "eu.anthropic.claude-3-opus-20240229-v1:0": {
         "input_cost_per_token": 1.5e-05,
@@ -50696,7 +50706,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "cache_read_input_token_cost": 3e-07,
-        "cache_creation_input_token_cost": 3.75e-06
+        "cache_creation_input_token_cost": 3.75e-06,
+        "deprecation_date": "2026-11-13"
     },
     "us.anthropic.claude-3-5-sonnet-20241022-v2:0": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -50714,7 +50725,8 @@
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "deprecation_date": "2026-11-13"
     },
     "us.anthropic.claude-3-7-sonnet-20250219-v1:0": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -50733,7 +50745,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "deprecation_date": "2026-11-13"
     },
     "us.anthropic.claude-3-opus-20240229-v1:0": {
         "input_cost_per_token": 1.5e-05,
@@ -77880,8 +77893,8 @@
         "supports_vision": true
     },
     "azure/whisper": {
-        "deprecation_date": "2027-02-26",
-        "deprecation_source": "https://management.azure.com/subscriptions/a88257a5-3323-4ef9-95bf-5681a46c9624/providers/Microsoft.CognitiveServices/locations/eastus/models?api-version=2024-10-01",
+        "deprecation_date": "2026-12-15",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "input_cost_per_second": 0.0001,
         "litellm_provider": "azure",
         "mode": "audio_transcription",
