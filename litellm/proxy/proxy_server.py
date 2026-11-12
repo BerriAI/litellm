@@ -5859,6 +5859,16 @@ def _reload_settings_store(section: Section, store: SettingsStore, section_confi
         store["pass_through_endpoints"] = serving_pass_throughs
 
 
+def _clear_db_settings_beside_pass_through_endpoints(section: Section, store: SettingsStore) -> None:
+    stored_pass_throughs: Final = store.db_value("pass_through_endpoints")
+    store.apply_db_row(
+        section,
+        MappingProxyType({"pass_through_endpoints": stored_pass_throughs})
+        if isinstance(stored_pass_throughs, list)
+        else _EMPTY_SETTINGS_MAPPING,
+    )
+
+
 def _general_settings_row_is_readable(row: _ConfigParamValueRow | None) -> bool:
     return row is None or row.param_value is None or isinstance(row.param_value, Mapping)
 
@@ -6709,7 +6719,7 @@ class ProxyConfig:
             )
         else:
             for section, store in self._settings_stores.items():
-                store.apply_db_row(section, _EMPTY_SETTINGS_MAPPING)
+                _clear_db_settings_beside_pass_through_endpoints(section, store)
 
         config = self._config_with_resolved_settings(config)
 

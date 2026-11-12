@@ -19278,6 +19278,18 @@
       }
     }
   },
+  "passThroughModelHub": {
+    "title": "Model Hub",
+    "description": "Optionally list this endpoint on the public Model Hub page",
+    "displayName": "Display Name",
+    "displayNameCreateHint": "Shown on the Model Hub instead of the path. Example: Clinical NER",
+    "displayNameHint": "Shown on the Model Hub instead of the path",
+    "displayNamePlaceholder": "Clinical NER",
+    "show": "Show on Model Hub",
+    "showHint": "Publish this endpoint on the public Model Hub page",
+    "published": "On Model Hub",
+    "endpoint": "Endpoint:"
+  },
   "addPassThrough": {
     "validation": {
       "pathRequired": "Path is required",
@@ -20655,6 +20667,11 @@
       },
       "unnamedKey": "Unnamed key",
       "back": "Back to customers"
+    },
+    "usage": {
+      "title": "Usage",
+      "description": "Daily activity by model across this customer's keys.",
+      "error": "Could not load customer usage"
     },
     "createDialog": {
       "title": "Create customer",

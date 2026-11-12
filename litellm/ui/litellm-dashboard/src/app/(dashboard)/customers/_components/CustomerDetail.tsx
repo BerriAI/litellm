@@ -15,6 +15,7 @@ import { customerStatus, useCustomerUsage } from "./customerPortalData";
 import EditCustomerDialog from "./EditCustomerDialog";
 import StatusBadge from "./StatusBadge";
 import { customerFallbackFields, modelRateLimitFields } from "./customerForms";
+import CustomerUsageOverview from "./CustomerUsageOverview";
 
 function UsageSummary({ spend, budget }: { spend: number; budget: EndUser["litellm_budget_table"] | undefined }) {
   const { t } = useTranslation();
@@ -117,6 +118,8 @@ export default function CustomerDetail({ customerId, onBack }: { customerId: str
         </div>
       </div>
       <p className="text-xs text-muted-foreground">{t("customerPortal.common.blockHint")}</p>
+
+      <CustomerUsageOverview customerId={customerId} />
 
       {fallbackRules !== null && (
         <div className="rounded-lg border bg-card">
