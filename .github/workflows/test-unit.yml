@@ -402,6 +402,7 @@ jobs:
               tests/unit/llms/xinference
               tests/unit/llms/you_com
               tests/unit/llms/zai
+              tests/unit/llms/zoom_ai
               --ignore=tests/unit/llms/base_llm/batches/base_batches_config_test.py
             python-version: "3.12"
             workers: 4

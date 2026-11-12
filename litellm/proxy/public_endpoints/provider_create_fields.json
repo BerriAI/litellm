@@ -4454,6 +4454,24 @@
     "default_model_placeholder": "zerogpu/gpt-oss-120b"
   },
   {
+    "provider": "ZoomAI",
+    "provider_display_name": "Zoom AI Services",
+    "litellm_provider": "zoom_ai",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "Zoom AI Services API Key",
+        "placeholder": null,
+        "tooltip": "Get your credentials at https://www.zoom.ai/. Supports Zoom Scribe Fast on /v1/audio/transcriptions.",
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "zoom_ai/zoom-scribe-en"
+  },
+  {
     "provider": "CURSOR",
     "provider_display_name": "Cursor",
     "litellm_provider": "cursor",

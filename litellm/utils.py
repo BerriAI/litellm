@@ -10432,6 +10432,12 @@ class ProviderConfigManager:
             )
 
             return SonioxAudioTranscriptionConfig()
+        elif litellm.LlmProviders.ZOOM_AI == provider:
+            from litellm.llms.zoom_ai.audio_transcription.transformation import (
+                ZoomAIAudioTranscriptionConfig,
+            )
+
+            return ZoomAIAudioTranscriptionConfig()
         elif litellm.LlmProviders.VERTEX_AI == provider:
             bare_vertex_model: Final = model.removeprefix("vertex_ai/")
             if bare_vertex_model.startswith("gemini") and "transcribe" in bare_vertex_model:
