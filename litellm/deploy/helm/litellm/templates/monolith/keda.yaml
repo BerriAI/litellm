@@ -1,0 +1,3 @@
+{{- if and .Values.monolith.enabled .Values.gateway.keda.enabled }}
+{{- include "litellm.workload.keda" . }}
+{{- end }}

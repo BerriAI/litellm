@@ -20,6 +20,7 @@ from pydantic import TypeAdapter, ValidationError
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
+from litellm.llms.anthropic.messages.native import handler as python_messages
 from litellm.anthropic_interface import messages
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -32,7 +33,7 @@ from litellm.types.utils import (
     StandardLoggingPayloadErrorInformation,
     StreamingChoices,
 )
-from litellm.rust_bridge.host.model_cost import publish
+from litellm.litellm_core_utils.model_cost_table import publish
 import unittest.mock
 
 
@@ -1470,7 +1471,7 @@ async def test_native_messages_strips_replayed_provider_specific_fields_from_wir
         patch.object(httpx.AsyncClient, "send", fake_send),
         pytest.raises(litellm.exceptions.InternalServerError),
     ):
-        await litellm.anthropic.messages.acreate(
+        await python_messages.anthropic_messages(
             max_tokens=100,
             messages=messages,
             model="anthropic/claude-haiku-4-5-20251001",
@@ -2451,7 +2452,7 @@ async def test_anthropic_messages_with_extra_headers():
     mock_client.post = AsyncMock(return_value=mock_response)
 
     # Call the handler with extra_headers and our mocked client
-    response = await litellm.anthropic.messages.acreate(
+    response = await python_messages.anthropic_messages(
         messages=messages,
         api_key=api_key,
         model="claude-haiku-4-5-20251001",
@@ -2515,7 +2516,7 @@ async def test_anthropic_messages_with_thinking():
     mock_client.post = AsyncMock(return_value=mock_response)
 
     # Call the handler with extra_headers and our mocked client
-    response = await litellm.anthropic.messages.acreate(
+    response = await python_messages.anthropic_messages(
         messages=messages,
         api_key=api_key,
         model="claude-haiku-4-5-20251001",
@@ -2785,7 +2786,7 @@ async def test_anthropic_messages_strict_tools_rejection_is_sent_again_without_s
     anthropic: Final = _RejectsStrictToolsOnce()
     tool: Final = {"name": "lookup_record", "input_schema": {"type": "object"}, "strict": True}
 
-    response: Final = await litellm.anthropic_messages(
+    response: Final = await python_messages.anthropic_messages(
         max_tokens=16,
         messages=[{"role": "user", "content": "Use lookup_record to find invoice 42"}],
         model="anthropic/claude-sonnet-4-6",
@@ -2799,6 +2800,85 @@ async def test_anthropic_messages_strict_tools_rejection_is_sent_again_without_s
     assert first["tools"] == [tool]
     assert second == {**first, "tools": [{"name": "lookup_record", "input_schema": {"type": "object"}}]}
     assert _JSON_BODY.validate_python(response)["id"] == "msg_strict_retry"
+
+
+@pytest.mark.parametrize(
+    "model",
+    ("openai/gpt-5.5", "vertex_ai/claude-opus-4-8", "bedrock/anthropic.claude-opus-4-8-v1:0"),
+    ids=("chat_bridge", "vertex_native", "bedrock_native"),
+)
+def test_a_thread_continue_on_a_leg_without_message_threads_is_thread_not_found_before_any_upstream_call(
+    model: str,
+) -> None:
+    from litellm.llms.anthropic.common_utils import AnthropicError
+    from litellm.llms.anthropic.messages.native.handler import anthropic_messages_handler
+
+    with pytest.raises(AnthropicError) as raised:
+        anthropic_messages_handler(
+            max_tokens=64,
+            messages=[{"role": "user", "content": "hi"}],
+            model=model,
+            api_key="synthetic-key",
+            thread={"type": "continue", "previous_message_id": "msg_01previous"},
+        )
+    assert raised.value.status_code == 404
+    error: Final = _JSON_BODY.validate_json(raised.value.message)["error"]
+    assert isinstance(error, dict)
+    assert error["type"] == "not_found_error"
+    assert error["details"] == {"error_code": "thread_not_found"}
+
+
+@pytest.mark.parametrize(
+    "model",
+    ("openai/gpt-5.5", "vertex_ai/claude-opus-4-8", "bedrock/anthropic.claude-opus-4-8-v1:0"),
+    ids=("chat_bridge", "vertex_native", "bedrock_native"),
+)
+def test_a_thread_create_on_a_leg_without_message_threads_is_thread_unsupported_before_any_upstream_call(
+    model: str,
+) -> None:
+    from litellm.llms.anthropic.common_utils import AnthropicError
+    from litellm.llms.anthropic.messages.native.handler import anthropic_messages_handler
+
+    with pytest.raises(AnthropicError) as raised:
+        anthropic_messages_handler(
+            max_tokens=64,
+            messages=[{"role": "user", "content": "hi"}],
+            model=model,
+            api_key="synthetic-key",
+            thread={"type": "create"},
+        )
+    assert raised.value.status_code == 400
+    error: Final = _JSON_BODY.validate_json(raised.value.message)["error"]
+    assert isinstance(error, dict)
+    assert error["type"] == "invalid_request_error"
+    assert error["details"] == {"error_code": "thread_unsupported_request"}
+
+
+@pytest.mark.asyncio
+async def test_a_thread_create_on_a_native_leg_without_message_threads_is_served_without_the_thread_under_drop_params(
+    local_beta_headers_config: None,
+) -> None:
+    from litellm.llms.anthropic.messages.native import handler
+
+    captured: Final[dict[str, object]] = {}
+    response: Final = await handler.anthropic_messages(
+        max_tokens=16,
+        messages=[{"role": "user", "content": "hi"}],
+        model="bedrock/us.anthropic.claude-sonnet-5",
+        custom_llm_provider="bedrock",
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+        aws_region_name="us-east-1",
+        client=_upstream_answering_with([], captured),
+        thread={"type": "create"},
+        drop_params=True,
+    )
+
+    body: Final = captured["body"]
+    assert isinstance(body, dict)
+    assert "thread" not in body
+    assert body["messages"] == [{"role": "user", "content": "hi"}]
+    assert _JSON_BODY.validate_python(response)["id"] == "msg_1"
 
 
 @pytest.mark.asyncio

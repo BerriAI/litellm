@@ -130,8 +130,7 @@ async def systemone(request: Request):
 
 if __name__ == "__main__":
     # The port is overridable so two checkouts can run the harness at the same
-    # time; the default keeps every existing caller (run_e2e.sh, the CircleCI
-    # job, the e2e chart's sidecar) working untouched.
+    # time; the default keeps run_e2e.sh and the e2e chart's sidecar working untouched.
     #
     # The HOST is deliberately NOT configurable. Binding loopback is what makes
     # this reachable at 127.0.0.1:8090 from inside the proxy's own pod, which is
