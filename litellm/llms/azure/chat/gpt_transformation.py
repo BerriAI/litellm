@@ -16,7 +16,11 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_azure_openai_messages,
 )
-from litellm.litellm_core_utils.prompt_templates.image_handling import inline_remote_media, inline_remote_pdf_files
+from litellm.litellm_core_utils.prompt_templates.image_handling import (
+    async_inline_remote_media,
+    inline_remote_media,
+    inline_remote_pdf_files,
+)
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.chat.gpt_5_transformation import GPT_REASONING_SERIES_MARKERS
 from litellm.types.llms.azure import (
@@ -268,10 +272,10 @@ class AzureOpenAIConfig(BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         ordered_messages: Final = system_messages_first(messages) if litellm.openai_system_messages_first else messages
         stripped_messages: Final = drop_tool_reference_parts_from_tool_messages(ordered_messages)
         inlined_messages: Final = inline_remote_media(stripped_messages, should_inline=inline_remote_pdf_files)
@@ -289,6 +293,22 @@ class AzureOpenAIConfig(BaseConfig):
             **request_params,
             **sanitized_tools_update(optional_params),
         }
+
+    async def async_transform_request(
+        self,
+        model: str,
+        messages: list[AllMessageValues],  # mutable-ok: BaseConfig signature
+        optional_params: dict[str, object],  # mutable-ok: BaseConfig signature
+        litellm_params: dict[str, object],  # mutable-ok: BaseConfig signature
+        headers: dict[str, object],  # mutable-ok: BaseConfig signature
+    ) -> dict[str, object]:  # mutable-ok: BaseConfig signature
+        return self.transform_request(
+            model=model,
+            messages=await async_inline_remote_media(messages, should_inline=inline_remote_pdf_files),
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
 
     def transform_response(
         self,

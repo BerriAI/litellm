@@ -6,6 +6,7 @@ Transforms OpenAI-format requests to GigaChat format and back.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 import uuid
@@ -17,7 +18,12 @@ import httpx
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.prompt_templates.image_handling import convert_url_to_base64, remote_pdf_file_link
+from litellm.litellm_core_utils.prompt_templates.image_handling import (
+    async_inline_remote_media,
+    convert_url_to_base64,
+    inline_remote_pdf_files,
+    remote_pdf_file_link,
+)
 from litellm.litellm_core_utils.tool_fields import tool_params_without_hosted_mcp
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.gigachat.utils import convert_usage, get_api_base
@@ -348,7 +354,7 @@ class GigaChatConfig(BaseConfig):
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
         headers: Mapping[str, object],
-    ) -> dict:  # mutable-ok: request payload sent to httpx
+    ) -> dict[str, object]:  # mutable-ok: request payload sent to httpx
         """Transform OpenAI request to GigaChat format."""
         giga_messages: Final = self._transform_messages(messages)
 
@@ -374,6 +380,27 @@ class GigaChatConfig(BaseConfig):
             request_data["function_call"] = optional_params["function_call"]
 
         return request_data
+
+    @property
+    def uses_async_transform_request(self) -> bool:
+        return True
+
+    async def async_transform_request(
+        self,
+        model: str,
+        messages: list[AllMessageValues],  # mutable-ok: BaseConfig signature
+        optional_params: dict[str, object],  # mutable-ok: BaseConfig signature
+        litellm_params: dict[str, object],  # mutable-ok: BaseConfig signature
+        headers: dict[str, object],  # mutable-ok: BaseConfig signature
+    ) -> dict[str, object]:  # mutable-ok: BaseConfig signature
+        return await asyncio.to_thread(
+            self.transform_request,
+            model,
+            await async_inline_remote_media(messages, should_inline=inline_remote_pdf_files),
+            optional_params,
+            litellm_params,
+            headers,
+        )
 
     def _transform_messages(self, messages: Sequence[AllMessageValues]) -> Sequence[dict]:
         """Transform OpenAI messages to GigaChat format."""

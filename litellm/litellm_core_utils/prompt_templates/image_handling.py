@@ -216,17 +216,8 @@ def inline_remote_files(media: RemoteMedia) -> bool:
     return media.part_type == "file"
 
 
-def is_unformatted_pdf_link(url: str, image_format: str | None) -> bool:
-    lowered: Final = url.lower()
-    return not image_format and (urlparse(lowered).path.endswith(".pdf") or lowered.endswith(".pdf"))
-
-
 def inline_remote_pdf_files(media: RemoteMedia) -> bool:
-    file_format: Final = media.fields.get("format")
-    return inline_remote_files(media) and (
-        is_pdf_file_part({"type": "file", "file": media.fields})
-        or is_unformatted_pdf_link(media.url, file_format if isinstance(file_format, str) else None)
-    )
+    return inline_remote_files(media) and is_pdf_file_part({"type": "file", "file": media.fields})
 
 
 def _parse_remote_image(fields: Mapping[str, object]) -> _RemoteImage | None:

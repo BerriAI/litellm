@@ -1,13 +1,20 @@
 import asyncio
 import base64
 import copy
+import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Final
 
 import pytest
 from httpx import Request, Response
+from respx import MockRouter
 
 import litellm
+from litellm.litellm_core_utils import url_utils
 from litellm.litellm_core_utils.prompt_templates import image_handling
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     MAX_CONCURRENT_REMOTE_MEDIA_FETCHES,
@@ -18,6 +25,7 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     inline_remote_media,
 )
 from litellm.litellm_core_utils.url_utils import SSRFError
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 
 @pytest.fixture(autouse=True)
@@ -442,23 +450,28 @@ def test_inline_remote_media_inlines_every_remote_part_shape(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("file", "filename"),
+    ("link_path", "caller_fields", "filename"),
     [
-        ({"file_id": "https://docs.example/reports/q3%20summary.pdf"}, "q3 summary.pdf"),
-        ({"file_id": "https://docs.example/download?id=7"}, "document.pdf"),
-        ({"file_id": "https://docs.example/reports/q3.pdf", "filename": "caller.pdf"}, "caller.pdf"),
+        ("reports/q3%20summary.pdf", {}, "q3 summary.pdf"),
+        ("download?id=7", {}, "document.pdf"),
+        ("reports/q3.pdf", {"filename": "caller.pdf"}, "caller.pdf"),
     ],
     ids=["named_by_the_url", "url_without_a_file_name", "caller_filename_kept"],
 )
-def test_inline_remote_media_names_an_inlined_file_so_openai_shaped_apis_accept_it(monkeypatch, file, filename):
-    monkeypatch.setattr(image_handling, "convert_url_to_base64", lambda url: "data:application/pdf;base64,JVBERi0=")
-    messages: Final = [{"role": "user", "content": [{"type": "file", "file": file}]}]
+def test_inline_remote_media_names_an_inlined_file_so_openai_shaped_apis_accept_it(
+    respx_mock: MockRouter, link_path: str, caller_fields: dict[str, str], filename: str
+) -> None:
+    pdf_link: Final = f"https://docs.example/{uuid.uuid4().hex}/{link_path}"
+    respx_mock.get(pdf_link).mock(
+        return_value=Response(200, content=PDF_BODY, headers={"Content-Type": "application/pdf"})
+    )
+    messages: Final = [{"role": "user", "content": [{"type": "file", "file": {"file_id": pdf_link, **caller_fields}}]}]
 
     inlined: Final = inline_remote_media(messages, should_inline=image_handling.inline_remote_files)
 
     inlined_file: Final = inlined[0]["content"][0]["file"]
     assert "file_id" not in inlined_file
-    assert inlined_file["file_data"] == "data:application/pdf;base64,JVBERi0="
+    assert inlined_file["file_data"] == f"data:application/pdf;base64,{base64.b64encode(PDF_BODY).decode()}"
     assert inlined_file["filename"] == filename
 
 
@@ -718,3 +731,100 @@ async def test_async_inline_remote_media_raises_image_fetch_error_when_the_fetch
 
     with pytest.raises(litellm.ImageFetchError, match="Status code: 404"):
         await async_inline_remote_media([{"role": "user", "content": [{"type": "image_url", "image_url": url}]}])
+
+
+PDF_BODY: Final = b"%PDF-1.7\n" + b"0" * 4096
+
+
+@dataclass(frozen=True, slots=True)
+class _Served:
+    status: int = 200
+    content_type: str | None = "application/octet-stream"
+    body: bytes = PDF_BODY
+    respond_after: threading.Event | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _ProbeServer:
+    base_url: str
+    routes: dict[str, _Served]
+    seen: list[tuple[str, str | None]]
+
+    def serve(self, path: str, served: _Served) -> str:
+        self.routes[path] = served
+        return f"{self.base_url}{path}"
+
+
+@pytest.fixture
+def probe_server(monkeypatch):
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    monkeypatch.setattr(image_handling, "safe_get", url_utils.safe_get)
+    monkeypatch.setattr(litellm, "module_level_client", HTTPHandler())
+    monkeypatch.setattr(litellm, "module_level_aclient", AsyncHTTPHandler())
+    routes: Final[dict[str, _Served]] = {}
+    seen: Final[list[tuple[str, str | None]]] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            served = routes[self.path]
+            seen.append((self.path, self.headers.get("Range")))
+            if served.respond_after is not None:
+                served.respond_after.wait(timeout=30)
+            self.send_response(served.status)
+            if served.content_type is not None:
+                self.send_header("Content-Type", served.content_type)
+            self.send_header("Content-Length", str(len(served.body)))
+            self.end_headers()
+            self.wfile.write(served.body)
+
+        def log_message(self, *args):
+            pass
+
+    server: Final = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread: Final = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield _ProbeServer(f"http://127.0.0.1:{server.server_port}", routes, seen)
+    server.shutdown()
+    server.server_close()
+
+
+async def _until_requested(probe_server: _ProbeServer, path: str) -> None:
+    deadline: Final = time.monotonic() + 10
+    while path not in (seen_path for seen_path, _ in probe_server.seen):
+        assert time.monotonic() < deadline, f"{path} was never requested"
+        await asyncio.sleep(0.01)
+
+
+@pytest.mark.parametrize(
+    ("model", "provider_kwargs"),
+    [
+        ("azure/gpt-4.1", {"api_key": "fake-key", "api_version": "2025-04-01-preview"}),
+        ("azure_ai/gpt-4.1", {"api_key": "fake-key"}),
+        ("gigachat/GigaChat-2", {}),
+    ],
+    ids=["azure", "azure_ai", "gigachat"],
+)
+async def test_a_stalled_pdf_link_leaves_the_shared_executor_free_for_other_requests(
+    probe_server: _ProbeServer, monkeypatch: pytest.MonkeyPatch, model: str, provider_kwargs: dict[str, str]
+) -> None:
+    monkeypatch.setenv("GIGACHAT_ACCESS_TOKEN", "fake-token")
+    pdf_host_answers: Final = threading.Event()
+    pdf_path: Final = f"/{uuid.uuid4().hex}/report.pdf"
+    pdf_link: Final = probe_server.serve(pdf_path, _Served(content_type="application/pdf", respond_after=pdf_host_answers))
+    loop: Final = asyncio.get_running_loop()
+    loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+    request: Final = asyncio.create_task(
+        litellm.acompletion(
+            model=model,
+            messages=[{"role": "user", "content": [{"type": "text", "text": "summarize"}, {"type": "file", "file": {"file_id": pdf_link}}]}],
+            api_base="http://127.0.0.1:1",
+            max_retries=0,
+            **provider_kwargs,
+        )
+    )
+    try:
+        await _until_requested(probe_server, pdf_path)
+        assert await asyncio.wait_for(loop.run_in_executor(None, lambda: "served"), timeout=5) == "served"
+    finally:
+        pdf_host_answers.set()
+        await asyncio.gather(request, return_exceptions=True)
