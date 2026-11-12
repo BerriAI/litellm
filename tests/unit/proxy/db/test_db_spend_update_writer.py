@@ -5890,6 +5890,57 @@ async def test_request_error_counts_survive_the_ledger_path_switch(monkeypatch: 
     ): 1}
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", ["aresponses", "aget_responses", "acancel_responses"])
+@pytest.mark.parametrize(
+    ("security_disabled", "status", "cost", "keep_read"),
+    [
+        (False, "success", 0.0, True),
+        (True, "success", 0.0, False),
+        (True, "success", None, False),
+        (True, "success", 0.23, True),
+        (True, "failure", 0.0, True),
+    ],
+)
+async def test_unsecured_free_response_reads_leave_the_creation_spend_row_alone(
+    monkeypatch: pytest.MonkeyPatch,
+    call_type: str,
+    security_disabled: bool,
+    status: str,
+    cost: float | None,
+    keep_read: bool,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    writer: Final = DBSpendUpdateWriter()
+    prisma: Final = _tool_usage_prisma()
+    prisma.get_request_status.return_value = status
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "disable_spend_logs", False)
+    monkeypatch.setitem(proxy_server.general_settings, "disable_responses_id_security", security_disabled)
+    now: Final = datetime(2026, 11, 11, tzinfo=timezone.utc)
+    assert await writer.update_database(
+        token="test-token",
+        user_id="test-user",
+        end_user_id=None,
+        team_id=None,
+        org_id=None,
+        kwargs={
+            "model": "response-model",
+            "call_type": call_type,
+            "litellm_call_id": "read-call",
+            "litellm_params": {"metadata": {"user_api_key": "test-token", "status": status}},
+        },
+        completion_response={"id": "resp-shared"},
+        start_time=now,
+        end_time=now,
+        response_cost=cost,
+    )
+    await drain_logging_tasks()
+    expected: Final = [call_type] if call_type == "aresponses" or keep_read else []
+    assert [row["call_type"] for row in prisma.spend_log_transactions] == expected
+
+
 class _SessionTotalsRedis:
     def __init__(self) -> None:
         self.values: dict[str, float] = {}  # mutable-ok: stands in for Redis state
