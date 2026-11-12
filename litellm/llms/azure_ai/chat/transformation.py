@@ -17,6 +17,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
     routed_model_info,
 )
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     content_parts,
     convert_content_list_to_str,
@@ -28,7 +29,7 @@ from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils i
     prompt_cache_breakpoint_for_wire,
     with_prompt_cache_breakpoint,
 )
-from litellm.litellm_core_utils.reasoning_effort_capability import declared_reasoning_efforts_for_model
+from litellm.litellm_core_utils.reasoning_effort_capability import declared_reasoning_efforts
 from litellm.litellm_core_utils.reasoning_effort_strength import nearest_declared_reasoning_effort
 from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning, warn_dropped_reasoning_params
 from litellm.llms.azure.common_utils import BaseAzureLLM
@@ -148,8 +149,13 @@ def _deployment_reads_breakpoints(model: str, litellm_params: Mapping[str, objec
     )
 
 
+def _catalog_reasoning_efforts(model: str) -> tuple[str, ...] | None:
+    row: Final = GetModelCostMap.loaded_model_cost_map().get(f"azure_ai/{model}")
+    return declared_reasoning_efforts(row) if row is not None else None
+
+
 def _declares_reasoning_effort(model: str) -> bool:
-    return bool(declared_reasoning_efforts_for_model(model, "azure_ai"))
+    return bool(_catalog_reasoning_efforts(model))
 
 
 def _reasoning_effort_level(
@@ -179,7 +185,7 @@ def _declared_reasoning_effort_param(
     deployment_levels: Collection[str] | None,
     drop_params: bool,
 ) -> Mapping[str, str]:
-    model_levels: Final = declared_reasoning_efforts_for_model(model, "azure_ai")
+    model_levels: Final = _catalog_reasoning_efforts(model)
     if "reasoning_effort" not in non_default_params or not model_levels:
         return {}
     return _reasoning_effort_level(

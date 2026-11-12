@@ -13,7 +13,12 @@ from httpx import Response
 import litellm
 from litellm import Router
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
-from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
+from litellm.litellm_core_utils.get_model_cost_map import (
+    GetModelCostMap,
+    ModelCostMapReloaded,
+    get_model_cost_map,
+    install_model_cost_map,
+)
 from litellm.llms.azure_ai.azure_model_router.transformation import (
     AzureModelRouterConfig,
 )
@@ -350,19 +355,17 @@ FOUNDRY_CHAT_COMPLETION: Final = MappingProxyType(
 @pytest.fixture
 def foundry_reasoner(monkeypatch: pytest.MonkeyPatch) -> str:
     model: Final = "FW-Reasoner"
-    monkeypatch.setattr(
-        litellm,
-        "model_cost",
-        {
-            **litellm.model_cost,
-            f"azure_ai/{model}": {
-                "litellm_provider": "azure_ai",
-                "mode": "chat",
-                "supports_reasoning": True,
-                "reasoning_effort_levels": ["low", "high", "max"],
-            },
+    monkeypatch.setattr(litellm, "model_cost", litellm.model_cost)
+    catalog: Final = {
+        **GetModelCostMap.load_local_model_cost_map(),
+        f"azure_ai/{model}": {
+            "litellm_provider": "azure_ai",
+            "mode": "chat",
+            "supports_reasoning": True,
+            "reasoning_effort_levels": ["low", "high", "max"],
         },
-    )
+    }
+    assert isinstance(install_model_cost_map(json.dumps(catalog).encode()), ModelCostMapReloaded)
     monkeypatch.setattr(litellm, "drop_params", False)
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     return model
@@ -436,10 +439,27 @@ async def test_anthropic_messages_thinking_reaches_a_foundry_reasoner_as_reasoni
     assert not _find_key_anywhere(sent["messages"], "thinking_blocks")
 
 
+@pytest.mark.parametrize(
+    "registered_at_runtime",
+    [
+        pytest.param({}, id="no-row"),
+        pytest.param(
+            {
+                "azure_ai/FW-Undeclared": {
+                    "litellm_provider": "azure_ai",
+                    "mode": "chat",
+                    "reasoning_effort_levels": ["low", "high"],
+                }
+            },
+            id="levels-a-sibling-deployment-registered-on-the-shared-row",
+        ),
+    ],
+)
 @pytest.mark.asyncio
 async def test_foundry_model_without_declared_reasoning_efforts_still_refuses_reasoning_effort(
-    respx_mock: respx.MockRouter, foundry_reasoner: str
+    respx_mock: respx.MockRouter, foundry_reasoner: str, registered_at_runtime: dict[str, dict[str, object]]
 ) -> None:
+    litellm.register_model(registered_at_runtime)
     route: Final = respx_mock.post(FOUNDRY_MODELS_CHAT_URL).mock(
         return_value=Response(200, json=dict(FOUNDRY_CHAT_COMPLETION))
     )
