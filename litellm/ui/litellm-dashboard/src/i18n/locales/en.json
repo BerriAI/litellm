@@ -8165,8 +8165,7 @@
         "costTracking": "Cost Tracking",
         "uiTheme": "UI Theme",
         "telemetry": "Telemetry",
-        "customers": "Customers",
-        "chargebacks": "Chargebacks"
+        "customers": "Customers"
       },
       "homeLink": "LiteLLM home"
     },
@@ -20585,7 +20584,7 @@
   "customerPortal": {
     "switcher": {
       "label": "Customer Portal",
-      "description": "End customers, budgets and chargebacks"
+      "description": "End customers and budgets"
     },
     "status": {
       "active": "Active",
