@@ -1022,6 +1022,15 @@ def test_transcription_usage_cost_returns_zero_for_unknown_type():
     assert _transcription_usage_cost({}, {}) == 0.0
 
 
+@pytest.mark.parametrize("malformed_seconds", [-1.0, float("nan"), float("inf"), 10**1000, True])
+def test_transcription_ignores_invalid_provider_duration(malformed_seconds: float | int | bool) -> None:
+    from litellm.cost_calculator import _get_transcription_usage_duration
+
+    response: Final = SimpleNamespace(usage={"type": "duration", "seconds": malformed_seconds})
+
+    assert _get_transcription_usage_duration(response) is None
+
+
 def test_get_transcription_model_falls_back_to_session_model(monkeypatch):
     """session.model is used when transcription-specific model fields are absent."""
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
@@ -6775,6 +6784,70 @@ def test_whisper_azure():
     assert round(cost, 5) == round(expected_cost, 5)
 
 
+def _per_second_transcription(
+    monkeypatch: pytest.MonkeyPatch, provider: str, model: str, response_object: Mapping[str, object]
+) -> TranscriptionResponse:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"input_cost_per_second": 0.01, "litellm_provider": provider, "mode": "audio_transcription"},
+    )
+    return convert_to_model_response_object(
+        response_object={"text": "What is the weather in Paris?", **response_object},
+        model_response_object=TranscriptionResponse(),
+        hidden_params={"model": model, "custom_llm_provider": provider},
+        response_type="audio_transcription",
+    )
+
+
+@pytest.mark.parametrize(
+    ("provider", "model", "measured"),
+    [
+        ("openai", "whisper-fake", {}),
+        ("openai", "whisper-fake", {"_audio_transcription_duration": 2.4}),
+        ("openai", "whisper-fake", {"duration": 2.4}),
+        ("openai", "gpt-fake-transcribe", {"_audio_transcription_duration": 2.4}),
+        ("azure", "whisper-fake", {"_audio_transcription_duration": 2.4}),
+    ],
+    ids=[
+        "unmeasured_upload",
+        "measured_upload",
+        "verbose_json_duration",
+        "gpt_transcribe_model",
+        "azure",
+    ],
+)
+def test_transcription_cost_bills_the_seconds_the_provider_billed(
+    monkeypatch: pytest.MonkeyPatch, provider: str, model: str, measured: Mapping[str, float]
+) -> None:
+    transcription: Final = _per_second_transcription(
+        monkeypatch, provider, model, {"usage": {"type": "duration", "seconds": 3}, **measured}
+    )
+
+    cost: Final = completion_cost(
+        completion_response=transcription, model=f"{provider}/{model}", call_type="atranscription"
+    )
+
+    assert cost == pytest.approx(0.01 * 3)
+
+
+@pytest.mark.parametrize(
+    ("measured", "expected_seconds"),
+    [({"_audio_transcription_duration": 2.4}, 2.4), ({"duration": 2.4}, 2.4), ({}, 0.0)],
+    ids=["measured_upload", "reply_duration", "nothing_known"],
+)
+def test_transcription_cost_without_provider_seconds_bills_the_measured_length(
+    monkeypatch: pytest.MonkeyPatch, measured: Mapping[str, float], expected_seconds: float
+) -> None:
+    transcription: Final = _per_second_transcription(monkeypatch, "openai", "whisper-fake", measured)
+
+    cost: Final = completion_cost(
+        completion_response=transcription, model="openai/whisper-fake", call_type="atranscription"
+    )
+
+    assert cost == pytest.approx(0.01 * expected_seconds)
+
+
 def test_gpt_image_2_azure_cost_tracking():
     azure_image_generation_response: Final = {
         "created": 1758585600,
@@ -10195,3 +10268,39 @@ def test_bedrock_registered_cache_prices_preserve_dynamic_threshold_rates(
     assert entry is not None
     assert entry[1]["input_cost_per_token_above_300k_tokens"] == 0.03
     assert entry[1][tier_field] == (tier_override if tier_override is not None else 0.007)
+
+
+@pytest.mark.parametrize(
+    ("message_logging_off", "query_image", "echoes_response"),
+    [
+        (True, None, False),
+        (False, None, True),
+        (False, {"type": "base64", "media_type": "image/jpeg", "data": "cXVlcnk="}, False),
+    ],
+)
+def test_cost_failure_for_an_unpriced_response_echoes_only_a_text_search_response_with_message_logging_on(
+    message_logging_off: bool,
+    query_image: Mapping[str, str] | None,
+    echoes_response: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "turn_off_message_logging", message_logging_off)
+    image_data: Final = "c2VjcmV0LWltYWdlLWJ5dGVz"
+    logging_obj: Final = Logging(
+        model="",
+        messages=[],
+        stream=False,
+        call_type="avector_store_search",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="unpriced-search",
+        function_id="f",
+    )
+    logging_obj.model_call_details["query_image"] = query_image
+
+    with pytest.raises(ValueError, match="Model is None") as exc_info:
+        completion_cost(
+            completion_response={"data": [{"content": [{"source": {"data": image_data}}]}]},
+            litellm_logging_obj=logging_obj,
+        )
+
+    assert (image_data in str(exc_info.value)) is echoes_response

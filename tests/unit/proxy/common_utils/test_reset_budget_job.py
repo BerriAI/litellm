@@ -76,6 +76,33 @@ class MockTable:
         return {"count": 1}
 
 
+def _raw_reset_write(query: str, args: Sequence[object]) -> dict[str, object] | None:
+    if "CASE WHEN ABS(spend -" not in query:
+        return None
+    table, column = {
+        "LiteLLM_VerificationToken": ("key", "token"),
+        "LiteLLM_UserTable": ("user", "user_id"),
+        "LiteLLM_TeamTable": ("team", "team_id"),
+    }[query.split('"')[1]]
+    identity, reset_at, decrement, expected_reset_at, _ = args
+    assert isinstance(identity, str) and isinstance(reset_at, str) and isinstance(decrement, str)
+    assert expected_reset_at is None or isinstance(expected_reset_at, str)
+    return {
+        "table": table,
+        "op": "update_many",
+        "where": {
+            column: identity,
+            "budget_reset_at": datetime.fromisoformat(expected_reset_at).replace(tzinfo=timezone.utc)
+            if expected_reset_at is not None
+            else None,
+        },
+        "data": {
+            "spend": {"decrement": float(decrement)},
+            "budget_reset_at": datetime.fromisoformat(reset_at).replace(tzinfo=timezone.utc),
+        },
+    }
+
+
 class MockBatcher:
     """Captures the writes queued on one `db.batch_()` and whether it committed.
 
@@ -112,6 +139,11 @@ class MockBatcher:
         self.litellm_modelaccessgroupbudgettable = _Table("model_access_group", self)
         self.litellm_projecttable = _Table("project", self)
         self.litellm_endusertable = _Table("enduser", self)
+
+    def execute_raw(self, query: str, *args: object) -> None:
+        self.calls.append(
+            _raw_reset_write(query, args) or {"table": "raw", "op": "execute_raw", "query": query, "args": args}
+        )
 
     async def commit(self):
         self.committed = True
@@ -279,15 +311,15 @@ def test_write_key_reset_updates_skips_none_token_and_still_writes_the_rest(rese
 
     asyncio.run(
         reset_budget_job._write_key_reset_updates(
-            updated_keys=[_RowReset(row=k, spend_decrement=(k.spend or 0.0)) for k in keys]
+            updated_keys=[_RowReset(row=k, spend_decrement=(k.spend or 0.0), expected_reset_at=reset_at) for k in keys]
         )
     )
 
     assert _batch_writes(mock_prisma_client, "key") == [
         {
             "table": "key",
-            "op": "update",
-            "where": {"token": "tok-ok"},
+            "op": "update_many",
+            "where": {"token": "tok-ok", "budget_reset_at": reset_at},
             "data": {"spend": {"decrement": 0.0}, "budget_reset_at": reset_at},
         }
     ]
@@ -319,7 +351,7 @@ def test_reset_budget_for_key(reset_budget_job, mock_prisma_client):
     key_writes = [c for c in mock_prisma_client.db.batch_calls if c["table"] == "key"]
     assert len(key_writes) == 1
     write = key_writes[0]
-    assert write["where"] == {"token": "tok-key-1"}
+    assert write["where"] == {"token": "tok-key-1", "budget_reset_at": now}
     assert write["data"]["spend"] == {"decrement": 100.0}
     assert write["data"]["budget_reset_at"] > now
     assert set(write["data"].keys()) == {"spend", "budget_reset_at"}
@@ -399,7 +431,7 @@ def test_reset_budget_for_user(reset_budget_job, mock_prisma_client):
     user_writes = [c for c in mock_prisma_client.db.batch_calls if c["table"] == "user"]
     assert len(user_writes) == 1
     write = user_writes[0]
-    assert write["where"] == {"user_id": "uid-1"}
+    assert write["where"] == {"user_id": "uid-1", "budget_reset_at": now}
     assert write["data"]["spend"] == {"decrement": 200.0}
     assert write["data"]["budget_reset_at"] > now
     assert set(write["data"].keys()) == {"spend", "budget_reset_at"}
@@ -428,7 +460,7 @@ def test_reset_budget_for_team(reset_budget_job, mock_prisma_client):
     team_writes = [c for c in mock_prisma_client.db.batch_calls if c["table"] == "team"]
     assert len(team_writes) == 1
     write = team_writes[0]
-    assert write["where"] == {"team_id": "tid-1"}
+    assert write["where"] == {"team_id": "tid-1", "budget_reset_at": now}
     assert write["data"]["spend"] == {"decrement": 500.0}
     assert write["data"]["budget_reset_at"] > now
     assert set(write["data"].keys()) == {"spend", "budget_reset_at"}
@@ -659,9 +691,13 @@ def test_reset_budget_all(reset_budget_job, mock_prisma_client):
         ("user", {"user_id": "uid-all-1"}, 200.0),
         ("team", {"team_id": "tid-all-1"}, 500.0),
     ]:
-        writes = _batch_writes(mock_prisma_client, table_name, op="update")
+        writes = [
+            write
+            for write in _batch_writes(mock_prisma_client, table_name, op="update_many")
+            if "budget_reset_at" in write["where"]
+        ]
         assert len(writes) == 1, f"expected 1 {table_name} write, got {len(writes)}"
-        assert writes[0]["where"] == where
+        assert writes[0]["where"] == {**where, "budget_reset_at": now}
         assert writes[0]["data"]["spend"] == {"decrement": decrement}
         assert set(writes[0]["data"].keys()) == {"spend", "budget_reset_at"}
 
@@ -1816,7 +1852,6 @@ def test_enduser_invalidation_is_paged_and_batched(reset_budget_job, mock_prisma
     assert evicted == {f"end_user_id:cust-{i:06d}" for i in range(population)}
 
 
-
 def test_enduser_invalidation_reports_a_page_read_failure_instead_of_a_clean_finish(
     mock_prisma_client, monkeypatch
 ):
@@ -2355,8 +2390,8 @@ def test_key_reset_walks_the_due_rows_one_chunk_at_a_time(monkeypatch):
     assert _fetch_limits(client, "key") == [2, 2]
     assert len(client.db.batchers) == 2
     assert all(batcher.committed for batcher in client.db.batchers)
-    assert [len(batcher.calls) for batcher in client.db.batchers] == [2, 1]
-    assert [w["where"]["token"] for w in _batch_writes(client, "key", op="update")] == ["k1", "k2", "k3"]
+    assert [sum(call["op"] == "update_many" for call in batcher.calls) for batcher in client.db.batchers] == [2, 1]
+    assert [w["where"]["token"] for w in _batch_writes(client, "key", op="update_many")] == ["k1", "k2", "k3"]
 
 
 def test_key_reset_stops_after_a_chunk_shorter_than_the_batch_size(monkeypatch):
@@ -2429,7 +2464,7 @@ def test_user_and_team_resets_are_chunked_too(monkeypatch, phase, table_name, ro
     assert client.fetches_by_table[table_name] == 2
     assert _fetch_limits(client, table_name) == [2, 2]
     assert len(client.db.batchers) == 2
-    assert len(_batch_writes(client, table_name, op="update")) == 3
+    assert len(_batch_writes(client, table_name, op="update_many")) == 3
 
 
 def test_budget_table_reset_walks_chunks_until_it_runs_dry(monkeypatch):
@@ -2486,7 +2521,7 @@ def test_key_reset_stops_when_the_new_reset_time_is_not_in_the_future(monkeypatc
     asyncio.run(job.reset_budget_for_litellm_keys())
 
     assert client.fetches_by_table["key"] == 1
-    assert len(_batch_writes(client, "key", op="update")) == 2
+    assert len(_batch_writes(client, "key", op="update_many")) == 2
 
 
 def test_budget_table_reset_stops_when_the_new_window_is_not_in_the_future(monkeypatch):
@@ -2553,7 +2588,7 @@ def test_key_reset_keeps_paging_when_some_rows_in_a_chunk_fail(monkeypatch):
     _run_and_drain_hooks(job.reset_budget_for_litellm_keys)
 
     assert client.fetches_by_table["key"] == 2
-    assert [w["where"]["token"] for w in _batch_writes(client, "key", op="update")] == ["k1", "k2"]
+    assert [w["where"]["token"] for w in _batch_writes(client, "key", op="update_many")] == ["k1", "k2"]
     assert [call["call_type"] for call in logging_obj.service_logging_obj.failure_calls] == ["reset_budget_keys"]
     assert set(logging_obj.service_logging_obj.failure_calls[0]["event_metadata"]) == {"num_keys_found"}
     assert [call["call_type"] for call in logging_obj.service_logging_obj.success_calls] == ["reset_budget_keys"]
@@ -2578,7 +2613,7 @@ def test_user_and_team_chunks_report_progress_despite_a_failed_row(
     _run_and_drain_hooks(getattr(job, phase))
 
     assert client.fetches_by_table[table_name] == 2
-    assert len(_batch_writes(client, table_name, op="update")) == 2
+    assert len(_batch_writes(client, table_name, op="update_many")) == 2
     assert [call["call_type"] for call in logging_obj.service_logging_obj.failure_calls] == [call_type]
 
 
@@ -3009,7 +3044,7 @@ def test_transient_transport_error_on_read_reconnects_and_still_resets(phase, ta
     asyncio.run(getattr(job, phase)())
 
     assert client.reconnect_reasons == [reason]
-    assert len(_batch_writes(client, table_name, op="update")) == 1
+    assert len(_batch_writes(client, table_name, op="update_many")) == 1
 
 
 @pytest.mark.parametrize(
@@ -3033,7 +3068,7 @@ def test_connect_error_on_write_reconnects_and_commits(phase, table_name, reason
 
     assert client.reconnect_reasons == [reason]
     assert client.commit_attempts == 2
-    assert len(_batch_writes(client, table_name, op="update")) == 1
+    assert len(_batch_writes(client, table_name, op="update_many")) == 1
 
 
 @pytest.mark.parametrize("ambiguous_error_name", ["ReadError", "ReadTimeout"])
@@ -3065,7 +3100,7 @@ def test_ambiguous_transport_error_on_read_still_retries(ambiguous_error_name):
     asyncio.run(job.reset_budget_for_litellm_keys())
 
     assert client.reconnect_reasons == ["reset_budget_read_keys_failure"]
-    assert len(_batch_writes(client, "key", op="update")) == 1
+    assert len(_batch_writes(client, "key", op="update_many")) == 1
 
 
 def test_transport_error_on_budget_cascade_read_reconnects_and_commits():
@@ -3302,7 +3337,15 @@ def rollover_enabled(monkeypatch):
     ],
 )
 def test_direct_reset_carries_overage_when_rollover_enabled(
-    rollover_enabled, reset_budget_job, mock_prisma_client, monkeypatch, run_phase, table, id_field, id_value, row_factory
+    rollover_enabled,
+    reset_budget_job,
+    mock_prisma_client,
+    monkeypatch,
+    run_phase,
+    table,
+    id_field,
+    id_value,
+    row_factory,
 ):
     """spend=150 against max_budget=100 must decrement by the cap (leaving 50)
     rather than zero the row, and the spend counter must be seeded with 50."""
@@ -3314,7 +3357,7 @@ def test_direct_reset_carries_overage_when_rollover_enabled(
 
     writes = _batch_writes(mock_prisma_client, table)
     assert len(writes) == 1
-    assert writes[0]["where"] == {id_field: id_value}
+    assert writes[0]["where"] == {id_field: id_value, "budget_reset_at": now}
     assert writes[0]["data"]["spend"] == {"decrement": 100.0}
     assert writes[0]["data"]["budget_reset_at"] > now
     counter_prefix = {"key": "spend:key", "user": "spend:user", "team": "spend:team"}[table]
@@ -3609,7 +3652,7 @@ def test_reset_decrement_preserves_spend_landed_after_read(
 
     writes = _batch_writes(mock_prisma_client, table)
     assert len(writes) == 1
-    assert writes[0]["where"] == {id_field: id_value}
+    assert writes[0]["where"] == {id_field: id_value, "budget_reset_at": now}
     assert writes[0]["data"]["spend"] == {"decrement": 5.0}
     assert writes[0]["data"]["budget_reset_at"] > now
     assert _apply_spend_payload(db_spend=5.4, spend_field=writes[0]["data"]["spend"]) == pytest.approx(0.4)
@@ -3714,6 +3757,7 @@ async def test_a_budget_window_write_renders_a_postgres_update_span_for_its_tabl
     assert update.await_count == 1
     assert await postgres_span_names() == (span_name,)
 
+
 def _attrify(d: dict):
     """
     Wrap a dict so that attribute access (`.token`, `.user_id`, `.team_id`,
@@ -3733,7 +3777,8 @@ def _attrify(d: dict):
         def __setattr__(self, k, v):
             self[k] = v
 
-    return _AttrDict(d)
+    return _AttrDict({"budget_reset_at": None, **d})
+
 
 def _wire_batcher_for_test(prisma_client, fail_commit=False):
     """
@@ -3792,11 +3837,18 @@ def _wire_batcher_for_test(prisma_client, fail_commit=False):
         batcher.litellm_organizationtable = _Table("org")
         batcher.litellm_tagtable = _Table("tag")
         batcher.litellm_endusertable = _Table("enduser")
+        def execute_raw(query: str, *args: object) -> None:
+            write: Final = _raw_reset_write(query, args)
+            if write is not None:
+                queued.append(write)
+
+        batcher.execute_raw = execute_raw
         batcher.commit = commit
         return batcher
 
     prisma_client.db.batch_ = MagicMock(side_effect=make_batcher)
     return batch_calls
+
 
 def _wire_cascade_reads_for_test(prisma_client, endusers=()):
     """
@@ -3817,6 +3869,7 @@ def _wire_cascade_reads_for_test(prisma_client, endusers=()):
     ):
         getattr(prisma_client.db, table).find_many = AsyncMock(return_value=[])
     prisma_client.db.litellm_endusertable.find_many = AsyncMock(return_value=list(endusers))
+
 
 @pytest.mark.asyncio
 async def test_reset_budget_keys_partial_failure():
@@ -3877,9 +3930,7 @@ async def test_reset_budget_keys_partial_failure():
             # Simulate successful reset modification
             key["spend"] = 0.0
             # Compute a new reset time based on the budget duration
-            key["budget_reset_at"] = (
-                current_time + timedelta(seconds=key["budget_duration"])
-            ).isoformat()
+            key["budget_reset_at"] = current_time + timedelta(seconds=key["budget_duration"])
             return key
 
     with patch.object(
@@ -3914,6 +3965,7 @@ async def test_reset_budget_keys_partial_failure():
         call.kwargs.get("call_type") == "reset_budget_keys"
         for call in failure_hook_calls
     )
+
 
 @pytest.mark.asyncio
 async def test_reset_budget_users_partial_failure():
@@ -3965,9 +4017,7 @@ async def test_reset_budget_users_partial_failure():
             raise Exception("Simulated failure for user1")
         else:
             user["spend"] = 0.0
-            user["budget_reset_at"] = (
-                current_time + timedelta(seconds=user["budget_duration"])
-            ).isoformat()
+            user["budget_reset_at"] = current_time + timedelta(seconds=user["budget_duration"])
             return user
 
     with patch.object(
@@ -3995,6 +4045,7 @@ async def test_reset_budget_users_partial_failure():
         call.kwargs.get("call_type") == "reset_budget_users"
         for call in failure_hook_calls
     )
+
 
 @pytest.mark.asyncio
 async def test_reset_budget_endusers_cascade_failure_is_all_or_nothing():
@@ -4209,12 +4260,12 @@ async def test_reset_budget_continues_other_categories_on_failure(frozen_reset_c
     assert enduser_writes[0]["where"] == {"user_id": {"in": ["user1"]}, "spend": {"gt": 0}}
     assert enduser_writes[0]["data"] == {"spend": 0}
 
-    key_writes: Final = [c for c in batch_calls if c["table"] == "key" and c["op"] == "update"]
+    key_writes: Final = [c for c in batch_calls if c["table"] == "key" and "token" in c["where"]]
     user_writes: Final = [c for c in batch_calls if c["table"] == "user"]
     team_writes: Final = [c for c in batch_calls if c["table"] == "team"]
     assert len(key_writes) == 2
     assert len(user_writes) == 1
-    assert user_writes[0]["where"] == {"user_id": "user2"}
+    assert user_writes[0]["where"] == {"user_id": "user2", "budget_reset_at": None}
     assert len(team_writes) == 2
     for c in key_writes + user_writes + team_writes:
         assert set(c["data"].keys()) == {"spend", "budget_reset_at"}
@@ -4258,9 +4309,7 @@ async def test_reset_budget_teams_partial_failure():
             raise Exception("Simulated failure for team1")
         else:
             team["spend"] = 0.0
-            team["budget_reset_at"] = (
-                current_time + timedelta(seconds=team["budget_duration"])
-            ).isoformat()
+            team["budget_reset_at"] = current_time + timedelta(seconds=team["budget_duration"])
             return team
 
     with patch.object(
@@ -4273,7 +4322,7 @@ async def test_reset_budget_teams_partial_failure():
     prisma_client.update_data.assert_not_awaited()
     team_writes = [c for c in batch_calls if c["table"] == "team"]
     assert len(team_writes) == 1
-    assert team_writes[0]["where"] == {"team_id": "team2"}
+    assert team_writes[0]["where"] == {"team_id": "team2", "budget_reset_at": None}
     assert set(team_writes[0]["data"].keys()) == {"spend", "budget_reset_at"}
     assert team_writes[0]["data"]["spend"] == {"decrement": pre_reset_spend}
 
@@ -4284,6 +4333,7 @@ async def test_reset_budget_teams_partial_failure():
         call.kwargs.get("call_type") == "reset_budget_teams"
         for call in failure_hook_calls
     )
+
 
 @pytest.mark.asyncio
 async def test_service_logger_keys_success():
@@ -4313,9 +4363,7 @@ async def test_service_logger_keys_success():
 
     async def fake_reset_key(key, current_time, reset_settings=None):
         key["spend"] = 0.0
-        key["budget_reset_at"] = (
-            current_time + timedelta(seconds=key["budget_duration"])
-        ).isoformat()
+        key["budget_reset_at"] = current_time + timedelta(seconds=key["budget_duration"])
         return key
 
     with patch.object(
@@ -4344,6 +4392,7 @@ async def test_service_logger_keys_success():
     # Failure hook should not be executed.
     proxy_logging_obj.service_logging_obj.async_service_failure_hook.assert_not_called()
 
+
 @pytest.mark.asyncio
 async def test_service_logger_keys_failure():
     """
@@ -4370,9 +4419,7 @@ async def test_service_logger_keys_failure():
         if key["id"] == "key1":
             raise Exception("Simulated failure for key1")
         key["spend"] = 0.0
-        key["budget_reset_at"] = (
-            current_time + timedelta(seconds=key["budget_duration"])
-        ).isoformat()
+        key["budget_reset_at"] = current_time + timedelta(seconds=key["budget_duration"])
         return key
 
     with patch.object(
@@ -4406,6 +4453,7 @@ async def test_service_logger_keys_failure():
     # Success hook should not be called.
     proxy_logging_obj.service_logging_obj.async_service_success_hook.assert_not_called()
 
+
 @pytest.mark.asyncio
 async def test_service_logger_users_success():
     """
@@ -4434,9 +4482,7 @@ async def test_service_logger_users_success():
 
     async def fake_reset_user(user, current_time, reset_settings=None):
         user["spend"] = 0.0
-        user["budget_reset_at"] = (
-            current_time + timedelta(seconds=user["budget_duration"])
-        ).isoformat()
+        user["budget_reset_at"] = current_time + timedelta(seconds=user["budget_duration"])
         return user
 
     with patch.object(
@@ -4461,6 +4507,7 @@ async def test_service_logger_users_success():
     assert event_metadata.get("num_users_updated") == len(users)
     assert event_metadata.get("num_users_failed") == 0
     proxy_logging_obj.service_logging_obj.async_service_failure_hook.assert_not_called()
+
 
 @pytest.mark.asyncio
 async def test_service_logger_users_failure():
@@ -4487,9 +4534,7 @@ async def test_service_logger_users_failure():
         if user["id"] == "user1":
             raise Exception("Simulated failure for user1")
         user["spend"] = 0.0
-        user["budget_reset_at"] = (
-            current_time + timedelta(seconds=user["budget_duration"])
-        ).isoformat()
+        user["budget_reset_at"] = current_time + timedelta(seconds=user["budget_duration"])
         return user
 
     with patch.object(
@@ -4520,6 +4565,7 @@ async def test_service_logger_users_failure():
     assert "users_found" not in event_metadata
     proxy_logging_obj.service_logging_obj.async_service_success_hook.assert_not_called()
 
+
 @pytest.mark.asyncio
 async def test_service_logger_teams_success():
     """
@@ -4548,9 +4594,7 @@ async def test_service_logger_teams_success():
 
     async def fake_reset_team(team, current_time, reset_settings=None):
         team["spend"] = 0.0
-        team["budget_reset_at"] = (
-            current_time + timedelta(seconds=team["budget_duration"])
-        ).isoformat()
+        team["budget_reset_at"] = current_time + timedelta(seconds=team["budget_duration"])
         return team
 
     with patch.object(
@@ -4575,6 +4619,7 @@ async def test_service_logger_teams_success():
     assert event_metadata.get("num_teams_updated") == len(teams)
     assert event_metadata.get("num_teams_failed") == 0
     proxy_logging_obj.service_logging_obj.async_service_failure_hook.assert_not_called()
+
 
 @pytest.mark.asyncio
 async def test_service_logger_teams_failure():
@@ -4601,9 +4646,7 @@ async def test_service_logger_teams_failure():
         if team["id"] == "team1":
             raise Exception("Simulated failure for team1")
         team["spend"] = 0.0
-        team["budget_reset_at"] = (
-            current_time + timedelta(seconds=team["budget_duration"])
-        ).isoformat()
+        team["budget_reset_at"] = current_time + timedelta(seconds=team["budget_duration"])
         return team
 
     with patch.object(
@@ -4633,6 +4676,7 @@ async def test_service_logger_teams_failure():
     assert event_metadata.get("num_teams_found") == len(teams)
     assert "teams_found" not in event_metadata
     proxy_logging_obj.service_logging_obj.async_service_success_hook.assert_not_called()
+
 
 @pytest.mark.asyncio
 async def test_service_logger_endusers_success():
@@ -4697,6 +4741,7 @@ async def test_service_logger_endusers_success():
     assert event_metadata.get("num_endusers_updated") == len(endusers)
     assert event_metadata.get("num_endusers_failed") == 0
     proxy_logging_obj.service_logging_obj.async_service_failure_hook.assert_not_called()
+
 
 @pytest.mark.asyncio
 async def test_service_logger_endusers_failure():
@@ -4763,6 +4808,7 @@ async def test_service_logger_endusers_failure():
     assert "endusers_found" not in event_metadata
     assert "budgets_found" not in event_metadata
     proxy_logging_obj.service_logging_obj.async_service_success_hook.assert_not_called()
+
 
 @pytest.mark.asyncio
 async def test_reset_budget_for_litellm_team_members_called():
