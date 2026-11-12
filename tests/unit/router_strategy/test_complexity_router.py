@@ -50,6 +50,7 @@ from litellm.router_strategy.complexity_router.complexity_router import (
     _CLASSIFICATION_CURRENT_MESSAGE_ONLY,
     _CLASSIFICATION_WITH_CONVERSATION,
     _CLASSIFIER_CIRCUIT_OPEN_SIGNAL,
+    _ContextWindowPlacement,
     TIER_SEVERITY_ORDER_LABELED,
     ComplexityRouter,
     DimensionScore,
@@ -9329,6 +9330,30 @@ def _stalled_tool_history(repeats: int = 3) -> List[Dict]:
     ]
 
 
+def _errored_tool_history(repeats: int = 3) -> List[Dict]:
+    return [
+        turn
+        for i in range(repeats)
+        for turn in (
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": f"call-{i}",
+                        "name": "bash",
+                        "input": {"cmd": f"pytest test_{i}.py"},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": f"call-{i}", "is_error": True, "content": "fail"}],
+            },
+        )
+    ]
+
+
 class TestStallEscalation:
     """Mid-task auto-escalation when the assistant's own recent tool calls look stuck: the
     automatic counterpart to escalation_keywords, gated by stall_escalation_enabled and off
@@ -9344,6 +9369,23 @@ class TestStallEscalation:
         messages = [*_stalled_tool_history(), {"role": "user", "content": "Hello there!"}]
         result = await router.async_pre_routing_hook(model="test-model", request_kwargs={}, messages=messages)
         assert result.model == "gpt-4o"  # SIMPLE bumped to MEDIUM
+        assert result.routing_decision.get("stall_escalated") is True
+        assert result.routing_decision.get("stall_escalation_reason") == "repeated_tool_call"
+        assert result.routing_decision.get("stall_escalation_original_tier") == "SIMPLE"
+
+    @pytest.mark.asyncio
+    async def test_repeated_tool_errors_record_stall_provenance(self, mock_router_instance, basic_config):
+        router = ComplexityRouter(
+            model_name="test-router",
+            ctx=RoutingContext(mock_router_instance),
+            complexity_router_config={**basic_config, "stall_escalation_enabled": True},
+        )
+        messages = [*_errored_tool_history(), {"role": "user", "content": "Hello there!"}]
+        result = await router.async_pre_routing_hook(model="test-model", request_kwargs={}, messages=messages)
+        assert result.model == "gpt-4o"
+        assert result.routing_decision.get("stall_escalated") is True
+        assert result.routing_decision.get("stall_escalation_reason") == "repeated_tool_error"
+        assert result.routing_decision.get("stall_escalation_original_tier") == "SIMPLE"
 
     @pytest.mark.asyncio
     async def test_varied_tool_calls_do_not_escalate(self, mock_router_instance, basic_config):
@@ -9365,6 +9407,9 @@ class TestStallEscalation:
         ]
         result = await router.async_pre_routing_hook(model="test-model", request_kwargs={}, messages=messages)
         assert result.model == "gpt-4o-mini"  # not escalated
+        assert "stall_escalated" not in result.routing_decision
+        assert "stall_escalation_reason" not in result.routing_decision
+        assert "stall_escalation_original_tier" not in result.routing_decision
 
     @pytest.mark.asyncio
     async def test_disabled_by_default_ignores_repeated_tool_calls(self, mock_router_instance, basic_config):
@@ -9376,6 +9421,9 @@ class TestStallEscalation:
         messages = [*_stalled_tool_history(), {"role": "user", "content": "Hello there!"}]
         result = await router.async_pre_routing_hook(model="test-model", request_kwargs={}, messages=messages)
         assert result.model == "gpt-4o-mini"  # stall_escalation_enabled defaults False
+        assert "stall_escalated" not in result.routing_decision
+        assert "stall_escalation_reason" not in result.routing_decision
+        assert "stall_escalation_original_tier" not in result.routing_decision
 
     @pytest.mark.asyncio
     async def test_signals_record_stall_escalation(self, mock_router_instance, basic_config):
@@ -9401,6 +9449,10 @@ class TestStallEscalation:
         ]
         result = await router.async_pre_routing_hook(model="test-model", request_kwargs={}, messages=messages)
         assert result.model == "o1-preview"  # already REASONING, stays there
+        assert "stall_escalation" in result.routing_decision["signals"]
+        assert "stall_escalated" not in result.routing_decision
+        assert "stall_escalation_reason" not in result.routing_decision
+        assert "stall_escalation_original_tier" not in result.routing_decision
 
     @pytest.mark.asyncio
     async def test_stall_escalation_stacks_with_keyword_escalation(self, mock_router_instance, basic_config):
@@ -9412,6 +9464,9 @@ class TestStallEscalation:
         messages = [*_stalled_tool_history(), {"role": "user", "content": "LITELLM ESCALATE Hello there!"}]
         result = await router.async_pre_routing_hook(model="test-model", request_kwargs={}, messages=messages)
         assert result.model == "claude-sonnet-4-20250514"  # SIMPLE -> MEDIUM (keyword) -> COMPLEX (stall)
+        assert result.routing_decision.get("stall_escalated") is True
+        assert result.routing_decision.get("stall_escalation_reason") == "repeated_tool_call"
+        assert result.routing_decision.get("stall_escalation_original_tier") == "MEDIUM"
 
     @pytest.mark.asyncio
     async def test_a_keyword_forced_tier_still_escalates_when_stalled(self, mock_router_instance, basic_config):
@@ -9431,6 +9486,9 @@ class TestStallEscalation:
             model="test-model", request_kwargs={}, messages=[{"role": "user", "content": "a billing question"}]
         )
         assert healthy.model == "gpt-4o-mini"  # forced SIMPLE, nothing stuck
+        assert "stall_escalated" not in healthy.routing_decision
+        assert "stall_escalation_reason" not in healthy.routing_decision
+        assert "stall_escalation_original_tier" not in healthy.routing_decision
 
         stalled = await router.async_pre_routing_hook(
             model="test-model",
@@ -9439,6 +9497,9 @@ class TestStallEscalation:
         )
         assert stalled.model == "gpt-4o"  # forced SIMPLE bumped to MEDIUM
         assert "stall_escalation" in stalled.routing_decision["signals"]
+        assert stalled.routing_decision.get("stall_escalated") is True
+        assert stalled.routing_decision.get("stall_escalation_reason") == "repeated_tool_call"
+        assert stalled.routing_decision.get("stall_escalation_original_tier") == "SIMPLE"
 
     @pytest.mark.asyncio
     async def test_evidence_survives_a_new_human_ask(self, mock_router_instance, basic_config):
@@ -9452,6 +9513,217 @@ class TestStallEscalation:
         messages = [*_stalled_tool_history(), {"role": "user", "content": "try again"}]
         result = await router.async_pre_routing_hook(model="test-model", request_kwargs={}, messages=messages)
         assert result.model == "gpt-4o"  # SIMPLE ("try again" carries no signal) bumped to MEDIUM
+        assert result.routing_decision.get("stall_escalated") is True
+        assert result.routing_decision.get("stall_escalation_reason") == "repeated_tool_call"
+        assert result.routing_decision.get("stall_escalation_original_tier") == "SIMPLE"
+
+    @pytest.mark.asyncio
+    async def test_plan_mode_top_tier_early_return_does_not_record_stall_provenance(
+        self, mock_router_instance, basic_config
+    ):
+        router = ComplexityRouter(
+            model_name="test-router",
+            ctx=RoutingContext(mock_router_instance),
+            complexity_router_config={
+                **basic_config,
+                "stall_escalation_enabled": True,
+                "plan_mode_min_tier": "REASONING",
+            },
+        )
+        plan_body = {
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "add a hello endpoint"}]},
+                {"role": "system", "content": [{"type": "text", "text": "Plan mode is active. Do not execute."}]},
+            ]
+        }
+        messages = [
+            *_stalled_tool_history(),
+            {"role": "user", "content": "plan the migration"},
+        ]
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={"proxy_server_request": {"body": plan_body}},
+            messages=messages,
+        )
+        assert result.model == "o1-preview"
+        assert result.routing_decision.get("cause") == "plan_mode"
+        assert "stall_escalated" not in result.routing_decision
+        assert "stall_escalation_reason" not in result.routing_decision
+        assert "stall_escalation_original_tier" not in result.routing_decision
+
+    @pytest.mark.asyncio
+    async def test_stall_and_context_provenance_coexist(self, mock_router_instance, basic_config):
+        router = ComplexityRouter(
+            model_name="test-router",
+            ctx=RoutingContext(mock_router_instance),
+            complexity_router_config={**basic_config, "stall_escalation_enabled": True},
+        )
+        messages = [*_stalled_tool_history(), {"role": "user", "content": "Hello there!"}]
+        with patch.object(
+            router,
+            "_context_window_placement",
+            new_callable=AsyncMock,
+            return_value=_ContextWindowPlacement(
+                tier=ComplexityTier.COMPLEX,
+                allowed_models=("claude-sonnet-4-20250514",),
+                holdable_models=frozenset({"claude-sonnet-4-20250514"}),
+            ),
+        ):
+            result = await router.async_pre_routing_hook(model="test-model", request_kwargs={}, messages=messages)
+        assert result.model == "claude-sonnet-4-20250514"
+        assert result.routing_decision.get("stall_escalated") is True
+        assert result.routing_decision.get("stall_escalation_reason") == "repeated_tool_call"
+        assert result.routing_decision.get("stall_escalation_original_tier") == "SIMPLE"
+        assert result.routing_decision.get("context_escalated") is True
+        assert result.routing_decision.get("context_escalation_original_tier") == "MEDIUM"
+        assert result.routing_decision.get("tier") == "COMPLEX"
+
+    @pytest.mark.asyncio
+    async def test_modality_reconstruction_preserves_stall_provenance(self, mock_router_instance):
+        vision_by_model: Final = {"text-cheap": False, "vision-mid": True}
+
+        def deployments(model_name=None, *, source="group", **_):
+            if model_name not in vision_by_model:
+                return []
+            declared: Final = vision_by_model[model_name]
+            return [
+                {
+                    "model_name": model_name,
+                    "litellm_params": {"model": f"openai/unmapped-{model_name}"},
+                    "model_info": {"supports_vision": declared},
+                }
+            ]
+
+        mock_router_instance.registry.return_value.deployments.side_effect = deployments
+        router: Final = ComplexityRouter(
+            model_name="test-router",
+            ctx=RoutingContext(mock_router_instance),
+            complexity_router_config={
+                "tiers": {"SIMPLE": "text-cheap", "MEDIUM": "vision-mid"},
+                "modality_routing": True,
+            },
+        )
+        decision: Final = router._build_routing_decision(
+            routed_model="text-cheap",
+            cause="heuristic_scorer",
+            tier=ComplexityTier.SIMPLE,
+            stall_escalation_reason="repeated_tool_call",
+            stall_escalation_original_tier="SIMPLE",
+        )
+        from litellm.types.router import PreRoutingHookResponse
+
+        response: Final = PreRoutingHookResponse(model="text-cheap", messages=None, routing_decision=decision)
+        image_message: Final = [
+            {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,aGk="}}]}
+        ]
+        rewritten: Final = await router._gate_response_modality(response, None, image_message, {})
+        assert rewritten.model == "vision-mid"
+        assert rewritten.routing_decision["cause"] == "modality_escalation"
+        assert rewritten.routing_decision.get("stall_escalated") is True
+        assert rewritten.routing_decision.get("stall_escalation_reason") == "repeated_tool_call"
+        assert rewritten.routing_decision.get("stall_escalation_original_tier") == "SIMPLE"
+
+    @pytest.mark.asyncio
+    async def test_health_reconstruction_preserves_stall_provenance(self, mock_router_instance):
+        from litellm.types.router import PreRoutingHookResponse
+
+        async def mock_recovery_select(model, *args, **kwargs):
+            if model == "dead-model":
+                return []
+            return [{"model_name": model}]
+
+        mock_router_instance.select.side_effect = mock_recovery_select
+        recovery_router: Final = ComplexityRouter(
+            model_name="test-router",
+            ctx=RoutingContext(mock_router_instance),
+            complexity_router_config={"tiers": {"SIMPLE": ["dead-model", "healthy-peer"]}},
+        )
+        recovery_decision: Final = recovery_router._build_routing_decision(
+            routed_model="dead-model",
+            cause="heuristic_scorer",
+            tier=ComplexityTier.SIMPLE,
+            stall_escalation_reason="repeated_tool_call",
+            stall_escalation_original_tier="SIMPLE",
+        )
+        recovery_response: Final = PreRoutingHookResponse(
+            model="dead-model",
+            messages=None,
+            routing_decision=recovery_decision,
+        )
+        failover_result: Final = await recovery_router._gate_response_health(
+            recovery_response,
+            messages=[{"role": "user", "content": "hi"}],
+            input=None,
+            resolved_messages=[{"role": "user", "content": "hi"}],
+            request_kwargs={},
+        )
+        assert failover_result.model == "healthy-peer"
+        assert failover_result.routing_decision["cause"] == "health_failover"
+        assert failover_result.routing_decision.get("stall_escalated") is True
+        assert failover_result.routing_decision.get("stall_escalation_reason") == "repeated_tool_call"
+        assert failover_result.routing_decision.get("stall_escalation_original_tier") == "SIMPLE"
+
+        async def mock_fallback_select(model, *args, **kwargs):
+            if model == "dead-model":
+                return []
+            return [{"model_name": model}]
+
+        mock_router_instance.select.side_effect = mock_fallback_select
+        fallback_router: Final = ComplexityRouter(
+            model_name="test-router",
+            ctx=RoutingContext(mock_router_instance),
+            complexity_router_config={
+                "tiers": {"SIMPLE": "dead-model"},
+                "default_model": "fallback-default",
+            },
+        )
+        fallback_decision: Final = fallback_router._build_routing_decision(
+            routed_model="dead-model",
+            cause="heuristic_scorer",
+            tier=ComplexityTier.SIMPLE,
+            stall_escalation_reason="repeated_tool_call",
+            stall_escalation_original_tier="SIMPLE",
+        )
+        fallback_response: Final = PreRoutingHookResponse(
+            model="dead-model",
+            messages=None,
+            routing_decision=fallback_decision,
+        )
+        fallback_result: Final = await fallback_router._gate_response_health(
+            fallback_response,
+            messages=[{"role": "user", "content": "hi"}],
+            input=None,
+            resolved_messages=[{"role": "user", "content": "hi"}],
+            request_kwargs={},
+        )
+        assert fallback_result.model == "fallback-default"
+        assert fallback_result.routing_decision["cause"] == "health_default_fallback"
+        assert fallback_result.routing_decision.get("stall_escalated") is True
+        assert fallback_result.routing_decision.get("stall_escalation_reason") == "repeated_tool_call"
+        assert fallback_result.routing_decision.get("stall_escalation_original_tier") == "SIMPLE"
+
+    @pytest.mark.asyncio
+    async def test_custom_tier_stalled_request_does_not_claim_escalation(self, mock_router_instance):
+        config: Final = {
+            "classifier_type": "custom",
+            "classifier_plugin": _FixedTierClassifier("TIER_A"),
+            "classifier_fallback": "default_model",
+            "default_model": "backup",
+            "tiers": {"TIER_A": "model-a", "TIER_B": "model-b"},
+        }
+        router: Final = ComplexityRouter(
+            model_name="custom-tier-router",
+            ctx=RoutingContext(mock_router_instance),
+            complexity_router_config=config,
+        )
+        object.__setattr__(router.config, "stall_escalation_enabled", True)
+        messages: Final = [*_stalled_tool_history(), {"role": "user", "content": "Hello there!"}]
+        result: Final = await router.async_pre_routing_hook(model="test-model", request_kwargs={}, messages=messages)
+        assert result.model == "model-a"
+        assert "stall_escalation" in result.routing_decision["signals"]
+        assert "stall_escalated" not in result.routing_decision
+        assert "stall_escalation_reason" not in result.routing_decision
+        assert "stall_escalation_original_tier" not in result.routing_decision
 
 
 class TestRoutingDecisionContents:
@@ -10232,6 +10504,9 @@ def test_every_routing_decision_field_is_classified():
         f"unclassified={declared - classified}, stale={classified - declared}"
     )
     assert not (PROMPT_QUOTING_ROUTING_DECISION_FIELDS & DERIVED_ROUTING_DECISION_FIELDS)
+    stall_fields: Final = frozenset({"stall_escalated", "stall_escalation_reason", "stall_escalation_original_tier"})
+    assert stall_fields.issubset(DERIVED_ROUTING_DECISION_FIELDS)
+    assert not (stall_fields & PROMPT_QUOTING_ROUTING_DECISION_FIELDS)
 
 
 _ASK = "Derive the amortized complexity of a splay tree access"

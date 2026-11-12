@@ -248,6 +248,111 @@ def test_malformed_routing_metadata_preserves_the_completed_llm_span(decision: o
     assert not any(key.startswith("litellm.routing.") for key in span.attributes)
 
 
+def test_stall_escalation_attributes_reach_llm_spans() -> None:
+    logger, exporter = _logger()
+    decision: Final = {
+        "router_model_name": "smart-router",
+        "cause": "keyword_rule",
+        "tier": "MEDIUM",
+        "routed_model": "big",
+        "stall_escalated": True,
+        "stall_escalation_reason": "repeated_tool_error",
+        "stall_escalation_original_tier": "SIMPLE",
+    }
+    payload: Final = _payload(metadata={"routing_decision": decision})
+    _emit_llm(logger, _kwargs(payload))
+    (span,) = exporter.get_finished_spans()
+    actual: Final = {key: value for key, value in span.attributes.items() if key.startswith("litellm.routing.")}
+    assert actual == {f"litellm.routing.{key}": value for key, value in decision.items()}
+    assert actual["litellm.routing.stall_escalated"] is True
+    assert actual["litellm.routing.stall_escalation_reason"] == "repeated_tool_error"
+    assert actual["litellm.routing.stall_escalation_original_tier"] == "SIMPLE"
+
+
+def test_ordinary_request_without_stall_escalation_omits_stall_attributes() -> None:
+    logger, exporter = _logger()
+    decision: Final = {
+        "router_model_name": "smart-router",
+        "cause": "heuristic",
+        "tier": "SIMPLE",
+        "routed_model": "small",
+        "escalated": False,
+    }
+    payload: Final = _payload(metadata={"routing_decision": decision})
+    _emit_llm(logger, _kwargs(payload))
+    (span,) = exporter.get_finished_spans()
+    assert not any(key.startswith("litellm.routing.stall_") for key in span.attributes)
+    assert span.attributes["litellm.routing.escalated"] is False
+    assert span.attributes["litellm.routing.tier"] == "SIMPLE"
+
+
+def test_redacted_routing_decision_preserves_stall_attributes_without_prompt_text() -> None:
+    logger, exporter = _logger()
+    decision: Final = {
+        "router_model_name": "smart-router",
+        "cause": "keyword_rule",
+        "tier": "MEDIUM",
+        "routed_model": "big",
+        "stall_escalated": True,
+        "stall_escalation_reason": "repeated_tool_call",
+        "stall_escalation_original_tier": "SIMPLE",
+    }
+    payload: Final = _payload(
+        metadata={
+            "routing_decision": {
+                **decision,
+                "signals": ["secret prompt text"],
+                "matched_keyword": "deploy to k8s",
+                "escalation_keyword": "LITELLM ESCALATE",
+            }
+        }
+    )
+    _emit_llm(logger, _kwargs(payload))
+    (span,) = exporter.get_finished_spans()
+    actual: Final = {key: value for key, value in span.attributes.items() if key.startswith("litellm.routing.")}
+    assert actual == {f"litellm.routing.{key}": value for key, value in decision.items()}
+    assert actual["litellm.routing.stall_escalated"] is True
+    assert actual["litellm.routing.stall_escalation_reason"] == "repeated_tool_call"
+    assert actual["litellm.routing.stall_escalation_original_tier"] == "SIMPLE"
+    assert not any(key.startswith("litellm.routing.signals") for key in span.attributes)
+    assert not any(key.startswith("litellm.routing.matched_keyword") for key in span.attributes)
+    assert not any(key.startswith("litellm.routing.escalation_keyword") for key in span.attributes)
+
+
+def test_routing_decision_attributes_mapping() -> None:
+    from litellm.integrations.otel.routing import routing_decision_attributes
+
+    assert routing_decision_attributes(None) == {}
+    assert routing_decision_attributes("invalid") == {}  # pyright: ignore[reportArgumentType]
+
+    decision: Final = {
+        "stall_escalated": True,
+        "stall_escalation_reason": "repeated_tool_error",
+        "stall_escalation_original_tier": "SIMPLE",
+        "tier": "MEDIUM",
+        "routed_model": "big",
+        "cause": "keyword_rule",
+        "signals": ["unmapped prompt signal"],
+    }
+    attrs: Final = routing_decision_attributes(decision)
+    assert attrs["litellm.routing.stall_escalated"] is True
+    assert attrs["litellm.routing.stall_escalation_reason"] == "repeated_tool_error"
+    assert attrs["litellm.routing.stall_escalation_original_tier"] == "SIMPLE"
+    assert attrs["litellm.routing.tier"] == "MEDIUM"
+    assert attrs["litellm.routing.routed_model"] == "big"
+    assert attrs["litellm.routing.cause"] == "keyword_rule"
+    assert "litellm.routing.signals" not in attrs
+
+    ordinary: Final = {
+        "tier": "SIMPLE",
+        "routed_model": "small",
+        "cause": "heuristic",
+    }
+    ordinary_attrs: Final = routing_decision_attributes(ordinary)
+    assert not any(key.startswith("litellm.routing.stall_") for key in ordinary_attrs)
+    assert ordinary_attrs["litellm.routing.tier"] == "SIMPLE"
+
+
 def test_llm_call_span_carries_the_callers_conversation_id():
     logger, exporter = _logger()
     kwargs = {**_kwargs(), "litellm_params": {"litellm_session_id": "conv-42", "metadata": {}}}

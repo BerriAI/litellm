@@ -526,9 +526,15 @@ There is no state to expire or leak: detection reruns on every classified turn f
 request's own message list, so the bump lasts only as long as the recent tool calls still look
 stuck and lifts on its own the moment they don't. This also means it reads the whole
 conversation rather than only the turns since the newest human ask, so a plain follow-up like
-"try again" does not discard evidence from before it. Escalation records `stall_escalation` in
-`routing_decision.signals`; unlike `escalation_keywords`, it does not set the
-`escalated`/`escalation_keyword` pair, which is reserved for the keyword mechanism specifically.
+"try again" does not discard evidence from before it. When stall detection bumps the tier,
+`routing_decision` records `stall_escalated: true`, `stall_escalation_reason` (`repeated_tool_call`
+or `repeated_tool_error`), and `stall_escalation_original_tier`, alongside `stall_escalation` in
+`routing_decision.signals`. Those three fields survive message redaction and are exported to
+Datadog (`router_escalated:true`, `router_stall_escalated:true`, `router_stall_escalation_reason`,
+`router_stall_escalation_original_tier`) and OpenTelemetry (`litellm.routing.stall_escalated`,
+`litellm.routing.stall_escalation_reason`, `litellm.routing.stall_escalation_original_tier`). Unlike
+`escalation_keywords`, stall escalation leaves `escalated` and `escalation_keyword` untouched, which
+remain reserved for the keyword mechanism specifically.
 
 `stall_escalation_enabled` cannot be combined with `session_affinity` or
 `classification_mode: user_turn`: both replay a held routing decision on most turns instead of

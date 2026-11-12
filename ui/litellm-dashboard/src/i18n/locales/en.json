@@ -14474,6 +14474,8 @@
         "score": "Score",
         "routedTo": "Routed to",
         "escalated": "Escalated",
+        "stallEscalation": "Stall escalation",
+        "stallOriginalTier": "from {{tier}}",
         "signals": "Signals",
         "calibration": "Calibration",
         "routerType": {
@@ -14526,6 +14528,10 @@
           "yes": "Yes",
           "requestedKeyword": "Requested via \"{{keyword}}\"; already at the highest tier",
           "requested": "Requested; already at the highest tier"
+        },
+        "stallReason": {
+          "repeated_tool_call": "Repeated tool call",
+          "repeated_tool_error": "Repeated tool error"
         },
         "capability": {
           "title": "Capability estimates",

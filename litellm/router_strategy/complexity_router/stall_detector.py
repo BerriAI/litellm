@@ -18,9 +18,16 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator, Mapping, Sequence
 from itertools import islice
-from typing import Final, NamedTuple
+from typing import Final, Literal, NamedTuple, TypeAlias
 
 from pydantic import TypeAdapter
+
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
+
+StallDetectionReason: TypeAlias = Literal[
+    "repeated_tool_call",
+    "repeated_tool_error",
+]
 
 _ARGUMENTS_PARSE_FAILED: Final = object()
 _DECODED_ARGUMENTS: Final = TypeAdapter(object)
@@ -50,8 +57,11 @@ def _tool_call_signature(name: str, raw_arguments: object) -> tuple[str, str]:
         return name, str(arguments)
 
 
-def _iter_tool_result_error_pairs(messages: Sequence[Mapping[str, object]]) -> Iterator[tuple[str, bool]]:
-    for msg in messages:
+def _iter_tool_result_error_pairs(messages: Sequence[object]) -> Iterator[tuple[str, bool]]:
+    for raw_msg in messages:
+        msg = as_str_mapping(raw_msg)
+        if msg is None:
+            continue
         content = msg.get("content")
         if msg.get("role") != "user" or not isinstance(content, list):
             continue
@@ -62,9 +72,12 @@ def _iter_tool_result_error_pairs(messages: Sequence[Mapping[str, object]]) -> I
                     yield call_id, bool(part.get("is_error", False))
 
 
-def _iter_tool_call_events_newest_first(messages: Sequence[Mapping[str, object]]) -> Iterator[_ToolCallEvent]:
+def _iter_tool_call_events_newest_first(messages: Sequence[object]) -> Iterator[_ToolCallEvent]:
     error_by_call_id: Final = dict(_iter_tool_result_error_pairs(messages))
-    for msg in reversed(messages):
+    for raw_msg in reversed(messages):
+        msg = as_str_mapping(raw_msg)
+        if msg is None:
+            continue
         if msg.get("role") != "assistant":
             continue
         content = msg.get("content")
@@ -93,12 +106,12 @@ def _iter_tool_call_events_newest_first(messages: Sequence[Mapping[str, object]]
 
 
 def detect_stalled_task(
-    messages: Sequence[Mapping[str, object]] | None,
+    messages: Sequence[object] | None,
     *,
     window: int,
     repeat_threshold: int,
-) -> bool:
-    """Whether the newest tool call is still part of a stuck pattern: it repeats, or it
+) -> StallDetectionReason | None:
+    """Which stuck pattern the newest tool call is part of, if any: it repeats, or it
     errored, at least repeat_threshold times across the last `window` calls.
 
     Both tests are anchored on the newest call rather than counting whichever pattern is
@@ -107,15 +120,17 @@ def detect_stalled_task(
     escalate a request that already recovered. Anchoring also leaves room between the
     matches, so a retry loop broken up by an unrelated lookup still reads as stuck.
     """
-    if not messages or repeat_threshold <= 0:
-        return False
+    if not messages or repeat_threshold <= 0 or window <= 0:
+        return None
     recent: Final = tuple(islice(_iter_tool_call_events_newest_first(messages), window))
     if len(recent) < repeat_threshold:
-        return False
+        return None
     newest: Final = recent[0]
     repeats: Final = sum(1 for event in recent if event.signature == newest.signature)
     if repeats >= repeat_threshold:
-        return True
+        return "repeated_tool_call"
     if not newest.is_error:
-        return False
-    return sum(1 for event in recent if event.is_error) >= repeat_threshold
+        return None
+    if sum(1 for event in recent if event.is_error) >= repeat_threshold:
+        return "repeated_tool_error"
+    return None

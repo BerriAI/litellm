@@ -89,9 +89,20 @@ _ROUTER_SPAN_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
         "escalated": "router_escalated",
         "signals": "router_signals",
         "routed_model": "routed_model",
+        "stall_escalated": "router_stall_escalated",
+        "stall_escalation_reason": "router_stall_escalation_reason",
+        "stall_escalation_original_tier": "router_stall_escalation_original_tier",
     }
 )
-_ROUTER_DIMENSIONS: Final[tuple[str, ...]] = ("router_tier", "router_cause", "router_escalated", "routed_model")
+_ROUTER_DIMENSIONS: Final[tuple[str, ...]] = (
+    "router_tier",
+    "router_cause",
+    "router_escalated",
+    "routed_model",
+    "router_stall_escalated",
+    "router_stall_escalation_reason",
+    "router_stall_escalation_original_tier",
+)
 _COST_DIMENSIONS: Final[tuple[str, ...]] = ("team", "user", "key_alias", "model_group", *_ROUTER_DIMENSIONS)
 
 
@@ -111,11 +122,33 @@ def _router_span_fields(
     routing_decision: Final = _mapping_field(_metadata_of(standard_logging_payload), "routing_decision")
     if not routing_decision:
         return _EMPTY_MAPPING
-    escalated: Final = bool(routing_decision.get("escalated") or routing_decision.get("context_escalated"))
+    stall_escalated: Final = bool(routing_decision.get("stall_escalated"))
+    escalated: Final = bool(
+        routing_decision.get("escalated") or routing_decision.get("context_escalated") or stall_escalated
+    )
+    stall_reason: Final = routing_decision.get("stall_escalation_reason") if stall_escalated else None
+    stall_original_tier: Final = routing_decision.get("stall_escalation_original_tier") if stall_escalated else None
+    managed_fields: Final = frozenset(
+        {
+            "escalated",
+            "stall_escalated",
+            "stall_escalation_reason",
+            "stall_escalation_original_tier",
+        }
+    )
+    unmanaged_entries: Final = tuple(
+        (key, value) for key, value in routing_decision.items() if key not in managed_fields
+    )
+    synthetic_entries: Final = (
+        ("escalated", escalated),
+        ("stall_escalated", stall_escalated),
+        ("stall_escalation_reason", stall_reason),
+        ("stall_escalation_original_tier", stall_original_tier),
+    )
     return MappingProxyType(
         {
             _ROUTER_SPAN_FIELDS[record_field]: value
-            for record_field, value in (*routing_decision.items(), ("escalated", escalated))
+            for record_field, value in (*unmanaged_entries, *synthetic_entries)
             if record_field in _ROUTER_SPAN_FIELDS
             and value is not None
             and not (redact_prompt_text and record_field in PROMPT_QUOTING_ROUTING_DECISION_FIELDS)

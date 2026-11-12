@@ -3352,6 +3352,7 @@ RoutingDecisionCause = Literal[
 ClassifierFailureReason = Literal[
     "timeout", "circuit_open", "not_configured", "unsupported_input", "invalid_response", "declined", "classifier_error"
 ]
+StallEscalationReason: TypeAlias = Literal["repeated_tool_call", "repeated_tool_error"]
 
 
 InternalCallOrigin = Literal[
@@ -3429,6 +3430,9 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     escalated: bool
     context_escalated: bool  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
     context_escalation_original_tier: str  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
+    stall_escalated: bool  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
+    stall_escalation_reason: StallEscalationReason  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
+    stall_escalation_original_tier: str  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
     tier_boundaries: StandardLoggingRoutingDecisionTierBoundaries
     reasoning_override_min_score: float  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
     conversation_continuing: bool
@@ -3493,6 +3497,9 @@ DERIVED_ROUTING_DECISION_FIELDS: Final[frozenset[str]] = frozenset(
         "escalated",
         "context_escalated",
         "context_escalation_original_tier",
+        "stall_escalated",
+        "stall_escalation_reason",
+        "stall_escalation_original_tier",
         "tier_boundaries",
         "reasoning_override_min_score",
         "conversation_continuing",
