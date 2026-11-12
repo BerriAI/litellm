@@ -168,6 +168,16 @@ def apply_response_model_id(response: object, request_metadata: Mapping[str, obj
     _write_hidden_params(response, hidden_params)
 
 
+def apply_response_api_base(response: object, api_base: object) -> None:
+    if not isinstance(api_base, str) or not api_base:
+        return
+    hidden_params: Final = get_hidden_params_dict(response, create=isinstance(response, dict))
+    if hidden_params.get("api_base"):
+        return
+    hidden_params["api_base"] = api_base
+    _write_hidden_params(response, hidden_params)
+
+
 def apply_quality_router_decision_headers(
     additional_headers: dict[str, object],
     request_kwargs: object,

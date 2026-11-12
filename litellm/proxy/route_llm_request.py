@@ -29,6 +29,7 @@ from litellm.router import router_arguments
 from litellm.router_api import router_init_args
 from litellm.router_attempt import metadata_field
 from litellm.router_config import build_router_config
+from litellm.vector_stores.deployments import is_vector_store_router_deployment
 
 # Client-supplied params that make the router or the call path fabricate a
 # failure or a delay instead of calling the provider. The ``mock_testing_*``
@@ -149,6 +150,23 @@ def _raise_if_model_fully_blocked(llm_router: LitellmRouter, model_name: object,
                 status_code=403,
                 request=httpx.Request(method="POST", url="https://github.com/BerriAI/litellm"),
             ),
+        )
+
+
+def _raise_if_vector_store_deployment_misused(llm_router: LitellmRouter | None, model: object, route_type: str) -> None:
+    if route_type == "avector_store_search" or not isinstance(llm_router, litellm.Router) or not isinstance(model, str):
+        return
+    registry: Final = llm_router.registry()
+    misused: Final = sorted(
+        name
+        for name in (part.strip() for part in model.split(","))
+        if any(is_vector_store_router_deployment(d) for d in registry.deployments(name, source="routable"))
+    )
+    if misused:
+        raise litellm.BadRequestError(
+            message=f"'{misused[0]}' is a vector store deployment and only serves vector store search",
+            model=misused[0],
+            llm_provider="",
         )
 
 
@@ -907,6 +925,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
         # Map generationConfig to config parameter for Google GenAI compatibility
         if "generationConfig" in data and "config" not in data:
             data["config"] = data.pop("generationConfig")
+    _raise_if_vector_store_deployment_misused(llm_router, data.get("model"), route_type)
     if "api_key" in data or "api_base" in data:
         if llm_router is not None:
             return getattr(llm_router, f"{route_type}")(**data)

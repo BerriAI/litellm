@@ -40,6 +40,7 @@ from litellm.router_utils.cooldown_handlers import (
     get_cooldown_deployments,
     is_failure_outside_selected_deployment,
     is_response_lookup_not_found,
+    is_vector_store_index_not_found,
     mark_advisor_orchestration_failure,
     set_cooldown_deployments,
     should_cooldown_based_on_allowed_fails_policy,
@@ -3544,3 +3545,20 @@ def test_is_response_lookup_not_found(status_code: int, call_type: str, expected
     error.status_code = status_code
 
     assert is_response_lookup_not_found(error, {"call_type": call_type}) is expected
+
+
+@pytest.mark.parametrize(
+    ("status_code", "call_type", "expected"),
+    [
+        (404, "avector_store_search", True),
+        (404, "vector_store_search", True),
+        (404, "acompletion", False),
+        (503, "avector_store_search", False),
+        (429, "avector_store_search", False),
+    ],
+)
+def test_is_vector_store_index_not_found(status_code: int, call_type: str, expected: bool) -> None:
+    error: Final = litellm.NotFoundError(message="index missing", llm_provider="azure_ai", model="azure_ai/kb-search")
+    error.status_code = status_code
+
+    assert is_vector_store_index_not_found(error, {"call_type": call_type}) is expected

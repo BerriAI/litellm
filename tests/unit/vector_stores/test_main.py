@@ -384,3 +384,40 @@ async def test_retrieving_a_missing_openai_vector_store_raises_not_found(is_asyn
 
     assert caught.value.status_code == 404
     assert "No vector store found with id 'vs_missing'." in caught.value.message
+
+
+@pytest.mark.asyncio
+async def test_router_vector_store_search_reports_the_serving_deployments_api_base():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "kb-search",
+                "litellm_params": {
+                    "model": "azure_ai/kb-search",
+                    "custom_llm_provider": "azure_ai",
+                    "api_base": "https://eastus.search.windows.net",
+                    "api_key": "search-key",
+                },
+                "model_info": {"id": "search-eastus", "mode": "vector_store"},
+            }
+        ]
+    )
+
+    response = await router.avector_store_search(
+        vector_store_id="claims-docs", query="claims", model="kb-search", mock_response="mocked"
+    )
+
+    assert response["_hidden_params"]["api_base"] == "https://eastus.search.windows.net"
+
+
+@pytest.mark.asyncio
+async def test_sdk_vector_store_search_response_is_unchanged_without_the_router():
+    response = await litellm.vector_stores.asearch(
+        vector_store_id="claims-docs",
+        query="claims",
+        custom_llm_provider="azure_ai",
+        api_base="https://eastus.search.windows.net",
+        mock_response="mocked",
+    )
+
+    assert "_hidden_params" not in response

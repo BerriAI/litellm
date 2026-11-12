@@ -41,6 +41,7 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
     add_retry_headers_to_response,
     apply_quality_router_decision_headers,
     apply_remaining_usage_headers,
+    apply_response_api_base,
     apply_response_model_id,
     complexity_router_decision_headers,
     ensure_response_additional_headers,
@@ -252,6 +253,7 @@ from litellm.types.router import (
     RoutingStrategy,
 )
 from litellm.types.utils import CooldownDeploymentInfo, LlmProviders
+from litellm.vector_stores.deployments import is_vector_store_deployment
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
@@ -5472,7 +5474,10 @@ class _Driver:
             return None
         name, kwargs = self._served
         additional: Final = ensure_response_additional_headers(response)
-        apply_response_model_id(response, find_deployment_metadata(kwargs))
+        deployment_metadata: Final = find_deployment_metadata(kwargs)
+        apply_response_model_id(response, deployment_metadata)
+        if is_vector_store_deployment((deployment_metadata or {}).get("model_info")):
+            apply_response_api_base(response, (deployment_metadata or {}).get("api_base"))
         additional["x-litellm-model-group"] = name
         apply_quality_router_decision_headers(additional, kwargs)
         additional.update(complexity_router_decision_headers(kwargs))

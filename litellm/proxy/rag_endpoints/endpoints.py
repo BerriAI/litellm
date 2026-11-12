@@ -71,6 +71,7 @@ from litellm.proxy.vector_store_endpoints.endpoints import (
 )
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_user_can_access_vector_store_id,
+    with_group_primary,
     with_managed_search_file_ids,
 )
 from litellm.rag.ingestion.vertex_ai_ingestion import DEFAULT_VERTEX_RAG_LOCATION
@@ -341,7 +342,7 @@ def _store_provider(config: Mapping[str, object]) -> object:
 def _managed_store_overrides(managed_store: LiteLLM_ManagedVectorStore | None) -> Mapping[str, object]:
     if managed_store is None:
         return MappingProxyType({})
-    stored: Final = build_request_data_from_managed_vector_store(managed_store)
+    stored: Final = with_group_primary(build_request_data_from_managed_vector_store(managed_store))
     return _without_blank_credentials({key: value for key, value in stored.items() if value is not None})
 
 
@@ -1144,7 +1145,7 @@ async def rag_query(
         # conflict so callers cannot override the store's provider or credentials.
         managed_store: Final = resolved_stores.get(vector_store_id)
         store_data: Final[Mapping[str, object]] = (
-            build_request_data_from_managed_vector_store(managed_store)
+            with_group_primary(build_request_data_from_managed_vector_store(managed_store))
             if managed_store is not None
             else _EMPTY_TEAM_PROVIDER_CREDENTIALS
         )

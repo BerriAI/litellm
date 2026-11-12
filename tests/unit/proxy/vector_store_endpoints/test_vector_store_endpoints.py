@@ -79,7 +79,7 @@ def test_router_vector_store_search_injects_executor_and_request_metadata():
 
     call_kwargs = search.call_args.kwargs
     assert call_kwargs["custom_llm_provider"] == "valkey"
-    executor = call_kwargs["_direct_vector_store_embedding_executor"]
+    executor = call_kwargs["_direct_vector_store_embedding_executor"].inner
     assert isinstance(executor, RouterVectorStoreEmbeddingExecutor)
     assert executor.metadata == {"user_api_key_team_id": "team-a"}
 
@@ -182,7 +182,7 @@ async def test_router_avector_store_search_passes_correct_args():
     assert call_kwargs["vector_store_id"] == "test_store_id"
     assert call_kwargs["query"] == "test query"
     assert call_kwargs["custom_llm_provider"] == "bedrock"
-    executor = call_kwargs["_direct_vector_store_embedding_executor"]
+    executor = call_kwargs["_direct_vector_store_embedding_executor"].inner
     assert isinstance(executor, RouterVectorStoreEmbeddingExecutor)
     assert executor.metadata["user_api_key_team_id"] == "team-a"
 

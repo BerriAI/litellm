@@ -1728,13 +1728,16 @@ class RustEndpoints:
 
     def _embedding_executor(self, kwargs: Mapping[str, object]) -> object:
         from litellm.llms.base_llm.vector_store.transformation import (
+            OncePerRequestEmbeddingExecutor,
             RouterVectorStoreEmbeddingExecutor,
             vector_store_request_metadata,
         )
 
-        return RouterVectorStoreEmbeddingExecutor(
-            router=self._core.router,  # pyright: ignore[reportArgumentType]  # the router serves aembedding
-            metadata=vector_store_request_metadata(kwargs),
+        return OncePerRequestEmbeddingExecutor(
+            inner=RouterVectorStoreEmbeddingExecutor(
+                router=self._core.router,  # pyright: ignore[reportArgumentType]  # the router serves aembedding
+                metadata=vector_store_request_metadata(kwargs),
+            )
         )
 
     async def _containers(

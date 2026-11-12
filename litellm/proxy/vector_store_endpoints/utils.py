@@ -26,6 +26,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import managed_file_ids_f
 from litellm.types.utils import LlmProviders
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 from litellm.utils import ProviderConfigManager
+from litellm.vector_stores.deployments import VECTOR_STORE_DEPLOYMENT_PARAM, with_primary_deployment
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 
@@ -54,6 +55,19 @@ def normalize_litellm_params(
             normalized["litellm_params"] = {}
         return normalized
     return vector_store
+
+
+def with_group_primary(params: Mapping[str, object]) -> Mapping[str, object]:
+    """A store's params on its vector_store_deployment group's primary, for paths that do not fail over yet."""
+    from litellm.proxy.proxy_server import llm_router
+
+    group: Final = params.get(VECTOR_STORE_DEPLOYMENT_PARAM)
+    deployments: Final = (
+        llm_router.registry().deployments(group, source="all")
+        if isinstance(group, str) and llm_router is not None
+        else ()
+    )
+    return with_primary_deployment(params, deployments)
 
 
 def _is_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:

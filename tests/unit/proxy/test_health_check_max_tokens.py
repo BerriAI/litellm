@@ -1646,3 +1646,19 @@ async def test_run_model_health_check_reports_why_a_string_configurable_clientsi
 
     assert "configurable_clientside_auth_params" in result["error"]
     invoke_endpoint.assert_not_called()
+
+
+@pytest.mark.parametrize("skip_disabled", [True, False])
+def test_vector_store_deployments_are_never_health_checked(skip_disabled):
+    deployments = [
+        {"model_name": "gpt", "litellm_params": {"model": "openai/gpt-5"}, "model_info": {"id": "gpt-1"}},
+        {
+            "model_name": "kb-search",
+            "litellm_params": {"model": "azure_ai/kb-search", "api_base": "https://eastus.search.windows.net"},
+            "model_info": {"id": "search-1", "mode": "vector_store"},
+        },
+    ]
+
+    eligible = hc_module._health_check_eligible(deployments, skip_disabled=skip_disabled)
+
+    assert [d["model_info"]["id"] for d in eligible] == ["gpt-1"]

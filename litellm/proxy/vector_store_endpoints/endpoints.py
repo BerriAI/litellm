@@ -36,6 +36,7 @@ from litellm.proxy.vector_store_endpoints.utils import (
 from litellm.repositories.table_repositories import ManagedVectorStoreIndexRepository
 from litellm.types.utils import LlmProviders
 from litellm.types.vector_stores import IndexCreateRequest, IndexListResponse
+from litellm.vector_stores.deployments import with_deployment_group
 from litellm.vector_stores.search_query import store_search_params, with_caller_query_params
 from litellm.vector_stores.utils import VectorStoreWriteBody, callers_metadata_snapshot
 from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry
@@ -144,7 +145,7 @@ async def _update_request_data_with_litellm_managed_vector_store_registry(
             vector_store=vector_store_to_run,
             user_api_key_dict=user_api_key_dict,
         )
-    return {**data, **build_request_data_from_managed_vector_store(vector_store_to_run)}
+    return {**data, **with_deployment_group(build_request_data_from_managed_vector_store(vector_store_to_run))}
 
 
 @router.post(

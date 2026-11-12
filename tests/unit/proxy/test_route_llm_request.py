@@ -3618,3 +3618,36 @@ async def test_a_request_a_hook_turned_streaming_runs_unbounded_under_a_header_t
 
     assert chunks
     assert deadline is not None and deadline.allows_wait(10**9)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route_type", "data"),
+    [
+        ("acompletion", {"model": "kb-search", "messages": [{"role": "user", "content": "hi"}]}),
+        ("acompletion", {"model": "gpt-4o, kb-search", "messages": [{"role": "user", "content": "hi"}]}),
+        ("acompletion", {"model": "kb-search", "messages": [], "api_key": "caller-key"}),
+        ("aembedding", {"model": "kb-search", "input": "hi"}),
+        ("acompletion", {"model": "azure_ai/kb-search", "messages": [{"role": "user", "content": "hi"}]}),
+        ("acompletion", {"model": "search-eastus", "messages": [{"role": "user", "content": "hi"}]}),
+    ],
+)
+async def test_a_vector_store_deployment_group_refuses_every_call_but_vector_store_search(route_type, data):
+    llm_router = litellm.Router(
+        model_list=[
+            {"model_name": "gpt-4o", "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-fake"}},
+            {
+                "model_name": "kb-search",
+                "litellm_params": {
+                    "model": "azure_ai/kb-search",
+                    "custom_llm_provider": "azure_ai",
+                    "api_base": "https://eastus.search.windows.net",
+                    "api_key": "search-key",
+                },
+                "model_info": {"id": "search-eastus", "mode": "vector_store"},
+            },
+        ]
+    )
+
+    with pytest.raises(litellm.BadRequestError, match="is a vector store deployment"):
+        await route_request(data, llm_router, None, route_type)

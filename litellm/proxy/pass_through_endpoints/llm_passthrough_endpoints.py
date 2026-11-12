@@ -171,6 +171,7 @@ from litellm.proxy.vector_store_endpoints.utils import (
     has_vector_store_index_access,
     is_allowed_to_call_vector_store_endpoint,
     normalize_litellm_params,
+    with_group_primary,
 )
 from litellm.secret_managers.main import get_secret_str, normalize_nonempty_secret_str, str_to_bool
 from litellm.types.passthrough_endpoints.eu_jev import EuJevDecisionRequest, EuJevDecisionResponse
@@ -1081,15 +1082,13 @@ async def milvus_proxy_route(
         vector_store=vector_store,
         user_api_key_dict=user_api_key_dict,
     )
-    litellm_params = vector_store.get("litellm_params") or {}
+    litellm_params = dict(with_group_primary(vector_store.get("litellm_params") or {}))
     auth_credentials: Final = provider_config.get_auth_credentials(litellm_params=litellm_params)
 
     extra_headers = auth_credentials.get("headers") or {}
 
-    litellm_params = vector_store.get("litellm_params") or {}
-
     base_target_url = provider_config.get_complete_url(
-        api_base=litellm_params.get("api_base"), litellm_params=litellm_params
+        api_base=_optional_str(litellm_params.get("api_base")), litellm_params=litellm_params
     )
 
     if base_target_url is None:
@@ -1157,7 +1156,7 @@ async def _opensearch_store_params(
         )
     vector_store: Final = named_stores[0]
     params: Final = with_named_credential(
-        build_request_data_from_managed_vector_store(normalize_litellm_params(vector_store))
+        with_group_primary(build_request_data_from_managed_vector_store(normalize_litellm_params(vector_store)))
     )
     provider: Final = params.get("custom_llm_provider")
     if not isinstance(provider, str) or provider.split("/", 1)[0] != LlmProviders.OPENSEARCH.value:
@@ -2842,7 +2841,7 @@ async def azure_proxy_route(
                     vector_store=vector_store,
                     user_api_key_dict=user_api_key_dict,
                 )
-                litellm_params = vector_store.get("litellm_params") or {}
+                litellm_params = dict(with_group_primary(vector_store.get("litellm_params") or {}))
                 auth_credentials = provider_config.get_auth_credentials(litellm_params=litellm_params)
 
                 extra_headers = auth_credentials.get("headers") or {}
