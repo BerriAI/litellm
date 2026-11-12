@@ -215,6 +215,49 @@ def test_override_can_be_reexpired_cleared_and_template_switched() -> None:
     assert after.json() == switched.json()
 
 
+def test_clearing_an_override_also_clears_its_expiry() -> None:
+    http: Final = client()
+    family(http)
+    created: Final = http.post(
+        "/management/v1/customer_members",
+        json={
+            "customer_member_id": "member",
+            "parent_team_id": "team",
+            "budget_override": {"max_budget": 5},
+            "budget_override_expires_at": "2025-01-01T00:00:00Z",
+        },
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["effective_budget"]["max_budget"] == 100
+    cleared: Final = http.patch("/management/v1/customer_members/member", json={"budget_override": None})
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["budget_override"] is None
+    assert cleared.json()["budget_override_expires_at"] is None
+    renewed: Final = http.patch("/management/v1/customer_members/member", json={"budget_override": {"max_budget": 7}})
+    assert renewed.status_code == 200, renewed.text
+    assert renewed.json()["budget_override_expires_at"] is None
+    assert renewed.json()["effective_budget"]["max_budget"] == 7
+
+
+def test_null_budget_clears_the_overall_budget_of_an_organization_and_a_team() -> None:
+    http: Final = client()
+    family(http)
+    org_cleared: Final = http.patch("/management/v1/customer_organizations/org", json={"budget": None})
+    assert org_cleared.status_code == 200, org_cleared.text
+    assert org_cleared.json()["budget"] is None
+    assert org_cleared.json()["budget_id"] is None
+    team_cleared: Final = http.patch("/management/v1/customer_teams/team", json={"budget": None})
+    assert team_cleared.status_code == 200, team_cleared.text
+    assert team_cleared.json()["budget"] is None
+    assert team_cleared.json()["budget_id"] is None
+    omitted: Final = http.patch("/management/v1/customer_organizations/org", json={"alias": "renamed"})
+    assert omitted.status_code == 200, omitted.text
+    assert omitted.json()["budget"] is None
+    restored: Final = http.patch("/management/v1/customer_organizations/org", json={"budget": {"max_budget": 5}})
+    assert restored.status_code == 200, restored.text
+    assert restored.json()["budget"]["max_budget"] == 5
+
+
 def test_template_deletion_guards_names_and_references() -> None:
     http: Final = client()
     org: Final = family(http)

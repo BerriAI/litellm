@@ -332,21 +332,31 @@ class CustomerHierarchyStore:
         )
         return await self.get_organization(organization_id)
 
+    async def overall_budget_patch(
+        self, current_id: str | None, payload: OrganizationPatch | TeamPatch, actor: str
+    ) -> str | None:
+        if "budget" not in payload.model_fields_set:
+            return current_id
+        if payload.budget is None:
+            return None
+        return await self.update_budget(current_id, payload.budget, actor)
+
+    async def delete_released_budget(self, previous_id: str | None, current_id: str | None) -> None:
+        if previous_id is not None and current_id is None:
+            await self.budgets.delete(where={"budget_id": previous_id})
+
     async def update_organization(
         self, organization_id: str, payload: OrganizationPatch, actor: str
     ) -> Organization | Failure:
         organization: Final = await self.get_organization(organization_id)
         if isinstance(organization, Failure):
             return organization
-        budget_id: Final = (
-            await self.update_budget(organization.budget_id, payload.budget, actor)
-            if payload.budget is not None
-            else organization.budget_id
-        )
+        budget_id: Final = await self.overall_budget_patch(organization.budget_id, payload, actor)
         await self.organizations.update(
             where={"customer_org_id": organization_id},
             data={**alias_patch(payload), "budget_id": budget_id, "updated_by": actor},
         )
+        await self.delete_released_budget(organization.budget_id, budget_id)
         return await self.get_organization(organization_id)
 
     async def add_template(self, organization_id: str, payload: BudgetTemplate, actor: str) -> Organization | Failure:
@@ -438,15 +448,12 @@ class CustomerHierarchyStore:
         team: Final = await self.get_team(team_id)
         if isinstance(team, Failure):
             return team
-        budget_id: Final = (
-            await self.update_budget(team.budget_id, payload.budget, actor)
-            if payload.budget is not None
-            else team.budget_id
-        )
+        budget_id: Final = await self.overall_budget_patch(team.budget_id, payload, actor)
         await self.teams.update(
             where={"customer_team_id": team_id},
             data={**alias_patch(payload), "budget_id": budget_id, "updated_by": actor},
         )
+        await self.delete_released_budget(team.budget_id, budget_id)
         return await self.get_team(team_id)
 
     async def create_member(self, payload: MemberCreate, actor: str) -> CustomerMember | Failure:
@@ -504,6 +511,8 @@ class CustomerHierarchyStore:
             payload.budget_override_expires_at
             if "budget_override_expires_at" in payload.model_fields_set
             else member.budget_override_expires_at
+            if budget_id is not None
+            else None
         )
         await self.members.update(
             where={"customer_member_id": member_id},
@@ -515,8 +524,7 @@ class CustomerHierarchyStore:
                 "updated_by": actor,
             },
         )
-        if member.budget_id is not None and budget_id is None:
-            await self.budgets.delete(where={"budget_id": member.budget_id})
+        await self.delete_released_budget(member.budget_id, budget_id)
         return await self.get_member(member_id)
 
     async def list_organizations(self, page: int, page_size: int) -> Page[Organization]:
