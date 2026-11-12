@@ -4569,6 +4569,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/customer/invoice": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Customer Invoice
+         * @description Download a customer usage invoice for the selected period, including every key's model and daily usage.
+         */
+        get: operations["customer_invoice_customer_invoice_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/customer/list": {
         parameters: {
             query?: never;
@@ -60812,6 +60832,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CustomerResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    customer_invoice_customer_invoice_get: {
+        parameters: {
+            query: {
+                /** @description The customer's literal ID, including any commas. */
+                end_user_id: string;
+                /** @description First included date in YYYY-MM-DD format. */
+                start_date: string;
+                /** @description Last included date in YYYY-MM-DD format. */
+                end_date: string;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/pdf": string;
                 };
             };
             /** @description Validation Error */

@@ -99,6 +99,7 @@ proxy = [
     "expression>=5.6.0,<6.0",
     "backports-zstd>=1.0.0,<2.0; python_version < '3.14'",
     "semver>=3.0.4,<4",
+    "reportlab==5.0.1",
 ]
 # Thin client install for the `lite` CLI on developer laptops. The CLI's heavy
 # imports are all guarded, so it runs on the base SDK plus these packages, and

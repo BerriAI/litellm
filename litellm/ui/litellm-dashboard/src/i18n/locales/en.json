@@ -20585,7 +20585,7 @@
   "customerPortal": {
     "switcher": {
       "label": "Customer Portal",
-      "description": "End customers, budgets and chargebacks"
+      "description": "Customer usage, limits and billing"
     },
     "status": {
       "active": "Active",
@@ -20649,6 +20649,15 @@
       "title": "Usage",
       "description": "Daily activity by model across this customer's keys.",
       "error": "Could not load customer usage"
+    },
+    "listSummary": {
+      "title": "Customer usage",
+      "error": "Could not load customer usage totals"
+    },
+    "invoice": {
+      "generate": "Generate invoice PDF",
+      "generating": "Generating PDF...",
+      "error": "Could not generate the invoice. Please try again."
     },
     "createDialog": {
       "title": "Create customer",

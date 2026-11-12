@@ -1,8 +1,10 @@
 import csv
 import io
+import re
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, fields
+from decimal import Decimal
 from itertools import chain
 from types import MappingProxyType, SimpleNamespace
 from typing import Final
@@ -13,6 +15,7 @@ import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 from prisma.errors import DataError
+from pypdf import PdfReader
 
 from litellm import constants
 from litellm.llms.azure.ptu_capacity import AZURE_PTU_CAPACITY
@@ -1580,6 +1583,168 @@ def test_customer_service_routes_deny_non_admins(daily_activity_client: tuple[Te
     for prefix in ("/customer", "/end_user"):
         for suffix, extra_params in route_params:
             _assert_customer_route_denied(client, prefix, suffix, extra_params)
+    repository.aggregated.assert_not_awaited()
+
+
+def _invoice_text(response: httpx.Response) -> str:
+    reader: Final = PdfReader(io.BytesIO(response.content))
+    return " ".join(" ".join(page.extract_text() or "" for page in reader.pages).split())
+
+
+def _invoice_amounts(text: str) -> frozenset[Decimal]:
+    return frozenset(Decimal(value.replace(",", "")) for value in re.findall(r"\$([\d,]+\.\d+)", text))
+
+
+@pytest.mark.parametrize("role", (LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY))
+def test_customer_invoice_returns_scoped_usage_matching_the_customer_graph(
+    daily_activity_client: tuple[TestClient, _FakeRepository], role: LitellmUserRoles
+) -> None:
+    client, _ = daily_activity_client
+    graph: Final = SpendAnalyticsPaginatedResponse.model_validate(
+        client.get("/customer/daily/activity/aggregated", params=_entity_params("end_user_ids", "customer-a")).json()
+    )
+    response: Final = client.get(
+        "/customer/invoice",
+        params={**_DATE_PARAMS, "end_user_id": "customer-a"},
+        headers={"x-user-role": role.value},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"] == "application/pdf"
+    assert response.headers["content-disposition"].startswith("attachment;")
+    assert "2025-01-01" in response.headers["content-disposition"]
+    assert "2025-01-02" in response.headers["content-disposition"]
+    assert "no-store" in response.headers["cache-control"]
+    assert "private" in response.headers["cache-control"]
+    text: Final = _invoice_text(response)
+    assert "Usage invoice" in text
+    assert "Customer A" in text
+    assert "customer-a" in text
+    assert "Customer B" not in text
+    assert "customer-b" not in text
+    assert "popular-group" in text
+    assert "rare-group" in text
+    assert "2025-01-01" in text
+    assert "2025-01-02" in text
+    assert f"{graph.metadata.total_api_requests:,} requests" in text
+    assert f"{graph.metadata.total_tokens:,} tokens" in text
+    amounts: Final = _invoice_amounts(text)
+    assert Decimal(str(graph.metadata.total_spend)) in amounts
+    assert frozenset(Decimal(str(day.metrics.spend)) for day in graph.results) <= amounts
+    for model in ("popular-group", "rare-group"):
+        model_spend: Final = sum(
+            (
+                Decimal(str(day.breakdown.model_groups[model].metrics.spend))
+                for day in graph.results
+                if model in day.breakdown.model_groups
+            ),
+            Decimal(0),
+        )
+        assert model_spend in amounts
+    assert Decimal("100") not in amounts
+
+
+def test_customer_invoice_keeps_a_comma_in_the_customer_id_literal() -> None:
+    rows: Final = _activity_for_entity(
+        DailyActivityTable.CUSTOMER,
+        "customer-a,customer-b",
+        (("invoice-key", "2025-01-01", "literal-model", 7.25, 0),),
+    )
+    repository: Final = _FakeRepository(rows + _seeded_activity())
+    customer_table: Final = _PrismaTable(
+        (SimpleNamespace(user_id="customer-a,customer-b", alias="Combined identifier"),)
+    )
+    with _daily_activity_test_client(repository, _prisma_client(litellm_endusertable=customer_table)) as client:
+        response: Final = client.get(
+            "/customer/invoice", params={**_DATE_PARAMS, "end_user_id": "customer-a,customer-b"}
+        )
+
+    assert response.status_code == 200, response.text
+    text: Final = _invoice_text(response)
+    assert "customer-a,customer-b" in text
+    assert "Combined identifier" in text
+    assert Decimal("7.25") in _invoice_amounts(text)
+    assert Decimal("114.5") not in _invoice_amounts(text)
+
+
+def test_customer_invoice_returns_zero_usage_with_every_day_in_the_selected_period() -> None:
+    repository: Final = _FakeRepository(())
+    with _daily_activity_test_client(repository, _prisma_client()) as client:
+        response: Final = client.get(
+            "/customer/invoice",
+            params={"end_user_id": "customer-a", "start_date": "2025-01-01", "end_date": "2025-01-03"},
+        )
+
+    assert response.status_code == 200, response.text
+    text: Final = _invoice_text(response)
+    assert "Customer A" in text
+    assert "2025-01-01" in text
+    assert "2025-01-02" in text
+    assert "2025-01-03" in text
+    assert _invoice_amounts(text) == frozenset((Decimal("0"),))
+
+
+def test_customer_invoice_preserves_small_model_charges_beyond_the_top_key_limit() -> None:
+    key_rows: Final = tuple(
+        (f"high-key-{index}", "2025-01-01", "popular", 1.0, 0)
+        for index in range(constants.USAGE_TOP_API_KEYS_DEFAULT + 1)
+    ) + (("small-key", "2025-01-02", "rare-model", 0.000000123, 0),)
+    rows: Final = _activity_for_entity(DailyActivityTable.CUSTOMER, "customer-a", key_rows)
+    repository: Final = _FakeRepository(rows)
+    with _daily_activity_test_client(repository, _prisma_client()) as client:
+        response: Final = client.get("/customer/invoice", params={**_DATE_PARAMS, "end_user_id": "customer-a"})
+
+    assert response.status_code == 200, response.text
+    text: Final = _invoice_text(response)
+    assert "rare-group" in text
+    assert "< $0.000001" in text
+    expected_total: Final = Decimal(constants.USAGE_TOP_API_KEYS_DEFAULT + 1) + Decimal("0.000000123")
+    assert expected_total.quantize(Decimal("0.000001")) in _invoice_amounts(text)
+
+
+def test_customer_invoice_denies_non_admins_without_reading_usage(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+) -> None:
+    client, repository = daily_activity_client
+    response: Final = client.get(
+        "/customer/invoice",
+        params={**_DATE_PARAMS, "end_user_id": "customer-a"},
+        headers={"x-user-role": LitellmUserRoles.INTERNAL_USER.value, "x-user-id": "user-a"},
+    )
+
+    assert response.status_code == 403, response.text
+    repository.aggregated.assert_not_awaited()
+
+
+def test_customer_invoice_returns_not_found_for_a_missing_customer(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+) -> None:
+    client, repository = daily_activity_client
+    response: Final = client.get("/customer/invoice", params={**_DATE_PARAMS, "end_user_id": "missing-customer"})
+
+    assert response.status_code == 404, response.text
+    repository.aggregated.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("params", "status"),
+    (
+        ({"start_date": "2025-01-01", "end_date": "2025-01-02"}, 422),
+        ({"end_user_id": "customer-a", "end_date": "2025-01-02"}, 422),
+        ({"end_user_id": "customer-a", "start_date": "2025-01-01"}, 422),
+        ({"end_user_id": "customer-a", "start_date": "2025-1-01", "end_date": "2025-01-02"}, 400),
+        ({"end_user_id": "customer-a", "start_date": "2025-02-30", "end_date": "2025-03-02"}, 400),
+        ({"end_user_id": "customer-a", "start_date": "2025-01-02", "end_date": "2025-01-01"}, 400),
+        ({"end_user_id": "customer-a", "start_date": "2025-01-01", "end_date": "2026-01-03"}, 400),
+    ),
+)
+def test_customer_invoice_rejects_missing_invalid_or_overlong_periods_before_querying(
+    daily_activity_client: tuple[TestClient, _FakeRepository], params: dict[str, str], status: int
+) -> None:
+    client, repository = daily_activity_client
+    response: Final = client.get("/customer/invoice", params=params)
+
+    assert response.status_code == status, response.text
     repository.aggregated.assert_not_awaited()
 
 

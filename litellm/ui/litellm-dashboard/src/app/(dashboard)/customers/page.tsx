@@ -14,6 +14,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import CustomerDetail from "./_components/CustomerDetail";
 import CreateCustomerDialog from "./_components/CreateCustomerDialog";
 import StatusBadge from "./_components/StatusBadge";
+import CustomersUsageSummary from "./_components/CustomersUsageSummary";
 import { rankBySpend, useCustomerUsage } from "./_components/customerPortalData";
 
 export default function CustomersPage() {
@@ -52,6 +53,7 @@ export default function CustomersPage() {
           <Plus className="size-4" /> {t("customerPortal.list.create")}
         </Button>
       </div>
+      <CustomersUsageSummary />
       <p className="text-xs text-muted-foreground">{t("customerPortal.common.blockHint")}</p>
       <div className="rounded-lg border bg-card">
         <div className="border-b p-3">

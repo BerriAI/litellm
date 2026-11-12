@@ -69,6 +69,7 @@ describe("CustomerUsageOverview", () => {
   afterEach(() => {
     testQueryClient.clear();
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it("should render customer-scoped daily usage with the Usage page's totals and model breakdown", async () => {
@@ -85,9 +86,9 @@ describe("CustomerUsageOverview", () => {
     expect(url.pathname).toBe("/customer/daily/activity/aggregated");
     expect(url.searchParams.get("end_user_ids")).toBe("customer-1");
     expect(url.searchParams.get("include_entity_breakdown")).toBe("false");
-    const month = relativeTimeOptions.find((option) => option.shortLabel === "MTD")!.getValue();
-    expect(url.searchParams.get("start_date")).toBe(formatDate(month.from));
-    expect(url.searchParams.get("end_date")).toBe(formatDate(month.to));
+    const period = relativeTimeOptions.find((option) => option.shortLabel === "30d")!.getValue();
+    expect(url.searchParams.get("start_date")).toBe(formatDate(period.from));
+    expect(url.searchParams.get("end_date")).toBe(formatDate(period.to));
 
     await user.click(screen.getByRole("radio", { name: "Tokens" }));
     expect(screen.getByText("500")).toBeInTheDocument();
@@ -151,5 +152,38 @@ describe("CustomerUsageOverview", () => {
     expect(await screen.findByText("No usage in this range")).toBeInTheDocument();
     expect(screen.getByText("$0.00")).toBeInTheDocument();
     expect(screen.queryByRole("status", { name: "Loading top models" })).not.toBeInTheDocument();
+  });
+
+  it("should download a PDF for the selected customer and exact displayed dates", async () => {
+    const user = userEvent.setup();
+    const createObjectURL = vi.fn(() => "blob:invoice");
+    const revokeObjectURL = vi.fn();
+    class DownloadURL extends URL {
+      static createObjectURL = createObjectURL;
+      static revokeObjectURL = revokeObjectURL;
+    }
+    vi.stubGlobal("URL", DownloadURL);
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click");
+    fetchMock.mockImplementation(async (input) =>
+      requestUrl(input).pathname === "/customer/invoice"
+        ? new Response("%PDF-1.7 invoice", { headers: { "Content-Type": "application/pdf" } })
+        : json(activity),
+    );
+    renderWithProviders(<CustomerUsageOverview customerId="customer-1" />, {
+      searchParams: "?id=customer-1&from=2026-10-14&to=2026-11-12",
+    });
+    expect(await screen.findByText("customer-primary")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Generate invoice PDF" }));
+
+    await waitFor(() => expect(createObjectURL).toHaveBeenCalledOnce());
+    expect(createObjectURL).toHaveBeenCalledWith(expect.objectContaining({ type: "application/pdf" }));
+    const url = requestedUrls().find((value) => value.pathname === "/customer/invoice")!;
+    expect(url.searchParams.get("end_user_id")).toBe("customer-1");
+    expect(url.searchParams.get("start_date")).toBe("2026-10-14");
+    expect(url.searchParams.get("end_date")).toBe("2026-11-12");
+    expect(click).toHaveBeenCalledOnce();
+    expect(click.mock.contexts[0]).toHaveAttribute("download", "litellm-usage-invoice-2026-10-14-2026-11-12.pdf");
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:invoice");
   });
 });

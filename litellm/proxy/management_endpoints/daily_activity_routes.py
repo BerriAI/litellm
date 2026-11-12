@@ -1,15 +1,17 @@
+import asyncio
 import csv
 import io
 import json
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import asdict, fields, replace
 from datetime import date, datetime
+from datetime import timezone as datetime_timezone
 from types import MappingProxyType
 from typing import Annotated, Final, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from litellm import constants
 from litellm._logging import verbose_proxy_logger
@@ -108,6 +110,66 @@ async def _resolved_scope(
     if isinstance(result, ScopeDenied):
         raise_public(result)
     return result
+
+
+@router.get(
+    "/customer/invoice",
+    tags=["Customer Management"],
+    response_class=Response,
+    responses={200: {"content": {"application/pdf": {"schema": {"type": "string", "format": "binary"}}}}},
+)
+@management_endpoint_wrapper
+async def customer_invoice(
+    end_user_id: Annotated[str, Query(min_length=1, description="The customer's literal ID, including any commas.")],
+    start_date: Annotated[str, Query(description="First included date in YYYY-MM-DD format.")],
+    end_date: Annotated[str, Query(description="Last included date in YYYY-MM-DD format.")],
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    repository: Annotated[DailyActivityRepository, Depends(get_daily_activity_repository)],
+    prisma_client: Annotated[PrismaClient, Depends(get_daily_activity_prisma_client)],
+    timezone: Annotated[int | None, Query(ge=-840, le=840)] = None,
+) -> Response:
+    """Download a customer usage invoice for the selected period, including every key's model and daily usage."""
+    from litellm.proxy.management_endpoints.customer_invoice import render_customer_invoice
+
+    query: Final = EntityQuery(
+        entity_ids=(end_user_id,),
+        exclude_entity_ids=(),
+        api_key=None,
+        start_date=start_date,
+        end_date=end_date,
+        model=None,
+        timezone_offset_minutes=timezone,
+        include_current_utc_day=False,
+    )
+    resolved: Final = await _resolved_scope(
+        CUSTOMER_RESOLVER, query, user_api_key_dict, prisma_client, user_aggregated=False
+    )
+    period: Final = parse_canonical_date_range(start_date, end_date)
+    if isinstance(period, InvalidDateRange):
+        raise_public(period)
+    if (period.end - period.start).days >= 366:
+        raise_public(InvalidDateRange(reason="Invoice date range must be at most 366 days"))
+    metadata: Final = resolved.entity_metadata or {}
+    if end_user_id not in metadata:
+        raise HTTPException(status_code=404, detail={"error": "Customer not found"})
+    alias: Final = metadata[end_user_id].get("alias")
+    activity: Final = await get_daily_activity_aggregated(repository, resolved.scope, include_entity_breakdown=False)
+    content: Final = await asyncio.to_thread(
+        render_customer_invoice,
+        end_user_id,
+        alias if isinstance(alias, str) else None,
+        (period.start, period.end),
+        activity,
+        datetime.now(datetime_timezone.utc),
+    )
+    return Response(
+        content=content,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="litellm-usage-{start_date}-{end_date}.pdf"',
+            "Cache-Control": "private, no-store",
+        },
+    )
 
 
 def _key_metadata(api_key: str, metadata: Mapping[str, KeyMetadataRow]) -> KeyMetadata:

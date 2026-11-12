@@ -32,7 +32,7 @@ export const relativeTimeOptions: readonly RelativeTimeOption[] = [
     shortLabel: "30d",
     settingValue: "last_30_days",
     getValue: () => ({
-      from: moment().subtract(30, "days").startOf("day").toDate(),
+      from: moment().subtract(29, "days").startOf("day").toDate(),
       to: moment().endOf("day").toDate(),
     }),
   },
