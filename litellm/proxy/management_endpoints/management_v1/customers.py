@@ -1,18 +1,26 @@
-from typing import Annotated, Final, NoReturn
+from math import ceil
+from typing import Annotated, Final, NoReturn, TypeVar
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query, Request, Response
+from typing_extensions import assert_never
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.list_api.common import PROBLEM_TYPE_BASE, ManagementProblem, reject_unknown_query_params
+from litellm.proxy.list_api.common import (
+    PROBLEM_TYPE_BASE,
+    ManagementProblem,
+    build_list_links,
+    reject_unknown_query_params,
+)
 from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V1_PREFIX
-from litellm.proxy.management_helpers.customer_hierarchy import (
-    CustomerHierarchy,
+from litellm.proxy.management_helpers.customer_hierarchy import CustomerHierarchy, ErrorCode, Failure, Page
+from litellm.proxy.management_helpers.utils import (
+    management_endpoint_wrapper,  # pyright: ignore[reportUnknownVariableType]  # legacy decorator is untyped
+)
+from litellm.types.proxy.management_endpoints.customer_hierarchy import (
     CustomerMember,
-    Entity,
-    Failure,
-    Kind,
     MemberCreate,
+    MemberPatch,
     Organization,
     OrganizationCreate,
     OrganizationPatch,
@@ -20,199 +28,329 @@ from litellm.proxy.management_helpers.customer_hierarchy import (
     TeamCreate,
     TeamPatch,
 )
-from litellm.proxy.management_helpers.utils import (
-    management_endpoint_wrapper,  # pyright: ignore[reportUnknownVariableType]  # legacy decorator is untyped
-)
-from litellm.types.proxy.management_endpoints.management_v1 import ProblemDetail
+from litellm.types.proxy.management_endpoints.management_v1 import ListMeta, ListResponse, ProblemDetail
 
-router: Final = APIRouter(prefix=MANAGEMENT_V1_PREFIX)
+T: Final = TypeVar("T")
+
+
+def error_details(code: ErrorCode) -> tuple[int, str, str]:
+    match code:
+        case ErrorCode.NOT_FOUND:
+            return 404, "Not found", "Customer entity not found."
+        case ErrorCode.PARENT_NOT_FOUND:
+            return 404, "Parent not found", "Customer parent not found."
+        case ErrorCode.ALREADY_EXISTS:
+            return 409, "Already exists", "Customer entity ID already exists."
+        case ErrorCode.INVALID_DEFAULT_BUDGET:
+            return (
+                422,
+                "Invalid default budget",
+                "Exactly one organization budget must be marked default.",
+            )
+        case ErrorCode.TEMPLATE_NOT_IN_ORG:
+            return (
+                422,
+                "Template not in organization",
+                "Budget template must belong to the member's organization.",
+            )
+        case ErrorCode.HAS_CHILDREN:
+            return 409, "Has children", "Delete the customer's children before deleting the parent."
+        case ErrorCode.FORBIDDEN:
+            return 403, "Forbidden", "Only proxy admins can manage customer hierarchies."
+        case ErrorCode.DATABASE_UNAVAILABLE:
+            return 503, "Database not connected", "Database not connected."
+        case _:
+            assert_never(code)
 
 
 def raise_public(failure: Failure) -> NoReturn:
+    status, title, detail = error_details(failure.code)
     raise ManagementProblem(
         ProblemDetail(
-            type=f"{PROBLEM_TYPE_BASE}customer-hierarchy-{failure.status}",
-            title={
-                403: "Forbidden",
-                404: "Not found",
-                409: "Conflict",
-                422: "Invalid budget template",
-                503: "Database not connected",
-            }.get(failure.status, "Internal server error"),
-            status=failure.status,
-            detail=failure.detail,
+            type=f"{PROBLEM_TYPE_BASE}customer-hierarchy-{failure.code.value.replace('_', '-')}",
+            title=title,
+            status=status,
+            detail=detail,
         )
     )
 
 
-def require_customer_admin(
-    auth: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
-) -> UserAPIKeyAuth:
+def require_customer_admin(auth: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]) -> UserAPIKeyAuth:
     if auth.user_role != LitellmUserRoles.PROXY_ADMIN:
-        raise_public(Failure(403, "Only proxy admins can manage customer hierarchies."))
+        raise_public(Failure(ErrorCode.FORBIDDEN))
     return auth
+
+
+def customer_actor(auth: Annotated[UserAPIKeyAuth, Depends(require_customer_admin)]) -> str:
+    return auth.user_id or "proxy_admin"
 
 
 def get_customer_hierarchy() -> CustomerHierarchy:
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
-        raise_public(Failure(503, "Database not connected."))
+        raise_public(Failure(ErrorCode.DATABASE_UNAVAILABLE))
     return CustomerHierarchy(prisma_client)
 
 
-def resolve(result: Entity | Failure) -> Entity:
+def resolve(result: T | Failure) -> T:
     if isinstance(result, Failure):
         raise_public(result)
     return result
 
 
+def list_response(result: Page[T], request: Request, page: int, page_size: int) -> ListResponse[T]:
+    total_pages: Final = ceil(result.total_count / page_size)
+    return ListResponse[T].model_validate(
+        {
+            "data": result.data,
+            "meta": ListMeta(total_count=result.total_count, page=page, page_size=page_size, total_pages=total_pages),
+            "links": build_list_links(request, page, total_pages),
+        }
+    )
+
+
+def reject_duplicate_list_params(request: Request) -> None:
+    repeated: Final = tuple(
+        sorted(name for name in request.query_params if len(request.query_params.getlist(name)) > 1)
+    )
+    if repeated:
+        raise ManagementProblem(
+            ProblemDetail(
+                type=f"{PROBLEM_TYPE_BASE}duplicate-query-parameter",
+                title="Duplicate query parameter",
+                status=400,
+                detail=f"Repeated query parameter(s): {', '.join(repeated)}. Each may appear once.",
+            )
+        )
+
+
+router: Final = APIRouter(
+    prefix=MANAGEMENT_V1_PREFIX,
+    tags=["customer hierarchy"],
+    dependencies=(Depends(require_customer_admin), Depends(reject_unknown_query_params)),
+)
+
+
 @router.post(
     "/customer_organizations",
-    tags=["customer hierarchy"],
-    dependencies=(Depends(reject_unknown_query_params),),
     response_model=Organization,
-    description="Create a customer organization and its resolved budget. Proxy admins only.",
+    description="Create a customer organization with resolved budgets. Proxy admins only.",
 )
 @management_endpoint_wrapper
-async def post_customer_organizations(
+async def create_customer_organization(
     data: OrganizationCreate,
-    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(require_customer_admin)],
+    actor: Annotated[str, Depends(customer_actor)],
     hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
-) -> Entity:
-    return resolve(await hierarchy.write(Kind.ORGANIZATION, data, user_api_key_dict.user_id or "proxy_admin"))
+) -> Organization:
+    return resolve(await hierarchy.create_organization(data, actor))
 
 
 @router.get(
     "/customer_organizations/{customer_org_id}",
-    tags=["customer hierarchy"],
-    dependencies=(Depends(reject_unknown_query_params),),
     response_model=Organization,
-    description="Get a customer organization and its resolved budget. Proxy admins only.",
+    description="Get a customer organization with resolved budgets. Proxy admins only.",
 )
 @management_endpoint_wrapper
-async def get_customer_organizations(
+async def get_customer_organization(
     customer_org_id: str,
-    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(require_customer_admin)],
     hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
-) -> Entity:
-    return resolve(await hierarchy.get(Kind.ORGANIZATION, customer_org_id))
+) -> Organization:
+    return resolve(await hierarchy.get_organization(customer_org_id))
 
 
 @router.patch(
     "/customer_organizations/{customer_org_id}",
-    tags=["customer hierarchy"],
-    dependencies=(Depends(reject_unknown_query_params),),
     response_model=Organization,
-    description="Update a customer organization and its resolved budget. Proxy admins only.",
+    description="Update a customer organization and its budgets. Proxy admins only.",
 )
 @management_endpoint_wrapper
-async def patch_customer_organizations(
+async def update_customer_organization(
     customer_org_id: str,
     data: OrganizationPatch,
-    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(require_customer_admin)],
+    actor: Annotated[str, Depends(customer_actor)],
     hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
-) -> Entity:
-    return resolve(
-        await hierarchy.write(Kind.ORGANIZATION, data, user_api_key_dict.user_id or "proxy_admin", customer_org_id)
-    )
+) -> Organization:
+    return resolve(await hierarchy.update_organization(customer_org_id, data, actor))
+
+
+@router.delete(
+    "/customer_organizations/{customer_org_id}",
+    status_code=204,
+    description="Delete a customer organization and its owned budgets. Parents with children return 409. Proxy admins only.",
+)
+@management_endpoint_wrapper
+async def delete_customer_organization(
+    customer_org_id: str,
+    hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+) -> Response:
+    resolve(await hierarchy.delete_organization(customer_org_id))
+    return Response(status_code=204)
+
+
+@router.get(
+    "/customer_organizations",
+    response_model=ListResponse[Organization],
+    dependencies=(Depends(reject_duplicate_list_params),),
+    description="List customer organizations with page-number pagination and resolved budgets. Proxy admins only.",
+)
+@management_endpoint_wrapper
+async def list_customer_organizations(
+    request: Request,
+    hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1)] = 50,
+) -> ListResponse[Organization]:
+    size: Final = min(page_size, 100)
+    result: Final = resolve(await hierarchy.list_organizations(page, size))
+    return list_response(result, request, page, size)
 
 
 @router.post(
     "/customer_teams",
-    tags=["customer hierarchy"],
-    dependencies=(Depends(reject_unknown_query_params),),
     response_model=Team,
-    description="Create a customer team and its resolved budget. Proxy admins only.",
+    description="Create a customer team with resolved budgets. Proxy admins only.",
 )
 @management_endpoint_wrapper
-async def post_customer_teams(
+async def create_customer_team(
     data: TeamCreate,
-    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(require_customer_admin)],
+    actor: Annotated[str, Depends(customer_actor)],
     hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
-) -> Entity:
-    return resolve(await hierarchy.write(Kind.TEAM, data, user_api_key_dict.user_id or "proxy_admin"))
+) -> Team:
+    return resolve(await hierarchy.create_team(data, actor))
 
 
 @router.get(
     "/customer_teams/{customer_team_id}",
-    tags=["customer hierarchy"],
-    dependencies=(Depends(reject_unknown_query_params),),
     response_model=Team,
-    description="Get a customer team and its resolved budget. Proxy admins only.",
+    description="Get a customer team with resolved budgets. Proxy admins only.",
 )
 @management_endpoint_wrapper
-async def get_customer_teams(
+async def get_customer_team(
     customer_team_id: str,
-    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(require_customer_admin)],
     hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
-) -> Entity:
-    return resolve(await hierarchy.get(Kind.TEAM, customer_team_id))
+) -> Team:
+    return resolve(await hierarchy.get_team(customer_team_id))
 
 
 @router.patch(
     "/customer_teams/{customer_team_id}",
-    tags=["customer hierarchy"],
-    dependencies=(Depends(reject_unknown_query_params),),
     response_model=Team,
-    description="Update a customer team and its resolved budget. Proxy admins only.",
+    description="Update a customer team and its budgets. Proxy admins only.",
 )
 @management_endpoint_wrapper
-async def patch_customer_teams(
+async def update_customer_team(
     customer_team_id: str,
     data: TeamPatch,
-    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(require_customer_admin)],
+    actor: Annotated[str, Depends(customer_actor)],
     hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
-) -> Entity:
-    return resolve(await hierarchy.write(Kind.TEAM, data, user_api_key_dict.user_id or "proxy_admin", customer_team_id))
+) -> Team:
+    return resolve(await hierarchy.update_team(customer_team_id, data, actor))
+
+
+@router.delete(
+    "/customer_teams/{customer_team_id}",
+    status_code=204,
+    description="Delete a customer team and its owned budgets. Parents with children return 409. Proxy admins only.",
+)
+@management_endpoint_wrapper
+async def delete_customer_team(
+    customer_team_id: str,
+    hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+) -> Response:
+    resolve(await hierarchy.delete_team(customer_team_id))
+    return Response(status_code=204)
+
+
+@router.get(
+    "/customer_teams",
+    response_model=ListResponse[Team],
+    dependencies=(Depends(reject_duplicate_list_params),),
+    description="List customer teams with page-number pagination and resolved budgets. Proxy admins only.",
+)
+@management_endpoint_wrapper
+async def list_customer_teams(
+    request: Request,
+    hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1)] = 50,
+    parent_org_id: str | None = None,
+) -> ListResponse[Team]:
+    size: Final = min(page_size, 100)
+    result: Final = resolve(await hierarchy.list_teams(parent_org_id, page, size))
+    return list_response(result, request, page, size)
 
 
 @router.post(
     "/customer_members",
-    tags=["customer hierarchy"],
-    dependencies=(Depends(reject_unknown_query_params),),
     response_model=CustomerMember,
-    description="Create a customer member and its resolved budget. Proxy admins only.",
+    description="Create a customer member with resolved budgets. Proxy admins only.",
 )
 @management_endpoint_wrapper
-async def post_customer_members(
+async def create_customer_member(
     data: MemberCreate,
-    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(require_customer_admin)],
+    actor: Annotated[str, Depends(customer_actor)],
     hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
-) -> Entity:
-    return resolve(await hierarchy.write(Kind.MEMBER, data, user_api_key_dict.user_id or "proxy_admin"))
+) -> CustomerMember:
+    return resolve(await hierarchy.create_member(data, actor))
 
 
 @router.get(
     "/customer_members/{customer_member_id}",
-    tags=["customer hierarchy"],
-    dependencies=(Depends(reject_unknown_query_params),),
     response_model=CustomerMember,
-    description="Get a customer member and its resolved budget. Proxy admins only.",
+    description="Get a customer member with resolved budgets. Proxy admins only.",
 )
 @management_endpoint_wrapper
-async def get_customer_members(
+async def get_customer_member(
     customer_member_id: str,
-    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(require_customer_admin)],
     hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
-) -> Entity:
-    return resolve(await hierarchy.get(Kind.MEMBER, customer_member_id))
+) -> CustomerMember:
+    return resolve(await hierarchy.get_member(customer_member_id))
 
 
 @router.patch(
     "/customer_members/{customer_member_id}",
-    tags=["customer hierarchy"],
-    dependencies=(Depends(reject_unknown_query_params),),
     response_model=CustomerMember,
-    description="Update a customer member and its resolved budget. Proxy admins only.",
+    description="Update a customer member and its budgets. Proxy admins only.",
 )
 @management_endpoint_wrapper
-async def patch_customer_members(
+async def update_customer_member(
     customer_member_id: str,
-    data: TeamPatch,
-    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(require_customer_admin)],
+    data: MemberPatch,
+    actor: Annotated[str, Depends(customer_actor)],
     hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
-) -> Entity:
-    return resolve(
-        await hierarchy.write(Kind.MEMBER, data, user_api_key_dict.user_id or "proxy_admin", customer_member_id)
-    )
+) -> CustomerMember:
+    return resolve(await hierarchy.update_member(customer_member_id, data, actor))
+
+
+@router.delete(
+    "/customer_members/{customer_member_id}",
+    status_code=204,
+    description="Delete a customer member and its owned budgets. Parents with children return 409. Proxy admins only.",
+)
+@management_endpoint_wrapper
+async def delete_customer_member(
+    customer_member_id: str,
+    hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+) -> Response:
+    resolve(await hierarchy.delete_member(customer_member_id))
+    return Response(status_code=204)
+
+
+@router.get(
+    "/customer_members",
+    response_model=ListResponse[CustomerMember],
+    dependencies=(Depends(reject_duplicate_list_params),),
+    description="List customer members with page-number pagination and resolved budgets. Proxy admins only.",
+)
+@management_endpoint_wrapper
+async def list_customer_members(
+    request: Request,
+    hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1)] = 50,
+    parent_team_id: str | None = None,
+) -> ListResponse[CustomerMember]:
+    size: Final = min(page_size, 100)
+    result: Final = resolve(await hierarchy.list_members(parent_team_id, page, size))
+    return list_response(result, request, page, size)
