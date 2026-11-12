@@ -1505,7 +1505,7 @@ def _without_tokens(value: str) -> str:
 
     if general_settings_view().get("redact_tokens_in_spend_logs") is False:
         return value
-    return redact_tokens(value, REDACTED_BY_LITELM_STRING)
+    return redact_tokens(strip_null_bytes(value), REDACTED_BY_LITELM_STRING)
 
 
 def _truncated_for_db(value: str, max_length: int) -> str:

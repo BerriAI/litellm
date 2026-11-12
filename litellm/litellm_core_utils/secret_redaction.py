@@ -117,8 +117,8 @@ _TOKEN_SHAPES: Final = (
     r"hf_[A-Za-z0-9]{34,}",
     r"npm_[A-Za-z0-9]{36}\b",
     r"pypi-AgEIcHlwaS5vcmc[A-Za-z0-9\-_]{50,}",
-    r"SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}\b",
-    r"eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+",
+    r"SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])",
+    r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+",
 )
 # Tokens start at a word boundary or right after a JSON escape like "\n", since tool output is often serialized JSON
 _TOKEN_START: Final = r"(?:(?<!\w)|(?<=\\[nrt]))"

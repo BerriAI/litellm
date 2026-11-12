@@ -74,6 +74,14 @@ def test_token_redaction_masks_known_token_shapes(token: str) -> None:
         ("", ""),
         ("password: ordinary text", "password: ordinary text"),
         ("sk-short", "sk-short"),
+        ("eyJ" + "a" * 12 + ".e30.fake_signature", "REDACTED"),
+        ("eyJ" + "a" * 12 + ".x.fake_signature", "REDACTED"),
+        ("not_a_json_header.e30.fake_signature", "not_a_json_header.e30.fake_signature"),
+        ("eyJ" + "a" * 12 + "..fake_signature", "eyJ" + "a" * 12 + "..fake_signature"),
+        ("SG." + "a" * 22 + "." + "b" * 42 + "- ", "REDACTED "),
+        ("SG." + "a" * 22 + "." + "b" * 42 + "_ ", "REDACTED "),
+        ("SG." + "a" * 22 + "." + "b" * 43 + "-x", "SG." + "a" * 22 + "." + "b" * 43 + "-x"),
+        ("eyJ" + "a" * 12 + "-SG." + "a" * 22 + "." + "b" * 43, "REDACTED"),
         ("wordghp_" + "a" * 36, "wordghp_" + "a" * 36),
         ("éghp_" + "a" * 36, "éghp_" + "a" * 36),
         (r"\nghp_" + "a" * 36, r"\nREDACTED"),
@@ -97,20 +105,20 @@ def test_token_redaction_preserves_matching_rules(text: str, expected: str) -> N
     (
         ("-----BEGIN RSA PRIVATE KEY-----\nbody\n-----END RSA PRIVATE KEY-----", "REDACTED"),
         ("ya29." + "a" * 20, "REDACTED"),
-        ("SG." + "a" * 22 + "." + "b" * 43, "REDACTED"),
+        ("SG." + "a" * 22 + "." + "b" * 42 + "-", "REDACTED"),
         ("AKIA" + "A" * 16 + "é", "AKIA" + "A" * 16 + "é"),
         (
-            "SG." + "a" * 22 + "." + "b" * 43 + "-eyJ" + "a" * 12 + ".eyJ" + "b" * 12 + ".c",
-            "REDACTED-REDACTED",
+            "SG." + "a" * 22 + "." + "b" * 43 + "!eyJ" + "a" * 12 + ".eyJ" + "b" * 12 + ".c",
+            "REDACTED!REDACTED",
         ),
         (
-            "sk-" + "a" * 20 + "-SG." + "a" * 22 + "." + "b" * 43,
-            "REDACTED." + "a" * 22 + "." + "b" * 43,
+            "sk-" + "a" * 20,
+            "REDACTED",
         ),
     ),
 )
 def test_failed_jwt_header_does_not_hide_other_tokens(content: str, expected: str) -> None:
-    prefix: Final = "eyJ" + "a" * 12 + "-"
+    prefix: Final = "eyJa-"
     assert redact_tokens(prefix + content) == prefix + expected
 
 

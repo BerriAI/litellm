@@ -1618,6 +1618,39 @@ def test_get_response_for_spend_logs_payload_strips_null_bytes(mock_should_store
 _GITHUB_TOKEN: Final = "ghp_" + "a1B2c3D4e5" * 3 + "F6g7H8"
 
 
+def test_payload_masks_tokens_joined_by_null_byte_removal(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    secret: Final = "ghp_\x00" + "A" * 36
+    messages: Final = [{"role": "tool", "content": secret}]
+    compaction: Final = {"type": "compaction", "content": secret}
+    kwargs: Final[dict[str, object]] = {
+        "model": "gpt-4o-mini",
+        "litellm_params": {
+            "proxy_server_request": {"body": {"messages": messages, "input": [compaction]}},
+            "metadata": {},
+        },
+        "standard_logging_object": {
+            "call_type": "_arealtime",
+            "model_map_information": None,
+            "metadata": {},
+            "messages": messages,
+            "response": {"content": secret, "output": [compaction]},
+        },
+    }
+    now: Final = datetime.datetime(2026, 1, 1, tzinfo=timezone.utc)
+    payload: Final = get_logging_payload(kwargs, litellm.ModelResponse(choices=[]), now, now)
+    masked_messages: Final = [{"role": "tool", "content": "REDACTED_BY_LITELM"}]
+    masked_compaction: Final = {"type": "compaction", "content": "REDACTED_BY_LITELM"}
+
+    assert json.loads(payload["proxy_server_request"]) == {"messages": masked_messages, "input": [masked_compaction]}
+    assert json.loads(payload["messages"]) == masked_messages
+    assert json.loads(payload["response"]) == {"content": "REDACTED_BY_LITELM", "output": [masked_compaction]}
+    assert messages == [{"role": "tool", "content": secret}]
+    assert compaction == {"type": "compaction", "content": secret}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("redact", (None, False, True))
 async def test_token_redaction_thread_and_inline_payloads_match(
@@ -1680,7 +1713,9 @@ _TOKEN_SHAPED_SECRETS: Final = (
 
 
 @pytest.mark.parametrize("secret", _TOKEN_SHAPED_SECRETS)
-def test_stored_request_masks_a_token_returned_in_an_anthropic_tool_result(monkeypatch, secret: str):
+def test_stored_request_masks_a_token_returned_in_an_anthropic_tool_result(
+    monkeypatch: pytest.MonkeyPatch, secret: str
+) -> None:
     from litellm.proxy import proxy_server
 
     monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
@@ -1701,7 +1736,7 @@ def test_stored_request_masks_a_token_returned_in_an_anthropic_tool_result(monke
     ]
 
 
-def test_stored_response_masks_a_token_in_a_tool_call_argument(monkeypatch):
+def test_stored_response_masks_a_token_in_a_tool_call_argument(monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.proxy import proxy_server
 
     monkeypatch.setattr(
@@ -1725,7 +1760,7 @@ def test_stored_response_masks_a_token_in_a_tool_call_argument(monkeypatch):
     assert stored["content"][1]["input"]["cmd"] == "git clone https://REDACTED_BY_LITELM@github.com/o/r"
 
 
-def test_stored_request_masks_a_token_kept_in_the_head_of_a_truncated_string(monkeypatch):
+def test_stored_request_masks_a_token_kept_in_the_head_of_a_truncated_string(monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.proxy import proxy_server
 
     monkeypatch.setattr(proxy_server, "general_settings", {})
@@ -1746,7 +1781,7 @@ def test_stored_request_masks_a_token_kept_in_the_head_of_a_truncated_string(mon
         "A" * 5000,
     ),
 )
-def test_stored_request_keeps_text_that_only_resembles_credentials(monkeypatch, text: str):
+def test_stored_request_keeps_text_that_only_resembles_credentials(monkeypatch: pytest.MonkeyPatch, text: str) -> None:
     from litellm.proxy import proxy_server
 
     monkeypatch.setattr(proxy_server, "general_settings", {})
@@ -1755,7 +1790,7 @@ def test_stored_request_keeps_text_that_only_resembles_credentials(monkeypatch, 
     assert stored["text"] == text
 
 
-def test_stored_request_preserves_a_token_in_a_tool_result_without_redaction(monkeypatch):
+def test_stored_request_preserves_a_token_in_a_tool_result_without_redaction(monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.proxy import proxy_server
 
     monkeypatch.setattr(
