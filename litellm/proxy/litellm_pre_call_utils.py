@@ -2125,6 +2125,7 @@ class LiteLLMProxyRequestSetup:
             user_api_key_org_alias=user_api_key_dict.organization_alias,
             user_api_key_team_alias=user_api_key_dict.team_alias,
             user_api_key_end_user_id=user_api_key_dict.end_user_id,
+            user_api_key_customer_member_id=user_api_key_dict.customer_member_id,
             user_api_key_user_email=user_api_key_dict.user_email,
             user_api_key_request_route=user_api_key_dict.request_route,
             user_api_key_budget_reset_at=(
@@ -2154,6 +2155,13 @@ class LiteLLMProxyRequestSetup:
         user_api_key_logged_metadata: Final = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
             user_api_key_dict=user_api_key_dict
         )
+        request_fields: Final = _REQUEST_FIELDS.validate_python(data)
+        for metadata_key in ("metadata", "litellm_metadata"):
+            if (
+                isinstance(metadata := request_fields.get(metadata_key), dict)
+                and "user_api_key_customer_member_id" in metadata
+            ):
+                metadata["user_api_key_customer_member_id"] = user_api_key_dict.customer_member_id
         data[_metadata_variable_name].update(user_api_key_logged_metadata)
         data[_metadata_variable_name]["user_api_key"] = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict)
 

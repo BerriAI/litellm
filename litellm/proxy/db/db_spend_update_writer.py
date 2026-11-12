@@ -37,7 +37,7 @@ from litellm.constants import (
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
 )
 from litellm.litellm_core_utils.batch_utils import BATCH_COST_REQUEST_ID_SUFFIX
-from litellm.litellm_core_utils.core_helpers import finite_cost, single_log_line
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, finite_cost, single_log_line
 from litellm.litellm_core_utils.litellm_logging import coerce_model_access_groups
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_share_of_spend
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -117,6 +117,18 @@ _JsonPayload: TypeAlias = Mapping[str, object] | Sequence[object] | str | int | 
 _JSON_VALUE_ADAPTER: Final[TypeAdapter[_JsonPayload]] = TypeAdapter(
     _JsonPayload, config=ConfigDict(strict=True, hide_input_in_errors=True)
 )
+
+
+def _customer_member_id_for_spend(request_fields: Mapping[str, object]) -> str | None:
+    params: Final = as_str_mapping(request_fields.get("litellm_params")) or {}
+    standard_logging: Final = as_str_mapping(request_fields.get("standard_logging_object")) or {}
+    for candidate in (params.get("litellm_metadata"), params.get("metadata"), standard_logging.get("metadata")):
+        if (metadata := as_str_mapping(candidate)) is None or "user_api_key_customer_member_id" not in metadata:
+            continue
+        if isinstance(member_id := metadata["user_api_key_customer_member_id"], str) and member_id:
+            return member_id
+        return None
+    return None
 
 
 def _parsed_request_tags(request_tags: object) -> Iterable[object] | TypeError | None:
@@ -287,9 +299,16 @@ class _SpendBatch(Protocol):
     @property
     def litellm_modelaccessgroupbudgettable(self) -> BatchTable: ...
 
+    @property
+    def litellm_customermembertable(self) -> BatchTable: ...
+
 
 _EntitySpendTable: TypeAlias = Literal[
-    "litellm_tagtable", "litellm_agentstable", "litellm_modelaccessgroupbudgettable", "litellm_projecttable"
+    "litellm_tagtable",
+    "litellm_agentstable",
+    "litellm_modelaccessgroupbudgettable",
+    "litellm_projecttable",
+    "litellm_customermembertable",
 ]
 
 
@@ -299,6 +318,7 @@ _ENTITY_SPEND_TABLES: Final[Mapping[_EntitySpendTable, Callable[[_SpendBatch], B
         "litellm_agentstable": lambda batcher: batcher.litellm_agentstable,
         "litellm_modelaccessgroupbudgettable": lambda batcher: batcher.litellm_modelaccessgroupbudgettable,
         "litellm_projecttable": lambda batcher: batcher.litellm_projecttable,
+        "litellm_customermembertable": lambda batcher: batcher.litellm_customermembertable,
     }
 )
 
@@ -363,6 +383,7 @@ _SpendTableName = Literal[
     "tag_list_transactions",
     "model_access_group_list_transactions",
     "agent_list_transactions",
+    "customer_member_list_transactions",
 ]
 _SPEND_TABLE_COMMIT_ORDER: Final[tuple[_SpendTableName, ...]] = (
     "org_list_transactions",
@@ -376,6 +397,7 @@ _SPEND_TABLE_COMMIT_ORDER: Final[tuple[_SpendTableName, ...]] = (
     "tag_list_transactions",
     "model_access_group_list_transactions",
     "agent_list_transactions",
+    "customer_member_list_transactions",
 )
 
 
@@ -475,6 +497,7 @@ _ENTITY_SPEND_MODELS: Final[Mapping[_EntitySpendTable, str]] = MappingProxyType(
         "litellm_agentstable": "LiteLLM_AgentsTable",
         "litellm_modelaccessgroupbudgettable": "LiteLLM_ModelAccessGroupBudgetTable",
         "litellm_projecttable": "LiteLLM_ProjectTable",
+        "litellm_customermembertable": "LiteLLM_CustomerMemberTable",
     }
 )
 
@@ -774,6 +797,7 @@ class DBSpendUpdateWriter:
         )
         use_ledger: Final = proxy_settings.get("use_spend_logs_ledger", True) is not False
         request_fields: Final = _SPEND_METADATA_ADAPTER.validate_python(kwargs or {})
+        customer_member_id: Final = _customer_member_id_for_spend(request_fields)
         if kwargs is not None:
             kwargs[ACCOUNTING_LEDGER_KWARG] = use_ledger  # rebind-ok: spend counters leave ledger windows to the worker
         try:
@@ -831,6 +855,7 @@ class DBSpendUpdateWriter:
                         "api_key": _persistable_api_key(hashed_token, payload.get("api_key") or ""),
                         "user": user_id,
                         "end_user": end_user_id,
+                        "customer_member_id": customer_member_id,
                         "team_id": team_id,
                         "organization_id": org_id,
                         "project_id": project_id,
@@ -887,6 +912,7 @@ class DBSpendUpdateWriter:
                         org_id=org_id,
                         project_id=project_id,
                         end_user_id=end_user_id,
+                        customer_member_id=customer_member_id,
                         prisma_client=prisma_client,
                         litellm_proxy_budget_name=litellm_proxy_budget_name,
                         payload=payload,
@@ -1357,6 +1383,7 @@ class DBSpendUpdateWriter:
         payload: SpendLogsPayload,
         request_model_access_groups: Sequence[str] = (),
         project_id: str | None = None,
+        customer_member_id: str | None = None,
     ):
         """
         Runs every spend-update helper for one request. Each helper goes through
@@ -1365,6 +1392,18 @@ class DBSpendUpdateWriter:
         """
         payload_copy: Final = copy.deepcopy(payload)
         request_tags: Final = payload_copy.get("request_tags")
+        if customer_member_id is not None and prisma_client is not None:
+            await self._run_spend_update_step(
+                "customer_member_spend",
+                self.spend_update_queue.add_update(
+                    SpendUpdateQueueItem(
+                        entity_type=Litellm_EntityType.CUSTOMER_MEMBER,
+                        entity_id=customer_member_id,
+                        response_cost=response_cost,
+                    )
+                ),
+                payload=payload_copy,
+            )
         await self._run_spend_update_step(
             "_update_user_db",
             self._update_user_db(
@@ -1925,7 +1964,7 @@ class DBSpendUpdateWriter:
                     verbose_proxy_logger.info(
                         "Spend tracking - committing spend updates from Redis to DB: "
                         "keys=%d, users=%d, teams=%d, orgs=%d, end_users=%d, team_members=%d, org_members=%d, "
-                        "projects=%d, tags=%d, agents=%d, model_access_groups=%d",
+                        "projects=%d, tags=%d, agents=%d, model_access_groups=%d, customer_members=%d",
                         len(db_spend_update_transactions.get("key_list_transactions") or ()),
                         len(db_spend_update_transactions.get("user_list_transactions") or ()),
                         len(db_spend_update_transactions.get("team_list_transactions") or ()),
@@ -1937,6 +1976,7 @@ class DBSpendUpdateWriter:
                         len(db_spend_update_transactions.get("tag_list_transactions") or ()),
                         len(db_spend_update_transactions.get("agent_list_transactions") or ()),
                         len(db_spend_update_transactions.get("model_access_group_list_transactions") or ()),
+                        len(db_spend_update_transactions.get("customer_member_list_transactions") or ()),
                     )
                     try:
                         await self._commit_spend_updates_to_db(
@@ -2698,6 +2738,19 @@ class DBSpendUpdateWriter:
         )
         if on_table_committed is not None:
             on_table_committed("agent_list_transactions")
+
+        await DBSpendUpdateWriter._update_entity_spend_in_db(
+            entity_name="Customer member",
+            transactions=db_spend_update_transactions.get("customer_member_list_transactions"),
+            outer_transaction=outer_transaction,
+            table_accessor="litellm_customermembertable",
+            where_field="customer_member_id",
+            n_retry_times=n_retry_times,
+            prisma_client=prisma_client,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        if on_table_committed is not None:
+            on_table_committed("customer_member_list_transactions")
 
     @staticmethod
     @with_service_target(AUTH_OBJECTS_TARGET)

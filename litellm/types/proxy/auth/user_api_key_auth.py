@@ -135,6 +135,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     """
 
     api_key: str | None = None
+    customer_member_id: str | None = None
     _access_group_rule_grants: frozenset[str] = PrivateAttr(default=frozenset())
 
     @property

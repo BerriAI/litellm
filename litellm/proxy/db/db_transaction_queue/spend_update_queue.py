@@ -136,6 +136,7 @@ class SpendUpdateQueue(BaseUpdateQueue):
         db_spend_update_transactions: Final = DBSpendUpdateTransactions(
             user_list_transactions={},
             end_user_list_transactions={},
+            customer_member_list_transactions={},
             key_list_transactions={},
             team_list_transactions={},
             team_member_list_transactions={},
@@ -151,6 +152,7 @@ class SpendUpdateQueue(BaseUpdateQueue):
         entity_type_to_dict_key: Final = {
             Litellm_EntityType.USER: "user_list_transactions",
             Litellm_EntityType.END_USER: "end_user_list_transactions",
+            Litellm_EntityType.CUSTOMER_MEMBER: "customer_member_list_transactions",
             Litellm_EntityType.KEY: "key_list_transactions",
             Litellm_EntityType.TEAM: "team_list_transactions",
             Litellm_EntityType.TEAM_MEMBER: "team_member_list_transactions",
@@ -187,6 +189,8 @@ class SpendUpdateQueue(BaseUpdateQueue):
                 transactions_dict = db_spend_update_transactions["user_list_transactions"]
             elif dict_key == "end_user_list_transactions":
                 transactions_dict = db_spend_update_transactions["end_user_list_transactions"]
+            elif dict_key == "customer_member_list_transactions":
+                transactions_dict = db_spend_update_transactions.get("customer_member_list_transactions")
             elif dict_key == "key_list_transactions":
                 transactions_dict = db_spend_update_transactions["key_list_transactions"]
             elif dict_key == "team_list_transactions":

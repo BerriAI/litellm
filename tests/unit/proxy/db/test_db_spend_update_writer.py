@@ -2869,6 +2869,15 @@ async def test_commit_daily_tag_spend_no_requeue_on_success():
             ["agent_a", "agent_b", "agent_c"],
             id="agent",
         ),
+        pytest.param(
+            "customer_member_list_transactions",
+            {"member_c": 0.1, "member_a": 0.2, "member_b": 0.3},
+            "litellm_customermembertable",
+            "update_many",
+            "customer_member_id",
+            ["member_a", "member_b", "member_c"],
+            id="customer_member",
+        ),
     ],
 )
 @pytest.mark.asyncio
@@ -3914,6 +3923,7 @@ async def test_commit_spend_updates_to_db_reports_each_completed_table():
         call("tag_list_transactions"),
         call("model_access_group_list_transactions"),
         call("agent_list_transactions"),
+        call("customer_member_list_transactions"),
     ]
 
 
@@ -4243,6 +4253,7 @@ async def test_update_daily_spend_retries_deadlock(monkeypatch):
         ("org_member_list_transactions", "organization_id::org-1::user_id::user-1"),
         ("tag_list_transactions", "tag-1"),
         ("agent_list_transactions", "agent-1"),
+        ("customer_member_list_transactions", "customer-member-1"),
     ],
 )
 @pytest.mark.asyncio

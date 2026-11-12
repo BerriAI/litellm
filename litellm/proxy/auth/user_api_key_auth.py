@@ -36,6 +36,7 @@ from litellm.constants import (
     LITELLM_PROXY_BUDGET_NAME,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
     MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY,
+    STANDARD_CUSTOMER_MEMBER_ID_HEADER,
 )
 from litellm.integrations.otel.model.config import is_otel_v2_enabled
 from litellm.integrations.otel.runtime import phase_event, phase_span, seed_request_identity
@@ -102,7 +103,10 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     virtual_key_max_budget_check,
     virtual_key_soft_budget_check,
 )
-from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
+from litellm.proxy.auth.auth_exception_handler import (
+    DB_UNAVAILABLE_FALLBACK_USER_ID,
+    UserAPIKeyAuthExceptionHandler,
+)
 from litellm.proxy.auth.auth_method import AuthMethod
 from litellm.proxy.auth.auth_object_prefetch import (
     AUTH_OBJECTS_TARGET,
@@ -114,6 +118,7 @@ from litellm.proxy.auth.auth_utils import (
     abbreviate_api_key,
     checks_team_s3_buckets_in_handler,
     fallback_target_model_name,
+    get_customer_member_id_from_request_headers,
     get_end_user_id_from_request_body,
     get_model_from_request,
     get_request_route,
@@ -126,6 +131,7 @@ from litellm.proxy.auth.auth_utils import (
     pre_db_read_auth_checks,
     request_dispatched_to_pass_through_endpoint,
     request_dispatched_to_provider_pass_through,
+    resolve_customer_member,
     route_in_additonal_public_routes,
 )
 from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
@@ -4458,6 +4464,26 @@ async def _authorize_authenticated_request(
             user_model,
         )
 
+        user_api_key_auth_obj.customer_member_id = None  # rebind-ok: clear request identity before failure logging
+        customer_member_id: Final = get_customer_member_id_from_request_headers(
+            _GENERAL_SETTINGS_ADAPTER.validate_python(safe_get_request_headers(request) or {})
+        )
+        member_settings: Final = _GENERAL_SETTINGS_ADAPTER.validate_python(general_settings)
+        if customer_member_id is not None and user_api_key_auth_obj.user_id == DB_UNAVAILABLE_FALLBACK_USER_ID:
+            raise ProxyException(
+                message="API key customer organization scope could not be verified. Please retry shortly.",
+                type="customer_member_lookup_failed",
+                param=STANDARD_CUSTOMER_MEMBER_ID_HEADER,
+                code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                openai_code="customer_member_lookup_failed",
+            )
+        user_api_key_auth_obj.customer_member_id = await resolve_customer_member(  # rebind-ok: legacy admission updates the request-owned auth object for its handler
+            customer_member_id,
+            prisma_client,
+            _GENERAL_SETTINGS_ADAPTER.validate_python(user_api_key_auth_obj.metadata or {}),  # pyright: ignore[reportUnknownMemberType]  # legacy key metadata is validated as a JSON mapping here
+            reject_unknown_customer_member=member_settings.get("reject_unknown_customer_member", True) is not False,
+        )
+
         grants: Final = await access_group_ids_for_identity(user_api_key_auth_obj)
         user_api_key_auth_obj.apply_access_group_rule_grants(grants)
         key_check_required: Final = (
@@ -4707,14 +4733,7 @@ async def user_api_key_auth(
             if body_parse_exception is not None:
                 raise body_parse_exception
             raise
-        from litellm.proxy.proxy_server import (
-            general_settings,  # pyright: ignore[reportUnknownVariableType]  # proxy global is validated below
-        )
-
-        settings: Final = _GENERAL_SETTINGS_ADAPTER.validate_python(general_settings)
-        user_api_key_auth_obj: Final = (
-            authenticated.model_copy() if settings.get("access_group_rules") else authenticated
-        )
+        user_api_key_auth_obj: Final = authenticated.model_copy(update={"customer_member_id": None})
         user_api_key_auth_obj.budget_reservation = None
         user_api_key_auth_obj.agent_caller = agent_caller_from_headers(
             safe_get_request_headers(request), user_api_key_auth_obj

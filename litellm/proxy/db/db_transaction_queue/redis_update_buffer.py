@@ -80,6 +80,7 @@ BufferedSpendTransactions: TypeAlias = DBSpendUpdateTransactions | Mapping[str, 
 _SpendTransactionField: TypeAlias = Literal[
     "user_list_transactions",
     "end_user_list_transactions",
+    "customer_member_list_transactions",
     "key_list_transactions",
     "team_list_transactions",
     "team_member_list_transactions",
@@ -94,6 +95,7 @@ _SpendTransactionField: TypeAlias = Literal[
 _SPEND_TRANSACTION_FIELDS: Final[tuple[_SpendTransactionField, ...]] = (
     "user_list_transactions",
     "end_user_list_transactions",
+    "customer_member_list_transactions",
     "key_list_transactions",
     "team_list_transactions",
     "team_member_list_transactions",
@@ -451,6 +453,10 @@ class RedisUpdateBuffer:
                 (
                     Litellm_EntityType.END_USER,
                     db_spend_update_transactions.get("end_user_list_transactions"),
+                ),
+                (
+                    Litellm_EntityType.CUSTOMER_MEMBER,
+                    db_spend_update_transactions.get("customer_member_list_transactions"),
                 ),
                 (
                     Litellm_EntityType.KEY,
@@ -1034,6 +1040,9 @@ class RedisUpdateBuffer:
         return DBSpendUpdateTransactions(
             user_list_transactions=_merged_entity_transactions(list_of_transactions, "user_list_transactions"),
             end_user_list_transactions=_merged_entity_transactions(list_of_transactions, "end_user_list_transactions"),
+            customer_member_list_transactions=_merged_entity_transactions(
+                list_of_transactions, "customer_member_list_transactions"
+            ),
             key_list_transactions=_merged_entity_transactions(list_of_transactions, "key_list_transactions"),
             team_list_transactions=_merged_entity_transactions(list_of_transactions, "team_list_transactions"),
             team_member_list_transactions=_merged_entity_transactions(

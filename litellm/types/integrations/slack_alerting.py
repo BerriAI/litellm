@@ -306,6 +306,7 @@ class Litellm_EntityType(enum.Enum):
     KEY = "key"
     USER = "user"
     END_USER = "end_user"
+    CUSTOMER_MEMBER = "customer_member"
     TEAM = "team"
     TEAM_MEMBER = "team_member"
     ORGANIZATION = "organization"

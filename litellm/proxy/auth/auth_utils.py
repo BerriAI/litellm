@@ -8,7 +8,7 @@ from functools import cache, lru_cache
 from itertools import accumulate, chain, repeat
 from logging import Logger
 from types import MappingProxyType
-from typing import Any, Final, Literal, Protocol, TypeAlias
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias
 
 from fastapi import HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, PositiveInt, TypeAdapter, ValidationError
@@ -22,6 +22,7 @@ from litellm.constants import (
     INVALID_VIRTUAL_KEY_ERROR_MARKER,
     MINIMUM_CUSTOM_KEY_LENGTH,
     STANDARD_CUSTOMER_ID_HEADERS,
+    STANDARD_CUSTOMER_MEMBER_ID_HEADER,
 )
 from litellm.litellm_core_utils.clientside_credential_handler import (
     _ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE,  # pyright: ignore[reportPrivateUsage]  # one canonical list of deployment credential fields
@@ -46,6 +47,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     read_request_path_params,
     resolve_inference_model,
 )
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
 )
@@ -65,6 +67,9 @@ from litellm.types.utils import (
     oauth_token_exchange_litellm_params,
 )
 from litellm.types.videos.main import DecodedVideoId
+
+if TYPE_CHECKING:
+    from litellm.proxy.utils import PrismaClient
 
 
 def is_unauthorized_error(exception: BaseException | None) -> bool:
@@ -2291,6 +2296,85 @@ def _get_customer_id_from_standard_headers(
                 if user_id_str:
                     return user_id_str
     return None
+
+
+def get_customer_member_id_from_request_headers(
+    request_headers: Mapping[str, object] | None,
+) -> str | None:
+    if request_headers is None:
+        return None
+    return next(
+        (
+            _coerce_user_id_to_str(value)
+            for name, value in request_headers.items()
+            if name.lower() == STANDARD_CUSTOMER_MEMBER_ID_HEADER
+        ),
+        None,
+    )
+
+
+class _CustomerMemberTeam(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+    parent_org_id: str
+
+
+class _CustomerMemberIdentity(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    customer_member_id: str
+    parent_team: _CustomerMemberTeam | None
+
+
+async def resolve_customer_member(
+    customer_member_id: str | None,
+    prisma_client: "PrismaClient | None",
+    key_metadata: Mapping[str, object] | None,
+    *,
+    reject_unknown_customer_member: bool = True,
+) -> str | None:
+    if customer_member_id is None:
+        return None
+    try:
+        raw_member: Final[object] = (
+            await prisma_client.db.litellm_customermembertable.find_unique(  # pyright: ignore[reportAny]  # PrismaClient exposes a dynamic db; the row is validated below
+                where={"customer_member_id": customer_member_id},
+                include={"parent_team": True},
+            )
+            if prisma_client is not None
+            else None
+        )
+    except Exception as error:
+        if PrismaDBExceptionHandler.is_database_service_unavailable_error(error):
+            raise ProxyException(
+                message="Customer member could not be verified. Please retry shortly.",
+                type="customer_member_lookup_failed",
+                param=STANDARD_CUSTOMER_MEMBER_ID_HEADER,
+                code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                openai_code="customer_member_lookup_failed",
+            ) from error
+        raise
+    member: Final = (
+        _CustomerMemberIdentity.model_validate(raw_member, from_attributes=True) if raw_member is not None else None
+    )
+    if member is None or member.parent_team is None:
+        if not reject_unknown_customer_member:
+            return None
+        raise ProxyException(
+            message="Customer member not found.",
+            type="customer_member_not_found",
+            param=STANDARD_CUSTOMER_MEMBER_ID_HEADER,
+            code=status.HTTP_401_UNAUTHORIZED,
+            openai_code="customer_member_not_found",
+        )
+    customer_org_id: Final = key_metadata.get("customer_org_id") if key_metadata is not None else None
+    if customer_org_id is not None and customer_org_id != member.parent_team.parent_org_id:
+        raise ProxyException(
+            message="API key is not allowed to act for this customer member organization.",
+            type="customer_member_org_mismatch",
+            param=STANDARD_CUSTOMER_MEMBER_ID_HEADER,
+            code=status.HTTP_403_FORBIDDEN,
+            openai_code="customer_member_org_mismatch",
+        )
+    return member.customer_member_id
 
 
 def _coerce_user_id_to_str(value: object) -> str | None:

@@ -45,6 +45,7 @@ def entity_transactions(contributions: tuple[Contribution, ...]) -> "DBSpendUpda
     return {
         "user_list_transactions": dict(_entity_totals(contributions, "LiteLLM_UserTable")),
         "end_user_list_transactions": dict(_entity_totals(contributions, "LiteLLM_EndUserTable")),
+        "customer_member_list_transactions": dict(_entity_totals(contributions, "LiteLLM_CustomerMemberTable")),
         "key_list_transactions": dict(_entity_totals(contributions, "LiteLLM_VerificationToken")),
         "team_list_transactions": dict(_entity_totals(contributions, "LiteLLM_TeamTable")),
         "team_member_list_transactions": dict(_entity_totals(contributions, "LiteLLM_TeamMembership")),

@@ -27,6 +27,8 @@ def _payload(spend: float, started: datetime = _NOW, window_start: datetime = _N
                     "user": "user/1",
                     "team_id": "team",
                     "organization_id": "org::1",
+                    "end_user": "end-user",
+                    "customer_member_id": "customer-member",
                 },
                 "accounting_windows": [
                     {
@@ -79,6 +81,8 @@ def test_entity_transactions_key_memberships_the_way_the_writer_applies_them() -
 
     assert transactions["key_list_transactions"] == {"key": 0.25}
     assert transactions["org_list_transactions"] == {"org::1": 0.25}
+    assert transactions["end_user_list_transactions"] == {"end-user": 0.25}
+    assert transactions["customer_member_list_transactions"] == {"customer-member": 0.25}
     assert transactions["team_member_list_transactions"] == {"team_id::team::user_id::user/1": 0.25}
     ((org_member_key, org_member_spend),) = transactions["org_member_list_transactions"].items()
     _, quoted_org_id, _, quoted_user_id = org_member_key.split("::")
