@@ -21,6 +21,11 @@ impl Serialize for Ordered<'_> {
                 map.serialize_entry(name, value)?;
             }
         }
+        for (name, value) in self.sent {
+            if !self.order.contains(name) {
+                map.serialize_entry(name, value)?;
+            }
+        }
         map.end()
     }
 }
@@ -71,8 +76,14 @@ mod tests {
         &["messages", "max_tokens", "model"],
         r#"{"messages":[],"max_tokens":8,"model":"m"}"#
     )]
-    #[case::unlisted_key_left_out(&["model"], r#"{"model":"m"}"#)]
-    #[case::unknown_name_skipped(&["absent", "model"], r#"{"model":"m"}"#)]
+    #[case::unlisted_keys_follow_in_sent_order(
+        &["model"],
+        r#"{"model":"m","max_tokens":8,"messages":[]}"#
+    )]
+    #[case::unknown_name_skipped(
+        &["absent", "model", "max_tokens", "messages"],
+        r#"{"model":"m","max_tokens":8,"messages":[]}"#
+    )]
     fn top_level_keys_follow_the_given_order(#[case] order: &[&str], #[case] expected: &str) {
         let sent = json!({"model": "m", "max_tokens": 8, "messages": []});
 
