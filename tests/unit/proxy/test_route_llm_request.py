@@ -162,6 +162,7 @@ def test_qca_team_public_name_rejects_request_selector_overrides(selector: str) 
         ("organization_max_budget", 10.0),
         ("end_user_max_budget", 10.0),
         ("budget_id", "budget-config-id"),
+        ("budget_limits", ({"budget_duration": "1d", "max_budget": 10.0},)),
         ("budget_reservation", {"entries": [{"counter_key": "spend:team:team-id"}]}),
         ("model_max_budget", {"qoder-agent": {"max_budget": 10.0}}),
         ("user_model_max_budget", {"qoder-agent": {"max_budget": 10.0}}),

@@ -1,11 +1,13 @@
 from collections.abc import AsyncIterator, Mapping
 from datetime import datetime, timezone
+from itertools import count
 from typing import Final
 from urllib.parse import urlsplit
 
 import httpx
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
+from litellm.constants import request_timeout as DEFAULT_REQUEST_TIMEOUT
 from litellm.exceptions import APIError, AuthenticationError, BadRequestError, RateLimitError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines
@@ -210,6 +212,7 @@ async def _normalized_stream(
     response: httpx.Response, interaction_id: str, agent: str
 ) -> AsyncIterator[InteractionsAPIStreamingResponse]:
     created: Final = datetime.now(timezone.utc).isoformat()
+    step_indexes: Final = count()
     try:
         yield InteractionsAPIStreamingResponse(
             event_type="interaction.created",
@@ -226,11 +229,24 @@ async def _normalized_stream(
         async for event in _stream_events(response):
             step, status = _normalized_event(event)
             if step is not None:
+                (step_index,) = (next(step_indexes),)
+                yield InteractionsAPIStreamingResponse(
+                    event_type="step.start",
+                    interaction_id=interaction_id,
+                    index=step_index,
+                    step={"type": "model_output", "content": []},
+                )
                 yield InteractionsAPIStreamingResponse(
                     event_type="step.delta",
                     interaction_id=interaction_id,
-                    index=0,
+                    index=step_index,
                     delta=dict(_text_delta(step)),
+                )
+                yield InteractionsAPIStreamingResponse(
+                    event_type="step.stop",
+                    interaction_id=interaction_id,
+                    index=step_index,
+                    status="done",
                 )
             if status is not None:
                 if status == "failed":
@@ -372,7 +388,7 @@ async def _session_id(
     create_response: Final = await client.post(
         f"{base}/sessions",
         headers=headers,
-        json={"agent": agent_id, "environment_id": environment_id},
+        json={"agent": agent_id, "environment_id": environment_id, "metadata": {"source": "litellm"}},
     )
     create_response.raise_for_status()
     return _require_identifier(QCASession.model_validate(create_response.json()).id, "sess_", "session id")
@@ -415,7 +431,9 @@ async def create_qca_interaction(
     except QCAValidationError as error:
         raise BadRequestError(message=str(error), model=agent or "", llm_provider="qca") from error
     owns_client: Final = client is None
-    http_client: Final = client or httpx.AsyncClient(timeout=timeout)
+    http_client: Final = client or httpx.AsyncClient(
+        timeout=timeout if timeout is not None else DEFAULT_REQUEST_TIMEOUT
+    )
     start_time: Final = datetime.now(timezone.utc)
     try:
         headers: Final = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
@@ -442,6 +460,8 @@ async def create_qca_interaction(
             headers={**headers, "Accept": "text/event-stream", "Last-Event-ID": input_event_id},
         )
         stream_response: Final = await http_client.send(stream_request, stream=True)
+        if stream_response.is_error:
+            await stream_response.aread()
         stream_response.raise_for_status()
         normalized: Final = _normalized_stream(stream_response, interaction_id, agent_id)
         if stream is True:

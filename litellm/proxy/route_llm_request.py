@@ -73,6 +73,7 @@ class _QCAMonetaryBudgetContext(BaseModel):
     organization_max_budget: float | None = None
     end_user_max_budget: float | None = None
     budget_id: str | None = None
+    budget_limits: tuple[object, ...] | None = None
     budget_reservation: Mapping[str, object] | None = None
     model_max_budget: Mapping[str, object] | None = None
     user_model_max_budget: Mapping[str, object] | None = None
@@ -88,6 +89,7 @@ class _QCAMonetaryBudgetContext(BaseModel):
             self.organization_max_budget,
             self.end_user_max_budget,
             self.budget_id,
+            self.budget_limits,
             self.budget_reservation,
             self.model_max_budget,
             self.user_model_max_budget,

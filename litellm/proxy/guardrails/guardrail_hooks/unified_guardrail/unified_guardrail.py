@@ -290,6 +290,9 @@ class UnifiedLLMGuardrails(CustomLogger):
         if guardrail_to_apply is None:
             return data
 
+        mappings: Final = load_guardrail_translation_mappings()
+        _raise_for_unmapped_interactions_guardrail(call_type, mappings)
+
         event_type: GuardrailEventHooks = GuardrailEventHooks.pre_call
         if call_type in MCP_GUARDRAIL_CALL_TYPES:
             event_type = GuardrailEventHooks.pre_mcp_call
@@ -300,10 +303,6 @@ class UnifiedLLMGuardrails(CustomLogger):
                 guardrail_to_apply.guardrail_name,
             )
             return data
-
-        mappings: Final = load_guardrail_translation_mappings()
-
-        _raise_for_unmapped_interactions_guardrail(call_type, mappings)
 
         try:
             if CallTypes(call_type) not in mappings:

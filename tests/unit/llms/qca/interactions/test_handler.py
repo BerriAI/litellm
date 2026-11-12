@@ -117,6 +117,12 @@ async def test_create_qca_interaction_maps_session_events_to_completed_response(
         "qca_usage_is_final": True,
     }
     assert requests[-1].headers["last-event-id"] == "evt_input"
+    session_request: Final = requests[0]
+    assert json.loads(session_request.content) == {
+        "agent": "agent_test",
+        "environment_id": "env_test",
+        "metadata": {"source": "litellm"},
+    }
 
 
 @pytest.mark.asyncio
@@ -177,10 +183,14 @@ async def test_create_qca_interaction_continues_session_and_streams_normalized_e
 
     assert [chunk.event_type for chunk in chunks] == [
         "interaction.created",
+        "step.start",
         "step.delta",
+        "step.stop",
         "interaction.completed",
     ]
-    assert chunks[1].delta == {"type": "text", "text": "continued"}
+    assert chunks[1].index == chunks[2].index == chunks[3].index == 0
+    assert chunks[2].delta == {"type": "text", "text": "continued"}
+    assert chunks[3].status == "done"
     assert chunks[-1].interaction_id == "qca1.sess_existing.evt_next"
     assert len(recorder.responses) == 1
     logged: Final = recorder.responses[0]
@@ -277,6 +287,33 @@ async def test_create_qca_interaction_preserves_rate_limit_status() -> None:
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(route)) as client:
         with pytest.raises(RateLimitError) as error:
+            await create_qca_interaction(
+                agent="agent_test",
+                input="hello",
+                environment="env_test",
+                previous_interaction_id=None,
+                stream=False,
+                api_key="secret",
+                api_base=None,
+                timeout=30,
+                unsupported_params={},
+                logging_obj=MagicMock(),
+                client=client,
+            )
+    assert error.value.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_create_qca_interaction_reads_stream_error_before_mapping_status() -> None:
+    def route(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/sessions"):
+            return httpx.Response(200, json={"id": "sess_test"})
+        if request.url.path.endswith("/events"):
+            return httpx.Response(202, json={"data": [{"id": "evt_input", "type": "user.message"}]})
+        return httpx.Response(429, text="stream rate limited")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(route)) as client:
+        with pytest.raises(RateLimitError, match="stream rate limited") as error:
             await create_qca_interaction(
                 agent="agent_test",
                 input="hello",

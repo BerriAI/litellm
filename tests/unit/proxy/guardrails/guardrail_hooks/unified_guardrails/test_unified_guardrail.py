@@ -360,6 +360,29 @@ class TestUnifiedLLMGuardrails:
             assert guardrail.apply_calls == []
 
         @pytest.mark.asyncio
+        async def test_interactions_rejects_post_call_only_policy_before_provider_access(self) -> None:
+            guardrail: Final = CustomGuardrail(
+                guardrail_name="post-call-only",
+                event_hook=GuardrailEventHooks.post_call,
+            )
+            data: Final = {
+                "guardrail_to_apply": guardrail,
+                "model": "qca-agent-alias",
+                "input": "sensitive input",
+            }
+
+            with pytest.raises(HTTPException) as error:
+                await UnifiedLLMGuardrails().async_pre_call_hook(
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+                    cache=DualCache(),
+                    data=data,
+                    call_type=CallTypes.acreate_interaction.value,
+                )
+
+            assert error.value.status_code == 400
+            assert "cannot enforce configured apply_guardrail policies" in error.value.detail
+
+        @pytest.mark.asyncio
         async def test_uses_mcp_event_type(self):
             """pre_call hook should swap to GuardrailEventHooks.pre_mcp_call for MCP calls."""
             handler = UnifiedLLMGuardrails()
