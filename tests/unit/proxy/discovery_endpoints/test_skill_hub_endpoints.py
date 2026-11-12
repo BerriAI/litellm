@@ -939,12 +939,41 @@ async def test_restore_republishes_retained_bytes_and_metadata_with_new_version(
     assert response.json()["description"] == retained.description
     assert response.json()["id"] == "hub-id"
     assert response.json()["visibility"] == "private"
+    assert response.json()["approved_by"] is None
+    assert response.json()["security_scan_passed"] is False
     latest: Final = hub.database.litellm_claudecodepluginversion.create.await_args.kwargs["data"]
     assert latest["content"] == retained.content
     assert latest["version"] == "2.0.1"
     assert json.loads(latest["manifest_json"])["agent_skill"] == json.loads(retained.manifest_json)["agent_skill"]
     assert retained.version == "1.0.0"
     assert latest["published_by"] == response.json()["published_by"]
+
+
+@pytest.mark.parametrize("scan_passed", (True, False))
+@pytest.mark.asyncio
+async def test_restore_carries_retained_scan_and_credits_restoring_admin(hub: HubClient, scan_passed: bool) -> None:
+    retained: Final = await _restorable_version(hub)
+    manifest: Final = {
+        **json.loads(retained.manifest_json),
+        "_litellm_review": {"approved_by": "previous-admin", "security_scan_passed": scan_passed},
+    }
+    hub.database.query_raw.return_value = [
+        {**row, "manifest": manifest} for row in hub.database.query_raw.return_value
+    ]
+    hub.database.litellm_claudecodepluginversion.find_first.return_value = retained.model_copy(update={
+        "manifest_json": json.dumps(manifest),
+    })
+    response: Final = await hub.client.post(
+        f"{HUB}/{NAME}/versions/retained/restore", headers=_headers(MASTER_KEY), json=_restore_body(),
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["security_scan_passed"] is scan_passed
+    assert response.json()["approved_by"] == response.json()["published_by"] == "default_user_id"
+    latest: Final = hub.database.litellm_claudecodepluginversion.create.await_args.kwargs["data"]
+    assert json.loads(latest["manifest_json"])["_litellm_review"] == {
+        "approved_by": "default_user_id", "security_scan_passed": scan_passed,
+    }
+    assert latest["published_by"] == "default_user_id"
 
 
 @pytest.mark.parametrize("key,status", (
@@ -967,9 +996,10 @@ async def test_restore_rejects_nonadmins_even_with_skill_grants(hub: HubClient, 
     ({"expected_updated_at": None}, 409),
     ({"version": "invalid"}, 400),
     ({"version": "1.0.0"}, 400),
+    ({"_litellm_review": {"approved_by": "forged", "security_scan_passed": True}}, 422),
 ))
 @pytest.mark.asyncio
-async def test_restore_rejects_stale_state_and_invalid_new_versions(
+async def test_restore_rejects_stale_state_and_invalid_requests(
     hub: HubClient, change: Mapping[str, object], status: int,
 ) -> None:
     await _restorable_version(hub)

@@ -661,6 +661,7 @@ async def restore_skill_version(
     if content is None:
         raise HTTPException(409, "This version has no verified retained archive to restore")
     digest: Final = hashlib.sha256(content).hexdigest()
+    review: Final = read_plugin_review(version.manifest)
     publication: Final = PluginPublication(
         name=name,
         version=body.version,
@@ -675,6 +676,7 @@ async def restore_skill_version(
         },
         content=content,
         created_by=caller.user_id or "proxy-admin",
+        review=replace(review, approved_by=caller.user_id or "proxy-admin") if review is not None else None,
     )
     published: Final = await store.publish(
         publication, PluginPublicationBase(body.expected_skill_id, body.expected_updated_at)
