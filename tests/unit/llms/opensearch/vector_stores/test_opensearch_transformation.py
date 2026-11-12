@@ -729,7 +729,7 @@ async def test_filters_narrow_the_knn_query_with_the_matching_opensearch_filter(
         pytest.param(
             {"properties": {"ref_code": {"type": "keyword"}, "ref": {"type": "alias", "path": "ref_code"}}},
             {"type": "eq", "key": "ref", "value": "FAC-017"},
-            {"term": {"ref_code": "FAC-017"}},
+            {"term": {"ref": "FAC-017"}},
             id="alias-to-a-keyword-field",
         ),
         pytest.param(
@@ -808,6 +808,24 @@ TEXT_ONLY: Final = {"litellm-qa-docs": {"properties": {"tenant": {"type": "text"
             {"type": "eq", "key": "tenant", "value": "acme"},
             "the indexes behind this store map tenant differently",
             id="alias-indexes-disagree",
+        ),
+        pytest.param(
+            {
+                "docs-2025": {
+                    "properties": {
+                        "owner": {"properties": {"team": {"type": "text", "fields": {"raw": {"type": "keyword"}}}}},
+                        "team": {"type": "alias", "path": "owner.team"},
+                    }
+                },
+                "docs-2026": {
+                    "properties": {
+                        "owner": {"properties": {"team": {"type": "text", "fields": {"raw": {"type": "keyword"}}}}}
+                    }
+                },
+            },
+            {"type": "eq", "key": "team", "value": "People Ops"},
+            "the indexes behind this store map team differently",
+            id="alias-rewrite-reaches-an-index-without-the-alias",
         ),
         pytest.param(
             {"litellm-qa-docs": {"properties": {"tenant": {"type": "keyword", "normalizer": "lowercase"}}}},
