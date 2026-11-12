@@ -4,7 +4,7 @@ from dataclasses import replace
 from typing import Final
 
 from litellm._version import version as _litellm_version
-from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
+from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig, remote_image_urls
 from litellm.types.decisions import (
     DecisionsBase64Image,
     DecisionsImage,
@@ -40,7 +40,6 @@ class NaceDecisionsConfig(BaseDecisionsConfig):
     api_base_env = ("NACE_API_BASE", "NACE_BASE_URL")
     max_images = 8
     image_media_types = frozenset({"image/png", "image/jpeg", "image/jpg", "image/webp"})
-    inlines_remote_images = True
 
     def __init__(self, model: str = "") -> None:
         self.supports_images = model != "drex-v2.0"
@@ -67,7 +66,6 @@ class NaceDecisionsConfig(BaseDecisionsConfig):
         request: DecisionsIRRequest,
         custom_llm_provider: str,
     ) -> Mapping[str, object] | UnsupportedDecisionsRequest:
+        if remote_image_urls(request.input):
+            return UnsupportedDecisionsRequest("Nace requires inline base64 images or data URLs, not remote image URLs")
         return super().transform_decisions_request(model, _with_images_as_data_urls(request), custom_llm_provider)
-
-
-NACE_DECISIONS_CONFIG: Final = NaceDecisionsConfig()

@@ -273,7 +273,6 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({
                 { value: "laya", label: productNames.laya },
                 { value: "bespoke", label: productNames.bespokeNimble },
                 { value: "databricks", label: productNames.databricks },
-                { value: "nace", label: productNames.nace },
               ]}
               value={normalizeJevClassifierConfig(value.jev_classifier_config).provider}
               onValueChange={changeProvider}
@@ -286,7 +285,6 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({
                 <SelectItem value="laya">{productNames.laya}</SelectItem>
                 <SelectItem value="bespoke">{productNames.bespokeNimble}</SelectItem>
                 <SelectItem value="databricks">{productNames.databricks}</SelectItem>
-                <SelectItem value="nace">{productNames.nace}</SelectItem>
               </SelectContent>
             </Select>
           </div>

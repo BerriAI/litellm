@@ -6979,23 +6979,31 @@ def test_no_messages_yields_user_text():
     assert contents == expected_output
 
 
-def test_convert_url(monkeypatch: pytest.MonkeyPatch) -> None:
-    from litellm.litellm_core_utils.prompt_templates.image_handling import in_memory_cache
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+def test_convert_url(monkeypatch):
+    import base64
+    from unittest.mock import MagicMock
 
-    url: Final = "https://example.com/image.png"
-    image_bytes: Final = b"\x89PNG\r\n\x1a\nfake-png-bytes"
-    transport: Final = httpx.MockTransport(
-        lambda request: httpx.Response(200, content=image_bytes, headers={"Content-Type": "image/png"})
+    import httpx
+
+    from litellm.litellm_core_utils.prompt_templates.image_handling import (
+        in_memory_cache,
     )
-    monkeypatch.setattr(litellm, "user_url_validation", False)
+
+    url = "https://picsum.photos/id/237/200/300"
+    image_bytes = b"\x89PNG\r\n\x1a\nfake-png-bytes"
+
+    mock_client = MagicMock()
+    mock_client.get.return_value = httpx.Response(200, content=image_bytes, headers={"Content-Type": "image/png"})
+
+    monkeypatch.setattr(litellm, "user_url_validation", False, raising=False)
+    monkeypatch.setattr(litellm, "module_level_client", mock_client, raising=False)
     in_memory_cache.flush_cache()
 
-    with httpx.Client(transport=transport) as client:
-        monkeypatch.setattr(litellm, "module_level_client", HTTPHandler(client=client))
-        result: Final = convert_url_to_base64(url)
+    result = convert_url_to_base64(url)
 
-    assert result == "data:image/png;base64," + base64.b64encode(image_bytes).decode("utf-8")
+    expected = "data:image/png;base64," + base64.b64encode(image_bytes).decode("utf-8")
+    assert result == expected
+    mock_client.get.assert_called_once()
 
 
 def test_convert_generic_image_chunk_to_openai_image_obj_preserves_data_uri():

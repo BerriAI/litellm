@@ -102,11 +102,10 @@ describe("JEV classifier editor", () => {
     ["laya", "Laya", "multilingual"],
     ["bespoke", "Bespoke Nimble", "bespokelabs/Bespoke-Nimble-9B"],
     ["databricks", "Databricks", "databricks-openjev-qwen35-4b"],
-    ["nace", "Nace", "drex-max-v1.1"],
   ] as const)(
     "preserves %s, custom tiers and context through save, reload and probe",
     async (provider, label, model) => {
-      const typesTheModel = provider === "jev" || provider === "databricks" || provider === "nace";
+      const typesTheModel = provider === "jev" || provider === "databricks";
       renderWithProviders(<Form />);
       expect(screen.getByLabelText("Judge model")).toBeInTheDocument();
       expect(screen.getByText("Reasoning Effort")).toBeInTheDocument();
@@ -127,10 +126,6 @@ describe("JEV classifier editor", () => {
       await chooseSelectOption(userEvent, screen.getByRole("combobox", { name: "Decision model" }), label);
       if (provider === "bespoke") expect(screen.getByLabelText("Classifier Model")).toHaveTextContent("nimble-latest");
       if (provider === "databricks") expect(screen.getByLabelText("Classifier Model")).toHaveValue("ai_decide");
-      if (provider === "nace") {
-        expect(screen.getByLabelText("Classifier Model")).toHaveValue("drex-max-v1.1");
-        expect(screen.getByText(/Uses Nace/)).toHaveTextContent("NACE_API_KEY");
-      }
       if (typesTheModel) {
         fireEvent.change(screen.getByLabelText("Classifier Model"), { target: { value: model } });
       } else {

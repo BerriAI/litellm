@@ -16,7 +16,6 @@ const providerDescriptions: Record<OssClassifierProvider, ParseKeys> = {
   laya: "addModel.jevClassifierConfig.providerDescriptions.laya",
   bespoke: "addModel.jevClassifierConfig.providerDescriptions.bespoke",
   databricks: "addModel.jevClassifierConfig.providerDescriptions.databricks",
-  nace: "addModel.jevClassifierConfig.providerDescriptions.nace",
 };
 
 export default function JevClassifierConfig({

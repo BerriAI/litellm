@@ -1,7 +1,6 @@
 import React, { useState } from "react";
-import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { chooseSelectOption, fireEvent, renderWithProviders, screen, waitFor, within } from "../../../tests/test-utils";
+import { fireEvent, renderWithProviders, screen, waitFor, within } from "../../../tests/test-utils";
 import { selectAutoRouterOption } from "../../../tests/autoRouterSetup";
 import AutoRouterClassifierTabs from "./AutoRouterClassifierTabs";
 import ClassificationMethodConfig from "./ClassificationMethodConfig";
@@ -55,25 +54,6 @@ function Form({
 }
 
 describe("Auto-router classifier selection", () => {
-  it("selects Nace with its default model and preserves classifier settings", async () => {
-    const onChange = vi.fn();
-    const jevConfig = { provider: "jev", model: "jev-latest", timeout_ms: 4200 } as const;
-    renderWithProviders(
-      <AutoRouterClassifierTabs
-        value={{ ...initial, classifier_type: "jev", jev_classifier_config: jevConfig }}
-        onChange={onChange}
-      >
-        Existing settings
-      </AutoRouterClassifierTabs>,
-    );
-    await chooseSelectOption(userEvent, screen.getByRole("combobox", { name: "Decision model" }), "Nace");
-    expect(onChange).toHaveBeenCalledWith({
-      ...initial,
-      classifier_type: "jev",
-      jev_classifier_config: { ...jevConfig, provider: "nace", model: "drex-max-v1.1" },
-    });
-  });
-
   it.each([false, true])("applies the v2 allowance to chain selection, owned: %s", (owned) => {
     const onChange = vi.fn();
     renderWithProviders(

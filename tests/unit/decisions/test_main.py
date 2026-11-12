@@ -4982,22 +4982,30 @@ def test_systemone_images_reach_nace_as_data_urls(nace_model: str, respx_mock: r
     assert isinstance(response, DecisionsResponse)
 
 
+@pytest.mark.asyncio
 @pytest.mark.usefixtures("nace_account")
 @pytest.mark.parametrize(("api", "request_kwargs"), _image_requests(_REMOTE_IMAGE_URL), ids=_PREDICATE_REQUEST_IDS)
-def test_remote_images_are_fetched_and_inlined_for_nace(
-    api: str, request_kwargs: Mapping[str, object], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("use_async", (False, True), ids=("sync", "async"))
+async def test_nace_remote_images_are_rejected_without_fetching_or_provider_calls(
+    api: str,
+    request_kwargs: Mapping[str, object],
+    use_async: bool,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "user_url_validation", False)
-    png: Final = b"\x89PNG\r\n\x1a\n"
-    image_route: Final = respx_mock.get(_REMOTE_IMAGE_URL).respond(content=png, headers={"content-type": "image/png"})
+    image_route: Final = respx_mock.get(_REMOTE_IMAGE_URL).respond(content=b"image")
     route: Final = respx_mock.post(_NACE_SYSTEMONE_URL).respond(json=_DREX_MAX_RESPONSE)
 
-    getattr(litellm, api)(model="nace/drex-max", **request_kwargs)
+    if use_async:
+        with pytest.raises(litellm.BadRequestError, match="inline base64 images or data URLs"):
+            await getattr(litellm, f"a{api}")(model="nace/drex-max", **request_kwargs)
+    else:
+        with pytest.raises(litellm.BadRequestError, match="inline base64 images or data URLs"):
+            getattr(litellm, api)(model="nace/drex-max", **request_kwargs)
 
-    assert image_route.call_count == 1
-    assert json.loads(route.calls[0].request.content)["images"] == [
-        f"data:image/png;base64,{base64.b64encode(png).decode()}"
-    ]
+    assert not image_route.called
+    assert not route.called
 
 
 @pytest.mark.usefixtures("nace_account")

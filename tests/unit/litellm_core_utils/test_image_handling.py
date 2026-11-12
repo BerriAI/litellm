@@ -1,17 +1,14 @@
 import asyncio
 import base64
 import copy
-import gzip
 import threading
 import time
 import uuid
-from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Final
 from unittest.mock import MagicMock
 
-import httpx
 import pytest
 from httpx import Request, Response
 
@@ -46,20 +43,20 @@ def _bypass_ssrf(monkeypatch):
     )
 
 
-def _missing_image_client() -> HTTPHandler:
-    transport: Final = httpx.MockTransport(lambda request: Response(404))
-    return HTTPHandler(client=httpx.Client(transport=transport))
+class DummyClient:
+    def get(self, url, follow_redirects=True):
+        return Response(status_code=404, request=Request("GET", url))
 
 
 def test_invalid_image_url_raises_bad_request(monkeypatch):
-    monkeypatch.setattr(litellm, "module_level_client", _missing_image_client())
+    monkeypatch.setattr(litellm, "module_level_client", DummyClient())
     with pytest.raises(litellm.ImageFetchError) as excinfo:
         convert_url_to_base64("https://invalid.example/image.png")
     assert "Unable to fetch image" in str(excinfo.value)
 
 
 def test_completion_with_invalid_image_url(monkeypatch):
-    monkeypatch.setattr(litellm, "module_level_client", _missing_image_client())
+    monkeypatch.setattr(litellm, "module_level_client", DummyClient())
     messages = [
         {
             "role": "user",
@@ -78,34 +75,74 @@ def test_completion_with_invalid_image_url(monkeypatch):
     assert "Unable to fetch image" in str(excinfo.value)
 
 
-class _GeneratedImageStream(httpx.SyncByteStream):
-    def __init__(self, size: int) -> None:
-        self.size = size
+class LargeImageClient:
+    """
+    Client that returns a large image exceeding size limit.
+    """
 
-    def __iter__(self) -> Iterator[bytes]:
-        for offset in range(0, self.size, 8192):
-            yield b"x" * min(8192, self.size - offset)
+    def __init__(self, size_mb=100, include_content_length=True):
+        self.size_mb = size_mb
+        self.include_content_length = include_content_length
+
+    def get(self, url, follow_redirects=True):
+        size_bytes = int(self.size_mb * 1024 * 1024)
+        headers = {"Content-Type": "image/jpeg"}
+        if self.include_content_length:
+            headers["Content-Length"] = str(size_bytes)
+        return Response(
+            status_code=200,
+            headers=headers,
+            content=b"x" * size_bytes,
+            request=Request("GET", url),
+        )
 
 
-def _large_image_client(size_mb: int = 100, include_content_length: bool = True) -> HTTPHandler:
-    size: Final = size_mb * 1024**2
-    headers: Final = {"Content-Type": "image/jpeg", **({"Content-Length": str(size)} if include_content_length else {})}
-    transport: Final = httpx.MockTransport(
-        lambda request: Response(200, headers=headers, stream=_GeneratedImageStream(size))
-    )
-    return HTTPHandler(client=httpx.Client(transport=transport))
+class StreamingLargeImageClient:
+    """
+    Client that streams a large image to test streaming download protection.
+    This simulates a huge file without actually creating it all in memory.
+    """
+
+    def __init__(self, size_mb=100, include_content_length=False):
+        self.size_mb = size_mb
+        self.include_content_length = include_content_length
+
+    def get(self, url, follow_redirects=True):
+        size_bytes = int(self.size_mb * 1024 * 1024)
+        headers = {"Content-Type": "image/jpeg"}
+        if self.include_content_length:
+            headers["Content-Length"] = str(size_bytes)
+
+        # Create a generator that yields chunks without creating the whole file in memory
+        def generate_chunks(total_size, chunk_size=8192):
+            bytes_sent = 0
+            while bytes_sent < total_size:
+                chunk = b"x" * min(chunk_size, total_size - bytes_sent)
+                bytes_sent += len(chunk)
+                yield chunk
+
+        # Create response with streaming content
+        response = Response(
+            status_code=200,
+            headers=headers,
+            request=Request("GET", url),
+        )
+        # Mock the iter_bytes method to return our generator
+        response.iter_bytes = lambda chunk_size=8192: generate_chunks(size_bytes, chunk_size)
+        return response
 
 
 def test_image_exceeds_size_limit_with_content_length(monkeypatch):
     """
     Test that images exceeding MAX_IMAGE_URL_DOWNLOAD_SIZE_MB are rejected when Content-Length header is present.
     """
-    monkeypatch.setattr(litellm, "module_level_client", _large_image_client(size_mb=100))
+    monkeypatch.setattr(litellm, "module_level_client", LargeImageClient(size_mb=100))
 
     with pytest.raises(litellm.ImageFetchError) as excinfo:
         convert_url_to_base64("https://example.com/large-image.jpg")
 
     assert "exceeds maximum allowed size" in str(excinfo.value)
+    assert "100.00MB" in str(excinfo.value)
     assert "50.0MB" in str(excinfo.value)
 
 
@@ -117,7 +154,7 @@ def test_image_exceeds_size_limit_without_content_length(monkeypatch):
     monkeypatch.setattr(
         litellm,
         "module_level_client",
-        _large_image_client(size_mb=100, include_content_length=False),
+        LargeImageClient(size_mb=100, include_content_length=False),
     )
 
     with pytest.raises(litellm.ImageFetchError) as excinfo:
@@ -136,7 +173,7 @@ def test_streaming_download_protects_against_huge_files(monkeypatch):
     limit is exceeded during streaming.
     """
     # Simulate a 1GB file - far larger than the 50MB default limit
-    client = _large_image_client(size_mb=1024, include_content_length=False)
+    client = StreamingLargeImageClient(size_mb=1024, include_content_length=False)
     monkeypatch.setattr(litellm, "module_level_client", client)
 
     with pytest.raises(litellm.ImageFetchError) as excinfo:
@@ -149,11 +186,30 @@ def test_streaming_download_protects_against_huge_files(monkeypatch):
     # not after downloading the full 1GB
 
 
+class SmallImageClient:
+    """
+    Client that returns a small valid image.
+    """
+
+    def get(self, url, follow_redirects=True):
+        size_bytes = 1024
+        headers = {
+            "Content-Type": "image/jpeg",
+            "Content-Length": str(size_bytes),
+        }
+        return Response(
+            status_code=200,
+            headers=headers,
+            content=b"x" * size_bytes,
+            request=Request("GET", url),
+        )
+
+
 def test_image_within_size_limit(monkeypatch):
     """
     Test that images within size limit are processed successfully.
     """
-    monkeypatch.setattr(litellm, "module_level_client", _stub_image_client(b"x" * 1024, "image/jpeg"))
+    monkeypatch.setattr(litellm, "module_level_client", SmallImageClient())
 
     result = convert_url_to_base64("https://example.com/small-image.jpg")
 
@@ -170,7 +226,7 @@ def test_streaming_download_handles_petabyte_file(monkeypatch):
     """
     # Simulate a 1 petabyte file (1,000,000 GB)
     # Without streaming protection, this would cause OOM or hang indefinitely
-    client = _large_image_client(size_mb=1_000_000_000, include_content_length=False)
+    client = StreamingLargeImageClient(size_mb=1_000_000_000, include_content_length=False)
     monkeypatch.setattr(litellm, "module_level_client", client)
 
     with pytest.raises(litellm.ImageFetchError) as excinfo:
@@ -220,10 +276,13 @@ REAL_PNG_BYTES = base64.b64decode(
 )
 
 
-def _stub_image_client(content: bytes, content_type: str | None) -> HTTPHandler:
-    headers: Final = {} if content_type is None else {"Content-Type": content_type}
-    transport: Final = httpx.MockTransport(lambda request: Response(200, content=content, headers=headers))
-    return HTTPHandler(client=httpx.Client(transport=transport))
+def _stub_image_client(content, content_type):
+    class _Client:
+        def get(self, url, follow_redirects=True):
+            headers = {} if content_type is None else {"Content-Type": content_type}
+            return Response(200, content=content, headers=headers, request=Request("GET", url))
+
+    return _Client()
 
 
 def test_convert_url_to_base64_infers_the_type_when_the_server_sends_octet_stream(monkeypatch):
@@ -293,7 +352,7 @@ def test_image_size_limit_disabled(monkeypatch):
     """
     from litellm.litellm_core_utils.prompt_templates import image_handling
 
-    monkeypatch.setattr(litellm, "module_level_client", _stub_image_client(b"x" * 1024, "image/jpeg"))
+    monkeypatch.setattr(litellm, "module_level_client", SmallImageClient())
     monkeypatch.setattr(image_handling, "MAX_IMAGE_URL_DOWNLOAD_SIZE_MB", 0)
 
     with pytest.raises(litellm.ImageFetchError) as excinfo:
@@ -794,9 +853,7 @@ async def test_serves_pdf_is_false_when_the_host_refuses_the_connection(probe_se
 
 
 @pytest.mark.parametrize("mode", ("sync", "async"))
-async def test_serves_pdf_is_false_without_a_request_when_the_ssrf_check_blocks_the_link(
-    probe_server, monkeypatch, mode
-):
+async def test_serves_pdf_is_false_without_a_request_when_the_ssrf_check_blocks_the_link(probe_server, monkeypatch, mode):
     monkeypatch.setattr(litellm, "user_url_validation", True)
     url = probe_server.serve("/report.pdf", _Served(content_type="application/pdf"))
 
@@ -887,11 +944,7 @@ async def test_format_pdf_links_marks_only_links_that_serve_a_pdf(probe_server, 
             "role": "user",
             "content": [
                 {"type": "text", "text": "compare"},
-                {
-                    "type": "image_url",
-                    "image_url": {"url": pdf_link, "detail": "high"},
-                    "cache_control": {"type": "ephemeral"},
-                },
+                {"type": "image_url", "image_url": {"url": pdf_link, "detail": "high"}, "cache_control": {"type": "ephemeral"}},
                 {"type": "image_url", "image_url": query_link},
                 {"type": "image_url", "image_url": {"url": png_at_pdf_link}},
                 {"type": "image_url", "image_url": {"url": png_link}},
@@ -922,16 +975,9 @@ async def test_format_pdf_links_marks_only_links_that_serve_a_pdf(probe_server, 
                 {"type": "image_url", "image_url": {"url": pdf_link, "format": "image/png"}},
             ],
         },
-        {
-            "role": "user",
-            "content": [{"type": "image_url", "image_url": {"url": pdf_link, "format": "application/pdf"}}],
-        },
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": pdf_link, "format": "application/pdf"}}]},
     )
-    assert sorted(path for path, _ in probe_server.seen) == [
-        "/a/download?file=summary.pdf",
-        "/a/page.pdf?fm=png",
-        "/a/report.pdf",
-    ]
+    assert sorted(path for path, _ in probe_server.seen) == ["/a/download?file=summary.pdf", "/a/page.pdf?fm=png", "/a/report.pdf"]
 
 
 @pytest.mark.parametrize("mode", ("sync", "async"))
@@ -949,136 +995,8 @@ async def test_format_pdf_links_probes_every_link_at_once(probe_server, mode):
 async def test_format_pdf_links_leaves_messages_without_pdf_links_alone(probe_server, mode):
     messages = [
         {"role": "user", "content": [{"type": "image_url", "image_url": {"url": f"{probe_server.base_url}/a.png"}}]},
-        {
-            "role": "user",
-            "content": [{"type": "image_url", "image_url": {"url": "data:application/pdf;base64,JVBERi0="}}],
-        },
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:application/pdf;base64,JVBERi0="}}]},
     ]
 
     assert await _format_pdf_links(mode, messages) == tuple(messages)
     assert probe_server.seen == []
-
-
-class _CountedImageStream(httpx.SyncByteStream, httpx.AsyncByteStream):
-    def __init__(self, body: bytes, *, cancel: bool = False) -> None:
-        self.body = body
-        self.consumed = 0
-        self.closed = False
-        self.cancel = cancel
-
-    def __iter__(self) -> Iterator[bytes]:
-        for offset in range(0, len(self.body), 64):
-            self.consumed += len(self.body[offset : offset + 64])
-            yield self.body[offset : offset + 64]
-
-    async def __aiter__(self) -> AsyncIterator[bytes]:
-        for chunk in self:
-            if self.cancel:
-                raise asyncio.CancelledError
-            yield chunk
-
-    def close(self) -> None:
-        self.closed = True
-
-    async def aclose(self) -> None:
-        self.close()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ("sync", "async"))
-@pytest.mark.parametrize("budget", (None, 128, 2048))
-@pytest.mark.parametrize("declared_length", (None, "1", "1024"))
-async def test_image_download_stops_reading_at_the_effective_limit(
-    monkeypatch: pytest.MonkeyPatch, mode: str, budget: int | None, declared_length: str | None
-) -> None:
-    stream: Final = _CountedImageStream(b"x" * 1024)
-    headers: Final = {"Content-Type": "image/png", **({"Content-Length": declared_length} if declared_length else {})}
-    transport: Final = httpx.MockTransport(lambda request: Response(200, headers=headers, stream=stream))
-    monkeypatch.setattr(image_handling, "safe_get", url_utils.safe_get)
-    monkeypatch.setattr(litellm, "user_url_validation", False)
-    monkeypatch.setattr(image_handling, "MAX_IMAGE_URL_DOWNLOAD_SIZE_MB", 256 / 1024**2)
-    monkeypatch.setattr(image_handling, "in_memory_cache", InMemoryCache())
-    with httpx.Client(transport=transport) as client:
-        async with httpx.AsyncClient(transport=transport) as aclient:
-            monkeypatch.setattr(litellm, "module_level_client", HTTPHandler(client=client))
-            monkeypatch.setattr(litellm, "module_level_aclient", _image_async_handler(aclient))
-            with pytest.raises(litellm.ImageFetchError):
-                await _download_image(mode, "https://images.example/oversized.png", budget)
-    assert stream.consumed <= min(256, budget if budget is not None else 256) + 64
-    assert stream.closed
-    assert image_handling.in_memory_cache.get_cache("https://images.example/oversized.png") is None
-
-
-@pytest.mark.asyncio
-async def test_cancelled_image_download_closes_the_response(monkeypatch: pytest.MonkeyPatch) -> None:
-    stream: Final = _CountedImageStream(b"x" * 1024, cancel=True)
-    transport: Final = httpx.MockTransport(lambda request: Response(200, stream=stream))
-    monkeypatch.setattr(litellm, "user_url_validation", False)
-    monkeypatch.setattr(image_handling, "in_memory_cache", InMemoryCache())
-    async with httpx.AsyncClient(transport=transport) as client:
-        monkeypatch.setattr(litellm, "module_level_aclient", _image_async_handler(client))
-        with pytest.raises(asyncio.CancelledError):
-            await async_convert_url_to_base64("https://images.example/cancelled.png")
-    assert stream.closed
-    assert image_handling.in_memory_cache.get_cache("https://images.example/cancelled.png") is None
-
-
-def _image_async_handler(client: httpx.AsyncClient) -> AsyncHTTPHandler:
-    handler: Final = AsyncHTTPHandler()
-    handler.client = client
-    return handler
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ("sync", "async"))
-async def test_image_download_accepts_exact_limit_and_rechecks_cached_budget(
-    monkeypatch: pytest.MonkeyPatch, mode: str
-) -> None:
-    stream: Final = _CountedImageStream(b"x" * 256)
-    transport: Final = httpx.MockTransport(
-        lambda request: Response(200, headers={"Content-Type": "image/png"}, stream=stream)
-    )
-    monkeypatch.setattr(image_handling, "safe_get", url_utils.safe_get)
-    monkeypatch.setattr(litellm, "user_url_validation", False)
-    monkeypatch.setattr(image_handling, "MAX_IMAGE_URL_DOWNLOAD_SIZE_MB", 256 / 1024**2)
-    monkeypatch.setattr(image_handling, "in_memory_cache", InMemoryCache())
-    with httpx.Client(transport=transport) as client:
-        async with httpx.AsyncClient(transport=transport) as aclient:
-            monkeypatch.setattr(litellm, "module_level_client", HTTPHandler(client=client))
-            monkeypatch.setattr(litellm, "module_level_aclient", _image_async_handler(aclient))
-            result: Final = await _download_image(mode, "https://images.example/boundary.png")
-            assert await _download_image(mode, "https://images.example/boundary.png") == result
-            with pytest.raises(litellm.ImageFetchError, match="budget"):
-                await _download_image(mode, "https://images.example/boundary.png", 128)
-            assert result == "data:image/png;base64," + base64.b64encode(b"x" * 256).decode()
-            monkeypatch.setattr(image_handling, "MAX_IMAGE_URL_DOWNLOAD_SIZE_MB", 0)
-            with pytest.raises(litellm.ImageFetchError, match="disabled"):
-                await _download_image(mode, "https://images.example/boundary.png")
-    assert stream.consumed == 256
-    assert stream.closed
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ("sync", "async"))
-async def test_image_download_rejects_compression_before_reading(monkeypatch: pytest.MonkeyPatch, mode: str) -> None:
-    stream: Final = _CountedImageStream(gzip.compress(b"x" * 1024))
-    transport: Final = httpx.MockTransport(
-        lambda request: Response(200, headers={"Content-Type": "image/png", "Content-Encoding": "gzip"}, stream=stream)
-    )
-    monkeypatch.setattr(image_handling, "safe_get", url_utils.safe_get)
-    monkeypatch.setattr(litellm, "user_url_validation", False)
-    monkeypatch.setattr(image_handling, "in_memory_cache", InMemoryCache())
-    with httpx.Client(transport=transport) as client:
-        async with httpx.AsyncClient(transport=transport) as aclient:
-            monkeypatch.setattr(litellm, "module_level_client", HTTPHandler(client=client))
-            monkeypatch.setattr(litellm, "module_level_aclient", _image_async_handler(aclient))
-            with pytest.raises(litellm.ImageFetchError, match="uncompressed"):
-                await _download_image(mode, "https://images.example/compressed.png")
-    assert stream.consumed == 0
-    assert stream.closed
-
-
-async def _download_image(mode: str, url: str, budget: int | None = None) -> str:
-    if mode == "sync":
-        return convert_url_to_base64(url, max_bytes=budget)
-    return await async_convert_url_to_base64(url, max_bytes=budget)

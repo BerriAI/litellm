@@ -41720,7 +41720,7 @@ export interface components {
              * @default jev
              * @enum {string}
              */
-            provider: "jev" | "laya" | "bespoke" | "databricks" | "nace";
+            provider: "jev" | "laya" | "bespoke" | "databricks";
             /**
              * Timeout Ms
              * @default 3000
