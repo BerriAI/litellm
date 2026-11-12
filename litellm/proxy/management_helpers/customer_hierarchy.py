@@ -11,6 +11,7 @@ from pydantic import ConfigDict, Field, TypeAdapter, model_validator
 
 from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.repositories.budget_repository import create_budget_row, update_budget_row
+from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.types.proxy.management_endpoints.customer_hierarchy import (
     Budget,
@@ -49,6 +50,11 @@ class ErrorCode(str, Enum):
 @dataclass(frozen=True, slots=True)
 class Failure:
     code: ErrorCode
+
+
+_LOCK_ORGANIZATION_SQL: Final = (
+    'SELECT 1 AS locked FROM "LiteLLM_CustomerOrganizationTable" WHERE customer_org_id = $1 FOR UPDATE'
+)
 
 
 class TransactionOperation(str, Enum):
@@ -209,6 +215,7 @@ _MEMBER_INCLUDE: Final = {"budget": True, "budget_template": True}
 
 class CustomerHierarchyStore:
     def __init__(self, db: "Prisma", now: datetime) -> None:
+        self.db = db
         self.now = now
         self.organizations: TableActions[PrismaRecord] = db.litellm_customerorganizationtable  # pyright: ignore[reportAttributeAccessIssue]  # protocol accepts immutable query mappings
         self.teams: TableActions[PrismaRecord] = db.litellm_customerteamtable  # pyright: ignore[reportAttributeAccessIssue]  # protocol accepts immutable query mappings
@@ -223,7 +230,7 @@ class CustomerHierarchyStore:
             for row in rows
         )
         budget_ids: Final = tuple(chain.from_iterable(record.budget_ids for record in records))
-        budget_rows: Final = await self.budgets.find_many(where={"budget_id": {"in": budget_ids}})
+        budget_rows: Final = await find_many_in(self.budgets, "budget_id", budget_ids)
         resolved: Final = tuple(StoredBudget.model_validate(row.model_dump()) for row in budget_rows)
         budgets: Final = {budget.budget_id: budget for budget in resolved}
         return tuple(organization_response(record, budgets) for record in records)
@@ -288,6 +295,9 @@ class CustomerHierarchyStore:
             },
         )
 
+    async def lock_organization(self, organization_id: str) -> None:
+        await self.db.query_raw(_LOCK_ORGANIZATION_SQL, organization_id)
+
     async def create_organization(self, payload: OrganizationCreate, actor: str) -> Organization | Failure:
         default_index: Final = default_template_index(payload.default_budgets)
         if isinstance(default_index, Failure):
@@ -340,6 +350,7 @@ class CustomerHierarchyStore:
         return await self.get_organization(organization_id)
 
     async def add_template(self, organization_id: str, payload: BudgetTemplate, actor: str) -> Organization | Failure:
+        await self.lock_organization(organization_id)
         organization: Final = await self.get_organization(organization_id)
         if isinstance(organization, Failure):
             return organization
@@ -356,6 +367,7 @@ class CustomerHierarchyStore:
     async def update_template(
         self, organization_id: str, budget_id: str, payload: TemplatePatch, actor: str
     ) -> Organization | Failure:
+        await self.lock_organization(organization_id)
         organization: Final = await self.get_organization(organization_id)
         if isinstance(organization, Failure):
             return organization
@@ -374,6 +386,7 @@ class CustomerHierarchyStore:
         return await self.get_organization(organization_id)
 
     async def delete_template(self, organization_id: str, budget_id: str, actor: str) -> None | Failure:
+        await self.lock_organization(organization_id)
         organization: Final = await self.get_organization(organization_id)
         if isinstance(organization, Failure):
             return organization

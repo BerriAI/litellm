@@ -116,6 +116,12 @@ class Database:
         self.litellm_customerteamtable = Table("customer_team_id", self)
         self.litellm_customermembertable = Table("customer_member_id", self)
         self.litellm_budgettable = Table("budget_id", self)
+        self.locked_organization_ids: tuple[str, ...] = ()
+
+    async def query_raw(self, query: str, *args: object) -> tuple[()]:
+        assert "FOR UPDATE" in query
+        self.locked_organization_ids = (*self.locked_organization_ids, *(str(arg) for arg in args))
+        return ()
 
     @asynccontextmanager
     async def tx(self) -> AsyncIterator["Database"]:
