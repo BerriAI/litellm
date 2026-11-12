@@ -646,7 +646,7 @@ def test_voyage_endpoint_sends_extra_body_fields_in_the_invoke_body():
     session.client.return_value = client
 
     with patch("boto3.Session", return_value=session):
-        embedding(
+        response = embedding(
             model="sagemaker/voyage-3-5-endpoint",
             input=["hello"],
             aws_region_name="us-east-1",
@@ -662,3 +662,4 @@ def test_voyage_endpoint_sends_extra_body_fields_in_the_invoke_body():
         "truncation": False,
         "output_dimension": 512,
     }
+    assert response.data[0]["embedding"] == [0.1, 0.2]

@@ -12,8 +12,6 @@ import types
 from collections.abc import Mapping
 from typing import Final
 
-from litellm.llms.base_llm.embedding.transformation import merge_extra_body
-
 
 class NvidiaNimEmbeddingConfig:
     """
@@ -82,5 +80,11 @@ class NvidiaNimEmbeddingConfig:
 
         if kwargs is not None:
             # pass kwargs in extra_body
-            optional_params["extra_body"].update(merge_extra_body(kwargs))
+            nested_extra_body: Final = kwargs.get("extra_body")
+            optional_params["extra_body"].update(
+                {
+                    **{k: v for k, v in kwargs.items() if k != "extra_body"},
+                    **(nested_extra_body if isinstance(nested_extra_body, Mapping) else {}),
+                }
+            )
         return optional_params

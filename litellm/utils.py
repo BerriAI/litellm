@@ -504,7 +504,6 @@ if TYPE_CHECKING:
 
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
-from litellm.llms.base_llm.embedding.transformation import merge_extra_body
 from litellm.llms.base_llm.evals.transformation import BaseEvalsAPIConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.base_llm.skills.transformation import BaseSkillsAPIConfig
@@ -5028,9 +5027,7 @@ def get_optional_params_embeddings(
             optional_params["dimensions"] = non_default_params.pop("dimensions")
         if len(non_default_params.keys()) > 0:
             if litellm.drop_params is True or drop_params is True:  # drop the unsupported non-default values
-                keys = list(non_default_params.keys())
-                for k in keys:
-                    non_default_params.pop(k, None)
+                non_default_params.clear()
             else:
                 raise UnsupportedParamsError(
                     status_code=500,
@@ -5043,9 +5040,7 @@ def get_optional_params_embeddings(
     ):
         if len(non_default_params.keys()) > 0:
             if litellm.drop_params is True or drop_params is True:  # drop the unsupported non-default values
-                keys = list(non_default_params.keys())
-                for k in keys:
-                    non_default_params.pop(k, None)
+                non_default_params.clear()
             else:
                 raise UnsupportedParamsError(
                     status_code=500,
@@ -5056,7 +5051,7 @@ def get_optional_params_embeddings(
     else:
         optional_params = non_default_params
 
-    final_params: dict[str, object] = add_provider_specific_params_to_optional_params(
+    final_params = add_provider_specific_params_to_optional_params(
         optional_params=optional_params,
         passed_params=passed_params,
         custom_llm_provider=custom_llm_provider,
@@ -5064,8 +5059,10 @@ def get_optional_params_embeddings(
         additional_drop_params=kwargs.get("additional_drop_params", None),
     )
 
-    if custom_llm_provider in EMBEDDING_PROVIDERS_WITH_NATIVE_HANDLERS:
-        return merge_extra_body(final_params)
+    if custom_llm_provider in EMBEDDING_PROVIDERS_WITH_NATIVE_HANDLERS and "extra_body" in final_params:
+        extra_body: Final = final_params["extra_body"]
+        del final_params["extra_body"]
+        return {**final_params, **(extra_body if isinstance(extra_body, dict) else {})}
 
     if "extra_body" in final_params and not final_params["extra_body"]:
         final_params.pop("extra_body", None)
