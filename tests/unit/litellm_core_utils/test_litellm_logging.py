@@ -31,6 +31,7 @@ from litellm._logging import session_id_var, trace_id_var, verbose_logger
 from litellm._service_logger import ServiceLogging
 from litellm.caching.caching import DualCache
 from litellm.constants import (
+    FAILED_PROMPT_TOKEN_ESTIMATE_KEY,
     KUBERNETES_POD_ROUTING_KEY,
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
     LOGGING_WORKER_MAX_TIME_PER_COROUTINE,
@@ -41,6 +42,7 @@ from litellm.cost_calculator import ocr_batch_cost
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils import litellm_logging
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+from litellm.litellm_core_utils.token_counter import token_counter
 from litellm.litellm_core_utils.litellm_logging import (
     BilledRoundsSpend,
     Logging,
@@ -14851,3 +14853,64 @@ async def test_a_response_discarded_after_its_success_log_was_parked_is_billed_o
     assert kwargs["response_cost"] == pytest.approx(both_attempts)
     assert prepared is not None
     assert prepared.amount == pytest.approx(both_attempts)
+
+
+class _FailureKwargsRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failure_kwargs: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+
+    async def async_log_failure_event(
+        self,
+        kwargs: dict[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        self.failure_kwargs.put_nowait(dict(kwargs))
+
+
+class _EstimateWantingRecorder(_FailureKwargsRecorder):
+    wants_failed_prompt_token_estimate = True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("recorder_type", "expects_estimate"),
+    [(_FailureKwargsRecorder, False), (_EstimateWantingRecorder, True)],
+    ids=["plain_logger_skips_counting", "opted_in_logger_gets_estimate"],
+)
+async def test_failed_chat_prompt_is_counted_only_for_loggers_that_want_the_estimate(
+    monkeypatch: pytest.MonkeyPatch,
+    recorder_type: type[_FailureKwargsRecorder],
+    expects_estimate: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    recorder: Final = recorder_type()
+    messages: Final = [{"role": "user", "content": "count these prompt words"}]
+    logging_obj: Final = LitellmLogging(
+        model="hosted_vllm/test-model",
+        messages=messages,
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.datetime(2026, 1, 1),
+        litellm_call_id="failed-request-call-id",
+        function_id="failed-request-function-id",
+        dynamic_async_failure_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(
+        model="hosted_vllm/test-model", user="", optional_params={}, litellm_params={}
+    )
+
+    await logging_obj.async_failure_handler(
+        litellm.Timeout(message="timed out", model="test-model", llm_provider="hosted_vllm"), "tb"
+    )
+
+    received: Final = recorder.failure_kwargs.get_nowait()
+    expected: Final = {
+        FAILED_PROMPT_TOKEN_ESTIMATE_KEY: token_counter(model="hosted_vllm/test-model", messages=messages)
+    }
+    assert {k: v for k, v in received.items() if k == FAILED_PROMPT_TOKEN_ESTIMATE_KEY} == (
+        expected if expects_estimate else {}
+    )

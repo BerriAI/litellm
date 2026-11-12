@@ -40,7 +40,9 @@ import litellm
 from litellm.integrations import opentelemetry as otel_module
 from litellm.integrations.arize.arize_phoenix import ArizePhoenixLogger
 from litellm.integrations.opentelemetry import (
+    ESTIMATED_INPUT_TOKENS_ATTRIBUTE,
     LITELLM_REQUEST_SPAN_NAME,
+    USAGE_PROVIDER_STATUS_ATTRIBUTE,
     OpenTelemetry,
     OpenTelemetryConfig,
     OTELMetricAttributeFilter,
@@ -54,13 +56,27 @@ from litellm.proxy import proxy_server
 from litellm.proxy._types import ManagementEndpointLoggingPayload, ProxyException, SpanAttributes
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
-from collections.abc import AsyncIterator, Callable, Mapping
-from litellm.constants import KUBERNETES_POD_ROUTING_KEY, LOGGING_WORKER_MAX_TIME_PER_COROUTINE
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
+from litellm.constants import (
+    FAILED_PROMPT_TOKEN_ESTIMATE_KEY,
+    KUBERNETES_POD_ROUTING_KEY,
+    LOGGING_WORKER_MAX_TIME_PER_COROUTINE,
+    REDACTED_BY_LITELLM,
+)
+from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+from litellm.litellm_core_utils.token_counter import token_counter
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.hidden_params import set_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-from litellm.types.utils import ChatCompletionMessageToolCall, Delta, Function, ModelResponseStream, StreamingChoices
+from litellm.types.utils import (
+    ChatCompletionMessageToolCall,
+    Delta,
+    Function,
+    ModelResponseStream,
+    StreamingChoices,
+    Usage,
+)
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 exporter = InMemorySpanExporter()
@@ -7940,3 +7956,165 @@ class TestOpentelemetryUnitTests:
 
         # Assert: error.message should be set from error_str using ErrorAttributes constant
         mock_span.set_attribute.assert_called_with(ErrorAttributes.ERROR_MESSAGE, "Fallback error message")
+
+
+_PROMPT_SECRET: Final = "confidential-prompt-marker"
+_SECRET_PROMPT: Final = ({"role": "user", "content": " ".join([_PROMPT_SECRET] * 200)},)
+_UNCOUNTABLE_PROMPT: Final = ({"role": "user", "content": [{"type": "not_a_content_block"}]},)
+_FAILED_MODEL: Final = "hosted_vllm/test-model"
+_SYNC_THEN_ASYNC: Final = "sync_redaction_first"
+_ASYNC_THEN_SYNC: Final = "async_callback_first"
+_GEN_AI_USAGE_KEYS: Final = (
+    SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS.value,
+    SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS.value,
+    SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS.value,
+)
+
+
+@pytest.fixture
+def in_memory_otel() -> Iterator[tuple[OpenTelemetry, InMemorySpanExporter]]:
+    exporter: Final = InMemorySpanExporter()
+    tracer_provider: Final = TracerProvider()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(exporter))
+    otel: Final = OpenTelemetry(tracer_provider=tracer_provider)
+    otel.tracer = tracer_provider.get_tracer("litellm")
+    yield otel, exporter
+    tracer_provider.shutdown()
+
+
+def _redacted_logging(
+    otel: OpenTelemetry, messages: list[dict[str, object]] | None, call_type: str = "acompletion"
+) -> LitellmLogging:
+    logging_obj: Final = LitellmLogging(
+        model=_FAILED_MODEL,
+        messages=messages,
+        stream=False,
+        call_type=call_type,
+        start_time=_FIXED_START,
+        litellm_call_id="failed-request-call-id",
+        function_id="failed-request-function-id",
+        dynamic_failure_callbacks=[otel],
+        dynamic_async_failure_callbacks=[otel],
+        kwargs={"turn_off_message_logging": True},
+    )
+    logging_obj.update_environment_variables(model=_FAILED_MODEL, user="", optional_params={}, litellm_params={})
+    return logging_obj
+
+
+async def _fail(logging_obj: LitellmLogging, exporter: InMemorySpanExporter, order: str) -> ReadableSpan:
+    error: Final = litellm.Timeout(message="timed out", model="test-model", llm_provider="hosted_vllm")
+    if order == _SYNC_THEN_ASYNC:
+        logging_obj.failure_handler(error, "tb")
+        await logging_obj.async_failure_handler(error, "tb")
+    else:
+        await logging_obj.async_failure_handler(error, "tb")
+        logging_obj.failure_handler(error, "tb")
+    assert logging_obj.model_call_details["messages"] == [{"role": "user", "content": REDACTED_BY_LITELLM}]
+    (span,) = exporter.get_finished_spans()
+    return span
+
+
+def _span_text(span: ReadableSpan) -> str:
+    event_attributes: Final = tuple(dict(event.attributes or {}) for event in span.events)
+    return safe_dumps({"attributes": dict(span.attributes or {}), "events": event_attributes})
+
+
+def _assert_unknown_usage(attributes: Mapping[str, object]) -> None:
+    assert attributes[USAGE_PROVIDER_STATUS_ATTRIBUTE] == "unknown"
+    assert not any(key in attributes for key in _GEN_AI_USAGE_KEYS)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("order", [_SYNC_THEN_ASYNC, _ASYNC_THEN_SYNC])
+async def test_failed_chat_span_flags_unknown_usage_with_pre_redaction_prompt_estimate(
+    in_memory_otel: tuple[OpenTelemetry, InMemorySpanExporter], order: str
+) -> None:
+    otel, exporter = in_memory_otel
+    expected_estimate: Final = token_counter(model=_FAILED_MODEL, messages=list(_SECRET_PROMPT))
+    redacted_estimate: Final = token_counter(
+        model=_FAILED_MODEL, messages=[{"role": "user", "content": REDACTED_BY_LITELLM}]
+    )
+    assert expected_estimate != redacted_estimate
+
+    span: Final = await _fail(_redacted_logging(otel, list(_SECRET_PROMPT)), exporter, order)
+
+    attributes: Final = dict(span.attributes or {})
+    _assert_unknown_usage(attributes)
+    assert attributes[ESTIMATED_INPUT_TOKENS_ATTRIBUTE] == expected_estimate
+    assert _PROMPT_SECRET not in _span_text(span)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "messages",
+    [None, [], list(_UNCOUNTABLE_PROMPT)],
+    ids=["no_messages", "empty_messages", "tokenizer_failure"],
+)
+async def test_failed_chat_span_flags_unknown_usage_without_inventing_an_estimate(
+    in_memory_otel: tuple[OpenTelemetry, InMemorySpanExporter], messages: list[dict[str, object]] | None
+) -> None:
+    otel, exporter = in_memory_otel
+
+    span: Final = await _fail(_redacted_logging(otel, messages), exporter, _SYNC_THEN_ASYNC)
+
+    attributes: Final = dict(span.attributes or {})
+    _assert_unknown_usage(attributes)
+    assert ESTIMATED_INPUT_TOKENS_ATTRIBUTE not in attributes
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "recovered",
+    [
+        Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
+        Usage(prompt_tokens=120, completion_tokens=7, total_tokens=127),
+    ],
+    ids=["recovered_zero", "recovered_partial_stream"],
+)
+async def test_failed_chat_span_adds_no_usage_attributes_when_usage_was_recovered(
+    in_memory_otel: tuple[OpenTelemetry, InMemorySpanExporter], recovered: Usage
+) -> None:
+    otel, exporter = in_memory_otel
+    logging_obj: Final = _redacted_logging(otel, list(_SECRET_PROMPT))
+    logging_obj.record_partial_usage_for_failure(recovered, 0.0)
+
+    span: Final = await _fail(logging_obj, exporter, _SYNC_THEN_ASYNC)
+
+    attributes: Final = dict(span.attributes or {})
+    assert USAGE_PROVIDER_STATUS_ATTRIBUTE not in attributes
+    assert ESTIMATED_INPUT_TOKENS_ATTRIBUTE not in attributes
+    assert not any(key in attributes for key in _GEN_AI_USAGE_KEYS)
+
+
+@pytest.mark.asyncio
+async def test_failed_non_chat_span_gets_no_failure_usage_flags(
+    in_memory_otel: tuple[OpenTelemetry, InMemorySpanExporter],
+) -> None:
+    otel, exporter = in_memory_otel
+    logging_obj: Final = _redacted_logging(otel, list(_SECRET_PROMPT), call_type="aresponses")
+
+    span: Final = await _fail(logging_obj, exporter, _SYNC_THEN_ASYNC)
+
+    attributes: Final = dict(span.attributes or {})
+    assert USAGE_PROVIDER_STATUS_ATTRIBUTE not in attributes
+    assert ESTIMATED_INPUT_TOKENS_ATTRIBUTE not in attributes
+
+
+def test_successful_span_reports_provider_usage_without_failure_usage_flags(
+    in_memory_otel: tuple[OpenTelemetry, InMemorySpanExporter],
+) -> None:
+    otel, exporter = in_memory_otel
+    data_dir: Final = Path(__file__).parent / "open_telemetry" / "data"
+    kwargs: Final = {
+        **json.loads((data_dir / "captured_kwargs.json").read_text()),
+        FAILED_PROMPT_TOKEN_ESTIMATE_KEY: 999,
+    }
+    response_obj: Final = json.loads((data_dir / "captured_response.json").read_text())
+
+    otel._handle_success(kwargs, response_obj, _FIXED_START, _FIXED_START + timedelta(seconds=1))
+
+    span_attributes: Final = tuple(dict(span.attributes or {}) for span in exporter.get_finished_spans())
+    input_tokens: Final = {attrs.get(SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS.value) for attrs in span_attributes}
+    assert response_obj["usage"]["prompt_tokens"] in input_tokens
+    assert not any(USAGE_PROVIDER_STATUS_ATTRIBUTE in attrs for attrs in span_attributes)
+    assert not any(ESTIMATED_INPUT_TOKENS_ATTRIBUTE in attrs for attrs in span_attributes)
