@@ -15,9 +15,11 @@ litellm-gateway-inference.workspace = true
 litellm-gateway-forward.workspace = true
 litellm-gateway-mcp.workspace = true
 tokio-util = "0.7"
+tower = { version = "0.5", features = ["util"] }
 thiserror.workspace = true
 futures-util.workspace = true
 litellm-gateway-auth.workspace = true
+litellm-gateway-auth-core.workspace = true
 litellm-gateway-ui.workspace = true
 litellm-config.workspace = true
 litellm-core-utils.workspace = true
@@ -47,4 +49,3 @@ base64.workspace = true
 rstest.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["sync"] }
-tower = { version = "0.5", features = ["util"] }

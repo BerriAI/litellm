@@ -3835,6 +3835,7 @@ dependencies = [
  "litellm-core-utils",
  "litellm-error",
  "litellm-gateway-auth",
+ "litellm-gateway-auth-core",
  "litellm-gateway-forward",
  "litellm-gateway-inference",
  "litellm-gateway-mcp",
@@ -3872,6 +3873,7 @@ dependencies = [
  "axum",
  "axum-login",
  "futures-util",
+ "jiff",
  "litellm-config",
  "litellm-error",
  "litellm-gateway-auth-core",
@@ -3927,6 +3929,7 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tokio-util",
+ "tower",
  "tower-service",
  "tracing",
 ]

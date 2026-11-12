@@ -4400,6 +4400,7 @@ class TestRustForwardServer:
             run_hypercorn=params["run_hypercorn"] is True,
             run_granian=params["run_granian"] is True,
             tls=None not in (params["ssl_keyfile_path"], params["ssl_certfile_path"]),
+            config=params["config"],
         )
 
     @pytest.mark.parametrize(

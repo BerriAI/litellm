@@ -1,5 +1,6 @@
 use std::{
     error::Error,
+    path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -49,10 +50,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         })
         .install_global()?;
         let stdin_closed = litellm_gateway_forward::input_closed(std::io::stdin());
-        litellm_gateway_forward::run(forward, async {
+        let shutdown = async {
             tokio::select! { () = shutdown_signal() => (), () = stdin_closed => () }
-        })
-        .await?;
+        };
+        match forward.config.clone() {
+            None => litellm_gateway_forward::run(forward, shutdown).await?,
+            Some(config) => in_front_of_python(forward, config, shutdown).await?,
+        }
         return Ok(());
     }
     let settings: Settings = settings::from_iter(std::env::vars_os())?;
@@ -126,6 +130,26 @@ async fn main() -> Result<(), Box<dyn Error>> {
         mcp.close().await;
     }
     result?;
+    Ok(())
+}
+
+/// Serves natively the requests the gateway authenticates, and forwards everything else to the
+/// Python proxy behind it.
+async fn in_front_of_python(
+    forward: litellm_gateway_forward::Settings,
+    config: PathBuf,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> Result<(), Box<dyn Error>> {
+    let config = Config::load(config)?;
+    let inference = litellm_gateway::build_inference(&config)?;
+    let env = |name: &str| std::env::var(name).ok();
+    let auth = litellm_gateway::auth(&config, inference.secrets.as_ref(), &env).await?;
+    litellm_gateway_forward::run_app(
+        forward,
+        |to_python| litellm_gateway::dispatching_router(inference, &config, &env, auth, to_python),
+        shutdown,
+    )
+    .await?;
     Ok(())
 }
 

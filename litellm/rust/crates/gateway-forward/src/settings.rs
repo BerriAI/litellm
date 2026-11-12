@@ -1,4 +1,4 @@
-use std::{ffi::OsString, net::SocketAddr, str::FromStr, time::Duration};
+use std::{ffi::OsString, net::SocketAddr, path::PathBuf, str::FromStr, time::Duration};
 
 use axum::http::Uri;
 use serde::Deserialize;
@@ -43,6 +43,7 @@ struct Environment {
     litellm_forward_port: u16,
     litellm_forward_upstream_keepalive: f64,
     litellm_forward_shutdown_drain: f64,
+    litellm_forward_config: String,
 }
 
 /// Everything forward mode runs with. The Python supervisor resolves each value from the settings
@@ -55,6 +56,9 @@ pub struct Settings {
     pub port: u16,
     pub upstream_keepalive: Duration,
     pub shutdown_drain: Duration,
+    /// The local YAML file Python loads its config from. `None`, written as an empty value, when
+    /// Python loads none or loads it from somewhere Rust can't read, and the gateway only forwards.
+    pub config: Option<PathBuf>,
 }
 
 impl Settings {
@@ -89,6 +93,9 @@ impl Settings {
                 "LITELLM_FORWARD_SHUTDOWN_DRAIN",
                 environment.litellm_forward_shutdown_drain,
             )?,
+            config: Some(environment.litellm_forward_config)
+                .filter(|path| !path.is_empty())
+                .map(PathBuf::from),
         }))
     }
 }
