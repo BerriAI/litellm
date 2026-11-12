@@ -382,6 +382,40 @@ def _restore_tool_use_names(messages: Sequence[object], original_names: Mapping[
                 block["name"] = original_names[name]
 
 
+# What a tool keeps through the OpenAI round trip. Everything else on an Anthropic tool (defer_loading, strict,
+# input_examples, allowed_callers, eager_input_streaming, ...) has no OpenAI equivalent and is lost on the way back.
+_OPENAI_REPRESENTABLE_TOOL_FIELDS: Final = frozenset(("name", "description", "input_schema", "type"))
+
+
+def _anthropic_tools_by_name(request: Mapping[str, object]) -> Mapping[str, Mapping[str, object]]:
+    # reversed so the first tool with a given name wins, matching how the provider resolves duplicates
+    return {
+        name: fields
+        for tool in reversed(list_field(request, "tools"))
+        if (fields := as_str_mapping(tool)) is not None and (name := anthropic_tool_name(tool)) is not None
+    }
+
+
+def _with_anthropic_only_fields(
+    tool: AllAnthropicToolsValues, request_tools: Mapping[str, Mapping[str, object]]
+) -> AllAnthropicToolsValues:
+    """Carry fields the OpenAI tool shape can't hold over from the request's own tool of the same name."""
+    name: Final = anthropic_tool_name(tool)
+    original: Final = None if name is None else request_tools.get(name)
+    if original is None:
+        return tool
+    carried: Final = {
+        key: value
+        for key, value in original.items()
+        if key not in _OPENAI_REPRESENTABLE_TOOL_FIELDS and key not in tool
+    }
+    return (
+        cast(AllAnthropicToolsValues, {**tool, **carried})  # cast-ok: same tool, plus fields copied from the request
+        if carried
+        else tool
+    )
+
+
 def _with_original_name(tool: ChatCompletionToolParam, original_names: Mapping[str, str]) -> ChatCompletionToolParam:
     if "function" not in tool:
         return tool
@@ -948,13 +982,16 @@ class AnthropicMessagesHandler(BaseTranslation):
             if guardrailed_tools is not None:
                 # Convert tools back from OpenAI format to Anthropic format
                 anthropic_config: Final = AnthropicConfig()
+                request_tools_by_name: Final = _anthropic_tools_by_name(
+                    cast(Mapping[str, object], data)  # cast-ok: Anthropic request body
+                )
                 anthropic_tools: Final[list[AllAnthropicToolsValues]] = []
                 for tool in guardrailed_tools:
                     converted_tool, mcp_server = anthropic_config.map_tool_helper(
                         _with_original_name(tool, original_tool_names.declared)
                     )
                     if converted_tool is not None:
-                        anthropic_tools.append(converted_tool)
+                        anthropic_tools.append(_with_anthropic_only_fields(converted_tool, request_tools_by_name))
                     # Note: MCP servers are handled separately in the main transformation
                 data["tools"] = (
                     merge_returned_tools_into_request_tools(
