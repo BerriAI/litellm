@@ -339,6 +339,7 @@ _PROXY_READ_TEAM_METADATA_KEYS: Final = (
     "max_batch_file_records",
     "max_batch_file_uploads_per_day",
     "max_file_downloads_per_minute",
+    "claude_code_gateway_managed_settings",
     "scim_managed",
     "scim_data",
     "phoenix_project_name_override",

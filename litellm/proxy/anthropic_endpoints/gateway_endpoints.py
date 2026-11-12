@@ -27,23 +27,25 @@ from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, Request, Response, status
 from fastapi.responses import JSONResponse
-from pydantic import Field, TypeAdapter, ValidationError
+from pydantic import Field, JsonValue, TypeAdapter, ValidationError
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import (
+    CLAUDE_CODE_GATEWAY_MANAGED_SETTINGS_KEY,
     CLI_JWT_EXPIRATION_HOURS,
     CLI_SSO_SESSION_TTL_SECONDS,
     LITELLM_CLI_SOURCE_IDENTIFIER,
 )
-from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
+from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.anthropic_endpoints.endpoints import anthropic_response, count_tokens
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _safe_set_request_parsed_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     safe_set_request_parsed_body,
 )
+from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
 from litellm.proxy.management_endpoints.sso_helper_utils import CLI_SSO_SESSIONS_TARGET
 from litellm.proxy.management_endpoints.ui_sso import (
     CLI_SSO_BROWSER_TEAM_CHOICE,
@@ -72,7 +74,7 @@ _REFRESH_TOKEN_GRANT: Final = "refresh_token"
 _DEVICE_CODE_SEPARATOR: Final = "."
 _DEVICE_POLL_INTERVAL_SECONDS: Final = 5
 _SECONDS_PER_HOUR: Final = 3600
-_MANAGED_SETTINGS_ADAPTER: Final = TypeAdapter(dict[str, object])
+_JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _NO_SETTINGS: Final = MappingProxyType({})
 _POST_ONLY: Final = ["POST"]
 
@@ -117,7 +119,7 @@ class _DeviceAuthorizationBody(LiteLLMBaseModel):
 class _ManagedSettingsBody(LiteLLMBaseModel):
     uuid: str
     checksum: str
-    settings: dict[str, object]
+    settings: Mapping[str, JsonValue]
 
 
 def _general_settings() -> Mapping[str, object]:
@@ -137,11 +139,20 @@ def ensure_gateway_enabled() -> None:
         raise HTTPException(status_code=404, detail="Claude Code gateway is not enabled")
 
 
-def _managed_settings() -> dict[str, object] | None:
-    settings: Final[object] = _general_settings().get("claude_code_gateway_managed_settings")
-    if not isinstance(settings, dict):
-        return None
-    return _MANAGED_SETTINGS_ADAPTER.validate_python(settings)
+def _managed_settings_block(source: Mapping[str, object] | None) -> JsonValue:
+    block: Final = _JSON_VALUE.validate_python(
+        None if source is None else source.get(CLAUDE_CODE_GATEWAY_MANAGED_SETTINGS_KEY)
+    )
+    return block if isinstance(block, dict) else None
+
+
+def _merged_managed_settings(
+    general_settings: Mapping[str, object], team_metadata: Mapping[str, object] | None
+) -> Mapping[str, JsonValue] | None:
+    global_block: Final = _managed_settings_block(general_settings)
+    team_block: Final = _managed_settings_block(team_metadata)
+    merged: Final = global_block if team_block is None else apply_json_merge_patch(global_block, team_block)
+    return merged if isinstance(merged, dict) else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -454,11 +465,13 @@ async def oauth_revoke(request: Request) -> Response:
     )
 
 
-@router.get("/managed/settings", include_in_schema=False, dependencies=_AUTHENTICATED)
-async def managed_settings(request: Request) -> Response:
+@router.get("/managed/settings", include_in_schema=False)
+async def managed_settings(
+    request: Request, user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]
+) -> Response:
     ensure_gateway_enabled()
 
-    settings: Final = _managed_settings()
+    settings: Final = _merged_managed_settings(_general_settings(), user_api_key_dict.team_metadata)
     if settings is None:
         return Response(status_code=404)
 

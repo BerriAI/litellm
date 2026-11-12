@@ -18,6 +18,7 @@ from litellm import Router, constants, provider_list
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS,
+    CLAUDE_CODE_GATEWAY_MANAGED_SETTINGS_KEY,
     EMPTY_MAPPING,
     INVALID_VIRTUAL_KEY_ERROR_MARKER,
     MINIMUM_CUSTOM_KEY_LENGTH,
@@ -1915,7 +1916,18 @@ class BatchLimitRequest(Protocol):
     def model_fields_set(self) -> Collection[str]: ...
 
 
-_ADMIN_ONLY_METADATA_KEYS: Final = (*ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS, TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY)
+_BATCH_LIMIT_REASON: Final = "It limits what the holder can do with batches, so the holder cannot raise it."
+_ADMIN_ONLY_METADATA_KEYS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        **dict.fromkeys(ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS, _BATCH_LIMIT_REASON),
+        TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY: (
+            "It lets the holder read and write those buckets with the proxy's AWS credentials."
+        ),
+        CLAUDE_CODE_GATEWAY_MANAGED_SETTINGS_KEY: (
+            "Claude Code applies it on every machine the gateway serves, hooks and env included."
+        ),
+    }
+)
 
 
 def enforce_batch_limits_are_admin_only(
@@ -1924,12 +1936,13 @@ def enforce_batch_limits_are_admin_only(
     user_api_key_dict: UserAPIKeyAuth,
     entity: Literal["key", "team"],
 ) -> None:
-    """Only a proxy admin may change a key or team's batch limits.
+    """Only a proxy admin may change a key or team's batch limits, S3 bucket list, or Claude Code managed settings.
 
     Every key in ``ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS`` caps what the holder
     may do with batches, so a holder-writable copy would let a caller lift their
-    own quota, and the S3 bucket list grants access to buckets with the proxy's
-    own credentials. Gated on the resulting value rather than on presence, so a form
+    own quota, the S3 bucket list grants access to buckets with the proxy's
+    own credentials, and the Claude Code gateway pushes the managed settings onto every
+    team member's machine. Gated on the resulting value rather than on presence, so a form
     resending the stored value stays a no-op.
     """
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
@@ -1944,14 +1957,9 @@ def enforce_batch_limits_are_admin_only(
     )
     if changed is None:
         return
-    reason: Final = (
-        "It lets the holder read and write those buckets with the proxy's AWS credentials."
-        if changed == TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY
-        else "It limits what the holder can do with batches, so the holder cannot raise it."
-    )
     raise HTTPException(
         status_code=403,
-        detail={"error": f"Only proxy admins can set {changed} on a {entity}. {reason}"},
+        detail={"error": f"Only proxy admins can set {changed} on a {entity}. {_ADMIN_ONLY_METADATA_KEYS[changed]}"},
     )
 
 

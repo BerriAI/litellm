@@ -18474,6 +18474,128 @@ async def test_update_team_team_admin_cannot_change_a_proxy_controlled_metadata_
     assert not prisma.db.litellm_teamtable.update.called
 
 
+_GATEWAY_SETTINGS_KEY: Final = "claude_code_gateway_managed_settings"
+_OPEX_GATEWAY_SETTINGS: Final = MappingProxyType({"env": {"LITELLM_COST_CENTER": "opex"}})
+_PROXY_ADMINS_ONLY_GATEWAY_SETTINGS: Final = f"Only proxy admins can set {_GATEWAY_SETTINGS_KEY} on a team."
+
+
+@pytest.mark.asyncio
+async def test_update_team_team_admin_cannot_set_the_claude_code_gateway_managed_settings():
+    with ExitStack() as stack:
+        prisma = _wire_update_team(stack, {"region": "eu"})
+        stack.enter_context(_team_admin_may_edit("metadata"))
+        with pytest.raises(ProxyException) as exc:
+            await update_team(
+                data=UpdateTeamRequest(
+                    team_id="test_team_id", metadata={"region": "eu", _GATEWAY_SETTINGS_KEY: dict(_OPEX_GATEWAY_SETTINGS)}
+                ),
+                http_request=_update_request_stub(),
+                user_api_key_dict=_TEAM_ADMIN_CALLER,
+            )
+
+    assert str(exc.value.code) == "403"
+    assert f"Team metadata key '{_GATEWAY_SETTINGS_KEY}' is a proxy setting" in str(exc.value.message)
+    assert not prisma.db.litellm_teamtable.update.called
+
+
+@pytest.mark.asyncio
+async def test_update_team_org_admin_cannot_set_the_claude_code_gateway_managed_settings(
+    mock_db_client: MagicMock,
+) -> None:
+    existing: Final[MagicMock] = MagicMock()
+    existing.metadata = {"region": "eu"}
+    existing.model_dump.return_value = {"team_id": "t1", "organization_id": "org-1", "metadata": {"region": "eu"}}
+    mock_db_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing)
+    mock_db_client.db.litellm_teamtable.update = AsyncMock()
+
+    with _org_admins(("u-team-admin", "org-1")):
+        exc: Final[pytest.ExceptionInfo[ProxyException]]
+        with pytest.raises(ProxyException) as exc:
+            await update_team(
+                data=UpdateTeamRequest(
+                    team_id="t1", metadata={"region": "eu", _GATEWAY_SETTINGS_KEY: dict(_OPEX_GATEWAY_SETTINGS)}
+                ),
+                http_request=MagicMock(spec=Request),
+                user_api_key_dict=_non_admin_auth(),
+            )
+
+    assert str(exc.value.code) == "403"
+    assert _PROXY_ADMINS_ONLY_GATEWAY_SETTINGS in str(exc.value.message)
+    assert not mock_db_client.db.litellm_teamtable.update.called
+
+
+@pytest.mark.asyncio
+async def test_new_team_org_admin_cannot_set_the_claude_code_gateway_managed_settings(
+    mock_db_client: MagicMock,
+) -> None:
+    mock_db_client.db.litellm_teamtable.count = AsyncMock(return_value=0)
+    mock_db_client.db.litellm_teamtable.create = AsyncMock()
+
+    with (
+        _org_admins(("u-team-admin", "org-1")),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._should_auto_add_team_creator",
+            return_value=False,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
+            new=AsyncMock(return_value=MagicMock()),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._check_org_team_limits",
+            new=AsyncMock(return_value=None),
+        ),
+    ):
+        exc: Final[pytest.ExceptionInfo[ProxyException]]
+        with pytest.raises(ProxyException) as exc:
+            await new_team(
+                data=NewTeamRequest(
+                    team_alias="t",
+                    organization_id="org-1",
+                    metadata={_GATEWAY_SETTINGS_KEY: dict(_OPEX_GATEWAY_SETTINGS)},
+                ),
+                http_request=MagicMock(spec=Request),
+                user_api_key_dict=_non_admin_auth(),
+            )
+
+    assert str(exc.value.code) == "403"
+    assert _PROXY_ADMINS_ONLY_GATEWAY_SETTINGS in str(exc.value.message)
+    assert not mock_db_client.db.litellm_teamtable.create.called
+
+
+@pytest.mark.asyncio
+async def test_update_team_proxy_admin_sets_the_claude_code_gateway_managed_settings(
+    disable_audit_logging_for_mocked_team: None,
+) -> None:
+    sent: Final = {"region": "eu", _GATEWAY_SETTINGS_KEY: dict(_OPEX_GATEWAY_SETTINGS)}
+    with ExitStack() as stack:
+        prisma = _wire_update_team(stack, {"region": "eu"})
+        await update_team(
+            data=UpdateTeamRequest(team_id="test_team_id", metadata=sent),
+            http_request=_update_request_stub(),
+            user_api_key_dict=_PROXY_ADMIN_CALLER,
+        )
+
+    assert prisma.db.litellm_teamtable.update.call_args.kwargs["data"]["metadata"] == sent
+
+
+@pytest.mark.asyncio
+async def test_update_team_team_admin_resending_the_stored_claude_code_gateway_managed_settings_is_not_an_edit(
+    disable_audit_logging_for_mocked_team: None,
+) -> None:
+    stored: Final = {"region": "eu", _GATEWAY_SETTINGS_KEY: dict(_OPEX_GATEWAY_SETTINGS)}
+    with ExitStack() as stack:
+        prisma = _wire_update_team(stack, stored)
+        stack.enter_context(_team_admin_may_edit("metadata"))
+        await update_team(
+            data=UpdateTeamRequest(team_id="test_team_id", metadata={**stored, "region": "us"}),
+            http_request=_update_request_stub(),
+            user_api_key_dict=_TEAM_ADMIN_CALLER,
+        )
+
+    assert prisma.db.litellm_teamtable.update.call_args.kwargs["data"]["metadata"] == {**stored, "region": "us"}
+
+
 @pytest.mark.asyncio
 async def test_update_team_team_admin_metadata_still_goes_through_the_configured_validator():
     import contextlib

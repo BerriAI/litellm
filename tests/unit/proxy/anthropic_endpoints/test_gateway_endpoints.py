@@ -7,6 +7,8 @@ settings, OTLP ingestion, and the enable flag.
 """
 
 import asyncio
+import hashlib
+import json
 from collections.abc import Iterator, Mapping
 from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
@@ -16,11 +18,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from litellm.caching.dual_cache import DualCache
-from litellm.proxy._types import ProxyException
+from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.anthropic_endpoints import gateway_endpoints
 from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
 from litellm.proxy.management_endpoints.ui_sso import (
@@ -164,6 +166,7 @@ def _gateway_env(
     minter: _Minter | None = None,
     real_auth: bool = False,
     extra_settings: Mapping[str, object] = MappingProxyType({}),
+    callers: Mapping[str, UserAPIKeyAuth] = MappingProxyType({}),
 ) -> Iterator[tuple[TestClient, DualCache]]:
     general_settings: Final = {
         "enable_claude_code_gateway": enabled,
@@ -177,8 +180,8 @@ def _gateway_env(
     app.include_router(gateway_endpoints.router)
     app.dependency_overrides[gateway_endpoints._proxy_credential_minter] = lambda: minter or _Minter()
 
-    async def _fake_auth() -> object:
-        return object()
+    async def _fake_auth(request: Request) -> UserAPIKeyAuth:
+        return callers.get(request.headers.get("Authorization", ""), UserAPIKeyAuth())
 
     with ExitStack() as stack:
         stack.enter_context(
@@ -788,10 +791,38 @@ def test_unsupported_grant_type():
     assert resp.json()["error"] == "unsupported_grant_type"
 
 
-def test_managed_settings_404_when_unset():
-    with _gateway_env() as (client, _):
-        resp = client.get("/claude_code_gateway/managed/settings")
-    assert resp.status_code == 404
+_MANAGED_SETTINGS_URL: Final = "/claude_code_gateway/managed/settings"
+_GLOBAL_MANAGED_SETTINGS: Final = MappingProxyType(
+    {
+        "env": {"LITELLM_COST_CENTER": "shared", "OTEL_EXPORTER_OTLP_ENDPOINT": "https://otel.example"},
+        "permissions": {"defaultMode": "acceptEdits", "deny": ["Read(./.env)"]},
+        "apiKeyHelper": "/usr/local/bin/key-helper",
+    }
+)
+
+
+def _team_caller(team_id: str, managed_settings: object) -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(
+        team_id=team_id, team_metadata={"claude_code_gateway_managed_settings": managed_settings, "owner": "finops"}
+    )
+
+
+def _as(caller: str) -> Mapping[str, str]:
+    return MappingProxyType({"Authorization": caller})
+
+
+@pytest.mark.parametrize(
+    "caller",
+    [
+        pytest.param(UserAPIKeyAuth(), id="no-team"),
+        pytest.param(UserAPIKeyAuth(team_id="t", team_metadata={"owner": "finops"}), id="team-without-block"),
+        pytest.param(_team_caller("t", ["not", "an", "object"]), id="team-block-not-an-object"),
+    ],
+)
+def test_managed_settings_404_when_unset(caller: UserAPIKeyAuth):
+    with _gateway_env(callers={"caller": caller}) as (client, _):
+        resp = client.get(_MANAGED_SETTINGS_URL, headers=_as("caller"))
+    assert resp.status_code == 404, resp.text
 
 
 def test_managed_settings_returns_client_envelope_and_304_on_cached_checksum():
@@ -827,6 +858,109 @@ def test_managed_settings_404_when_gateway_disabled():
     with _gateway_env(enabled=False, managed_settings={"env": {}}) as (client, _):
         resp = client.get("/claude_code_gateway/managed/settings")
     assert resp.status_code == 404
+
+
+def test_managed_settings_without_a_bearer_is_rejected_by_real_auth():
+    with (
+        _gateway_env(real_auth=True, managed_settings=_GLOBAL_MANAGED_SETTINGS) as (client, _),
+        pytest.raises(ProxyException) as exc_info,
+    ):
+        client.get(_MANAGED_SETTINGS_URL)
+    assert exc_info.value.code == "401"
+
+
+def test_managed_settings_gives_each_team_its_own_settings_and_etag():
+    callers: Final = {
+        "opex": _team_caller("opex-team", {"env": {"LITELLM_COST_CENTER": "opex"}}),
+        "capex": _team_caller(
+            "capex-team",
+            {"env": {"LITELLM_COST_CENTER": "capex"}, "permissions": {"deny": ["Read(./.env)", "Bash(curl:*)"]}},
+        ),
+    }
+    with _gateway_env(managed_settings=_GLOBAL_MANAGED_SETTINGS, callers=callers) as (client, _):
+        opex: Final = client.get(_MANAGED_SETTINGS_URL, headers=_as("opex"))
+        capex: Final = client.get(_MANAGED_SETTINGS_URL, headers=_as("capex"))
+        opex_again: Final = client.get(_MANAGED_SETTINGS_URL, headers=_as("opex"))
+        opex_cached: Final = client.get(
+            _MANAGED_SETTINGS_URL, headers={**_as("opex"), "If-None-Match": opex.headers["ETag"]}
+        )
+        capex_with_opex_etag: Final = client.get(
+            _MANAGED_SETTINGS_URL, headers={**_as("capex"), "If-None-Match": opex.headers["ETag"]}
+        )
+
+    assert opex.json()["settings"] == {
+        "env": {"LITELLM_COST_CENTER": "opex", "OTEL_EXPORTER_OTLP_ENDPOINT": "https://otel.example"},
+        "permissions": {"defaultMode": "acceptEdits", "deny": ["Read(./.env)"]},
+        "apiKeyHelper": "/usr/local/bin/key-helper",
+    }, opex.text
+    assert capex.json()["settings"] == {
+        "env": {"LITELLM_COST_CENTER": "capex", "OTEL_EXPORTER_OTLP_ENDPOINT": "https://otel.example"},
+        "permissions": {"defaultMode": "acceptEdits", "deny": ["Read(./.env)", "Bash(curl:*)"]},
+        "apiKeyHelper": "/usr/local/bin/key-helper",
+    }, capex.text
+    assert opex.headers["ETag"] != capex.headers["ETag"]
+    assert opex_again.headers["ETag"] == opex.headers["ETag"]
+    assert opex_cached.status_code == 304
+    assert opex_cached.headers["ETag"] == opex.headers["ETag"]
+    assert capex_with_opex_etag.status_code == 200
+    assert capex_with_opex_etag.json() == capex.json()
+
+
+@pytest.mark.parametrize(
+    "team_block,expected",
+    [
+        pytest.param(
+            {"permissions": {"defaultMode": "plan"}},
+            {**_GLOBAL_MANAGED_SETTINGS, "permissions": {"defaultMode": "plan", "deny": ["Read(./.env)"]}},
+            id="nested-object-keeps-sibling-global-keys",
+        ),
+        pytest.param(
+            {"apiKeyHelper": None, "env": {"OTEL_EXPORTER_OTLP_ENDPOINT": None}},
+            {"env": {"LITELLM_COST_CENTER": "shared"}, "permissions": _GLOBAL_MANAGED_SETTINGS["permissions"]},
+            id="null-deletes-the-global-key",
+        ),
+        pytest.param(
+            {"permissions": {"deny": ["WebFetch"]}},
+            {**_GLOBAL_MANAGED_SETTINGS, "permissions": {"defaultMode": "acceptEdits", "deny": ["WebFetch"]}},
+            id="array-replaces-the-global-array",
+        ),
+        pytest.param(
+            {"permissions": "locked"},
+            {**_GLOBAL_MANAGED_SETTINGS, "permissions": "locked"},
+            id="scalar-replaces-the-global-object",
+        ),
+    ],
+)
+def test_managed_settings_merges_the_team_block_over_the_global_block_as_a_json_merge_patch(
+    team_block: Mapping[str, object], expected: Mapping[str, object]
+):
+    with _gateway_env(
+        managed_settings=_GLOBAL_MANAGED_SETTINGS, callers={"member": _team_caller("t", team_block)}
+    ) as (client, _):
+        resp = client.get(_MANAGED_SETTINGS_URL, headers=_as("member"))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["settings"] == expected
+
+
+def test_managed_settings_serves_the_team_block_when_no_global_block_is_set():
+    team_block: Final = {"env": {"LITELLM_COST_CENTER": "capex"}, "apiKeyHelper": None}
+    with _gateway_env(callers={"member": _team_caller("t", team_block)}) as (client, _):
+        resp = client.get(_MANAGED_SETTINGS_URL, headers=_as("member"))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["settings"] == {"env": {"LITELLM_COST_CENTER": "capex"}}
+
+
+@pytest.mark.parametrize("team_value", ["opex", ["a"], 1, None])
+def test_managed_settings_ignores_a_team_value_that_is_not_an_object(team_value: object):
+    global_canonical: Final = json.dumps(dict(_GLOBAL_MANAGED_SETTINGS), sort_keys=True, separators=(",", ":"))
+    global_etag: Final = f'"sha256:{hashlib.sha256(global_canonical.encode()).hexdigest()}"'
+    callers: Final = {"member": _team_caller("t", team_value), "teamless": UserAPIKeyAuth()}
+    with _gateway_env(managed_settings=_GLOBAL_MANAGED_SETTINGS, callers=callers) as (client, _):
+        member: Final = client.get(_MANAGED_SETTINGS_URL, headers=_as("member"))
+        teamless: Final = client.get(_MANAGED_SETTINGS_URL, headers=_as("teamless"))
+    assert member.json()["settings"] == dict(_GLOBAL_MANAGED_SETTINGS), member.text
+    assert member.headers["ETag"] == global_etag
+    assert teamless.headers["ETag"] == global_etag
 
 
 @pytest.mark.parametrize("signal", ["metrics", "logs", "traces"])

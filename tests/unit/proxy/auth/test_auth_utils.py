@@ -6585,6 +6585,32 @@ def test_only_proxy_admins_change_a_teams_s3_bucket_list(
     assert "Only proxy admins can set allowed_s3_buckets on a team." in str(rejection.value.detail)
 
 
+@pytest.mark.parametrize(
+    "key,reason",
+    [
+        ("max_batch_file_records", "It limits what the holder can do with batches, so the holder cannot raise it."),
+        ("allowed_s3_buckets", "It lets the holder read and write those buckets with the proxy's AWS credentials."),
+        (
+            "claude_code_gateway_managed_settings",
+            "Claude Code applies it on every machine the gateway serves, hooks and env included.",
+        ),
+    ],
+)
+def test_a_non_admin_changing_an_admin_only_team_metadata_key_is_refused_with_its_reason(key: str, reason: str) -> None:
+    from litellm.proxy._types import UpdateTeamRequest
+    from litellm.proxy.auth.auth_utils import enforce_batch_limits_are_admin_only
+
+    with pytest.raises(HTTPException) as rejection:
+        enforce_batch_limits_are_admin_only(
+            data=UpdateTeamRequest(team_id="t1", metadata={key: {"changed": True}}),
+            existing_metadata={key: {"changed": False}},
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="u1"),
+            entity="team",
+        )
+    assert rejection.value.status_code == 403
+    assert rejection.value.detail == {"error": f"Only proxy admins can set {key} on a team. {reason}"}
+
+
 def _request_with_content_length(content_length: int) -> Request:
     return Request(
         {

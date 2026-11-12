@@ -19,7 +19,11 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS, OTEL_SERVICE_NAME_METADATA_KEYS
+from litellm.constants import (
+    ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS,
+    CLAUDE_CODE_GATEWAY_MANAGED_SETTINGS_KEY,
+    OTEL_SERVICE_NAME_METADATA_KEYS,
+)
 from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.models.team import LiteLLM_TeamTable
 from litellm.models.verification_token import LiteLLM_VerificationToken
@@ -89,6 +93,7 @@ PROXY_CONTROLLED_TEAM_METADATA_KEYS: Final[frozenset[str]] = frozenset(
         *_SYSTEM_MANAGED_METADATA_KEYS,
         *OTEL_SERVICE_NAME_METADATA_KEYS,
         *ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS,
+        CLAUDE_CODE_GATEWAY_MANAGED_SETTINGS_KEY,
         SCIM_MANAGED_TEAM_METADATA_KEY,
         SCIM_TEAM_DATA_METADATA_KEY,
         "opted_out_global_guardrails",
