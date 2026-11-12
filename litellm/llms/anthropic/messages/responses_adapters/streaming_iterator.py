@@ -215,14 +215,13 @@ class AnthropicResponsesStreamWrapper:
             stop: Final[dict[str, object]] = {"type": "content_block_stop", "index": redacted_idx}
             self._chunk_queue.append(stop)
             return
-        if signature is not None:
-            self._chunk_queue.append(
-                {
-                    "type": "content_block_delta",
-                    "index": block_idx,
-                    "delta": {"type": "signature_delta", "signature": signature},
-                }
-            )
+        self._chunk_queue.append(
+            {
+                "type": "content_block_delta",
+                "index": block_idx,
+                "delta": {"type": "signature_delta", "signature": signature or ""},
+            }
+        )
         self._chunk_queue.append({"type": "content_block_stop", "index": block_idx})
 
     def _process_event(self, event: object) -> None:

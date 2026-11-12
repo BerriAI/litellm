@@ -177,6 +177,7 @@ class TestReasoningItemWithoutSummaryText:
             ("content_block_start", 0),
             ("content_block_delta", 0),
             ("content_block_delta", 0),
+            ("content_block_delta", 0),
             ("content_block_stop", 0),
             ("content_block_start", 1),
             ("content_block_delta", 1),
@@ -188,10 +189,12 @@ class TestReasoningItemWithoutSummaryText:
         assert "".join(c["delta"]["thinking"] for c in chunks[2:4]) == "Weighing options"
 
     def test_the_reasoning_item_id_is_never_streamed_as_a_signature(self):
-        """A stand-in signature would be replayed as a real one, so none is ever sent."""
+        """A stand-in signature would be replayed as a real one, so the block closes with an empty one."""
         chunks = _drain_async(self._gpt_turn(reasoning_summary_deltas=["Weighing options"]))
 
-        assert not [c for c in chunks if c.get("delta", {}).get("type") == "signature_delta"]
+        signature_deltas = [c for c in chunks if c.get("delta", {}).get("type") == "signature_delta"]
+        assert [(c["index"], c["delta"]["signature"]) for c in signature_deltas] == [(0, "")]
+        assert chunks[chunks.index(signature_deltas[0]) + 1] == {"type": "content_block_stop", "index": 0}
 
 
 _ENCRYPTED_REASONING = "gAAAAABp_encrypted_reasoning_bytes_only_openai_can_read"

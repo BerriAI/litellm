@@ -1534,3 +1534,56 @@ async def test_signed_thinking_blocks_keep_their_own_text_and_signature(is_async
     assert _last_delta_types_per_thinking_block(events) == ("signature_delta", "signature_delta")
     assert _text_deltas(events) == ["Done"]
     _assert_deltas_match_their_block_type(events)
+
+
+_UNSIGNED_REASONING_STREAMS: Final[Mapping[str, Tuple[MagicMock, ...]]] = MappingProxyType(
+    {
+        "then-text": (
+            _reasoning_content_chunk("The user "),
+            _reasoning_content_chunk("wants 2+2."),
+            _make_chunk(Delta(content="4")),
+            _make_chunk(Delta(content=None), finish_reason="stop"),
+        ),
+        "then-tool-call": (
+            _reasoning_content_chunk("The user wants 2+2."),
+            _tool_chunk("call_add", "add", '{"a": 2, "b": 2}'),
+            _make_chunk(Delta(content=None), finish_reason="tool_calls"),
+        ),
+        "thought-ends-with-finish": (
+            _reasoning_content_chunk("The user "),
+            _make_chunk(Delta(content=None, reasoning_content="wants 2+2."), finish_reason="stop"),
+        ),
+        "unsigned-thinking-blocks": (
+            _thinking_chunk("The user "),
+            _thinking_chunk("wants 2+2."),
+            _make_chunk(Delta(content="4")),
+            _make_chunk(Delta(content=None), finish_reason="stop"),
+        ),
+    }
+)
+
+
+def _event_before_stop(events: List[dict], index: int) -> dict:
+    stop_position: Final = next(
+        position
+        for position, event in enumerate(events)
+        if event.get("type") == "content_block_stop" and event["index"] == index
+    )
+    return events[stop_position - 1]
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("stream", list(_UNSIGNED_REASONING_STREAMS), ids=list(_UNSIGNED_REASONING_STREAMS))
+@pytest.mark.asyncio
+async def test_unsigned_thinking_block_closes_with_an_empty_signature_delta(is_async: bool, stream: str):
+    events: Final = await _events_for(_UNSIGNED_REASONING_STREAMS[stream], is_async)
+
+    assert _thinking_blocks_as_accumulated(events) == (
+        _AccumulatedThinking(thinking="The user wants 2+2.", signature=""),
+    )
+    assert [_event_before_stop(events, index) for index in _thinking_starts(events)] == [
+        {"type": "content_block_delta", "index": index, "delta": {"type": "signature_delta", "signature": ""}}
+        for index in _thinking_starts(events)
+    ]
+    assert _signature_deltas(events) == [""]
+    _assert_deltas_match_their_block_type(events)

@@ -3233,7 +3233,7 @@ def test_translate_openai_content_to_anthropic_reasoning_content_without_thinkin
     assert result[0]["type"] == "thinking"
     assert "Considering Letter Frequency" in result[0]["thinking"]
     assert "Calculating the Count" in result[0]["thinking"]
-    assert result[0]["signature"] is None
+    assert result[0]["signature"] == ""
     # Second block should be text block with content
     assert result[1]["type"] == "text"
     assert result[1]["text"] == 'There are **3** "r"s in the word strawberry.'
@@ -3311,7 +3311,7 @@ def test_translate_openai_response_to_anthropic_with_reasoning_content_only():
     # First block should be thinking
     assert anthropic_content[0]["type"] == "thinking"
     assert "Considering Letter Frequency" in anthropic_content[0]["thinking"]
-    assert anthropic_content[0].get("signature") is None
+    assert anthropic_content[0].get("signature") == ""
 
     # Second block should be text
     assert anthropic_content[1]["type"] == "text"
