@@ -296,7 +296,7 @@ const eslintConfig = [
   },
   {
     files: ["src/components/ui/sidebar.tsx"],
-    rules: { "local/no-ad-hoc-z-index": "off" },
+    rules: { "local/no-ad-hoc-z-index": "off", "local/no-large-inline-object-arg": "off" },
   },
   {
     files: ["src/hooks/use-mobile.ts"],
