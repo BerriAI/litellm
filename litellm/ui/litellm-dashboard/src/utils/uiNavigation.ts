@@ -1,23 +1,20 @@
 import { getUiPageUrl } from "@/components/networking";
 
 export function navigateToUiPage(url: string, replace = false): void {
-  let destination = "/ui";
+  const destination = (() => {
+    try {
+      const target = new URL(getUiPageUrl(url), window.location.origin);
+      const isHttp = target.protocol === "http:" || target.protocol === "https:";
 
-  try {
-    const target = new URL(getUiPageUrl(url), window.location.origin);
-    const isHttp = target.protocol === "http:" || target.protocol === "https:";
-
-    if (isHttp && target.origin === window.location.origin) {
-      destination = target.href;
+      return isHttp && target.origin === window.location.origin ? target.href : "/ui";
+    } catch {
+      return "/ui";
     }
-  } catch {
-    destination = "/ui";
-  }
+  })();
 
   if (replace) {
     window.location.replace(destination);
   } else {
-    // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- A fresh document resets auth state after login.
     window.location.assign(destination);
   }
 }
