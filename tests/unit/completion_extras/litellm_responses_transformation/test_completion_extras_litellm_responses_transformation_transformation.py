@@ -7,6 +7,7 @@ import queue
 import unittest
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, List, Literal, Optional, Tuple, cast, get_args
 from unittest.mock import ANY, MagicMock, Mock, patch
@@ -7062,6 +7063,14 @@ def test_stream_structured_output_drops_text_after_first_message_item(
     assert chunks[-1].choices[0].finish_reason == "stop"
 
 
+def _commentary_message_events(index: int, item: ResponseOutputMessage) -> tuple[dict[str, object], ...]:
+    return (
+        {"type": "response.output_item.added", "output_index": index, "item": item.model_dump()},
+        {"type": "response.output_text.delta", "output_index": index, "delta": item.content[0].text},
+        {"type": "response.output_item.done", "output_index": index, "item": item.model_dump()},
+    )
+
+
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize("answer", [None, "", '{"city":"Paris"}'])
 def test_commentary_phase_preserves_json_and_separates_notes(stream: bool, answer: str | None) -> None:
@@ -7082,13 +7091,7 @@ def test_commentary_phase_preserves_json_and_separates_notes(stream: bool, answe
             streaming_response=iter(()), sync_stream=True, replays_openai_history=True
         )
         events: Final = tuple(
-            event
-            for index, item in enumerate(items)
-            for event in (
-                {"type": "response.output_item.added", "output_index": index, "item": item.model_dump()},
-                {"type": "response.output_text.delta", "output_index": index, "delta": item.content[0].text},
-                {"type": "response.output_item.done", "output_index": index, "item": item.model_dump()},
-            )
+            chain.from_iterable(_commentary_message_events(index, item) for index, item in enumerate(items))
         ) + ({"type": "response.completed", "response": {"output": [item.model_dump() for item in items]}},)
         chunks: Final = [iterator.chunk_parser(event) for event in events]
         assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == expected_content

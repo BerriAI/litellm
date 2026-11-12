@@ -9,6 +9,8 @@ import respx
 import litellm
 from litellm.completion_extras.litellm_responses_transformation import history
 from litellm.exceptions import MidStreamFallbackError
+from litellm.types.llms.openai import ChatCompletionToolMessage
+from litellm.types.utils import ChatCompletionMessageToolCall
 
 OPENAI_RESPONSES_URL: Final = "https://api.openai.com/v1/responses"
 AZURE_API_BASE: Final = "https://litellm-history-test.openai.azure.com"
@@ -262,6 +264,34 @@ def test_next_turn_replays_every_item_phase_and_boundary_once_in_order(stream: b
 
 def _edit_content(message: Mapping[str, object]) -> Mapping[str, object]:
     return {**message, "content": "Checking the weather. Paris: heavy rain."}
+
+
+def test_tool_loop_saves_commentary_and_replays_the_original_item_order() -> None:
+    def execute_weather(call: ChatCompletionMessageToolCall) -> ChatCompletionToolMessage:
+        assert call.function.name == "get_weather"
+        assert call.function.arguments == '{"city":"Paris"}'
+        return ChatCompletionToolMessage(role="tool", tool_call_id=call.id or "", content="light rain")
+
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post(url__startswith=OPENAI_RESPONSES_URL).mock(
+            side_effect=(httpx.Response(200, json=_response(OUTPUT)), httpx.Response(200, json=_response((FOLLOW_UP,))))
+        )
+        answer: Final = litellm.run_tool_loop(
+            model=f"openai/responses/{MODEL}",
+            messages=[USER],
+            tools=TOOLS,
+            execute_tool=execute_weather,
+            api_key="sk-test",
+        )
+
+    sent: Final = json.loads(upstream.calls[1].request.content)["input"]
+    assert answer == "Done."
+    assert sent[1:-1] == list(REPLAYED)
+    assert sent[-1] == {
+        "type": "function_call_output",
+        "call_id": "call_weather_paris",
+        "output": [{"type": "input_text", "text": "light rain"}],
+    }
 
 
 def _edit_phase(message: Mapping[str, object]) -> Mapping[str, object]:
