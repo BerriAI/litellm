@@ -280,7 +280,7 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
         if (isSkippedResponse(response)) {
           setModelHealthStatuses((prev) => ({
             ...prev,
-            [modelId]: skippedStatus(response.warnings[0], currentTime, prev[modelId]),
+            [modelId]: skippedStatus(response.warnings[0], prev[modelId]?.lastCheck || "None", prev[modelId]),
           }));
           return;
         }
@@ -385,7 +385,7 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
         if (isSkippedResponse(response)) {
           setModelHealthStatuses((prev) => ({
             ...prev,
-            [modelId]: skippedStatus(response.warnings[0], currentTime, prev[modelId]),
+            [modelId]: skippedStatus(response.warnings[0], prev[modelId]?.lastCheck || "None", prev[modelId]),
           }));
           return;
         }

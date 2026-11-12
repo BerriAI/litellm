@@ -127,7 +127,7 @@ describe("HealthCheckComponent", () => {
     expect(mockIndividualModelHealthCheckCall).not.toHaveBeenCalledWith("token", "gpt-4");
   });
 
-  it("shows a model the proxy declined to check as skipped, never healthy, even with an old saved result", async () => {
+  it("shows a model the proxy declined to check as skipped, never healthy, and keeps its last real check time", async () => {
     const warning = "Not checked, because this health check would generate billed media.";
     const declinedResponse = {
       healthy_count: 0,
@@ -154,6 +154,7 @@ describe("HealthCheckComponent", () => {
       expect(screen.queryByText("healthy")).not.toBeInTheDocument();
       expect(screen.getByText(warning)).toBeInTheDocument();
       expect(screen.getByText(warning)).not.toHaveClass("text-destructive");
+      expect(screen.getAllByText(new Date("2026-10-01T00:00:00Z").toLocaleString())).toHaveLength(2);
     }
   });
 
