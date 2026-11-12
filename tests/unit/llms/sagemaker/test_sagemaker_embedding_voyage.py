@@ -7,6 +7,7 @@ transformation, and model type detection.
 """
 
 import json
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -106,7 +107,7 @@ class TestSagemakerCohereEmbeddingConfig:
         assert result["texts"] == ["hello"]
 
     def test_transform_request_keeps_max_tokens_and_priority(self):
-        result = self.config.transform_embedding_request(
+        result: Final = self.config.transform_embedding_request(
             model="cohere-embed-v4",
             input=["hello"],
             optional_params={"max_tokens": 16, "priority": 5, "truncate": "END"},
