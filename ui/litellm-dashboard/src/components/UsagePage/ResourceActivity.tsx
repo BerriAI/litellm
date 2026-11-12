@@ -48,6 +48,7 @@ export default function ResourceActivity({ scope, id, activity }: ResourceActivi
           entityIds: entityId ? [entityId] : null,
           apiKey,
           apiKeyLimit: 1,
+          includeEntityBreakdown: scope === "model" ? false : undefined,
           model: scope === "model" && !wildcard ? id : undefined,
           includeCurrentUtcDay: true,
         }

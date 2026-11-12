@@ -41,6 +41,14 @@ afterEach(() => {
 });
 
 describe("dailyActivityAggregatedCall", () => {
+  it.each([undefined, true, false])("sends the entity breakdown choice %s without changing defaults", async (value) => {
+    const mockFetch = captureFetch();
+    await dailyActivityAggregatedCall("user", req({ includeEntityBreakdown: value }));
+    expect(requestedUrl(mockFetch).searchParams.get("include_entity_breakdown")).toBe(
+      value === undefined ? null : String(value),
+    );
+  });
+
   it.each<[DailyActivityEntity, string]>([
     ["user", "user_id"],
     ["team", "team_ids"],
