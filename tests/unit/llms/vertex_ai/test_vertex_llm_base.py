@@ -7,6 +7,7 @@ import pathlib
 import re
 import time
 import traceback
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from functools import partial
@@ -2674,7 +2675,9 @@ async def test_callers_reload_a_rotated_key_file_once_when_google_rejects_the_ol
     with patch("google.auth._helpers.utcnow", return_value=now) as clock, responses.RequestsMock() as oauth:
         oauth.add_callback(responses.POST, "https://oauth2.googleapis.com/token", callback=token_response)
         assert await fetch(str(key_file), project) == ("old-token", "unit-project")
-        key_file.write_text(_authorized_user_cache_credentials("new-key", quota_project="unit-project"))
+        _rewrite_keeping_its_version(
+            key_file, _authorized_user_cache_credentials("new-key", quota_project="unit-project")
+        )
         old_key_revoked.set()
         clock.return_value = now + timedelta(seconds=7200)
         assert await fetch(str(key_file), project) == ("new-token", "unit-project")
@@ -2714,12 +2717,76 @@ async def test_a_google_outage_during_refresh_keeps_the_cached_key_instead_of_re
     ):
         oauth.add_callback(responses.POST, "https://oauth2.googleapis.com/token", callback=token_response)
         assert await fetch(str(key_file), "unit-project") == ("old-token", "unit-project")
-        key_file.write_text(_authorized_user_cache_credentials("new-key"))
+        _rewrite_keeping_its_version(key_file, _authorized_user_cache_credentials("new-key"))
         google_down.set()
         clock.return_value = now + timedelta(seconds=7200)
         with pytest.raises(google.auth.exceptions.RefreshError):
             await fetch(str(key_file), "unit-project")
         assert not any("new-key" in str(call.request.body) for call in oauth.calls)
+
+
+def _rewrite_keeping_its_version(key_file: pathlib.Path, contents: str) -> None:
+    before: Final = key_file.stat()
+    key_file.write_text(contents)
+    os.utime(key_file, ns=(before.st_atime_ns, before.st_mtime_ns))
+
+
+def _move_into_place(key_file: pathlib.Path, contents: str) -> None:
+    before: Final = key_file.stat()
+    staged: Final = key_file.with_name("staged-key.json")
+    staged.write_text(contents)
+    os.utime(staged, ns=(before.st_atime_ns, before.st_mtime_ns))
+    os.replace(staged, key_file)
+
+
+def _rewrite_later(key_file: pathlib.Path, contents: str) -> None:
+    before: Final = key_file.stat()
+    key_file.write_text(contents)
+    os.utime(key_file, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
+
+
+def _rewrite_longer(key_file: pathlib.Path, contents: str) -> None:
+    _rewrite_keeping_its_version(key_file, contents.replace("new-key", "new-key-v2"))
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("from_adc_env", [False, True], ids=["vertex_credentials", "GOOGLE_APPLICATION_CREDENTIALS"])
+@pytest.mark.parametrize(
+    "swap_key_file",
+    [_move_into_place, _rewrite_later, _rewrite_longer],
+    ids=["moved_into_place", "rewritten_later", "rewritten_longer"],
+)
+@pytest.mark.asyncio
+async def test_a_swapped_key_file_is_used_on_the_next_call_while_the_old_key_still_works(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    is_async: bool,
+    from_adc_env: bool,
+    swap_key_file: Callable[[pathlib.Path, str], None],
+) -> None:
+    vertex: Final = VertexBase()
+    key_file: Final = tmp_path / "vertex-key.json"
+    key_file.write_text(_authorized_user_cache_credentials("old-key", quota_project="unit-project"))
+    if from_adc_env:
+        monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(key_file))
+    credentials: Final = None if from_adc_env else str(key_file)
+
+    def token_response(request: requests.PreparedRequest) -> tuple[int, dict[str, str], str]:
+        form: Final = request.body.decode() if isinstance(request.body, bytes) else str(request.body)
+        return (
+            200,
+            {},
+            json.dumps({"access_token": "old-token" if "old-key" in form else "new-token", "expires_in": 3600}),
+        )
+
+    fetch: Final = vertex.get_access_token_async if is_async else partial(asyncio.to_thread, vertex.get_access_token)
+    with responses.RequestsMock() as oauth:
+        oauth.add_callback(responses.POST, "https://oauth2.googleapis.com/token", callback=token_response)
+        assert await fetch(credentials, "unit-project") == ("old-token", "unit-project")
+        swap_key_file(key_file, _authorized_user_cache_credentials("new-key", quota_project="unit-project"))
+        assert await fetch(credentials, "unit-project") == ("new-token", "unit-project")
+        assert await fetch(credentials, "unit-project") == ("new-token", "unit-project")
+        assert len(oauth.calls) == 2
 
 
 def _authorized_user_cache_credentials(identity: str, quota_project: str | None = None) -> str:

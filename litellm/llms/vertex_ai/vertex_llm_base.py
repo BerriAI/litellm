@@ -6,6 +6,7 @@ Handles Authentication and generating request urls for Vertex AI and Google AI S
 
 import asyncio
 import json
+import os
 import re
 import threading
 import weakref
@@ -37,6 +38,7 @@ from .credentials_source import (
     build_vertex_credentials,
     load_vertex_credentials_source,
     raise_vertex_credentials_failure,
+    vertex_credentials_file_version,
 )
 
 
@@ -102,6 +104,16 @@ class _VertexCredentialsObject(Protocol):
 
 
 _VertexCredentialCacheKey = tuple[str | None, str | None]
+
+
+def _credential_cache_identity(credentials: VERTEX_CREDENTIALS_TYPES | None) -> str | None:
+    if isinstance(credentials, dict):
+        return json.dumps(credentials)
+    key_file: Final = credentials if credentials is not None else os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    version: Final = None if key_file is None else vertex_credentials_file_version(key_file)
+    if version is None:
+        return credentials
+    return f"{credentials or ''}\0{version}"
 
 
 class VertexBase:
@@ -956,8 +968,7 @@ class VertexBase:
             )
             if project_id is None and isinstance(credential_project_id, str):
                 project_id = credential_project_id
-                cache_credentials: Final = json.dumps(credentials) if isinstance(credentials, dict) else credentials
-                resolved_cache_key: Final = (cache_credentials, project_id)
+                resolved_cache_key: Final = (credential_cache_key[0], project_id)
                 # Always overwrite — any pre-existing entry at the resolved key
                 # references the OLD credentials object we just replaced, and
                 # leaving it would force the next request to do a redundant
@@ -1005,8 +1016,7 @@ class VertexBase:
             Tuple of (access_token, project_id)
         """
 
-        # Convert dict credentials to string for caching
-        cache_credentials: Final = json.dumps(credentials) if isinstance(credentials, dict) else credentials
+        cache_credentials: Final = _credential_cache_identity(credentials)
         credential_cache_key: Final = (cache_credentials, project_id)
         verbose_logger.debug("Checking cached credentials for project_id: %s", project_id)
         if _retry_reauth:
@@ -1113,7 +1123,7 @@ class VertexBase:
         """
         from google.auth.credentials import TokenState
 
-        cache_credentials: Final = json.dumps(credentials) if isinstance(credentials, dict) else credentials
+        cache_credentials: Final = _credential_cache_identity(credentials)
         credential_cache_key: Final = (cache_credentials, project_id)
 
         # === FAST PATH (no lock) ===
