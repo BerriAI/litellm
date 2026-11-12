@@ -5,7 +5,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
@@ -176,5 +179,88 @@ func TestResourceLiteLLMFallbackDelete(t *testing.T) {
 	}
 	if d.Id() != "" {
 		t.Fatalf("expected ID cleared after delete, got %q", d.Id())
+	}
+}
+
+func withFastFallbackReadBack(t *testing.T) {
+	t.Helper()
+	saved := fallbackReadBackDelays
+	fallbackReadBackDelays = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}
+	t.Cleanup(func() { fallbackReadBackDelays = saved })
+}
+
+// fallbackReplicaServer accepts the POST and answers the first `stale` reads with staleGet, the way a
+// replica that has not reloaded the write answers, then with the written fallback.
+func fallbackReplicaServer(t *testing.T, stale int32, staleGet func(http.ResponseWriter), written FallbackGetResponse) (*httptest.Server, *int32) {
+	t.Helper()
+	var reads int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/fallback", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"message":"ok"}`))
+	})
+	mux.HandleFunc("/fallback/gpt-4", func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&reads, 1) <= stale {
+			staleGet(w)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(written)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv, &reads
+}
+
+func TestResourceLiteLLMFallbackCreate_RetriesReadUntilReplicaHasIt(t *testing.T) {
+	withFastFallbackReadBack(t)
+	notFound := func(w http.ResponseWriter) { w.WriteHeader(http.StatusNotFound) }
+	srv, reads := fallbackReplicaServer(t, 2, notFound, FallbackGetResponse{Model: "gpt-4", FallbackModels: []string{"claude-3"}, FallbackType: "general"})
+
+	d := newFallbackTestResourceData(t, "gpt-4", []interface{}{"claude-3"}, "general")
+	if err := resourceLiteLLMFallbackCreate(d, NewClient(srv.URL, "test-key", true)); err != nil {
+		t.Fatalf("expected nil error, got: %v", err)
+	}
+	if d.Id() != "gpt-4" {
+		t.Fatalf("expected ID 'gpt-4', got %q", d.Id())
+	}
+	if got := atomic.LoadInt32(reads); got != 3 {
+		t.Fatalf("expected 3 reads (2 stale, 1 fresh), got %d", got)
+	}
+}
+
+func TestResourceLiteLLMFallbackUpdate_RetriesReadWhileOldModelsAreReturned(t *testing.T) {
+	withFastFallbackReadBack(t)
+	oldModels := func(w http.ResponseWriter) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(FallbackGetResponse{Model: "gpt-4", FallbackModels: []string{"claude-3"}, FallbackType: "general"})
+	}
+	srv, reads := fallbackReplicaServer(t, 1, oldModels, FallbackGetResponse{Model: "gpt-4", FallbackModels: []string{"claude-3", "gpt-3.5-turbo"}, FallbackType: "general"})
+
+	d := newFallbackTestResourceData(t, "gpt-4", []interface{}{"claude-3", "gpt-3.5-turbo"}, "general")
+	d.SetId("gpt-4")
+	if err := resourceLiteLLMFallbackUpdate(d, NewClient(srv.URL, "test-key", true)); err != nil {
+		t.Fatalf("expected nil error, got: %v", err)
+	}
+	if got := expandStringList(d.Get("fallback_models").([]interface{})); !reflect.DeepEqual(got, []string{"claude-3", "gpt-3.5-turbo"}) {
+		t.Fatalf("unexpected fallback_models %v", got)
+	}
+	if got := atomic.LoadInt32(reads); got != 2 {
+		t.Fatalf("expected 2 reads (1 stale, 1 fresh), got %d", got)
+	}
+}
+
+func TestResourceLiteLLMFallbackCreate_GivesUpWhenNeverReadBack(t *testing.T) {
+	withFastFallbackReadBack(t)
+	notFound := func(w http.ResponseWriter) { w.WriteHeader(http.StatusNotFound) }
+	srv, reads := fallbackReplicaServer(t, 100, notFound, FallbackGetResponse{})
+
+	d := newFallbackTestResourceData(t, "gpt-4", []interface{}{"claude-3"}, "general")
+	err := resourceLiteLLMFallbackCreate(d, NewClient(srv.URL, "test-key", true))
+	if err == nil || !strings.Contains(err.Error(), "not read back") {
+		t.Fatalf("expected a not-read-back error, got: %v", err)
+	}
+	if got, want := atomic.LoadInt32(reads), int32(len(fallbackReadBackDelays)+1); got != want {
+		t.Fatalf("expected %d reads, got %d", want, got)
 	}
 }
