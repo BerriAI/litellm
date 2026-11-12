@@ -1,4 +1,5 @@
 "use client";
+import { useResetDetailState } from "@/hooks/useUrlTab";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useTeamMemberBudgets } from "@/app/(dashboard)/hooks/teams/useTeamMemberBudgets";
 import { teamMemberBudgetGate } from "@/components/shared/InheritedBudgetHint";
@@ -52,6 +53,7 @@ const DEFAULT_SORTING: SortingState = [{ id: "created_at", desc: true }];
 
 export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVirtualKeysTableProps) {
   const { t } = useTranslation();
+  const resetKeyDetailState = useResetDetailState("key_tab");
   const [selectedKey, setSelectedKey] = useState<KeyResponse | null>(null);
   const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
   const [tablePagination, setTablePagination] = useState<PaginationState>({
@@ -153,7 +155,13 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         size: 120,
         enableSorting: true,
         cell: (info) => (
-          <IdCell value={info.getValue() as string | null} onClick={() => setSelectedKey(info.row.original)} />
+          <IdCell
+            value={info.getValue() as string | null}
+            onClick={() => {
+              resetKeyDetailState();
+              setSelectedKey(info.row.original);
+            }}
+          />
         ),
       },
       {
@@ -538,7 +546,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         },
       },
     ],
-    [expandedAccordions, teamMemberBudgets, teamId, organization?.organization_id, t],
+    [expandedAccordions, teamMemberBudgets, teamId, organization?.organization_id, t, resetKeyDetailState],
   );
 
   const handleSortingChange = useCallback((updaterOrValue: React.SetStateAction<SortingState>) => {
@@ -552,7 +560,10 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         <KeyInfoView
           tabParam="key_tab"
           keyId={selectedKey.token}
-          onClose={() => setSelectedKey(null)}
+          onClose={() => {
+            resetKeyDetailState();
+            setSelectedKey(null);
+          }}
           keyData={selectedKey}
           teams={[currentTeam]}
           onDelete={refetch}
