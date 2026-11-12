@@ -752,10 +752,16 @@ impl LegacyLogging {
                 let sent = self.request.as_ref().map(|request| SentRequest {
                     url: &request.url,
                     headers: &request.headers,
-                    body: &request.body,
+                    body: &head.sent_body,
                 });
-                self.logger()?
-                    .record_response(py, head.status, &head.headers, &raw.body, sent)?;
+                self.logger()?.record_response(
+                    py,
+                    head.status,
+                    &head.headers,
+                    &raw.body,
+                    head.streamed,
+                    sent,
+                )?;
             }
             return Ok(HookStep::Ready(()));
         }

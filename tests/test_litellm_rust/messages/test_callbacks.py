@@ -1,9 +1,11 @@
 import asyncio
-from collections.abc import Iterator
+import json
+from collections.abc import Iterator, Mapping, Sequence
 from contextvars import ContextVar
 from datetime import datetime
 from typing import Final
 
+import httpx
 import pytest
 from pydantic import TypeAdapter
 
@@ -13,11 +15,20 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.types.integrations.argilla import ArgillaItem
 from litellm.types.utils import ModelResponse, StandardLoggingPayload
-from tests.test_litellm_rust.messages.data import BAD_REQUEST, MESSAGES_RESPONSE, RATE_LIMITED, REQUEST, call
+from tests.test_litellm_rust.messages.data import (
+    BAD_REQUEST,
+    MESSAGES,
+    MESSAGES_EVENTS,
+    MESSAGES_MODEL,
+    MESSAGES_RESPONSE,
+    RATE_LIMITED,
+    REQUEST,
+    call,
+)
 from tests.test_litellm_rust.support.callback_recorder import HookRecorder, RecordingLogger, request_body
 from tests.test_litellm_rust.support.isolation import rebound
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec, relaxed
-from tests.test_litellm_rust.support.results import response_id, with_id
+from tests.test_litellm_rust.support.results import consume, response_id, with_id
 from tests.test_litellm_rust.support.routing import CALL_ID, assert_served_natively
 
 pytestmark = pytest.mark.requires_rust_extension
@@ -510,3 +521,92 @@ async def test_sync_call_raises_like_python_without_logging(server: RecordingSer
 
     assert not server.requests
     assert not recorder.names
+
+
+_HTTPX_RESPONSE: Final = TypeAdapter(httpx.Response, config={"arbitrary_types_allowed": True})
+_STREAM: Final = ResponseSpec(body=None, events=MESSAGES_EVENTS)
+_WIDE: Final = 2**70
+_TOOLS: Final = (
+    {
+        "name": "get_weather",
+        "input_schema": {"type": "object", "properties": {"celsius": {"type": "number", "minimum": 1e-7}}},
+    },
+)
+_INVALID_SIGNATURE: Final = {
+    "type": "error",
+    "error": {
+        "type": "invalid_request_error",
+        "message": "messages.1.content.0: Invalid `signature` in `thinking` block",
+    },
+}
+_THINKING_REPLAY: Final = (
+    {"role": "user", "content": "Weather in Paris?"},
+    {
+        "role": "assistant",
+        "content": [
+            {"type": "thinking", "thinking": "Look it up.", "signature": "EqQBCkYIARgCKkB"},
+            {"type": "tool_use", "id": "toolu_01Wide", "name": "get_weather", "input": {"big": _WIDE}},
+        ],
+    },
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01Wide", "content": "18C"}]},
+)
+
+
+def _messages_logger() -> Logging:
+    return Logging(
+        model=MESSAGES_MODEL,
+        messages=[],
+        stream=False,
+        start_time=datetime.now(),
+        call_type="anthropic_messages",
+        litellm_call_id=CALL_ID,
+        function_id=CALL_ID,
+    )
+
+
+async def _logged_request(
+    server: RecordingServer,
+    stream: bool,
+    messages: Sequence[Mapping[str, object]] = MESSAGES,
+    thinking: Mapping[str, object] | None = None,
+) -> httpx.Request:
+    logging_obj: Final = _messages_logger()
+    if stream:
+        server.enqueue(_STREAM)
+    response: Final = await call(
+        server,
+        litellm_logging_obj=logging_obj,
+        stream=stream,
+        messages=list(messages),
+        thinking=thinking,
+        system="café \U0001f600",
+        tools=list(_TOOLS),
+    )
+    if stream:
+        _ = await consume(response)
+    return _HTTPX_RESPONSE.validate_python(logging_obj.model_call_details["httpx_response"]).request
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", (False, True), ids=("unary", "stream"))
+async def test_the_logged_provider_request_is_the_bytes_the_provider_received(
+    server: RecordingServer, stream: bool
+) -> None:
+    sent: Final = await _logged_request(server, stream)
+
+    assert_served_natively(server)
+    assert sent.content == server.requests[0].raw_body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", (False, True), ids=("unary", "stream"))
+async def test_the_logged_provider_request_of_a_retried_call_is_the_retried_bytes(
+    server: RecordingServer, stream: bool
+) -> None:
+    server.responses.insert(0, ResponseSpec(body=_INVALID_SIGNATURE, status=400))
+
+    sent: Final = await _logged_request(server, stream, _THINKING_REPLAY, {"type": "enabled", "budget_tokens": 2048})
+
+    assert_served_natively(server, count=2)
+    assert sent.content == server.requests[1].raw_body
+    assert json.loads(sent.content)["messages"][1]["content"][-1]["input"] == {"big": _WIDE}

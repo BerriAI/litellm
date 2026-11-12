@@ -4009,6 +4009,7 @@ dependencies = [
 name = "litellm-host"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "futures-util",
  "litellm-coroutine",
  "litellm-secret-value",

@@ -303,9 +303,9 @@ def wire_headers(headers: Sequence[tuple[str, str]]) -> httpx.Headers:
     return httpx.Headers([(name.encode(), value.encode()) for name, value in headers])
 
 
-def _sent_request(sent: tuple[str, Mapping[str, str], Mapping[str, object]]) -> httpx.Request:
+def _sent_request(sent: tuple[str, Mapping[str, str], bytes]) -> httpx.Request:
     url, headers, body = sent
-    return httpx.Request("POST", url, headers=list(headers.items()), content=json.dumps(body, default=str).encode())
+    return httpx.Request("POST", url, headers=list(headers.items()), content=body)
 
 
 def record_response(
@@ -313,11 +313,11 @@ def record_response(
     status: int,
     headers: Sequence[tuple[str, str]],
     body: str,
-    sent: tuple[str, Mapping[str, str], Mapping[str, object]] | None,
+    streamed: bool,
+    sent: tuple[str, Mapping[str, str], bytes] | None,
 ) -> None:
     """Stores the provider response the way Python's Messages handler does, for logging to replay."""
     request: Final = None if sent is None else _sent_request(sent)
-    streamed: Final = sent is not None and sent[2].get("stream") is True
     response: Final = (
         httpx.Response(status_code=status, stream=_UnreadBody(), request=request)
         if streamed
