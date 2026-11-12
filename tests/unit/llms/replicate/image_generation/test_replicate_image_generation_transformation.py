@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.url_utils import SSRFError
 from litellm.llms.replicate import common_utils
 from litellm.llms.replicate.common_utils import ReplicateError
 from litellm.llms.replicate.image_generation.transformation import ReplicateImageGenerationConfig
@@ -19,19 +20,28 @@ PREDICTIONS_URL: Final = f"{API_BASE}/models/{MODEL}/predictions"
 IMAGE_URLS: Final = ("https://replicate.delivery/out/0.webp", "https://replicate.delivery/out/1.webp")
 
 
+@pytest.fixture(autouse=True)
+def _skip_url_dns_validation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+
+
 class _FakeClient:
     def __init__(self, *responses: httpx.Response) -> None:
         self.responses = list(responses)
         self.calls: list[tuple[str, dict[str, str] | None]] = []
 
-    def get(self, url: str, headers: dict[str, str] | None = None, params: object = None) -> httpx.Response:
+    def get(
+        self, url: str, headers: dict[str, str] | None = None, params: object = None, **kwargs: object
+    ) -> httpx.Response:
         self.calls.append((url, headers))
         return self.responses.pop(0)
 
 
 class _FakeAsyncClient(_FakeClient):
-    async def get(self, url: str, headers: dict[str, str] | None = None, params: object = None) -> httpx.Response:  # pyright: ignore[reportIncompatibleMethodOverride]  # async twin of the sync fake
-        return super().get(url, headers=headers, params=params)
+    async def get(
+        self, url: str, headers: dict[str, str] | None = None, params: object = None, **kwargs: object
+    ) -> httpx.Response:  # pyright: ignore[reportIncompatibleMethodOverride]  # async twin of the sync fake
+        return super().get(url, headers=headers, params=params, **kwargs)
 
 
 def _prediction_response(body: dict[str, object], status_code: int = 201) -> httpx.Response:
@@ -225,6 +235,32 @@ def test_output_urls_keep_nested_order_without_recursion():
     nested = [[IMAGE_URLS[0]], "not a url", {"files": [IMAGE_URLS[1], {"deep": "https://cdn.example/3.png"}]}, 7]
     assert common_utils.replicate_output_urls(nested) == (IMAGE_URLS[0], IMAGE_URLS[1], "https://cdn.example/3.png")
     assert common_utils.replicate_output_urls("plain text") == ()
+
+
+def test_request_flattens_extra_body_into_native_input():
+    body = ReplicateImageGenerationConfig().transform_image_generation_request(
+        MODEL,
+        "a boat",
+        {"num_outputs": 1, "extra_body": {"seed": 7, "num_outputs": 3}, "response_format": "url"},
+        {},
+        {},
+    )
+    assert body == {"input": {"prompt": "a boat", "num_outputs": 3, "seed": 7}}
+
+
+def test_poll_url_must_share_the_api_origin():
+    pending = _prediction_response(
+        {"id": "p1", "status": "starting", "output": None, "urls": {"get": "https://evil.example/predictions/p1"}}
+    )
+    with pytest.raises(SSRFError, match="Origin mismatch"):
+        _transform(_config(_FakeClient()), pending)
+
+
+def test_b64_download_blocks_internal_urls(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "user_url_validation", True)
+    done = _prediction_response({"id": "p1", "status": "succeeded", "output": ["http://10.0.0.8/secret.png"]})
+    with pytest.raises(SSRFError):
+        _transform(_config(_FakeClient()), done, {"response_format": "b64_json"})
 
 
 def test_failed_prediction_raises_with_replicate_error_text():

@@ -5,6 +5,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeAlias
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.image_generation.transformation import BaseImageGenerationConfig
@@ -16,9 +17,11 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.llms.replicate.common_utils import (
     ReplicateError,
+    async_replicate_download,
     async_wait_for_replicate_prediction,
     replicate_api_base,
     replicate_auth_headers,
+    replicate_download,
     replicate_output_urls,
     replicate_prediction_failure,
     replicate_prediction_request,
@@ -43,6 +46,9 @@ def _aspect_ratio(size: object) -> Mapping[str, str]:
         return MappingProxyType({})
     divisor: Final = math.gcd(int(width_text), int(height_text))
     return MappingProxyType({"aspect_ratio": f"{int(width_text) // divisor}:{int(height_text) // divisor}"})
+
+
+_NATIVE_INPUT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 def _get_replicate_httpx_client(ssl_verify: object) -> HTTPHandler:
@@ -121,9 +127,11 @@ class ReplicateImageGenerationConfig(BaseImageGenerationConfig):
         litellm_params: _ImageParams,
         headers: _ImageHeaders,
     ) -> _ImageParams:
+        extra_body: Final = optional_params.get("extra_body")
         prediction_input: Final = {
             "prompt": prompt,
-            **{key: value for key, value in optional_params.items() if key != "response_format"},
+            **{key: value for key, value in optional_params.items() if key not in ("response_format", "extra_body")},
+            **(_NATIVE_INPUT.validate_python(extra_body) if isinstance(extra_body, Mapping) else {}),
         }
         return dict(replicate_prediction_request("", model, prediction_input).body)
 
@@ -193,15 +201,11 @@ class ReplicateImageGenerationConfig(BaseImageGenerationConfig):
 
     @staticmethod
     def _download(client: HTTPHandler, url: str) -> bytes:
-        response: Final[httpx.Response] = client.get(url)  # pyright: ignore[reportUnknownMemberType]  # HTTP handler stubs are untyped
-        response.raise_for_status()
-        return response.content
+        return replicate_download(client, url).content
 
     @staticmethod
     async def _async_download(client: AsyncHTTPHandler, url: str) -> bytes:
-        response: Final[httpx.Response] = await client.get(url)  # pyright: ignore[reportUnknownMemberType]  # HTTP handler stubs are untyped
-        response.raise_for_status()
-        return response.content
+        return (await async_replicate_download(client, url)).content
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: _ImageHeaders | httpx.Headers

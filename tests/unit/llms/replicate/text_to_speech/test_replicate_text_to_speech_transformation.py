@@ -4,6 +4,7 @@ from unittest.mock import Mock
 import httpx
 import pytest
 
+import litellm
 from litellm.llms.replicate.common_utils import ReplicateError
 from litellm.llms.replicate.text_to_speech.transformation import ReplicateTextToSpeechConfig
 from litellm.types.llms.openai import HttpxBinaryResponseContent
@@ -16,19 +17,28 @@ PREDICTIONS_URL: Final = f"{API_BASE}/models/{MODEL}/predictions"
 AUDIO_URL: Final = "https://replicate.delivery/out/speech.mp3"
 
 
+@pytest.fixture(autouse=True)
+def _skip_url_dns_validation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+
+
 class _FakeClient:
     def __init__(self, *responses: httpx.Response) -> None:
         self.responses = list(responses)
         self.calls: list[str] = []
 
-    def get(self, url: str, headers: dict[str, str] | None = None, params: object = None) -> httpx.Response:
+    def get(
+        self, url: str, headers: dict[str, str] | None = None, params: object = None, **kwargs: object
+    ) -> httpx.Response:
         self.calls.append(url)
         return self.responses.pop(0)
 
 
 class _FakeAsyncClient(_FakeClient):
-    async def get(self, url: str, headers: dict[str, str] | None = None, params: object = None) -> httpx.Response:  # pyright: ignore[reportIncompatibleMethodOverride]  # async twin of the sync fake
-        return super().get(url, headers=headers, params=params)
+    async def get(
+        self, url: str, headers: dict[str, str] | None = None, params: object = None, **kwargs: object
+    ) -> httpx.Response:  # pyright: ignore[reportIncompatibleMethodOverride]  # async twin of the sync fake
+        return super().get(url, headers=headers, params=params, **kwargs)
 
 
 def _prediction_response(body: dict[str, object]) -> httpx.Response:
@@ -101,6 +111,14 @@ def test_request_body_uses_model_family_voice_key(model: str, voice_key: str):
 def test_request_body_without_voice():
     request = ReplicateTextToSpeechConfig().transform_text_to_speech_request(MODEL, "hello", None, {}, {}, {})
     assert request == {"dict_body": {"input": {"text": "hello"}}}
+
+
+def test_request_input_wins_over_extra_body_text():
+    _, params = ReplicateTextToSpeechConfig().map_openai_params(
+        MODEL, {}, voice="ara", kwargs={"extra_body": {"text": "a much longer text that is not billed"}}
+    )
+    request = ReplicateTextToSpeechConfig().transform_text_to_speech_request(MODEL, "hello", "ara", params, {}, {})
+    assert request["dict_body"]["input"] == {"text": "hello", "voice": "ara"}
 
 
 def test_response_downloads_audio_from_output_url():

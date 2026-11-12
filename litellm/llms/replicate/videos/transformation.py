@@ -20,8 +20,10 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.llms.replicate.common_utils import (
     ReplicateError,
+    async_replicate_download,
     replicate_api_base,
     replicate_auth_headers,
+    replicate_download,
     replicate_model_owner,
     replicate_output_urls,
     replicate_prediction,
@@ -154,6 +156,25 @@ def _video_object(
     return video_object
 
 
+def _owned_prediction(raw_response: httpx.Response) -> Mapping[str, object]:
+    prediction: Final = replicate_prediction(raw_response)
+    requested: Final = raw_response.request.url.fragment
+    if not requested or requested.startswith("deployments/"):
+        return prediction
+    requested_path, _, requested_version = requested.partition(":")
+    actual_path: Final = replicate_prediction_string(prediction, "model")
+    actual_version: Final = replicate_prediction_string(prediction, "version")
+    if (actual_path is not None and actual_path != requested_path) or (
+        requested_version and actual_version is not None and actual_version != requested_version
+    ):
+        raise ReplicateError(
+            status_code=404,
+            message=f"Replicate prediction {replicate_prediction_string(prediction, 'id')} does not belong to {requested}",
+            headers=raw_response.headers,
+        )
+    return prediction
+
+
 def _get_replicate_async_httpx_client() -> AsyncHTTPHandler:
     return get_async_httpx_client(llm_provider=LlmProviders.REPLICATE)
 
@@ -262,6 +283,12 @@ class ReplicateVideoConfig(BaseVideoConfig):
         decoded: Final = decode_video_id_with_provider(video_id)
         return decoded.get("video_id", video_id), decoded.get("model_id")
 
+    @classmethod
+    def _prediction_url_for_video(cls, video_id: str, api_base: str) -> str:
+        prediction_id, model_id = cls._decode_video_id(video_id)
+        prediction_url: Final = httpx.URL(replicate_prediction_url(api_base, prediction_id))
+        return str(prediction_url.copy_with(fragment=model_id) if model_id else prediction_url)
+
     def transform_video_status_retrieve_request(
         self,
         video_id: str,
@@ -269,9 +296,7 @@ class ReplicateVideoConfig(BaseVideoConfig):
         litellm_params: GenericLiteLLMParams,
         headers: _VideoHeaders,
     ) -> tuple[str, _VideoParams]:
-        prediction_id, model_id = self._decode_video_id(video_id)
-        status_url: Final = httpx.URL(replicate_prediction_url(api_base, prediction_id))
-        return str(status_url.copy_with(fragment=model_id) if model_id else status_url), {}
+        return self._prediction_url_for_video(video_id, api_base), {}
 
     def transform_video_status_retrieve_response(
         self,
@@ -280,7 +305,7 @@ class ReplicateVideoConfig(BaseVideoConfig):
         custom_llm_provider: str | None = None,
         client: HTTPHandler | None = None,
     ) -> VideoObject:
-        prediction: Final = replicate_prediction(raw_response)
+        prediction: Final = _owned_prediction(raw_response)
         model: Final = raw_response.request.url.fragment or replicate_prediction_string(prediction, "model")
         return _video_object(prediction, model, custom_llm_provider, 0)
 
@@ -292,12 +317,11 @@ class ReplicateVideoConfig(BaseVideoConfig):
         headers: _VideoHeaders,
         variant: str | None = None,
     ) -> tuple[str, _VideoStringParams]:
-        prediction_id, _ = self._decode_video_id(video_id)
-        return replicate_prediction_url(api_base, prediction_id), {}
+        return self._prediction_url_for_video(video_id, api_base), {}
 
     @staticmethod
     def _video_url(raw_response: httpx.Response) -> str:
-        prediction: Final = replicate_prediction(raw_response)
+        prediction: Final = _owned_prediction(raw_response)
         failure: Final = replicate_prediction_failure(prediction)
         if failure is not None:
             raise ReplicateError(status_code=raw_response.status_code, message=failure, headers=raw_response.headers)
@@ -317,9 +341,7 @@ class ReplicateVideoConfig(BaseVideoConfig):
         client: "HTTPHandler | None" = None,
     ) -> bytes:
         download_client: Final = client if client is not None else self._sync_client_factory()
-        video_response: Final[httpx.Response] = download_client.get(self._video_url(raw_response))  # pyright: ignore[reportUnknownMemberType]  # HTTP handler stubs are untyped
-        video_response.raise_for_status()
-        return video_response.content
+        return replicate_download(download_client, self._video_url(raw_response)).content
 
     async def async_transform_video_content_response(
         self,
@@ -328,9 +350,7 @@ class ReplicateVideoConfig(BaseVideoConfig):
         client: "AsyncHTTPHandler | None" = None,
     ) -> bytes:
         download_client: Final = client if client is not None else self._async_client_factory()
-        video_response: Final[httpx.Response] = await download_client.get(self._video_url(raw_response))  # pyright: ignore[reportUnknownMemberType]  # HTTP handler stubs are untyped
-        video_response.raise_for_status()
-        return video_response.content
+        return (await async_replicate_download(download_client, self._video_url(raw_response))).content
 
     def transform_video_remix_request(
         self,

@@ -15,9 +15,11 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.llms.replicate.common_utils import (
     ReplicateError,
+    async_replicate_download,
     async_wait_for_replicate_prediction,
     replicate_api_base,
     replicate_auth_headers,
+    replicate_download,
     replicate_model_owner,
     replicate_output_urls,
     replicate_prediction_failure,
@@ -101,9 +103,9 @@ class ReplicateTextToSpeechConfig(BaseTextToSpeechConfig):
         headers: Mapping[str, str],
     ) -> TextToSpeechRequestData:
         prediction_input: Final = {
-            "text": input,
-            **({_voice_key(model): voice} if voice else {}),
             **optional_params,
+            **({_voice_key(model): voice} if voice else {}),
+            "text": input,
         }
         return {"dict_body": dict(replicate_prediction_request("", model, prediction_input).body)}
 
@@ -146,7 +148,7 @@ class ReplicateTextToSpeechConfig(BaseTextToSpeechConfig):
     ) -> "HttpxBinaryResponseContent":
         client: Final = self._sync_client_factory()
         audio_url: Final = self._audio_url(wait_for_replicate_prediction(raw_response, client), raw_response)
-        return self._binary_response(client.get(audio_url), raw_response)  # pyright: ignore[reportUnknownMemberType]  # HTTP handler stubs are untyped
+        return self._binary_response(replicate_download(client, audio_url), raw_response)
 
     async def async_transform_text_to_speech_response(
         self,
@@ -158,7 +160,7 @@ class ReplicateTextToSpeechConfig(BaseTextToSpeechConfig):
         audio_url: Final = self._audio_url(
             await async_wait_for_replicate_prediction(raw_response, client), raw_response
         )
-        return self._binary_response(await client.get(audio_url), raw_response)  # pyright: ignore[reportUnknownMemberType]  # HTTP handler stubs are untyped
+        return self._binary_response(await async_replicate_download(client, audio_url), raw_response)
 
     def get_error_class(
         self,

@@ -7,6 +7,7 @@ import pytest
 import litellm
 from litellm.cost_calculator import default_video_cost_calculator
 from litellm.exceptions import UnsupportedParamsError
+from litellm.litellm_core_utils.url_utils import SSRFError
 from litellm.llms.replicate.common_utils import ReplicateError
 from litellm.llms.replicate.videos.transformation import ReplicateVideoConfig
 from litellm.types.router import GenericLiteLLMParams
@@ -21,19 +22,28 @@ IMAGE_URL: Final = "https://example.com/frame.png"
 VIDEO_URL: Final = "https://replicate.delivery/out/video.mp4"
 
 
+@pytest.fixture(autouse=True)
+def _skip_url_dns_validation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+
+
 class _FakeClient:
     def __init__(self, *responses: httpx.Response) -> None:
         self.responses = list(responses)
         self.calls: list[str] = []
 
-    def get(self, url: str, headers: dict[str, str] | None = None, params: object = None) -> httpx.Response:
+    def get(
+        self, url: str, headers: dict[str, str] | None = None, params: object = None, **kwargs: object
+    ) -> httpx.Response:
         self.calls.append(url)
         return self.responses.pop(0)
 
 
 class _FakeAsyncClient(_FakeClient):
-    async def get(self, url: str, headers: dict[str, str] | None = None, params: object = None) -> httpx.Response:  # pyright: ignore[reportIncompatibleMethodOverride]  # async twin of the sync fake
-        return super().get(url, headers=headers, params=params)
+    async def get(
+        self, url: str, headers: dict[str, str] | None = None, params: object = None, **kwargs: object
+    ) -> httpx.Response:  # pyright: ignore[reportIncompatibleMethodOverride]  # async twin of the sync fake
+        return super().get(url, headers=headers, params=params, **kwargs)
 
 
 def _prediction_response(body: dict[str, object], url: str = f"{API_BASE}/predictions/abc") -> httpx.Response:
@@ -160,7 +170,7 @@ def test_status_request_uses_prediction_id_from_encoded_video_id():
     content_url, _ = ReplicateVideoConfig().transform_video_content_request(
         video.id, API_BASE, GenericLiteLLMParams(), {}
     )
-    assert content_url == f"{API_BASE}/predictions/abc"
+    assert content_url == url
 
 
 @pytest.mark.parametrize("model", [f"{MODEL}:0123abcd", "deployments/acme/fast-video"])
@@ -235,6 +245,55 @@ def test_content_response_prefers_the_handler_client():
     response = _prediction_response({"id": "abc", "status": "succeeded", "output": VIDEO_URL})
     assert config.transform_video_content_response(response, Mock(), client=handler_client) == b"mp4-bytes"  # pyright: ignore[reportArgumentType]  # fake stands in for HTTPHandler
     assert handler_client.calls == [VIDEO_URL]
+
+
+@pytest.mark.parametrize(
+    ("requested_model", "prediction"),
+    [
+        (
+            "acme/other-video",
+            {"id": "abc", "status": "succeeded", "model": "xai/grok-imagine-video", "output": VIDEO_URL},
+        ),
+        (f"{MODEL}:v2", {"id": "abc", "status": "succeeded", "model": MODEL, "version": "v1", "output": VIDEO_URL}),
+    ],
+)
+def test_retrieval_rejects_a_prediction_from_another_model(requested_model: str, prediction: dict[str, object]):
+    create = _prediction_response({"id": "abc", "status": "starting"})
+    video = ReplicateVideoConfig().transform_video_create_response(requested_model, create, Mock())
+    config = ReplicateVideoConfig(sync_client_factory=lambda: _FakeClient())  # pyright: ignore[reportArgumentType]  # fake stands in for HTTPHandler
+    status_url, _ = config.transform_video_status_retrieve_request(video.id, API_BASE, GenericLiteLLMParams(), {})
+    foreign = httpx.Response(200, json=prediction, request=httpx.Request("GET", status_url))
+    with pytest.raises(ReplicateError, match="does not belong to") as excinfo:
+        config.transform_video_status_retrieve_response(foreign, Mock())
+    assert excinfo.value.status_code == 404
+    with pytest.raises(ReplicateError, match="does not belong to"):
+        config.transform_video_content_response(foreign, Mock())
+
+
+def test_retrieval_accepts_deployment_predictions_without_a_model_check():
+    create = _prediction_response({"id": "abc", "status": "starting"})
+    video = ReplicateVideoConfig().transform_video_create_response("deployments/acme/fast", create, Mock())
+    status_url, _ = ReplicateVideoConfig().transform_video_status_retrieve_request(
+        video.id, API_BASE, GenericLiteLLMParams(), {}
+    )
+    status = httpx.Response(
+        200,
+        json={"id": "abc", "status": "succeeded", "model": "xai/grok-imagine-video"},
+        request=httpx.Request("GET", status_url),
+    )
+    assert (
+        ReplicateVideoConfig().transform_video_status_retrieve_response(status, Mock()).model == "deployments/acme/fast"
+    )
+
+
+def test_content_download_blocks_internal_urls(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "user_url_validation", True)
+    config = ReplicateVideoConfig(sync_client_factory=lambda: _FakeClient())  # pyright: ignore[reportArgumentType]  # fake stands in for HTTPHandler
+    response = _prediction_response(
+        {"id": "abc", "status": "succeeded", "output": "http://169.254.169.254/latest/meta-data"}
+    )
+    with pytest.raises(SSRFError):
+        config.transform_video_content_response(response, Mock())
 
 
 def test_content_response_errors_without_output():

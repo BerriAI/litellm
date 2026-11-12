@@ -11,7 +11,14 @@ from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.constants import DEFAULT_REPLICATE_POLLING_DELAY_SECONDS, DEFAULT_REPLICATE_SYNC_POLLING_RETRIES
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment, ensure_api_route, join_api_base
+from litellm.litellm_core_utils.url_utils import (
+    assert_same_origin,
+    async_safe_get,
+    encode_url_path_segment,
+    ensure_api_route,
+    join_api_base,
+    safe_get,
+)
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.secret_managers.main import get_secret_str
@@ -149,6 +156,7 @@ def _poll_url(prediction: Mapping[str, object], raw_response: httpx.Response) ->
         replicate_prediction_string(_JSON_OBJECT.validate_python(urls), "get") if isinstance(urls, Mapping) else None
     )
     if poll_url is not None:
+        assert_same_origin(poll_url, str(raw_response.request.url))
         return poll_url
     prediction_id: Final = replicate_prediction_string(prediction, "id")
     if prediction_id is None:
@@ -208,3 +216,15 @@ async def async_wait_for_replicate_prediction(
         message=f"Replicate prediction did not finish after {DEFAULT_REPLICATE_SYNC_POLLING_RETRIES} polls",
         headers=raw_response.headers,
     )
+
+
+def replicate_download(client: HTTPHandler, url: str) -> httpx.Response:
+    response: Final = safe_get(client, url)
+    response.raise_for_status()
+    return response
+
+
+async def async_replicate_download(client: AsyncHTTPHandler, url: str) -> httpx.Response:
+    response: Final = await async_safe_get(client, url)
+    response.raise_for_status()
+    return response
