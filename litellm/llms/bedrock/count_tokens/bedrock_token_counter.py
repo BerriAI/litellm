@@ -17,7 +17,7 @@ from litellm.llms.anthropic.common_utils import context_management_betas, contex
 from litellm.llms.anthropic.count_tokens.transformation import (
     ChatCountTranslationError,
     anthropic_count_fields,
-    plain_message_error,
+    contentless_plain_message_error,
 )
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.bedrock.common_utils import (
@@ -40,7 +40,7 @@ from litellm.types.utils import (
 RUNTIME_TOKENIZER_TYPE: Final = "bedrock_api"
 MANTLE_TOKENIZER_TYPE: Final = "bedrock_mantle_api"
 _RUNTIME_FALLBACK_STATUSES: Final = frozenset({400, 404})
-_CONVERSE_ROLES_WITHOUT_CONTENT: Final = frozenset({"assistant"})
+_CONVERSE_DROPPED_ROLES: Final = frozenset({"user"})
 
 
 class _CountTokensReply(LiteLLMPydanticObjectBase):
@@ -211,7 +211,7 @@ class BedrockTokenCounter(BaseTokenCounter):
         claude: Final = is_mantle_claude_model(resolved_model)
         chat_config: Final = _anthropic_chat_config(litellm_params) if claude else None
         converse_drops: Final = (
-            plain_message_error(messages, _CONVERSE_ROLES_WITHOUT_CONTENT)
+            contentless_plain_message_error(messages, _CONVERSE_DROPPED_ROLES)
             if claude and chat_config is None and messages_format == "openai"
             else None
         )

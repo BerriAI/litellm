@@ -318,14 +318,10 @@ def _chat_message_problem(index: int, message: Mapping[str, object]) -> str | No
     return None if message.get("role") in _CHAT_ROLES_WITHOUT_CONTENT else _message_problem(index, message)
 
 
-def _plain_message_problem(
-    roles_without_content: frozenset[str], index: int, message: Mapping[str, object]
-) -> str | None:
-    if not _is_plain_message(message) or message.get("role") in roles_without_content:
-        return None
-    return _message_problem(index, message) or (
-        f"Message {index} must have a 'content' field" if message["content"] is None else None
-    )
+def _contentless_plain_message_problem(roles: frozenset[str], index: int, message: Mapping[str, object]) -> str | None:
+    if message.get("content") is None and message.get("role") in roles and _is_plain_message(message):
+        return f"Message {index} must have a 'content' field"
+    return None
 
 
 def _first_message_problem(
@@ -349,10 +345,10 @@ def chat_message_error(messages: Sequence[Mapping[str, object]]) -> ChatCountTra
     return _first_message_problem(messages, _chat_message_problem)
 
 
-def plain_message_error(
-    messages: Sequence[Mapping[str, object]], roles_without_content: frozenset[str]
+def contentless_plain_message_error(
+    messages: Sequence[Mapping[str, object]], roles: frozenset[str]
 ) -> ChatCountTranslationError | None:
-    return _first_message_problem(messages, partial(_plain_message_problem, roles_without_content))
+    return _first_message_problem(messages, partial(_contentless_plain_message_problem, roles))
 
 
 def anthropic_fields_for_chat_tool_use(

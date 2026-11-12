@@ -530,10 +530,11 @@ _TOOL_CALL: Final = {
             {"role": "assistant", "content": "Hello"},
             {"role": "user", "name": "bob", "content": None},
         ],
+        [{"role": "system", "content": None}, {"role": "user", "content": "Hi"}],
     ),
-    ids=("null-content-tool-result", "null-content-named-user-turn"),
+    ids=("null-content-tool-result", "null-content-named-user-turn", "null-content-system-turn"),
 )
-async def test_claude_converse_count_sends_a_null_content_message_chat_translation_already_sent(
+async def test_claude_converse_count_sends_a_null_content_message_converse_inference_serves(
     messages: list[dict[str, JsonValue]],
 ) -> None:
     bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 412}), mantle=(200, {"input_tokens": 2177}))
