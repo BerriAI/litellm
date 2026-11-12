@@ -4,10 +4,13 @@ Transformation logic from OpenAI /v1/embeddings format to Google AI Studio /batc
 Why separate file? Make it easy to see how transformation works
 """
 
+import re
 from collections.abc import Iterator, Mapping, Sequence
+from decimal import Decimal
 from typing import Annotated, Final, Literal, cast
 
-from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError, model_validator
+from typing_extensions import Self
 
 from litellm.exceptions import BadRequestError
 from litellm.llms.vertex_ai.common_utils import GEMINI_FILES_API_URI_PREFIX, gemini_video_metadata_from_openai
@@ -141,12 +144,39 @@ def _is_data_url(s: str) -> bool:
     return s.startswith("data:") and ";base64," in s
 
 
+_DEFAULT_VIDEO_FPS: Final = 1.0
+_HALF_FRAME: Final = Decimal("0.5")
+_DURATION_SECONDS: Final = re.compile(r"\s*([+-]?[0-9]+(?:\.[0-9]*)?)s")
+
+
+def _duration_seconds(duration: str) -> Decimal | None:
+    parsed: Final = _DURATION_SECONDS.fullmatch(duration)
+    return Decimal(parsed.group(1)) if parsed else None
+
+
 class _EmbeddingVideoMetadata(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    fps: float | None = None
+    fps: Annotated[float, Field(gt=0)] | None = None
     start_offset: str | None = None
     end_offset: str | None = None
+
+    @model_validator(mode="after")
+    def _window_samples_a_frame(self) -> Self:
+        end: Final = _duration_seconds(self.end_offset) if self.end_offset is not None else None
+        given_start: Final = _duration_seconds(self.start_offset if self.start_offset is not None else "0s")
+        if end is None or given_start is None:
+            return self
+        start: Final = max(Decimal(0), given_start)
+        if end <= start:
+            raise ValueError(f"end_offset ({self.end_offset}) must be later than the window start ({start:g}s)")
+        fps: Final = self.fps if self.fps is not None else _DEFAULT_VIDEO_FPS
+        if (end - start) * Decimal(fps) < _HALF_FRAME:
+            raise ValueError(
+                f"end_offset - start_offset ({end - start:g}s) at {fps:g} fps rounds to 0 frames, "
+                "so widen the window or raise fps"
+            )
+        return self
 
 
 class _EmbeddingFile(LiteLLMBaseModel):
