@@ -1440,7 +1440,7 @@ class BaseLLMHTTPHandler:
             headers=headers,
         )
         if embedding_extra_body:
-            data.update({k: v for k, v in embedding_extra_body.items() if k not in data})
+            data.update(embedding_extra_body)
 
         # Some providers (e.g. OCI) require request signing after the body is built.
         # The default BaseConfig.sign_request returns (headers, None) — a no-op for
