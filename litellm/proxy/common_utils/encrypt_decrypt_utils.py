@@ -9,6 +9,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.auth.master_key_boot_check import SALT_KEY_ENV_VAR
+from litellm.proxy.common_utils.fips import fips_mode_active
 
 # Versioned ciphertext marker for AES-256-GCM values.
 # Format: "v2:gcm:" + base64url(nonce(12) || ciphertext || tag(16)).
@@ -50,7 +51,7 @@ _OSSL_PARAM_UTF8_STRING: Final = 4
 _OSSL_PARAM_OCTET_STRING: Final = 5
 _OSSL_PARAM_UNMODIFIED: Final = ctypes.c_size_t(-1).value
 _DERIVED_KEY_BYTES: Final = 32
-_KBKDF_PROPERTIES: Final = b"fips=yes"
+_FIPS_PROPERTIES: Final = b"fips=yes"
 
 
 class _OsslParam(ctypes.Structure):
@@ -88,7 +89,7 @@ def _kbkdf_hmac_sha256(key: bytes, label: bytes, context: bytes) -> bytes:
         _param(b"info", _OSSL_PARAM_OCTET_STRING, context),
     )
     derived: Final = ctypes.create_string_buffer(_DERIVED_KEY_BYTES)
-    kdf: Final = kdf_fetch(None, b"KBKDF", _KBKDF_PROPERTIES)
+    kdf: Final = kdf_fetch(None, b"KBKDF", _FIPS_PROPERTIES)
     ctx: Final = ctx_new(kdf)
     try:
         if not ctx or derive(ctx, derived, _DERIVED_KEY_BYTES, params) != 1:
@@ -103,13 +104,77 @@ def derive_key_from_salt_key(label: bytes, context: bytes) -> str:
     """Hex of 32 bytes derived from LITELLM_SALT_KEY under label and context by SP 800-108r1 KBKDF in counter mode
     with HMAC-SHA256, run by EVP_KDF from the FIPS provider of the OpenSSL that hashlib uses. Raises ValueError when
     LITELLM_SALT_KEY is not at least 32 bytes of hex, optionally prefixed with sk-, or when no FIPS provider runs it."""
-    salt_key: Final = _SALT_KEY_HEX.fullmatch(os.getenv(SALT_KEY_ENV_VAR, ""))
-    if salt_key is None:
+    return _kbkdf_from_hex_key(os.getenv(SALT_KEY_ENV_VAR, ""), label, context).hex()
+
+
+def _kbkdf_from_hex_key(hex_key: str, label: bytes, context: bytes) -> bytes:
+    key: Final = _SALT_KEY_HEX.fullmatch(hex_key)
+    if key is None:
         raise ValueError(
             f"With general_settings.fips_mode on, {SALT_KEY_ENV_VAR} must be at least 32 bytes of hex, such as "
             "sk-$(openssl rand -hex 32)"
         )
-    return _kbkdf_hmac_sha256(bytes.fromhex(salt_key.group(1)), label, context).hex()
+    return _kbkdf_hmac_sha256(bytes.fromhex(key.group(1)), label, context)
+
+
+_FIPS_AT_REST_KEY_LABEL: Final = b"litellm-at-rest:aes-256-gcm:"
+_GCM_NONCE_BYTES: Final = 12
+_GCM_TAG_BYTES: Final = 16
+
+
+def _fips_at_rest_key(signing_key: str) -> bytes:
+    return _kbkdf_from_hex_key(signing_key, _FIPS_AT_REST_KEY_LABEL, b"")
+
+
+def _fips_seal_aes_gcm(key: bytes, plaintext: bytes) -> bytes:
+    """nonce(12) || ciphertext || tag(16) from the FIPS provider's AES-256-GCM. No nonce is passed in, so the provider
+    draws it from its own DRBG, which FIPS 140-3 IG C.H requires and cryptography's AESGCM cannot ask for."""
+    import _hashlib
+
+    libcrypto: Final = ctypes.CDLL(_hashlib.__file__)
+    int_p: Final = ctypes.POINTER(ctypes.c_int)
+    fetch: Final = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p)(
+        ("EVP_CIPHER_fetch", libcrypto)
+    )
+    ctx_new: Final = ctypes.CFUNCTYPE(ctypes.c_void_p)(("EVP_CIPHER_CTX_new", libcrypto))
+    init: Final = ctypes.CFUNCTYPE(
+        ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_void_p
+    )(("EVP_EncryptInit_ex2", libcrypto))
+    update: Final = ctypes.CFUNCTYPE(
+        ctypes.c_int, ctypes.c_void_p, ctypes.c_char_p, int_p, ctypes.c_char_p, ctypes.c_int
+    )(("EVP_EncryptUpdate", libcrypto))
+    final: Final = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_char_p, int_p)(
+        ("EVP_EncryptFinal_ex", libcrypto)
+    )
+    get_params: Final = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.POINTER(_OsslParam))(
+        ("EVP_CIPHER_CTX_get_params", libcrypto)
+    )
+    ctx_free: Final = ctypes.CFUNCTYPE(None, ctypes.c_void_p)(("EVP_CIPHER_CTX_free", libcrypto))
+    cipher_free: Final = ctypes.CFUNCTYPE(None, ctypes.c_void_p)(("EVP_CIPHER_free", libcrypto))
+    ciphertext: Final = ctypes.create_string_buffer(len(plaintext))
+    written: Final = ctypes.c_int()
+    nonce: Final = ctypes.create_string_buffer(_GCM_NONCE_BYTES)
+    tag: Final = ctypes.create_string_buffer(_GCM_TAG_BYTES)
+    nonce_and_tag: Final = (_OsslParam * 3)(
+        _OsslParam(b"iv", _OSSL_PARAM_OCTET_STRING, ctypes.addressof(nonce), _GCM_NONCE_BYTES, _OSSL_PARAM_UNMODIFIED),
+        _OsslParam(b"tag", _OSSL_PARAM_OCTET_STRING, ctypes.addressof(tag), _GCM_TAG_BYTES, _OSSL_PARAM_UNMODIFIED),
+    )
+    cipher: Final = fetch(None, b"AES-256-GCM", _FIPS_PROPERTIES)
+    ctx: Final = ctx_new()
+    try:
+        if (
+            not cipher
+            or not ctx
+            or init(ctx, cipher, key, None, None) != 1
+            or update(ctx, ciphertext, ctypes.byref(written), plaintext, len(plaintext)) != 1
+            or final(ctx, ciphertext, ctypes.byref(written)) != 1
+            or get_params(ctx, nonce_and_tag) != 1
+        ):
+            raise ValueError("OpenSSL could not run AES-256-GCM")
+        return nonce.raw + ciphertext.raw + tag.raw
+    finally:
+        ctx_free(ctx)
+        cipher_free(cipher)
 
 
 def _get_encryption_algorithm() -> str:
@@ -120,6 +185,8 @@ def _get_encryption_algorithm() -> str:
     the legacy XSalsa20-Poly1305 algorithm so deployments that have not opted in
     keep producing byte-for-byte identical ciphertext.
     """
+    if fips_mode_active():
+        return ALGO_AES_GCM
     try:
         from litellm.proxy.proxy_server import general_settings
 
@@ -168,14 +235,23 @@ def _open_aes_gcm(sealed: bytes, signing_key: str, aad: bytes | None) -> str:
 
 
 def _encrypt_aes_gcm(value: str, signing_key: str) -> str:
-    """Encrypt under AES-256-GCM and return the versioned ``v2:gcm:`` string."""
-    sealed: Final = _seal_aes_gcm(value=value, signing_key=signing_key, aad=None)
+    """Encrypt under AES-256-GCM and return the versioned ``v2:gcm:`` string. With general_settings.fips_mode on, the
+    key comes from the FIPS provider's KBKDF over the salt key and the nonce from the provider itself."""
+    if fips_mode_active():
+        sealed = _fips_seal_aes_gcm(_fips_at_rest_key(signing_key), value.encode("utf-8"))
+    else:
+        sealed = _seal_aes_gcm(value=value, signing_key=signing_key, aad=None)
     return V2_GCM_PREFIX + base64.urlsafe_b64encode(sealed).decode("utf-8")
 
 
 def _decrypt_aes_gcm(value: str, signing_key: str) -> str:
     """Decrypt a versioned ``v2:gcm:`` string produced by :func:`_encrypt_aes_gcm`."""
     sealed: Final = base64.urlsafe_b64decode(value[len(V2_GCM_PREFIX) :])
+    if fips_mode_active():
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+        key: Final = _fips_at_rest_key(signing_key)
+        return AESGCM(key).decrypt(sealed[:_GCM_NONCE_BYTES], sealed[_GCM_NONCE_BYTES:], None).decode("utf-8")
     return _open_aes_gcm(sealed=sealed, signing_key=signing_key, aad=None)
 
 
@@ -251,6 +327,8 @@ def _decrypt_with_signing_key(value: str, signing_key: str) -> str:
     # The prefix is the algorithm tag the legacy nacl format never carried.
     if value.startswith(V2_GCM_PREFIX):
         return _decrypt_aes_gcm(value=value, signing_key=signing_key)
+    if fips_mode_active():
+        raise ValueError("With general_settings.fips_mode on, only v2:gcm: values can be decrypted")
 
     return decrypt_value(value=_legacy_ciphertext_bytes(value), signing_key=signing_key)
 
