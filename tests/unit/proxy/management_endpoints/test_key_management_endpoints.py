@@ -51,6 +51,7 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import AuthCacheInvalidationSubscriber
+from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     budget_windows_absent_cache_key,
@@ -101,6 +102,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     persist_deleted_verification_tokens,
     prepare_key_update_data,
     prepare_metadata_fields,
+    raise_on_logging_credential_change,
     reset_key_spend_fn,
     update_key_fn,
     validate_key_list_check,
@@ -112,6 +114,7 @@ from litellm.types.proxy.management_endpoints.key_management_endpoints import (
     BulkUpdateKeyResponse,
     CustomKeyPolicyRequest,
 )
+from litellm.types.utils import CredentialItem
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 client = TestClient(app)
@@ -2104,6 +2107,34 @@ async def test_update_key_end_user_budget_id_folds_into_metadata_and_survives_om
         data=UpdateKeyRequest(key="sk-1", key_alias="renamed"), existing_key_row=existing_key
     )
     assert untouched["metadata"]["end_user_budget_id"] == "svc-a-budget"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stored_duration", "stored_reset_at", "moves_reset"),
+    [
+        ("30d", datetime(2020, 1, 1, tzinfo=timezone.utc), False),
+        ("30d", datetime(2020, 1, 1), False),
+        ("30d", datetime(2099, 1, 1, tzinfo=timezone.utc), True),
+        ("7d", datetime(2020, 1, 1, tzinfo=timezone.utc), True),
+        ("30d", None, True),
+    ],
+)
+async def test_update_key_keeps_a_due_budget_reset_when_the_duration_is_resent(
+    stored_duration: str, stored_reset_at: datetime | None, moves_reset: bool
+) -> None:
+    existing_key: Final = LiteLLM_VerificationToken(
+        token="hashed", budget_duration=stored_duration, budget_reset_at=stored_reset_at
+    )
+
+    updated: Final = await prepare_key_update_data(
+        data=UpdateKeyRequest(key="sk-1", budget_duration="30d"), existing_key_row=existing_key
+    )
+
+    assert updated["budget_duration"] == "30d"
+    reset_at: Final = updated.get("budget_reset_at")
+    assert (isinstance(reset_at, datetime) and reset_at > datetime.now(timezone.utc)) is moves_reset
+    assert ("budget_reset_at" in updated) is moves_reset
 
 
 @pytest.mark.asyncio
@@ -8693,6 +8724,7 @@ async def test_reset_key_spend_success(monkeypatch):
         mock_spend_counter_cache.in_memory_cache.set_cache.assert_any_call(
             key=f"spend_db_floor:spend:key:{hashed_key}", value=50.0, ttl=5
         )
+        assert spend.deleted() == {f"spend:committed:key:{hashed_key}"}
 
 
 @pytest.mark.asyncio
@@ -9013,7 +9045,10 @@ async def test_update_key_spend_updates_counter(monkeypatch):
 
         mock_delete_cache.assert_awaited_once()
         assert spend.memory == {f"spend:key:{hashed_key}": 0.0}
-        assert spend.commands == [f"SET spend:key:{hashed_key} 0.0 60"]
+        assert spend.commands == [
+            f"SET spend:key:{hashed_key} 0.0 60",
+            f"DEL spend:committed:key:{hashed_key}",
+        ]
 
 
 @pytest.mark.asyncio
@@ -14230,6 +14265,7 @@ async def test_bulk_update_keys_runs_custom_key_policy_per_key(monkeypatch):
 def _policy_generate_prisma() -> MagicMock:
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_budgettable.create = AsyncMock(return_value=MagicMock(budget_id="budget-1"))
+    mock_prisma.writer_db.litellm_guardrailstable.find_many = AsyncMock(return_value=[SimpleNamespace(guardrail_name="g1")])
     mock_prisma.jsonify_object = MagicMock(side_effect=lambda data: json.loads(data) if isinstance(data, str) else data)
     return mock_prisma
 
@@ -19793,6 +19829,150 @@ async def test_bulk_key_update_batch_enqueued_token_limit_rejected_for_non_admin
     assert "Only proxy admins can set" in str(exc.value.detail)
 
 
+
+_INDEX_GRANT = [{"index_name": "docs", "index_permissions": ["read", "write"]}]
+
+
+@pytest.mark.parametrize(
+    "label, top_level, sent, stored, allowed",
+    [
+        ("granted top-level on a key with none stored", _INDEX_GRANT, _UNTOUCHED, None, False),
+        ("granted in metadata on a key with none stored", None, _INDEX_GRANT, None, False),
+        ("widened from read to read and write", None, _INDEX_GRANT, [{"index_name": "docs", "index_permissions": ["read"]}], False),
+        ("cleared by replacing the blob", None, None, _INDEX_GRANT, False),
+        ("resent unchanged in metadata", None, _INDEX_GRANT, _INDEX_GRANT, True),
+        ("resent unchanged top-level", _INDEX_GRANT, _UNTOUCHED, _INDEX_GRANT, True),
+        ("left untouched", None, _UNTOUCHED, _INDEX_GRANT, True),
+        ("cleared top-level with an empty list", [], _UNTOUCHED, _INDEX_GRANT, False),
+        ("empty top-level list on a key with none stored", [], _UNTOUCHED, None, True),
+    ],
+)
+def test_vector_store_index_grants_admin_gate_matrix(
+    label: str,
+    top_level: list[dict[str, object]] | None,
+    sent: object,
+    stored: list[dict[str, object]] | None,
+    allowed: bool,
+) -> None:
+    from litellm.proxy.auth.auth_utils import (
+        enforce_vector_store_index_grants_are_admin_only,
+    )
+
+    request_body = {} if sent is _UNTOUCHED else {"metadata": {} if sent is None else {"allowed_vector_store_indexes": sent}}
+    if top_level is not None:
+        request_body["allowed_vector_store_indexes"] = top_level
+    data = UpdateKeyRequest(key="sk-1", **request_body)
+    existing_metadata = None if stored is None else {"allowed_vector_store_indexes": stored}
+
+    def _call(caller: UserAPIKeyAuth) -> None:
+        enforce_vector_store_index_grants_are_admin_only(
+            data=data,
+            top_level_grants=data.allowed_vector_store_indexes,
+            existing_metadata=existing_metadata,
+            user_api_key_dict=caller,
+            entity="key",
+        )
+
+    non_admin = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-non-admin", user_id="alice")
+    if allowed:
+        _call(non_admin)
+    else:
+        with pytest.raises(HTTPException) as exc:
+            _call(non_admin)
+        assert exc.value.status_code == 403
+        assert "Only proxy admins can set allowed_vector_store_indexes" in str(exc.value.detail)
+
+    _call(UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin", user_id="admin"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_fields",
+    [{"allowed_vector_store_indexes": _INDEX_GRANT}, {"metadata": {"allowed_vector_store_indexes": _INDEX_GRANT}}],
+    ids=["top-level", "metadata"],
+)
+async def test_generate_key_vector_store_index_grants_rejected_for_non_admin(request_fields: dict[str, object]) -> None:
+    """An index grant on a key opens document reads and writes on that index, so a
+    non-admin minting their own key cannot pick its grants."""
+    with patch("litellm.proxy.proxy_server.prisma_client", AsyncMock()):
+        with pytest.raises(HTTPException) as exc:
+            await _common_key_generation_helper(
+                data=GenerateKeyRequest(**request_fields),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.INTERNAL_USER,
+                    api_key="sk-alice",
+                    user_id="alice",
+                ),
+                litellm_changed_by=None,
+                team_table=None,
+            )
+    assert int(getattr(exc.value, "status_code", 0)) == 403
+    assert "Only proxy admins can set allowed_vector_store_indexes" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_update_key_vector_store_index_grants_unchanged_allows_non_admin_edit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A key owner renaming a key that carries admin-set index grants resends them
+    with the rest of the form, which must not count as setting them."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        update_key_fn,
+    )
+
+    token = "b3b2c3d4e5f6789012345678901234567890123456789012345678901234abcd"
+    _wire_update_key_fn(monkeypatch, _estimate_key_row(token, {"allowed_vector_store_indexes": _INDEX_GRANT}))
+
+    mock_request = MagicMock()
+    mock_request.query_params = {}
+
+    result = await update_key_fn(
+        request=mock_request,
+        data=UpdateKeyRequest(key=token, key_alias="my-alias", metadata={"allowed_vector_store_indexes": _INDEX_GRANT}),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            api_key="sk-internal",
+            user_id="internal_user",
+        ),
+        litellm_changed_by=None,
+    )
+
+    assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_update_key_vector_store_index_grants_widened_rejected_for_non_admin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        update_key_fn,
+    )
+
+    token = "c3b2c3d4e5f6789012345678901234567890123456789012345678901234abcd"
+    _wire_update_key_fn(
+        monkeypatch,
+        _estimate_key_row(token, {"allowed_vector_store_indexes": [{"index_name": "docs", "index_permissions": ["read"]}]}),
+    )
+
+    mock_request = MagicMock()
+    mock_request.query_params = {}
+
+    with pytest.raises(ProxyException) as exc:
+        await update_key_fn(
+            request=mock_request,
+            data=UpdateKeyRequest(key=token, allowed_vector_store_indexes=_INDEX_GRANT),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                api_key="sk-internal",
+                user_id="internal_user",
+            ),
+            litellm_changed_by=None,
+        )
+
+    assert str(exc.value.code) == "403"
+    assert "Only proxy admins can set allowed_vector_store_indexes" in str(exc.value.message)
+
+
 @pytest.mark.asyncio
 async def test_execute_virtual_key_regeneration_stamps_settings_updated_at():
     """Regenerate rewrites the key's config, so it must move settings_updated_at."""
@@ -24259,3 +24439,182 @@ async def test_key_aliases_answers_503_when_the_database_is_unreachable(monkeypa
         )
 
     assert (exc_info.value.code, exc_info.value.type) == ("503", "no_db_connection")
+
+
+def test_non_admin_resaving_referencing_key_metadata_read_back_encrypted_is_not_a_logging_change(monkeypatch):
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt-32-bytes-aaaaaaaaaaaaaa")
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [CredentialItem(credential_name="space-a", credential_values={"arize_api_key": "k"}, credential_info={})],
+    )
+    stored = encrypt_callback_vars(
+        {
+            "logging": [
+                {"callback_name": "arize", "litellm_credential_name": "space-a", "callback_vars": {}},
+                {"callback_name": "langfuse", "callback_vars": {"langfuse_secret_key": "sk-lf-secret"}},
+            ]
+        }
+    )
+    assert stored["logging"][1]["callback_vars"]["langfuse_secret_key"] != "sk-lf-secret"
+    key_row = LiteLLM_VerificationToken(token="hashed", metadata=stored)
+    internal_user = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER)
+
+    raise_on_logging_credential_change({**stored, "note": "unrelated edit"}, key_row, internal_user)
+    with pytest.raises(HTTPException) as removed:
+        raise_on_logging_credential_change({"note": "unrelated edit"}, key_row, internal_user)
+
+    assert removed.value.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "body",
+    ({"guardrails": ["typo"]}, {"metadata": {"guardrails": ["typo"]}}),
+    ids=("top_level", "metadata"),
+)
+def test_key_generate_rejects_an_unregistered_guardrail(
+    spend_permission_client: TestClient, monkeypatch: pytest.MonkeyPatch, body: dict[str, object]
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    prisma_client: Final = proxy_server.prisma_client
+    prisma_client.writer_db.litellm_guardrailstable.find_many = AsyncMock(return_value=[])
+
+    response: Final = spend_permission_client.post("/key/generate", json=body)
+
+    assert response.status_code == 400, response.text
+    assert "typo" in response.json()["error"]["message"]
+    prisma_client.insert_data.assert_not_awaited()
+
+
+def test_key_generate_accepts_a_guardrail_active_in_the_db(
+    spend_permission_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    prisma_client: Final = proxy_server.prisma_client
+    prisma_client.writer_db.litellm_guardrailstable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(guardrail_name="created-on-other-pod")]
+    )
+
+    response: Final = spend_permission_client.post("/key/generate", json={"guardrails": ["created-on-other-pod"]})
+
+    assert response.status_code == 200, response.text
+    prisma_client.insert_data.assert_awaited_once()
+
+
+def _key_with_stale_guardrail() -> LiteLLM_VerificationToken:
+    return LiteLLM_VerificationToken(
+        token=_POLICY_HASHED_TOKEN,
+        user_id="test-user",
+        team_id="team-a",
+        metadata={"guardrails": ["stale"]},
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_key_fn_rejects_an_added_unregistered_guardrail_and_keeps_stale_keys_editable(monkeypatch):
+    from litellm.proxy.management_endpoints.key_management_endpoints import update_key_fn
+
+    mock_prisma_client: Final = _setup_update_key_fn_policy_mocks(monkeypatch, _key_with_stale_guardrail())
+    mock_prisma_client.writer_db.litellm_guardrailstable.find_many = AsyncMock(return_value=[])
+
+    with patch(  # test-quality-ok: cache eviction is outside the guardrail check
+        "litellm.proxy.management_endpoints.key_management_endpoints.delete_cache_key_object",
+        new_callable=AsyncMock,
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await update_key_fn(
+                request=MagicMock(),
+                data=UpdateKeyRequest(key=_POLICY_HASHED_TOKEN, guardrails=["stale", "typo"]),
+                user_api_key_dict=_make_regenerate_user_api_key_dict(),
+                litellm_changed_by=None,
+            )
+        assert str(exc_info.value.code) == "400"
+        assert "typo" in exc_info.value.message
+        assert "stale" not in exc_info.value.message
+        mock_prisma_client.update_data.assert_not_awaited()
+
+        await update_key_fn(
+            request=MagicMock(),
+            data=UpdateKeyRequest(key=_POLICY_HASHED_TOKEN, guardrails=["stale"], max_budget=50.0),
+            user_api_key_dict=_make_regenerate_user_api_key_dict(),
+            litellm_changed_by=None,
+        )
+
+    mock_prisma_client.update_data.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_process_single_key_update_rejects_an_unregistered_guardrail(monkeypatch):
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    mock_prisma_client: Final = AsyncMock()
+    mock_prisma_client.writer_db.litellm_guardrailstable.find_many = AsyncMock(return_value=[])
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _process_single_key_update_under_policy(
+            mock_prisma_client, UpdateKeyRequest(key=_POLICY_HASHED_TOKEN, metadata={"guardrails": ["typo"]}), None
+        )
+
+    assert exc_info.value.status_code == 400
+    mock_prisma_client.update_data.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_regenerate_key_rejects_an_unregistered_guardrail():
+    from litellm.proxy._types import RegenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import regenerate_key_fn
+
+    mock_prisma_client: Final = AsyncMock()
+    mock_prisma_client.writer_db.litellm_guardrailstable.find_many = AsyncMock(return_value=[])
+    mock_repo: Final = MagicMock()
+    mock_repo.table.find_unique = AsyncMock(return_value=_make_regenerate_existing_key())
+
+    with (
+        patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: guardrails are an enterprise field
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),  # test-quality-ok: fake DB
+        patch(  # test-quality-ok: the stored key row is outside the guardrail check
+            "litellm.proxy.management_endpoints.key_management_endpoints.VerificationTokenRepository",
+            return_value=mock_repo,
+        ),
+        pytest.raises(ProxyException) as exc,
+    ):
+        await regenerate_key_fn(
+            key=None,
+            data=RegenerateKeyRequest(key="sk-alice-personal", guardrails=["typo"]),
+            user_api_key_dict=_make_regenerate_user_api_key_dict(),
+            litellm_changed_by=None,
+        )
+
+    assert int(exc.value.code) == 400
+    assert "typo" in str(exc.value.message)
+    mock_repo.table.update.assert_not_called()
+
+
+def test_user_new_rejects_an_unregistered_guardrail_before_creating_anything(
+    spend_permission_client: TestClient,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    prisma_client: Final = proxy_server.prisma_client
+    prisma_client.writer_db.litellm_guardrailstable.find_many = AsyncMock(return_value=[])
+
+    response: Final = spend_permission_client.post("/user/new", json={"guardrails": ["typo"]})
+
+    assert response.status_code == 400, response.text
+    assert "typo" in response.json()["error"]["message"]
+    prisma_client.insert_data.assert_not_awaited()
+
+
+def test_user_new_without_a_key_does_not_check_guardrail_names(spend_permission_client: TestClient) -> None:
+    from litellm.proxy import proxy_server
+
+    find_many: Final = AsyncMock(return_value=[])
+    proxy_server.prisma_client.writer_db.litellm_guardrailstable.find_many = find_many
+
+    response: Final = spend_permission_client.post("/user/new", json={"guardrails": ["typo"], "auto_create_key": False})
+
+    assert response.status_code == 200, response.text
+    find_many.assert_not_awaited()

@@ -246,7 +246,7 @@ def enumerate_rust_tests(
 ) -> frozenset[RustTestIdentity]:
     if not scopes:
         return frozenset()
-    cwd: Final = repo_root / "litellm-rust"
+    cwd: Final = repo_root / "litellm/rust"
     metadata: Final = _CargoMetadata.model_validate_json(
         command_runner(("cargo", "metadata", "--format-version", "1", "--no-deps", "--locked"), cwd)
     )

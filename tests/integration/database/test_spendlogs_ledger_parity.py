@@ -257,7 +257,7 @@ def ledger_schema() -> str:
             "diff",
             "--from-empty",
             "--to-schema-datamodel",
-            str(_ROOT / "schema.prisma"),
+            str(_ROOT / "litellm/schema.prisma"),
             "--script",
         ],
         check=True,
@@ -424,6 +424,7 @@ async def _assert_legacy_database_parity(
                             "guardrail_status": "success",
                             "guardrail_usage": {"text": 2},
                             "guardrail_cost_by_unit": {"text": 0.02},
+                            "guardrail_cost": 0.02,
                             "guardrail_cost_in_spend": True,
                         }
                     ],
@@ -579,6 +580,7 @@ async def _assert_legacy_database_parity(
         assert daily["autorouter_savings_spend"] == pytest.approx(
             (0 if origin == "auto_router" else 0.125) + (0.2 if correction_order else 0)
         )
+        assert daily["guardrail_spend"] == pytest.approx(min(0.02, cost))
         group_spend = {row["access_group_name"]: row["spend"] for row in results[-1]["LiteLLM_ModelAccessGroupBudgetTable"]}
         assert group_spend == {"group": cost + prior_spend, **({"unserved-group": prior_spend} if fallback_narrowing else {})}
         assert results[-1]["LiteLLM_DailyGuardrailUsageUnits"]
@@ -978,14 +980,16 @@ async def test_fallback_charges_only_groups_declared_by_the_served_deployment(
 
 
 @pytest.mark.asyncio
-async def test_worker_skips_another_leader_and_releases_its_redis_lock_after_retry(
+async def test_worker_delivers_under_another_leaders_lock_then_cleans_reports_and_releases_its_lock(
     parity_database: str, monkeypatch: pytest.MonkeyPatch
 ):
+    from prometheus_client import REGISTRY
     from litellm.accounting.worker import flush_accounting_deliveries
     from litellm.caching.redis_cache import RedisCache
     from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 
     monkeypatch.setenv("DATABASE_URL", parity_database)
+    monkeypatch.setenv("LITELLM_ACCOUNTING_DELIVERY_RETENTION_DAYS", "1")
     cache = RedisCache(host=os.environ["REDIS_HOST"], port=int(os.environ["REDIS_PORT"]), namespace=uuid.uuid4().hex)
     other_leader = PodLockManager(cache)
     writer = DBSpendUpdateWriter(redis_cache=cache)
@@ -993,16 +997,39 @@ async def test_worker_skips_another_leader_and_releases_its_redis_lock_after_ret
     client = PrismaClient(database_url=parity_database, proxy_logging_obj=proxy_server.proxy_logging_obj)
     await client.db.connect()
     try:
+        reports_before: Final = REGISTRY.get_sample_value("litellm_accounting_batch_seconds_count")
+        assert reports_before is not None
         with psycopg.connect(parity_database, autocommit=True) as connection:
-            connection.execute('INSERT INTO "LiteLLM_SpendLogDelivery" (request_id, accounting_payload, is_batch) VALUES ($$invalid-row$$, $$ {"metadata": {"accounting_windows": [{}]}} $$::jsonb, false)')
+            connection.execute(
+                'INSERT INTO "LiteLLM_SpendLogDelivery" (request_id, accounting_payload, is_batch, attempts) '
+                "VALUES ('fresh', %s::jsonb, false, 0), ('retry', %s::jsonb, false, 1)",
+                (
+                    json.dumps({"spend": 0.25, "metadata": {"accounting_entities": {"user": "user"}}}),
+                    json.dumps({"spend": 0.5, "metadata": {"accounting_entities": {"user": "user"}}}),
+                ),
+            )
+            connection.execute(
+                'INSERT INTO "LiteLLM_SpendLogDelivery" '
+                '(request_id, accounting_payload, is_batch, state, applied_at) '
+                "VALUES ('expired', '{}'::jsonb, false, 'applied', CURRENT_TIMESTAMP - INTERVAL '2 days')"
+            )
         assert await other_leader.acquire_lock(cronjob_id="accounting_delivery", allow_reentrant=False)
         await flush_accounting_deliveries(writer, client, proxy_server.proxy_logging_obj)
         with psycopg.connect(parity_database) as connection:
-            assert connection.execute('SELECT attempts FROM "LiteLLM_SpendLogDelivery"').fetchall() == [(0,)]
+            assert connection.execute(
+                'SELECT request_id, state::text, attempts FROM "LiteLLM_SpendLogDelivery" ORDER BY request_id'
+            ).fetchall() == [("expired", "applied", 0), ("fresh", "applied", 0), ("retry", "applied", 1)]
+            assert connection.execute('SELECT spend FROM "LiteLLM_UserTable" WHERE user_id=\'user\'').fetchone() == (0.75,)
+        assert REGISTRY.get_sample_value("litellm_accounting_batch_seconds_count") == reports_before
+        assert await writer.pod_lock_manager.acquire_lock(cronjob_id="accounting_delivery", allow_reentrant=False) is False
         await other_leader.release_lock(cronjob_id="accounting_delivery")
         await flush_accounting_deliveries(writer, client, proxy_server.proxy_logging_obj)
         with psycopg.connect(parity_database) as connection:
-            assert connection.execute('SELECT attempts FROM "LiteLLM_SpendLogDelivery"').fetchall() == [(1,)]
+            assert connection.execute(
+                'SELECT request_id, state::text, attempts FROM "LiteLLM_SpendLogDelivery" ORDER BY request_id'
+            ).fetchall() == [("fresh", "applied", 0), ("retry", "applied", 1)]
+            assert connection.execute('SELECT spend FROM "LiteLLM_UserTable" WHERE user_id=\'user\'').fetchone() == (0.75,)
+        assert REGISTRY.get_sample_value("litellm_accounting_batch_seconds_count") == reports_before + 1
         assert await other_leader.acquire_lock(cronjob_id="accounting_delivery", allow_reentrant=False)
     finally:
         await other_leader.release_lock(cronjob_id="accounting_delivery")

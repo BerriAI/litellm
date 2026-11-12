@@ -20,6 +20,7 @@ from pydantic import TypeAdapter, ValidationError
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
+from litellm.llms.anthropic.messages.native import handler as python_messages
 from litellm.anthropic_interface import messages
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -32,7 +33,7 @@ from litellm.types.utils import (
     StandardLoggingPayloadErrorInformation,
     StreamingChoices,
 )
-from litellm.utils import _invalidate_model_cost_lowercase_map
+from litellm.litellm_core_utils.model_cost_table import publish
 import unittest.mock
 
 
@@ -1413,7 +1414,7 @@ async def test_messages_honors_a_chat_pin_on_a_prefixed_responses_deployment(
         "supported_endpoints": ["/v1/chat/completions", "/v1/responses"],
     }
     litellm.model_cost["perplexity/pin-test-model"] = {"litellm_provider": "perplexity", "mode": "chat"}
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
 
@@ -1470,7 +1471,7 @@ async def test_native_messages_strips_replayed_provider_specific_fields_from_wir
         patch.object(httpx.AsyncClient, "send", fake_send),
         pytest.raises(litellm.exceptions.InternalServerError),
     ):
-        await litellm.anthropic.messages.acreate(
+        await python_messages.anthropic_messages(
             max_tokens=100,
             messages=messages,
             model="anthropic/claude-haiku-4-5-20251001",
@@ -2021,6 +2022,89 @@ async def test_anthropic_messages_forwards_safeguards_and_dangerous_tool_use_bet
     assert response["safeguard_results"] == safeguard_results
 
 
+_OPUS_4_8_ON_BEDROCK_INVOKE: Final = "bedrock/invoke/us.anthropic.claude-opus-4-8"
+
+
+def _bedrock_invoke_recording(bodies: list[dict[str, object]]) -> AsyncHTTPHandler:
+    def record_and_answer(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_drop_top_k",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-opus-4-8",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 3, "output_tokens": 1},
+            },
+            request=request,
+        )
+
+    upstream: Final = AsyncHTTPHandler()
+    upstream.client = httpx.AsyncClient(transport=httpx.MockTransport(record_and_answer))
+    return upstream
+
+
+async def _opus_4_8_messages_with_top_k(bodies: list[dict[str, object]], **deployment: object) -> object:
+    return await messages.acreate(
+        max_tokens=16,
+        messages=[{"role": "user", "content": "hi"}],
+        model=_OPUS_4_8_ON_BEDROCK_INVOKE,
+        top_k=5,
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+        aws_region_name="us-east-1",
+        client=_bedrock_invoke_recording(bodies),
+        **deployment,
+    )
+
+
+@pytest.mark.asyncio
+async def test_bedrock_invoke_messages_drops_top_k_the_deployment_lists_on_a_model_without_sampling_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    bodies: Final[list[dict[str, object]]] = []
+
+    response: Final = await _opus_4_8_messages_with_top_k(bodies, additional_drop_params=["top_k"])
+
+    assert response["content"] == [{"type": "text", "text": "ok"}]
+    (body,) = bodies
+    assert "top_k" not in body
+    assert body["max_tokens"] == 16
+
+
+@pytest.mark.asyncio
+async def test_bedrock_invoke_messages_still_rejects_top_k_the_deployment_does_not_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    bodies: Final[list[dict[str, object]]] = []
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="does not support top_k=5") as raised:
+        await _opus_4_8_messages_with_top_k(bodies, additional_drop_params=["top_p"])
+
+    assert raised.value.status_code == 400
+    assert bodies == []
+
+
+@pytest.mark.asyncio
+async def test_bedrock_invoke_messages_answers_the_top_k_400_for_a_drop_list_that_is_not_a_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    bodies: Final[list[dict[str, object]]] = []
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="does not support top_k=5") as raised:
+        await _opus_4_8_messages_with_top_k(bodies, additional_drop_params="top_k")
+
+    assert raised.value.status_code == 400
+    assert bodies == []
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("client_headers", _CLIENT_BETA_HEADERS)
 async def test_anthropic_messages_forwards_safeguards_and_dangerous_tool_use_beta_to_vertex(
@@ -2368,7 +2452,7 @@ async def test_anthropic_messages_with_extra_headers():
     mock_client.post = AsyncMock(return_value=mock_response)
 
     # Call the handler with extra_headers and our mocked client
-    response = await litellm.anthropic.messages.acreate(
+    response = await python_messages.anthropic_messages(
         messages=messages,
         api_key=api_key,
         model="claude-haiku-4-5-20251001",
@@ -2432,7 +2516,7 @@ async def test_anthropic_messages_with_thinking():
     mock_client.post = AsyncMock(return_value=mock_response)
 
     # Call the handler with extra_headers and our mocked client
-    response = await litellm.anthropic.messages.acreate(
+    response = await python_messages.anthropic_messages(
         messages=messages,
         api_key=api_key,
         model="claude-haiku-4-5-20251001",
@@ -2702,7 +2786,7 @@ async def test_anthropic_messages_strict_tools_rejection_is_sent_again_without_s
     anthropic: Final = _RejectsStrictToolsOnce()
     tool: Final = {"name": "lookup_record", "input_schema": {"type": "object"}, "strict": True}
 
-    response: Final = await litellm.anthropic_messages(
+    response: Final = await python_messages.anthropic_messages(
         max_tokens=16,
         messages=[{"role": "user", "content": "Use lookup_record to find invoice 42"}],
         model="anthropic/claude-sonnet-4-6",
@@ -2716,6 +2800,85 @@ async def test_anthropic_messages_strict_tools_rejection_is_sent_again_without_s
     assert first["tools"] == [tool]
     assert second == {**first, "tools": [{"name": "lookup_record", "input_schema": {"type": "object"}}]}
     assert _JSON_BODY.validate_python(response)["id"] == "msg_strict_retry"
+
+
+@pytest.mark.parametrize(
+    "model",
+    ("openai/gpt-5.5", "vertex_ai/claude-opus-4-8", "bedrock/anthropic.claude-opus-4-8-v1:0"),
+    ids=("chat_bridge", "vertex_native", "bedrock_native"),
+)
+def test_a_thread_continue_on_a_leg_without_message_threads_is_thread_not_found_before_any_upstream_call(
+    model: str,
+) -> None:
+    from litellm.llms.anthropic.common_utils import AnthropicError
+    from litellm.llms.anthropic.messages.native.handler import anthropic_messages_handler
+
+    with pytest.raises(AnthropicError) as raised:
+        anthropic_messages_handler(
+            max_tokens=64,
+            messages=[{"role": "user", "content": "hi"}],
+            model=model,
+            api_key="synthetic-key",
+            thread={"type": "continue", "previous_message_id": "msg_01previous"},
+        )
+    assert raised.value.status_code == 404
+    error: Final = _JSON_BODY.validate_json(raised.value.message)["error"]
+    assert isinstance(error, dict)
+    assert error["type"] == "not_found_error"
+    assert error["details"] == {"error_code": "thread_not_found"}
+
+
+@pytest.mark.parametrize(
+    "model",
+    ("openai/gpt-5.5", "vertex_ai/claude-opus-4-8", "bedrock/anthropic.claude-opus-4-8-v1:0"),
+    ids=("chat_bridge", "vertex_native", "bedrock_native"),
+)
+def test_a_thread_create_on_a_leg_without_message_threads_is_thread_unsupported_before_any_upstream_call(
+    model: str,
+) -> None:
+    from litellm.llms.anthropic.common_utils import AnthropicError
+    from litellm.llms.anthropic.messages.native.handler import anthropic_messages_handler
+
+    with pytest.raises(AnthropicError) as raised:
+        anthropic_messages_handler(
+            max_tokens=64,
+            messages=[{"role": "user", "content": "hi"}],
+            model=model,
+            api_key="synthetic-key",
+            thread={"type": "create"},
+        )
+    assert raised.value.status_code == 400
+    error: Final = _JSON_BODY.validate_json(raised.value.message)["error"]
+    assert isinstance(error, dict)
+    assert error["type"] == "invalid_request_error"
+    assert error["details"] == {"error_code": "thread_unsupported_request"}
+
+
+@pytest.mark.asyncio
+async def test_a_thread_create_on_a_native_leg_without_message_threads_is_served_without_the_thread_under_drop_params(
+    local_beta_headers_config: None,
+) -> None:
+    from litellm.llms.anthropic.messages.native import handler
+
+    captured: Final[dict[str, object]] = {}
+    response: Final = await handler.anthropic_messages(
+        max_tokens=16,
+        messages=[{"role": "user", "content": "hi"}],
+        model="bedrock/us.anthropic.claude-sonnet-5",
+        custom_llm_provider="bedrock",
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+        aws_region_name="us-east-1",
+        client=_upstream_answering_with([], captured),
+        thread={"type": "create"},
+        drop_params=True,
+    )
+
+    body: Final = captured["body"]
+    assert isinstance(body, dict)
+    assert "thread" not in body
+    assert body["messages"] == [{"role": "user", "content": "hi"}]
+    assert _JSON_BODY.validate_python(response)["id"] == "msg_1"
 
 
 @pytest.mark.asyncio
@@ -2755,7 +2918,7 @@ async def test_azure_messages_replay_encrypted_reasoning_only_to_responses(
             },
         },
     )
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     litellm.in_memory_llm_clients_cache.flush_cache()
     chat_reply: Final = {
         "id": "chatcmpl-azure",

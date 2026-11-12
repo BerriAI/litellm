@@ -38,10 +38,10 @@ Safe to enable globally:
 
 import hashlib
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import cache, lru_cache, partial
 from time import monotonic
-from typing import TYPE_CHECKING, Final, Optional, cast
+from typing import TYPE_CHECKING, Final, Optional, TypeVar, cast
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
@@ -49,6 +49,7 @@ import litellm
 from litellm._logging import verbose_router_logger
 from litellm.exceptions import AuthenticationError, BadRequestError
 from litellm.integrations.custom_logger import CustomLogger, Span
+from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_provider, get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import has_sensitive_keyword
 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
@@ -60,9 +61,10 @@ from litellm.litellm_core_utils.routing_common_utils import as_excluded_deployme
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_deprecated import RenamedRouterAttribute, renamed_router_param
+from litellm.router_strategy.tag_based_routing import get_deployments_for_tag
 from litellm.secret_managers.main import secret_manager_would_be_consulted
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.router import Deployment, GenericLiteLLMParams
+from litellm.types.router import Deployment, GenericLiteLLMParams, ModelInfo
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager, get_order_filtered_deployments, with_named_credential
 
@@ -70,6 +72,7 @@ if TYPE_CHECKING:
     from litellm.router_api import RoutingContext
 
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_DeploymentT: Final = TypeVar("_DeploymentT", bound=Mapping[str, object])
 _HEADERS_ADAPTER: Final = TypeAdapter(Mapping[object, object])
 _ACCOUNT_SCOPE_HEADERS: Final = frozenset({"openai-organization", "openai-project", "cookie"})
 _SINGLE_VENDOR_PROVIDERS: Final = frozenset({LlmProviders.OPENAI.value})
@@ -91,8 +94,11 @@ class _EncryptionBoundary:
     model: Callable[[], str | None] = field(compare=False)
     account_scope: frozenset[tuple[str, object]]
     explicit_pair: bool
+    declared: str | None = None
 
     def is_shared_with(self, other: "_EncryptionBoundary") -> bool:
+        if self.declared is not None and other.declared is not None:
+            return self.declared == other.declared
         if (self.api_base, self.api_key) != (other.api_base, other.api_key):
             return False
         if self.explicit_pair and other.explicit_pair:
@@ -242,7 +248,9 @@ class EncryptedContentAffinityCheck(CustomLogger):
         return None if deployment_id is None else str(deployment_id)
 
     @staticmethod
-    def _find_deployment_by_model_id(healthy_deployments: list[dict], model_id: str) -> dict | None:
+    def _find_deployment_by_model_id(
+        healthy_deployments: list[dict[str, object]], model_id: str
+    ) -> dict[str, object] | None:
         for deployment in healthy_deployments:
             model_info = deployment.get("model_info")
             if not isinstance(model_info, dict):
@@ -289,6 +297,37 @@ class EncryptedContentAffinityCheck(CustomLogger):
                 effective_params,
             )
         )
+
+    @staticmethod
+    def _deployment_encryption_boundary(
+        litellm_params: object,
+        model_info: object,
+        clock: Callable[[], float] = monotonic,
+    ) -> _EncryptionBoundary | None:
+        """
+        ``_encryption_boundary_key``, overridden by an operator-declared
+        ``model_info.encrypted_content_boundary``. Two deployments that both declare one are peers exactly
+        when the names match, which lets endpoints of one provider organization with different ``api_base``
+        values share encrypted reasoning.
+        """
+        declared: Final = EncryptedContentAffinityCheck._declared_encryption_boundary(model_info)
+        resolved: Final = EncryptedContentAffinityCheck._encryption_boundary_key(litellm_params, clock)
+        if declared is None:
+            return resolved
+        if resolved is None:
+            return _EncryptionBoundary(None, None, lambda: None, frozenset(), explicit_pair=False, declared=declared)
+        return replace(resolved, declared=declared)
+
+    @staticmethod
+    def _declared_encryption_boundary(model_info: object) -> str | None:
+        if isinstance(model_info, ModelInfo):
+            return model_info.encrypted_content_boundary
+        if not isinstance(model_info, Mapping):
+            return None
+        declared: Final = cast(Mapping[str, object], model_info).get(  # cast-ok: narrowed by isinstance
+            "encrypted_content_boundary"
+        )
+        return declared if isinstance(declared, str) and declared else None
 
     @staticmethod
     @lru_cache(maxsize=1024)
@@ -408,9 +447,9 @@ class EncryptedContentAffinityCheck(CustomLogger):
 
     def _find_deployments_on_same_encryption_boundary(
         self,
-        healthy_deployments: list[dict],
+        healthy_deployments: list[dict[str, object]],
         model_id: str,
-    ) -> tuple[list[dict], Deployment | None]:
+    ) -> tuple[list[dict[str, object]], Deployment | None]:
         """
         Deployments in ``healthy_deployments`` sharing the originating
         deployment's encryption boundary, alongside the originating
@@ -421,15 +460,20 @@ class EncryptedContentAffinityCheck(CustomLogger):
         originating: Final = self.ctx.registry().deployment(model_id)
         if originating is None:
             return [], None
-        boundary: Final = self._encryption_boundary_key(
-            originating.litellm_params.model_dump(exclude_none=True), self._clock
+        boundary: Final = self._deployment_encryption_boundary(
+            originating.litellm_params.model_dump(exclude_none=True), originating.model_info, self._clock
         )
         if boundary is None:
             return [], originating
         matches: Final = [
             d
             for d in healthy_deployments
-            if (candidate := self._encryption_boundary_key(d.get("litellm_params", {}), self._clock)) is not None
+            if (
+                candidate := self._deployment_encryption_boundary(
+                    d.get("litellm_params", {}), d.get("model_info"), self._clock
+                )
+            )
+            is not None
             and boundary.is_shared_with(candidate)
         ]
         return matches, originating
@@ -464,8 +508,8 @@ class EncryptedContentAffinityCheck(CustomLogger):
                 boundary
                 for target in target_deployments
                 if (
-                    boundary := EncryptedContentAffinityCheck._encryption_boundary_key(
-                        target.get("litellm_params"), clock
+                    boundary := EncryptedContentAffinityCheck._deployment_encryption_boundary(
+                        target.get("litellm_params"), target.get("model_info"), clock
                     )
                 )
                 is not None
@@ -482,8 +526,8 @@ class EncryptedContentAffinityCheck(CustomLogger):
                 return False
             origin: Final = ctx.registry().deployment(origin_model_id)
             origin_boundary: Final = (
-                EncryptedContentAffinityCheck._encryption_boundary_key(
-                    origin.litellm_params.model_dump(exclude_none=True), clock
+                EncryptedContentAffinityCheck._deployment_encryption_boundary(
+                    origin.litellm_params.model_dump(exclude_none=True), origin.model_info, clock
                 )
                 if origin is not None
                 else None
@@ -506,6 +550,27 @@ class EncryptedContentAffinityCheck(CustomLogger):
     # ------------------------------------------------------------------
     # Request routing  (pre-call filter)
     # ------------------------------------------------------------------
+
+    async def _tag_routable(
+        self, model: str, pinned: Sequence[_DeploymentT], request_kwargs: Mapping[str, object]
+    ) -> tuple[_DeploymentT, ...]:
+        """The deployments in ``pinned`` the router's tag filter keeps for this request, none when it rejects
+        them all, so an explicit routing tag outranks the pin."""
+        if self.ctx is None:
+            return tuple(pinned)
+        try:
+            kept: Final = await get_deployments_for_tag(
+                ctx=self.ctx,
+                model=model,
+                healthy_deployments=pinned,  # pyright: ignore[reportArgumentType]  # deployment dicts
+                request_kwargs=request_kwargs,  # pyright: ignore[reportArgumentType]  # the request kwargs
+                metadata_variable_name=get_metadata_variable_name_from_kwargs(request_kwargs),
+                request_deployments=self.ctx.registry().deployments(model) or pinned,  # pyright: ignore[reportArgumentType]  # deployment dicts
+            )
+        except ValueError:
+            return ()
+        kept_identities: Final = frozenset(map(id, kept))
+        return tuple(deployment for deployment in pinned if id(deployment) in kept_identities)
 
     async def async_filter_deployments(
         self,
@@ -590,7 +655,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
             healthy_deployments=untried_candidates,
             model_id=model_id,
         )
-        if deployment is not None:
+        if deployment is not None and await self._tag_routable(model, (deployment,), typed_request_kwargs):
             verbose_router_logger.debug(
                 "EncryptedContentAffinityCheck: pinning -> deployment=%s",
                 model_id,
@@ -611,19 +676,22 @@ class EncryptedContentAffinityCheck(CustomLogger):
             healthy_deployments=untried_candidates,
             model_id=model_id,
         )
-        if boundary_matches:
+        routable_peers: Final = (
+            await self._tag_routable(model, boundary_matches, typed_request_kwargs) if boundary_matches else ()
+        )
+        if routable_peers:
             verbose_router_logger.debug(
-                "EncryptedContentAffinityCheck: model_id=%s not in healthy_deployments; "
+                "EncryptedContentAffinityCheck: model_id=%s cannot serve this turn; "
                 "pinning to %d deployment(s) on same encryption boundary",
                 model_id,
-                len(boundary_matches),
+                len(routable_peers),
             )
             request_kwargs["_encrypted_content_affinity_pinned"] = True
             self.strip_reasoning_the_targets_cannot_decrypt(
                 self.ctx,
                 request_input,
                 anthropic_messages,
-                boundary_matches,
+                routable_peers,
                 unmarked_origin=model_id,
                 clock=self._clock,
             )
@@ -642,4 +710,4 @@ class EncryptedContentAffinityCheck(CustomLogger):
         )
         ResponsesAPIRequestUtils.strip_encrypted_reasoning_from_input(request_input)
         strip_encrypted_reasoning_from_messages(anthropic_messages)
-        return candidates
+        return untried_candidates if excluded_ids or retry_skipped_ids else candidates
