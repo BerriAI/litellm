@@ -651,3 +651,7 @@ class AnthropicResponsesSyncSSEByteStream(AnthropicResponsesSSEByteStream):
 
     def close(self) -> None:
         self._wrapper.close()
+
+    async def aclose(self) -> None:
+        self.close()
+        await super().aclose()
