@@ -153,6 +153,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     populate_request_with_path_params,
     read_raw_json_body,
     read_request_body,
+    read_request_path_params,
     resolve_realtime_route_model,
     rewrite_request_model,
     safe_get_request_headers,
@@ -4252,6 +4253,7 @@ async def _reserve_budget_after_common_checks(
             reserve_budget_for_request,
         )
 
+        reservation_path_params: Final = read_request_path_params(request)
         user_api_key_auth_obj.budget_reservation = await reserve_budget_for_request(
             request_body=request_data,
             route=route,
@@ -4270,6 +4272,7 @@ async def _reserve_budget_after_common_checks(
                 or user_api_key_auth_obj.billing_agent_policy is not None
             ),
             raw_body=await read_raw_json_body(request=request),
+            path_params=reservation_path_params,
         )
     if request is not None:
         reservation: Final = user_api_key_auth_obj.budget_reservation

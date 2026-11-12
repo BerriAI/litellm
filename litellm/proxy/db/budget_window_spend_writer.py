@@ -18,6 +18,7 @@ from collections.abc import Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from types import TracebackType
 from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import TypeAdapter
@@ -149,7 +150,13 @@ class _UpsertBatch(Protocol):
 class _UpsertBatchManager(Protocol):
     async def __aenter__(self) -> _UpsertBatch: ...
 
-    async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> bool | None: ...
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+        /,
+    ) -> bool | None: ...
 
 
 class _UpsertTransaction(Protocol):
@@ -161,7 +168,13 @@ class _UpsertTransaction(Protocol):
 class _UpsertTransactionManager(Protocol):
     async def __aenter__(self) -> _UpsertTransaction: ...
 
-    async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> bool | None: ...
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+        /,
+    ) -> bool | None: ...
 
 
 def _seed_totals_query(prisma_client: "PrismaClient") -> _SeedTotalsQuery:

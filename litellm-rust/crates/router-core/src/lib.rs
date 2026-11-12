@@ -688,7 +688,7 @@ impl Router {
             entries,
             resolve_secrets,
             |deployment| {
-                working.push_built(deployment.spec.clone(), add)?;
+                working.install_built(deployment.spec.clone(), add, install)?;
                 installed.push(deployment.spec.clone());
                 core.validate_deployment(working.last().expect("just installed"))
                     .map_err(Error::from)
@@ -698,7 +698,7 @@ impl Router {
         if built.is_ok() && replace && path == BuildPath::Create {
             working.set_model_names(model_names);
         }
-        self.serve_built(&base, working, installed, add)?;
+        self.serve_built(&base, working, installed, add, install)?;
         built
     }
 
@@ -710,6 +710,7 @@ impl Router {
         built: Registry,
         installed: Vec<DeploymentSpec>,
         add: bool,
+        install: build::Install,
     ) -> Result<(), ConfigError> {
         let _writer = self.core.writer.lock();
         let current = self.core.snapshot.load_full();
@@ -718,7 +719,7 @@ impl Router {
         } else {
             let mut next = Registry::clone(&current.registry);
             for spec in installed {
-                next.push_built(spec, add)?;
+                next.install_built(spec, add, install)?;
             }
             next
         };
