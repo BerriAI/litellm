@@ -25,7 +25,10 @@ vi.mock("@tanstack/react-pacer/debouncer", async () => {
   };
 });
 
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+vi.mock("next/navigation", () => ({
+  usePathname: () => "/ui/",
+  useRouter: () => ({ push: vi.fn() }),
+}));
 
 vi.mock("../networking", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../networking")>()),
@@ -480,7 +483,10 @@ it.each([
 
 it("clicking the key cell deep-links via ?key=", async () => {
   const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
-  renderWithProviders(<VirtualKeysTable />, { onUrlUpdate });
+  renderWithProviders(<VirtualKeysTable />, {
+    onUrlUpdate,
+    searchParams: { detail_tab: "activity", activity_from: "2026-01-01", activity_to: "2026-01-08" },
+  });
 
   await waitFor(() => {
     expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
@@ -491,12 +497,21 @@ it("clicking the key cell deep-links via ?key=", async () => {
   await waitFor(() => {
     expect(lastKeyParam(onUrlUpdate)).toBe(mockKey.token);
   });
+  expect(Object.fromEntries(onUrlUpdate.mock.calls.at(-1)![0].searchParams)).toEqual({ key: mockKey.token });
   expect(lastHistoryMode(onUrlUpdate)).toBe("push");
 });
 
 it("renders KeyInfoView when the URL has ?key= for a key on the current page, without refetching it", async () => {
   const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
-  renderWithProviders(<VirtualKeysTable />, { searchParams: { key: mockKey.token }, onUrlUpdate });
+  renderWithProviders(<VirtualKeysTable />, {
+    searchParams: {
+      key: mockKey.token,
+      activity_from: "2026-01-01",
+      activity_to: "2026-01-08",
+      filter_user: "user-42",
+    },
+    onUrlUpdate,
+  });
 
   await waitFor(() => {
     expect(screen.getByText("Back to Keys")).toBeInTheDocument();
@@ -509,6 +524,7 @@ it("renders KeyInfoView when the URL has ?key= for a key on the current page, wi
   await waitFor(() => {
     expect(lastKeyParam(onUrlUpdate)).toBeNull();
   });
+  expect(Object.fromEntries(onUrlUpdate.mock.calls.at(-1)![0].searchParams)).toEqual({ filter_user: "user-42" });
   expect(screen.getByTestId("pagination-range")).toBeInTheDocument();
 });
 

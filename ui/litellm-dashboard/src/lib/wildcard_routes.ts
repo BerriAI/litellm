@@ -7,7 +7,7 @@ export type WildcardRoute = { readonly model: string; readonly sourceGroup: stri
 
 // A linear glob scan rather than a RegExp: patterns are admin-controlled model_name values, and a
 // backtracking regex built from one ("a*a*a*...") can freeze another admin's dashboard.
-const matchesWildcard = (pattern: string, name: string): boolean => {
+export const matchesWildcard = (pattern: string, name: string): boolean => {
   const parts = pattern.split("*");
   const head = parts[0];
   const tail = parts[parts.length - 1];

@@ -123,9 +123,17 @@ interface SkillDetailProps {
   accessToken?: string | null;
   onPublishClick?: () => void;
   onEditClick?: () => void;
+  onRestored?: (skill: SkillHubSkill) => void;
 }
 
-const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack, accessToken, onEditClick, isAdmin = false }) => {
+const SkillDetail: React.FC<SkillDetailProps> = ({
+  skill,
+  onBack,
+  accessToken,
+  onEditClick,
+  onRestored,
+  isAdmin = false,
+}) => {
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState("overview");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -256,7 +264,13 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack, accessToken, o
       {/* Overview tab */}
       {visibleTab === "history" && accessToken && (
         <TabsContent value="history">
-          <SkillVersionHistory key={`${skill.id}:${accessToken}`} skill={skill} accessToken={accessToken} />
+          <SkillVersionHistory
+            key={`${skill.id}:${accessToken}:${isAdmin}`}
+            skill={skill}
+            accessToken={accessToken}
+            isAdmin={isAdmin}
+            onRestored={onRestored}
+          />
         </TabsContent>
       )}
       {visibleTab === "overview" && (

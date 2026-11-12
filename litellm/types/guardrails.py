@@ -163,6 +163,7 @@ class SupportedGuardrailIntegrations(Enum):
     AIRIA = "airia"
     WINGBACK = "wingback"
     DECISION_MODEL = "decision_model"
+    COLLIEAI = "collieai"
 
 
 class Role(Enum):

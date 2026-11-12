@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { renderWithProviders } from "../../../../../tests/test-utils";
@@ -33,8 +34,21 @@ vi.mock("@/components/networking", () => ({
 
 // The detail view has its own test; stub it so this file covers the parent's swap.
 vi.mock("./view_users/user_info_view", () => ({
-  default: function UserInfoViewMock({ userId, startInEditMode }: { userId: string; startInEditMode?: boolean }) {
-    return <div data-testid="user-info-view">{`detail:${userId}:${String(Boolean(startInEditMode))}`}</div>;
+  default: function UserInfoViewMock({
+    userId,
+    startInEditMode,
+    onClose,
+  }: {
+    userId: string;
+    startInEditMode?: boolean;
+    onClose: () => void;
+  }) {
+    return (
+      <div data-testid="user-info-view">
+        {`detail:${userId}:${String(Boolean(startInEditMode))}`}
+        <button onClick={onClose}>Close user</button>
+      </div>
+    );
   },
 }));
 
@@ -85,11 +99,15 @@ const defaultProps = {
   teams: [],
 };
 
-const renderDashboard = (overrides: Partial<typeof defaultProps> = {}) =>
+const renderDashboard = (
+  overrides: Partial<typeof defaultProps> = {},
+  options?: { searchParams?: string; onUrlUpdate?: OnUrlUpdateFunction },
+) =>
   renderWithProviders(
     <QueryClientProvider client={createQueryClient()}>
       <ViewUserDashboard {...defaultProps} {...overrides} />
     </QueryClientProvider>,
+    options,
   );
 
 describe("ViewUserDashboard", () => {
@@ -196,7 +214,11 @@ describe("ViewUserDashboard", () => {
 
   it("should swap to the detail view when the identity cell is clicked", async () => {
     const user = userEvent.setup();
-    renderDashboard();
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderDashboard(
+      {},
+      { searchParams: "?detail_tab=activity&activity_from=2026-01-01&activity_to=2026-01-08", onUrlUpdate },
+    );
 
     await waitFor(() => {
       expect(screen.getByText("test@example.com")).toBeInTheDocument();
@@ -206,11 +228,17 @@ describe("ViewUserDashboard", () => {
 
     expect(await screen.findByTestId("user-info-view")).toHaveTextContent("detail:user-1:false");
     expect(screen.queryByText("test@example.com")).not.toBeInTheDocument();
+    await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+    expect(Object.fromEntries(onUrlUpdate.mock.calls.at(-1)![0].searchParams)).toEqual({ user: "user-1" });
   });
 
   it("should open the detail view in edit mode from the row actions menu", async () => {
     const user = userEvent.setup();
-    renderDashboard();
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderDashboard(
+      {},
+      { searchParams: "?detail_tab=activity&activity_from=2026-01-01&activity_to=2026-01-08", onUrlUpdate },
+    );
 
     await waitFor(() => {
       expect(screen.getByText("test@example.com")).toBeInTheDocument();
@@ -220,6 +248,22 @@ describe("ViewUserDashboard", () => {
     await user.click(await screen.findByTestId("user-action-edit"));
 
     expect(await screen.findByTestId("user-info-view")).toHaveTextContent("detail:user-1:true");
+    await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+    expect(Object.fromEntries(onUrlUpdate.mock.calls.at(-1)![0].searchParams)).toEqual({ user: "user-1" });
+  });
+
+  it("closing a user clears its tab and dates while preserving list filters", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderDashboard(
+      {},
+      {
+        searchParams: "?user=user-1&detail_tab=activity&activity_from=2026-01-01&activity_to=2026-01-08&tab=users",
+        onUrlUpdate,
+      },
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Close user" }));
+    await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+    expect(Object.fromEntries(onUrlUpdate.mock.calls.at(-1)![0].searchParams)).toEqual({ tab: "users" });
   });
 
   describe("bulk edit selection", () => {

@@ -8,6 +8,7 @@ should still use the built-in pricing.
 """
 
 import asyncio
+import contextlib
 import copy
 import itertools
 import json
@@ -18,6 +19,7 @@ import queue
 import re
 import sys
 import threading
+from collections.abc import Iterator
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final, cast
@@ -32,8 +34,10 @@ from litellm import Router
 from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE
 from litellm.litellm_core_utils.ptu_pricing import ptu_config_error
 from litellm.litellm_core_utils.llm_cost_calc.utils import SERVICE_TIER_COST_KEY_SUFFIXES
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy.utils import create_model_info_response
+from litellm.router_api import ChangeSet
 from litellm.types.router import (
     Deployment,
     DeploymentTypedDict,
@@ -44,7 +48,7 @@ from litellm.types.router import (
 from litellm.utils import (
     reapply_runtime_model_cost_registrations,
 )
-from litellm.rust_bridge.host.model_cost import publish
+from litellm.litellm_core_utils.model_cost_table import publish
 
 
 _COPILOT_TOKEN_EXPIRES_AT: Final = 4_102_444_800
@@ -630,6 +634,286 @@ def test_pdf_opt_out_on_one_deployment_does_not_block_its_sibling(respx_mock: re
 
         assert route.call_count == 1
         assert json.loads(route.calls[0].request.content)["messages"] == pdf_messages
+    finally:
+        _restore_model_cost_entries(model_keys)
+
+
+@pytest.mark.parametrize(
+    ("catalog_flag", "sibling_flag", "shared_flag"),
+    ((True, False, True), (True, "true", True), (None, True, True)),
+    ids=("false-keeps-catalog-true", "string-keeps-catalog-true", "true-reaches-shared"),
+)
+def test_a_sibling_box_questions_flag_reaches_the_shared_key_only_as_true(
+    catalog_flag: bool | None, sibling_flag: bool | str, shared_flag: bool
+) -> None:
+    backend_model: Final = "perplexity/box-isolation-check"
+    catalog_row: Final = {
+        "litellm_provider": "perplexity",
+        "mode": "evaluation",
+        **({} if catalog_flag is None else {"supports_box_questions": catalog_flag}),
+    }
+    model_keys: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key)) for key in ("unflagged-id", "sibling-id", backend_model)
+    }
+    litellm.model_cost[backend_model] = catalog_row
+    publish(litellm.model_cost)
+    try:
+        Router(
+            model_list=[
+                {
+                    "model_name": "box-isolation",
+                    "litellm_params": {"model": backend_model},
+                    "model_info": {"id": "unflagged-id"},
+                },
+                {
+                    "model_name": "box-isolation",
+                    "litellm_params": {"model": backend_model},
+                    "model_info": {"id": "sibling-id", "supports_box_questions": sibling_flag},
+                },
+            ],
+        )
+
+        assert litellm.supports_box_questions(model=backend_model) is shared_flag
+        assert litellm.model_cost["sibling-id"]["supports_box_questions"] == sibling_flag
+    finally:
+        _restore_model_cost_entries(model_keys)
+
+
+def _box_flag_deployment(
+    backend_model: str, model_id: str, flag: bool | None, custom_llm_provider: str | None = None
+) -> DeploymentTypedDict:
+    return {
+        "model_name": "box-withdraw",
+        "litellm_params": {
+            "model": backend_model,
+            **({} if custom_llm_provider is None else {"custom_llm_provider": custom_llm_provider}),
+        },
+        "model_info": {"id": model_id, **({} if flag is None else {"supports_box_questions": flag})},
+    }
+
+
+@contextlib.contextmanager
+def _live_box_router(backend_model: str, deployments: tuple[tuple[str, bool | None], ...]) -> Iterator[Router]:
+    router: Final = Router(
+        model_list=[_box_flag_deployment(backend_model, model_id, flag) for model_id, flag in deployments]
+    )
+    try:
+        yield router
+    finally:
+        router.retire()
+
+
+@pytest.mark.parametrize(
+    ("catalog_box", "true_sibling_stays", "change", "shared_flag"),
+    (
+        (False, False, "update", False),
+        (False, False, "delete", False),
+        (False, False, "replace", False),
+        (False, True, "update", True),
+        (True, False, "update", True),
+    ),
+    ids=(
+        "update-to-false-clears",
+        "delete-clears",
+        "replace-clears",
+        "another-true-sibling-keeps",
+        "catalog-true-keeps",
+    ),
+)
+def test_a_withdrawn_box_questions_true_leaves_the_shared_key_once_no_sibling_sets_it(
+    catalog_box: bool, true_sibling_stays: bool, change: str, shared_flag: bool
+) -> None:
+    backend_model: Final = (
+        next(
+            key
+            for key, entry in GetModelCostMap.loaded_model_cost_map().items()
+            if entry.get("supports_box_questions") is True
+        )
+        if catalog_box
+        else "perplexity/box-withdraw-check"
+    )
+    deployments: Final = (
+        ("unflagged-id", None),
+        ("sibling-id", True),
+        *((("other-true-id", True),) if true_sibling_stays else ()),
+    )
+    model_keys: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in (*(model_id for model_id, _ in deployments), backend_model)
+    }
+    try:
+        with _live_box_router(backend_model, deployments) as router:
+            assert litellm.supports_box_questions(model=backend_model) is True
+            if change == "replace":
+                router.set_model_list(
+                    [
+                        _box_flag_deployment(backend_model, model_id, flag)
+                        for model_id, flag in deployments
+                        if model_id != "sibling-id"
+                    ]
+                )
+            else:
+                _ = router.apply(
+                    ChangeSet(upsert=[Deployment(**_box_flag_deployment(backend_model, "sibling-id", False))])
+                    if change == "update"
+                    else ChangeSet(delete=["sibling-id"])
+                )
+
+            assert litellm.supports_box_questions(model=backend_model) is shared_flag
+    finally:
+        _restore_model_cost_entries(model_keys)
+
+
+def test_a_failed_set_model_list_takes_back_the_box_questions_true_its_aborted_build_registered() -> None:
+    backend_model: Final = "perplexity/box-withdraw-on-rollback"
+    model_keys: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in ("unflagged-id", "false-id", "aborted-true-id", "unservable-id", backend_model)
+    }
+    unservable: Final = {
+        "model_name": "box-withdraw",
+        "litellm_params": {"model": backend_model, "input_cost_per_token": float("inf")},
+        "model_info": {"id": "unservable-id"},
+    }
+    try:
+        with _live_box_router(backend_model, (("unflagged-id", None), ("false-id", False))) as router:
+            with pytest.raises(ValueError, match="cannot be served"):
+                router.set_model_list(
+                    [
+                        _box_flag_deployment(backend_model, "unflagged-id", None),
+                        _box_flag_deployment(backend_model, "aborted-true-id", True),
+                        unservable,
+                    ]
+                )
+
+            assert sorted(
+                deployment["model_info"]["id"] for deployment in router.registry().deployments("box-withdraw")
+            ) == ["false-id", "unflagged-id"]
+            assert litellm.supports_box_questions(model=backend_model) is False
+    finally:
+        _restore_model_cost_entries(model_keys)
+
+
+def test_a_failed_set_model_list_writes_no_row_for_a_box_questions_true_it_never_built() -> None:
+    backend_model: Final = "perplexity/box-withdraw-on-rollback-served"
+    never_built_model: Final = "perplexity/box-withdraw-never-built"
+    model_keys: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in ("unflagged-id", "unservable-id", "never-built-id", backend_model, never_built_model)
+    }
+    unservable: Final = {
+        "model_name": "box-withdraw",
+        "litellm_params": {"model": backend_model, "input_cost_per_token": float("inf")},
+        "model_info": {"id": "unservable-id"},
+    }
+    try:
+        with _live_box_router(backend_model, (("unflagged-id", None),)) as router:
+            with pytest.raises(ValueError, match="cannot be served"):
+                router.set_model_list([unservable, _box_flag_deployment(never_built_model, "never-built-id", True)])
+
+            assert never_built_model not in litellm.model_cost
+    finally:
+        _restore_model_cost_entries(model_keys)
+
+
+def test_a_failed_set_model_list_takes_back_a_box_questions_true_whose_model_comes_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend_model: Final = "perplexity/box-withdraw-on-rollback-env"
+    monkeypatch.setenv("BOX_WITHDRAW_ROLLBACK_MODEL", backend_model)
+    model_keys: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in ("unflagged-id", "env-true-id", "unservable-id", backend_model)
+    }
+    unservable: Final = {
+        "model_name": "box-withdraw",
+        "litellm_params": {"model": backend_model, "input_cost_per_token": float("inf")},
+        "model_info": {"id": "unservable-id"},
+    }
+    try:
+        with _live_box_router(backend_model, (("unflagged-id", None),)) as router:
+            with pytest.raises(ValueError, match="cannot be served"):
+                router.set_model_list(
+                    [
+                        _box_flag_deployment(backend_model, "unflagged-id", None),
+                        _box_flag_deployment("os.environ/BOX_WITHDRAW_ROLLBACK_MODEL", "env-true-id", True),
+                        unservable,
+                    ]
+                )
+
+            assert litellm.supports_box_questions(model=backend_model) is False
+    finally:
+        _restore_model_cost_entries(model_keys)
+
+
+def test_a_box_questions_true_another_live_router_serves_stays_on_the_shared_key() -> None:
+    backend_model: Final = "perplexity/box-withdraw-across-routers"
+    model_keys: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in ("unflagged-id", "sibling-id", "other-router-id", backend_model)
+    }
+    try:
+        with (
+            _live_box_router(backend_model, (("unflagged-id", None), ("sibling-id", True))) as router,
+            _live_box_router(backend_model, (("other-router-id", True),)) as other_router,
+        ):
+            _ = router.apply(ChangeSet(delete=["sibling-id"]))
+            assert litellm.supports_box_questions(model=backend_model) is True
+
+            _ = other_router.apply(ChangeSet(delete=["other-router-id"]))
+            assert litellm.supports_box_questions(model=backend_model) is False
+    finally:
+        _restore_model_cost_entries(model_keys)
+
+
+@pytest.mark.parametrize("deleted_first", ("ui-true-id", "config-true-id"))
+def test_a_box_questions_true_stays_while_a_sibling_spelled_with_its_provider_still_sets_it(deleted_first: str) -> None:
+    backend_model: Final = next(
+        key
+        for key, entry in GetModelCostMap.loaded_model_cost_map().items()
+        if entry.get("litellm_provider") == "typesafe" and entry.get("supports_box_questions") is not True
+    )
+    model_keys: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in ("unflagged-id", "config-true-id", "ui-true-id", backend_model)
+    }
+    try:
+        with _live_box_router(backend_model, (("unflagged-id", None), ("config-true-id", True))) as router:
+            _ = router.apply(
+                ChangeSet(
+                    upsert=[
+                        Deployment(
+                            **_box_flag_deployment(backend_model, "ui-true-id", True, custom_llm_provider="typesafe")
+                        )
+                    ]
+                )
+            )
+
+            _ = router.apply(ChangeSet(delete=[deleted_first]))
+            assert litellm.supports_box_questions(model=backend_model) is True
+
+            _ = router.apply(ChangeSet(delete=[({"ui-true-id", "config-true-id"} - {deleted_first}).pop()]))
+            assert litellm.supports_box_questions(model=backend_model) is False
+    finally:
+        _restore_model_cost_entries(model_keys)
+
+
+def test_a_retired_router_takes_back_a_box_questions_true_no_live_router_still_sets() -> None:
+    backend_model: Final = "perplexity/box-withdraw-on-retire"
+    model_keys: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in ("unflagged-id", "first-true-id", "second-true-id", backend_model)
+    }
+    try:
+        with _live_box_router(backend_model, (("unflagged-id", None),)):
+            first: Final = Router(model_list=[_box_flag_deployment(backend_model, "first-true-id", True)])
+            second: Final = Router(model_list=[_box_flag_deployment(backend_model, "second-true-id", True)])
+
+            first.retire()
+            assert litellm.supports_box_questions(model=backend_model) is True
+
+            second.retire()
+            assert litellm.supports_box_questions(model=backend_model) is False
     finally:
         _restore_model_cost_entries(model_keys)
 

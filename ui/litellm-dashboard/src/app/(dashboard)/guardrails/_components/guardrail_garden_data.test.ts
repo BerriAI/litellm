@@ -6,6 +6,13 @@ import {
   LITELLM_CONTENT_FILTER_CARDS,
   PARTNER_GUARDRAIL_CARDS,
 } from "./guardrail_garden_data";
+import {
+  getGuardrailLogoAndName,
+  getGuardrailProviders,
+  guardrailLogoMap,
+  populateGuardrailProviderMap,
+  populateGuardrailProviders,
+} from "./guardrail_info_helpers";
 
 const EXPECTED_PARTNER_LOGO_FILES: Record<string, string> = {
   presidio: "microsoft_azure.svg",
@@ -39,6 +46,7 @@ const EXPECTED_PARTNER_LOGO_FILES: Record<string, string> = {
   conduct: "conduct.png",
   wingback: "wingback.png",
   airia: "airia.svg",
+  collieai: "collieai.svg",
 };
 
 describe("guardrail_garden_data logos", () => {
@@ -98,5 +106,28 @@ describe("decision model presets", () => {
       };
       expect(GUARDRAIL_PRESETS[card.id], `card ${card.id}`).toEqual(expectedPreset);
     }
+  });
+});
+
+describe("collieai preset", () => {
+  it("opens the CollieAi card on both halves of the call, off until a request or Always On asks for it", () => {
+    const expectedPreset = {
+      provider: "Collieai",
+      guardrailNameSuggestion: "CollieAi",
+      mode: ["pre_call", "post_call"],
+      defaultOn: false,
+    };
+    expect(GUARDRAIL_PRESETS["collieai"]).toEqual(expectedPreset);
+  });
+
+  it("uses the provider key the proxy's provider list generates, so saved guardrails keep their name and logo", () => {
+    const providerParams = { collieai: { ui_friendly_name: "CollieAi" } };
+    populateGuardrailProviders(providerParams);
+    populateGuardrailProviderMap(providerParams);
+    const provider = GUARDRAIL_PRESETS["collieai"].provider;
+
+    expect(getGuardrailLogoAndName("collieai")).toEqual({ logo: guardrailLogoMap.CollieAi, displayName: "CollieAi" });
+    expect(Object.keys(getGuardrailProviders())).toContain(provider);
+    expect(PARTNER_GUARDRAIL_CARDS.find((card) => card.id === "collieai")?.providerKey).toBe(provider);
   });
 });

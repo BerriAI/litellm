@@ -34,6 +34,16 @@ class _PrismaWriterClientView(Protocol):
     def writer_db(self) -> object: ...
 
 
+class _LedgerWriterClientView(Protocol):
+    @property
+    def writer_db(self) -> LedgerDatabase: ...
+
+
+class _RawQueryWriterClientView(Protocol):
+    @property
+    def writer_db(self) -> LedgerTransaction: ...
+
+
 class PrismaTableRepository(Generic[RowT_co]):
     """Base for repositories that expose a single Prisma table."""
 
@@ -143,7 +153,7 @@ class SpendLogsRepository(PrismaTableRepository["prisma_models.LiteLLM_SpendLogs
         )
         if not ledger:
             return legacy_count
-        database: Final[LedgerDatabase] = self.prisma_client.writer_db
+        database: Final = require_attributes(self._connected_client(), _LedgerWriterClientView, "writer_db").writer_db
         async with database.tx(timeout=timedelta(seconds=60)) as transaction:
             accepted: Final = await self._insert_ledger(transaction, ledger, write_spend_logs=write_spend_logs)
         return legacy_count + accepted
@@ -211,7 +221,7 @@ class SpendLogsRepository(PrismaTableRepository["prisma_models.LiteLLM_SpendLogs
         return frozenset(str(row["request_id"]) for row in rows)
 
     async def has_delivery(self, delivery_id: str) -> bool:
-        database: Final[LedgerTransaction] = self.prisma_client.writer_db
+        database: Final = require_attributes(self._connected_client(), _RawQueryWriterClientView, "writer_db").writer_db
         rows: Final = await database.query_raw(
             'SELECT 1 FROM "LiteLLM_SpendLogDelivery" WHERE delivery_id = $1', delivery_id
         )
@@ -406,6 +416,12 @@ class BackgroundInteractionSettlementRepository(
     PrismaTableRepository["prisma_models.LiteLLM_BackgroundInteractionSettlement"]
 ):
     table_name = "litellm_backgroundinteractionsettlement"
+
+
+class BackgroundResponseSettlementRepository(
+    PrismaTableRepository["prisma_models.LiteLLM_BackgroundResponseSettlement"]
+):
+    table_name = "litellm_backgroundresponsesettlement"
 
 
 class RetiredAgentRepository(PrismaTableRepository["prisma_models.LiteLLM_RetiredAgent"]):
