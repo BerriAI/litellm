@@ -10,6 +10,7 @@ All /vector_store management endpoints
 
 import copy
 import json
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -54,8 +55,16 @@ def _vector_store_table(prisma_client: "PrismaClient") -> "TableActions[_VectorS
     return ManagedVectorStoresRepository(prisma_client).table
 
 
+class _VectorStoreRowFields(TypedDict, total=False, extra_items=object):
+    pass
+
+
+def _dumped_row(row: "_VectorStoreRow") -> Mapping[str, object]:
+    return row.model_dump()
+
+
 def _row_to_vector_store(row: "_VectorStoreRow") -> LiteLLM_ManagedVectorStore:
-    return LiteLLM_ManagedVectorStore(**row.model_dump())
+    return LiteLLM_ManagedVectorStore(**_VectorStoreRowFields(**_dumped_row(row)))
 
 
 class _ConfigOwnedDetail(TypedDict):
@@ -308,9 +317,7 @@ async def new_vector_store(
 
         # Extract and validate metadata
         metadata: Final = vector_store.get("vector_store_metadata")
-        validated_metadata: dict | None = None
-        if metadata is not None and isinstance(metadata, dict):
-            validated_metadata = metadata
+        validated_metadata: Final = metadata if isinstance(metadata, dict) else None
 
         new_vector_store: Final = await create_vector_store_in_db(
             vector_store_id=vector_store_id,
@@ -382,7 +389,6 @@ async def list_vector_stores(
     from litellm.proxy.proxy_server import prisma_client
 
     vector_store_map: Final[dict[str, LiteLLM_ManagedVectorStore]] = {}
-    db_vector_store_ids: Final[set] = set()
 
     try:
         # Get vector stores from database first (source of truth)
@@ -393,7 +399,7 @@ async def list_vector_stores(
             vector_store_id = vector_store.get("vector_store_id", None)
             if vector_store_id:
                 vector_store_map[vector_store_id] = vector_store
-                db_vector_store_ids.add(vector_store_id)
+        db_vector_store_ids: Final = frozenset(vector_store_map)
 
         # Process in-memory vector stores
         if litellm.vector_store_registry is not None:
@@ -647,8 +653,9 @@ async def update_vector_store(
         )
 
         # Handle metadata serialization
-        if update_data.get("vector_store_metadata") is not None:
-            update_data["vector_store_metadata"] = safe_dumps(update_data["vector_store_metadata"])
+        submitted_metadata: Final[object] = update_data.get("vector_store_metadata")
+        if submitted_metadata is not None:
+            update_data["vector_store_metadata"] = safe_dumps(submitted_metadata)
 
         # Handle litellm_params if provided. As with the create path, the
         # embedding-config auto-resolve previously persisted cleartext

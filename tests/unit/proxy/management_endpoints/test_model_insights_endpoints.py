@@ -253,6 +253,7 @@ async def test_model_insights_reads_back_what_the_rollup_wrote() -> None:
         "request_tags": '["task:debugging"]',
         "custom_llm_provider": "openai",
         "status": "success",
+        "request_duration_ms": None,
     }
 
     transactions = (

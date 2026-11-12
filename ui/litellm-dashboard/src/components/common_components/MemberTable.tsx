@@ -9,6 +9,7 @@ import {
   DataTable,
   DataTableFilterDrawer,
   DataTableFilterField,
+  type FilterDraft,
   DataTableSortHeader,
   DataTableToolbar,
   DEFAULT_PAGE_SIZE_OPTIONS,
@@ -317,7 +318,7 @@ export default function MemberTable({
               title={t("memberTable.filters.title")}
               description={t("memberTable.filters.description")}
             >
-              {({ get, set }) => (
+              {({ get, set }: FilterDraft<"role">) => (
                 <DataTableFilterField label={roleTitle}>
                   <Select
                     items={roleFilterItems}

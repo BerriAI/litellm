@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { Command as CommandPrimitive } from "cmdk";
+import i18n from "@/i18n/i18n";
 import { cn } from "@/lib/cva.config";
 
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -22,8 +23,8 @@ function Command({ className, ...props }: React.ComponentProps<typeof CommandPri
 }
 
 function CommandDialog({
-  title = "Command Palette",
-  description = "Search for a command to run...",
+  title = i18n.t("ui.command.title"),
+  description = i18n.t("ui.command.description"),
   children,
   className,
   showCloseButton = false,
@@ -54,10 +55,13 @@ function CommandDialog({
 function CommandInput({ className, ...props }: React.ComponentProps<typeof CommandPrimitive.Input>) {
   return (
     <div data-slot="command-input-wrapper" className="p-1 pb-0">
-      <InputGroup className="h-8! rounded-lg! border-input/30 bg-input/30 shadow-none! *:data-[slot=input-group-addon]:pl-2!">
+      <InputGroup className="h-8! rounded-lg! border-border bg-muted/50 shadow-none! focus-within:border-ring dark:bg-muted/50 *:data-[slot=input-group-addon]:pl-2!">
         <CommandPrimitive.Input
           data-slot="command-input"
-          className={cn("w-full text-sm outline-hidden disabled:cursor-not-allowed disabled:opacity-50", className)}
+          className={cn(
+            "min-w-0 w-full border-0 bg-transparent p-0 text-sm text-foreground shadow-none outline-hidden placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50 dark:bg-transparent",
+            className,
+          )}
           {...props}
         />
         <InputGroupAddon>

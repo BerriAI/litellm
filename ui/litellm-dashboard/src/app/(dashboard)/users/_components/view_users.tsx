@@ -1,4 +1,5 @@
 import { parseAsString, useQueryState } from "nuqs";
+import { useResetDetailState } from "@/hooks/useUrlTab";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -73,6 +74,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   const [selectionMode, setSelectionMode] = useState(false);
   const [isBulkEditModalVisible, setIsBulkEditModalVisible] = useState(false);
 
+  const resetDetailState = useResetDetailState();
   const [selectedUserId, setSelectedUserId] = useQueryState("user", parseAsString.withOptions({ history: "push" }));
   const [openInEditMode, setOpenInEditMode] = useState(false);
 
@@ -140,16 +142,18 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
 
   const handleUserClick = useCallback(
     (userId: string, openInEdit: boolean = false) => {
+      resetDetailState();
       void setSelectedUserId(userId);
       setOpenInEditMode(openInEdit);
     },
-    [setSelectedUserId],
+    [setSelectedUserId, resetDetailState],
   );
 
   const handleCloseUserInfo = useCallback(() => {
+    resetDetailState();
     void setSelectedUserId(null);
     setOpenInEditMode(false);
-  }, [setSelectedUserId]);
+  }, [setSelectedUserId, resetDetailState]);
 
   const handleDelete = useCallback((user: UserInfo) => {
     setUserToDelete(user);

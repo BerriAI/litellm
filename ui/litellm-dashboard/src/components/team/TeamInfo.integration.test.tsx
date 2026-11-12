@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
 import { toast } from "@/lib/toast";
-import type { Team } from "../key_team_helpers/key_list";
+import type { KeyResponse, Team } from "../key_team_helpers/key_list";
 import { MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES } from "./memberBudgetReset";
 import TeamInfoView, { type TeamData } from "./TeamInfo";
 
@@ -24,11 +24,12 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   }),
 }));
 
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }), usePathname: () => "/ui/alerts" }));
 
 vi.mock("@/components/networking", () => ({
   serverRootPath: "",
   teamInfoCall: vi.fn(),
+  teamListCall: vi.fn().mockResolvedValue([]),
   teamMemberDeleteCall: vi.fn(),
   teamMemberAddCall: vi.fn(),
   teamMemberUpdateCall: vi.fn(),
@@ -427,6 +428,70 @@ describe("TeamInfoView - member budget reset prompt", () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  it.each([
+    ["members", "Members", true],
+    ["member-permissions", "Member Permissions", true],
+    ["settings", "Settings", true],
+    ["settings", "Settings", false],
+  ])("opens %s only when loaded team permissions allow it (%s, %s)", async (tab, label, allowed) => {
+    const response = Promise.withResolvers<TeamData>();
+    vi.mocked(networking.teamInfoCall).mockReturnValue(response.promise);
+    renderWithProviders(<TeamInfoView {...props} is_team_admin={false} is_proxy_admin={false} />, {
+      searchParams: { detail_tab: tab },
+    });
+
+    expect(screen.queryByRole("tab", { name: label })).not.toBeInTheDocument();
+    await waitFor(() => expect(networking.teamInfoCall).toHaveBeenCalled());
+    response.resolve(
+      createMockTeamData({
+        caller_edit_access: allowed ? { kind: "team_admin", editable_fields: [] } : { kind: "none" },
+      }) as TeamData,
+    );
+
+    expect(await screen.findByRole("tab", { name: allowed ? label : "Overview" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    if (!allowed) expect(screen.queryByRole("tab", { name: label })).not.toBeInTheDocument();
+  });
+
+  it("keeps a team's key visible while switching its tabs and returning to the key list", async () => {
+    const user = userEvent.setup({ delay: null });
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData() as TeamData);
+    mockUseKeys.mockReturnValue({
+      data: {
+        keys: [
+          {
+            token: "example-key",
+            token_id: "example-key",
+            key_alias: "Research agent",
+            team_id: "123",
+            models: [],
+            metadata: {},
+            spend: 0,
+            max_budget: 100,
+          } as KeyResponse,
+        ],
+        total_count: 1,
+        current_page: 1,
+        total_pages: 1,
+      },
+      isPending: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as ReturnType<typeof useKeys>);
+    renderWithProviders(<TeamInfoView {...props} />, { searchParams: { detail_tab: "virtual-keys" } });
+
+    await user.click(await screen.findByRole("button", { name: "example-key" }));
+    expect(await screen.findByRole("button", { name: "Back to Keys" })).toBeInTheDocument();
+    const keyPanel = screen.getByRole("tabpanel", { name: "Virtual Keys" });
+    await user.click(within(keyPanel).getByRole("tab", { name: "Settings" }));
+    expect(screen.getByRole("tab", { name: "Virtual Keys" })).toHaveAttribute("aria-selected", "true");
+    expect(within(keyPanel).getByRole("tab", { name: "Settings" })).toHaveAttribute("aria-selected", "true");
+    await user.click(screen.getByRole("button", { name: "Back to Keys" }));
+    expect(await screen.findByRole("button", { name: "example-key" })).toBeInTheDocument();
   });
 
   it("holds the save behind the prompt when the default changes while a member has a custom budget", async () => {
@@ -830,6 +895,21 @@ describe("TeamInfoView - model settings", () => {
 
   beforeEach(() => {
     seedDefaultMocks();
+  });
+
+  it("submits the prompt storage restriction in team metadata", async () => {
+    const user = userEvent.setup({ delay: null });
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData({ models: [] }));
+    renderWithProviders(<TeamInfoView {...props} userModels={["gpt-4"]} />);
+    await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    fireEvent.click(screen.getByRole("switch", { name: "Store prompts in spend logs" }));
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalled());
+    expect(vi.mocked(networking.teamUpdateCall).mock.calls[0][1]).toEqual(
+      expect.objectContaining({ metadata: expect.objectContaining({ store_prompts_in_spend_logs: false }) }),
+    );
   });
 
   afterEach(() => {

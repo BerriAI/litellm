@@ -3,12 +3,14 @@ use litellm_host::lifecycle::ExecutionEvent;
 use std::sync::Mutex;
 
 use litellm_host::{
-    interceptors::{ExecutionFacts, RequestContext, ResultSource, WireRequest},
+    interceptors::{ExecutionFacts, RawResponse, RequestContext, ResultSource, WireRequest},
     lifecycle::CallEvent,
 };
-use litellm_inference_messages::{MessagesCallResponse, route::Messages};
+use litellm_inference_messages::{MessagesBody, MessagesCallResponse, route::Messages};
 use litellm_inference_testing::{RecordingSecrets, no_secrets};
-use litellm_llms::base_llm::messages::context::MessagesModelCapabilities as AnthropicModelCapabilities;
+use litellm_llms::base_llm::messages::context::{
+    MessagesModelCapabilities as AnthropicModelCapabilities, SupportedEffortTiers,
+};
 use rstest::rstest;
 
 use super::*;
@@ -44,18 +46,22 @@ impl RecordingHost {
         Self::new(call, Box::new(Ok))
     }
 
-    fn raw_responses(&self) -> Vec<String> {
+    fn raw_heads(&self) -> Vec<RawResponse> {
         self.events
             .lock()
             .unwrap()
             .iter()
             .filter_map(|event| match event {
                 CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { raw }) => {
-                    Some(raw.body.clone())
+                    Some(raw.clone())
                 }
                 _ => None,
             })
             .collect()
+    }
+
+    fn raw_responses(&self) -> Vec<String> {
+        self.raw_heads().into_iter().map(|raw| raw.body).collect()
     }
 }
 
@@ -135,7 +141,7 @@ async fn rejected_results_are_not_delivered_or_cached(
 
     let response = if streaming {
         ResponseTemplate::new(200).set_body_raw(
-            "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+            "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hi\"}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
             "text/event-stream",
         )
     } else {
@@ -289,22 +295,23 @@ async fn what_before_send_returns_is_what_the_provider_receives(call: MessagesCa
 }
 
 #[rstest]
-#[case::enable(false, json!(true), Some(true))]
-#[case::disable(true, json!(false), Some(false))]
-#[case::null(true, Value::Null, Some(false))]
-#[case::invalid(false, json!("true"), None)]
+#[case::enable(false, json!(true), true)]
+#[case::disable(true, json!(false), false)]
+#[case::null(true, Value::Null, false)]
+#[case::truthy_string(false, json!("false"), true)]
+#[case::falsy_integer(true, json!(0), false)]
 #[tokio::test]
 async fn response_mode_follows_the_intercepted_request(
     call: MessagesCall,
     traces: TraceCapture,
     #[case] original_stream: bool,
     #[case] rewritten_stream: Value,
-    #[case] expected_stream: Option<bool>,
+    #[case] expected_stream: bool,
 ) {
     use futures_util::TryStreamExt;
 
     let sse = "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
-    let response = if expected_stream == Some(true) {
+    let response = if expected_stream {
         ResponseTemplate::new(200).set_body_raw(sse, "text/event-stream")
     } else {
         message_response()
@@ -330,15 +337,18 @@ async fn response_mode_follows_the_intercepted_request(
                 .await?;
             match output {
                 MessagesCallResponse::Stream { chunks, .. } => {
-                    assert_eq!(expected_stream, Some(true));
+                    assert!(expected_stream);
                     assert_eq!(
                         chunks.try_collect::<Vec<_>>().await?.concat(),
                         sse.as_bytes()
                     );
                 }
                 MessagesCallResponse::Complete(message) => {
-                    assert_eq!(expected_stream, Some(false));
-                    assert_eq!(*message, serde_json::from_value(message_body()).unwrap());
+                    assert!(!expected_stream);
+                    assert_eq!(
+                        message,
+                        MessagesBody::Message(serde_json::from_value(message_body()).unwrap())
+                    );
                 }
             }
             Ok::<_, Error>(())
@@ -347,18 +357,12 @@ async fn response_mode_follows_the_intercepted_request(
 
     let summaries = traces.summaries("litellm.route");
     assert_eq!(summaries.len(), 1);
-    let Some(expected_stream) = expected_stream else {
-        assert!(result.unwrap_err().is_request());
-        assert!(received(&upstream).await.is_empty());
-        assert_eq!(summaries[0]["outcome"], "failure");
-        return;
-    };
     result.unwrap();
     assert_eq!(
         only_request(&upstream).await.json()["stream"],
         rewritten_stream
     );
-    assert_eq!(host.raw_responses().len(), usize::from(!expected_stream));
+    assert_eq!(host.raw_responses().len(), 1);
     assert_eq!(summaries[0]["stream"], expected_stream);
     assert_eq!(summaries[0]["outcome"], "success");
 }
@@ -400,14 +404,9 @@ async fn the_raw_upstream_text_is_emitted_once_for_a_message(call: MessagesCall)
 }
 
 #[rstest]
-#[case::upstream_error(ResponseTemplate::new(500).set_body_string("boom"))]
-#[case::stream(ResponseTemplate::new(200).set_body_raw("event: message_stop\ndata: {}\n\n", "text/event-stream"))]
 #[tokio::test]
-async fn no_raw_response_is_emitted_for_a_stream_or_a_failure(
-    call: MessagesCall,
-    #[case] response: ResponseTemplate,
-) {
-    let upstream = upstream([response]).await;
+async fn no_raw_response_is_emitted_for_a_failure(call: MessagesCall) {
+    let upstream = upstream([ResponseTemplate::new(500).set_body_string("boom")]).await;
     let host = RecordingHost::passthrough(authenticated(
         with_fields(call, json!({"stream": true})),
         upstream.uri(),
@@ -419,7 +418,33 @@ async fn no_raw_response_is_emitted_for_a_stream_or_a_failure(
     assert!(host.raw_responses().is_empty());
 }
 
-/// Python logs `optional_params` as what it is about to send, so a dropped param must
+#[rstest]
+#[tokio::test]
+async fn a_stream_emits_its_head_without_a_body_before_any_chunk(call: MessagesCall) {
+    let upstream = upstream([ResponseTemplate::new(200)
+        .insert_header("request-id", "req_stream")
+        .set_body_raw("event: message_stop\ndata: {}\n\n", "text/event-stream")])
+    .await;
+    let host = RecordingHost::passthrough(authenticated(
+        with_fields(call, json!({"stream": true})),
+        upstream.uri(),
+    ));
+
+    let _ = run_through(&host).await;
+
+    let [raw] = <[RawResponse; 1]>::try_from(host.raw_heads())
+        .unwrap_or_else(|raws| panic!("expected one raw response, got {}", raws.len()));
+    assert_eq!(raw.body, "");
+    let head = raw.head.expect("the stream's head is forwarded");
+    assert_eq!(head.status, 200);
+    assert!(
+        head.headers
+            .iter()
+            .any(|(name, value)| name == "request-id" && value == "req_stream")
+    );
+}
+
+/// Python logs `optional_params` after its requested-param gate, so a dropped param must
 /// not resurface in callbacks.
 #[rstest]
 #[tokio::test]
@@ -449,4 +474,210 @@ async fn the_request_context_carries_the_shaped_params_without_model_or_messages
     let [optional_params] = <[Value; 1]>::try_from(host.optional_params.into_inner().unwrap())
         .unwrap_or_else(|seen| panic!("before_provider_request runs once, saw {}", seen.len()));
     assert_eq!(optional_params, json!({"max_tokens": 16}));
+}
+
+#[rstest]
+#[tokio::test]
+async fn the_request_context_keeps_the_nested_fields_additional_drop_params_strip(
+    call: MessagesCall,
+) {
+    let upstream = upstream([message_response()]).await;
+    let tool = json!({"name": "lookup", "input_schema": {"type": "object"}, "input_examples": [{"q": "x"}]});
+    let host = RecordingHost::passthrough(authenticated(
+        MessagesCall {
+            shaping: MessagesShaping {
+                settings: MessagesSettings {
+                    additional_drop_params: vec!["tools[*].input_examples".into()],
+                    ..MessagesSettings::default()
+                },
+                ..MessagesShaping::default()
+            },
+            ..with_fields(call, json!({"tools": [tool.clone()]}))
+        },
+        upstream.uri(),
+    ));
+
+    run_through(&host).await.expect("messages call succeeds");
+
+    let [optional_params] = <[Value; 1]>::try_from(host.optional_params.into_inner().unwrap())
+        .unwrap_or_else(|seen| panic!("before_provider_request runs once, saw {}", seen.len()));
+    assert_eq!(optional_params["tools"], json!([tool]));
+    assert_eq!(
+        only_request(&upstream).await.json()["tools"][0].get("input_examples"),
+        None
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn the_request_context_leaves_out_a_listed_param_the_model_refuses(call: MessagesCall) {
+    let upstream = upstream([message_response()]).await;
+    let host = RecordingHost::passthrough(authenticated(
+        MessagesCall {
+            shaping: MessagesShaping {
+                settings: MessagesSettings {
+                    additional_drop_params: vec!["temperature".into()],
+                    ..MessagesSettings::default()
+                },
+                capabilities: AnthropicModelCapabilities {
+                    supports_sampling_params: false,
+                    ..AnthropicModelCapabilities::default()
+                },
+            },
+            ..with_fields(call, json!({"temperature": 0.2}))
+        },
+        upstream.uri(),
+    ));
+
+    run_through(&host).await.expect("messages call succeeds");
+
+    let [optional_params] = <[Value; 1]>::try_from(host.optional_params.into_inner().unwrap())
+        .unwrap_or_else(|seen| panic!("before_provider_request runs once, saw {}", seen.len()));
+    assert_eq!(optional_params, json!({"max_tokens": 16}));
+}
+
+#[rstest]
+#[case::reasoning_effort_on_an_adaptive_model(
+    AnthropicModelCapabilities {
+        supports_reasoning: true,
+        supports_adaptive_thinking: true,
+        supports_output_config: true,
+        effort_tiers: SupportedEffortTiers { low: true, ..SupportedEffortTiers::default() },
+        ..AnthropicModelCapabilities::default()
+    },
+    json!({"reasoning_effort": "low"})
+)]
+#[case::adaptive_payload_on_a_legacy_model(
+    AnthropicModelCapabilities {
+        supports_reasoning: true,
+        ..AnthropicModelCapabilities::default()
+    },
+    json!({"max_tokens": 3000, "thinking": {"type": "adaptive"}, "output_config": {"effort": "high"}})
+)]
+#[tokio::test]
+async fn the_request_context_carries_the_requested_reasoning_not_its_translation(
+    call: MessagesCall,
+    #[case] capabilities: AnthropicModelCapabilities,
+    #[case] fields: Value,
+) {
+    let upstream = upstream([message_response()]).await;
+    let host = RecordingHost::passthrough(authenticated(
+        MessagesCall {
+            shaping: MessagesShaping {
+                capabilities,
+                ..MessagesShaping::default()
+            },
+            ..with_fields(call, fields.clone())
+        },
+        upstream.uri(),
+    ));
+
+    run_through(&host).await.expect("messages call succeeds");
+
+    let [optional_params] = <[Value; 1]>::try_from(host.optional_params.into_inner().unwrap())
+        .unwrap_or_else(|seen| panic!("before_provider_request runs once, saw {}", seen.len()));
+    assert_eq!(
+        optional_params,
+        Value::Object(
+            object(json!({"max_tokens": 16}))
+                .into_iter()
+                .chain(object(fields))
+                .collect()
+        )
+    );
+}
+
+#[derive(Default)]
+struct RecordingAnswer(Mutex<Vec<bool>>);
+
+impl litellm_inference_messages::HostAnswer for RecordingAnswer {
+    fn answer(&self, stream: bool) -> futures_util::future::BoxFuture<'_, Result<(), Error>> {
+        self.0.lock().unwrap().push(stream);
+        Box::pin(async { Ok(()) })
+    }
+}
+
+#[rstest]
+#[case::unary(false)]
+#[case::stream(true)]
+#[tokio::test]
+async fn an_intercepted_call_is_answered_by_the_host_before_the_mock_and_the_provider(
+    call: MessagesCall,
+    #[case] streaming: bool,
+) {
+    let upstream = upstream([message_response()]).await;
+    let answer = Arc::new(RecordingAnswer::default());
+    let route = messages_route(no_secrets()).with_host_answer(answer.clone());
+    let mut request = authenticated(
+        with_fields(call, json!({"stream": streaming})),
+        upstream.uri(),
+    );
+    request.shaping.settings.intercepted = true;
+    request.shaping.settings.mock_response = Some(object(json!({"id": "mocked"})));
+    let host = RecordingHost::passthrough(request);
+
+    let output = route
+        .execute(host.request().unwrap(), &host, None)
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        output,
+        MessagesCallResponse::Complete(MessagesBody::Unchecked(body)) if body.is_empty()
+    ));
+    assert_eq!(*answer.0.lock().unwrap(), vec![streaming]);
+    assert!(received(&upstream).await.is_empty());
+    let facts = host.facts.lock().unwrap();
+    assert_eq!(facts.len(), 1);
+    assert_eq!(facts[0].source, ResultSource::Host);
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_call_no_interceptor_owns_never_asks_the_host(call: MessagesCall) {
+    let upstream = upstream([message_response()]).await;
+    let answer = Arc::new(RecordingAnswer::default());
+    let route = messages_route(no_secrets()).with_host_answer(answer.clone());
+    let host = RecordingHost::passthrough(authenticated(call, upstream.uri()));
+
+    route
+        .execute(host.request().unwrap(), &host, None)
+        .await
+        .unwrap();
+
+    assert!(answer.0.lock().unwrap().is_empty());
+    assert_eq!(received(&upstream).await.len(), 1);
+}
+
+#[derive(Default)]
+struct DecliningAnswer(Mutex<Vec<bool>>);
+
+impl litellm_inference_messages::HostAnswer for DecliningAnswer {
+    fn answer(&self, _stream: bool) -> futures_util::future::BoxFuture<'_, Result<(), Error>> {
+        panic!("a declined interception never asks for an answer")
+    }
+
+    fn intercept(&self, stream: bool) -> futures_util::future::BoxFuture<'_, Result<bool, Error>> {
+        self.0.lock().unwrap().push(stream);
+        Box::pin(async { Ok(false) })
+    }
+}
+
+#[rstest]
+#[tokio::test]
+async fn an_interception_no_interceptor_takes_reaches_the_provider(call: MessagesCall) {
+    let upstream = upstream([message_response()]).await;
+    let answer = Arc::new(DecliningAnswer::default());
+    let route = messages_route(no_secrets()).with_host_answer(answer.clone());
+    let mut request = authenticated(call, upstream.uri());
+    request.shaping.settings.intercepted = true;
+    let host = RecordingHost::passthrough(request);
+
+    route
+        .execute(host.request().unwrap(), &host, None)
+        .await
+        .unwrap();
+
+    assert_eq!(*answer.0.lock().unwrap(), vec![false]);
+    assert_eq!(received(&upstream).await.len(), 1);
 }

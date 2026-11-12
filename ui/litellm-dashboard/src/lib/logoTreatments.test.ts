@@ -14,6 +14,7 @@ describe("logoTreatmentFor", () => {
 
   it("marks a multicolor dark mark for a plate instead of inversion", () => {
     expect(logoTreatmentFor("/ui/assets/logos/fireworks.svg")).toBe("plate");
+    expect(logoTreatmentFor("/ui/assets/logos/collieai.svg")).toBe("plate");
   });
 
   it("plates a dark mark with a light knockout, which inversion would flatten away", () => {

@@ -1,5 +1,5 @@
 use litellm_http::request::{with_header, without_headers};
-use litellm_llms_types::providers::anthropic::{BETA_HEADER, BetaProvider, BetaSet};
+use litellm_llms_types::providers::anthropic::{AnthropicBeta, BETA_HEADER, BetaProvider, BetaSet};
 
 use crate::{anthropic::common_utils::existing_betas, base_llm::auth::Headers};
 
@@ -31,6 +31,16 @@ impl BetaPolicy {
         }
         with_header(headers, BETA_HEADER, accepted.to_string())
     }
+}
+
+pub fn accepted_or_unlisted(betas: BetaSet, provider: BetaProvider) -> BetaSet {
+    betas
+        .into_iter()
+        .filter_map(|beta| match beta {
+            AnthropicBeta::Other(_) => Some(beta),
+            known => known.on(provider),
+        })
+        .collect()
 }
 
 #[cfg(test)]

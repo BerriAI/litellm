@@ -18,7 +18,7 @@ from collections.abc import Iterator, Mapping
 from typing import Final, NamedTuple
 
 GATED_METHODS: Final = frozenset({"post"})
-SCHEMA_MEDIA_TYPES: Final = ("application/json", "application/sdp")
+SCHEMA_MEDIA_TYPES: Final = ("application/json", "application/sdp", "multipart/form-data")
 
 
 class Violation(NamedTuple):

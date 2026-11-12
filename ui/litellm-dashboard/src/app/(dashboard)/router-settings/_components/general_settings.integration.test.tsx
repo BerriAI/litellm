@@ -310,12 +310,12 @@ it("keeps a new baggage mapping unsaved until every field the backend requires i
     name: "Update",
   });
   expect(update).toBeDisabled();
-  fireEvent.change(screen.getByLabelText("Mapping 1 baggage key"), { target: { value: "entrypoint" } });
+  fireEvent.change(screen.getByLabelText("Mapping 1 baggage key"), { target: { value: "service" } });
   fireEvent.change(screen.getByLabelText("Mapping 1 match value"), { target: { value: "a" } });
   expect(update).toBeDisabled();
-  fireEvent.change(screen.getByLabelText("Mapping 1 tag"), { target: { value: "usecase:support" } });
+  fireEvent.change(screen.getByLabelText("Mapping 1 tag"), { target: { value: "app:support" } });
   await user.click(update);
   expect(vi.mocked(updateConfigFieldSetting).mock.calls).toEqual([
-    ["token", "request_tag_mappings", [{ header: "baggage", key: "entrypoint", value: "a", tag: "usecase:support" }]],
+    ["token", "request_tag_mappings", [{ header: "baggage", key: "service", value: "a", tag: "app:support" }]],
   ]);
 });
