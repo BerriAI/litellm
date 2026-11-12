@@ -772,32 +772,17 @@ class ResetBudgetJob:
     async def _closing_windows(
         self, budgets_to_reset: Sequence[LiteLLM_BudgetTableFull], now: datetime
     ) -> Mapping[str, datetime]:
-        """The window each tier closes, which its end-user resets stamp. A tier
-        with no reset time gets one pinned before any page commits, so the retry
-        after a failed window advance reads back the same window. A pin later
-        than ours means another sweep already pinned or advanced the tier, so
-        the tier is left out and this sweep resets nothing for it."""
-        pin_at: Final = now.replace(microsecond=now.microsecond - now.microsecond % 1000)
-        unset: Final = tuple(
-            b.budget_id for b in budgets_to_reset if b.budget_id is not None and b.budget_reset_at is None
-        )
-        pinned: Final[Mapping[str, datetime]] = (
-            await self._with_db_retry(
-                lambda: BudgetRepository(self.prisma_client).pin_unset_reset_times(unset, at=pin_at),
-                reason="reset_budget_pin_windows_failure",
-            )
-            if unset
-            else MappingProxyType({})
-        )
-        return MappingProxyType(
-            {
-                **{
-                    b.budget_id: b.budget_reset_at
-                    for b in budgets_to_reset
-                    if b.budget_id is not None and b.budget_reset_at is not None
-                },
-                **{budget_id: window for budget_id, window in pinned.items() if window <= pin_at},
-            }
+        """The window each tier closes, which its end-user resets stamp, named by
+        the tier's last write. A failed window advance leaves that write in
+        place, so the retry skips the end users already reset, while the advance
+        or an admin edit of the tier opens a new window. A tier another sweep
+        advanced since the read is no longer due on the writer and is left out."""
+        budget_ids: Final = tuple(b.budget_id for b in budgets_to_reset if b.budget_id is not None)
+        if not budget_ids:
+            return MappingProxyType({})
+        return await self._with_db_retry(
+            lambda: BudgetRepository(self.prisma_client).due_tier_versions(budget_ids, due_before=now),
+            reason="reset_budget_read_windows_failure",
         )
 
     async def _fetch_enduser_page(self, where: Mapping[str, object], cursor: str) -> tuple[_EndUserRow, ...]:
@@ -816,8 +801,7 @@ class ResetBudgetJob:
     async def _collect_budget_cascade(
         self, budgets_to_reset: Sequence[LiteLLM_BudgetTableFull], now: datetime
     ) -> _BudgetCascade:
-        """Pin a reset time on the expiring tiers that have none, then resolve
-        every row the tiers that still have a window gate, before any other write.
+        """Resolve every row the tiers still due on the writer gate, before any write.
 
         Keys carrying their own budget_duration are left out: they run on their
         own schedule via reset_budget_for_litellm_keys(), so sweeping them here
