@@ -3828,3 +3828,71 @@ async def test_stream_ends_without_waiting_for_served_output_and_logging_still_s
 
     assert served == events
     assert await asyncio.wait_for(served_texts_seen_by_logging, timeout=5) == ("final answer",)
+
+
+@pytest.mark.asyncio
+async def test_streams_wait_for_their_served_output_once_background_rebuilds_hit_the_cap(monkeypatch):
+    from litellm.caching.caching import DualCache
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.litellm_core_utils.served_output_texts import SERVED_OUTPUT_TEXTS_KEY
+    from litellm.litellm_core_utils.token_counter import _count_offload_limiter_for_this_loop
+    from litellm.proxy.utils import _MAX_BACKGROUND_SERVED_OUTPUT_REBUILDS, ProxyLogging
+
+    class PassThroughIterator(CustomLogger):
+        async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
+            async for chunk in response:
+                yield chunk
+
+    monkeypatch.setattr(litellm, "callbacks", [PassThroughIterator()])
+    proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+    events: Final = _anthropic_thinking_sse(1)
+    logging_objs: Final = tuple(
+        Logging(
+            model="claude-sonnet-4-5",
+            messages=[],
+            stream=True,
+            call_type="anthropic_messages",
+            start_time=datetime.now(),
+            litellm_call_id=f"served-output-cap-{index}",
+            function_id=f"served-output-cap-{index}",
+        )
+        for index in range(_MAX_BACKGROUND_SERVED_OUTPUT_REBUILDS + 1)
+    )
+
+    async def upstream():
+        for event in events:
+            yield event
+
+    async def drain(logging_obj: Logging) -> list[object]:
+        return [
+            chunk
+            async for chunk in proxy_logging.async_post_call_streaming_iterator_hook(
+                response=upstream(),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-1", request_route="/v1/messages"),
+                request_data={"model": "claude-sonnet-4-5", "litellm_logging_obj": logging_obj},
+            )
+        ]
+
+    offload_limiter: Final = _count_offload_limiter_for_this_loop()
+    holders: Final = tuple(object() for _ in range(int(offload_limiter.total_tokens)))
+    for holder in holders:
+        await offload_limiter.acquire_on_behalf_of(holder)
+
+    for logging_obj in logging_objs[:-1]:
+        assert await asyncio.wait_for(drain(logging_obj), timeout=5) == events
+    over_cap: Final = asyncio.ensure_future(drain(logging_objs[-1]))
+    await asyncio.sleep(0.2)
+    over_cap_waited: Final = not over_cap.done()
+
+    for holder in holders:
+        offload_limiter.release_on_behalf_of(holder)
+
+    assert over_cap_waited
+    assert await asyncio.wait_for(over_cap, timeout=5) == events
+
+    async def every_stream_recorded() -> None:
+        while any(SERVED_OUTPUT_TEXTS_KEY not in obj.model_call_details for obj in logging_objs):
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(every_stream_recorded(), timeout=10)

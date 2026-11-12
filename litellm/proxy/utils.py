@@ -368,6 +368,7 @@ class _TeamMembershipRow(TypedDict):
 
 
 _ROOTED_STREAM_LOGGING_TASKS: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: strong refs keep tasks alive
+_MAX_BACKGROUND_SERVED_OUTPUT_REBUILDS: Final = 64
 _VIEW_SETUP_POLL_INTERVAL_SECONDS: Final = 5.0
 _VIEW_SETUP_DEADLINE_SECONDS: Final = 15 * 60.0
 _VIEW_SETUP_GATE_TABLE: Final = '"LiteLLM_SpendLogs"'
@@ -4980,7 +4981,12 @@ class ProxyLogging:
         # completed.  unified_guardrail writes guardrail_information during
         # its end-of-stream block (inside current_response), so by the time
         # we reach this point the metadata is fully populated.
-        # Rebuilding the served output only feeds logging, so it runs after the stream closes.
+        # Rebuilding the served output only feeds logging, so it runs after the stream closes,
+        # unless enough rebuilds are already pending that this stream should wait like it used to.
+        if len(_ROOTED_STREAM_LOGGING_TASKS) >= _MAX_BACKGROUND_SERVED_OUTPUT_REBUILDS:
+            await ProxyLogging._record_served_stream_output(request_data, served_chunks)
+            ProxyLogging.fire_deferred_stream_logging(request_data)
+            return
         ProxyLogging._spawn_rooted(
             ProxyLogging._log_served_stream(
                 request_data, served_chunks, ProxyLogging._take_deferred_stream_logging(request_data)
