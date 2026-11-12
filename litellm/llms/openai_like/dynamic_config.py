@@ -44,12 +44,16 @@ def web_search_requests_from_tool_usage(payload: object) -> int | None:
 
 
 def _function_calling_disabled(model: str, provider: SimpleProviderConfig) -> bool:
-    from litellm.utils import is_explicitly_disabled_factory, supports_function_calling
+    from litellm.utils import has_catalog_entry, is_explicitly_disabled_factory, supports_function_calling
 
     if supports_function_calling(model=model, custom_llm_provider=provider.slug):
         return False
-    return provider.provider_info.get("supports_function_calling") is False or is_explicitly_disabled_factory(
-        model=model, custom_llm_provider=provider.slug, key="supports_function_calling"
+    return (
+        has_catalog_entry(model, provider.slug)
+        or provider.provider_info.get("supports_function_calling") is False
+        or is_explicitly_disabled_factory(
+            model=model, custom_llm_provider=provider.slug, key="supports_function_calling"
+        )
     )
 
 
@@ -138,8 +142,8 @@ def create_config_class(provider: SimpleProviderConfig):
             raise ValueError(f"api_base is required for provider {provider.slug}")
 
         def get_supported_openai_params(self, model: str) -> list:
-            """Get supported OpenAI params, excluding tool-related params for models
-            the model map, or failing that the provider, marks as not supporting function calling."""
+            """Get supported OpenAI params, excluding tool-related params for models known not to support
+            function calling."""
             from litellm.utils import supports_reasoning
 
             supported_params: Final = super().get_supported_openai_params(model=model)

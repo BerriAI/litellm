@@ -1,8 +1,10 @@
+import json
 from typing import Final
 
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap, install_model_cost_map
 from litellm.llms.openai_like import dynamic_config
 from litellm.llms.openai_like.dynamic_config import create_config_class, create_responses_config_class
 from litellm.llms.openai_like.json_loader import SimpleProviderConfig
@@ -192,6 +194,30 @@ class TestToolParamsFollowTheModelMap:
             non_default_params={"tools": self._TOOLS, "tool_choice": "auto"},
             optional_params={},
             model="some-model",
+            drop_params=True,
+        )
+
+        assert ("tools" in optional_params) is tools_forwarded
+        assert ("tool_choice" in optional_params) is tools_forwarded
+
+    @pytest.mark.parametrize(("shipped", "tools_forwarded"), [(True, False), (False, True)], ids=["shipped", "registered"])
+    def test_a_row_that_leaves_function_calling_unset_drops_tools_only_when_shipped(
+        self, shipped: bool, tools_forwarded: bool, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        row: Final = {"litellm_provider": "tools_map", "mode": "chat"}
+        if shipped:
+            monkeypatch.setattr(litellm, "model_cost", litellm.model_cost)
+            install_model_cost_map(
+                json.dumps({**GetModelCostMap.load_local_model_cost_map(), "tools_map/row-model": row}).encode()
+            )
+        else:
+            monkeypatch.setitem(litellm.model_cost, "tools_map/row-model", row)
+        config: Final = create_config_class(_provider("tools_map"))()
+
+        optional_params: Final = config.map_openai_params(
+            non_default_params={"tools": self._TOOLS, "tool_choice": "auto"},
+            optional_params={},
+            model="row-model",
             drop_params=True,
         )
 

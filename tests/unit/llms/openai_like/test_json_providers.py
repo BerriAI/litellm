@@ -93,7 +93,7 @@ class TestJSONProviderLoader:
         assert isinstance(supported, list)
         assert len(supported) > 0
 
-    def test_tool_params_excluded_when_function_calling_not_supported(self, monkeypatch):
+    def test_tool_params_excluded_when_function_calling_not_supported(self, monkeypatch: "pytest.MonkeyPatch") -> None:
         """Test that tool-related params are excluded for models the model map marks as not
         supporting function calling. Regression test for https://github.com/BerriAI/litellm/issues/21125
         """
@@ -129,7 +129,7 @@ class TestJSONProviderLoader:
         assert "max_tokens" in supported
         assert "stop" in supported
 
-    def test_tool_params_included_when_function_calling_supported(self, monkeypatch):
+    def test_tool_params_included_when_function_calling_supported(self, monkeypatch: "pytest.MonkeyPatch") -> None:
         """Test that tool-related params are included for models that support function calling."""
         import litellm
         from litellm.llms.openai_like.dynamic_config import create_config_class
