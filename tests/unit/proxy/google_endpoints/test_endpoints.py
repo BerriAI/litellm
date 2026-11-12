@@ -222,3 +222,12 @@ def test_proxy_app_sends_a_google_model_action_post_to_its_handler_under_every_a
     matched: Final = next(route for route in app.router.routes if route.matches(scope)[0] is Match.FULL)
 
     assert getattr(matched, "endpoint", None) is handler
+
+
+@pytest.mark.parametrize("version", ["/v1beta", "/v1", ""])
+def test_proxy_openapi_documents_stream_generate_content_as_server_sent_events(version: str) -> None:
+    from litellm.proxy.proxy_server import app
+
+    operation: Final = app.openapi()["paths"][f"{version}/models/{{model_name}}:streamGenerateContent"]["post"]
+
+    assert "text/event-stream" in operation["responses"]["200"]["content"]

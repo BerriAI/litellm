@@ -69725,13 +69725,14 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
+            /** @description Server-sent events, each data line one GenerateContentResponse */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["GenerateContentResponseBody"];
+                    "application/json": unknown;
+                    "text/event-stream": string;
                 };
             };
             /** @description Validation Error */
@@ -86392,13 +86393,14 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
+            /** @description Server-sent events, each data line one GenerateContentResponse */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["GenerateContentResponseBody"];
+                    "application/json": unknown;
+                    "text/event-stream": string;
                 };
             };
             /** @description Validation Error */
@@ -89726,13 +89728,14 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
+            /** @description Server-sent events, each data line one GenerateContentResponse */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["GenerateContentResponseBody"];
+                    "application/json": unknown;
+                    "text/event-stream": string;
                 };
             };
             /** @description Validation Error */

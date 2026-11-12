@@ -288,19 +288,34 @@ async def google_generate_content(
     "/v1beta/models/{model_name:path}:streamGenerateContent",
     dependencies=[Depends(user_api_key_auth)],
     openapi_extra={"requestBody": _GENERATE_CONTENT_REQUEST_BODY},
-    responses={200: {"model": GenerateContentResponseBody}},
+    responses={
+        200: {
+            "description": "Server-sent events, each data line one GenerateContentResponse",
+            "content": {"text/event-stream": {"schema": {"type": "string"}}},
+        }
+    },
 )
 @router.post(
     "/v1/models/{model_name:path}:streamGenerateContent",
     dependencies=[Depends(user_api_key_auth)],
     openapi_extra={"requestBody": _GENERATE_CONTENT_REQUEST_BODY},
-    responses={200: {"model": GenerateContentResponseBody}},
+    responses={
+        200: {
+            "description": "Server-sent events, each data line one GenerateContentResponse",
+            "content": {"text/event-stream": {"schema": {"type": "string"}}},
+        }
+    },
 )
 @router.post(
     "/models/{model_name:path}:streamGenerateContent",
     dependencies=[Depends(user_api_key_auth)],
     openapi_extra={"requestBody": _GENERATE_CONTENT_REQUEST_BODY},
-    responses={200: {"model": GenerateContentResponseBody}},
+    responses={
+        200: {
+            "description": "Server-sent events, each data line one GenerateContentResponse",
+            "content": {"text/event-stream": {"schema": {"type": "string"}}},
+        }
+    },
 )
 async def google_stream_generate_content(
     request: Request,

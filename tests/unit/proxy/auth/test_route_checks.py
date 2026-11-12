@@ -1109,6 +1109,41 @@ def test_virtual_key_allowed_routes_with_no_member_names_only_explicit():
     assert "Virtual key is not allowed to call this route" in str(exc_info.value.detail)
 
 
+@pytest.mark.parametrize(
+    "allowed_route, route",
+    [
+        ("/v1/models", "/v1/models/gemini-text:generateContent"),
+        ("/v1/models/*", "/v1/models/gemini-text:streamGenerateContent"),
+        ("/v1/models*", "/v1/models/gemini-text:countTokens"),
+        ("/v1/models/gemini-text*", "/v1/models/gemini-text:generateContent"),
+    ],
+)
+def test_virtual_key_openai_models_grant_does_not_reach_gemini_v1_inference(allowed_route: str, route: str) -> None:
+    valid_token: Final = UserAPIKeyAuth(user_id="test_user", allowed_routes=[allowed_route])
+
+    with pytest.raises(HTTPException) as exc_info:
+        RouteChecks.is_virtual_key_allowed_to_call_route(route=route, valid_token=valid_token)
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "allowed_route, route",
+    [
+        ("/v1/models", "/v1/models/gemini-text"),
+        ("/v1/models/*", "/v1/models/llama3:8b"),
+        ("/v1/models/gemini-text:generateContent", "/v1/models/gemini-text:generateContent"),
+        ("/v1/*", "/v1/models/gemini-text:streamGenerateContent"),
+        ("/v1", "/v1/models/gemini-text:countTokens"),
+        ("google_routes", "/v1/models/gemini-text:generateContent"),
+    ],
+)
+def test_virtual_key_grant_that_names_the_route_reaches_gemini_v1_routes(allowed_route: str, route: str) -> None:
+    valid_token: Final = UserAPIKeyAuth(user_id="test_user", allowed_routes=[allowed_route])
+
+    assert RouteChecks.is_virtual_key_allowed_to_call_route(route=route, valid_token=valid_token) is True
+
+
 def test_anthropic_count_tokens_route_is_llm_api_route():
     """Test that /v1/messages/count_tokens is recognized as an LLM API route for Anthropic"""
 

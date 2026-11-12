@@ -14,6 +14,7 @@ import pytest
 from fastapi import HTTPException, Request
 
 import litellm
+from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
     _allow_model_level_clientside_configurable_parameters,
@@ -37,8 +38,10 @@ from litellm.proxy.auth.auth_utils import (
     get_request_route_template,
     enforce_team_s3_bucket_allowlist,
     is_request_body_safe,
+    normalize_request_route,
     pre_db_read_auth_checks,
 )
+from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.router import Router
 from litellm.types.utils import oauth_token_exchange_litellm_params, server_owned_wif_litellm_params
 from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
@@ -1709,6 +1712,34 @@ def test_get_model_from_request_checks_the_url_model_on_routes_served_from_the_u
     route: str, url_model: str, request_data: dict[str, object]
 ) -> None:
     assert get_model_from_request(request_data=request_data, route=route) == url_model
+
+
+@pytest.mark.parametrize("route", ["/v1/models/llama3:8b", "/openai/v1/models/ft:gpt-4o-mini:my-org::abc123"])
+def test_get_model_from_request_reads_no_model_from_an_openai_model_info_route_with_a_colon_id(route: str) -> None:
+    assert get_model_from_request(request_data={}, route=route) is None
+
+
+def test_get_model_from_request_keeps_a_colon_alias_whole_on_v1_count_tokens() -> None:
+    assert get_model_from_request(request_data={}, route="/v1/models/ollama/llama3:8b:countTokens") == "ollama/llama3:8b"
+
+
+@pytest.mark.parametrize("action", ["generateContent", "streamGenerateContent"])
+def test_v1_gemini_request_route_is_tracked_and_guarded_like_v1beta(action: str) -> None:
+    v1_route: Final = normalize_request_route(f"/v1/models/gemini-text:{action}")
+    v1beta_route: Final = normalize_request_route(f"/v1beta/models/gemini-text:{action}")
+
+    assert RouteChecks.is_llm_api_route(v1_route) is True
+    assert get_call_types_for_route(v1_route) is not None
+    assert get_call_types_for_route(v1_route) == get_call_types_for_route(v1beta_route)
+
+
+def test_v1_count_tokens_request_route_is_an_llm_api_route() -> None:
+    assert RouteChecks.is_llm_api_route(normalize_request_route("/v1/models/gemini-text:countTokens")) is True
+
+
+@pytest.mark.parametrize("route", ["/v1/models/gpt-4o", "/v1/models/llama3:8b"])
+def test_openai_model_info_request_route_still_collapses_the_model_id(route: str) -> None:
+    assert normalize_request_route(route) == "/v1/models/{model}"
 
 
 @pytest.mark.usefixtures("no_inference_model_override")

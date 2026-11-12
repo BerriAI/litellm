@@ -40,7 +40,7 @@ from litellm.litellm_core_utils.url_utils import (
 from litellm.llms.azure.passthrough.transformation import azure_router_model_in_endpoint
 from litellm.llms.nvidia_nim.passthrough.transformation import nvidia_nim_model_group_in_path
 from litellm.proxy._types import *
-from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.auth.route_checks import GEMINI_V1_ACTION_ROUTE, RouteChecks
 from litellm.proxy.common_utils.http_parsing_utils import (
     extract_nested_form_metadata,
     read_request_path_params,
@@ -1419,6 +1419,9 @@ def normalize_request_route(route: str) -> str:
         >>> normalize_request_route("/chat/completions")
         '/chat/completions'
     """
+    if GEMINI_V1_ACTION_ROUTE.match(route):
+        return route
+
     # Define patterns for routes with dynamic IDs
     # Format: (regex_pattern, replacement_template)
     patterns: Final = [
@@ -2869,7 +2872,10 @@ def _model_from_route_path(route: str) -> str | None:
     if route.lower().startswith("/vertex"):
         vertex_model: Final = re.search(r"/models/([^:]+)", route)
         return vertex_model.group(1) if vertex_model else None
-    google_model: Final = re.search(r"/(?:v1beta|beta|v1)/models/([^:]+):", route) or re.search(
+    gemini_v1_model: Final = GEMINI_V1_ACTION_ROUTE.match(route)
+    if gemini_v1_model:
+        return gemini_v1_model.group(1)
+    google_model: Final = re.search(r"/(?:v1beta|beta)/models/([^:]+):", route) or re.search(
         r"^/models/([^:]+):", route
     )
     return google_model.group(1) if google_model else None

@@ -107,6 +107,8 @@ _UNBILLED_ROUTES: Final[frozenset[str]] = frozenset(
 )
 _TOKEN_COUNTING_SEGMENTS: Final[frozenset[str]] = frozenset({"count_tokens", "count-tokens"})
 _TOKEN_COUNTING_ACTION: Final = "countTokens"
+GEMINI_V1_ACTION_ROUTE: Final = re.compile(r"^/v1/models/(.+):(?:countTokens|generateContent|streamGenerateContent)$")
+_OPENAI_MODELS_ROUTE: Final = "/v1/models"
 
 
 class RouteChecks:
@@ -155,8 +157,10 @@ class RouteChecks:
 
         denied_auth_enforced_pass_through_route = False
 
+        route_grants: Final = RouteChecks._grants_reaching_route(route=route, allowed_routes=valid_token.allowed_routes)
+
         # explicit check for allowed routes (exact match or prefix match)
-        for allowed_route in valid_token.allowed_routes:
+        for allowed_route in route_grants:
             if RouteChecks._route_matches_allowed_route(route=route, allowed_route=allowed_route):
                 return True
 
@@ -234,7 +238,7 @@ class RouteChecks:
                             return True
 
         # check if wildcard pattern is allowed
-        for allowed_route in valid_token.allowed_routes:
+        for allowed_route in route_grants:
             if RouteChecks.route_matches_wildcard_pattern(route=route, pattern=allowed_route):
                 return True
 
@@ -679,6 +683,16 @@ class RouteChecks:
         else:
             # If there's no wildcard, the pattern and route should match exactly
             return route == pattern
+
+    @staticmethod
+    def _grants_reaching_route(route: str, allowed_routes: Iterable[str]) -> tuple[str, ...]:
+        if GEMINI_V1_ACTION_ROUTE.match(route) is None:
+            return tuple(allowed_routes)
+        return tuple(
+            allowed_route
+            for allowed_route in allowed_routes
+            if allowed_route == route or not allowed_route.rstrip("*").startswith(_OPENAI_MODELS_ROUTE)
+        )
 
     @staticmethod
     def _route_matches_allowed_route(route: str, allowed_route: str) -> bool:
