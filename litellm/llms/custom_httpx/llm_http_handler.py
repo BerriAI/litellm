@@ -45,6 +45,9 @@ from litellm.anthropic_beta_headers_manager import (
 )
 from litellm.constants import MAX_FILE_LIST_LIMIT, REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.files.types import FileContentStreamingResult
+from litellm.integrations.custom_logger_v2.enums import Hook
+from litellm.integrations.custom_logger_v2.legacy import Admit, hook_subscribers
+from litellm.integrations.custom_logger_v2.logger import CustomLoggerV2
 from litellm.litellm_core_utils.agentic_followup_kwargs import build_agentic_followup_kwargs
 from litellm.litellm_core_utils.agentic_loop_refusal import (
     called_tool_names,
@@ -562,6 +565,14 @@ def _run_responses_deployment_hook(
             "custom_llm_provider": custom_llm_provider,
         },
         CallTypes.responses.value,
+        include_v2=True,
+    )
+
+
+def _has_v2_deployment_hook() -> bool:
+    return (
+        Hook.pre_deployment_call in CustomLoggerV2.declared_hooks
+        and hook_subscribers(Hook.pre_deployment_call, litellm.callbacks, admit=Admit.every_logger).has_v2
     )
 
 
@@ -2940,7 +2951,7 @@ class BaseLLMHTTPHandler:
         dict[str, object],
         GenericLiteLLMParams,
     ]:
-        if not _has_pre_call_deployment_hook(logging_obj):
+        if not _has_pre_call_deployment_hook(logging_obj) and not _has_v2_deployment_hook():
             return (
                 model,
                 input,
