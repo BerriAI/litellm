@@ -724,6 +724,14 @@ class LiteLLMRoutes(enum.Enum):
             "/jwt/key/mapping/delete",
             "/jwt/key/mapping/list",
             "/jwt/key/mapping/info",
+            "/management/v1/customer_organizations",
+            "/management/v1/customer_organizations/{customer_org_id}",
+            "/management/v1/customer_organizations/{customer_org_id}/default_budgets",
+            "/management/v1/customer_organizations/{customer_org_id}/default_budgets/{budget_id}",
+            "/management/v1/customer_teams",
+            "/management/v1/customer_teams/{customer_team_id}",
+            "/management/v1/customer_members",
+            "/management/v1/customer_members/{customer_member_id}",
         ]
         + key_management_routes
         + mcp_management_routes
