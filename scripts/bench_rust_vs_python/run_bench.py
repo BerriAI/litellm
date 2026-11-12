@@ -427,6 +427,7 @@ def run_once(spec: RunSpec) -> dict[str, object]:
             "locust_exit": loadgen.returncode,
             "profiled": profiler is not None,
             "profile_rate_hz": spec.profile_rate_hz,
+            "profile_started_at": profile_started_at,
             "profile_requests": sum(
                 1
                 for record in records

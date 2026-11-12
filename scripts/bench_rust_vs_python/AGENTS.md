@@ -30,7 +30,11 @@ python scripts/bench_rust_vs_python/run_bench.py --worktrees ~/bench/wt --plans 
 python scripts/bench_rust_vs_python/report.py ~/bench/results/l1 --pairs A0:A1,B0:B1 --noise-pair A0:A0b
 ```
 
-`--ramp first,last,step,step_seconds` on `gen_requests.py` gives the stepped plan for saturation. `--profile-seconds` on `run_bench.py` attaches `py-spy` after warmup, and `flame.py <old run dir> <new run dir> --out <dir>` turns two profiled runs into the subsystem table and, when `inferno-flamegraph` and `inferno-diff-folded` are on PATH, the flame graph SVGs. Profiled runs are separate from measured runs because sampling slows the proxy
+`--ramp first,last,step,step_seconds` on `gen_requests.py` gives the stepped plan for saturation, and `--input-tokens low,high` replays the same arrivals with other request sizes. `--profile-seconds` on `run_bench.py` attaches `py-spy --native` once warmup is over, at `--profile-rate` samples a second, and `flame.py <old run dir> <new run dir> --out <dir>` turns two profiled runs into a subsystem table, a flame tree and a per-function comparison, all in CPU ms per request
+
+Profile at low load (3 RPS) and 50 Hz. At 200 Hz on 4 vCPU py-spy fell minutes behind. Even when it keeps up, attaching it makes the proxy burn several times its normal CPU, so profiled runs are never measured runs, and `flame.py` scales each profile to the CPU per request the same run used before the profiler attached. `--native` counts parked threads as running, so `flame.py` drops samples in thread waits, GIL reacquisition and uvicorn's supervisor pipe read. Every worker's stack starts in uvicorn's supervisor module, so match only the pipe read there, or the whole request path disappears. The profiler slows the Rust variant more than the Python one (more threads to stop), so compare shapes and shares more than exact milliseconds
+
+`litellm-rust/crates/python-bridge/benches/messages_body.rs` times each Python and Rust conversion of a coding-agent request at about 2k and 50k tokens (`PYO3_PYTHON=python3.12 cargo bench -p litellm-python-bridge --bench messages_body`)
 
 ## Validity checks
 

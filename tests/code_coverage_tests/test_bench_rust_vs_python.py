@@ -6,7 +6,7 @@ from typing import Final
 
 import pytest
 
-from scripts.bench_rust_vs_python.flame import Profile, bucket_of, parse_folded
+from scripts.bench_rust_vs_python.flame import Profile, bucket_ms, function_ms, parse_folded, tree_rows
 from scripts.bench_rust_vs_python.gen_requests import WARMUP_SEQ_START, Step, build_plan, step_windows
 from scripts.bench_rust_vs_python.report import (
     RequestMetrics,
@@ -176,23 +176,56 @@ def test_ramp_step_windows_follow_the_warmup_back_to_back() -> None:
     assert windows == [{"rps": 5.0, "start_s": 60.0, "end_s": 90.0}, {"rps": 10.0, "start_s": 90.0, "end_s": 120.0}]
 
 
-def test_flame_buckets_charge_the_frame_closest_to_the_leaf() -> None:
-    logging_then_json: Final = [
-        "main (proxy_server.py:1)",
-        "async_log (litellm/integrations/s3_v2.py:9)",
-        "loads (json/decoder.py:3)",
-    ]
-    folded: Final = parse_folded(
+def test_flame_keeps_worker_request_handling_and_drops_only_waiting_threads() -> None:
+    worker: Final = (
+        'process 1:"python proxy_cli.py";process 2:"python -c from multiprocessing.spawn import spawn_main; '
+        'spawn_main(tracker_fd=12, pipe_handle=13) --multiprocessing-fork";'
+        "target (/x/site-packages/uvicorn/supervisors/multiprocess.py:9);"
+        "user_api_key_auth (/home/user/bench/wt/main/litellm/proxy/auth/user_api_key_auth.py:88)"
+    )
+    stacks, kinds = parse_folded(
         [
-            ";".join(logging_then_json) + " 30",
-            "main (proxy_server.py:1);route (litellm/router_strategy/simple_shuffle.py:4) 10",
-            "main (proxy_server.py:1);spin (unknown.py:1) 5",
+            f"{worker} 30",
+            'process 1:"python proxy_cli.py";pong (multiprocessing.py:1);_recv (/usr/lib/python3.12/multiprocessing/connection.py:4);read (libc.so.6) 50',
+            'process 2:"w";_worker (concurrent/futures/thread.py:3);PyThread_acquire_lock_timed (python3.12);0x7f42 (libc.so.6) 900',
+            'process 2:"w";encode (tiktoken/core.py:5);PyEval_RestoreThread (python3.12);pthread_cond_timedwait (libc.so.6) 7',
+            'process 3:"w";poll (x.py:1);0x7f16b38a5098 (libc.so.6) 1',
+            'process 4:"w";poll (x.py:1);0x7f421daa5098 (libc.so.6) 2',
         ]
     )
 
-    assert bucket_of(logging_then_json) == "body parse / pydantic"
-    assert folded == Counter({"body parse / pydantic": 30, "router selection": 10, "other": 5})
-    assert Profile(samples=folded, rate_hz=100.0, requests=10).ms_per_request("router selection") == pytest.approx(10.0)
+    assert kinds == Counter({"idle": 950, "cpu": 33, "gil_wait": 7})
+    assert (
+        stacks[
+            (
+                "target (uvicorn/supervisors/multiprocess.py)",
+                "user_api_key_auth (litellm/proxy/auth/user_api_key_auth.py)",
+            )
+        ]
+        == 30
+    )
+    assert stacks[("poll (x.py)", "[native] (libc.so.6)")] == 3
+
+
+def test_flame_scales_each_profile_to_its_unprofiled_cpu_and_charges_the_leaf_most_bucket() -> None:
+    profile: Final = Profile(
+        cpu_stacks={
+            ("main (proxy_server.py)", "loads (json/decoder.py)"): 30,
+            ("main (proxy_server.py)", "route (litellm/router.py)"): 10,
+        },
+        kinds={"cpu": 40},
+        scale_ms=0.5,
+    )
+    own, inclusive = function_ms(profile)
+
+    assert bucket_ms(profile) == Counter({"body parse / pydantic / json": 15.0, "router selection": 5.0})
+    assert inclusive["main (proxy_server.py)"] == 20.0
+    assert own["loads (json/decoder.py)"] == 15.0
+    assert {row["name"]: row["ms_per_request"] for row in tree_rows("A1", profile)} == {
+        "main (proxy_server.py)": 20.0,
+        "loads (json/decoder.py)": 15.0,
+        "route (litellm/router.py)": 5.0,
+    }
 
 
 def test_run_log_keeps_the_upstream_user_agent_the_mock_recorded() -> None:
