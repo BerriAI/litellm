@@ -8,13 +8,14 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Final, Literal
 
 from fastapi import HTTPException
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict
 
 import litellm
 from litellm import Router
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
+from litellm.cost_calculator import get_usage_object
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.add_retry_fallback_headers import (
     ensure_response_additional_headers,
@@ -42,7 +43,6 @@ from litellm.proxy.hooks.rate_limiter_utils import (
 )
 from litellm.proxy.utils import InternalUsageCache
 from litellm.redis.stores.rate_limits import RATE_LIMITS_TARGET, CounterIncrement, RateLimitCounter, RateLimitScope
-from litellm.types.llms.openai import ResponseAPIUsage
 from litellm.types.router import ModelGroupInfo
 from litellm.types.utils import CallTypesLiteral, LLMResponseTypes, Usage
 
@@ -64,24 +64,8 @@ class _SettlementMetadata(BaseModel):
         return value if isinstance(value, str) else None
 
 
-class _ResponseUsage(BaseModel):
-    """The usage block of any response type that carries one, read off the object's attributes."""
-
-    model_config = ConfigDict(frozen=True, from_attributes=True)
-
-    usage: Usage | ResponseAPIUsage | None = None
-
-
 def _usage_of(response_obj: object) -> Usage | None:
-    try:
-        usage: Final = _ResponseUsage.model_validate(response_obj).usage
-    except ValidationError:
-        return None
-    if isinstance(usage, ResponseAPIUsage):
-        return Usage(
-            prompt_tokens=usage.input_tokens, completion_tokens=usage.output_tokens, total_tokens=usage.total_tokens
-        )
-    return usage
+    return get_usage_object(response_obj)
 
 
 TEAM_MODEL_LIMIT_AT_SATURATION: Final = "model_per_team_saturated"
@@ -406,20 +390,18 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         return descriptors
 
     def _create_borrowing_team_model_limit_descriptor(
-        self,
-        model: str,
-        model_group_info: ModelGroupInfo,
-        user_api_key_dict: UserAPIKeyAuth,
+        self, model: str, user_api_key_dict: UserAPIKeyAuth
     ) -> RateLimitDescriptor | None:
-        limits: Final = borrowing_team_model_limits(
-            user_api_key_dict,
-            self.v3_limiter.rate_limited_model(model) or RateLimitedModel(requested=model, group=model),
+        """One counter per team and resolved model group, so an alias and its target share the team's share."""
+        rate_limited: Final = self.v3_limiter.rate_limited_model(model) or RateLimitedModel(
+            requested=model, group=model
         )
+        limits: Final = borrowing_team_model_limits(user_api_key_dict, rate_limited)
         if limits.tpm is None and limits.rpm is None:
             return None
         return RateLimitDescriptor(
             key=TEAM_MODEL_LIMIT_AT_SATURATION,
-            value=f"{user_api_key_dict.team_id}:{model_group_info.model_group}",
+            value=f"{user_api_key_dict.team_id}:{rate_limited.group}",
             rate_limit={
                 "tokens_per_unit": limits.tpm,
                 "requests_per_unit": limits.rpm,
@@ -524,7 +506,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         # All-or-nothing: if any enforced descriptor would exceed its limit,
         # no counter is modified and the response carries "OVER_LIMIT".
         team_limit_descriptor: Final = self._create_borrowing_team_model_limit_descriptor(
-            model=model, model_group_info=model_group_info, user_api_key_dict=user_api_key_dict
+            model=model, user_api_key_dict=user_api_key_dict
         )
         get_or_create_request_stash().borrowing_team_model_limit = team_limit_descriptor
         if team_limit_descriptor is not None:

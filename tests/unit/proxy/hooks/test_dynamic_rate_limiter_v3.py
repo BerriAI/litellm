@@ -1825,7 +1825,10 @@ async def test_post_call_success_hook_priority_header_is_always_http_encodable(t
 
 
 def _borrowing_handler(
-    monkeypatch: pytest.MonkeyPatch, borrows: bool, saturation_threshold: float = 0.5
+    monkeypatch: pytest.MonkeyPatch,
+    borrows: bool,
+    saturation_threshold: float = 0.5,
+    model_group_alias: dict[str, str] | None = None,
 ) -> PROXY_DynamicRateLimitHandlerV3:
     from litellm.types.utils import PriorityReservationSettings
 
@@ -1845,7 +1848,8 @@ def _borrowing_handler(
                 "model_name": "shared-model",
                 "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "k", "api_base": "b", "tpm": 1000, "rpm": 100},
             }
-        ]
+        ],
+        model_group_alias=model_group_alias or {},
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
     handler = PROXY_DynamicRateLimitHandlerV3(internal_usage_cache=DualCache())
@@ -1887,11 +1891,13 @@ def _team_key(
     )
 
 
-async def _check(handler: PROXY_DynamicRateLimitHandlerV3, auth: UserAPIKeyAuth, saturation: float) -> None:
-    group: Final = handler.llm_router.registry().group("shared-model")
+async def _check(
+    handler: PROXY_DynamicRateLimitHandlerV3, auth: UserAPIKeyAuth, saturation: float, model: str = "shared-model"
+) -> None:
+    group: Final = handler.llm_router.registry().group(model)
     assert group is not None
     await handler._check_rate_limits(
-        model="shared-model", model_group_info=group, user_api_key_dict=auth, priority=None, saturation=saturation
+        model=model, model_group_info=group, user_api_key_dict=auth, priority=None, saturation=saturation
     )
 
 
@@ -2048,3 +2054,13 @@ async def test_an_exempt_keys_tokens_are_not_charged_to_its_teammates(monkeypatc
     owner: Final = _team_key(metadata={"model_tpm_limit": {"shared-model": 5000}})
     await _admit_then_settle(handler, owner, 150)
     await _check(handler, _team_key(), saturation=0.9)
+
+
+@pytest.mark.asyncio
+async def test_an_alias_request_counts_against_the_same_team_share_as_its_target(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True, model_group_alias={"alias-model": "shared-model"})
+    await _check(handler, _team_key(), saturation=0.0, model="alias-model")
+    await _settle_tokens(handler, 150)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _team_key(), saturation=0.5)
+    _held_to_team_limit(exc.value, "tokens", "model_tpm_limit")
