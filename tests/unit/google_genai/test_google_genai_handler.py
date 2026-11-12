@@ -10,7 +10,7 @@ import logging
 import threading
 from collections.abc import Iterator
 from unittest.mock import AsyncMock, MagicMock, patch
-from typing import Final
+from typing import Final, NotRequired, TypedDict
 
 import httpx
 import pytest
@@ -22,7 +22,7 @@ from litellm.integrations.custom_logger import CustomLogger
 
 from litellm.google_genai.adapters.handler import GenerateContentToCompletionHandler
 from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter, GoogleGenAIStreamWrapper
-from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices, Usage
+from litellm.types.utils import Delta, ModelResponseStream, StandardLoggingPayload, StreamingChoices, Usage
 from tests._wait_helpers import await_until, wait_until
 
 
@@ -352,6 +352,17 @@ _ANTHROPIC_SSE: Final = "".join(
 )
 
 
+class _CallbackParams(TypedDict):
+    litellm_session_id: NotRequired[str | None]
+
+
+class _CallbackKwargs(TypedDict):
+    call_type: str
+    litellm_call_id: str
+    litellm_params: _CallbackParams
+    standard_logging_object: StandardLoggingPayload
+
+
 class _LoggedEvents(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
@@ -360,23 +371,31 @@ class _LoggedEvents(CustomLogger):
         self.session_ids: list[str | None] = []
         self.messages: list[object] = []
 
-    def _record(self, outcome: str, kwargs: dict[str, object]) -> None:
+    def _record(self, outcome: str, kwargs: _CallbackKwargs) -> None:
         payload: Final = kwargs["standard_logging_object"]
         self.events.append((outcome, kwargs["call_type"], kwargs["litellm_call_id"], payload["model_group"]))
         self.response_costs.append(payload["response_cost"])
         self.session_ids.append(kwargs["litellm_params"].get("litellm_session_id"))
         self.messages.append(payload["messages"])
 
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+    def log_success_event(
+        self, kwargs: _CallbackKwargs, response_obj: object, start_time: datetime.datetime, end_time: datetime.datetime
+    ) -> None:
         self._record("success", kwargs)
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(
+        self, kwargs: _CallbackKwargs, response_obj: object, start_time: datetime.datetime, end_time: datetime.datetime
+    ) -> None:
         self._record("success", kwargs)
 
-    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    def log_failure_event(
+        self, kwargs: _CallbackKwargs, response_obj: object, start_time: datetime.datetime, end_time: datetime.datetime
+    ) -> None:
         self._record("failure", kwargs)
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(
+        self, kwargs: _CallbackKwargs, response_obj: object, start_time: datetime.datetime, end_time: datetime.datetime
+    ) -> None:
         self._record("failure", kwargs)
 
 
@@ -386,11 +405,13 @@ class _CacheHitFlags(CustomLogger):
         self.cache_hits: list[object] = []
         self.call_returned: Final = threading.Event()
 
-    def logging_hook(self, kwargs, result, call_type):
+    def logging_hook(self, kwargs: dict[str, object], result: object, call_type: str) -> tuple[dict[str, object], object]:
         self.call_returned.wait(timeout=1.0)
         return kwargs, result
 
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+    def log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime.datetime, end_time: datetime.datetime
+    ) -> None:
         self.cache_hits.append(kwargs.get("cache_hit"))
 
 
@@ -399,11 +420,15 @@ class _AsyncCacheHitFlags(CustomLogger):
         super().__init__()
         self.cache_hits: list[object] = []
 
-    async def async_logging_hook(self, kwargs, result, call_type):
+    async def async_logging_hook(
+        self, kwargs: dict[str, object], result: object, call_type: str
+    ) -> tuple[dict[str, object], object]:
         await asyncio.sleep(0.3)
         return kwargs, result
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime.datetime, end_time: datetime.datetime
+    ) -> None:
         self.cache_hits.append(kwargs.get("cache_hit"))
 
 
@@ -419,9 +444,11 @@ class _SuccessPayloads(CustomLogger):
 class _SuccessRows(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
-        self.rows: list[tuple[object, str, str]] = []
+        self.rows: list[tuple[bool | None, str | None, str]] = []
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(
+        self, kwargs: _CallbackKwargs, response_obj: object, start_time: datetime.datetime, end_time: datetime.datetime
+    ) -> None:
         payload: Final = kwargs["standard_logging_object"]
         self.rows.append((payload["cache_hit"], payload["model_group"], payload["model"]))
 
@@ -644,7 +671,9 @@ async def test_generate_content_adapter_success_is_logged_once_on_the_request(
     monkeypatch.setattr(litellm, "callbacks", [logged])
     per_request_calls: list[tuple[str, str]] = []
 
-    async def per_request_callback(kwargs, completion_response, start_time, end_time):
+    async def per_request_callback(
+        kwargs: _CallbackKwargs, completion_response: object, start_time: datetime.datetime, end_time: datetime.datetime
+    ) -> None:
         per_request_calls.append((kwargs["call_type"], kwargs["litellm_call_id"]))
 
     with respx.mock() as upstream:
@@ -674,7 +703,9 @@ def test_sync_generate_content_adapter_success_is_logged_once_on_the_request(
     monkeypatch.setattr(litellm, "callbacks", [logged])
     per_request_calls: list[tuple[str, str]] = []
 
-    def per_request_callback(kwargs, completion_response, start_time, end_time):
+    def per_request_callback(
+        kwargs: _CallbackKwargs, completion_response: object, start_time: datetime.datetime, end_time: datetime.datetime
+    ) -> None:
         per_request_calls.append((kwargs["call_type"], kwargs["litellm_call_id"]))
 
     with respx.mock() as upstream:
