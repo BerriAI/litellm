@@ -38,6 +38,31 @@ async def test_mistral_chat_transformation():
 class TestMistralReasoningSupport:
     """Test suite for Mistral Magistral reasoning functionality."""
 
+    @pytest.fixture(autouse=True)
+    def fixed_reasoning_capabilities(self, local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch) -> None:
+        import litellm
+
+        declarations: Final = (
+            ("mistral-medium-latest", ("none", "high")),
+            ("mistral-small-latest", ("none", "high")),
+            ("mistral-vibe-cli-latest", ("none", "high")),
+            ("magistral-small-latest", ("none", "high")),
+            ("magistral-medium-latest", ("none", "high")),
+            ("zai-glm-5", ("none", "low", "high", "max")),
+            ("zai-glm-5-2", ("none", "low", "medium", "high", "xhigh", "max")),
+        )
+        for model, levels in declarations:
+            monkeypatch.setitem(
+                litellm.model_cost,
+                f"mistral/{model}",
+                {
+                    "litellm_provider": "mistral",
+                    "mode": "chat",
+                    "supports_reasoning": True,
+                    "reasoning_effort_levels": levels,
+                },
+            )
+
     def test_get_supported_openai_params_magistral_model(self):
         """Test that magistral models support reasoning parameters."""
         mistral_config = MistralConfig()
@@ -80,10 +105,12 @@ class TestMistralReasoningSupport:
             ("zai-glm-5-2", "max", "max"),
         ],
     )
-    def test_reasoning_effort_is_sent_as_a_level_the_model_accepts(self, local_model_cost_map, model, requested, sent):
+    def test_reasoning_effort_is_sent_as_a_level_the_model_accepts(
+        self, local_model_cost_map: None, model: str, requested: str, sent: str
+    ) -> None:
         import litellm
 
-        optional_params = litellm.get_optional_params(
+        optional_params: Final = litellm.get_optional_params(
             model=model,
             custom_llm_provider="mistral",
             reasoning_effort=requested,
@@ -91,8 +118,8 @@ class TestMistralReasoningSupport:
         assert optional_params["reasoning_effort"] == sent
 
     def test_reasoning_effort_is_forwarded_verbatim_when_the_map_declares_no_levels(
-        self, local_model_cost_map, monkeypatch
-    ):
+        self, local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         import litellm
 
         monkeypatch.setitem(
@@ -100,14 +127,14 @@ class TestMistralReasoningSupport:
             "mistral/undeclared-reasoner",
             {"litellm_provider": "mistral", "mode": "chat", "supports_reasoning": True},
         )
-        optional_params = litellm.get_optional_params(
+        optional_params: Final = litellm.get_optional_params(
             model="undeclared-reasoner",
             custom_llm_provider="mistral",
             reasoning_effort="medium",
         )
         assert optional_params["reasoning_effort"] == "medium"
 
-    def test_reasoning_effort_stays_unsupported_for_non_reasoning_models(self):
+    def test_reasoning_effort_stays_unsupported_for_non_reasoning_models(self) -> None:
         import litellm
 
         with pytest.raises(litellm.UnsupportedParamsError):
@@ -117,7 +144,7 @@ class TestMistralReasoningSupport:
                 reasoning_effort="high",
             )
 
-        dropped = litellm.get_optional_params(
+        dropped: Final = litellm.get_optional_params(
             model="codestral-latest",
             custom_llm_provider="mistral",
             reasoning_effort="high",
@@ -150,8 +177,8 @@ class TestMistralReasoningSupport:
         ],
     )
     def test_magistral_sends_thinking_as_a_reasoning_effort_the_model_accepts(
-        self, local_model_cost_map, caplog, thinking, sent
-    ):
+        self, local_model_cost_map: None, caplog: pytest.LogCaptureFixture, thinking: object, sent: str
+    ) -> None:
         import litellm
 
         with caplog.at_level("WARNING", logger="LiteLLM"):
@@ -164,7 +191,7 @@ class TestMistralReasoningSupport:
         assert "thinking" not in optional_params
         assert "Ignoring thinking.budget_tokens=" not in caplog.text
 
-    def test_magistral_prefers_reasoning_effort_over_thinking(self, local_model_cost_map):
+    def test_magistral_prefers_reasoning_effort_over_thinking(self, local_model_cost_map: None) -> None:
         import litellm
 
         optional_params: Final = litellm.get_optional_params(
@@ -279,7 +306,7 @@ class TestMistralReasoningSupport:
         assert "thinking" not in optional_params
         assert "Dropping thinking.budget_tokens=" in caplog.text
 
-    def test_magistral_thinking_without_a_type_sends_no_reasoning_effort(self, local_model_cost_map):
+    def test_magistral_thinking_without_a_type_sends_no_reasoning_effort(self, local_model_cost_map: None) -> None:
         import litellm
 
         optional_params: Final = litellm.get_optional_params(
@@ -294,8 +321,8 @@ class TestMistralReasoningSupport:
         "reasoning", [{"reasoning_effort": "medium"}, {"thinking": {"type": "enabled", "budget_tokens": 1024}}]
     )
     def test_magistral_request_carries_reasoning_effort_and_the_callers_messages_only(
-        self, local_model_cost_map, reasoning
-    ):
+        self, local_model_cost_map: None, reasoning: dict[str, object]
+    ) -> None:
         import litellm
 
         optional_params: Final = litellm.get_optional_params(
