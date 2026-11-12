@@ -31,6 +31,7 @@ from pydantic import TypeAdapter, ValidationError
 from starlette.status import HTTP_400_BAD_REQUEST, HTTP_503_SERVICE_UNAVAILABLE
 from typing_extensions import NotRequired, ReadOnly
 
+import litellm
 from litellm import DualCache
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
@@ -164,6 +165,21 @@ class RateLimitedModel:
             return None
         requested_limit: Final = limits.get(self.requested)
         return requested_limit if requested_limit is not None else limits.get(self.group)
+
+
+def team_model_floor_covers(model_group: str) -> bool:
+    from litellm.proxy.hooks.dynamic_rate_limiter_v3 import PROXY_DynamicRateLimitHandlerV3
+    from litellm.proxy.proxy_server import llm_router
+
+    if llm_router is None:
+        return False
+    group: Final = llm_router.registry().group(model_group)
+    if group is None or group.tpm is None:
+        return False
+    return any(
+        callback == "dynamic_rate_limiter_v3" or isinstance(callback, PROXY_DynamicRateLimitHandlerV3)
+        for callback in litellm.callbacks
+    )
 
 
 def _resolve_media_models(router: "Router | None", model: str, team_id: str | None) -> tuple[str, ...]:
@@ -2551,8 +2567,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         model: Final = self._rate_limited_model(requested_model)
         if model is None:
             return
-        model_specific_tpm_limit: Final = model.limit_in(
-            get_key_model_tpm_limit(user_api_key_dict, model_name=model.group)
+        model_specific_tpm_limit: Final = (
+            None
+            if self._team_model_tpm_is_floor(user_api_key_dict, model)
+            else model.limit_in(get_key_model_tpm_limit(user_api_key_dict, model_name=model.group))
         )
         model_specific_rpm_limit: Final = model.limit_in(
             get_key_model_rpm_limit(user_api_key_dict, model_name=model.group)
@@ -3128,6 +3146,17 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     ) -> bool:
         return model.limit_in(get_key_own_model_rate_limit(user_api_key_dict, rate_limit_key)) is not None
 
+    def _team_model_tpm_is_floor(self, user_api_key_dict: UserAPIKeyAuth, model: RateLimitedModel) -> bool:
+        settings: Final = litellm.priority_reservation_settings
+        if settings is None or not settings.team_model_limit_is_floor:
+            return False
+        if self._key_owns_model_limit(user_api_key_dict, model, "model_tpm_limit"):
+            return False
+        team_limit: Final = model.limit_in(
+            get_model_rate_limit_from_metadata(user_api_key_dict, "team_metadata", "model_tpm_limit")
+        )
+        return team_limit is not None and team_model_floor_covers(model.group)
+
     def _inherited_team_model_limit(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -3166,7 +3195,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if model is None:
             return
         team_rpm_limit: Final = self._inherited_team_model_limit(user_api_key_dict, model, "model_rpm_limit")
-        team_tpm_limit: Final = self._inherited_team_model_limit(user_api_key_dict, model, "model_tpm_limit")
+        team_tpm_limit: Final = (
+            None
+            if self._team_model_tpm_is_floor(user_api_key_dict, model)
+            else self._inherited_team_model_limit(user_api_key_dict, model, "model_tpm_limit")
+        )
         if team_rpm_limit is None and team_tpm_limit is None:
             return
         descriptors.append(

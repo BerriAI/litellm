@@ -5,17 +5,20 @@ Core tests to validate that priority weights are respected (0.9/0.1) instead of 
 """
 
 import asyncio
-import os
 import time
 from datetime import datetime, timedelta
+from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-
 import litellm
 from litellm import DualCache, Router
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (
+    PROXY_DynamicRateLimitHandlerV3,
+)
 from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (
     PROXY_DynamicRateLimitHandlerV3 as DynamicRateLimitHandler,
 )
@@ -353,9 +356,9 @@ async def test_100_concurrent_priority_requests(time_controller, monkeypatch):
         assert result["rpm"] == 50, f"Low priority user {result['user_id']} got {result['rpm']} RPM, expected 50"
 
     print(f"✅ Successfully processed 100 concurrent requests in {total_duration:.2f}s")
-    print(f"   - 70 high priority users: 900 TPM, 450 RPM each")
-    print(f"   - 30 low priority users: 100 TPM, 50 RPM each")
-    print(f"   - Priority ratio maintained: 9:1 (TPM) and 9:1 (RPM)")
+    print("   - 70 high priority users: 900 TPM, 450 RPM each")
+    print("   - 30 low priority users: 100 TPM, 50 RPM each")
+    print("   - Priority ratio maintained: 9:1 (TPM) and 9:1 (RPM)")
 
 
 @pytest.mark.asyncio
@@ -572,7 +575,7 @@ async def test_concurrent_pre_call_hooks_stress(monkeypatch):
     print(f"   - Premium users: {premium_success}/{len(premium_results)} success ({premium_success_rate:.1%})")
     print(f"   - Standard users: {standard_success}/{len(standard_results)} success ({standard_success_rate:.1%})")
     print(f"   - Total successful: {successful_count}/50 ({successful_count / 50:.1%})")
-    print(f"   - Priority system working: Premium > Standard success rates")
+    print("   - Priority system working: Premium > Standard success rates")
 
 
 # These tests make actual async_pre_call_hook calls to simulate real traffic
@@ -676,7 +679,7 @@ async def test_fake_calls_case_1_no_rate_limiting_at_capacity(monkeypatch):
     total_successful = successful_requests["key_a"] + successful_requests["key_b"]
     total_rate_limited = rate_limited_requests["key_a"] + rate_limited_requests["key_b"]
 
-    print(f"Test Case 1 - Saturation-Aware Rate Limiting:")
+    print("Test Case 1 - Saturation-Aware Rate Limiting:")
     print(f"   - Duration: {end_time - start_time:.2f}s")
     print(f"   - Key A: {successful_requests['key_a']}/1 successful (reserved 75 RPM)")
     print(f"   - Key B: {successful_requests['key_b']}/100 successful (reserved 25 RPM)")
@@ -796,7 +799,7 @@ async def test_fake_calls_case_2_priority_queue_during_saturation(monkeypatch):
     key_a_success_rate = successful_requests["key_a"] / 200
     key_b_success_rate = successful_requests["key_b"] / 200
 
-    print(f"Test Case 2 - Priority Queue Behavior During Saturation:")
+    print("Test Case 2 - Priority Queue Behavior During Saturation:")
     print(f"   - Duration: {end_time - start_time:.2f}s")
     print(f"   - Key A: {successful_requests['key_a']}/200 successful ({key_a_success_rate:.1%})")
     print(f"   - Key B: {successful_requests['key_b']}/200 successful ({key_b_success_rate:.1%})")
@@ -929,7 +932,7 @@ async def test_fake_calls_case_3_spillover_capacity_default_keys(monkeypatch):
     # Analyze results
     total_successful = sum(successful_requests.values())
 
-    print(f"Test Case 3 - Spillover Capacity for Default Keys:")
+    print("Test Case 3 - Spillover Capacity for Default Keys:")
     print(f"   - Duration: {end_time - start_time:.2f}s")
     print(f"   - Key A: {successful_requests['key_a']}/150 successful")
     print(f"   - Key B: {successful_requests['key_b']}/150 successful (default)")
@@ -1047,7 +1050,7 @@ async def test_fake_calls_case_4_over_allocated_with_normalization(monkeypatch):
     key_a_success_rate = successful_requests["key_a"] / 200
     key_b_success_rate = successful_requests["key_b"] / 200
 
-    print(f"Test Case 4 - Over-Allocated Priority Reservations with Normalization:")
+    print("Test Case 4 - Over-Allocated Priority Reservations with Normalization:")
     print(f"   - Duration: {end_time - start_time:.2f}s")
     print(f"   - Key A (0.60): {successful_requests['key_a']}/200 successful ({key_a_success_rate:.1%})")
     print(f"   - Key B (0.80): {successful_requests['key_b']}/200 successful ({key_b_success_rate:.1%})")
@@ -1184,7 +1187,7 @@ async def test_fake_calls_case_5_default_value_priority_reservation(monkeypatch)
     # Analyze results
     total_successful = sum(successful_requests.values())
 
-    print(f"Test Case 5 - Default value for priority reservation:")
+    print("Test Case 5 - Default value for priority reservation:")
     print(f"   - Duration: {end_time - start_time:.2f}s")
     print(f"   - Key A (0.50): {successful_requests['key_a']}/150 successful")
     print(f"   - Key B (0.20): {successful_requests['key_b']}/150 successful")
@@ -1430,7 +1433,6 @@ async def test_saturation_check_cache_ttl_configuration(monkeypatch):
         class _RecordingRateLimits(FakeRateLimits):
             async def get(self, entry, *, backfill_ttl_seconds=None):
                 get_cache_calls.append({"entry": entry, "ttl": backfill_ttl_seconds})
-                return None  # Simulate cache miss
 
         handler.v3_limiter = PROXY_MaxParallelRequestsHandler_v3(
             handler.internal_usage_cache,
@@ -1819,3 +1821,112 @@ async def test_post_call_success_hook_priority_header_is_always_http_encodable(t
     http_response = Response(headers={key: str(value) for key, value in additional_headers.items()})
     assert http_response.headers.get("x-litellm-priority") == expected_priority_header
     assert http_response.headers["x-litellm-rate-limiter-version"] == "v3"
+
+
+def _team_floor_handler(
+    monkeypatch: pytest.MonkeyPatch, floor_on: bool, saturation_threshold: float = 0.5
+) -> PROXY_DynamicRateLimitHandlerV3:
+    from litellm.types.utils import PriorityReservationSettings
+
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
+    monkeypatch.setattr(litellm, "priority_reservation", {"interactive": 0.6, "batch": 0.4})
+    monkeypatch.setattr(
+        litellm,
+        "priority_reservation_settings",
+        PriorityReservationSettings(saturation_threshold=saturation_threshold, team_model_limit_is_floor=floor_on),
+    )
+    handler = PROXY_DynamicRateLimitHandlerV3(internal_usage_cache=DualCache())
+    handler.update_variables(
+        llm_router=Router(
+            model_list=[
+                {
+                    "model_name": "floor-model",
+                    "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "k", "api_base": "b", "tpm": 1000},
+                }
+            ]
+        )
+    )
+    return handler
+
+
+async def _admit_then_settle(handler: PROXY_DynamicRateLimitHandlerV3, auth: UserAPIKeyAuth, tokens: int) -> None:
+    await _check(handler, auth, saturation=0.0)
+    await _settle_team_tokens(handler, auth.team_id or "", tokens)
+
+
+async def _settle_team_tokens(handler: PROXY_DynamicRateLimitHandlerV3, team_id: str, tokens: int) -> None:
+    response: Final = litellm.ModelResponse(
+        usage=litellm.Usage(prompt_tokens=tokens, completion_tokens=0, total_tokens=tokens)
+    )
+    await handler.async_log_success_event(
+        kwargs={
+            "litellm_params": {"metadata": {"model_group": "floor-model"}},
+            "standard_logging_object": {
+                "metadata": {"user_api_key_team_id": team_id, "user_api_key_auth_metadata": {}}
+            },
+        },
+        response_obj=response,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+
+def _team_key(team_id: str = "team-a", **extra: dict[str, dict[str, int]]) -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(
+        api_key="sk-floor", team_id=team_id, team_metadata={"model_tpm_limit": {"floor-model": 100}}, **extra
+    )
+
+
+async def _check(handler: PROXY_DynamicRateLimitHandlerV3, auth: UserAPIKeyAuth, saturation: float) -> None:
+    group: Final = handler.llm_router.registry().group("floor-model")
+    assert group is not None
+    await handler._check_rate_limits(
+        model="floor-model", model_group_info=group, user_api_key_dict=auth, priority=None, saturation=saturation
+    )
+
+
+@pytest.mark.asyncio
+async def test_team_past_its_model_tpm_limit_borrows_while_the_model_is_below_the_saturation_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _team_floor_handler(monkeypatch, floor_on=True)
+    await _admit_then_settle(handler, _team_key(), 150)
+    await _check(handler, _team_key(), saturation=0.49)
+
+
+@pytest.mark.asyncio
+async def test_team_past_its_model_tpm_limit_is_held_to_it_once_the_model_saturates(monkeypatch: pytest.MonkeyPatch):
+    handler = _team_floor_handler(monkeypatch, floor_on=True)
+    await _admit_then_settle(handler, _team_key(), 150)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _team_key(), saturation=0.5)
+    assert exc.value.status_code == 429
+    assert exc.value.headers is not None
+    assert exc.value.headers["rate_limited_by"] == "team_model_floor"
+    assert exc.value.headers["rate_limit_type"] == "tokens"
+    assert str(exc.value.detail).startswith(
+        "{'error': 'Team share reached for floor-model. Team: team-a, Rate limit type: tokens, "
+        "Team model_tpm_limit: 100, Remaining: 0, Model saturation: 50.0%"
+    ), exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_another_teams_usage_does_not_count_against_a_teams_floor(monkeypatch: pytest.MonkeyPatch):
+    handler = _team_floor_handler(monkeypatch, floor_on=True)
+    await _admit_then_settle(handler, _team_key("team-b"), 150)
+    await _check(handler, _team_key("team-a"), saturation=0.9)
+
+
+@pytest.mark.asyncio
+async def test_team_floor_is_off_by_default_so_the_dynamic_limiter_adds_no_team_limit(monkeypatch: pytest.MonkeyPatch):
+    handler = _team_floor_handler(monkeypatch, floor_on=False)
+    await _admit_then_settle(handler, _team_key(), 150)
+    await _check(handler, _team_key(), saturation=0.9)
+
+
+@pytest.mark.asyncio
+async def test_a_key_that_owns_its_own_model_tpm_limit_is_not_held_to_the_team_floor(monkeypatch: pytest.MonkeyPatch):
+    handler = _team_floor_handler(monkeypatch, floor_on=True)
+    owner: Final = _team_key(metadata={"model_tpm_limit": {"floor-model": 5000}})
+    await _admit_then_settle(handler, owner, 150)
+    await _check(handler, owner, saturation=0.9)

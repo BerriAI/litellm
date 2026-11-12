@@ -5389,6 +5389,10 @@ class PriorityReservationSettings(LiteLLMBaseModel):
         default=0.50,
         description="Saturation threshold (0.0-1.0) at which strict priority enforcement begins. Below this threshold, generous mode allows priority borrowing. Above this threshold, strict mode enforces normalized priority limits.",
     )
+    team_model_limit_is_floor: bool = Field(
+        default=False,
+        description="When true and the dynamic rate limiter covers the model, a team's model_tpm_limit is a guaranteed share instead of a ceiling. The team may exceed it while the model is below saturation_threshold and is held to it once the model saturates.",
+    )
 
     saturation_check_cache_ttl: int = Field(
         default=60,
