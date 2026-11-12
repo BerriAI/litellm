@@ -30,6 +30,8 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import os
+import shlex
+import signal
 import subprocess
 import sys
 import time
@@ -38,6 +40,7 @@ from typing import IO, TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from types import FrameType
 
 HELD_MARKER_ENV: Final = "LITELLM_GATE_SLOT_HELD"
 SLOT_COUNT_ENV: Final = "LITELLM_GATE_SLOTS"
@@ -143,6 +146,19 @@ def held_slot() -> Iterator[None]:
             os.environ.pop(HELD_MARKER_ENV, None)
 
 
+def _report_never_ran(signal_name: str) -> None:
+    print(
+        f"gate_slot_lock: {signal_name} arrived while waiting for a slot, so `{shlex.join(sys.argv[1:])}` never ran",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
+def _exit_before_the_command_ran(signum: int, _frame: FrameType | None) -> None:
+    _report_never_ran(signal.Signals(signum).name)
+    os._exit(128 + signum)
+
+
 def _wait_ignoring_interrupts(process: subprocess.Popen[bytes]) -> int:
     while True:
         try:
@@ -155,10 +171,13 @@ def main() -> int:
     if len(sys.argv) < 2:
         print("usage: gate_slot_lock.py <command> [args...]", file=sys.stderr)
         return 2
+    previous_sigterm_handler: Final = signal.signal(signal.SIGTERM, _exit_before_the_command_ran)
     try:
         held: Final = acquire_slot()
     except KeyboardInterrupt:
+        _report_never_ran("SIGINT")
         return 130
+    signal.signal(signal.SIGTERM, previous_sigterm_handler)
     try:
         code: Final = _wait_ignoring_interrupts(subprocess.Popen(sys.argv[1:]))
     except FileNotFoundError as error:
@@ -166,7 +185,10 @@ def main() -> int:
         return 127
     if held is not None:
         held.close()
-    return code if code >= 0 else 128 - code
+    exit_code: Final = code if code >= 0 else 128 - code
+    if exit_code != 0:
+        print(f"gate_slot_lock: `{shlex.join(sys.argv[1:])}` exited {exit_code}", file=sys.stderr, flush=True)
+    return exit_code
 
 
 if __name__ == "__main__":
