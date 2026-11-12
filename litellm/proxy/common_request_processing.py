@@ -128,6 +128,7 @@ from litellm.proxy.auth.auth_checks import (
     tag_max_budget_check_for_tags,
 )
 from litellm.proxy.auth.auth_utils import check_response_size_is_safe, client_side_s3_bucket_check, get_request_route
+from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.bug_report_config import build_proxy_bug_report
 from litellm.proxy.common_utils.callback_utils import (
     get_logging_caching_headers,
@@ -1146,11 +1147,14 @@ async def _enforce_guardrail_added_tag_budgets(
     llm_router: Router | None,
     user_api_key_dict: UserAPIKeyAuth,
     proxy_logging_obj: ProxyLogging,
+    http_method: str | None = None,
 ) -> None:
     added_tags: Final = tuple(
         tag for tag in get_tags_from_request_body(request_body=data) if tag not in tags_before_guardrails
     )
-    if not added_tags or request_skips_budget_checks(route=route, model=_request_model(data), llm_router=llm_router):
+    if not added_tags or request_skips_budget_checks(
+        route=route, model=_request_model(data), llm_router=llm_router, http_method=http_method
+    ):
         return
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
@@ -2970,6 +2974,7 @@ class ProxyBaseLLMRequestProcessing:
             llm_router=llm_router,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
+            http_method=RouteChecks.get_request_method(request),
         )
         if route_type == "aget_responses":
             attach_post_call_pipelines_to_retrieval(

@@ -4736,7 +4736,10 @@ async def test_bedrock_messages_fallback_to_anthropic_sends_the_tool_names_bedro
     unnamed_tool_extras: dict[str, object],
     sent_extras: dict[str, object],
 ) -> None:
+    from litellm.llms.anthropic.messages.native import handler as python_messages
+
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "anthropic_messages", python_messages.anthropic_messages)
     upstream: Final = BedrockDownAnthropicUp()
     respx_mock.post(url__regex=r"https://.*").mock(side_effect=upstream)
     router: Final = litellm.Router(

@@ -36,7 +36,12 @@ async fn all_inference_endpoints_share_native_cache(
     } else {
         "message_stop"
     };
-    let events = format!("event: {terminal}\ndata: {{\"type\":\"{terminal}\"}}\n\n");
+    let output = if is_responses {
+        ""
+    } else {
+        "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n"
+    };
+    let events = format!("{output}event: {terminal}\ndata: {{\"type\":\"{terminal}\"}}\n\n");
     let template = if stream {
         ResponseTemplate::new(200).set_body_raw(events.clone(), "text/event-stream")
     } else {
