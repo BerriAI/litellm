@@ -52,11 +52,15 @@ pub(crate) fn messages_provider(provider: LlmProviders, model: &str) -> Option<M
         LlmProviders::Tencent => &TENCENT_MESSAGES_CONFIG,
         LlmProviders::Anthropic => &ANTHROPIC_MESSAGES_CONFIG,
         LlmProviders::AzureAi => &AZURE_ANTHROPIC_MESSAGES_CONFIG,
-        LlmProviders::Bedrock if model.starts_with("claude_platform/") => {
+        LlmProviders::Bedrock if has_route_prefix(model, "claude_platform/") => {
             &BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG
         }
-        LlmProviders::Bedrock if model.starts_with("mantle/") => &BEDROCK_MANTLE_MESSAGES_CONFIG,
-        LlmProviders::Bedrock => &BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
+        LlmProviders::Bedrock if has_route_prefix(model, "converse/") => return None,
+        LlmProviders::Bedrock if has_route_prefix(model, "mantle/") => {
+            &BEDROCK_MANTLE_MESSAGES_CONFIG
+        }
+        LlmProviders::Bedrock if model.contains("claude") => &BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
+        LlmProviders::Bedrock => return None,
         LlmProviders::BedrockMantle => &BEDROCK_MANTLE_MESSAGES_CONFIG,
         LlmProviders::Deepseek => &DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG,
         LlmProviders::Edenai => &EDENAI_MESSAGES_CONFIG,
@@ -68,6 +72,10 @@ pub(crate) fn messages_provider(provider: LlmProviders, model: &str) -> Option<M
         _ => return None,
     };
     Some(MessagesProvider { provider, config })
+}
+
+fn has_route_prefix(model: &str, prefix: &str) -> bool {
+    model.starts_with(prefix) || model.contains(&format!("/{prefix}"))
 }
 
 pub(super) fn string_headers(
@@ -153,6 +161,72 @@ mod tests {
         #[case] model: &str,
     ) {
         assert!(messages_provider(provider, model).is_none());
+    }
+
+    #[rstest]
+    #[case::invoke_claude("anthropic.claude-sonnet-4-5-20250929-v1:0", Some("bedrock"))]
+    #[case::invoke_prefix("invoke/anthropic.claude-3-5-sonnet", Some("bedrock"))]
+    #[case::cross_region_claude("us.anthropic.claude-opus-4-5", Some("bedrock"))]
+    #[case::claude_arn(
+        "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-4-5",
+        Some("bedrock")
+    )]
+    #[case::converse_claude("converse/anthropic.claude-sonnet-4-5", None)]
+    #[case::nested_converse("us-west-2/converse/anthropic.claude-sonnet-4-5", None)]
+    #[case::non_claude("amazon.nova-pro-v1:0", None)]
+    #[case::non_claude_invoke("invoke/meta.llama3-70b-instruct-v1:0", None)]
+    #[case::capitalized_claude_is_not_claude("anthropic.Claude-x", None)]
+    #[case::mantle("mantle/anthropic.claude-sonnet-5", Some("bedrock"))]
+    #[case::claude_platform("claude_platform/claude-sonnet-4-5", Some("bedrock"))]
+    #[case::bedrock_mantle_provider_prefix_is_not_the_mantle_route(
+        "bedrock_mantle/openai.gpt-5",
+        None
+    )]
+    fn bedrock_models_route_as_python_selects_their_messages_config(
+        #[case] model: &str,
+        #[case] expected: Option<&str>,
+    ) {
+        assert_eq!(
+            messages_provider(LlmProviders::Bedrock, model).map(|provider| provider.as_str()),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::invoke("anthropic.claude-3", false, false)]
+    #[case::mantle("mantle/anthropic.claude-sonnet-5", true, false)]
+    #[case::claude_platform("claude_platform/claude-sonnet-4-5", false, true)]
+    fn bedrock_route_prefixes_pick_their_config(
+        #[case] model: &str,
+        #[case] mantle: bool,
+        #[case] claude_platform: bool,
+    ) {
+        use litellm_llms::{
+            base_llm::messages::transformation::BaseMessagesConfig,
+            bedrock::claude_platform::messages::transformation::BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG,
+            bedrock_mantle::messages::transformation::BEDROCK_MANTLE_MESSAGES_CONFIG,
+        };
+        let params = litellm_router_types::LitellmParams::default();
+        let region = |key: &str| {
+            key.starts_with("AWS_REGION")
+                .then(|| "us-east-1".to_owned())
+        };
+        let url = |config: &dyn BaseMessagesConfig| {
+            format!(
+                "{:?}",
+                config.get_complete_url(None, model, &params, false, &region)
+            )
+        };
+        let routed = url(messages_provider(LlmProviders::Bedrock, model)
+            .unwrap()
+            .config());
+        assert_eq!(
+            (
+                routed == url(&BEDROCK_MANTLE_MESSAGES_CONFIG),
+                routed == url(&BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG),
+            ),
+            (mantle, claude_platform)
+        );
     }
 
     #[rstest]

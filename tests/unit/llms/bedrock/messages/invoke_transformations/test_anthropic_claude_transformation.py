@@ -47,6 +47,13 @@ from litellm.llms.custom_httpx.stream_close import aclose_if_supported
 REASONING_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
+@pytest.fixture(autouse=True)
+def _python_messages(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.llms.anthropic.messages.native import handler as python_messages
+
+    monkeypatch.setattr(litellm, "anthropic_messages", python_messages.anthropic_messages)
+
+
 @pytest.mark.asyncio
 async def test_bedrock_sse_wrapper_encodes_dict_chunks():
     """Verify that `bedrock_sse_wrapper` converts dictionary chunks to properly formatted Server-Sent Events and forwards non-dict chunks unchanged."""

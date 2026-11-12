@@ -336,6 +336,8 @@ impl Settings {
                 web_identity_token: secret(params, "s3_aws_web_identity_token"),
                 sts_endpoint: text(params, "s3_aws_sts_endpoint"),
                 external_id: None,
+                session_tags: None,
+                session_policy: None,
             },
             use_team_prefix: truthy_param("s3_use_team_prefix"),
             use_key_prefix: truthy_param("s3_use_key_prefix"),

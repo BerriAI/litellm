@@ -1,4 +1,5 @@
 use litellm_core_utils::settings::{Lookup, ProcessEnvironment};
+use litellm_llms_types::formats::messages::EffortLevel;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -23,39 +24,10 @@ impl SupportedEffortTiers {
     }
 }
 
-/// What the shared Anthropic shaping does with a message, or a beta trigger in one, that Rust
-/// could not type. `Read` reads it as Python does, off any mapping. `Skipped` leaves it as sent
-/// and finds no beta in it, as main's native route does. Only `azure_ai` reads them: by the
-/// owner's ruling `anthropic` keeps main's behaviour.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum UnparsedMessages {
-    #[default]
-    Skipped,
-    Read,
-}
-
-impl UnparsedMessages {
-    pub fn read(self) -> bool {
-        self == Self::Read
-    }
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MessagesShapeOptions {
     pub reasoning_auto_summary: bool,
     pub presanitized: bool,
-    pub unparsed: UnparsedMessages,
-}
-
-impl MessagesShapeOptions {
-    /// The same options for a provider whose shaping reads unparsed messages.
-    #[must_use]
-    pub fn reading_unparsed_messages(self) -> Self {
-        Self {
-            unparsed: UnparsedMessages::Read,
-            ..self
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -80,6 +52,46 @@ pub struct MessagesModelCapabilities {
     pub supports_mid_conversation_system: bool,
     #[serde(default)]
     pub effort_tiers: SupportedEffortTiers,
+    #[serde(default)]
+    pub bedrock: BedrockCapabilities,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BedrockCapabilities {
+    #[serde(default)]
+    pub output_config_effort_ceiling: Option<EffortLevel>,
+    #[serde(default)]
+    pub supports_output_config: bool,
+    #[serde(default)]
+    pub supports_prompt_cache_ttl: bool,
+    #[serde(default)]
+    pub supports_tool_search: bool,
+    #[serde(default)]
+    pub supports_per_turn_control: bool,
+    #[serde(default)]
+    pub native_output: NativeOutputSupport,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeOutputSupport {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub opt_in: bool,
+    #[serde(default)]
+    pub mapped: bool,
+    #[serde(default)]
+    pub replaces_unforceable_tool: bool,
+}
+
+impl NativeOutputSupport {
+    pub fn is_opt_in(self) -> bool {
+        !self.enabled && (self.opt_in || self.replaces_unforceable_tool)
+    }
+
+    pub fn retries(self) -> bool {
+        self.enabled || self.is_opt_in()
+    }
 }
 
 fn default_true() -> bool {
@@ -99,6 +111,7 @@ impl Default for MessagesModelCapabilities {
             supports_speed: false,
             supports_mid_conversation_system: false,
             effort_tiers: SupportedEffortTiers::default(),
+            bedrock: BedrockCapabilities::default(),
         }
     }
 }
@@ -111,6 +124,7 @@ pub struct ThinkingBudgets {
     pub high: u64,
     pub xhigh: u64,
     pub max: u64,
+    pub bedrock_min: u64,
 }
 
 impl Default for ThinkingBudgets {
@@ -122,6 +136,7 @@ impl Default for ThinkingBudgets {
             high: 4096,
             xhigh: 8192,
             max: 16384,
+            bedrock_min: 1024,
         }
     }
 }
@@ -140,6 +155,9 @@ impl ThinkingBudgets {
             high: tier("HIGH", defaults.high),
             xhigh: tier("XHIGH", defaults.xhigh),
             max: tier("MAX", defaults.max),
+            bedrock_min: env
+                .parsed::<u64>("BEDROCK_MIN_THINKING_BUDGET_TOKENS")
+                .unwrap_or(defaults.bedrock_min),
         }
     }
 }
@@ -159,9 +177,7 @@ pub struct MessagesTransformContext {
     pub thinking: ThinkingContext,
     pub drop_params: bool,
     pub drops_unsupported_params: bool,
-    pub unparsed: UnparsedMessages,
-    /// Logs Python's warning for a param `drop_params` drops because the model lacks it.
-    pub logs_dropped_params: bool,
+    pub global_drop_params: bool,
 }
 impl MessagesTransformContext {
     pub fn new(capabilities: MessagesModelCapabilities, drop_params: bool) -> Self {
@@ -182,8 +198,7 @@ impl MessagesTransformContext {
             },
             drop_params,
             drops_unsupported_params: false,
-            unparsed: UnparsedMessages::Skipped,
-            logs_dropped_params: false,
+            global_drop_params: false,
         }
     }
 
@@ -195,15 +210,6 @@ impl MessagesTransformContext {
                 keeps_display_updates: true,
                 ..self.thinking
             },
-            ..*self
-        }
-    }
-
-    /// The same context for a provider whose transform reads unparsed messages.
-    #[must_use]
-    pub fn reading_unparsed_messages(&self) -> Self {
-        Self {
-            unparsed: UnparsedMessages::Read,
             ..*self
         }
     }

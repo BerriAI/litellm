@@ -32,6 +32,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+litellm-core-utils.workspace = true
 litellm-cache-memory.workspace = true
 futures-util.workspace = true
 tokio = { workspace = true, features = ["io-util"] }

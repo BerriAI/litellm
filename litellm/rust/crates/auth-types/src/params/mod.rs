@@ -1,7 +1,7 @@
 mod aws;
 mod vertex;
 
-pub use aws::AwsParams;
+pub use aws::{AwsParams, AwsSessionTag};
 pub use vertex::VertexParams;
 
 /// One connection param of Python's `CredentialLiteLLMParams` and every place Python reads

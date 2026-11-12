@@ -14,6 +14,7 @@ class MessagesStreamHead(dict[str, object]):
     agentic: Callable[[execution.AsyncStream], object] | None = None
     deliver: Callable[[object], Awaitable[object]] | None = None
     python_types: bool = False
+    relayed: bool = False
     cached: object | None = None
     cache_writer: Callable[[object], object] | None = None
 

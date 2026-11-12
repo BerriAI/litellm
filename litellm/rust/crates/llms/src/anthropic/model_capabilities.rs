@@ -1,19 +1,32 @@
 use std::sync::LazyLock;
 
-use crate::base_llm::messages::context::{MessagesModelCapabilities, SupportedEffortTiers};
+use crate::base_llm::messages::context::{
+    BedrockCapabilities, MessagesModelCapabilities, NativeOutputSupport, SupportedEffortTiers,
+};
 use crate::bedrock::common_utils::{
-    bedrock_base_model, is_bedrock_application_inference_profile_arn, without_routing_prefixes,
+    bedrock_base_model, is_bedrock_application_inference_profile_arn, strip_bedrock_routing_prefix,
 };
 use fancy_regex::Regex;
 use litellm_auth_aws::is_bedrock_region;
 use litellm_core_utils::get_llm_provider_logic::get_custom_llm_provider;
+use litellm_llms_types::formats::messages::EffortLevel;
 use litellm_model_catalog::{Catalog, wire::Fields};
+use litellm_python_compat::{json::from_json, truthy::truthy};
+use serde::Deserialize;
+use serde_json::Value;
 
 const SAMPLING_RESTRICTED_NAMES: [&str; 9] = [
     "fable", "opus-4-7", "opus_4_7", "opus-4.7", "opus_4.7", "opus-4-8", "opus_4_8", "opus-4.8",
     "opus_4.8",
 ];
 const SAMPLING_TOLERANT_PROVIDERS: [&str; 1] = ["openrouter"];
+const BEDROCK: &str = "bedrock";
+const NATIVE_OUTPUT: &str = "supports_native_structured_output";
+const BEDROCK_NATIVE_OUTPUT: &str = "supports_bedrock_native_structured_output";
+const NATIVE_OUTPUT_BY_DEFAULT: &str = "supports_bedrock_native_structured_output_by_default";
+const OUTPUT_CONFIG: &str = "supports_output_config";
+const PER_TURN_CONTROL: &str = "supports_per_turn_control";
+const PROMPT_CACHE_TTL_PRICE: &str = "cache_creation_input_token_cost_above_1hr";
 const BACKSTOP_PREFIXES: [&str; 4] = [
     "bedrock/converse/",
     "bedrock/invoke/",
@@ -45,7 +58,8 @@ pub fn anthropic_model_capabilities(
         .map_or((model, "anthropic"), |resolved| {
             (resolved.model, resolved.custom_llm_provider)
         });
-    let (model, name) = match base_model.map(without_routing_prefixes) {
+    let requested = model;
+    let (model, name) = match base_model.map(strip_bedrock_routing_prefix) {
         Some(base)
             if is_bedrock(provider) && is_bedrock_application_inference_profile_arn(resolved) =>
         {
@@ -53,18 +67,7 @@ pub fn anthropic_model_capabilities(
         }
         _ => (model, resolved),
     };
-    let probe = Probe {
-        catalog,
-        declared,
-        fallbacks: backstop_candidates(model),
-        info: catalog.model_info(
-            &candidate_names(name, provider)
-                .each_ref()
-                .map(String::as_str),
-            provider,
-        ),
-        bare: catalog.lookup(name).map(|found| found.entry.fields()),
-    };
+    let probe = Probe::new(catalog, model, name, provider, declared);
     let thinking_always_on = probe.supports("thinking_always_on");
     MessagesModelCapabilities {
         supports_reasoning: probe.supports("supports_reasoning"),
@@ -98,7 +101,71 @@ pub fn anthropic_model_capabilities(
             xhigh: probe.supports("supports_xhigh_reasoning_effort"),
             max: probe.supports("supports_max_reasoning_effort"),
         },
+        bedrock: if provider == BEDROCK {
+            bedrock_model_capabilities(catalog, requested, declared)
+        } else {
+            BedrockCapabilities::default()
+        },
     }
+}
+
+pub fn bedrock_model_capabilities(
+    catalog: &Catalog,
+    model: &str,
+    declared: &dyn Fn(&str) -> Option<bool>,
+) -> BedrockCapabilities {
+    let model = bedrock_model(model);
+    let probe = Probe::new(catalog, model, bedrock_model(model), BEDROCK, &|_| None);
+    let mapped = probe.factory(NATIVE_OUTPUT);
+    let opted_out = declared(BEDROCK_NATIVE_OUTPUT).map_or_else(
+        || mapped_native_output_flag(catalog, model) == Some(false),
+        |opted_in| !opted_in,
+    );
+    BedrockCapabilities {
+        output_config_effort_ceiling: probe
+            .info
+            .as_ref()
+            .and_then(|info| info.get("bedrock_output_config_effort_ceiling"))
+            .and_then(|ceiling| EffortLevel::deserialize(ceiling).ok()),
+        supports_output_config: probe.factory(OUTPUT_CONFIG),
+        supports_prompt_cache_ttl: [model, bedrock_base_model(model)].iter().any(|name| {
+            catalog
+                .get(name)
+                .and_then(|fields| fields.get(PROMPT_CACHE_TTL_PRICE))
+                .is_some_and(|price| !price.is_null())
+        }),
+        supports_tool_search: probe.supports("supports_tool_search"),
+        supports_per_turn_control: declared(PER_TURN_CONTROL)
+            .unwrap_or_else(|| probe.supports(PER_TURN_CONTROL)),
+        native_output: NativeOutputSupport {
+            enabled: declared(NATIVE_OUTPUT)
+                .unwrap_or_else(|| declared(BEDROCK_NATIVE_OUTPUT) != Some(false) && mapped),
+            opt_in: declared(BEDROCK_NATIVE_OUTPUT)
+                .unwrap_or_else(|| probe.factory(BEDROCK_NATIVE_OUTPUT)),
+            mapped,
+            replaces_unforceable_tool: backstop(
+                catalog,
+                &probe.fallbacks,
+                "supports_forced_tool_use",
+            ) == Some(false)
+                && !opted_out,
+        },
+    }
+}
+
+fn bedrock_model(model: &str) -> &str {
+    get_custom_llm_provider(model, Some(BEDROCK)).map_or(model, |found| found.model)
+}
+
+fn mapped_native_output_flag(catalog: &Catalog, model: &str) -> Option<bool> {
+    let routed = strip_bedrock_routing_prefix(model);
+    [
+        format!("{BEDROCK}/{routed}"),
+        routed.to_owned(),
+        without_region(routed).to_owned(),
+    ]
+    .iter()
+    .find_map(|name| flag(catalog.get(name), BEDROCK_NATIVE_OUTPUT))
 }
 
 struct Probe<'a> {
@@ -109,7 +176,28 @@ struct Probe<'a> {
     bare: Option<&'a Fields>,
 }
 
-impl Probe<'_> {
+impl<'a> Probe<'a> {
+    fn new(
+        catalog: &'a Catalog,
+        model: &str,
+        name: &str,
+        provider: &str,
+        declared: &'a dyn Fn(&str) -> Option<bool>,
+    ) -> Self {
+        Self {
+            catalog,
+            declared,
+            fallbacks: backstop_candidates(model),
+            info: catalog.model_info(
+                &candidate_names(name, provider)
+                    .each_ref()
+                    .map(String::as_str),
+                provider,
+            ),
+            bare: catalog.lookup(name).map(|found| found.entry.fields()),
+        }
+    }
+
     fn supports(&self, capability: &str) -> bool {
         if let Some(supported) = (self.declared)(capability) {
             return supported;
@@ -117,10 +205,35 @@ impl Probe<'_> {
         if let Some(supported) = flag(self.info.as_ref(), capability) {
             return supported;
         }
-        if self.info.is_some() && flag(self.bare, capability) == Some(true) {
-            return true;
+        self.bare_supports(capability)
+            || backstop(self.catalog, &self.fallbacks, capability) == Some(true)
+    }
+
+    fn factory(&self, capability: &str) -> bool {
+        match self.info.as_ref() {
+            Some(info) => {
+                model_info_flag(info, capability).unwrap_or_else(|| self.bare_supports(capability))
+            }
+            None => false,
         }
-        backstop(self.catalog, &self.fallbacks, capability) == Some(true)
+    }
+
+    fn bare_supports(&self, capability: &str) -> bool {
+        self.info.is_some() && flag(self.bare, capability) == Some(true)
+    }
+}
+
+fn model_info_flag(info: &Fields, capability: &str) -> Option<bool> {
+    match capability {
+        NATIVE_OUTPUT
+            if info
+                .get(NATIVE_OUTPUT_BY_DEFAULT)
+                .is_some_and(|value| truthy(&from_json(value.clone()))) =>
+        {
+            Some(info.get(BEDROCK_NATIVE_OUTPUT) != Some(&Value::Bool(false)))
+        }
+        OUTPUT_CONFIG => None,
+        _ => flag(Some(info), capability),
     }
 }
 
@@ -170,7 +283,7 @@ fn split_model<'a>(model: &'a str, provider: &str) -> &'a str {
     if !is_bedrock(provider) {
         return model;
     }
-    let routed = without_routing_prefixes(model);
+    let routed = strip_bedrock_routing_prefix(model);
     let region_free = without_region(routed);
     if !region_free.starts_with("arn:") {
         return routed;
@@ -239,7 +352,9 @@ mod tests {
     use rstest::{fixture, rstest};
     use serde_json::Value;
 
-    use super::anthropic_model_capabilities;
+    use super::{anthropic_model_capabilities, bedrock_model_capabilities};
+    use crate::base_llm::messages::context::{BedrockCapabilities, NativeOutputSupport};
+    use litellm_llms_types::formats::messages::EffortLevel;
 
     const CATALOG: &str = r#"{
         "claude-test-5": {
@@ -457,6 +572,137 @@ mod tests {
             anthropic_model_capabilities(&catalog, model, None, base_model, &|_| None)
                 .supports_reasoning,
             expected
+        );
+    }
+
+    #[fixture]
+    fn bundled() -> Catalog {
+        Catalog::parse(BUNDLED_REGISTRY).unwrap().value
+    }
+
+    type Expected = (Option<EffortLevel>, [bool; 8]);
+
+    fn projected(capabilities: BedrockCapabilities) -> Expected {
+        let BedrockCapabilities {
+            output_config_effort_ceiling,
+            supports_output_config,
+            supports_prompt_cache_ttl,
+            supports_tool_search,
+            supports_per_turn_control,
+            native_output:
+                NativeOutputSupport {
+                    enabled,
+                    opt_in,
+                    mapped,
+                    replaces_unforceable_tool,
+                },
+        } = capabilities;
+        (
+            output_config_effort_ceiling,
+            [
+                supports_output_config,
+                supports_prompt_cache_ttl,
+                supports_tool_search,
+                supports_per_turn_control,
+                enabled,
+                opt_in,
+                mapped,
+                replaces_unforceable_tool,
+            ],
+        )
+    }
+
+    const XHIGH: Option<EffortLevel> = Some(EffortLevel::Xhigh);
+    const PROFILE: &str = "bedrock/arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-opus-4-8";
+    const FOUNDATION: &str = "bedrock/invoke/arn:aws:bedrock:us-east-1:123456789012:foundation-model/anthropic.claude-opus-4-8";
+    const APPLICATION: &str =
+        "bedrock/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123";
+
+    #[rstest]
+    #[case::us("bedrock/us.anthropic.claude-opus-4-8", (XHIGH, [true, true, true, true, true, true, true, false]))]
+    #[case::eu("bedrock/eu.anthropic.claude-opus-4-8", (XHIGH, [true, true, true, true, true, true, true, false]))]
+    #[case::global("bedrock/global.anthropic.claude-opus-4-8", (XHIGH, [true, true, true, true, true, true, true, false]))]
+    #[case::invoke_prefix("bedrock/invoke/us.anthropic.claude-opus-4-8", (XHIGH, [false, true, true, true, true, true, true, false]))]
+    #[case::region_path("bedrock/us-east-1/anthropic.claude-opus-4-8", (XHIGH, [false, true, true, true, false, true, false, false]))]
+    #[case::inference_profile_arn(PROFILE, (XHIGH, [false, true, true, true, true, true, true, false]))]
+    #[case::invoke_foundation_arn(FOUNDATION, (XHIGH, [false, true, true, true, false, true, false, false]))]
+    #[case::unprefixed("anthropic.claude-opus-4-8", (XHIGH, [true, true, true, true, false, true, false, false]))]
+    #[case::other_casing("bedrock/ANTHROPIC.CLAUDE-OPUS-4-8", (XHIGH, [true, false, true, true, false, true, false, false]))]
+    #[case::sonnet_4_5("bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0", (None, [false, true, true, true, true, false, true, false]))]
+    #[case::converse_prefix("bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0", (None, [false, true, true, true, true, false, true, false]))]
+    #[case::throughput_suffix("bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0:1000k", (None, [false, true, true, true, true, false, true, false]))]
+    #[case::claude_3_5("bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0", (None, [false; 8]))]
+    #[case::opus_4_7_without_version("bedrock/global.anthropic.claude-opus-4-7", (XHIGH, [true, true, true, true, false, false, false, false]))]
+    #[case::opus_4_7_invoke("bedrock/invoke/global.anthropic.claude-opus-4-7-v1:0", (None, [false, false, true, true, false, false, false, false]))]
+    #[case::unforceable_tool("bedrock/anthropic.claude-fable-5-1", (XHIGH, [true, true, true, true, false, false, false, true]))]
+    #[case::native_by_default("bedrock/us.anthropic.claude-mythos-5-2", (XHIGH, [true, true, true, true, true, false, true, false]))]
+    #[case::opt_in_only("bedrock/anthropic.claude-sonnet-5", (XHIGH, [true, true, true, true, false, true, false, false]))]
+    #[case::unmapped_claude_version("bedrock/anthropic.claude-opus-9-9-v1:0", (None, [false, false, true, true, false, false, false, false]))]
+    #[case::unmapped_claude("bedrock/anthropic.claude-newthing", (None, [false; 8]))]
+    #[case::application_profile(APPLICATION, (None, [false; 8]))]
+    #[case::other_family("bedrock/amazon.nova-pro-v1:0", (None, [false; 8]))]
+    #[case::unknown("bedrock/unknown-model", (None, [false; 8]))]
+    fn bedrock_capabilities_match_python(
+        bundled: Catalog,
+        #[case] model: &str,
+        #[case] expected: Expected,
+    ) {
+        assert_eq!(
+            projected(bedrock_model_capabilities(&bundled, model, &|_| None)),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::native_on("bedrock/us.anthropic.claude-opus-4-8", &[("supports_native_structured_output", true)], (XHIGH, [true, true, true, true, true, true, true, false]))]
+    #[case::native_off("bedrock/us.anthropic.claude-opus-4-8", &[("supports_native_structured_output", false)], (XHIGH, [true, true, true, true, false, true, true, false]))]
+    #[case::bedrock_native_off("bedrock/us.anthropic.claude-opus-4-8", &[("supports_bedrock_native_structured_output", false)], (XHIGH, [true, true, true, true, false, false, true, false]))]
+    #[case::per_turn_off("bedrock/us.anthropic.claude-opus-4-8", &[("supports_per_turn_control", false)], (XHIGH, [true, true, true, false, true, true, true, false]))]
+    #[case::native_off_opt_in(
+        "bedrock/us.anthropic.claude-opus-4-8",
+        &[("supports_native_structured_output", false), ("supports_bedrock_native_structured_output", true)],
+        (XHIGH, [true, true, true, true, false, true, true, false])
+    )]
+    #[case::unforceable_native_on("bedrock/anthropic.claude-fable-5-1", &[("supports_native_structured_output", true)], (XHIGH, [true, true, true, true, true, false, false, true]))]
+    #[case::unforceable_opt_in("bedrock/anthropic.claude-fable-5-1", &[("supports_bedrock_native_structured_output", true)], (XHIGH, [true, true, true, true, false, true, false, true]))]
+    #[case::unforceable_opted_out("bedrock/anthropic.claude-fable-5-1", &[("supports_bedrock_native_structured_output", false)], (XHIGH, [true, true, true, true, false, false, false, false]))]
+    #[case::bedrock_native_on("bedrock/anthropic.claude-haiku-4-5-20251001-v1:0", &[("supports_bedrock_native_structured_output", true)], (None, [false, true, true, true, true, true, true, false]))]
+    #[case::per_turn_off_haiku("bedrock/anthropic.claude-haiku-4-5-20251001-v1:0", &[("supports_per_turn_control", false)], (None, [false, true, true, false, true, false, true, false]))]
+    fn deployment_model_info_overrides_the_catalog_as_python_does(
+        bundled: Catalog,
+        #[case] model: &str,
+        #[case] declared: &[(&str, bool)],
+        #[case] expected: Expected,
+    ) {
+        let lookup = |capability: &str| {
+            declared
+                .iter()
+                .find(|(name, _)| *name == capability)
+                .map(|(_, supported)| *supported)
+        };
+
+        assert_eq!(
+            projected(bedrock_model_capabilities(&bundled, model, &lookup)),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::bedrock("bedrock/us.anthropic.claude-opus-4-8", None, true)]
+    #[case::configured_bedrock("us.anthropic.claude-opus-4-8", Some("bedrock"), true)]
+    #[case::anthropic("anthropic/claude-opus-4-8", None, false)]
+    fn only_bedrock_deployments_carry_bedrock_capabilities(
+        bundled: Catalog,
+        #[case] model: &str,
+        #[case] custom_llm_provider: Option<&str>,
+        #[case] carried: bool,
+    ) {
+        let capabilities =
+            anthropic_model_capabilities(&bundled, model, custom_llm_provider, None, &|_| None);
+
+        assert_eq!(
+            capabilities.bedrock != BedrockCapabilities::default(),
+            carried
         );
     }
 
