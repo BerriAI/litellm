@@ -57,6 +57,24 @@ _DECODED_JSON: Final = TypeAdapter(object)
 _RequestData: TypeAlias = dict[str, object]
 
 
+def _raise_for_unmapped_interactions_guardrail(
+    call_type: CallTypesLiteral | None,
+    mappings: Mapping[CallTypes, type["BaseTranslation"]],
+) -> None:
+    if call_type is None:
+        return
+    try:
+        resolved_call_type: Final = CallTypes(call_type)
+    except ValueError:
+        return
+    if resolved_call_type != CallTypes.acreate_interaction or resolved_call_type in mappings:
+        return
+    raise HTTPException(
+        status_code=400,
+        detail="Interactions requests cannot enforce configured apply_guardrail policies without a translation handler",
+    )
+
+
 @runtime_checkable
 class RequestAttachmentScanner(Protocol):
     async def async_scan_request_attachments(
@@ -282,6 +300,9 @@ class UnifiedLLMGuardrails(CustomLogger):
         if guardrail_to_apply is None:
             return data
 
+        mappings: Final = load_guardrail_translation_mappings()
+        _raise_for_unmapped_interactions_guardrail(call_type, mappings)
+
         event_type: GuardrailEventHooks = GuardrailEventHooks.pre_call
         if call_type in MCP_GUARDRAIL_CALL_TYPES:
             event_type = GuardrailEventHooks.pre_mcp_call
@@ -292,8 +313,6 @@ class UnifiedLLMGuardrails(CustomLogger):
                 guardrail_to_apply.guardrail_name,
             )
             return data
-
-        mappings: Final = load_guardrail_translation_mappings()
 
         try:
             if CallTypes(call_type) not in mappings:
@@ -346,6 +365,7 @@ class UnifiedLLMGuardrails(CustomLogger):
             return data
 
         mappings: Final = load_guardrail_translation_mappings()
+        _raise_for_unmapped_interactions_guardrail(call_type, mappings)
         if call_type is not None and CallTypes(call_type) not in mappings:
             return data
 
@@ -421,6 +441,8 @@ class UnifiedLLMGuardrails(CustomLogger):
             return response
 
         mappings: Final = load_guardrail_translation_mappings()
+
+        _raise_for_unmapped_interactions_guardrail(call_type, mappings)
 
         if CallTypes(call_type) not in mappings:
             verbose_proxy_logger.warning(

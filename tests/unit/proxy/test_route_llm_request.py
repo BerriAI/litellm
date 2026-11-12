@@ -23,12 +23,13 @@ from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import get_team_provider_deployment
 from litellm.proxy.route_llm_request import (
     JSON_OBJECT_ADAPTER,
     ProxyModelNotFoundError,
     UserConfigRouters,
+    _raise_if_qca_deployment_selectors_are_overridden,
     endpoint_unsupported_by_model,
     route_request,
     user_config_routers,
@@ -43,6 +44,161 @@ from litellm.types.router import RouterErrors, RouterGeneralSettings, RouterRate
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 
+@pytest.mark.parametrize("selector", ("agent", "environment"))
+def test_qca_alias_rejects_request_selector_overrides(selector: str) -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "qoder-agent",
+                "litellm_params": {
+                    "model": "qca/agent_configured",
+                    "environment": "env_configured",
+                    "api_key": "unit-provider-key",
+                },
+            }
+        ]
+    )
+
+    with pytest.raises(ProxyException) as error:
+        _raise_if_qca_deployment_selectors_are_overridden(
+            router,
+            "qoder-agent",
+            {"model": "qoder-agent", selector: f"{selector}_attacker"},
+        )
+
+    assert error.value.code == "403"
+
+
+@pytest.mark.parametrize("selector", ("agent", "environment"))
+def test_qca_model_group_alias_rejects_request_selector_overrides(selector: str) -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "qoder-agent",
+                "litellm_params": {
+                    "model": "qca/agent_configured",
+                    "environment": "env_configured",
+                    "api_key": "unit-provider-key",
+                },
+            }
+        ],
+        model_group_alias={"public-agent": "qoder-agent"},
+    )
+
+    with pytest.raises(ProxyException) as error:
+        _raise_if_qca_deployment_selectors_are_overridden(
+            router,
+            "public-agent",
+            {"model": "public-agent", selector: f"{selector}_attacker"},
+        )
+
+    assert error.value.code == "403"
+
+
+@pytest.mark.parametrize("selector", ("agent", "environment"))
+def test_qca_deployment_id_rejects_request_selector_overrides(selector: str) -> None:
+    deployment_id: Final = "qoder-deployment-id"
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "qoder-agent",
+                "litellm_params": {
+                    "model": "qca/agent_configured",
+                    "environment": "env_configured",
+                    "api_key": "unit-provider-key",
+                },
+                "model_info": {"id": deployment_id},
+            }
+        ]
+    )
+
+    with pytest.raises(ProxyException) as error:
+        _raise_if_qca_deployment_selectors_are_overridden(
+            router,
+            deployment_id,
+            {"model": deployment_id, selector: f"{selector}_attacker"},
+        )
+
+    assert error.value.code == "403"
+
+
+@pytest.mark.parametrize("selector", ("agent", "environment"))
+def test_qca_team_public_name_rejects_request_selector_overrides(selector: str) -> None:
+    team_id: Final = "qoder-team"
+    public_name: Final = "team-qoder-agent"
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "private-qoder-agent",
+                "litellm_params": {
+                    "model": "qca/agent_configured",
+                    "environment": "env_configured",
+                    "api_key": "unit-provider-key",
+                },
+                "model_info": {"team_id": team_id, "team_public_model_name": public_name},
+            }
+        ]
+    )
+    request: Final = {
+        "model": public_name,
+        selector: f"{selector}_attacker",
+        "metadata": {"user_api_key_team_id": team_id},
+    }
+
+    with pytest.raises(ProxyException) as error:
+        _raise_if_qca_deployment_selectors_are_overridden(
+            router,
+            public_name,
+            request,
+            UserAPIKeyAuth(team_id=team_id),
+        )
+
+    assert error.value.code == "403"
+
+
+@pytest.mark.parametrize(
+    "budget_field,budget_value",
+    (
+        ("max_budget", 10.0),
+        ("user_max_budget", 10.0),
+        ("team_max_budget", 10.0),
+        ("organization_max_budget", 10.0),
+        ("end_user_max_budget", 10.0),
+        ("budget_id", "budget-config-id"),
+        ("budget_limits", ({"budget_duration": "1d", "max_budget": 10.0},)),
+        ("budget_reservation", {"entries": [{"counter_key": "spend:team:team-id"}]}),
+        ("model_max_budget", {"qoder-agent": {"max_budget": 10.0}}),
+        ("user_model_max_budget", {"qoder-agent": {"max_budget": 10.0}}),
+        ("team_model_max_budget", {"qoder-agent": {"max_budget": 10.0}}),
+        ("team_member_model_max_budget", {"qoder-agent": {"max_budget": 10.0}}),
+        ("end_user_model_max_budget", {"qoder-agent": {"max_budget": 10.0}}),
+    ),
+)
+def test_qca_rejects_callers_with_unenforceable_monetary_budgets(budget_field: str, budget_value: object) -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "qoder-agent",
+                "litellm_params": {
+                    "model": "qca/agent_configured",
+                    "environment": "env_configured",
+                    "api_key": "unit-provider-key",
+                },
+            }
+        ]
+    )
+    caller: Final = UserAPIKeyAuth.model_validate({budget_field: budget_value})
+
+    with pytest.raises(ProxyException) as error:
+        _raise_if_qca_deployment_selectors_are_overridden(
+            router,
+            "qoder-agent",
+            {"model": "qoder-agent"},
+            caller,
+        )
+
+    assert error.value.code == "400"
+    assert "cannot enforce monetary budgets" in error.value.message
 @pytest.mark.parametrize(
     "route_type, required_body_params",
     [

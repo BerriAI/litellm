@@ -363,6 +363,7 @@ jobs:
               tests/unit/llms/pg_vector
               tests/unit/llms/pi
               tests/unit/llms/publicai
+              tests/unit/llms/qca
               tests/unit/llms/ragflow
               tests/unit/llms/recraft
               tests/unit/llms/reducto

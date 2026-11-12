@@ -310,6 +310,47 @@ def create(
         local_vars.update(kwargs)
         optional_params: Final = InteractionsAPIRequestUtils.get_requested_interactions_api_optional_params(local_vars)
 
+        if custom_llm_provider == "qca":
+            from litellm.llms.qca.interactions import create_qca_interaction
+
+            if not _is_async:
+                raise litellm.UnsupportedParamsError(
+                    message="QCA interactions require litellm.interactions.acreate",
+                    llm_provider="qca",
+                    model=model,
+                )
+            litellm_logging_obj.update_from_kwargs(  # pyright: ignore[reportUnknownMemberType]  # old API untyped
+                kwargs=kwargs,
+                model=model,
+                optional_params=dict(optional_params),
+                litellm_params={"litellm_call_id": litellm_call_id},
+                custom_llm_provider=custom_llm_provider,
+            )
+            return create_qca_interaction(
+                agent=agent or model,
+                input=input,
+                environment=environment,
+                previous_interaction_id=previous_interaction_id,
+                stream=stream,
+                api_key=litellm_params.api_key if isinstance(litellm_params.api_key, str) else None,
+                api_base=litellm_params.api_base,
+                timeout=timeout,
+                logging_obj=litellm_logging_obj,
+                unsupported_params={
+                    "tools": tools,
+                    "system_instruction": system_instruction,
+                    "generation_config": generation_config,
+                    "store": store,
+                    "background": background,
+                    "response_modalities": response_modalities,
+                    "response_format": response_format,
+                    "response_mime_type": response_mime_type,
+                    "agent_config": agent_config,
+                    "extra_headers": extra_headers,
+                    "extra_body": extra_body,
+                },
+            )
+
         # Check if this is a bridge provider (litellm_responses) - similar to responses API
         # Either provider is explicitly "litellm_responses" or no config found (bridge to responses)
         if custom_llm_provider == "litellm_responses" or interactions_api_config is None:

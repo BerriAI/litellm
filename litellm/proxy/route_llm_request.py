@@ -11,7 +11,7 @@ from uuid import uuid4
 
 import httpx
 from fastapi import HTTPException, status
-from pydantic import BeforeValidator, TypeAdapter, ValidationError
+from pydantic import BaseModel, BeforeValidator, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, normalize_drop_params
@@ -69,6 +69,52 @@ _PER_REQUEST_ROUTER_SETTINGS: Final = (
 _ROUTER_ONLY_SETTINGS: Final = frozenset(
     ("fallbacks", "context_window_fallbacks", "content_policy_fallbacks", "model_group_retry_policy")
 )
+_ROUTER_DEPLOYMENTS: Final = TypeAdapter(list[dict[str, object]])
+
+
+class _QCAMonetaryBudgetContext(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    max_budget: float | None = None
+    user_max_budget: float | None = None
+    team_max_budget: float | None = None
+    organization_max_budget: float | None = None
+    end_user_max_budget: float | None = None
+    budget_id: str | None = None
+    budget_limits: tuple[object, ...] | None = None
+    budget_reservation: Mapping[str, object] | None = None
+    model_max_budget: Mapping[str, object] | None = None
+    user_model_max_budget: Mapping[str, object] | None = None
+    team_model_max_budget: Mapping[str, object] | None = None
+    team_member_model_max_budget: Mapping[str, object] | None = None
+    end_user_model_max_budget: Mapping[str, object] | None = None
+
+    def is_limited(self) -> bool:
+        values: Final = (
+            self.max_budget,
+            self.user_max_budget,
+            self.team_max_budget,
+            self.organization_max_budget,
+            self.end_user_max_budget,
+            self.budget_id,
+            self.budget_limits,
+            self.budget_reservation,
+            self.model_max_budget,
+            self.user_model_max_budget,
+            self.team_model_max_budget,
+            self.team_member_model_max_budget,
+            self.end_user_model_max_budget,
+        )
+        return any(value is not None and value != {} for value in values)
+
+
+def _provider_model(deployment: Mapping[str, object]) -> str | None:
+    unvalidated_litellm_params: Final = deployment.get("litellm_params")
+    if not isinstance(unvalidated_litellm_params, Mapping):
+        return None
+    litellm_params: Final = JSON_OBJECT_ADAPTER.validate_python(unvalidated_litellm_params)
+    model: Final = litellm_params.get("model")
+    return model if isinstance(model, str) else None
 
 
 class UserConfigRouters:
@@ -149,6 +195,53 @@ def _raise_if_model_fully_blocked(llm_router: LitellmRouter, model_name: object,
                 status_code=403,
                 request=httpx.Request(method="POST", url="https://github.com/BerriAI/litellm"),
             ),
+        )
+
+
+def _raise_if_qca_deployment_selectors_are_overridden(
+    llm_router: LitellmRouter,
+    model_name: object,
+    request_data: Mapping[str, object],
+    user_api_key_dict: UserAPIKeyAuth | None = None,
+) -> None:
+    if not isinstance(model_name, str):
+        return
+    deployment_by_id: Final = llm_router.registry().deployment(model_name)
+    request_deployments: Final = _ROUTER_DEPLOYMENTS.validate_python(
+        llm_router.registry().deployments(
+            model_name,
+            source="for_request",
+            request=request_data,
+            call_type="acreate_interaction",
+        )
+    )
+    configured_models: Final = (
+        (deployment_by_id.litellm_params.model,)
+        if deployment_by_id is not None
+        else tuple(model for deployment in request_deployments if (model := _provider_model(deployment)) is not None)
+    )
+    if not model_name.startswith("qca/") and not any(model.startswith("qca/") for model in configured_models):
+        return
+    budget_context: Final = (
+        None if user_api_key_dict is None else _QCAMonetaryBudgetContext.model_validate(user_api_key_dict)
+    )
+    if budget_context is not None and budget_context.is_limited():
+        raise ProxyException(
+            message=(
+                "Qoder Cloud Agents cannot enforce monetary budgets because Qoder credits do not have a configured "
+                "currency conversion"
+            ),
+            type="invalid_request_error",
+            param="model",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+    overridden: Final = tuple(name for name in ("agent", "environment") if request_data.get(name) is not None)
+    if overridden:
+        raise ProxyException(
+            message=f"Qoder Cloud Agents deployment selectors cannot be overridden: {', '.join(overridden)}",
+            type="auth_error",
+            param=overridden[0],
+            code=status.HTTP_403_FORBIDDEN,
         )
 
 
@@ -469,13 +562,14 @@ def endpoint_unsupported_by_model(
     if not isinstance(model, str) or llm_router is None:
         return False
     metadata: Final = data.get("metadata")
-    request_kwargs: Final = {
-        **data,
-        "metadata": {
-            **(metadata if isinstance(metadata, Mapping) else {}),
+    validated_metadata: Final = JSON_OBJECT_ADAPTER.validate_python(metadata) if isinstance(metadata, Mapping) else {}
+    request_metadata: Final = MappingProxyType[str, object](
+        {
+            **validated_metadata,
             "user_api_key_team_id": team_id,
-        },
-    }
+        }
+    )
+    request_kwargs: Final = MappingProxyType[str, object]({**data, "metadata": request_metadata})
     registry: Final = llm_router.registry()
     return bool(registry.deployments(model, source="routable", request=request_kwargs)) and not registry.deployments(
         model, source="routable", request=request_kwargs, call_type=route_type
@@ -901,6 +995,15 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
     team_id: Final = get_team_id_from_data(data)
     router_model_names: Final = llm_router.registry().names(kind="group_set") if llm_router is not None else []
     is_proxy_admin_without_team: Final = team_id is None and is_proxy_admin_request(data)
+
+    if route_type == "acreate_interaction" and llm_router is not None:
+        interaction_request: Final = JSON_OBJECT_ADAPTER.validate_python(data)
+        _raise_if_qca_deployment_selectors_are_overridden(
+            llm_router,
+            interaction_request.get("model"),
+            interaction_request,
+            user_api_key_dict,
+        )
 
     # Preprocess Google GenAI generate content requests
     if route_type in ["agenerate_content", "agenerate_content_stream"]:

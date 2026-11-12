@@ -669,6 +669,12 @@ class CallTypes(str, Enum):
     #########################################################
     create_interaction = "create_interaction"
     acreate_interaction = "acreate_interaction"
+    get_interaction = "get_interaction"
+    aget_interaction = "aget_interaction"
+    delete_interaction = "delete_interaction"
+    adelete_interaction = "adelete_interaction"
+    cancel_interaction = "cancel_interaction"
+    acancel_interaction = "acancel_interaction"
 
     #########################################################
     # Container Call Types
@@ -811,6 +817,10 @@ CallTypesLiteral = Literal[
     "list_mcp_tools",
     "asend_message",
     "send_message",
+    "acreate_interaction",
+    "aget_interaction",
+    "adelete_interaction",
+    "acancel_interaction",
     "aresponses",
     "responses",
     "compact_responses",
@@ -4709,6 +4719,7 @@ class LlmProviders(str, Enum):
     CODESTRAL = "codestral"
     TEXT_COMPLETION_CODESTRAL = "text-completion-codestral"
     DASHSCOPE = "dashscope"
+    QCA = "qca"
     QWENCLOUD = "qwencloud"
     QWEN_AI_PLATFORM = "qwen_ai_platform"
     MODELSCOPE = "modelscope"

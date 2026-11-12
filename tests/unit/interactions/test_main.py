@@ -12,6 +12,7 @@ from respx import MockRouter
 import litellm
 from litellm import interactions
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.interactions import InteractionsAPIResponse
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 
@@ -862,6 +863,43 @@ def test_create_streaming_hands_completed_interaction_to_success_callback(
     assert recorder.logged == (_GEMINI_COMPLETED_INTERACTION,)
 
 
+@pytest.mark.asyncio
+async def test_acreate_qca_runs_managed_session_flow(respx_mock: MockRouter) -> None:
+    base: Final = "https://qca.test/api/v1/cloud"
+    respx_mock.post(f"{base}/sessions").mock(return_value=httpx.Response(200, json={"id": "sess_public"}))
+    respx_mock.post(f"{base}/sessions/sess_public/events").mock(
+        return_value=httpx.Response(202, json={"data": [{"id": "evt_input", "type": "user.message"}]})
+    )
+    respx_mock.get(f"{base}/sessions/sess_public/events/stream").mock(
+        return_value=httpx.Response(
+            200,
+            text=(
+                'data: {"id":"evt_answer","type":"agent.message",'
+                '"content":[{"type":"text","text":"ready"}]}\n\n'
+                'data: {"id":"evt_idle","type":"session.status_idle",'
+                '"stop_reason":{"type":"end_turn"}}\n\n'
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    response: Final = await interactions.acreate(
+        model="qca/agent_public",
+        input="run",
+        environment="env_public",
+        api_key="qca-secret",
+        api_base=base,
+    )
+
+    assert isinstance(response, InteractionsAPIResponse)
+    assert response.id == "qca1.sess_public.evt_input"
+    assert response.status == "completed"
+    assert response.steps == [
+        {
+            "type": "model_output",
+            "content": [{"type": "text", "text": "ready"}],
+        }
+    ]
 _GEMINI_URL: Final = "https://generativelanguage.googleapis.com/v1beta/interactions"
 _LONG_DECODE_REQUEST: Final = {
     "model": "gemini/gemini-4-argon",
