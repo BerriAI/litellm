@@ -1987,7 +1987,15 @@
         "download": "Download retained ZIP",
         "downloadFailed": "Could not download this version.",
         "newer": "Newer",
-        "older": "Older"
+        "older": "Older",
+        "restore": "Restore this version",
+        "restoreTitle": "Restore version {{version}}",
+        "restoreDescription": "Publish this version's files and metadata as a new release. Existing versions, access permissions, and public or private status are preserved.",
+        "newVersion": "New version (optional)",
+        "versionHint": "Leave blank to increment the current patch version, or enter a higher semantic version. Legacy versions require an explicit version.",
+        "confirmRestore": "Restore as new version",
+        "restoring": "Restoring…",
+        "restoreFailed": "Could not restore this version. Reload the skill and try again."
       },
       "back": "Skills Hub",
       "tabs": {
