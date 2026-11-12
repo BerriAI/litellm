@@ -1618,6 +1618,38 @@ def test_get_response_for_spend_logs_payload_strips_null_bytes(mock_should_store
 _GITHUB_TOKEN: Final = "ghp_" + "a1B2c3D4e5" * 3 + "F6g7H8"
 
 
+@pytest.mark.parametrize("prefix,serialized", (("\u2022", True), ("\u00e9", True), ("\U0001f600", True), ("\u2022", False)))
+def test_payload_masks_tokens_after_json_unicode_escapes(
+    monkeypatch: pytest.MonkeyPatch, prefix: str, serialized: bool
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    raw: Final = prefix + "ghp_" + "A" * 36
+    content: Final = json.dumps({"stdout": raw}) if serialized else raw
+    messages: Final = [{"role": "tool", "content": content}]
+    kwargs: Final[dict[str, object]] = {
+        "model": "gpt-4o-mini",
+        "litellm_params": {"proxy_server_request": {"body": {"messages": messages}}, "metadata": {}},
+        "standard_logging_object": {
+            "call_type": "_arealtime",
+            "model_map_information": None,
+            "metadata": {},
+            "messages": messages,
+            "response": {"content": content},
+        },
+    }
+    now: Final = datetime.datetime(2026, 1, 1, tzinfo=timezone.utc)
+    payload: Final = get_logging_payload(kwargs, litellm.ModelResponse(choices=[]), now, now)
+    masked_text: Final = prefix + "REDACTED_BY_LITELM"
+    masked: Final = json.dumps({"stdout": masked_text}) if serialized else masked_text
+
+    assert json.loads(payload["proxy_server_request"])["messages"] == [{"role": "tool", "content": masked}]
+    assert json.loads(payload["messages"]) == [{"role": "tool", "content": masked}]
+    assert json.loads(payload["response"]) == {"content": masked}
+    assert messages == [{"role": "tool", "content": content}]
+
+
 def test_payload_masks_tokens_joined_by_null_byte_removal(monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.proxy import proxy_server
 

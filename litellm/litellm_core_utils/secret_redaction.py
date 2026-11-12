@@ -121,7 +121,7 @@ _TOKEN_SHAPES: Final = (
     r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+",
 )
 # Tokens start at a word boundary or right after a JSON escape like "\n", since tool output is often serialized JSON
-_TOKEN_START: Final = r"(?:(?<!\w)|(?<=\\[nrt]))"
+_TOKEN_START: Final = r"(?:(?<!\w)|(?<=\\[nrt])|(?<=\\u[0-9A-Fa-f]{4}))"
 _TOKEN_PEM_PRIVATE_KEY_BLOCK: Final = (
     r"-----BEGIN(?:[A-Z ]|-(?!----))*?PRIVATE KEY-----"
     r"(?:[^-]|-(?!----))*?-----END(?:[A-Z ]|-(?!----))*?PRIVATE KEY-----"
