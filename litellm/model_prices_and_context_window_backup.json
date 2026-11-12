@@ -100787,6 +100787,7 @@
         "max_input_tokens": 262144,
         "mode": "decisions",
         "output_cost_per_token": 0.0,
+        "rpm": 1500,
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/decisions"
@@ -100810,6 +100811,7 @@
         "supports_url_context": false,
         "supports_video_input": true,
         "supports_vision": true,
-        "supports_web_search": false
+        "supports_web_search": false,
+        "tpm": 1000000
     }
 }
