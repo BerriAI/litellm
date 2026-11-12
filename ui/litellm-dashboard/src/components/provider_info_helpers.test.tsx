@@ -282,6 +282,7 @@ describe("provider_info_helpers", () => {
         Providers.PREDIBASE,
         Providers.Sail,
         Providers.StreamLake,
+        Providers.Superbot,
         Providers.WANDB,
         Providers.ZAI,
         Providers.ZeroGPU,
