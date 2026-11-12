@@ -126,7 +126,9 @@ class AccountingDeliveryRepository:
             )
             return DeliveryMetrics.model_validate(rows[0])
 
-    async def cleanup_applied(self, *, retention_days: int = 1, batch_size: int = 1000) -> int:
+    async def cleanup_applied(
+        self, *, retention_days: int = 1, batch_size: int = 1000, keep_unobserved: bool = False
+    ) -> int:
         if retention_days < 1 or batch_size < 1:
             raise ValueError("Delivery retention and cleanup batch size must be positive")
         async with self._database.tx(timeout=_TIMEOUT) as transaction:
@@ -134,7 +136,13 @@ class AccountingDeliveryRepository:
                 'DELETE FROM "LiteLLM_SpendLogDelivery" WHERE delivery_id IN ('
                 'SELECT delivery_id FROM "LiteLLM_SpendLogDelivery" '
                 "WHERE state = 'applied' AND NOT is_batch AND applied_at < CURRENT_TIMESTAMP - make_interval(days => $1::integer) "
-                "ORDER BY applied_at, delivery_id LIMIT $2::integer FOR UPDATE SKIP LOCKED)",
+                + (
+                    'AND EXISTS (SELECT 1 FROM "LiteLLM_TaskObservation" observation '
+                    'WHERE observation.delivery_id = "LiteLLM_SpendLogDelivery".delivery_id) '
+                    if keep_unobserved
+                    else ""
+                )
+                + "ORDER BY applied_at, delivery_id LIMIT $2::integer FOR UPDATE SKIP LOCKED)",
                 retention_days,
                 batch_size,
             )

@@ -1,4 +1,4 @@
-from typing import Annotated, TypeAlias
+from typing import Annotated, TypeAlias, cast
 
 from fastapi import Depends
 
@@ -6,12 +6,14 @@ from litellm.models.deployment_warning import DeploymentWarningIgnoreStore
 from litellm.models.gateway_activity import GatewayActivityStore
 from litellm.models.plugin_upload import PluginUploadStore
 from litellm.models.skill_submission import SkillSubmissionStore
+from litellm.models.task_insights import TaskInsightsStore
 from litellm.models.user_banner import UserBannerStore
 from litellm.proxy.deps.database import DatabaseDep
 from litellm.repositories.deployment_warning_ignore_repository import DeploymentWarningIgnoreRepository
 from litellm.repositories.gateway_activity_repository import GatewayActivityRepository
 from litellm.repositories.plugin_upload_repository import PluginUploadRepository
 from litellm.repositories.skill_submission_repository import SkillSubmissionRepository
+from litellm.repositories.task_insights_repository import TaskInsightsDatabase, TaskInsightsRepository
 from litellm.repositories.user_banner_repository import UserBannerRepository
 
 
@@ -54,3 +56,12 @@ async def get_skill_submission_repository(database: DatabaseDep) -> SkillSubmiss
 SkillSubmissionRepositoryDep: TypeAlias = Annotated[
     SkillSubmissionStore | None, Depends(get_skill_submission_repository)
 ]
+
+
+async def get_task_insights_repository(database: DatabaseDep) -> TaskInsightsStore | None:
+    if database is None:
+        return None
+    return TaskInsightsRepository(cast(TaskInsightsDatabase, database.prisma.db))
+
+
+TaskInsightsRepositoryDep: TypeAlias = Annotated[TaskInsightsStore | None, Depends(get_task_insights_repository)]

@@ -17248,6 +17248,132 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/task-insights/discovery": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request Task Insights Discovery
+         * @description Queues discovery over up to `max_requests` distinct request texts. The analysis worker embeds and clusters
+         *     them and drafts task definitions for review, which is the only step that calls models.
+         */
+        post: operations["request_task_insights_discovery_task_insights_discovery_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/task-insights/matrix": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Task Insights Matrix
+         * @description Request count, mean cost and p95 latency per deployment and task. Missing cost or latency stays null and
+         *     `*_observations` says how many requests the figure rests on. Compatibility comes from current model metadata.
+         */
+        get: operations["get_task_insights_matrix_task_insights_matrix_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/task-insights/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Task Insights Overview
+         * @description Task volume, spend and a bounded sample of map points. Counts are requests, never repeated deliveries.
+         */
+        get: operations["get_task_insights_overview_task_insights_overview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/task-insights/tasks/{task_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Task Insights Task
+         * @description A task's definition, its metrics per deployment and its most recent requests with bounded text excerpts.
+         */
+        get: operations["get_task_insights_task_task_insights_tasks__task_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Edit Task Insights Draft
+         * @description Frozen definitions are immutable, so the assignments made against them stay explainable.
+         */
+        patch: operations["edit_task_insights_draft_task_insights_tasks__task_id__patch"];
+        trace?: never;
+    };
+    "/task-insights/taxonomy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Task Insights Taxonomy
+         * @description Draft and frozen task definitions with the discovery state, for reviewing a draft before freezing it.
+         */
+        get: operations["get_task_insights_taxonomy_task_insights_taxonomy_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/task-insights/taxonomy/freeze": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Freeze Task Insights Taxonomy
+         * @description Replaces the frozen taxonomy with the draft and clears every assignment, which the worker then rebuilds.
+         */
+        post: operations["freeze_task_insights_taxonomy_task_insights_taxonomy_freeze_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/team/available": {
         parameters: {
             query?: never;
@@ -33038,6 +33164,17 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** DraftTaskEdit */
+        DraftTaskEdit: {
+            /** Description */
+            description?: string | null;
+            /** Exclusion Criteria */
+            exclusion_criteria?: string | null;
+            /** Inclusion Criteria */
+            inclusion_criteria?: string | null;
+            /** Name */
+            name?: string | null;
+        };
         /**
          * Drag
          * @description A drag action.
@@ -39632,6 +39769,31 @@ export interface components {
             /** Timezone */
             timezone: string;
         };
+        /** ModelConfigSummary */
+        ModelConfigSummary: {
+            /**
+             * Configured
+             * @description False when traffic names a deployment that is no longer configured
+             */
+            configured: boolean;
+            /**
+             * Max Input Tokens
+             * @description From model metadata. Whether a given request fits is for the router to check
+             */
+            max_input_tokens?: number | null;
+            /** Model Config Id */
+            model_config_id: string;
+            /**
+             * Model Name
+             * @description Public model name of the deployment
+             */
+            model_name: string | null;
+            /**
+             * Provider Model
+             * @description Provider model the deployment calls
+             */
+            provider_model: string | null;
+        };
         /** ModelDeprecationInfo */
         ModelDeprecationInfo: {
             /**
@@ -44250,6 +44412,34 @@ export interface components {
             /** Status Code */
             status_code: number;
         };
+        /** RequestSample */
+        RequestSample: {
+            /** Delivery Count */
+            delivery_count: number;
+            /** Excerpt */
+            excerpt: string | null;
+            /** Latency Ms */
+            latency_ms: number | null;
+            /** Model Config Id */
+            model_config_id: string | null;
+            /** Model Group */
+            model_group: string | null;
+            /** Outcome */
+            outcome: ("assigned" | "unknown" | "failed") | null;
+            /** Request Id */
+            request_id: string;
+            /** Session Id */
+            session_id: string | null;
+            /** Spend */
+            spend: number | null;
+            /**
+             * Start Time
+             * Format: date-time
+             */
+            start_time: string;
+            /** Top Probability */
+            top_probability: number | null;
+        };
         /**
          * RequestTagMapping
          * @description An exact baggage value mapping, or a prefix for any value of a key.
@@ -48046,6 +48236,342 @@ export interface components {
             spend?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
+        };
+        /** TaskCompatibility */
+        TaskCompatibility: {
+            /**
+             * Missing
+             * @description Required capabilities the model metadata says it lacks. A router must still check each request
+             */
+            missing: ("function_calling" | "vision" | "reasoning" | "structured_output")[];
+            /** Model Config Id */
+            model_config_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "compatible" | "incompatible" | "unknown";
+            /** Task Id */
+            task_id: string;
+        };
+        /** TaskDefinition */
+        TaskDefinition: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Description */
+            description: string;
+            /**
+             * Discovery Size
+             * @default 0
+             */
+            discovery_size: number;
+            /**
+             * Examples
+             * @default []
+             */
+            examples: string[];
+            /** Exclusion Criteria */
+            exclusion_criteria: string;
+            /** Frozen At */
+            frozen_at?: string | null;
+            /** Inclusion Criteria */
+            inclusion_criteria: string;
+            /** Map X */
+            map_x: number;
+            /** Map Y */
+            map_y: number;
+            /** Name */
+            name: string;
+            /**
+             * Required Capabilities
+             * @default []
+             */
+            required_capabilities: ("function_calling" | "vision" | "reasoning" | "structured_output")[];
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "discovered" | "sample";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "draft" | "frozen";
+            /** Task Id */
+            task_id: string;
+        };
+        /** TaskDetailResponse */
+        TaskDetailResponse: {
+            definition: components["schemas"]["TaskDefinition"] | null;
+            /** Entries */
+            entries: components["schemas"]["TaskMatrixEntry"][];
+            /** Model Config Id */
+            model_config_id: string | null;
+            /** Model Configs */
+            model_configs: components["schemas"]["ModelConfigSummary"][];
+            /** Requests */
+            requests: components["schemas"]["RequestSample"][];
+            summary: components["schemas"]["TaskSummary"];
+            window: components["schemas"]["TaskInsightsWindowOut"];
+        };
+        /** TaskDiscoveryRequest */
+        TaskDiscoveryRequest: {
+            /**
+             * End Date
+             * @description YYYY-MM-DD, defaults to today
+             */
+            end_date?: string | null;
+            /**
+             * Max Requests
+             * @default 500
+             */
+            max_requests: number;
+            /**
+             * Start Date
+             * @description YYYY-MM-DD, defaults to 30 days before end_date
+             */
+            start_date?: string | null;
+        };
+        /** TaskFreezeRequest */
+        TaskFreezeRequest: {
+            /**
+             * Draft Task Count
+             * @description Number of draft tasks reviewed. Freezing fails when the draft changed since the review
+             */
+            draft_task_count: number;
+        };
+        /** TaskFreezeResponse */
+        TaskFreezeResponse: {
+            /** Frozen Task Count */
+            frozen_task_count: number;
+        };
+        /** TaskInsightsOverviewResponse */
+        TaskInsightsOverviewResponse: {
+            /** Last Refreshed At */
+            last_refreshed_at: string | null;
+            /**
+             * Points
+             * @description A bounded deterministic sample of requests for the map
+             */
+            points: components["schemas"]["TaskMapPoint"][];
+            status: components["schemas"]["TaskInsightsStatus"];
+            /** Tasks */
+            tasks: components["schemas"]["TaskSummary"][];
+            totals: components["schemas"]["TaskInsightsTotals"];
+            window: components["schemas"]["TaskInsightsWindowOut"];
+        };
+        /** TaskInsightsStatus */
+        TaskInsightsStatus: {
+            /** Discovery Error */
+            discovery_error: string | null;
+            /** Discovery Finished At */
+            discovery_finished_at: string | null;
+            /** Discovery Requested At */
+            discovery_requested_at: string | null;
+            /**
+             * Discovery Status
+             * @enum {string}
+             */
+            discovery_status: "idle" | "requested" | "running" | "failed" | "completed";
+            /** Draft Task Count */
+            draft_task_count: number;
+            /** Frozen Task Count */
+            frozen_task_count: number;
+            /** Last Bucketed At */
+            last_bucketed_at: string | null;
+            /**
+             * Sample Data
+             * @description True when the taxonomy and assignments are seeded sample data
+             */
+            sample_data: boolean;
+            /** Taxonomy Frozen At */
+            taxonomy_frozen_at: string | null;
+        };
+        /** TaskInsightsTotals */
+        TaskInsightsTotals: {
+            /**
+             * Analysis Request Count
+             * @description Requests the analysis worker made, excluded from the figures
+             */
+            analysis_request_count: number;
+            /** Analysis Spend */
+            analysis_spend: number | null;
+            /** Classified Count */
+            classified_count: number;
+            /** Cost Observations */
+            cost_observations: number;
+            /** Delivery Count */
+            delivery_count: number;
+            /** Request Count */
+            request_count: number;
+            /**
+             * Session Count
+             * @description Distinct sessions in the window, each counted once across tasks
+             */
+            session_count: number;
+            /** Spend */
+            spend: number | null;
+            /**
+             * Unattributed Count
+             * @description Requests with no delivery tied to a known deployment
+             */
+            unattributed_count: number;
+            /** Unclassified Count */
+            unclassified_count: number;
+            /** Unknown Count */
+            unknown_count: number;
+        };
+        /** TaskInsightsWindowOut */
+        TaskInsightsWindowOut: {
+            /**
+             * End Date
+             * @description Last day of the measurement window, YYYY-MM-DD (UTC), inclusive
+             */
+            end_date: string;
+            /**
+             * Start Date
+             * @description First day of the measurement window, YYYY-MM-DD (UTC)
+             */
+            start_date: string;
+            /**
+             * Team Id
+             * @description Team the figures are filtered to, if any
+             */
+            team_id?: string | null;
+        };
+        /** TaskMapPoint */
+        TaskMapPoint: {
+            /**
+             * Placement
+             * @description `embedding` points come from the discovery projection, `categorical` points are drawn at a stable offset around their task and carry no semantic position
+             * @enum {string}
+             */
+            placement: "embedding" | "categorical";
+            /** Request Id */
+            request_id: string;
+            /** Task Id */
+            task_id: string;
+            /** X */
+            x: number;
+            /** Y */
+            y: number;
+        };
+        /** TaskMatrixEntry */
+        TaskMatrixEntry: {
+            /** Avg Cost Usd */
+            avg_cost_usd: number | null;
+            /** Cost Observations */
+            cost_observations: number;
+            /**
+             * Eval Sample Count
+             * @description Not measured yet, always 0
+             * @default 0
+             */
+            eval_sample_count: number;
+            /**
+             * Eval Success Rate
+             * @description Not measured yet, always null
+             */
+            eval_success_rate?: number | null;
+            /** Latency Observations */
+            latency_observations: number;
+            /** Model Config Id */
+            model_config_id: string;
+            /** P95 Latency Ms */
+            p95_latency_ms: number | null;
+            /** Request Count */
+            request_count: number;
+            /** Task Id */
+            task_id: string;
+        };
+        /** TaskMatrixResponse */
+        TaskMatrixResponse: {
+            /** Compatibility */
+            compatibility: components["schemas"]["TaskCompatibility"][];
+            /** Entries */
+            entries: components["schemas"]["TaskMatrixEntry"][];
+            /** Last Refreshed At */
+            last_refreshed_at: string | null;
+            measurement_window: components["schemas"]["TaskInsightsWindowOut"];
+            /** Model Configs */
+            model_configs: components["schemas"]["ModelConfigSummary"][];
+            /** Tasks */
+            tasks: components["schemas"]["TaskRef"][];
+            /**
+             * Unattributed Request Count
+             * @description Requests whose serving deployment is unknown
+             */
+            unattributed_request_count: number;
+        };
+        /** TaskRef */
+        TaskRef: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "task" | "unknown" | "unclassified";
+            /** Name */
+            name: string;
+            /** Required Capabilities */
+            required_capabilities: ("function_calling" | "vision" | "reasoning" | "structured_output")[];
+            /** Task Id */
+            task_id: string;
+        };
+        /** TaskSummary */
+        TaskSummary: {
+            /** Avg Cost Usd */
+            avg_cost_usd: number | null;
+            /**
+             * Cost Observations
+             * @description Requests whose cost is known
+             */
+            cost_observations: number;
+            /** Delivery Count */
+            delivery_count: number;
+            /** Description */
+            description: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "task" | "unknown" | "unclassified";
+            /**
+             * Map X
+             * @description Layout position only, distance does not measure model quality
+             */
+            map_x: number | null;
+            /** Map Y */
+            map_y: number | null;
+            /** Name */
+            name: string;
+            /** Request Count */
+            request_count: number;
+            /**
+             * Session Count
+             * @description Distinct sessions with a request in this task
+             */
+            session_count: number;
+            /**
+             * Share
+             * @description Fraction of requests in the window, from 0 to 1
+             */
+            share: number;
+            /**
+             * Spend
+             * @description Sum of known request costs in USD, null when no cost was recorded
+             */
+            spend: number | null;
+            /** Task Id */
+            task_id: string;
+        };
+        /** TaskTaxonomyResponse */
+        TaskTaxonomyResponse: {
+            /** Definitions */
+            definitions: components["schemas"]["TaskDefinition"][];
+            status: components["schemas"]["TaskInsightsStatus"];
         };
         /** TeamAddMemberResponse */
         TeamAddMemberResponse: {
@@ -76937,6 +77463,241 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ActiveUsersAnalyticsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    request_task_insights_discovery_task_insights_discovery_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TaskDiscoveryRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskTaxonomyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_task_insights_matrix_task_insights_matrix_get: {
+        parameters: {
+            query?: {
+                /** @description YYYY-MM-DD (UTC), defaults to 30 days before end_date */
+                start_date?: string | null;
+                /** @description YYYY-MM-DD (UTC), inclusive, defaults to today */
+                end_date?: string | null;
+                /** @description Only count requests made by this team */
+                team_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskMatrixResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_task_insights_overview_task_insights_overview_get: {
+        parameters: {
+            query?: {
+                /** @description YYYY-MM-DD (UTC), defaults to 30 days before end_date */
+                start_date?: string | null;
+                /** @description YYYY-MM-DD (UTC), inclusive, defaults to today */
+                end_date?: string | null;
+                /** @description Only count requests made by this team */
+                team_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskInsightsOverviewResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_task_insights_task_task_insights_tasks__task_id__get: {
+        parameters: {
+            query?: {
+                /** @description YYYY-MM-DD (UTC), defaults to 30 days before end_date */
+                start_date?: string | null;
+                /** @description YYYY-MM-DD (UTC), inclusive, defaults to today */
+                end_date?: string | null;
+                /** @description Only count requests made by this team */
+                team_id?: string | null;
+                /** @description Only show requests served by this deployment */
+                model_config_id?: string | null;
+            };
+            header?: never;
+            path: {
+                /** @description A frozen task id, `unknown` or `unclassified` */
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskDetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    edit_task_insights_draft_task_insights_tasks__task_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A draft task id */
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DraftTaskEdit"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskDefinition"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_task_insights_taxonomy_task_insights_taxonomy_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskTaxonomyResponse"];
+                };
+            };
+        };
+    };
+    freeze_task_insights_taxonomy_task_insights_taxonomy_freeze_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TaskFreezeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskFreezeResponse"];
                 };
             };
             /** @description Validation Error */

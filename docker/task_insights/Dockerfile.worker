@@ -1,0 +1,15 @@
+# syntax=docker/dockerfile:1.7
+# The Task Insights analysis worker: the branch image plus the clustering libraries discovery needs.
+# Build the litellm service of docker/task_insights/docker-compose.yml first, it produces the base image.
+ARG BASE_IMAGE=litellm-task-insights:local
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2e4e1e333f7d67fbdd923d00a506a516a
+
+FROM $UV_IMAGE AS uvbin
+
+FROM $BASE_IMAGE
+USER root
+COPY --from=uvbin /uv /usr/local/bin/uv
+COPY docker/task_insights/worker-requirements.txt /tmp/worker-requirements.txt
+RUN uv pip install --python /app/.venv/bin/python --require-hashes --no-deps -r /tmp/worker-requirements.txt \
+    && rm /usr/local/bin/uv /tmp/worker-requirements.txt
+USER 65532:65532

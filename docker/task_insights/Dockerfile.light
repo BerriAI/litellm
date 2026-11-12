@@ -1,0 +1,45 @@
+# syntax=docker/dockerfile:1.7
+# Seeded preview image for docker/task_insights/demo.sh. It reuses a published LiteLLM image for the compiled Rust
+# extension and Python dependencies, then copies in this branch's Python package and a freshly built dashboard.
+# BASE_IMAGE is the multi-arch (linux/amd64, linux/arm64) image built from 07c72298956, the commit this branch is based
+# on, because the Python package calls into that image's compiled extension.
+ARG BASE_IMAGE=ghcr.io/berriai/litellm@sha256:47350b93fa4e8590a6fea60055397afbed018764a845dbdda067f0a02672941e
+ARG UI_BUILD_IMAGE=node:24.19-alpine3.24@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43
+
+FROM --platform=$BUILDPLATFORM $UI_BUILD_IMAGE AS ui-builder
+ARG UI_NODE_HEAP_MB=4096
+ENV NEXT_TELEMETRY_DISABLED=1 \
+    npm_config_fund=false \
+    npm_config_audit=false \
+    NODE_OPTIONS=--max-old-space-size=${UI_NODE_HEAP_MB}
+WORKDIR /ui
+COPY ui/litellm-dashboard/package.json ui/litellm-dashboard/package-lock.json ./
+COPY ui/litellm-dashboard/vendor/ ./vendor/
+RUN --mount=type=cache,target=/root/.npm npm ci --prefer-offline
+COPY ui/litellm-dashboard/ ./
+RUN npm run build
+
+FROM $BASE_IMAGE AS preview
+ARG SITE_PACKAGES=/app/.venv/lib/python3.13/site-packages
+COPY litellm/ /tmp/overlay/litellm/
+COPY litellm-proxy-extras/litellm_proxy_extras/ /tmp/overlay/litellm_proxy_extras/
+RUN test -f ${SITE_PACKAGES}/litellm/rust_bridge/_native.abi3.so \
+    && cp -a /tmp/overlay/litellm/. ${SITE_PACKAGES}/litellm/ \
+    && cp -a /tmp/overlay/litellm_proxy_extras/. ${SITE_PACKAGES}/litellm_proxy_extras/ \
+    && rm -rf /tmp/overlay ${SITE_PACKAGES}/litellm/proxy/_experimental/out
+COPY --from=ui-builder /ui/out/ ${SITE_PACKAGES}/litellm/proxy/_experimental/out/
+COPY schema.prisma /app/schema.prisma
+RUN cd /tmp && python -I - <<'PY'
+import pathlib
+import re
+
+import litellm.rust_bridge._native as native
+
+stub = pathlib.Path(native.__file__).with_name("_native.pyi").read_text()
+missing = sorted(name for name in re.findall(r"^(?:def|class) ([A-Za-z]\w*)", stub, re.M) if not hasattr(native, name))
+if missing:
+    raise SystemExit(f"BASE_IMAGE's compiled extension lacks {missing}. Use an image built from this branch's base.")
+
+import litellm.proxy.proxy_server
+import litellm.task_insights.demo_seed
+PY

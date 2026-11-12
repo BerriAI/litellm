@@ -1,0 +1,4 @@
+# Input for worker-requirements.txt, compiled with hashes for Python 3.13 on manylinux against the
+# numpy already in the branch image.
+scikit-learn==1.8.0
+umap-learn

@@ -1,0 +1,27 @@
+# Seeded preview overrides for docker/task_insights/demo.sh: build Dockerfile.light instead of compiling LiteLLM.
+x-logs: &logs
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
+
+x-preview: &preview
+  image: litellm-task-insights:demo
+  pull_policy: never
+  read_only: false
+
+services:
+  litellm:
+    <<: *preview
+    build:
+      context: ../..
+      dockerfile: docker/task_insights/Dockerfile.light
+      target: preview
+  task-insights-seed:
+    <<: *preview
+  task-insights-traffic:
+    <<: *preview
+  db:
+    logging: *logs
+  redis:
+    logging: *logs
