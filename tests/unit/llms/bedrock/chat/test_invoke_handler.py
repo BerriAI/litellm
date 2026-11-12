@@ -1539,16 +1539,23 @@ async def test_aiter_bytes_stream_error_carries_only_the_provider_request_id_hea
 
 
 @pytest.mark.parametrize("request_id", ("req-\u00fc-1", "req-\udcfc-1"), ids=("latin-1", "surrogate-escaped"))
-def test_iter_bytes_streams_and_fails_normally_with_a_non_ascii_provider_request_id(request_id: str) -> None:
+def test_iter_bytes_streams_the_served_tier_and_fails_normally_with_a_non_ascii_provider_request_id(
+    request_id: str,
+) -> None:
     decoder: Final = AWSEventStreamDecoder(model="us.moonshotai.kimi-k3")
-    headers: Final = {"content-type": "application/vnd.amazon.eventstream", "x-amzn-RequestId": request_id}
+    headers: Final = {
+        "content-type": "application/vnd.amazon.eventstream",
+        "x-amzn-RequestId": request_id,
+        "X-AMZN-BEDROCK-SERVICE-TIER": "flex",
+    }
 
     chunks: Final = list(decoder.iter_bytes(iter(_CONVERSE_CONTENT_FRAMES), response_headers=headers))
     with pytest.raises(BedrockError) as exc_info:
         list(decoder.iter_bytes(iter([_unknown_event_frame()]), response_headers=headers))
 
-    texts: Final = [chunk.choices[0].delta.content for chunk in chunks if isinstance(chunk, ModelResponseStream)]
-    assert "".join(text or "" for text in texts) == "hi"
+    stream_chunks: Final = [chunk for chunk in chunks if isinstance(chunk, ModelResponseStream)]
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in stream_chunks) == "hi"
+    assert {chunk.service_tier for chunk in stream_chunks} == {"flex"}
     assert exc_info.value.status_code == 502
     assert exc_info.value.headers is None
 
