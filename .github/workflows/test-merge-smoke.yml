@@ -17,7 +17,7 @@ concurrency:
 jobs:
   dashboard-build:
     name: dashboard-build
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -30,7 +30,7 @@ jobs:
 
   core-checks:
     name: py${{ matrix.python-version }}
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -124,7 +124,7 @@ jobs:
 
   all-extras:
     name: all-extras-py${{ matrix.python-version }}
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
     strategy:
       fail-fast: false
@@ -213,7 +213,7 @@ jobs:
 
   proxy-build-from-pip:
     name: proxy-build-from-pip
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
     services:
       postgres:
@@ -354,7 +354,7 @@ jobs:
     name: smoke passed
     needs: [dashboard-build, core-checks, all-extras, windows-sdk, proxy-build-from-pip]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 2
     permissions: {}
     steps:

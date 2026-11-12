@@ -14,7 +14,7 @@ permissions: {}
 
 jobs:
   rerun-cost-map-guard:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 30
     permissions:
       actions: write

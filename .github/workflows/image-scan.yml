@@ -48,7 +48,7 @@ env:
 jobs:
   build:
     name: build
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     if: >-
       github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository
@@ -89,7 +89,7 @@ jobs:
   verify:
     name: verify (${{ matrix.check }})
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 45
     permissions:
       contents: read

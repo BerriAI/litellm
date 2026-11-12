@@ -22,7 +22,7 @@ permissions: {}
 jobs:
   flag-tests:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     permissions:
       contents: read
@@ -42,7 +42,7 @@ jobs:
 
   classify:
     if: github.event_name != 'pull_request' && github.repository == 'BerriAI/litellm'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 15
     permissions:
       contents: read
@@ -116,7 +116,7 @@ jobs:
   flag:
     needs: classify
     if: needs.classify.outputs.verdict != ''
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     permissions:
       contents: read
