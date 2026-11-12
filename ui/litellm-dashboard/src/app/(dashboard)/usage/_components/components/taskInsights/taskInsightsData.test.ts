@@ -49,7 +49,10 @@ describe("cellReading", () => {
 
 describe("entryLookup", () => {
   it("finds the entry for one deployment and task without mixing up ids that share a prefix", () => {
-    const lookup = entryLookup([entry({ model_config_id: "m1", task_id: "t1" }), entry({ model_config_id: "m1t", task_id: "1" })]);
+    const lookup = entryLookup([
+      entry({ model_config_id: "m1", task_id: "t1" }),
+      entry({ model_config_id: "m1t", task_id: "1" }),
+    ]);
 
     expect(lookup("m1", "t1")?.task_id).toBe("t1");
     expect(lookup("m1t", "1")?.model_config_id).toBe("m1t");
@@ -59,7 +62,10 @@ describe("entryLookup", () => {
 
 describe("shareOfTask", () => {
   it("divides a deployment's requests by every request in the task", () => {
-    const entries = [entry({ model_config_id: "a", request_count: 3 }), entry({ model_config_id: "b", request_count: 1 })];
+    const entries = [
+      entry({ model_config_id: "a", request_count: 3 }),
+      entry({ model_config_id: "b", request_count: 1 }),
+    ];
 
     expect(shareOfTask(entries, "a", "t1")).toBe(0.75);
     expect(shareOfTask(entries, "c", "t1")).toBeNull();

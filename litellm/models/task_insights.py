@@ -198,8 +198,13 @@ class TaskAnalysisStore(Protocol):
 
     async def decisions_by_hash(self, text_hashes: tuple[str, ...]) -> Mapping[str, Decision]: ...
 
+    async def taxonomy_version(self) -> datetime | None: ...
+
     async def save_decisions(
-        self, decisions: tuple[tuple[PendingRequest, Decision], ...], bucketed_at: datetime
+        self,
+        decisions: tuple[tuple[PendingRequest, Decision], ...],
+        bucketed_at: datetime,
+        taxonomy_version: datetime | None,
     ) -> int: ...
 
     async def claim_discovery(self) -> DiscoveryRun | None: ...

@@ -37,7 +37,9 @@ const rowNames = () =>
 
 describe("TaskBreakdown", () => {
   it("ranks by request volume, then by spend when asked", async () => {
-    renderWithProviders(<TaskBreakdown tasks={tasks} colors={taskColors(tasks)} selectedTaskId={null} onSelect={vi.fn()} />);
+    renderWithProviders(
+      <TaskBreakdown tasks={tasks} colors={taskColors(tasks)} selectedTaskId={null} onSelect={vi.fn()} />,
+    );
 
     expect(rowNames()).toEqual(["Busy cheap task", "Costly task", "Unknown"]);
 
@@ -47,7 +49,9 @@ describe("TaskBreakdown", () => {
   });
 
   it("says how many requests the spend rests on and never shows missing spend as zero", () => {
-    renderWithProviders(<TaskBreakdown tasks={tasks} colors={taskColors(tasks)} selectedTaskId={null} onSelect={vi.fn()} />);
+    renderWithProviders(
+      <TaskBreakdown tasks={tasks} colors={taskColors(tasks)} selectedTaskId={null} onSelect={vi.fn()} />,
+    );
 
     const costly = screen.getByRole("row", { name: /Costly task/ });
     expect(costly).toHaveTextContent("Cost known for 12 of 15");
@@ -58,7 +62,9 @@ describe("TaskBreakdown", () => {
 
   it("selects a task from its row", async () => {
     const onSelect = vi.fn();
-    renderWithProviders(<TaskBreakdown tasks={tasks} colors={taskColors(tasks)} selectedTaskId={null} onSelect={onSelect} />);
+    renderWithProviders(
+      <TaskBreakdown tasks={tasks} colors={taskColors(tasks)} selectedTaskId={null} onSelect={onSelect} />,
+    );
 
     await userEvent.click(screen.getByRole("button", { name: "Costly task" }));
 

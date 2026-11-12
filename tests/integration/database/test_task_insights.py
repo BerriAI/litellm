@@ -262,7 +262,7 @@ async def test_freezing_a_draft_replaces_the_taxonomy_and_clears_assignments(ins
     await _observe(insights_client)
     assert await _freeze(repository, _task("old", "Old task")) == 1
     pending = await repository.pending_requests(10)
-    await repository.save_decisions(((pending[0], _assigned("old")),), _NOW)
+    await repository.save_decisions(((pending[0], _assigned("old")),), _NOW, await repository.taxonomy_version())
     assert {volume.task_id for volume in await repository.task_volumes(_WINDOW)} == {"old"}
 
     await repository.save_draft_taxonomy(
@@ -287,7 +287,7 @@ async def test_unknown_assignments_and_reused_decisions(insights_database, insig
     await _observe(insights_client)
     await _freeze(repository, _task("t1", "Task"))
     pending = (await repository.pending_requests(10))[0]
-    await repository.save_decisions(((pending, _assigned(None)),), _NOW)
+    await repository.save_decisions(((pending, _assigned(None)),), _NOW, await repository.taxonomy_version())
 
     assert [volume.task_id for volume in await repository.task_volumes(_WINDOW)] == [UNKNOWN_TASK_ID]
     assert await repository.pending_requests(10) == ()
@@ -307,7 +307,7 @@ async def test_failed_decisions_retry_until_the_attempt_limit(insights_database,
     for _ in range(3):
         pending = await repository.pending_requests(10)
         assert len(pending) == 1
-        await repository.save_decisions(((pending[0], failed),), _NOW)
+        await repository.save_decisions(((pending[0], failed),), _NOW, await repository.taxonomy_version())
 
     assert await repository.pending_requests(10) == ()
     assert await repository.decisions_by_hash((pending[0].text_hash,)) == {}
@@ -375,3 +375,39 @@ async def test_seeding_refuses_to_replace_a_real_taxonomy(insights_client):
 
     with pytest.raises(ForeignTaxonomyError):
         await seed_demo(insights_client, lambda: _NOW)
+
+
+@pytest.mark.asyncio
+async def test_a_freeze_during_bucketing_discards_the_stale_batch(insights_database, insights_client):
+    import asyncio
+
+    from litellm.task_insights.bucketing import bucket_pending
+
+    repository = TaskInsightsRepository(insights_client)
+    _log(insights_database, "r", messages=[{"role": "user", "content": "Fix the flaky test"}])
+    _deliver(insights_database, "r", "r", spend=0.1, model="claude-sonnet")
+    await _observe(insights_client)
+    await _freeze(repository, _task("old", "Old task"))
+
+    class _BlockingDecider:
+        decision_model = "jev-test"
+
+        def __init__(self) -> None:
+            self.entered = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def decide(self, tasks, request):
+            self.entered.set()
+            await self.release.wait()
+            return _assigned("old")
+
+    decider = _BlockingDecider()
+    batch = asyncio.create_task(bucket_pending(repository, decider, now=lambda: _NOW, batch_size=10))
+    await decider.entered.wait()
+    await repository.save_draft_taxonomy((_task("new", "New task"),), (), {}, _NOW)
+    assert await repository.freeze_draft(datetime(2026, 11, 11, 13, 0, tzinfo=timezone.utc)) == 1
+    decider.release.set()
+
+    assert await batch == 0
+    assert insights_database.execute('SELECT COUNT(*) FROM "LiteLLM_TaskAssignment"').fetchone() == (0,)
+    assert [pending.request_id for pending in await repository.pending_requests(10)] == ["r"]

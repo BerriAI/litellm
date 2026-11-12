@@ -38,7 +38,7 @@ services:
     ports:
       - "${TASK_INSIGHTS_PORT:-4000}:4000"
     volumes:
-      - ./config.yaml:/app/task-insights-config.yaml:ro
+      - ./task-insights-config.yaml:/app/task-insights-config.yaml:ro
     environment:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?set it in docker/task_insights/.env, see the header of this file}
       LITELLM_MIGRATION_DIR: /tmp/litellm-migrations

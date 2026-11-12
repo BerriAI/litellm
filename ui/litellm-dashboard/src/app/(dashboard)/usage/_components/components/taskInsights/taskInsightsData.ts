@@ -78,7 +78,9 @@ export const shareOfTask = (
   modelConfigId: string,
   taskId: string,
 ): number | null => {
-  const total = entries.filter((entry) => entry.task_id === taskId).reduce((sum, entry) => sum + entry.request_count, 0);
+  const total = entries
+    .filter((entry) => entry.task_id === taskId)
+    .reduce((sum, entry) => sum + entry.request_count, 0);
   const served = entries.find((entry) => entry.task_id === taskId && entry.model_config_id === modelConfigId);
   return total > 0 && served ? served.request_count / total : null;
 };

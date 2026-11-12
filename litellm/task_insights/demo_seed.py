@@ -352,7 +352,9 @@ async def seed_demo(database: TaskInsightsDatabase, now: Callable[[], datetime])
         item for item in await repository.pending_requests(len(requests) + 1) if item.request_id in by_id
     )
     return await repository.save_decisions(
-        tuple((item, demo_decision(by_id[item.request_id])) for item in pending), seeded_at
+        tuple((item, demo_decision(by_id[item.request_id])) for item in pending),
+        seeded_at,
+        await repository.taxonomy_version(),
     )
 
 

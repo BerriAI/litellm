@@ -8,7 +8,15 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
-import { NUMERIC_CELL_CLASS, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  NUMERIC_CELL_CLASS,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import {
   formatCount,
   formatLatency,
@@ -40,7 +48,15 @@ function Criteria({ label, text }: { label: string; text: string }) {
   );
 }
 
-function DetailBody({ detail, sampleData, onClearModel }: { detail: TaskDetail; sampleData: boolean; onClearModel: () => void }) {
+function DetailBody({
+  detail,
+  sampleData,
+  onClearModel,
+}: {
+  detail: TaskDetail;
+  sampleData: boolean;
+  onClearModel: () => void;
+}) {
   const { t } = useTranslation();
   const configs = new Map(detail.model_configs.map((config) => [config.model_config_id, config]));
   const nameOf = (id: string | null | undefined) => {
@@ -147,7 +163,9 @@ function DetailBody({ detail, sampleData, onClearModel }: { detail: TaskDetail; 
             {detail.requests.map((request) => (
               <li key={request.request_id} className="flex flex-col gap-1 p-3">
                 <p className="line-clamp-3 text-sm">
-                  {request.excerpt ?? <span className="text-muted-foreground">{t("usage.taskInsights.detail.noText")}</span>}
+                  {request.excerpt ?? (
+                    <span className="text-muted-foreground">{t("usage.taskInsights.detail.noText")}</span>
+                  )}
                 </p>
                 <p className="flex flex-wrap gap-x-3 text-xs text-muted-foreground">
                   <span>{new Date(request.start_time).toLocaleString()}</span>
@@ -156,14 +174,18 @@ function DetailBody({ detail, sampleData, onClearModel }: { detail: TaskDetail; 
                   <span>{formatLatency(request.latency_ms) ?? t("usage.taskInsights.detail.latencyUnknown")}</span>
                   {request.top_probability !== null && request.top_probability !== undefined && (
                     <span>
-                      {t("usage.taskInsights.detail.probability", { probability: formatShare(request.top_probability) })}
+                      {t("usage.taskInsights.detail.probability", {
+                        probability: formatShare(request.top_probability),
+                      })}
                     </span>
                   )}
                   {request.delivery_count > 1 && (
                     <span>{t("usage.taskInsights.detail.deliveries", { deliveries: request.delivery_count })}</span>
                   )}
                   {request.session_id && (
-                    <span className="truncate">{t("usage.taskInsights.detail.session", { session: request.session_id })}</span>
+                    <span className="truncate">
+                      {t("usage.taskInsights.detail.session", { session: request.session_id })}
+                    </span>
                   )}
                 </p>
               </li>
@@ -174,6 +196,34 @@ function DetailBody({ detail, sampleData, onClearModel }: { detail: TaskDetail; 
       </section>
     </div>
   );
+}
+
+function SheetBody({
+  detail,
+  loading,
+  error,
+  sampleData,
+  onRetry,
+  onClearModel,
+}: Omit<TaskDetailSheetProps, "open" | "onClose">) {
+  const { t } = useTranslation();
+  if (error) {
+    return (
+      <div className="px-4">
+        <ErrorState title={t("usage.taskInsights.detail.loadFailed")} message={error} onRetry={onRetry} />
+      </div>
+    );
+  }
+  if (loading || !detail) {
+    return (
+      <div role="status" aria-label={t("usage.taskInsights.loading")} className="flex flex-col gap-3 px-4">
+        <Skeleton className="h-6 w-2/3" />
+        <Skeleton className="h-24 w-full" />
+        <Skeleton className="h-40 w-full" />
+      </div>
+    );
+  }
+  return <DetailBody detail={detail} sampleData={sampleData} onClearModel={onClearModel} />;
 }
 
 export default function TaskDetailSheet({
@@ -194,19 +244,14 @@ export default function TaskDetailSheet({
           <SheetTitle>{detail?.summary.name ?? t("usage.taskInsights.detail.loadingTitle")}</SheetTitle>
           <SheetDescription>{detail?.summary.description ?? ""}</SheetDescription>
         </SheetHeader>
-        {error ? (
-          <div className="px-4">
-            <ErrorState title={t("usage.taskInsights.detail.loadFailed")} message={error} onRetry={onRetry} />
-          </div>
-        ) : loading || !detail ? (
-          <div role="status" aria-label={t("usage.taskInsights.loading")} className="flex flex-col gap-3 px-4">
-            <Skeleton className="h-6 w-2/3" />
-            <Skeleton className="h-24 w-full" />
-            <Skeleton className="h-40 w-full" />
-          </div>
-        ) : (
-          <DetailBody detail={detail} sampleData={sampleData} onClearModel={onClearModel} />
-        )}
+        <SheetBody
+          detail={detail}
+          loading={loading}
+          error={error}
+          sampleData={sampleData}
+          onRetry={onRetry}
+          onClearModel={onClearModel}
+        />
       </SheetContent>
     </Sheet>
   );

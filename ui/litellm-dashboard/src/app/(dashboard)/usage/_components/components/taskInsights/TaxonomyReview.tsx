@@ -43,8 +43,7 @@ function DraftTaskForm({
   const [name, setName] = React.useState(task.name);
   const [inclusion, setInclusion] = React.useState(task.inclusion_criteria);
   const [exclusion, setExclusion] = React.useState(task.exclusion_criteria);
-  const changed =
-    name !== task.name || inclusion !== task.inclusion_criteria || exclusion !== task.exclusion_criteria;
+  const changed = name !== task.name || inclusion !== task.inclusion_criteria || exclusion !== task.exclusion_criteria;
   const id = `draft-${task.task_id}`;
   return (
     <li className="flex flex-col gap-2 rounded-lg border p-3">

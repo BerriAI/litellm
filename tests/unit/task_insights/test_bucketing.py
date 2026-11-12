@@ -47,7 +47,11 @@ class _Store:
     async def decisions_by_hash(self, text_hashes):
         return {key: value for key, value in self.reused.items() if key in text_hashes}
 
-    async def save_decisions(self, decisions, bucketed_at):
+    async def taxonomy_version(self):
+        return _AT
+
+    async def save_decisions(self, decisions, bucketed_at, taxonomy_version):
+        assert taxonomy_version == _AT
         self.saved = decisions
         return len(decisions)
 

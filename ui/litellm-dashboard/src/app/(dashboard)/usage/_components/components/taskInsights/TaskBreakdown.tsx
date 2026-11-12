@@ -3,7 +3,15 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
 
-import { NUMERIC_CELL_CLASS, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  NUMERIC_CELL_CLASS,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { cn } from "@/lib/cva.config";
 import {
   UNASSIGNED_COLOR,
@@ -14,7 +22,8 @@ import {
   type TaskSummary,
 } from "./taskInsightsData";
 
-type Rank = "requests" | "spend";
+const RANKS = ["requests", "spend"] as const;
+type Rank = (typeof RANKS)[number];
 
 interface TaskBreakdownProps {
   tasks: readonly TaskSummary[];
@@ -35,8 +44,12 @@ export default function TaskBreakdown({ tasks, colors, selectedTaskId, onSelect 
   const maxShare = Math.max(0, ...tasks.map((task) => task.share));
   return (
     <div className="flex flex-col gap-2">
-      <div role="radiogroup" aria-label={t("usage.taskInsights.breakdown.rankBy")} className="flex w-fit rounded-lg bg-muted p-1">
-        {(["requests", "spend"] as const).map((option) => (
+      <div
+        role="radiogroup"
+        aria-label={t("usage.taskInsights.breakdown.rankBy")}
+        className="flex w-fit rounded-lg bg-muted p-1"
+      >
+        {RANKS.map((option) => (
           <button
             key={option}
             type="button"
@@ -48,7 +61,11 @@ export default function TaskBreakdown({ tasks, colors, selectedTaskId, onSelect 
             )}
             onClick={() => setRank(option)}
           >
-            {t(option === "requests" ? "usage.taskInsights.breakdown.byRequests" : "usage.taskInsights.breakdown.bySpend")}
+            {t(
+              option === "requests"
+                ? "usage.taskInsights.breakdown.byRequests"
+                : "usage.taskInsights.breakdown.bySpend",
+            )}
           </button>
         ))}
       </div>

@@ -15,8 +15,20 @@ const matrix: TaskMatrix = {
     { task_id: "explain", name: "Explain code", kind: "task", required_capabilities: [] },
   ],
   model_configs: [
-    { model_config_id: "opus", model_name: "claude-opus", provider_model: "anthropic/claude-opus", configured: true, max_input_tokens: null },
-    { model_config_id: "idle", model_name: "idle-model", provider_model: "anthropic/idle", configured: true, max_input_tokens: null },
+    {
+      model_config_id: "opus",
+      model_name: "claude-opus",
+      provider_model: "anthropic/claude-opus",
+      configured: true,
+      max_input_tokens: null,
+    },
+    {
+      model_config_id: "idle",
+      model_name: "idle-model",
+      provider_model: "anthropic/idle",
+      configured: true,
+      max_input_tokens: null,
+    },
   ],
   entries: [
     {
@@ -42,9 +54,7 @@ const matrix: TaskMatrix = {
       eval_sample_count: 0,
     },
   ],
-  compatibility: [
-    { model_config_id: "idle", task_id: "debug", status: "incompatible", missing: ["function_calling"] },
-  ],
+  compatibility: [{ model_config_id: "idle", task_id: "debug", status: "incompatible", missing: ["function_calling"] }],
   unattributed_request_count: 3,
 };
 
@@ -74,7 +84,9 @@ describe("TaskHeatmap", () => {
     renderHeatmap({ metric: "cost" });
 
     expect(screen.getByRole("button", { name: "Debug failing tests on claude-opus: No data" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Explain code on claude-opus: $0.004" })).toHaveTextContent("10 observed");
+    expect(screen.getByRole("button", { name: "Explain code on claude-opus: $0.004" })).toHaveTextContent(
+      "10 observed",
+    );
   });
 
   it("keeps a configured deployment without traffic as an empty column and flags missing capabilities", () => {

@@ -47,7 +47,11 @@ export const useTaskInsightsMatrix = (filter: TaskInsightsFilter, enabled: boole
   );
 };
 
-export const useTaskInsightsTask = (filter: TaskInsightsFilter, taskId: string | null, modelConfigId: string | null) => {
+export const useTaskInsightsTask = (
+  filter: TaskInsightsFilter,
+  taskId: string | null,
+  modelConfigId: string | null,
+) => {
   const { accessToken } = useAuthorized();
   return $api.useQuery(
     "get",

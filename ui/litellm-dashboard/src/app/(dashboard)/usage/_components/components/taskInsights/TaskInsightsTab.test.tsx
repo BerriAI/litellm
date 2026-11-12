@@ -80,7 +80,13 @@ const overview = (frozen: number, sample = false): TaskInsightsOverview => ({
 const renderTab = (canEdit = true, searchParams = "?tab=tasks") => {
   const onUrlUpdate = vi.fn();
   renderWithProviders(
-    <TaskInsightsTab startTime={new Date(2026, 10, 4)} endTime={new Date(2026, 10, 11)} teams={[]} canEdit={canEdit} active />,
+    <TaskInsightsTab
+      startTime={new Date(2026, 10, 4)}
+      endTime={new Date(2026, 10, 11)}
+      teams={[]}
+      canEdit={canEdit}
+      active
+    />,
     { searchParams, onUrlUpdate },
   );
   return onUrlUpdate;
@@ -137,6 +143,8 @@ describe("TaskInsightsTab", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Debug failing tests" }));
 
-    expect(onUrlUpdate).toHaveBeenCalledWith(expect.objectContaining({ queryString: expect.stringContaining("ti_task=debug") }));
+    expect(onUrlUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ queryString: expect.stringContaining("ti_task=debug") }),
+    );
   });
 });

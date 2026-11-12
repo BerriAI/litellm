@@ -76,7 +76,9 @@ export default function TaskHeatmap({
       </div>
       <div className="overflow-x-auto">
         <table className="w-full border-separate border-spacing-1 text-xs">
-          <caption className="sr-only">{t("usage.taskInsights.heatmap.caption", { metric: t(METRIC_LABELS[metric]) })}</caption>
+          <caption className="sr-only">
+            {t("usage.taskInsights.heatmap.caption", { metric: t(METRIC_LABELS[metric]) })}
+          </caption>
           <thead>
             <tr>
               <th scope="col" className="w-48 text-left font-medium text-muted-foreground">
@@ -103,7 +105,8 @@ export default function TaskHeatmap({
                   const reading = cellReading(entry, metric);
                   const intensity = heatIntensity(reading.value, values);
                   const shown = formatReading(reading, metric);
-                  const share = metric === "share" ? shareOfTask(matrix.entries, config.model_config_id, task.task_id) : null;
+                  const share =
+                    metric === "share" ? shareOfTask(matrix.entries, config.model_config_id, task.task_id) : null;
                   const compatibility = compatibilityFor(matrix.compatibility, config.model_config_id, task.task_id);
                   const selected = selectedTaskId === task.task_id && selectedModelId === config.model_config_id;
                   const label = t("usage.taskInsights.heatmap.cellLabel", {
@@ -120,13 +123,17 @@ export default function TaskHeatmap({
                         onClick={() => onSelectCell(task.task_id, config.model_config_id)}
                         className={cn(
                           "flex h-12 w-full flex-col items-start justify-center rounded-md px-2 text-left transition-shadow",
-                          intensity === null && "bg-muted bg-[repeating-linear-gradient(45deg,transparent,transparent_4px,rgba(0,0,0,0.04)_4px,rgba(0,0,0,0.04)_8px)] text-muted-foreground",
+                          intensity === null &&
+                            "bg-muted bg-[repeating-linear-gradient(45deg,transparent,transparent_4px,rgba(0,0,0,0.04)_4px,rgba(0,0,0,0.04)_8px)] text-muted-foreground",
                           selected && "ring-2 ring-ring",
                         )}
                         style={
                           intensity === null
                             ? undefined
-                            : { backgroundColor: `rgba(43, 63, 214, ${intensity})`, color: intensity > 0.55 ? "white" : undefined }
+                            : {
+                                backgroundColor: `rgba(43, 63, 214, ${intensity})`,
+                                color: intensity > 0.55 ? "white" : undefined,
+                              }
                         }
                       >
                         <span className="flex items-center gap-1 font-medium">

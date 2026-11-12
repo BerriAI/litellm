@@ -24,7 +24,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/u
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { extractErrorMessage } from "@/utils/errorUtils";
-import { usageUrlParsers } from "../../usageUrlState";
+import { usageUrlParsers, type TaskInsightsMetric } from "../../usageUrlState";
 import { Panel } from "../overview/Primitives";
 import TaskBreakdown from "./TaskBreakdown";
 import TaskClusterMap from "./TaskClusterMap";
@@ -50,6 +50,46 @@ interface TaskInsightsTabProps {
   teams: readonly Team[];
   canEdit: boolean;
   active: boolean;
+}
+
+function MatrixBody({
+  matrix,
+  metric,
+  selectedTaskId,
+  selectedModelId,
+  onMetricChange,
+  onSelectCell,
+}: {
+  matrix: ReturnType<typeof useTaskInsightsMatrix>;
+  metric: TaskInsightsMetric;
+  selectedTaskId: string | null;
+  selectedModelId: string | null;
+  onMetricChange: (metric: TaskInsightsMetric) => void;
+  onSelectCell: (taskId: string, modelConfigId: string) => void;
+}) {
+  const { t } = useTranslation();
+  if (matrix.isError) {
+    return (
+      <ErrorState
+        title={t("usage.taskInsights.heatmap.loadFailed")}
+        message={extractErrorMessage(matrix.error)}
+        onRetry={() => void matrix.refetch()}
+      />
+    );
+  }
+  if (!matrix.data) {
+    return <Skeleton role="status" aria-label={t("usage.taskInsights.loading")} className="h-64 w-full" />;
+  }
+  return (
+    <TaskHeatmap
+      matrix={matrix.data}
+      metric={metric}
+      onMetricChange={onMetricChange}
+      selectedTaskId={selectedTaskId}
+      selectedModelId={selectedModelId}
+      onSelectCell={onSelectCell}
+    />
+  );
 }
 
 function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
@@ -87,7 +127,8 @@ export default function TaskInsightsTab({ startTime, endTime, teams, canEdit, ac
 
   const selectTask = (taskId: string) =>
     void setParams({ ti_task: params.ti_task === taskId && params.ti_model === null ? null : taskId, ti_model: null });
-  const selectCell = (taskId: string, modelConfigId: string) => void setParams({ ti_task: taskId, ti_model: modelConfigId });
+  const selectCell = (taskId: string, modelConfigId: string) =>
+    void setParams({ ti_task: taskId, ti_model: modelConfigId });
 
   if (overview.isError) {
     return (
@@ -121,7 +162,9 @@ export default function TaskInsightsTab({ startTime, endTime, teams, canEdit, ac
             <Select
               items={teamItems}
               value={params.ti_team ?? ALL_TEAMS}
-              onValueChange={(value) => void setParams({ ti_team: value === ALL_TEAMS || value === null ? null : value })}
+              onValueChange={(value) =>
+                void setParams({ ti_team: value === ALL_TEAMS || value === null ? null : value })
+              }
             >
               <SelectTrigger aria-label={t("usage.taskInsights.teamFilter")} className="w-full">
                 <SelectValue />
@@ -250,24 +293,14 @@ export default function TaskInsightsTab({ startTime, endTime, teams, canEdit, ac
             title={t("usage.taskInsights.heatmap.title")}
             subtitle={t("usage.taskInsights.heatmap.subtitle")}
           >
-            {matrix.isError ? (
-              <ErrorState
-                title={t("usage.taskInsights.heatmap.loadFailed")}
-                message={extractErrorMessage(matrix.error)}
-                onRetry={() => void matrix.refetch()}
-              />
-            ) : matrix.data ? (
-              <TaskHeatmap
-                matrix={matrix.data}
-                metric={metric}
-                onMetricChange={(next) => void setParams({ ti_metric: next === "share" ? null : next })}
-                selectedTaskId={params.ti_task}
-                selectedModelId={params.ti_model}
-                onSelectCell={selectCell}
-              />
-            ) : (
-              <Skeleton role="status" aria-label={t("usage.taskInsights.loading")} className="h-64 w-full" />
-            )}
+            <MatrixBody
+              matrix={matrix}
+              metric={metric}
+              selectedTaskId={params.ti_task}
+              selectedModelId={params.ti_model}
+              onMetricChange={(next) => void setParams({ ti_metric: next === "share" ? null : next })}
+              onSelectCell={selectCell}
+            />
           </Panel>
           <p className="text-xs text-muted-foreground">
             {t("usage.taskInsights.footer", {

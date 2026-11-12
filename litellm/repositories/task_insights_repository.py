@@ -236,6 +236,11 @@ SELECT request_id, 'draft', task_id, x, y
 FROM jsonb_to_recordset($1::jsonb) AS r(request_id text, task_id text, x double precision, y double precision)
 ON CONFLICT (request_id, status) DO UPDATE SET task_id = EXCLUDED.task_id, x = EXCLUDED.x, y = EXCLUDED.y"""
 
+_LOCK_STATE: Final = """INSERT INTO "LiteLLM_TaskInsightsState" (id) VALUES ('default')
+ON CONFLICT (id) DO UPDATE SET updated_at = "LiteLLM_TaskInsightsState".updated_at"""
+_TAXONOMY_VERSION: Final = """SELECT taxonomy_frozen_at FROM "LiteLLM_TaskInsightsState" WHERE id = 'default'"""
+_LOCK_CURRENT_TAXONOMY: Final = """SELECT 1 AS current FROM "LiteLLM_TaskInsightsState"
+WHERE id = 'default' AND taxonomy_frozen_at IS NOT DISTINCT FROM $1::timestamp FOR UPDATE"""
 _FREEZE: Final = (
     """DELETE FROM "LiteLLM_TaskDefinition" WHERE status = 'frozen' AND EXISTS (
     SELECT 1 FROM "LiteLLM_TaskDefinition" WHERE status = 'draft')""",
@@ -434,6 +439,7 @@ class TaskInsightsRepository:
     async def freeze_draft(self, frozen_at: datetime) -> int:
         """Replacing the taxonomy drops every assignment so the worker buckets all requests against the new one."""
         async with self._database.tx(timeout=_TIMEOUT) as transaction:
+            await transaction.execute_raw(_LOCK_STATE)
             for statement in _FREEZE:
                 await transaction.execute_raw(statement)
             frozen: Final = await transaction.execute_raw(_FREEZE_DEFINITIONS, _db_time(frozen_at))
@@ -505,12 +511,26 @@ class TaskInsightsRepository:
         rows: Final = await self._database.query_raw(_BY_HASH, list(text_hashes))
         return {str(row["text_hash"]): _decision_from_row(row) for row in rows}
 
+    async def taxonomy_version(self) -> datetime | None:
+        rows: Final = _STATES.validate_python(await self._database.query_raw(_TAXONOMY_VERSION))
+        return rows[0].taxonomy_frozen_at if rows else None
+
     async def save_decisions(
-        self, decisions: tuple[tuple[PendingRequest, Decision], ...], bucketed_at: datetime
+        self,
+        decisions: tuple[tuple[PendingRequest, Decision], ...],
+        bucketed_at: datetime,
+        taxonomy_version: datetime | None,
     ) -> int:
+        """Writes nothing when the taxonomy was replaced after the decisions were made. Freezing locks the same state
+        row first, so a freeze and a save never interleave."""
         if not decisions:
             return 0
         async with self._database.tx(timeout=_TIMEOUT) as transaction:
+            current: Final = await transaction.query_raw(
+                _LOCK_CURRENT_TAXONOMY, _db_time(taxonomy_version) if taxonomy_version is not None else None
+            )
+            if not current:
+                return 0
             saved: Final = await transaction.execute_raw(
                 _SAVE_DECISIONS,
                 safe_dumps(tuple(_decision_record(*item) for item in decisions), non_finite_as_null=True),
