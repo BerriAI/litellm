@@ -37992,7 +37992,7 @@ export interface components {
             category_thresholds?: components["schemas"]["LakeraCategoryThresholds"] | null;
             /**
              * Ccr Retrieval
-             * @description Inject the Headroom retrieval tool for hashes declared by the compression service.
+             * @description Inject the Headroom retrieval tool for hashes declared by the compression service. Applies only when gateway_turn is false.
              * @default true
              */
             ccr_retrieval: boolean;
@@ -38017,6 +38017,12 @@ export interface components {
              * @description Client secret of the gateway's Entra app registration, used to perform the On-Behalf-Of exchange. Falls back to the AGENT365_CLIENT_SECRET environment variable.
              */
             client_secret?: string | null;
+            /**
+             * Compression Mode
+             * @description Headroom only. config.mode for a gateway turn. 'lossless' loses nothing and needs no retrieval tool; 'lossy_inline' saves more without a way back. Null uses the Headroom server's default.
+             * @default lossless
+             */
+            compression_mode: ("lossless" | "lossy_inline" | "lossless_then_lossy") | null;
             /**
              * Confidence Threshold
              * @description Only block or mask when detection confidence >= this value; below threshold, allow or log_only.
@@ -38174,6 +38180,12 @@ export interface components {
              * @description noma_v2 only: name of this gateway, used as the gateway_host label on Noma scans
              */
             gateway_name?: string | null;
+            /**
+             * Gateway Turn
+             * @description Headroom only. Send Headroom the whole provider request (messages, system, tools) on its gateway contract, so history stays byte-stable for the prompt cache and server-side plugins can rewrite tools and skills. With false, or against an older headroom-ai (asked again every 5 minutes), the guardrail compresses a subset of rows instead.
+             * @default true
+             */
+            gateway_turn: boolean;
             /**
              * Grounding Check
              * @description Enable grounding verification to ensure output is grounded in provided context.

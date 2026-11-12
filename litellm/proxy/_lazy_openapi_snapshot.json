@@ -18476,7 +18476,7 @@
             },
             "ccr_retrieval": {
               "default": true,
-              "description": "Inject the Headroom retrieval tool for hashes declared by the compression service.",
+              "description": "Inject the Headroom retrieval tool for hashes declared by the compression service. Applies only when gateway_turn is false.",
               "title": "Ccr Retrieval",
               "type": "boolean"
             },
@@ -18528,6 +18528,24 @@
               ],
               "description": "Client secret of the gateway's Entra app registration, used to perform the On-Behalf-Of exchange. Falls back to the AGENT365_CLIENT_SECRET environment variable.",
               "title": "Client Secret"
+            },
+            "compression_mode": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "lossless",
+                    "lossy_inline",
+                    "lossless_then_lossy"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": "lossless",
+              "description": "Headroom only. config.mode for a gateway turn. 'lossless' loses nothing and needs no retrieval tool; 'lossy_inline' saves more without a way back. Null uses the Headroom server's default.",
+              "title": "Compression Mode"
             },
             "confidence_threshold": {
               "default": 0.5,
@@ -18869,6 +18887,12 @@
               ],
               "description": "noma_v2 only: name of this gateway, used as the gateway_host label on Noma scans",
               "title": "Gateway Name"
+            },
+            "gateway_turn": {
+              "default": true,
+              "description": "Headroom only. Send Headroom the whole provider request (messages, system, tools) on its gateway contract, so history stays byte-stable for the prompt cache and server-side plugins can rewrite tools and skills. With false, or against an older headroom-ai (asked again every 5 minutes), the guardrail compresses a subset of rows instead.",
+              "title": "Gateway Turn",
+              "type": "boolean"
             },
             "grounding_check": {
               "anyOf": [

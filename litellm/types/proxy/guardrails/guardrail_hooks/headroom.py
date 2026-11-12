@@ -38,7 +38,23 @@ class HeadroomGuardrailConfigModel(GuardrailConfigModel[BaseModel]):
     )
     ccr_retrieval: bool = Field(
         default=True,
-        description="Inject the Headroom retrieval tool for hashes declared by the compression service.",
+        description="Inject the Headroom retrieval tool for hashes declared by the compression service. Applies only when gateway_turn is false.",
+    )
+    gateway_turn: bool = Field(
+        default=True,
+        description=(
+            "Headroom only. Send Headroom the whole provider request (messages, system, tools) on its gateway "
+            "contract, so history stays byte-stable for the prompt cache and server-side plugins can rewrite tools "
+            "and skills. With false, or against an older headroom-ai (asked again every 5 minutes), the guardrail "
+            "compresses a subset of rows instead."
+        ),
+    )
+    compression_mode: Literal["lossless", "lossy_inline", "lossless_then_lossy"] | None = Field(
+        default="lossless",
+        description=(
+            "Headroom only. config.mode for a gateway turn. 'lossless' loses nothing and needs no retrieval tool; "
+            "'lossy_inline' saves more without a way back. Null uses the Headroom server's default."
+        ),
     )
 
     @staticmethod

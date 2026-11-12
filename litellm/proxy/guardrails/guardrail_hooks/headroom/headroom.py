@@ -55,7 +55,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.headroom import (
     HEADROOM_REQUEST_CONTEXT_KEY,
     HeadroomRequestContext,
 )
-from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs
+from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs, GuardrailStatus
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -73,6 +73,21 @@ _COMPRESS_TIMEOUT_SECONDS: Final = 60.0
 HEADROOM_RETRIEVE_TOOL_NAME: Final = "headroom_retrieve"
 _HASH_PATTERN: Final = re.compile(r"[a-f0-9]{12,24}")
 _HASH_CACHE_TTL_SECONDS: Final = 15 * 60
+# The provider request Headroom's gateway turn reads, and the part it may rewrite.
+# Everything else in request_data is LiteLLM's own or the client's to keep.
+_GATEWAY_REWRITABLE_KEYS: Final = ("messages", "input", "system", "instructions", "tools", "tool_choice")
+_GATEWAY_BODY_KEYS: Final = (*_GATEWAY_REWRITABLE_KEYS, "model", "max_tokens", "max_output_tokens", "stream")
+# How long a Headroom without the gateway turn is left alone before it's asked again,
+# so a rolling upgrade or one old replica doesn't switch the feature off for good.
+_GATEWAY_UNSUPPORTED_RETRY_SECONDS: Final = 300.0
+_COMPRESS_STAT_KEYS: Final = (
+    "tokens_before",
+    "tokens_after",
+    "tokens_saved",
+    "tool_tokens_saved",
+    "compression_ratio",
+    "transforms_applied",
+)
 # Narrows the base class's bare-dict ``request_data`` at the boundary so its
 # untranslated messages can be read with concrete types (values pass through by
 # reference, so this is a shallow top-level reconstruction).
@@ -343,6 +358,37 @@ class _CompressResult:
     ccr_hashes: frozenset[str] = frozenset()
 
 
+@dataclass(frozen=True, slots=True)
+class _TurnAnswered:
+    answer: Mapping[str, object]
+    body: Mapping[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class _TurnUnsupported:
+    status_code: int
+
+
+@dataclass(frozen=True, slots=True)
+class _TurnFailed:
+    """Headroom failed, and fail_open lets the request through as it was."""
+
+
+def _is_count(value: object) -> TypeGuard[int | float]:  # guard-ok: isinstance narrows correctly; predicate is trivially correct  # fmt: skip
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _compression_stats(body: Mapping[str, object]) -> Mapping[str, object]:
+    """The savings Headroom reported. Spend tracking (extract_compression_saved_tokens)
+    reads only tokens_saved, which the service can omit, so it's derived then."""
+    stats: Final = {key: body[key] for key in _COMPRESS_STAT_KEYS if key in body}
+    before: Final = stats.get("tokens_before")
+    after: Final = stats.get("tokens_after")
+    if "tokens_saved" in stats or not _is_count(before) or not _is_count(after):
+        return stats
+    return {**stats, "tokens_saved": before - after}
+
+
 def _build_headroom_retrieve_tool() -> dict[str, object]:
     return {
         "type": "function",
@@ -370,18 +416,108 @@ def _build_headroom_retrieve_tool() -> dict[str, object]:
     }
 
 
-def _session_affinity(request_data: Mapping[str, object]) -> str | None:
+def _request_tenant(request_data: Mapping[str, object]) -> tuple[object, ...] | None:
+    """Who is calling, or None for a request with no caller on it."""
     auth: Final = request_user_api_key_auth(request_data)
-    session_id: Final = get_caller_session_id(request_data)
-    if not isinstance(auth, UserAPIKeyAuth) or not session_id:
+    if not isinstance(auth, UserAPIKeyAuth):
         return None
     tenant: Final = (
         ("key", auth.api_key) if auth.api_key else ("principal", auth.org_id, auth.team_id, auth.user_id, auth.agent_id)
     )
-    if not any(tenant[1:]):
+    return tenant if any(tenant[1:]) else None
+
+
+def _session_affinity(request_data: Mapping[str, object]) -> str | None:
+    session_id: Final = get_caller_session_id(request_data)
+    tenant: Final = _request_tenant(request_data)
+    if not session_id or tenant is None:
         return None
     identity: Final = json.dumps(["headroom-affinity-v1", tenant, session_id], separators=(",", ":"))
     return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
+def _without_cache_control(part: object) -> object:
+    return {key: value for key, value in part.items() if key != "cache_control"} if _is_str_object_dict(part) else part
+
+
+def _conversation_identity(row: Mapping[str, object]) -> object:
+    """A row as a conversation key. Clients move cache_control between turns, and
+    with it can resend the same text as a part list instead of a string."""
+    content: Final = row.get("content")
+    if isinstance(content, str) or is_all_text_parts(content):
+        return content_to_text(content)
+    return [_without_cache_control(part) for part in content] if _is_object_list(content) else content
+
+
+def _gateway_session_id(
+    request_data: Mapping[str, object], rows: Sequence[object], model: object, tenant: tuple[object, ...]
+) -> str | None:
+    """One Headroom session per conversation, or None to stay stateless.
+
+    Headroom replays what it already sent in a session, which keeps the provider's
+    prompt cache warm, and turns in one session queue on one lock. So only the
+    caller's own session id joins requests into a session: one app key can serve
+    many end users whose conversations all start the same way. Claude Code's
+    subagents share their parent's session id, and the first user row tells them apart.
+    """
+    caller_session: Final = get_caller_session_id(request_data)
+    if not caller_session:
+        return None
+    first_user_row: Final = next((row for row in rows if _is_str_object_dict(row) and row.get("role") == "user"), None)
+    identity: Final = json.dumps(
+        [
+            "headroom-session-v2",
+            tenant,
+            request_data.get("user"),
+            caller_session,
+            model,
+            _conversation_identity(first_user_row) if first_user_row is not None else None,
+        ],
+        sort_keys=True,
+        default=str,
+    )
+    return f"litellm-{hashlib.sha256(identity.encode('utf-8')).hexdigest()[:32]}"
+
+
+def _client_anthropic_beta(request_data: Mapping[str, object]) -> str | None:
+    proxy_request: Final = request_data.get("proxy_server_request")
+    headers: Final = proxy_request.get("headers") if _is_str_object_dict(proxy_request) else None
+    if not _is_str_object_dict(headers):
+        return None
+    return next(
+        (value for name, value in headers.items() if name.lower() == "anthropic-beta" and isinstance(value, str)),
+        None,
+    )
+
+
+def _is_gateway_turn_unsupported(response: HttpxResponse, body: object) -> bool:
+    """An older Headroom: it rejects the mode, or answers in the legacy messages-only shape."""
+    if response.status_code == 400:
+        return "config.mode" in response.text
+    return _is_str_object_dict(body) and "messages" in body and "body" not in body
+
+
+def _json_or_none(response: HttpxResponse) -> object:
+    """A 200 answer's JSON body, or None for any other status or a body that isn't JSON."""
+    if response.status_code != 200:
+        return None
+    try:
+        return _json_body(response)
+    except ValueError:
+        return None
+
+
+def _merged_extra_headers(existing: object, added: object) -> Mapping[str, object] | None:
+    """The request's extra headers plus the ones Headroom asks for, anthropic-beta values combined."""
+    if not _is_str_object_dict(added) or not added:
+        return None
+    current: Final = existing if _is_str_object_dict(existing) else {}
+    if "anthropic-beta" not in current or "anthropic-beta" not in added:
+        return {**current, **added}
+    from litellm.llms.anthropic.common_utils import merge_anthropic_beta_headers
+
+    beta: Final = merge_anthropic_beta_headers(str(current["anthropic-beta"]), str(added["anthropic-beta"]))
+    return {**current, **added, "anthropic-beta": beta}
 
 
 def has_headroom_retrieve_tool(tools: object) -> bool:
@@ -521,6 +657,8 @@ class HeadroomGuardrail(CustomGuardrail):
         unreachable_fallback: str | None = None,
         timeout: float | None = None,
         ccr_retrieval: bool = True,
+        gateway_turn: bool = True,
+        compression_mode: Literal["lossless", "lossy_inline", "lossless_then_lossy"] | None = "lossless",
     ):
         self.headroom_api_base = (api_base or get_secret_str("HEADROOM_API_BASE") or "").rstrip("/")
         if not self.headroom_api_base:
@@ -533,6 +671,9 @@ class HeadroomGuardrail(CustomGuardrail):
         self.unreachable_fallback: Literal["fail_closed", "fail_open"] = (
             "fail_open" if unreachable_fallback == "fail_open" else "fail_closed"
         )
+        self.gateway_turn = gateway_turn
+        self._gateway_turn_retry_at = 0.0
+        self.compression_mode = compression_mode
         self.ccr_retrieval = ccr_retrieval
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
@@ -613,34 +754,17 @@ class HeadroomGuardrail(CustomGuardrail):
         if self.ccr_retrieval:
             payload["config"] = {"mode": "ccr"}
 
-        try:
-            raw_response: HttpxResponse = await self.async_handler.post(  # pyright: ignore[reportUnknownMemberType]  # AsyncHTTPHandler.post is untyped
-                url=f"{self.headroom_api_base}/v1/compress",
-                json=payload,
-                headers=self._request_headers(affinity),
-                timeout=self.timeout,
-            )
-        except httpx.HTTPStatusError as e:
-            return _CompressResult(
-                self._handle_compress_failure(
-                    messages,
-                    "Headroom compression service returned an error",
-                    _build_compress_failure_detail(e.response.status_code, e.response.text),
-                ),
-                False,
-                {},
-            )
-        except (httpx.ConnectError, httpx.TimeoutException, httpx.TransportError, litellm.Timeout) as e:
+        response: Final = await self._post_compress(payload, affinity)
+        if isinstance(response, str):
             return _CompressResult(
                 self._handle_compress_failure(
                     messages,
                     "Headroom compression service unreachable",
-                    {"detail": str(e)},
+                    {"detail": response},
                 ),
                 False,
                 {},
             )
-        response: Final[HttpxResponse] = raw_response
 
         if response.status_code != 200:
             return _CompressResult(
@@ -720,31 +844,145 @@ class HeadroomGuardrail(CustomGuardrail):
             body.get("compression_ratio", 0),
         )
 
-        stats: Final = {
-            key: body[key]
-            for key in (
-                "tokens_before",
-                "tokens_after",
-                "tokens_saved",
-                "compression_ratio",
-                "transforms_applied",
-            )
-            if key in body
-        }
-        tokens_before: Final = stats.get("tokens_before")
-        tokens_after: Final = stats.get("tokens_after")
-        if (
-            "tokens_saved" not in stats
-            and isinstance(tokens_before, (int, float))
-            and not isinstance(tokens_before, bool)
-            and isinstance(tokens_after, (int, float))
-            and not isinstance(tokens_after, bool)
-        ):
-            # Spend tracking (extract_compression_saved_tokens) reads only
-            # tokens_saved, which the live compression service omits; derive it
-            # so savings are counted, but let a service-sent value win.
-            stats["tokens_saved"] = tokens_before - tokens_after
+        stats: Final = dict(_compression_stats(body))
         return _CompressResult(filtered, True, stats, _read_ccr_hashes(body))
+
+    async def _post_compress(self, payload: Mapping[str, object], affinity: str | None) -> HttpxResponse | str:
+        """Headroom's HTTP answer, or why it could not be reached."""
+        try:
+            return await self.async_handler.post(  # pyright: ignore[reportUnknownMemberType]  # AsyncHTTPHandler.post is untyped
+                url=f"{self.headroom_api_base}/v1/compress",
+                json=dict(payload),
+                headers=self._request_headers(affinity),
+                timeout=self.timeout,
+            )
+        except httpx.HTTPStatusError as e:
+            # AsyncHTTPHandler raises on any non-2xx, and the status decides what happens next.
+            return e.response
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.TransportError, litellm.Timeout) as e:
+            return str(e)
+
+    async def _call_gateway_turn(
+        self, payload: Mapping[str, object], affinity: str | None
+    ) -> _TurnAnswered | _TurnUnsupported | _TurnFailed:
+        """A failed call goes through the configured fallback, so fail_closed raises here."""
+        first: Final = await self._post_compress(payload, affinity)
+        # A 503 means a session's turn lock timed out, and Headroom asks the gateway to retry.
+        retry: Final = not isinstance(first, str) and first.status_code == 503
+        sent: Final = await self._post_compress(payload, affinity) if retry else first
+        if isinstance(sent, str):
+            _ = self._handle_compress_failure([], "Headroom compression service unreachable", {"detail": sent})
+            return _TurnFailed()
+        answer: Final = _json_or_none(sent)
+        if _is_gateway_turn_unsupported(sent, answer):
+            return _TurnUnsupported(sent.status_code)
+        body: Final = answer.get("body") if _is_str_object_dict(answer) else None
+        if not _is_str_object_dict(answer) or not _is_str_object_dict(body):
+            _ = self._handle_compress_failure(
+                [],
+                "Headroom compression service returned an error",
+                _build_compress_failure_detail(sent.status_code, sent.text),
+            )
+            return _TurnFailed()
+        return _TurnAnswered(answer, body)
+
+    async def _apply_gateway_turn(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],  # mutable-ok: the rewritten request is written back into request_data
+    ) -> GenericGuardrailAPIInputs | None:
+        """Send Headroom the whole provider request and take back what it rewrites.
+
+        Reads and writes request_data, not the translated inputs: on the Anthropic
+        route those are OpenAI-shaped copies, while Headroom's folds and hooks need
+        the wire shape. The inputs handed back carry no texts or tools and the same
+        structured_messages object, so the translation handlers write nothing over
+        the rewritten request.
+
+        None means this request takes the row-subset path: it isn't a caller's live
+        request (the auto-router's routing hop passes a throwaway request_data and
+        reads the result's structured_messages), or Headroom is too old.
+        """
+        tenant: Final = _request_tenant(request_data)
+        rows: Final = request_data["messages"] if "messages" in request_data else request_data.get("input")
+        if tenant is None or "structured_messages" not in inputs or not _is_object_list(rows) or not rows:
+            return None
+
+        model: Final = self.headroom_model or request_data.get("model")
+        session_id: Final = _gateway_session_id(request_data, rows, model, tenant)
+        config: Final = {
+            **({"session_id": session_id} if session_id else {}),
+            **({"mode": self.compression_mode} if self.compression_mode else {}),
+        }
+        client_beta: Final = _client_anthropic_beta(request_data)
+        payload: Final = {
+            **{key: request_data[key] for key in _GATEWAY_BODY_KEYS if key in request_data},
+            **({"model": model} if model else {}),
+            "config": config,
+            "gateway": {
+                "can_redrive": False,
+                "can_relay_response": False,
+                "request_headers": {"anthropic-beta": client_beta} if client_beta else {},
+            },
+        }
+        affinity: Final = _session_affinity(request_data) or session_id
+        start_time: Final = time.time()
+        outcome: Final = await self._call_gateway_turn(payload, affinity)
+        end_time: Final = time.time()
+        match outcome:
+            case _TurnUnsupported(status_code=status_code):
+                self._gateway_turn_retry_at = time.monotonic() + _GATEWAY_UNSUPPORTED_RETRY_SECONDS
+                verbose_proxy_logger.warning(
+                    "Headroom at %s has no lossless gateway turn (HTTP %s); using row-subset compression and "
+                    "asking again in %d seconds. Upgrade headroom-ai to get it.",
+                    self.headroom_api_base,
+                    status_code,
+                    _GATEWAY_UNSUPPORTED_RETRY_SECONDS,
+                )
+                return None
+            case _TurnFailed():
+                self._record_outcome(
+                    request_data,
+                    "guardrail_failed_to_respond",
+                    {"error": "headroom compression unavailable; request forwarded uncompressed"},
+                    start_time,
+                    end_time,
+                )
+                return inputs
+            case _TurnAnswered(answer=answer, body=body):
+                # A key Headroom sent back without was dropped on purpose (a tool_choice naming
+                # a tool it deferred, say), so it goes from the request too.
+                dropped: Final = tuple(key for key in _GATEWAY_REWRITABLE_KEYS if key in payload and key not in body)
+                for key in dropped:
+                    _ = request_data.pop(key, None)
+                rewrites: Final = {key: body[key] for key in _GATEWAY_REWRITABLE_KEYS if key in body}
+                extra_headers: Final = _merged_extra_headers(request_data.get("extra_headers"), answer.get("headers"))
+                request_data.update({**rewrites, **({"extra_headers": extra_headers} if extra_headers else {})})
+                self._record_outcome(request_data, "success", _compression_stats(answer), start_time, end_time)
+        return GenericGuardrailAPIInputs(structured_messages=inputs["structured_messages"])
+
+    def _record_outcome(
+        self,
+        request_data: dict[str, object],  # mutable-ok: LiteLLM's guardrail logging writes into request_data
+        status: GuardrailStatus,
+        response: Mapping[str, object],
+        start_time: float,
+        end_time: float,
+    ) -> None:
+        from litellm.proxy.common_utils.callback_utils import (
+            add_guardrail_to_applied_guardrails_header,
+        )
+
+        self.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response=response,
+            request_data=request_data,
+            guardrail_status=status,
+            guardrail_provider=HEADROOM_GUARDRAIL_PROVIDER,
+            start_time=start_time,
+            end_time=end_time,
+            duration=end_time - start_time,
+        )
+        add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
 
     async def _call_retrieve(self, hash_value: str, affinity: str | None, query: str | None = None) -> str:
         params: Final[dict[str, str]] = {}
@@ -805,6 +1043,11 @@ class HeadroomGuardrail(CustomGuardrail):
             verbose_proxy_logger.debug("Headroom: background request; skipping compression")
             return inputs
 
+        if self.gateway_turn and time.monotonic() >= self._gateway_turn_retry_at:
+            turned: Final = await self._apply_gateway_turn(inputs, request_data)
+            if turned is not None:
+                return turned
+
         structured_messages: Final = inputs.get("structured_messages")
         if not _is_object_list(structured_messages) or not structured_messages:
             return inputs
@@ -839,21 +1082,14 @@ class HeadroomGuardrail(CustomGuardrail):
         )
         end_time: Final = time.time()
 
-        from litellm.proxy.common_utils.callback_utils import (
-            add_guardrail_to_applied_guardrails_header,
-        )
-
         if not result.succeeded:
-            self.add_standard_logging_guardrail_information_to_request_data(
-                guardrail_json_response={"error": "headroom compression unavailable; request forwarded uncompressed"},
-                request_data=request_data,
-                guardrail_status="guardrail_failed_to_respond",
-                guardrail_provider=HEADROOM_GUARDRAIL_PROVIDER,
-                start_time=start_time,
-                end_time=end_time,
-                duration=end_time - start_time,
+            self._record_outcome(
+                request_data,
+                "guardrail_failed_to_respond",
+                {"error": "headroom compression unavailable; request forwarded uncompressed"},
+                start_time,
+                end_time,
             )
-            add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
             # Hand back the caller's own inputs object. Translation handlers
             # detect "the guardrail rewrote the messages" by identity, so
             # returning a rebuilt copy sends an unchanged request through the
@@ -866,16 +1102,7 @@ class HeadroomGuardrail(CustomGuardrail):
             protected_indices=protected_indices,
         )
 
-        self.add_standard_logging_guardrail_information_to_request_data(
-            guardrail_json_response=result.stats,
-            request_data=request_data,
-            guardrail_status="success",
-            guardrail_provider=HEADROOM_GUARDRAIL_PROVIDER,
-            start_time=start_time,
-            end_time=end_time,
-            duration=end_time - start_time,
-        )
-        add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
+        self._record_outcome(request_data, "success", result.stats, start_time, end_time)
 
         hashes: Final = result.ccr_hashes if self.ccr_retrieval else frozenset()
         if not hashes:
