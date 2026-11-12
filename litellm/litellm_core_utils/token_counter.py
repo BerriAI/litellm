@@ -17,7 +17,7 @@ import anyio
 import anyio.lowlevel
 import httpx
 import tiktoken
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 from tiktoken.model import MODEL_TO_ENCODING
 from typing_extensions import ParamSpec, TypeVar
 
@@ -1878,7 +1878,8 @@ def _is_text_block(block: object) -> bool:
 
 
 def _has_only_text_content(message: object) -> bool:
-    mapping: Final = as_str_mapping(message)
+    normalized: Final[object] = message.model_dump(exclude_none=True) if isinstance(message, BaseModel) else message
+    mapping: Final = as_str_mapping(normalized)
     if mapping is None:
         return False
     content: Final = mapping.get("content")

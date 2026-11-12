@@ -76,6 +76,7 @@ from litellm.types.utils import (
     Delta,
     Function,
     ModelResponseStream,
+    Message,
     StreamingChoices,
     Usage,
 )
@@ -8117,6 +8118,88 @@ async def test_failed_prompt_estimate_keeps_the_prompt_out_of_debug_logs(
     )
     assert _PROMPT_SECRET not in caplog.text
     assert not any(_PROMPT_SECRET in _span_text(span) for span in exporter.get_finished_spans())
+
+
+async def _raise_offload_error(error: BaseException) -> int:
+    raise error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("seam", "error"),
+    [
+        ("offload", RuntimeError("can't start new thread")),
+        ("offload", OSError("worker unavailable")),
+        ("counter", RuntimeError("tokenizer failed to load")),
+    ],
+    ids=["offload_runtime_error", "offload_os_error", "counter_runtime_error"],
+)
+async def test_failed_chat_span_survives_estimate_errors(
+    in_memory_otel: tuple[OpenTelemetry, InMemorySpanExporter],
+    monkeypatch: pytest.MonkeyPatch,
+    seam: str,
+    error: Exception,
+) -> None:
+    otel, exporter = in_memory_otel
+
+    def failing_counter(**_kwargs: object) -> int:
+        raise error
+
+    if seam == "offload":
+        monkeypatch.setattr(
+            token_counter_module, "offload_token_count", lambda _function: lambda: _raise_offload_error(error)
+        )
+    else:
+        monkeypatch.setattr(litellm_logging_module, "get_token_counter_new", lambda: failing_counter)
+
+    span: Final = await _fail(_redacted_logging(otel, list(_SECRET_PROMPT)), exporter, _SYNC_THEN_ASYNC)
+
+    attributes: Final = dict(span.attributes or {})
+    _assert_unknown_usage(attributes)
+    assert ESTIMATED_INPUT_TOKENS_ATTRIBUTE not in attributes
+    assert span.status.status_code == trace.StatusCode.ERROR
+    assert any("Timeout" in str((event.attributes or {}).get("exception.type")) for event in span.events)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_prompt_estimate_cancels_async_failure_logging(
+    in_memory_otel: tuple[OpenTelemetry, InMemorySpanExporter], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    otel, exporter = in_memory_otel
+    monkeypatch.setattr(
+        token_counter_module,
+        "offload_token_count",
+        lambda _function: lambda: _raise_offload_error(asyncio.CancelledError()),
+    )
+    logging_obj: Final = _redacted_logging(otel, list(_SECRET_PROMPT))
+
+    with pytest.raises(asyncio.CancelledError):
+        await logging_obj.async_failure_handler(
+            litellm.Timeout(message="timed out", model="test-model", llm_provider="hosted_vllm"), "tb"
+        )
+
+    assert exporter.get_finished_spans() == ()
+
+
+@pytest.mark.asyncio
+async def test_failed_chat_span_estimates_sdk_message_objects_like_dicts(
+    in_memory_otel: tuple[OpenTelemetry, InMemorySpanExporter],
+) -> None:
+    otel, exporter = in_memory_otel
+    text: Final = " ".join([_PROMPT_SECRET] * 50)
+
+    message_span: Final = await _fail(
+        _redacted_logging(otel, [Message(role="user", content=text)]), exporter, _SYNC_THEN_ASYNC
+    )
+    exporter.clear()
+    dict_span: Final = await _fail(
+        _redacted_logging(otel, [{"role": "user", "content": text}]), exporter, _SYNC_THEN_ASYNC
+    )
+
+    message_estimate: Final = dict(message_span.attributes or {}).get(ESTIMATED_INPUT_TOKENS_ATTRIBUTE)
+    assert isinstance(message_estimate, int)
+    assert message_estimate == dict(dict_span.attributes or {}).get(ESTIMATED_INPUT_TOKENS_ATTRIBUTE)
+    assert _PROMPT_SECRET not in _span_text(message_span)
 
 
 @pytest.mark.asyncio

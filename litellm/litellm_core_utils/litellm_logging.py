@@ -4782,7 +4782,15 @@ class Logging(LiteLLMLoggingBaseClass):
             if not has_only_text_content(messages):
                 return None
             return get_token_counter_new()(model=self.model, messages=messages, use_default_image_token_count=True)
-        except (ValueError, TypeError, LookupError, AttributeError):
+        except (ValueError, TypeError, LookupError, AttributeError, RuntimeError, OSError):
+            return None
+
+    async def _offloaded_prompt_token_estimate(self) -> int | None:
+        from litellm.litellm_core_utils.token_counter import offload_token_count
+
+        try:
+            return await offload_token_count(self._prompt_token_estimate)()
+        except (RuntimeError, OSError):
             return None
 
     async def special_failure_handlers(self, exception: Exception):
@@ -5066,11 +5074,7 @@ class Logging(LiteLLMLoggingBaseClass):
             estimate_prompt_tokens=False,
         )
         if self._should_estimate_failed_prompt():
-            from litellm.litellm_core_utils.token_counter import offload_token_count
-
-            self.model_call_details[FAILED_PROMPT_TOKEN_ESTIMATE_KEY] = await offload_token_count(
-                self._prompt_token_estimate
-            )()
+            self.model_call_details[FAILED_PROMPT_TOKEN_ESTIMATE_KEY] = await self._offloaded_prompt_token_estimate()
         if self._on_failure_payload_built is not None:
             self._on_failure_payload_built()
         callbacks: Final = self.get_combined_callback_list(
