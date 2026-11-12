@@ -1,8 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, fireEvent, renderWithProviders as render, screen, waitFor, within } from "../../../tests/test-utils";
+import { fireEvent, renderWithProviders as render, screen, waitFor, within } from "../../../tests/test-utils";
 import { usePathname } from "next/navigation";
-import { AuthProvider, useAuth } from "@/contexts/AuthContext";
-import { clearTokenCookies, storeLoginToken } from "@/utils/cookieUtils";
+import { AuthProvider } from "@/contexts/AuthContext";
 import { recordUiEvent } from "@/lib/telemetry/uiEvents";
 import Layout from "./layout";
 
@@ -242,47 +241,8 @@ describe("(dashboard) Layout", () => {
     };
 
     afterEach(() => {
-      clearTokenCookies();
       document.cookie = "token=; Max-Age=0; Path=/";
       document.cookie = "litellm_return_url=; Max-Age=0; Path=/";
-    });
-
-    function SessionIdentity() {
-      const { authLoading, userEmail, userRole } = useAuth();
-      if (authLoading) return <div>Loading session</div>;
-      return <div>{userEmail ? `${userEmail} (${userRole})` : "Signed out"}</div>;
-    }
-
-    it("updates the mounted session after login and when a different user signs in", async () => {
-      clearTokenCookies();
-      render(
-        <AuthProvider>
-          <SessionIdentity />
-        </AuthProvider>,
-      );
-      pendingUiConfig.resolve();
-      expect(await screen.findByText("Signed out")).toBeInTheDocument();
-
-      act(() => storeLoginToken(sessionCookie({ user_email: "admin@example.test", user_role: "proxy_admin" })));
-      expect(await screen.findByText("admin@example.test (Admin)")).toBeInTheDocument();
-
-      act(() => storeLoginToken(sessionCookie({ user_email: "user@example.test", user_role: "internal_user" })));
-      expect(await screen.findByText("user@example.test (Internal User)")).toBeInTheDocument();
-    });
-
-    it.each(["", "   ", "invalid-token"])("does not authenticate a stored invalid token %j", async (token) => {
-      clearTokenCookies();
-      render(
-        <AuthProvider>
-          <SessionIdentity />
-        </AuthProvider>,
-      );
-      pendingUiConfig.resolve();
-      expect(await screen.findByText("Signed out")).toBeInTheDocument();
-
-      act(() => storeLoginToken(token));
-
-      expect(screen.getByText("Signed out")).toBeInTheDocument();
     });
 
     it("routes a session flagged password_reset_required to the change-password page", async () => {

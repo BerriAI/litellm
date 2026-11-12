@@ -2,7 +2,7 @@
 
 import React, { createContext, useContext, useEffect, useState } from "react";
 import { jwtDecode } from "jwt-decode";
-import { clearTokenCookies, getCookie, LOGIN_TOKEN_CHANGED_EVENT } from "@/utils/cookieUtils";
+import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
 import { isJwtExpired } from "@/utils/jwtUtils";
 import { effectiveSessionRole } from "@/utils/roles";
 import { getUiConfig, setGlobalLitellmHeaderName } from "@/components/networking";
@@ -56,17 +56,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let cancelled = false;
 
-    const refreshToken = () => {
-      const raw = getCookie("token");
-      const valid = raw && !isJwtExpired(raw) ? raw : null;
-      if (raw && !valid) {
-        deleteCookie("token", "/");
-      }
-      setToken(valid);
-    };
-
-    window.addEventListener(LOGIN_TOKEN_CHANGED_EVENT, refreshToken);
-
     (async () => {
       try {
         await getUiConfig();
@@ -76,13 +65,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       if (cancelled) return;
 
-      refreshToken();
+      const raw = getCookie("token");
+      const valid = raw && !isJwtExpired(raw) ? raw : null;
+
+      // Clear expired/invalid token so downstream code doesn't keep trying to use it.
+      if (raw && !valid) {
+        deleteCookie("token", "/");
+      }
+
+      setToken(valid);
       setAuthLoading(false);
     })();
 
     return () => {
       cancelled = true;
-      window.removeEventListener(LOGIN_TOKEN_CHANGED_EVENT, refreshToken);
     };
   }, []);
 

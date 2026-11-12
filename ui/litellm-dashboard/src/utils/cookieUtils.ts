@@ -4,8 +4,6 @@
 
 import { clearAllMcpTokens } from "./mcpTokenStore";
 
-export const LOGIN_TOKEN_CHANGED_EVENT = "litellm-login-token-changed";
-
 /**
  * Returns the cookie path for the UI.
  * Derives the path from window.location.pathname so it works when
@@ -105,8 +103,6 @@ export function storeLoginToken(token: string) {
   } catch {
     // sessionStorage may be unavailable (e.g. private browsing quota exceeded)
   }
-
-  window.dispatchEvent(new Event(LOGIN_TOKEN_CHANGED_EVENT));
 }
 
 /**
