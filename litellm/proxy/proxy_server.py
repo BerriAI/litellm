@@ -11948,6 +11948,35 @@ class ProxyStartupEvent:
             misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
         )
 
+        async def send_performance_alert_summaries() -> None:
+            from litellm.integrations.performance_alert_notifications import PerformanceAlertNotifier
+            from litellm.repositories.alert_repository import AlertRepository
+
+            slack: Final = proxy_logging_obj.slack_alerting_instance
+            email_connected: Final = bool(os.getenv("SMTP_HOST") and os.getenv("SMTP_SENDER_EMAIL"))
+            if not email_connected and not slack.performance_alert_webhooks():
+                return
+            if _current_general_settings().get("performance_alerts_enabled", True) is not True:
+                return
+            if not (
+                await PerformanceAlertRepository(prisma_client, enterprise=premium_user is True).monitoring()
+            ).enabled:
+                return
+            await PerformanceAlertNotifier(
+                ConfigRepository(prisma_client, use_writer=True), AlertRepository(prisma_client)
+            ).run(slack)
+
+        scheduler.add_job(  # pyright: ignore[reportUnknownMemberType]  # APScheduler does not provide typed job methods
+            send_performance_alert_summaries,
+            "interval",
+            minutes=5,
+            next_run_time=datetime.now(timezone.utc),
+            id="performance_alert_summaries",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+
         ### PTU DAILY ROLLUP ###
         from litellm.proxy.spend_tracking.ptu_feature_flag import (
             is_ptu_cost_attribution_enabled,
