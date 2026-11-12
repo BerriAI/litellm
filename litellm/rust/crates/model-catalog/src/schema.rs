@@ -64,7 +64,7 @@ struct RegistryDocument {
 pub(crate) const FLAT_KEY_PATTERN: &str = concat!(
     r"^(",
     r"input_cost_per_((audio_|image_|video_)?token|character|image|pixel|query|request|second|text_message|audio_per_second|video_per_second(_above_\d+s_interval)?)",
-    r"|output_cost_per_((audio_|image_|video_|reasoning_)?token|character|image(_\d+(\.\d+)?K?)?|pixel|second(_\d+[pk])?|video_per_second|billable_unit)",
+    r"|output_cost_per_((audio_|image_|video_|reasoning_)?token|character|image(_\d+(\.\d+)?K?)?|pixel|second(_\d+[pk])?|video|video_per_second|billable_unit)",
     r"|cache_read_input_(audio_|image_|video_)?token_cost",
     r"|explicit_cache_read_input_token_cost",
     r"|cache_creation_input_(audio_|image_|video_)?token_cost(_above_1hr|_above_12hr)?",
