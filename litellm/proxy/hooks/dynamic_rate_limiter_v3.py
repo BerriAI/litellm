@@ -1193,6 +1193,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         tpm_share: Final = (descriptor["rate_limit"] or {}).get("tokens_per_unit")
         if tpm_share is None or not data:
             return 0
+        self.v3_limiter.bound_output_for_limit(data, tpm_share, call_type)
         try:
             estimate: Final = await offload_token_count(self.v3_limiter.estimate_request_tokens)(
                 data=data,
@@ -1200,6 +1201,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                 min_configured_tpm_limit=tpm_share,
                 call_type=call_type,
                 team_id=user_api_key_dict.team_id,
+                rate_limit_type=self.v3_limiter.get_rate_limit_type(),
             )
         except Exception as e:  # noqa: BLE001  # an unreadable prompt still holds the minimum so admission runs
             verbose_proxy_logger.warning(
@@ -1665,8 +1667,9 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
     async def async_log_failure_event(
         self, kwargs: object, response_obj: object, start_time: object, end_time: object
     ) -> None:
-        """Give back the tokens held for an attempt that produced no usage, on the admitting team counter and on
-        the fallback target that failed, leaving holds on other fallback targets to the attempts still running."""
+        """Settle the tokens held for a failed attempt to the usage it recorded, or give them all back when it recorded
+        none, on the admitting team counter or the fallback target that failed, leaving holds on other fallback
+        targets to the attempts still running."""
         from litellm.proxy.common_utils.callback_utils import get_model_group_from_litellm_kwargs
 
         callback_kwargs: Final = callback_kwargs_mapping(kwargs)
@@ -1677,16 +1680,29 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         failed_hold: Final = (
             stash.borrowing_team_model_fallback_limits.get(failed_group) if failed_group is not None else None
         )
+        used: Final = _settled_tokens(
+            _usage_of(callback_kwargs, None if isinstance(response_obj, BaseException) else response_obj),
+            self.v3_limiter.get_rate_limit_type(),
+        )
         refund: Final = (
             *_window_guarded(
                 _team_model_token_increment(
                     stash.borrowing_team_model_limit,
-                    -stash.borrowing_team_model_reserved_tokens,
+                    (used if failed_hold is None else 0) - stash.borrowing_team_model_reserved_tokens,
                     self.v3_limiter.window_size,
                 ),
                 stash.borrowing_team_model_reserved_window,
             ),
-            *_hold_refunds(() if failed_hold is None else (failed_hold,), self.v3_limiter.window_size),
+            *(
+                ()
+                if failed_hold is None
+                else _window_guarded(
+                    _team_model_token_increment(
+                        failed_hold.descriptor, used - failed_hold.reserved_tokens, self.v3_limiter.window_size
+                    ),
+                    failed_hold.window,
+                )
+            ),
         )
         stash.borrowing_team_model_reserved_tokens = 0
         stash.borrowing_team_model_reserved_window = None

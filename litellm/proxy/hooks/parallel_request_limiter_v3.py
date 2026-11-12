@@ -1092,16 +1092,35 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             data[cap_field] = effective_cap  # rebind-ok: downstream routing requires the bounded output cap
 
     def estimate_request_tokens(
-        self, data: object, model: str, min_configured_tpm_limit: int, call_type: str | None, team_id: str | None
+        self,
+        data: object,
+        model: str,
+        min_configured_tpm_limit: int,
+        call_type: str | None,
+        team_id: str | None,
+        rate_limit_type: str = "total",
     ) -> int:
         """The reservation this limiter would hold for the request, for another limiter settling the same call."""
-        return self._estimate_tokens_for_request(
+        if rate_limit_type == "total":
+            return self._estimate_tokens_for_request(
+                data=data,
+                model=model,
+                min_configured_tpm_limit=min_configured_tpm_limit,
+                call_type=call_type,
+                team_id=team_id,
+            )
+        estimated_input, output_budget = self._estimate_input_and_output_tokens(
             data=data,
-            model=model,
             min_configured_tpm_limit=min_configured_tpm_limit,
             call_type=call_type,
             team_id=team_id,
+            media_model_resolver=self._media_model_resolver,
         )
+        return output_budget if rate_limit_type == "output" else estimated_input
+
+    def bound_output_for_limit(self, data: object, min_configured_limit: int, call_type: str | None) -> None:
+        """Cap a request without an explicit output cap the way this limiter does for its own small TPM limits."""
+        self._apply_implicit_output_cap(data=data, min_configured_limit=min_configured_limit, call_type=call_type)
 
     def _estimate_tokens_for_request(
         self,

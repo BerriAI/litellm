@@ -2582,6 +2582,45 @@ async def test_a_saturated_responses_fallback_holds_the_output_budget_as_well_as
 
 
 @pytest.mark.asyncio
+async def test_an_output_token_limit_holds_only_the_prompts_output_budget(monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setitem(proxy_server.general_settings, "token_rate_limit_type", "output")
+    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.0)
+    await _check(handler, _team_key(), saturation=1.0, data=_fallback_prompt(300))
+    assert await _team_tokens_remaining(handler) == 90
+
+
+@pytest.mark.asyncio
+async def test_a_request_without_max_tokens_leaves_admission_capped_to_the_teams_share(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.0)
+    prompt: Final[dict[str, object]] = {"messages": [{"role": "user", "content": "hi"}]}
+    await _check(handler, _team_key(), saturation=1.0, data=prompt)
+    assert prompt["max_tokens"] == handler.v3_limiter.no_max_tokens_output_floor(100)
+
+
+@pytest.mark.asyncio
+async def test_a_failed_attempt_that_recorded_usage_is_charged_that_usage_instead_of_refunded(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.0)
+    await _check(handler, _team_key(), saturation=1.0, data=_fallback_prompt(30))
+    assert await _team_tokens_remaining(handler) < 70
+    await handler.async_log_failure_event(
+        kwargs={
+            "litellm_params": {"metadata": {"model_group": "shared-model"}},
+            "combined_usage_object": litellm.Usage(prompt_tokens=20, completion_tokens=5, total_tokens=25),
+        },
+        response_obj=Exception("stream cut"),
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    assert await _team_tokens_remaining(handler) == 75
+
+
+@pytest.mark.asyncio
 async def test_a_fallback_attempt_that_fails_gives_back_the_tokens_it_held(monkeypatch: pytest.MonkeyPatch):
     handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.0)
     assert await handler.async_fallback_target_allowed(_team_key(), "shared-model", _fallback_prompt(30)) is True
