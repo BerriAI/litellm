@@ -3131,13 +3131,51 @@ async def mcp_read_resource(
             detail="User not allowed to read this resource.",
         )
 
-    if len(allowed_mcp_servers) != 1:
+    async def owner(candidate: MCPServer) -> MCPServer | None:
+        candidate_auth, candidate_headers = _prepare_mcp_server_headers(
+            server=candidate,
+            mcp_server_auth_headers=mcp_server_auth_headers,
+            mcp_auth_header=mcp_auth_header,
+            oauth2_headers=oauth2_headers,
+            raw_headers=raw_headers,
+            user_api_key_auth=user_api_key_auth,
+            scope_servers=allowed_mcp_servers,
+        )
+        try:
+            resources: Final = await global_mcp_server_manager.get_resources_from_server(
+                server=candidate,
+                user_api_key_auth=user_api_key_auth,
+                mcp_auth_header=candidate_auth,
+                extra_headers=candidate_headers,
+                add_prefix=False,
+                raw_headers=raw_headers,
+                client_ip=client_ip,
+                raise_on_error=True,
+            )
+        except Exception as error:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Unable to list resources from MCP server '{candidate.name}'; resource owner is unknown.",
+            ) from error
+        return candidate if any(str(resource.uri) == str(url) for resource in resources) else None
+
+    async def resolve_owner() -> MCPServer:
+        candidates: Final = tuple([await owner(candidate) for candidate in allowed_mcp_servers])
+        owners: Final = tuple(candidate for candidate in candidates if candidate is not None)
+        if len(owners) == 1:
+            return owners[0]
+        if not owners:
+            raise HTTPException(status_code=404, detail=f"Resource '{url}' not found on any allowed MCP server.")
+        conflict: Final = ", ".join(candidate.name for candidate in owners)
         raise HTTPException(
             status_code=400,
-            detail=("Multiple MCP servers configured; read_resource currently supports exactly one allowed server."),
+            detail=(
+                f"Resource URI '{url}' is ambiguous across MCP servers: {conflict}. "
+                "Use /{server_name}/mcp or x-mcp-servers to select one server."
+            ),
         )
 
-    server: Final = allowed_mcp_servers[0]
+    server: Final = allowed_mcp_servers[0] if len(allowed_mcp_servers) == 1 else await resolve_owner()
 
     server_auth_header, extra_headers = _prepare_mcp_server_headers(
         server=server,

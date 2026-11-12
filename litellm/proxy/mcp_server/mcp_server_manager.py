@@ -5098,8 +5098,11 @@ class MCPServerManager:
         add_prefix: bool = True,
         raw_headers: dict[str, str] | None = None,
         client_ip: str | None = None,
+        raise_on_error: bool = False,
     ) -> list[Resource]:
         if self._skip_blocked_stdio_listing(server, "resource"):
+            if raise_on_error:
+                raise RuntimeError("Resource listing is unavailable for this server")
             return []
         try:
             headers: Final = (
@@ -5141,6 +5144,8 @@ class MCPServerManager:
             items: Final = await self._resource_discovery_cache.get(key, fetch)
             return self._create_prefixed_resources(items.resources, server, add_prefix=add_prefix)
         except Exception as error:
+            if raise_on_error:
+                raise
             verbose_logger.warning("Failed to get resources from server %s: %s", server.name, error)
             return []
 

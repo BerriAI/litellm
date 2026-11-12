@@ -4,10 +4,22 @@ from types import SimpleNamespace
 from typing import Final, Literal
 from unittest.mock import AsyncMock, patch
 
+import httpx2
 import pytest
+from fastapi import HTTPException
 from mcp.server.context import ServerRequestContext
-from mcp.types import GetPromptRequest, GetPromptRequestParams, GetPromptResult, ListToolsResult
+from mcp.types import (
+    GetPromptRequest,
+    GetPromptRequestParams,
+    GetPromptResult,
+    JSONRPCMessage,
+    JSONRPCRequest,
+    ListToolsResult,
+    ReadResourceResult,
+    TextResourceContents,
+)
 from mcp.types import Tool as MCPTool
+from pydantic import AnyUrl, TypeAdapter
 
 import litellm
 from litellm.caching.dual_cache import DualCache
@@ -24,6 +36,7 @@ from litellm.proxy.mcp_server.mcp_server_manager import (
 )
 from litellm.proxy.mcp_server.mcp_server_manager import (
     ListedToolsCaller,
+    MCPServerManager,
 )
 from litellm.proxy.mcp_server.operations import GatewayOperations, prepare_context
 from litellm.proxy.mcp_server.tool_registry import global_mcp_tool_registry
@@ -44,6 +57,104 @@ class _CatalogHookCapture(CustomLogger):
 
 async def _served_catalog_tool() -> str:
     return "ok"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["unique", "ambiguous", "missing", "failure"])
+async def test_resource_read_requires_unique_owner_from_complete_listings(
+    monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    uri: Final = "ui://widget/view.html"
+    reads: Final[asyncio.Queue[str]] = asyncio.Queue()
+    message: Final = TypeAdapter(JSONRPCMessage)
+
+    async def respond(request: httpx2.Request) -> httpx2.Response:
+        if request.method == "DELETE":
+            return httpx2.Response(200)
+        payload: Final = message.validate_json(request.content)
+        if not isinstance(payload, JSONRPCRequest):
+            return httpx2.Response(202)
+        if payload.method == "initialize":
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.id,
+                    "result": {
+                        "protocolVersion": "2025-03-26",
+                        "serverInfo": {"name": "upstream", "version": "1"},
+                        "capabilities": {"resources": {}},
+                    },
+                },
+            )
+        if payload.method == "resources/read":
+            reads.put_nowait(request.url.host)
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.id,
+                    "result": {
+                        "contents": [{"uri": uri, "text": request.url.host}],
+                    },
+                },
+            )
+        assert payload.method == "resources/list"
+        if case == "failure" and request.url.host == "other.example":
+            return httpx2.Response(503, text="private upstream diagnostic")
+        if not (payload.params or {}).get("cursor"):
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.id,
+                    "result": {
+                        "resources": [],
+                        "nextCursor": "second-page",
+                    },
+                },
+            )
+        owns: Final = case != "missing" and (request.url.host == "owner.example" or case == "ambiguous")
+        return httpx2.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": payload.id,
+                "result": {
+                    "resources": [{"name": "widget", "uri": uri}] if owns else [],
+                },
+            },
+        )
+
+    manager: Final = MCPServerManager(upstream_transport=httpx2.MockTransport(respond))
+    servers: Final = tuple(
+        MCPServer(
+            server_id=name,
+            name=name,
+            url=f"https://{name}.example/mcp",
+            transport=MCPTransport.http,
+            allow_all_keys=True,
+        )
+        for name in ("owner", "other")
+    )
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    for server in servers:
+        monkeypatch.setitem(manager.config_mcp_servers, server.server_id, server)
+    if case == "unique":
+        result: Final = await operations.mcp_read_resource(url=AnyUrl(uri))
+        assert result == ReadResourceResult(contents=[TextResourceContents(uri=uri, text="owner.example")])
+        assert reads.qsize() == 1
+        assert reads.get_nowait() == "owner.example"
+        return
+    with pytest.raises(HTTPException) as rejected:
+        await operations.mcp_read_resource(url=AnyUrl(uri))
+    assert rejected.value.status_code == {"ambiguous": 400, "missing": 404, "failure": 502}[case]
+    assert {"ambiguous": "ambiguous", "missing": "not found", "failure": "list resources"}[case] in str(
+        rejected.value.detail
+    ).lower()
+    assert reads.empty()
+    assert "private upstream diagnostic" not in str(rejected.value.detail)
 
 
 def _listing_client() -> SimpleNamespace:
