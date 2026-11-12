@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.decisions_pricing import QUERY_PRICED_DECISIONS_
 from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
+    async_convert_url_to_base64,
     async_convert_urls_to_base64,
     async_convert_urls_to_base64_or_errors,
     convert_url_to_base64,
@@ -33,6 +34,7 @@ from litellm.llms.base_llm.decisions.transformation import (
     image_param,
     input_has_no_text,
     input_images,
+    ir_to_systemone_request,
     ir_to_systemone_response,
     remote_image_urls,
     standard_base64,
@@ -240,6 +242,18 @@ def get_decisions_provider_config(model: str, custom_llm_provider: str) -> BaseD
             llm_provider=custom_llm_provider,
         )
     return provider_config
+
+
+def validate_router_connection(model: str, provider: str | None, request: Mapping[str, object]) -> None:
+    api_base: Final = request.get("api_base") or request.get("base_url")
+    if provider is None or not isinstance(api_base, str) or not api_base:
+        return
+    api_key: Final = request.get("api_key")
+    provider_config: Final = get_decisions_provider_config(model, provider)
+    try:
+        provider_config.validate_client_connection(api_base, api_key if isinstance(api_key, str) else None)
+    except ValueError as error:
+        raise litellm.BadRequestError(message=str(error), model=model, llm_provider=provider) from error
 
 
 def _ir_request(request: DecisionsRequestFormat, safety_identifier: str | None) -> DecisionsIRRequest:
@@ -693,10 +707,47 @@ def _with_downloads_or_dropped_failures(
     )
 
 
+def _remaining_image_bytes(call: DecisionsCall) -> int | None:
+    rules: Final = call.provider_config.image_rules_for(call.model)
+    if call.custom_llm_provider != "gemini" or rules.max_total_image_bytes is None:
+        return None
+    sizes: Final = tuple(_decoded_image_bytes(image) for image in input_images(call.ir_request.input))
+    error: Final = _image_size_error(sizes, rules.max_image_bytes, rules.max_total_image_bytes)
+    if error is not None:
+        raise _refusal(call, error)
+    return rules.max_total_image_bytes - sum(sizes)
+
+
+def _bounded_remote_images(
+    urls: tuple[str, ...], remaining: int, timeout: float | httpx.Timeout | None
+) -> tuple[str, ...]:
+    state: tuple[int, tuple[str, ...]] = (remaining, ())  # rebind-ok: sequential budget without recursion
+    for url in urls:
+        available, images = state
+        image = convert_url_to_base64(url, timeout=timeout, max_bytes=available)
+        state = (available - _decoded_image_bytes(image), (*images, image))
+    return state[1]
+
+
+async def _async_bounded_remote_images(
+    urls: tuple[str, ...], remaining: int, timeout: float | httpx.Timeout | None
+) -> tuple[str, ...]:
+    state: tuple[int, tuple[str, ...]] = (remaining, ())  # rebind-ok: sequential budget without recursion
+    for url in urls:
+        available, images = state
+        image = await async_convert_url_to_base64(url, timeout=timeout, max_bytes=available)
+        state = (available - _decoded_image_bytes(image), (*images, image))
+    return state[1]
+
+
 def _with_remote_images_inlined(call: DecisionsCall) -> DecisionsCall:
     remote_urls: Final = _remote_image_urls(call)
     if not remote_urls:
         return call
+    remaining: Final = _remaining_image_bytes(call)
+    if remaining is not None:
+        images: Final = _bounded_remote_images(remote_urls, remaining, call.timeout)
+        return _with_images_replaced(call, MappingProxyType(dict(zip(remote_urls, images, strict=True))))
     if _drops_params(call.litellm_params):
         return _with_downloads_or_dropped_failures(
             call,
@@ -711,6 +762,10 @@ async def _async_with_remote_images_inlined(call: DecisionsCall) -> DecisionsCal
     remote_urls: Final = _remote_image_urls(call)
     if not remote_urls:
         return call
+    remaining: Final = _remaining_image_bytes(call)
+    if remaining is not None:
+        bounded: Final = await _async_bounded_remote_images(remote_urls, remaining, call.timeout)
+        return _with_images_replaced(call, MappingProxyType(dict(zip(remote_urls, bounded, strict=True))))
     if _drops_params(call.litellm_params):
         downloads: Final = await async_convert_urls_to_base64_or_errors(remote_urls, timeout=call.timeout)
         return _with_downloads_or_dropped_failures(
@@ -942,12 +997,18 @@ def _request_body(call: DecisionsCall) -> Mapping[str, object]:
     return body
 
 
+def _logged_request_body(call: DecisionsCall) -> Mapping[str, object]:
+    if call.custom_llm_provider == "gemini":
+        return ir_to_systemone_request(call.model, call.ir_request)
+    return _request_body(call)
+
+
 def _logged_body(
     supported: DecisionsCall, fetched: DecisionsCall, kept: Sequence[bool], body: Mapping[str, object]
 ) -> Mapping[str, object]:
     if fetched is supported:
         return body
-    return _request_body(
+    return _logged_request_body(
         replace(
             supported,
             ir_request=replace(supported.ir_request, input=_with_images_kept(supported.ir_request.input, kept)),
