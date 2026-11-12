@@ -322,6 +322,9 @@
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
     },
+    "special_handling": {
+      "require_provider_api_key": true
+    },
     "provider_info": {
       "supports_function_calling": true
     }

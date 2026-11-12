@@ -407,3 +407,44 @@ class TestBourse:
         )
 
         assert params["tools"] == tools
+
+    def test_bourse_missing_key_never_falls_back_to_openai_key(self, monkeypatch):
+        import litellm
+
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-must-not-leak")
+        monkeypatch.delenv("BOURSE_API_KEY", raising=False)
+        monkeypatch.setattr(litellm, "api_key", None)
+        monkeypatch.setattr(litellm, "openai_key", None)
+
+        with patch("litellm.main.openai_chat_completions.completion") as mock_openai, patch(
+            "litellm.main.base_llm_http_handler.completion"
+        ) as mock_http:
+            with pytest.raises(litellm.AuthenticationError, match="BOURSE_API_KEY"):
+                litellm.completion(
+                    model="bourse/claude-opus-5",
+                    messages=[{"role": "user", "content": "hi"}],
+                )
+
+        mock_openai.assert_not_called()
+        mock_http.assert_not_called()
+
+    def test_bourse_uses_its_own_key(self, monkeypatch):
+        import litellm
+
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-must-not-leak")
+        monkeypatch.setenv("BOURSE_API_KEY", "bourse-key")
+
+        with patch("litellm.main.openai_chat_completions.completion") as mock_openai, patch(
+            "litellm.main.base_llm_http_handler.completion"
+        ) as mock_http:
+            try:
+                litellm.completion(
+                    model="bourse/claude-opus-5",
+                    messages=[{"role": "user", "content": "hi"}],
+                )
+            except Exception:
+                pass  # the mocked transport returns no real response; only the key matters here
+
+        calls = mock_openai.call_args_list + mock_http.call_args_list
+        assert calls, "expected the request to reach a transport"
+        assert all(c.kwargs.get("api_key") == "bourse-key" for c in calls)
