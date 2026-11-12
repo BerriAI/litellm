@@ -81,6 +81,28 @@ def _usage_of(response_obj: object) -> Usage | None:
 TEAM_MODEL_LIMIT_AT_SATURATION: Final = "model_per_team_saturated"
 
 
+def _team_limit_name(rate_limit_type: str) -> str:
+    return "model_rpm_limit" if rate_limit_type == "requests" else "model_tpm_limit"
+
+
+def _team_model_token_increment(
+    descriptor: RateLimitDescriptor | None, total_tokens: int, ttl: int
+) -> tuple[CounterIncrement, ...]:
+    """Charge the team counter the pre-call hook tracked, and only when that team limit has a TPM share."""
+    if descriptor is None:
+        return ()
+    rate_limit: Final = descriptor["rate_limit"]
+    if rate_limit is None or rate_limit.get("tokens_per_unit") is None:
+        return ()
+    return (
+        CounterIncrement(
+            counter=RateLimitScope(descriptor["key"], descriptor["value"]).counter("tokens"),
+            amount=total_tokens,
+            ttl=ttl,
+        ),
+    )
+
+
 def _get_priority_settings() -> "PriorityReservationSettings":
     """
     Get the priority reservation settings, guaranteed to be non-None.
@@ -571,16 +593,13 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                     )
 
                 if descriptor_key == TEAM_MODEL_LIMIT_AT_SATURATION:
-                    limit_name: Final = (
-                        "model_rpm_limit" if status["rate_limit_type"] == "requests" else "model_tpm_limit"
-                    )
                     raise ProxyRateLimitError(
                         detail={
-                            "error": f"Team {limit_name} reached for {model} and the model is saturated, "
-                            "so there is no idle capacity to borrow. "
+                            "error": f"Team {_team_limit_name(status['rate_limit_type'])} reached for {model} "
+                            "and the model is saturated, so there is no idle capacity to borrow. "
                             f"Team: {user_api_key_dict.team_id}, "
                             f"Rate limit type: {status['rate_limit_type']}, "
-                            f"Team {limit_name}: {status['current_limit']}, "
+                            f"Team {_team_limit_name(status['rate_limit_type'])}: {status['current_limit']}, "
                             f"Remaining: {status['limit_remaining']}, "
                             f"Model saturation: {saturation:.1%}"
                         },
@@ -775,7 +794,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             return response
 
     @with_service_target(RATE_LIMITS_TARGET)
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+    async def async_log_success_event(self, kwargs, response_obj: object, start_time, end_time) -> None:
         """
         Update token usage for priority-based rate limiting after successful API calls.
 
@@ -846,20 +865,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             else:
                 priority_key = f"{model_group}:default_pool"
 
-            borrowing_team_limit: Final = get_or_create_request_stash().borrowing_team_model_limit
-            team_model_tokens: Final = (
-                (
-                    CounterIncrement(
-                        counter=RateLimitScope(borrowing_team_limit["key"], borrowing_team_limit["value"]).counter(
-                            "tokens"
-                        ),
-                        amount=total_tokens,
-                        ttl=self.v3_limiter.window_size,
-                    ),
-                )
-                if borrowing_team_limit is not None
-                and borrowing_team_limit["rate_limit"].get("tokens_per_unit") is not None
-                else ()
+            team_model_tokens: Final = _team_model_token_increment(
+                get_or_create_request_stash().borrowing_team_model_limit, total_tokens, self.v3_limiter.window_size
             )
             pipeline_operations: Final = (
                 model_tokens,
