@@ -2130,3 +2130,80 @@ def test_bedrock_embedding_region_bug_reproduction():
 
 
 img_base_64 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGQAAABkBAMAAACCzIhnAAAAG1BMVEURAAD///+ln5/h39/Dv79qX18uHx+If39MPz9oMSdmAAAACXBIWXMAAA7EAAAOxAGVKw4bAAABB0lEQVRYhe2SzWrEIBCAh2A0jxEs4j6GLDS9hqWmV5Flt0cJS+lRwv742DXpEjY1kOZW6HwHFZnPmVEBEARBEARB/jd0KYA/bcUYbPrRLh6amXHJ/K+ypMoyUaGthILzw0l+xI0jsO7ZcmCcm4ILd+QuVYgpHOmDmz6jBeJImdcUCmeBqQpuqRIbVmQsLCrAalrGpfoEqEogqbLTWuXCPCo+Ki1XGqgQ+jVVuhB8bOaHkvmYuzm/b0KYLWwoK58oFqi6XfxQ4Uz7d6WeKpna6ytUs5e8betMcqAv5YPC5EZB2Lm9FIn0/VP6R58+/GEY1X1egVoZ/3bt/EqF6malgSAIgiDIH+QL41409QMY0LMAAAAASUVORK5CYII="
+
+
+@pytest.mark.parametrize(
+    ("model_id", "embed_response", "extra_body", "expected_body"),
+    [
+        (
+            "amazon.titan-embed-text-v2:0",
+            titan_embedding_response,
+            {"normalize": False, "dimensions": 256},
+            {"inputText": test_input, "normalize": False, "dimensions": 256},
+        ),
+        (
+            "cohere.embed-english-v3",
+            cohere_embedding_response,
+            {"input_type": "search_query", "truncate": "END"},
+            {"texts": [test_input], "input_type": "search_query", "truncate": "END"},
+        ),
+    ],
+)
+def test_bedrock_embedding_sends_extra_body_fields_in_the_request_body(
+    respx_mock: respx.MockRouter,
+    model_id: str,
+    embed_response: dict[str, object],
+    extra_body: dict[str, object],
+    expected_body: dict[str, object],
+) -> None:
+    route = respx_mock.post(f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{model_id}/invoke").mock(
+        return_value=httpx.Response(200, json=embed_response)
+    )
+
+    litellm.embedding(
+        model=f"bedrock/{model_id}",
+        input=[test_input],
+        api_key="test-bearer-token",
+        aws_region_name="us-east-1",
+        extra_body=extra_body,
+    )
+
+    assert json.loads(route.calls.last.request.read()) == expected_body
+
+
+def test_bedrock_nova_embedding_sends_extra_body_fields_inside_single_embedding_params(
+    respx_mock: respx.MockRouter,
+) -> None:
+    model_id: Final = "amazon.nova-2-multimodal-embeddings-v1:0"
+    route = respx_mock.post(f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{model_id}/invoke").mock(
+        return_value=httpx.Response(200, json={"embeddings": [{"embeddingType": "TEXT", "embedding": [0.1, 0.2]}]})
+    )
+
+    litellm.embedding(
+        model=f"bedrock/{model_id}",
+        input=[test_input],
+        api_key="test-bearer-token",
+        aws_region_name="us-east-1",
+        extra_body={"embeddingPurpose": "GENERIC_RETRIEVAL", "embeddingDimension": 1024},
+    )
+
+    params = json.loads(route.calls.last.request.read())["singleEmbeddingParams"]
+    assert "extra_body" not in params
+    assert (params["embeddingPurpose"], params["embeddingDimension"]) == ("GENERIC_RETRIEVAL", 1024)
+
+
+def test_bedrock_embedding_extra_body_wins_over_the_mapped_openai_param(respx_mock: respx.MockRouter) -> None:
+    route = respx_mock.post(
+        "https://bedrock-runtime.us-east-1.amazonaws.com/model/amazon.titan-embed-text-v2:0/invoke"
+    ).mock(return_value=httpx.Response(200, json=titan_embedding_response))
+
+    litellm.embedding(
+        model="bedrock/amazon.titan-embed-text-v2:0",
+        input=[test_input],
+        api_key="test-bearer-token",
+        aws_region_name="us-east-1",
+        dimensions=256,
+        extra_body={"dimensions": 512},
+    )
+
+    assert json.loads(route.calls.last.request.read())["dimensions"] == 512

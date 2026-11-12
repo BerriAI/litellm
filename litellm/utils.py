@@ -504,6 +504,7 @@ if TYPE_CHECKING:
 
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
+from litellm.llms.base_llm.embedding.transformation import merge_extra_body
 from litellm.llms.base_llm.evals.transformation import BaseEvalsAPIConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.base_llm.skills.transformation import BaseSkillsAPIConfig
@@ -4709,6 +4710,9 @@ def get_optional_params_image_gen(
     return optional_params
 
 
+EMBEDDING_PROVIDERS_WITH_NATIVE_HANDLERS: Final = frozenset({"bedrock", "gemini", "ollama", "sagemaker", "vertex_ai"})
+
+
 def get_optional_params_embeddings(
     # 2 optional params
     model: str,
@@ -5052,7 +5056,7 @@ def get_optional_params_embeddings(
     else:
         optional_params = non_default_params
 
-    final_params = add_provider_specific_params_to_optional_params(
+    final_params: dict[str, object] = add_provider_specific_params_to_optional_params(
         optional_params=optional_params,
         passed_params=passed_params,
         custom_llm_provider=custom_llm_provider,
@@ -5060,7 +5064,10 @@ def get_optional_params_embeddings(
         additional_drop_params=kwargs.get("additional_drop_params", None),
     )
 
-    if "extra_body" in final_params and len(final_params["extra_body"]) == 0:
+    if custom_llm_provider in EMBEDDING_PROVIDERS_WITH_NATIVE_HANDLERS:
+        return merge_extra_body(final_params)
+
+    if "extra_body" in final_params and not final_params["extra_body"]:
         final_params.pop("extra_body", None)
 
     return final_params

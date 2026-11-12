@@ -12,6 +12,8 @@ import types
 from collections.abc import Mapping
 from typing import Final
 
+from litellm.llms.base_llm.embedding.transformation import merge_extra_body
+
 
 class NvidiaNimEmbeddingConfig:
     """
@@ -66,7 +68,7 @@ class NvidiaNimEmbeddingConfig:
         self,
         non_default_params: dict,
         optional_params: dict,
-        kwargs: dict | None = None,
+        kwargs: Mapping[str, object] | None = None,
     ):
         if "extra_body" not in optional_params:
             optional_params["extra_body"] = {}
@@ -80,5 +82,5 @@ class NvidiaNimEmbeddingConfig:
 
         if kwargs is not None:
             # pass kwargs in extra_body
-            optional_params["extra_body"].update(kwargs)
+            optional_params["extra_body"].update(merge_extra_body(kwargs))
         return optional_params

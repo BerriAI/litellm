@@ -348,3 +348,30 @@ async def test_sdk_embedding_rejects_non_string_batch(embedding_route: respx.Rou
             litellm.embedding(model="ollama/nomic-embed-text", input=[123], api_base="http://ollama.test")
 
     assert not embedding_route.called
+
+
+def test_ollama_embeddings_sends_extra_body_fields_at_the_documented_places(
+    mock_response_data, mock_embedding_response
+):
+    with (
+        patch("litellm.module_level_client.post") as mock_post,
+        patch("litellm.OllamaConfig.get_config", return_value={}),
+    ):
+        mock_post.return_value = MagicMock(json=MagicMock(return_value=mock_response_data))
+
+        ollama_embeddings(
+            api_base="http://localhost:11434",
+            model="test-model",
+            prompts=["hello", "world"],
+            optional_params={"extra_body": {"truncate": False, "keep_alive": "5m", "options": {"num_ctx": 2048}}},
+            model_response=mock_embedding_response,
+            logging_obj=None,
+        )
+
+    assert mock_post.call_args.kwargs["json"] == {
+        "model": "test-model",
+        "input": ["hello", "world"],
+        "truncate": False,
+        "keep_alive": "5m",
+        "options": {"num_ctx": 2048},
+    }
