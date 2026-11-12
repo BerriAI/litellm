@@ -4147,6 +4147,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/cursor-cli/{endpoint}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cursor Cli Passthrough
+         * @description Forward the signed-in Cursor CLI's agent session using a separate x-litellm-api-key. Set network.useHttp1ForAgent to true in the CLI's cli-config.json, then run `agent --agent-endpoint https://YOUR_PROXY/cursor-cli --header "x-litellm-api-key: Bearer YOUR_KEY"`. Leave --endpoint unchanged. Login, bootstrap and model discovery stay direct to Cursor. Use an unrestricted virtual key or master key. JWT and custom-auth credentials are unsupported. Model restrictions, token accounting and content guardrails are unsupported. Configured content guardrails or policy-engine rules disable this relay, even when not selected by this request. Logs describe HTTP transport status, not the agent's outcome. The client owns login and token refresh.
+         */
+        post: operations["cursor_cli_passthrough_cursor_cli__endpoint__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/cursor/chat/completions": {
         parameters: {
             query?: never;
@@ -60745,6 +60765,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UserConnectionStartResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cursor_cli_passthrough_cursor_cli__endpoint__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: "agent.v1.AgentService/RunSSE" | "aiserver.v1.BidiService/BidiAppend";
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/connect+proto": string;
+                "application/proto": string;
+            };
+        };
+        responses: {
+            /** @description Unchanged native Cursor response bytes, including streamed agent events */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                    "application/proto": string;
+                    "text/event-stream": string;
                 };
             };
             /** @description Validation Error */

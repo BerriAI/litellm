@@ -23,6 +23,7 @@ def _post_with_media_types(request_media_type: str, response_media_type: str) ->
 @pytest.mark.parametrize("request_type, response_type", [
     ("application/json", "application/json"), ("application/sdp", "application/sdp"),
     ("multipart/form-data", "application/json"),
+    ("application/connect+proto", "text/event-stream"), ("application/proto", "application/proto"),
 ])
 def test_a_fully_documented_post_has_no_findings(request_type: str, response_type: str) -> None:
     operation: Final = _post_with_media_types(request_type, response_type)
@@ -60,7 +61,7 @@ def test_each_missing_piece_is_its_own_rule() -> None:
     assert codes == {"OA001", "OA002", "OA003"}
 
 
-@pytest.mark.parametrize("body", [{}, {"content": {"multipart/form-data": {}}}])
+@pytest.mark.parametrize("body", [{}, {"content": {"multipart/form-data": {}}}, {"content": {"application/proto": {}}}])
 def test_only_the_missing_piece_is_reported(body: Mapping[str, object]) -> None:
     no_body: Final = {**_DOCUMENTED, "requestBody": body}
     blank_description: Final = {**_DOCUMENTED, "description": "   "}

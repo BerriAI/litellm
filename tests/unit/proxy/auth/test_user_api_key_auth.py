@@ -35,6 +35,25 @@ class Request:
         self.headers: Dict[str, str] = {}
 
 
+def test_custom_header_auth_logs_names_without_provider_or_gateway_credentials(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gateway: Final = "test-gateway-credential"
+    provider: Final = "test-cursor-credential"
+    request: Final = StarletteRequest(
+        {
+            "type": "http",
+            "headers": [(b"x-litellm-api-key", f"Bearer {gateway}".encode()), (b"authorization", f"Bearer {provider}".encode())],
+        }
+    )
+    monkeypatch.setattr(verbose_proxy_logger, "propagate", True)
+    with caplog.at_level(logging.DEBUG, logger=verbose_proxy_logger.name):
+        assert get_api_key_from_custom_header(request, "x-litellm-api-key") == gateway
+    assert "header_names" in caplog.text
+    assert provider not in caplog.text
+    assert gateway not in caplog.text
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "model,fallbacks,allowed", (("model-a", [], True), ("model-b", [], False), ("model-a", ["model-b"], False))

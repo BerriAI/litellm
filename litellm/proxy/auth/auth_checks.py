@@ -32,6 +32,7 @@ from litellm.caching.dual_cache import DualCache, LimitedSizeOrderedDict
 from litellm.constants import (
     CLI_JWT_EXPIRATION_HOURS,
     CLI_SESSION_KEY_PREFIX,
+    CURSOR_CLI_PASS_THROUGH_ROUTE_PREFIX,
     DEFAULT_ACCESS_GROUP_CACHE_TTL,
     DEFAULT_IN_MEMORY_TTL,
     DEFAULT_MAX_RECURSE_DEPTH,
@@ -43,7 +44,7 @@ from litellm.constants import (
     REGISTRY_ERROR_NEGATIVE_CACHE_TTL,
     TAG_REGISTRY_MAX_SIZE,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.decisions_pricing import decisions_pricing_fields, decisions_request_price
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
@@ -1149,6 +1150,29 @@ def request_skips_budget_checks(
     return is_model_cost_zero(model=model, llm_router=llm_router)
 
 
+def check_opaque_inference_controls(value: object) -> None:
+    fields: Final = as_str_mapping(value)
+    if fields is None:
+        for item in as_object_list(value) or ():
+            check_opaque_inference_controls(item)
+        return
+    for name, control in fields.items():
+        if control in (None, {}, [], ()):
+            continue
+        if name in {"models", "team_models", "allowed_models"} and "*" not in (as_object_list(control) or ()):
+            raise HTTPException(status_code=403, detail="Opaque inference cannot enforce model restrictions")
+        if name.endswith(("tpm_limit", "tpd_limit", "model_max_budget", "model_rpm_limit")) or name in {
+            "tpm_limit_per_model",
+            "rpm_limit_per_model",
+            "allowed_model_region",
+            "allowed_tools",
+            "guardrails",
+            "policies",
+        }:
+            raise HTTPException(status_code=403, detail=f"Opaque inference cannot enforce {name}")
+        check_opaque_inference_controls(control)
+
+
 async def common_checks(
     request_body: dict,
     team_object: LiteLLM_TeamTable | None,
@@ -1208,8 +1232,11 @@ async def common_checks(
         )
     )
 
+    opaque_cursor: Final = route.startswith(f"{CURSOR_CLI_PASS_THROUGH_ROUTE_PREFIX}/")
     membership_user_id: Final = (
-        valid_token.user_id if valid_token is not None and (bool(_model) or not skip_all_budget_checks) else None
+        valid_token.user_id
+        if valid_token is not None and (bool(_model) or not skip_all_budget_checks or opaque_cursor)
+        else None
     )
     team_membership_loaded: Final = team_object is not None and membership_user_id is not None
     loaded_team_membership: Final = (
@@ -1223,6 +1250,38 @@ async def common_checks(
         if team_object is not None and membership_user_id is not None
         else None
     )
+
+    if opaque_cursor and valid_token is not None:
+        if personal_key_team_model_access_applies(valid_token):
+            raise HTTPException(status_code=403, detail="Opaque inference cannot enforce inherited personal-key models")
+        if valid_token.user_id is not None and user_object is None:
+            raise HTTPException(status_code=403, detail="Opaque inference cannot verify the key owner's policies")
+        org_id: Final = valid_token.org_id or (team_object.organization_id if team_object is not None else None)
+        org_object: Final = (
+            await get_org_object(
+                org_id=org_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            if org_id is not None
+            else None
+        )
+        if (valid_token.project_id is not None and project_object is None) or (
+            org_id is not None and org_object is None
+        ):
+            raise HTTPException(status_code=403, detail="Opaque inference cannot verify inherited policies")
+        for source in (
+            valid_token,
+            team_object,
+            user_object,
+            project_object,
+            end_user_object,
+            loaded_team_membership,
+            org_object,
+        ):
+            if source is not None:
+                check_opaque_inference_controls(source.model_dump())
 
     unpriced_models: Final = (
         _unpriced_models_in_request(model=_model, llm_router=llm_router)

@@ -3172,7 +3172,7 @@ def _is_authenticated_caller_secret(value: str, user_api_key_dict: UserAPIKeyAut
     return hmac.compare_digest(stored_representation.encode(), authenticated_key.encode())
 
 
-def _caller_headers_without_litellm_secrets(
+def caller_headers_without_litellm_secrets(
     request: Request, user_api_key_dict: UserAPIKeyAuth, never_forwarded: frozenset[str]
 ) -> Mapping[str, str]:
     incoming: Final = safe_get_request_headers(request)
@@ -3192,7 +3192,7 @@ def _forwarded_headers_for_credentialless_vertex_passthrough(
     request: Request, user_api_key_dict: UserAPIKeyAuth
 ) -> Mapping[str, str]:
     """Caller headers to forward on the bring-your-own-credentials Vertex branch, minus LiteLLM secrets."""
-    forwarded: Final = _caller_headers_without_litellm_secrets(
+    forwarded: Final = caller_headers_without_litellm_secrets(
         request, user_api_key_dict, _HEADERS_NEVER_FORWARDED_TO_VERTEX
     )
     if _VERTEX_UPSTREAM_CREDENTIAL_HEADERS.isdisjoint(forwarded):
@@ -3203,7 +3203,7 @@ def _forwarded_headers_for_credentialless_vertex_passthrough(
 def _upstream_headers_for_anthropic_route(
     request: Request, user_api_key_dict: UserAPIKeyAuth, proxy_auth_header: Mapping[str, str] | None
 ) -> Mapping[str, str]:
-    caller_headers: Final = _caller_headers_without_litellm_secrets(
+    caller_headers: Final = caller_headers_without_litellm_secrets(
         request, user_api_key_dict, _HEADERS_NEVER_FORWARDED_TO_ANTHROPIC
     )
     if proxy_auth_header is None:
@@ -3225,7 +3225,7 @@ def _upstream_headers_for_anthropic_route(
 def _upstream_headers_for_bedrock_agent_runtime_route(
     request: Request, user_api_key_dict: UserAPIKeyAuth, signed_headers: Mapping[str, object]
 ) -> Mapping[str, object]:
-    caller_headers: Final = _caller_headers_without_litellm_secrets(
+    caller_headers: Final = caller_headers_without_litellm_secrets(
         request,
         user_api_key_dict,
         _HEADERS_NEVER_FORWARDED_TO_BEDROCK | frozenset(name.lower() for name in signed_headers),

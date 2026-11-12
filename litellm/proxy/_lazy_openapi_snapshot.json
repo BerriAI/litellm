@@ -10802,6 +10802,145 @@
       }
     }
   },
+  "cursor_cli_passthrough": {
+    "components": {
+      "schemas": {
+        "HTTPValidationError": {
+          "properties": {
+            "detail": {
+              "items": {
+                "$ref": "#/components/schemas/ValidationError"
+              },
+              "title": "Detail",
+              "type": "array"
+            }
+          },
+          "title": "HTTPValidationError",
+          "type": "object"
+        },
+        "ValidationError": {
+          "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
+            "loc": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              },
+              "title": "Location",
+              "type": "array"
+            },
+            "msg": {
+              "title": "Message",
+              "type": "string"
+            },
+            "type": {
+              "title": "Error Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "loc",
+            "msg",
+            "type"
+          ],
+          "title": "ValidationError",
+          "type": "object"
+        }
+      }
+    },
+    "paths": {
+      "/cursor-cli/{endpoint}": {
+        "post": {
+          "description": "Forward the signed-in Cursor CLI's agent session using a separate x-litellm-api-key. Set network.useHttp1ForAgent to true in the CLI's cli-config.json, then run `agent --agent-endpoint https://YOUR_PROXY/cursor-cli --header \"x-litellm-api-key: Bearer YOUR_KEY\"`. Leave --endpoint unchanged. Login, bootstrap and model discovery stay direct to Cursor. Use an unrestricted virtual key or master key. JWT and custom-auth credentials are unsupported. Model restrictions, token accounting and content guardrails are unsupported. Configured content guardrails or policy-engine rules disable this relay, even when not selected by this request. Logs describe HTTP transport status, not the agent's outcome. The client owns login and token refresh.",
+          "operationId": "cursor_cli_passthrough_cursor_cli__endpoint__post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "enum": [
+                  "agent.v1.AgentService/RunSSE",
+                  "aiserver.v1.BidiService/BidiAppend"
+                ],
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/connect+proto": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                },
+                "application/proto": {
+                  "schema": {
+                    "format": "binary",
+                    "type": "string"
+                  }
+                },
+                "text/event-stream": {
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              },
+              "description": "Unchanged native Cursor response bytes, including streamed agent events"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Cursor Cli Passthrough",
+          "tags": [
+            "cursor_cli_passthrough"
+          ]
+        }
+      }
+    }
+  },
   "decisions": {
     "components": {
       "schemas": {
