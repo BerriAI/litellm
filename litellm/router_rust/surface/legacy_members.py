@@ -37,7 +37,7 @@ from litellm.redis.stores.router_cooldowns import ROUTER_COOLDOWNS_TARGET
 from litellm.redis.stores.router_usage import ROUTER_USAGE_TARGET, RouterUsage, UsageCounter
 from litellm.router_api import RoutingContext
 from litellm.router_rust.invoke.websocket import admit_deployment_turn
-from litellm.router_rust.steps.callbacks import RustOptionalChecks
+from litellm.router_rust.steps.callbacks import RustOptionalChecks, in_filter_order
 from litellm.router_rust.steps.prerouting import TIER_PARAMS_NEVER_DROPPED as _TIER_PARAMS_NEVER_DROPPED
 from litellm.router_rust.surface.members import RustRegistryMembers
 from litellm.router_strategy.auto_router.auto_router_model_naming import (
@@ -381,7 +381,7 @@ class RustLegacyMembers(RustRegistryMembers, RustOptionalChecks):
     ) -> object:
         """``async_callback_filter_deployments``: each routing callback narrows the deployments in turn."""
         remaining: object = healthy_deployments  # rebind-ok: narrowed by each callback
-        for callback in self._opt.routing_callbacks():
+        for callback in in_filter_order(self._opt.routing_callbacks()):
             if isinstance(callback, CustomLogger):
                 try:
                     remaining = await _deployments_filtered_by(

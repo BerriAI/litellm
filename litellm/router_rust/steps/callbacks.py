@@ -469,7 +469,7 @@ class OptionalChecks:
         Rust core to decide on."""
         remaining: list[object] = list(deployments)  # mutable-ok: filter contract  # rebind-ok: narrowed
         request_kwargs: Final = dict(request)
-        callbacks: Final = tuple(self.routing_callbacks())
+        callbacks: Final = in_filter_order(self.routing_callbacks())
         for callback in callbacks:
             if not isinstance(callback, CustomLogger) or not filters_deployments(callback):
                 continue
@@ -579,6 +579,17 @@ def filters_deployments(callback: object) -> bool:
     input unchanged, so only overriding filters are run."""
     base: Final[object] = CustomLogger.async_filter_deployments  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # untyped deployment dicts
     return isinstance(callback, CustomLogger) and type(callback).async_filter_deployments is not base  # pyright: ignore[reportUnknownMemberType]  # see above
+
+
+def in_filter_order(callbacks: Iterable[object]) -> tuple[object, ...]:
+    """The routing callbacks in the order their filters run: budget limiters first, so an affinity
+    check never pins a deployment that is over budget while an in-budget sibling is left, whatever
+    order the callbacks were registered in."""
+    listed: Final = tuple(callbacks)
+    return (
+        *(callback for callback in listed if isinstance(callback, RouterBudgetLimiting)),
+        *(callback for callback in listed if not isinstance(callback, RouterBudgetLimiting)),
+    )
 
 
 def filtered_ids(remaining: Iterable[object], candidates: Sequence[str]) -> list[str]:  # mutable-ok: a JSON list
