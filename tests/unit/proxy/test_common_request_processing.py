@@ -12019,6 +12019,28 @@ class TestDetachedStreamFailureHook:
         assert [call["original_exception"] for call in recorder.calls] == [upstream_failure]
 
     @pytest.mark.asyncio
+    async def test_finished_stream_frees_the_logging_object_without_a_gc_pass(self):
+        import gc
+        import weakref
+
+        recorder = _FailureHookRecorder()
+
+        async def iterator_hook(**_kwargs):
+            yield b"event: message_start\n\n"
+
+        logging_obj, stream = self._armed_stream(recorder, lambda _logging_obj: iterator_hook)
+        logging_ref = weakref.ref(logging_obj)
+        frames = [frame async for frame in stream]
+
+        gc.disable()
+        try:
+            del logging_obj, stream
+            assert frames == ["data: chunk\n\n"]
+            assert logging_ref() is None
+        finally:
+            gc.enable()
+
+    @pytest.mark.asyncio
     async def test_failure_reported_by_an_iterator_hook_is_not_reported_again_when_the_stream_closes(self):
         recorder = _FailureHookRecorder()
         upstream_failure = RuntimeError("upstream Responses stream failed")

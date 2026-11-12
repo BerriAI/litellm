@@ -5,6 +5,7 @@ import json
 import logging
 import math
 import time
+import weakref
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -3957,6 +3958,9 @@ class ProxyBaseLLMRequestProcessing:
             ),
         )
 
+    def _request_fields(self) -> Mapping[str, object]:
+        return self.data
+
     def _arm_detached_stream_failure_hook(
         self,
         logging_obj: LiteLLMLoggingObj,
@@ -3971,17 +3975,24 @@ class ProxyBaseLLMRequestProcessing:
         so the failed spend is still written and the budget reservation released;
         a replacement error the hook raises has no client left to reach.
         """
-        request_data: Final = self.data
+        # The closure lives on the logging object until the logging object dies, so it must not
+        # hold the logging object, or a request stays alive until a full GC pass (#51277)
+        logging_obj_ref: Final = weakref.ref(logging_obj)
+        request_data: Final = {
+            key: value for key, value in self._request_fields().items() if key != "litellm_logging_obj"
+        }
+        route_type: Final = self.route_type
 
         async def _on_detached_stream_failure(exc: Exception) -> None:
-            if not logging_obj.claim_stream_failure_report():
+            live_logging_obj: Final = logging_obj_ref()
+            if live_logging_obj is None or not live_logging_obj.claim_stream_failure_report():
                 return
             try:
                 await proxy_logging_obj.post_call_failure_hook(
                     user_api_key_dict=user_api_key_dict,
                     original_exception=exc,
-                    request_data=request_data,
-                    dispatched_call_type=self.route_type,
+                    request_data={**request_data, "litellm_logging_obj": live_logging_obj},
+                    dispatched_call_type=route_type,
                 )
             except HTTPException:
                 return
