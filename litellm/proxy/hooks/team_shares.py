@@ -187,9 +187,8 @@ class TeamShareRegistry:
         decoded: Final = (
             (member.decode() if isinstance(member, bytes) else member, score) for member, score in entries
         )
-        parsed: Final = ((text.rpartition(_MEMBER_SEPARATOR), score) for text, score in decoded)
-        # zrangebyscore returns ascending scores, so the newest entry for a team wins
-        return {team: (team_class, score) for (team, _, team_class), score in parsed}
+        oldest_first: Final = ((text.rpartition(_MEMBER_SEPARATOR), score) for text, score in decoded)
+        return {team: (team_class, score) for (team, _, team_class), score in oldest_first}
 
     async def _read_local(self, model: str) -> Mapping[str, tuple[str, float]]:
         key: Final = self.key(model)
