@@ -2348,13 +2348,78 @@ async def _fallback_access_groups(
     )
 
 
+_PER_TOKEN_PRICES: Final[TypeAdapter[tuple[float, float]]] = TypeAdapter(tuple[float, float])
+_RESERVATION_ENTRIES: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = TypeAdapter(
+    tuple[Mapping[str, object], ...]
+)
+_MODEL_ACCESS_GROUP_ENTITY: Final = "Model access group"
+
+
+def _per_token_prices(llm_router: Router, model: str) -> tuple[float, float] | None:
+    info: Final = llm_router.get_model_group_info(model_group=model)
+    if info is None:
+        return None
+    try:
+        return _PER_TOKEN_PRICES.validate_python((info.input_cost_per_token, info.output_cost_per_token))
+    except ValidationError:
+        return None
+
+
+def _reservation_covers(
+    user_api_key_dict: UserAPIKeyAuth,
+    access_groups: Sequence[str],
+    requested_model: str,
+    fallback_model: str,
+    llm_router: Router,
+) -> bool:
+    """Whether the budget auth reserved for ``requested_model`` still fits ``fallback_model``: the fallback costs no
+    more per token than the model the estimate was made for, and every access group reserved against grants the
+    fallback, so settlement never charges a group that did not serve."""
+    reservation: Final = user_api_key_dict.budget_reservation
+    if reservation is None:
+        return True
+    requested: Final = _per_token_prices(llm_router, requested_model)
+    fallback: Final = _per_token_prices(llm_router, fallback_model)
+    if requested is None or fallback is None or fallback[0] > requested[0] or fallback[1] > requested[1]:
+        return False
+    try:
+        entries: Final = _RESERVATION_ENTRIES.validate_python(reservation.get("entries") or ())
+    except ValidationError:
+        return False
+    reserved: Final = frozenset(
+        entry.get("entity_id") for entry in entries if entry.get("entity_type") == _MODEL_ACCESS_GROUP_ENTITY
+    )
+    return reserved <= frozenset(access_groups)
+
+
+def _fallback_pricing_admits(requested_model: str, fallback_model: str, llm_router: Router) -> bool:
+    """A zero-cost ``requested_model`` waived the aggregate budget checks at auth, so only another zero-cost model may
+    take its place, and an unpriced fallback is refused while ``block_requests_for_models_without_pricing`` is on."""
+    from litellm.proxy.auth.auth_checks import (
+        _unpriced_models_in_request,  # pyright: ignore[reportPrivateUsage]  # the pre-call walk shares the auth-time fallback contract
+    )
+
+    if is_model_cost_zero(model=requested_model, llm_router=llm_router) and not is_model_cost_zero(
+        model=fallback_model, llm_router=llm_router
+    ):
+        return False
+    return not (
+        litellm.block_requests_for_models_without_pricing
+        and _unpriced_models_in_request(model=fallback_model, llm_router=llm_router)
+    )
+
+
 async def _fallback_grant(
-    fallback_model: str, user_api_key_dict: UserAPIKeyAuth, llm_router: Router | None, proxy_logging_obj: ProxyLogging
+    fallback_model: str,
+    user_api_key_dict: UserAPIKeyAuth,
+    llm_router: Router | None,
+    proxy_logging_obj: ProxyLogging,
+    requested_model: str,
 ) -> list[str] | None:
     """The model access groups a pre-call fallback to ``fallback_model`` charges, or None when the caller may not use
-    it: the key, team and project allowlists while ``enforce_fallback_model_access`` is on, every per-model budget
-    layer, and the budgets of the access groups that grant the model, the same checks a direct request passes at
-    auth."""
+    it: the key, team and project allowlists while ``enforce_fallback_model_access`` is on, the pricing rules, every
+    per-model budget layer, the budgets of the access groups that grant the model, and the budget auth reserved for
+    ``requested_model``, the same checks a direct request passes at auth."""
     from litellm.proxy.auth.auth_checks import (
         _model_access_group_max_budget_check,  # pyright: ignore[reportPrivateUsage]  # the pre-call walk shares the auth-time fallback contract
     )
@@ -2369,6 +2434,8 @@ async def _fallback_grant(
     if router_fallback_access_check.is_enforced() and not await is_model_authorized_for_token(
         model=fallback_model, valid_token=user_api_key_dict, llm_router=llm_router
     ):
+        return None
+    if not _fallback_pricing_admits(requested_model, fallback_model, llm_router):
         return None
     try:
         if not is_model_cost_zero(
@@ -2385,6 +2452,8 @@ async def _fallback_grant(
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
         )
+        if not _reservation_covers(user_api_key_dict, access_groups, requested_model, fallback_model, llm_router):
+            return None
     except Exception as e:  # noqa: BLE001  # fail closed: a budget the walk cannot read must not admit the fallback
         verbose_proxy_logger.warning(
             "Skipping fallback to model=%s: budget check failed: %s",
@@ -3137,7 +3206,9 @@ class ProxyBaseLLMRequestProcessing:
                     if fallback_model == original_model:
                         continue
                     if (
-                        grant := await _fallback_grant(fallback_model, user_api_key_dict, llm_router, proxy_logging_obj)
+                        grant := await _fallback_grant(
+                            fallback_model, user_api_key_dict, llm_router, proxy_logging_obj, original_model
+                        )
                     ) is None:
                         continue
                     if not await _team_member_within_fallback_model_budget(
