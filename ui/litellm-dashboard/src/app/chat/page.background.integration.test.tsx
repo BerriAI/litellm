@@ -139,7 +139,7 @@ it("should switch the composer placeholder with deep research on home and in a c
   const home = renderChat();
   await screen.findByRole("button", { name: "research-chat" });
   const homeEditor = screen.getByRole("textbox", { name: "Message" });
-  expect(homeEditor).toHaveAttribute("placeholder", "Ask a question, attach a file, or paste something to work on…");
+  expect(homeEditor).toHaveAttribute("placeholder", "Ask anything…");
 
   const enableResearch = async () => {
     await user.click(screen.getByRole("button", { name: "Connect tools" }));
@@ -148,7 +148,7 @@ it("should switch the composer placeholder with deep research on home and in a c
   await enableResearch();
   expect(homeEditor).toHaveAttribute("placeholder", "What should I research on the web?");
   await user.click(screen.getByRole("button", { name: "Turn off deep research" }));
-  expect(homeEditor).toHaveAttribute("placeholder", "Ask a question, attach a file, or paste something to work on…");
+  expect(homeEditor).toHaveAttribute("placeholder", "Ask anything…");
 
   home.unmount();
   const conversationId = "saved-chat";
@@ -266,7 +266,9 @@ it("should retain ordinary streaming when background support is unavailable", as
   expect(requests[0]).not.toHaveProperty("background");
   expect(requests[0]).not.toHaveProperty("instructions");
   expect(requests[0].tools).not.toContainEqual(expect.objectContaining({ type: "web_search" }));
-  expect(screen.getByText("Keep this tab open. Background runs are not available for this chat.")).toBeVisible();
+  expect(
+    screen.queryByText("Keep this tab open. Background runs are not available for this chat."),
+  ).not.toBeInTheDocument();
 });
 
 it("should let the user reconnect after an authentication failure without resubmitting work", async () => {

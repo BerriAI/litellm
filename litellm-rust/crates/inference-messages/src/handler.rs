@@ -10,30 +10,40 @@ use litellm_core_utils::{
     get_provider_specific_headers::get_provider_specific_headers, settings::Lookup,
 };
 use litellm_host::interceptors::{
-    Cost, ExecutionFacts, Interceptors, ProviderIdentity, RequestContext, ResultSource, WireRequest,
+    Cost, ExecutionFacts, Interceptors, ProviderIdentity, RawResponse, RequestContext,
+    ResponseHead, ResultSource, WireRequest,
 };
-use litellm_http::request::with_default_headers;
 use litellm_llms::base_llm::{
     auth::{Authenticated, ValidatedEnvironment, resolve_auth},
     messages::{
         context::MessagesTransformContext,
         streaming::{self, ByteStream, StreamDecoder},
-        transformation::BaseMessagesConfig,
+        transformation::{BaseMessagesConfig, FederatedEnvironment},
     },
 };
-use litellm_llms_types::formats::messages::{MessagesRequest, MessagesResponse};
+use litellm_llms_types::formats::messages::{
+    MessagesOptionalParams, MessagesRequest, MessagesResponse,
+};
 use litellm_secrets::source::Secrets;
 use litellm_tracing::ByteChunk;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use super::{
-    Error, MessagesCall, MessagesCallResponse, MessagesRoute,
-    common_utils::{MessagesProvider, string_headers},
-    constants::MESSAGES_TIMEOUT_SECS,
+    Delivered, Error, HostAnswer, MessagesBody, MessagesCall, MessagesCallResponse, MessagesRoute,
+    Transport, TransportBody, TransportRequest, TransportResponse, UnencodableHeader,
+    WorkloadIdentity,
+    common_utils::{MessagesProvider, merge_messages_header_sources, string_headers},
+    constants::{
+        MESSAGES_HTTP_ERROR_ATTEMPTS, MESSAGES_STREAM_ERROR_BODY_READ_SECS, MESSAGES_TIMEOUT_SECS,
+    },
     route::Messages,
     types::invalid_request,
 };
-use litellm_inference::{caching::CallCache, context::CallContext, outbound::outbound_request};
+use litellm_inference::{
+    caching::{CacheRequest, CallCache},
+    context::CallContext,
+    outbound::raw_leaf_outbound_request,
+};
 
 struct ProviderCall {
     identity: ProviderIdentity,
@@ -42,6 +52,12 @@ struct ProviderCall {
     signer: Option<litellm_auth_aws::SigV4Signer>,
     timeout: Option<Duration>,
     stream: bool,
+    whole_sse_frames: bool,
+    joined_reads: bool,
+    transform_context: MessagesTransformContext,
+    ascii_response_headers: bool,
+    unencodable_request_header: Option<Vec<u8>>,
+    ascii_request_headers: bool,
 }
 
 impl ProviderCall {
@@ -50,16 +66,122 @@ impl ProviderCall {
     }
 }
 
+pub(super) async fn cached(
+    route: &MessagesRoute,
+    provider: MessagesProvider,
+    model: &str,
+    context: &CallContext<'_, impl Interceptors<Error>>,
+) -> Result<Option<MessagesCallResponse>, Error> {
+    let Some(cache) = caller_keyed(route) else {
+        return Ok(None);
+    };
+    let identity = ProviderIdentity {
+        model: model.to_owned(),
+        provider: provider.as_str().to_string(),
+    };
+    let Some((output, source)) = CallCache::<Messages>::new(
+        Some(cache),
+        context.cache,
+        CacheRequest::from_wire(identity.clone(), None),
+    )
+    .lookup()
+    .await
+    else {
+        return Ok(None);
+    };
+    context
+        .result_ready(execution_facts(provider, identity, &output, &source))
+        .await?;
+    Ok(Some(output))
+}
+
+pub(super) async fn mocked(
+    route: &MessagesRoute,
+    provider: MessagesProvider,
+    model: String,
+    context: &CallContext<'_, impl Interceptors<Error>>,
+    mock: Map<String, Value>,
+    stream: bool,
+) -> MessagesCallResponse {
+    let output = MessagesCallResponse::Complete(MessagesBody::Unchecked(mock));
+    let Some(cache) = caller_keyed(route).filter(|_| !stream) else {
+        return output;
+    };
+    let identity = ProviderIdentity {
+        model,
+        provider: provider.as_str().to_string(),
+    };
+    CallCache::<Messages>::new(
+        Some(cache),
+        context.cache,
+        CacheRequest::from_wire(identity, None),
+    )
+    .finish(output, &ResultSource::Provider)
+    .await
+}
+
+pub(super) async fn answered(
+    route: &MessagesRoute,
+    host_answer: &dyn HostAnswer,
+    provider: MessagesProvider,
+    model: String,
+    stream: bool,
+    context: &CallContext<'_, impl Interceptors<Error>>,
+) -> Result<MessagesCallResponse, Error> {
+    host_answer.answer(stream).await?;
+    deliver_answer(route, provider, model, stream, context).await
+}
+
+pub(super) async fn deliver_answer(
+    route: &MessagesRoute,
+    provider: MessagesProvider,
+    model: String,
+    stream: bool,
+    context: &CallContext<'_, impl Interceptors<Error>>,
+) -> Result<MessagesCallResponse, Error> {
+    let identity = ProviderIdentity {
+        model,
+        provider: provider.as_str().to_string(),
+    };
+    let cache = CallCache::<Messages>::new(
+        caller_keyed(route),
+        context.cache,
+        CacheRequest::from_wire(identity.clone(), None),
+    );
+    context
+        .result_ready(ExecutionFacts {
+            provider: identity,
+            source: ResultSource::Host,
+            cost: Cost::Deferred,
+        })
+        .await?;
+    let output = MessagesCallResponse::Complete(MessagesBody::Unchecked(Map::new()));
+    if stream {
+        return Ok(output);
+    }
+    Ok(cache.finish(output, &ResultSource::Host).await)
+}
+
+fn caller_keyed(route: &MessagesRoute) -> Option<&litellm_cache_response::ScopedCache> {
+    route
+        .cache
+        .as_ref()
+        .filter(|cache| cache.service.keyed_by_caller())
+}
+
 pub(super) async fn execute(
     route: &MessagesRoute,
     provider: MessagesProvider,
     model: String,
     call: MessagesCall,
     secrets: Secrets,
+    requested_stream: bool,
     context: &CallContext<'_, impl Interceptors<Error>>,
 ) -> Result<MessagesCallResponse, Error> {
+    let caller_keyed = caller_keyed(route).is_some();
     let request = provider_call(
         &route.auth,
+        route.workload_identity.as_deref(),
         provider,
         model,
         call,
@@ -69,35 +191,64 @@ pub(super) async fn execute(
     .boxed()
     .await?;
     let cache = CallCache::<Messages>::from_wire(
-        route.cache.as_ref().filter(|_| request.cacheable()),
+        route
+            .cache
+            .as_ref()
+            .filter(|_| caller_keyed || request.cacheable()),
         context.cache,
         &request.identity,
         &request.wire,
     );
     let identity = request.identity.clone();
-    let (output, source) = match cache.lookup().await {
+    let hit = match caller_keyed {
+        true => None,
+        false => cache.lookup().await,
+    };
+    let (output, source) = match hit {
         Some(hit) => hit,
         None => (
-            call_provider(&route.http, request, context).await?,
+            call_provider(&route.http, route.transport.as_deref(), request, context).await?,
             ResultSource::Provider,
         ),
     };
-    let reported = match &output {
-        MessagesCallResponse::Complete(response) => provider.config().reported_cost(response),
+    context
+        .result_ready(execution_facts(provider, identity, &output, &source))
+        .await?;
+    let output = match source {
+        ResultSource::Provider => {
+            super::safeguards::stamped(route.safeguards.as_ref(), output).await?
+        }
+        ResultSource::Cache { .. } | ResultSource::Host => output,
+    };
+    if !requested_stream && matches!(output, MessagesCallResponse::Stream { .. }) {
+        return Ok(output);
+    }
+    Ok(cache.finish(output, &source).await)
+}
+
+fn execution_facts(
+    provider: MessagesProvider,
+    identity: ProviderIdentity,
+    output: &MessagesCallResponse,
+    source: &ResultSource,
+) -> ExecutionFacts {
+    let reported = match output {
+        MessagesCallResponse::Complete(response) => match response {
+            MessagesBody::Message(message) => provider.config().reported_cost(message),
+            MessagesBody::Unchecked(_) => None,
+        },
         MessagesCallResponse::Stream { .. } => None,
     };
-    context
-        .result_ready(ExecutionFacts {
-            provider: identity,
-            cost: Cost::settle(&source, reported),
-            source: source.clone(),
-        })
-        .await?;
-    Ok(cache.finish(output, &source).await)
+    ExecutionFacts {
+        provider: identity,
+        cost: Cost::settle(source, reported),
+        source: source.clone(),
+    }
 }
 
 async fn provider_call(
     auth: &AuthServices,
+    workload_identity: Option<&dyn WorkloadIdentity>,
     provider: MessagesProvider,
     model: String,
     call: MessagesCall,
@@ -124,53 +275,82 @@ async fn provider_call(
 
     let sanitized = config.shape_request(
         MessagesRequest { model, ..body },
-        shaping.settings.reasoning_auto_summary,
+        shaping.settings.shape_options(),
     )?;
+    let transform_context = MessagesTransformContext {
+        drops_unsupported_params: shaping.settings.drops_unsupported_params,
+        ..MessagesTransformContext::new(shaping.capabilities, shaping.settings.drop_params)
+    };
+    let dropped_keys = top_level_paths(&shaping.settings.additional_drop_params);
+    let without_keys = without_additional_drop_params(sanitized, &dropped_keys)?;
+    let requested = requested_optional_params(without_keys, provider, &transform_context)?;
+    let requested_params = serde_json::to_value(&requested.params).map_err(serialize_failure)?;
     let trimmed =
-        without_additional_drop_params(sanitized, &shaping.settings.additional_drop_params)?;
+        without_additional_drop_params(requested, &shaping.settings.additional_drop_params)?;
 
     let scoped =
         get_provider_specific_headers(provider_specific_header.as_ref(), provider.as_str());
-    let forwarded = string_headers(Some(
-        extra_headers.into_iter().flatten().chain(scoped).collect(),
-    ))?;
-    let validated = config.validate_environment(
+    let forwarded = string_headers(Some(merge_messages_header_sources([
+        extra_headers.unwrap_or_default(),
+        scoped,
+    ])))?;
+    let validated = match config.validate_federated_environment(
         forwarded,
         api_key.as_deref(),
         &trimmed.model,
         &trimmed.params,
         &connection_params,
         &env_lookup,
-    )?;
+    )? {
+        FederatedEnvironment::Validated(validated) => validated,
+        FederatedEnvironment::Unauthenticated {
+            headers,
+            missing,
+            federate,
+        } => match workload_identity {
+            Some(identity) => match identity
+                .token(&connection_params, api_base.as_deref())
+                .await?
+            {
+                Some(token) => federate(headers, token),
+                None => return Err(missing.into()),
+            },
+            None => return Err(missing.into()),
+        },
+    };
 
+    let tool_custom_field = config.tool_custom_field(&trimmed.model);
+    let requested_output_format = trimmed.params.output_format.clone();
     let body = config.request_body(
-        config.transform_anthropic_messages_request(
-            trimmed,
-            &MessagesTransformContext::new(shaping.capabilities, shaping.settings.drop_params),
-        )?,
+        tool_custom_field.apply(
+            config.transform_anthropic_messages_request(trimmed, &transform_context)?,
+            shaping.settings.drops_unsupported_params,
+        ),
         &validated.headers,
         shaping.settings.drop_params,
     )?;
-    let environment = ValidatedEnvironment {
-        headers: config.request_headers(
-            with_default_headers(validated.headers, config.default_headers()),
-            &body,
-        ),
-        auth: validated.auth,
-    };
-
     let url = config.get_complete_url(
         api_base.as_deref(),
         &body.model,
         &connection_params,
-        body.params.stream == Some(true),
+        body.params.streams(),
         &env_lookup,
     )?;
+    let environment = ValidatedEnvironment {
+        headers: config.headers_for_url(
+            config.request_headers(
+                with_python_default_headers(validated.headers, config.default_headers()),
+                &with_requested_output_format(&body, requested_output_format),
+            ),
+            &url,
+        ),
+        auth: validated.auth,
+    };
 
     let request_context = RequestContext {
         model: body.model.clone(),
         custom_llm_provider: provider.as_str().to_string(),
-        optional_params: serde_json::to_value(&body.params).map_err(serialize_failure)?,
+        optional_params: requested_params,
         secret_fields: Vec::new(),
         api_key: api_key.map(SecretValue::new),
     };
@@ -184,25 +364,16 @@ async fn provider_call(
         .before_provider_request(
             WireRequest {
                 url,
-                headers: authenticated.headers,
+                headers: joined_header_values(authenticated.headers),
                 body: config.wire_body(serde_json::to_value(&body).map_err(serialize_failure)?),
             },
             request_context,
         )
         .await?;
-    let stream = match wire.body.get("stream") {
-        None | Some(Value::Null) => false,
-        Some(Value::Bool(stream)) => *stream,
-        Some(value) => {
-            return Err(Error::invalid_request(
-                litellm_llms::ErrorDetail::InvalidValue {
-                    field: "stream",
-                    expected: "a boolean",
-                    actual: value.clone(),
-                },
-            ));
-        }
-    };
+    let stream = wire
+        .body
+        .get("stream")
+        .is_some_and(litellm_llms_types::recognized::python_truthy);
     Ok(ProviderCall {
         identity,
         wire,
@@ -210,7 +381,97 @@ async fn provider_call(
         signer: authenticated.signer,
         timeout: timeout.or_else(|| shaping.settings.request_timeout()),
         stream,
+        whole_sse_frames: shaping.settings.whole_sse_frames,
+        joined_reads: shaping.settings.joined_reads,
+        transform_context,
+        ascii_response_headers: shaping.settings.ascii_response_headers,
+        unencodable_request_header: shaping.settings.unencodable_request_header,
+        ascii_request_headers: shaping.settings.ascii_request_headers,
     })
+}
+
+fn with_requested_output_format(
+    body: &MessagesRequest,
+    requested: Option<Value>,
+) -> std::borrow::Cow<'_, MessagesRequest> {
+    match requested {
+        Some(output_format) if body.params.output_format.is_none() => {
+            std::borrow::Cow::Owned(MessagesRequest {
+                params: MessagesOptionalParams {
+                    output_format: Some(output_format),
+                    ..body.params.clone()
+                },
+                ..body.clone()
+            })
+        }
+        _ => std::borrow::Cow::Borrowed(body),
+    }
+}
+
+/// Python sends its header dict through `httpx.Headers`, which folds names that differ only in
+/// case into one lowercase header whose values are joined with `", "`.
+fn joined_header_values(headers: Vec<(String, String)>) -> Vec<(String, String)> {
+    let mut joined: Vec<(String, String)> = Vec::with_capacity(headers.len());
+    let mut positions: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::with_capacity(headers.len());
+    for (name, value) in headers {
+        match positions.entry(name.to_ascii_lowercase()) {
+            std::collections::hash_map::Entry::Occupied(position) => {
+                let present = &mut joined[*position.get()].1;
+                present.push_str(", ");
+                present.push_str(&value);
+            }
+            std::collections::hash_map::Entry::Vacant(position) => {
+                position.insert(joined.len());
+                joined.push((name, value));
+            }
+        }
+    }
+    joined
+}
+
+/// Python's `finalize_messages_headers` adds a default only when the exact lowercase name is
+/// absent, so a caller's `Anthropic-Version` is sent alongside the default, not instead of it.
+fn with_python_default_headers(
+    headers: Vec<(String, String)>,
+    defaults: &[(&str, &str)],
+) -> Vec<(String, String)> {
+    let missing: Vec<(String, String)> = defaults
+        .iter()
+        .filter(|(name, _)| !headers.iter().any(|(present, _)| present == name))
+        .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
+        .collect();
+    headers.into_iter().chain(missing).collect()
+}
+
+/// Python's `get_requested_anthropic_messages_optional_param`, which gates speed, service tier
+/// and sampling params before `additional_drop_params` and the environment check run.
+fn requested_optional_params(
+    request: MessagesRequest,
+    provider: MessagesProvider,
+    context: &MessagesTransformContext,
+) -> Result<MessagesRequest, Error> {
+    let request = litellm_llms::anthropic::messages::transformation::drop_unsupported_params(
+        request, context,
+    )?;
+    if provider.accepts_service_tier() {
+        return Ok(request);
+    }
+    Ok(MessagesRequest {
+        params: MessagesOptionalParams {
+            service_tier: None,
+            ..request.params
+        },
+        ..request
+    })
+}
+
+fn top_level_paths(paths: &[String]) -> Vec<String> {
+    paths
+        .iter()
+        .filter(|path| !path.contains(['.', '[']))
+        .cloned()
+        .collect()
 }
 
 fn without_additional_drop_params(
@@ -230,48 +491,258 @@ fn without_additional_drop_params(
     })
 }
 
+enum Upstream {
+    Native(reqwest::Response),
+    Hosted(TransportResponse),
+}
+
 async fn call_provider(
     http: &litellm_http::Client,
+    transport: Option<&dyn Transport>,
     request: ProviderCall,
     context: &CallContext<'_, impl Interceptors<Error>>,
 ) -> Result<MessagesCallResponse, Error> {
+    let timeout = request
+        .timeout
+        .unwrap_or(Duration::from_secs(MESSAGES_TIMEOUT_SECS));
+    let response = match send_recovering(http, transport, &request, timeout, context).await? {
+        Upstream::Native(response) => response,
+        Upstream::Hosted(response) => return hosted_response(response, request, context).await,
+    };
     let ProviderCall {
         identity,
-        wire,
         provider,
-        signer,
-        timeout,
         stream,
+        whole_sse_frames,
+        joined_reads,
+        ..
     } = request;
     let provider_name = provider.as_str();
-    log_request_body(provider_name, stream, &wire.body);
-    let response = send(
-        http,
-        Authenticated {
-            headers: wire.headers,
-            signer,
-        },
-        &wire.url,
-        &wire.body,
-        timeout,
-    )
-    .await?;
-    if !response.status().is_success() {
-        return Err(provider_error(response).await);
-    }
     let config = provider.config();
+    let head = ResponseHead {
+        status: response.status().as_u16(),
+        headers: super::encoding::header_pairs(response.headers()),
+    };
     if stream {
-        return Ok(streaming_response(
+        context
+            .raw_response_received(RawResponse::new(String::new()).with_head(head))
+            .await?;
+        let streamed = streaming_response(
             response,
             config.stream_decoder(),
             provider_name,
-        ));
+            timeout,
+            joined_reads,
+        );
+        return Ok(if whole_sse_frames {
+            framed(streamed)
+        } else {
+            streamed
+        });
     }
-    let text = response.text().await.map_err(litellm_http::Error::from)?;
+    let status = head.status;
+    let text = read_body(response, timeout).await?;
     log_response_body(&text);
-    context.response_received(&text).await?;
-    decode_response(config, &identity.model, &text)
-        .map(|message| MessagesCallResponse::Complete(Box::new(message)))
+    context
+        .raw_response_received(RawResponse::new(text.clone()).with_head(head))
+        .await?;
+    if serde_json::from_str::<serde::de::IgnoredAny>(&text).is_err() {
+        // Python raises `AnthropicError(status_code=<the response's>, message=<its text>)` for a
+        // body it cannot parse, and the public mapping classifies it by that status.
+        return Err(litellm_http::Error::upstream(status, text).into());
+    }
+    decode_response(config, &identity.model, &text).map(MessagesCallResponse::Complete)
+}
+
+async fn hosted_response(
+    response: TransportResponse,
+    request: ProviderCall,
+    context: &CallContext<'_, impl Interceptors<Error>>,
+) -> Result<MessagesCallResponse, Error> {
+    let TransportResponse {
+        status,
+        headers,
+        delivered,
+    } = response;
+    let ProviderCall {
+        identity,
+        provider,
+        whole_sse_frames,
+        ..
+    } = request;
+    let provider_name = provider.as_str();
+    let config = provider.config();
+    let text = match delivered {
+        Delivered::Complete(text) => text,
+        Delivered::Stream(chunks) => {
+            context
+                .raw_response_received(RawResponse::new(String::new()).with_head(ResponseHead {
+                    status,
+                    headers: headers.clone(),
+                }))
+                .await?;
+            let streamed =
+                hosted_streaming_response(headers, chunks, config.stream_decoder(), provider_name);
+            return Ok(if whole_sse_frames {
+                framed(streamed)
+            } else {
+                streamed
+            });
+        }
+        Delivered::Rejected { error, .. } => return Err(error),
+    };
+    log_response_body(&text);
+    context
+        .raw_response_received(
+            RawResponse::new(text.clone()).with_head(ResponseHead { status, headers }),
+        )
+        .await?;
+    if serde_json::from_str::<serde::de::IgnoredAny>(&text).is_err() {
+        return Err(litellm_http::Error::upstream(status, text).into());
+    }
+    decode_response(config, &identity.model, &text).map(MessagesCallResponse::Complete)
+}
+
+fn hosted_request(
+    authenticated: Authenticated,
+    url: &str,
+    body: &Value,
+    stream: bool,
+) -> Result<TransportRequest, Error> {
+    if authenticated.signer.is_none() {
+        return Ok(TransportRequest {
+            url: url.to_owned(),
+            headers: authenticated.headers,
+            body: TransportBody::Json(body.clone()),
+            stream,
+        });
+    }
+    let names: Vec<String> = authenticated
+        .headers
+        .iter()
+        .map(|(name, _)| name.clone())
+        .collect();
+    let signed = raw_leaf_outbound_request(authenticated, url, body, None)?;
+    let headers = signed
+        .headers()
+        .iter()
+        .filter_map(|(name, value)| {
+            let spelled = names
+                .iter()
+                .find(|known| known.eq_ignore_ascii_case(name.as_str()))
+                .cloned()
+                .unwrap_or_else(|| name.to_string());
+            Some((spelled, value.to_str().ok()?.to_owned()))
+        })
+        .collect();
+    let bytes = signed
+        .body()
+        .and_then(reqwest::Body::as_bytes)
+        .map(Bytes::copy_from_slice)
+        .unwrap_or_default();
+    Ok(TransportRequest {
+        url: signed.url().to_string(),
+        headers,
+        body: TransportBody::Signed(bytes),
+        stream,
+    })
+}
+
+async fn send_recovering(
+    http: &litellm_http::Client,
+    transport: Option<&dyn Transport>,
+    request: &ProviderCall,
+    timeout: Duration,
+    context: &CallContext<'_, impl Interceptors<Error>>,
+) -> Result<Upstream, Error> {
+    let config = request.provider.config();
+    let mut body = std::borrow::Cow::Borrowed(&request.wire.body);
+    let mut attempt = 1;
+    loop {
+        log_request_body(request.provider.as_str(), request.stream, &body);
+        if let Some(value) = &request.unencodable_request_header {
+            return Err(Error::transport(UnencodableHeader::Sent(value.clone())));
+        }
+        // The credential header built from the caller's api_key never passes the caller header
+        // check, so it is checked on the wire headers as Python's client encodes them.
+        if request.ascii_request_headers
+            && let Some((_, value)) = request
+                .wire
+                .headers
+                .iter()
+                .find(|(_, value)| !value.is_ascii())
+        {
+            return Err(Error::transport(UnencodableHeader::Sent(
+                value.as_bytes().to_vec(),
+            )));
+        }
+        let authenticated = Authenticated {
+            headers: request.wire.headers.clone(),
+            signer: request.signer.clone(),
+        };
+        let response = match transport {
+            None => Upstream::Native(
+                send(http, authenticated, &request.wire.url, &body, timeout).await?,
+            ),
+            Some(transport) => Upstream::Hosted(
+                transport
+                    .send(hosted_request(
+                        authenticated,
+                        &request.wire.url,
+                        &body,
+                        request.stream,
+                    )?)
+                    .await?,
+            ),
+        };
+        if let Upstream::Native(response) = &response
+            && request.ascii_response_headers
+            && let Some(unencodable) = UnencodableHeader::received(response.headers())
+        {
+            return Err(Error::transport(unencodable));
+        }
+        let failure = match response {
+            Upstream::Native(response) if response.status().is_success() => {
+                return Ok(Upstream::Native(response));
+            }
+            Upstream::Native(response) => {
+                provider_failure(response, timeout, request.stream).await?
+            }
+            Upstream::Hosted(TransportResponse {
+                status,
+                headers,
+                delivered: Delivered::Rejected { text, error },
+            }) => {
+                log_error_body(status, &text);
+                ProviderFailure {
+                    status,
+                    text,
+                    headers,
+                    raised: Some(error),
+                }
+            }
+            hosted @ Upstream::Hosted(_) => return Ok(hosted),
+        };
+        let retried = if attempt == MESSAGES_HTTP_ERROR_ATTEMPTS {
+            None
+        } else {
+            config.retry_after_http_error(
+                failure.status,
+                &failure.text,
+                &body,
+                &request.transform_context,
+            )
+        };
+        let Some(retried) = retried else {
+            return Err(failure.into());
+        };
+        attempt += 1;
+        tracing::debug!(
+            "Anthropic /v1/messages: retrying after a recoverable HTTP error (attempt {attempt}/{MESSAGES_HTTP_ERROR_ATTEMPTS})."
+        );
+        body = std::borrow::Cow::Owned(retried.body.clone());
+        context.provider_request_retried(retried).await?;
+    }
 }
 
 fn serialize_failure(err: serde_json::Error) -> Error {
@@ -286,65 +757,172 @@ async fn send(
     authenticated: Authenticated,
     url: &str,
     body: &Value,
-    timeout: Option<Duration>,
+    timeout: Duration,
 ) -> Result<reqwest::Response, Error> {
-    let request = outbound_request(
-        authenticated,
-        url,
-        body,
-        Some(timeout.unwrap_or(Duration::from_secs(MESSAGES_TIMEOUT_SECS))),
-    )?;
-    Ok(litellm_inference::outbound::send(request, http).await?)
+    let request = raw_leaf_outbound_request(authenticated, url, body, None)?;
+    tokio::time::timeout(timeout, litellm_inference::outbound::send(request, http))
+        .await
+        .map_err(litellm_http::Error::read_timeout)?
+        .map(super::encoding::decoded)
+        .map_err(Error::from)
 }
 
-async fn provider_error(response: reqwest::Response) -> Error {
-    let status = response.status().as_u16();
-    match response.text().await {
-        Ok(text) => {
-            log_error_body(status, &text);
-            litellm_http::Error::upstream(status, text).into()
-        }
-        Err(error) => litellm_http::Error::from(error).into(),
+async fn read_body(
+    mut response: reqwest::Response,
+    timeout: Duration,
+) -> Result<String, litellm_http::Error> {
+    let expected = response.content_length();
+    let mut body = Vec::new();
+    while let Some(chunk) = tokio::time::timeout(timeout, response.chunk())
+        .await
+        .map_err(litellm_http::Error::read_timeout)?
+        .map_err(|error| litellm_http::Error::body_read(error, body.len() as u64, expected))?
+    {
+        body.extend_from_slice(&chunk);
     }
+    Ok(String::from_utf8_lossy(&body).into_owned())
+}
+
+/// The stream's body, each read bounded by `timeout` as httpx bounds each read.
+fn timed_chunks(
+    response: reqwest::Response,
+    timeout: Duration,
+) -> impl futures_util::Stream<Item = Result<Bytes, litellm_http::Error>> + Send + 'static {
+    let expected = response.content_length();
+    futures_util::stream::try_unfold(
+        (response, 0_u64),
+        move |(mut response, received)| async move {
+            let chunk = tokio::time::timeout(timeout, response.chunk())
+                .await
+                .map_err(litellm_http::Error::body_read_timeout)?
+                .map_err(|error| litellm_http::Error::body_read(error, received, expected))?;
+            Ok(chunk.map(|chunk| {
+                let received = received + chunk.len() as u64;
+                (chunk, (response, received))
+            }))
+        },
+    )
+}
+
+struct ProviderFailure {
+    status: u16,
+    text: String,
+    headers: Vec<(String, String)>,
+    raised: Option<Error>,
+}
+
+impl From<ProviderFailure> for Error {
+    fn from(failure: ProviderFailure) -> Self {
+        match failure.raised {
+            Some(raised) => raised,
+            None => litellm_http::Error::upstream_with_headers(
+                failure.status,
+                failure.text,
+                failure.headers,
+            )
+            .into(),
+        }
+    }
+}
+
+async fn provider_failure(
+    response: reqwest::Response,
+    timeout: Duration,
+    stream: bool,
+) -> Result<ProviderFailure, Error> {
+    let status = response.status().as_u16();
+    let headers = super::encoding::header_pairs(response.headers());
+    let text = if stream {
+        tokio::time::timeout(
+            Duration::from_secs(MESSAGES_STREAM_ERROR_BODY_READ_SECS),
+            read_body(response, timeout),
+        )
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .unwrap_or_default()
+    } else {
+        read_body(response, timeout).await?
+    };
+    log_error_body(status, &text);
+    Ok(ProviderFailure {
+        status,
+        text,
+        headers,
+        raised: None,
+    })
 }
 
 fn decode_response(
     config: &dyn BaseMessagesConfig,
     model: &str,
     text: &str,
-) -> Result<MessagesResponse, Error> {
-    let response = serde_json::from_str(text).map_err(|err| {
-        Error::invalid_response(litellm_llms::ErrorDetail::invalid(
-            "messages response JSON",
-            err,
-        ))
-    })?;
-    config
+) -> Result<MessagesBody, Error> {
+    let marked = litellm_host::raw_json::mark_wide_numbers(text);
+    let response = match serde_json::from_str::<MessagesResponse>(&marked) {
+        Ok(response) => response,
+        Err(err) => {
+            let Ok(mut body) = serde_json::from_str::<Map<String, Value>>(&marked) else {
+                return Err(Error::invalid_response(litellm_llms::ErrorDetail::invalid(
+                    "messages response JSON",
+                    err,
+                )));
+            };
+            body.entry("stop_sequence").or_insert(Value::Null);
+            return Ok(MessagesBody::Unchecked(body));
+        }
+    };
+    let message = config
         .transform_anthropic_messages_response(model, response)
         .map_err(Error::from)
-        .map_err(Error::after_send)
+        .map_err(Error::after_send)?;
+    if text_has_stop_reason(text) {
+        return Ok(MessagesBody::Message(Box::new(message)));
+    }
+    match serde_json::to_value(message).map_err(serialize_failure)? {
+        Value::Object(mut body) => {
+            body.remove("stop_reason");
+            Ok(MessagesBody::Unchecked(body))
+        }
+        _ => unreachable!("a message serializes as a JSON object"),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct StopReasonKey {
+    #[serde(default, deserialize_with = "key_present")]
+    stop_reason: bool,
+}
+
+fn key_present<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+    <serde::de::IgnoredAny as serde::Deserialize<'de>>::deserialize(deserializer).map(|_| true)
+}
+
+fn text_has_stop_reason(text: &str) -> bool {
+    serde_json::from_str::<StopReasonKey>(text).is_ok_and(|key| key.stop_reason)
 }
 
 fn streaming_response(
     response: reqwest::Response,
     decoder: Option<StreamDecoder>,
     provider: &'static str,
+    timeout: Duration,
+    joined: bool,
 ) -> MessagesCallResponse {
-    let headers = response
-        .headers()
-        .iter()
-        .filter_map(|(name, value)| Some((name.to_string(), value.to_str().ok()?.to_string())))
-        .collect();
+    let headers = super::encoding::header_pairs(response.headers());
+    let chunks = timed_chunks(response, timeout);
+    let chunks = match (joined, &decoder) {
+        (true, None) => super::reads::joined_reads(chunks),
+        _ => chunks.boxed(),
+    }
+    .inspect_ok(move |chunk| log_chunk(provider, "provider_response", chunk));
     let chunks = match decoder {
-        None => futures_util::stream::try_unfold(response, move |mut response| async move {
-            let chunk = response.chunk().await.map_err(litellm_http::Error::from)?;
-            Ok(chunk.map(|chunk| {
-                log_chunk(provider, "provider_response", &chunk);
-                (chunk, response)
-            }))
-        })
-        .boxed(),
-        Some(decode) => decoded_chunks(response, decode, provider),
+        None => chunks.map_err(Error::from).boxed(),
+        Some(decode) => decoded_chunks(
+            chunks.map_err(std::io::Error::other).boxed(),
+            decode,
+            provider,
+        ),
     };
     MessagesCallResponse::Stream {
         head: super::route::MessagesStreamHead { headers },
@@ -352,16 +930,78 @@ fn streaming_response(
     }
 }
 
+fn hosted_streaming_response(
+    headers: Vec<(String, String)>,
+    chunks: BoxStream<'static, Result<Bytes, Error>>,
+    decoder: Option<StreamDecoder>,
+    provider: &'static str,
+) -> MessagesCallResponse {
+    let chunks = chunks.inspect_ok(move |chunk| log_chunk(provider, "provider_response", chunk));
+    let chunks = match decoder {
+        None => chunks.boxed(),
+        Some(decode) => decoded_chunks(
+            chunks.map_err(std::io::Error::other).boxed(),
+            decode,
+            provider,
+        ),
+    };
+    MessagesCallResponse::Stream {
+        head: super::route::MessagesStreamHead { headers },
+        chunks,
+    }
+}
+
+fn framed(response: MessagesCallResponse) -> MessagesCallResponse {
+    let MessagesCallResponse::Stream { head, chunks } = response else {
+        return response;
+    };
+    MessagesCallResponse::Stream {
+        head,
+        chunks: whole_sse_frames(chunks),
+    }
+}
+
+fn whole_sse_frames(
+    chunks: BoxStream<'static, Result<Bytes, Error>>,
+) -> BoxStream<'static, Result<Bytes, Error>> {
+    futures_util::stream::try_unfold(
+        (Some(chunks), Vec::new()),
+        |(chunks, mut pending)| async move {
+            let Some(mut chunks) = chunks else {
+                return Ok(None);
+            };
+            while let Some(chunk) = chunks.try_next().await? {
+                pending.extend_from_slice(&chunk);
+                let end = complete_frames_end(&pending);
+                if end > 0 {
+                    let rest = pending.split_off(end);
+                    return Ok(Some((Bytes::from(pending), (Some(chunks), rest))));
+                }
+            }
+            Ok((!pending.is_empty()).then(|| (Bytes::from(pending), (None, Vec::new()))))
+        },
+    )
+    .boxed()
+}
+
+fn complete_frames_end(pending: &[u8]) -> usize {
+    [b"\r\n\r\n".as_slice(), b"\n\n", b"\r\r"]
+        .iter()
+        .filter_map(|delimiter| {
+            pending
+                .windows(delimiter.len())
+                .rposition(|window| window == *delimiter)
+                .map(|at| at + delimiter.len())
+        })
+        .max()
+        .unwrap_or(0)
+}
+
 fn decoded_chunks(
-    response: reqwest::Response,
+    bytes: ByteStream,
     decode: StreamDecoder,
     provider: &'static str,
 ) -> BoxStream<'static, Result<Bytes, Error>> {
-    let bytes: ByteStream = response
-        .bytes_stream()
-        .inspect_ok(move |chunk| log_chunk(provider, "provider_response", chunk))
-        .map_err(|error| std::io::Error::other(litellm_http::Error::from(error)))
-        .boxed();
     futures_util::stream::try_unfold(decode(bytes), move |mut events| async move {
         let Some(event) = events.try_next().await? else {
             return Ok(None);
@@ -418,6 +1058,14 @@ mod tests {
         call: MessagesCall,
         secrets: &(dyn Lookup + Send + Sync),
     ) -> Result<ProviderCall, Error> {
+        provider_call_federating(call, secrets, None).await
+    }
+
+    async fn provider_call_federating(
+        call: MessagesCall,
+        secrets: &(dyn Lookup + Send + Sync),
+        workload_identity: Option<&dyn WorkloadIdentity>,
+    ) -> Result<ProviderCall, Error> {
         let provider = resolve_llm_provider(
             &call.body.model,
             call.custom_llm_provider.as_deref(),
@@ -430,6 +1078,7 @@ mod tests {
         let context = CallContext::new(&interceptors, litellm_inference::CallOptions::default());
         provider_call(
             &AuthServices::default(),
+            workload_identity,
             config,
             model,
             call,
@@ -621,6 +1270,178 @@ mod tests {
             panic!("a call without credentials fails");
         };
         assert!(error.is_missing_credential(), "{error:?}");
+    }
+
+    struct ScriptedIdentity {
+        minted: Result<Option<&'static str>, ()>,
+        asked: std::sync::Mutex<Vec<(Option<Value>, Option<String>)>>,
+    }
+
+    impl ScriptedIdentity {
+        fn new(minted: Result<Option<&'static str>, ()>) -> Self {
+            Self {
+                minted,
+                asked: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn asked(&self) -> Vec<(Option<Value>, Option<String>)> {
+            self.asked.lock().unwrap().clone()
+        }
+    }
+
+    impl WorkloadIdentity for ScriptedIdentity {
+        fn token<'a>(
+            &'a self,
+            litellm_params: &'a litellm_router_types::LitellmParams,
+            api_base: Option<&'a str>,
+        ) -> futures_util::future::BoxFuture<'a, Result<Option<SecretValue>, litellm_auth::Error>>
+        {
+            self.asked.lock().unwrap().push((
+                litellm_params
+                    .extra
+                    .get("anthropic_federation_rule_id")
+                    .cloned(),
+                api_base.map(str::to_owned),
+            ));
+            let minted = self.minted;
+            Box::pin(async move {
+                minted
+                    .map(|token| token.map(SecretValue::new))
+                    .map_err(|()| litellm_auth::Error::InvalidHeader)
+            })
+        }
+    }
+
+    fn federated_call(
+        shaping: MessagesShaping,
+        api_key: Option<&str>,
+        extra_headers: Option<Value>,
+    ) -> MessagesCall {
+        MessagesCall {
+            body: body(
+                json!({"model": "claude-test", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16}),
+            ),
+            api_key: api_key.map(str::to_owned),
+            api_base: Some("https://anthropic.test".into()),
+            custom_llm_provider: Some("anthropic".into()),
+            litellm_params: crate::litellm_params(
+                serde_json::from_value(
+                    json!({"model": "claude-test", "anthropic_federation_rule_id": "fdrl_1"}),
+                )
+                .unwrap(),
+            )
+            .unwrap(),
+            extra_headers: extra_headers.map(|headers| serde_json::from_value(headers).unwrap()),
+            provider_specific_header: None,
+            timeout: None,
+            shaping,
+        }
+    }
+
+    fn sent_headers<'a>(call: &'a ProviderCall, names: &[&str]) -> Vec<(&'a str, &'a str)> {
+        call.wire
+            .headers
+            .iter()
+            .filter(|(name, _)| names.contains(&name.as_str()))
+            .map(|(name, value)| (name.as_str(), value.as_str()))
+            .collect()
+    }
+
+    #[rstest]
+    #[case::alone(None, &[("anthropic-beta", "oauth-2025-04-20"), ("authorization", "Bearer sk-ant-oat01-minted")])]
+    #[case::beside_a_caller_beta(
+        Some(json!({"anthropic-beta": "files-api-2025-04-14"})),
+        &[("anthropic-beta", "files-api-2025-04-14,oauth-2025-04-20"), ("authorization", "Bearer sk-ant-oat01-minted")]
+    )]
+    #[tokio::test]
+    async fn a_minted_federation_token_is_sent_as_an_oauth_bearer(
+        shaping: MessagesShaping,
+        #[case] extra_headers: Option<Value>,
+        #[case] expected: &[(&str, &str)],
+    ) {
+        let identity = ScriptedIdentity::new(Ok(Some("sk-ant-oat01-minted")));
+        let call = provider_call_federating(
+            federated_call(shaping, None, extra_headers),
+            &|_: &str| None,
+            Some(&identity),
+        )
+        .await
+        .unwrap();
+        let mut sent = sent_headers(
+            &call,
+            &[
+                "anthropic-beta",
+                "authorization",
+                "x-api-key",
+                "anthropic-dangerous-direct-browser-access",
+            ],
+        );
+        sent.sort_unstable();
+        assert_eq!(
+            (sent.as_slice(), identity.asked()),
+            (
+                expected,
+                vec![(Some(json!("fdrl_1")), Some("https://anthropic.test".into()))]
+            )
+        );
+    }
+
+    #[rstest]
+    #[case::static_key(Some("sk-static"), None, &[("x-api-key", "sk-static")])]
+    #[case::caller_credential(
+        None,
+        Some(json!({"x-api-key": "sk-caller"})),
+        &[("x-api-key", "sk-caller")]
+    )]
+    #[tokio::test]
+    async fn a_configured_credential_is_never_federated(
+        shaping: MessagesShaping,
+        #[case] api_key: Option<&str>,
+        #[case] extra_headers: Option<Value>,
+        #[case] expected: &[(&str, &str)],
+    ) {
+        let identity = ScriptedIdentity::new(Ok(Some("sk-ant-oat01-minted")));
+        let call = provider_call_federating(
+            federated_call(shaping, api_key, extra_headers),
+            &|_: &str| None,
+            Some(&identity),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            (
+                sent_headers(&call, &["authorization", "x-api-key"]),
+                identity.asked()
+            ),
+            (expected.to_vec(), Vec::new())
+        );
+    }
+
+    #[rstest]
+    #[case::nothing_minted(Ok(None), true)]
+    #[case::minting_failed(Err(()), false)]
+    #[tokio::test]
+    async fn an_unminted_federation_token_fails_the_call(
+        shaping: MessagesShaping,
+        #[case] minted: Result<Option<&'static str>, ()>,
+        #[case] missing_credential: bool,
+    ) {
+        let identity = ScriptedIdentity::new(minted);
+        let Err(error) = provider_call_federating(
+            federated_call(shaping, None, None),
+            &|_: &str| None,
+            Some(&identity),
+        )
+        .await
+        else {
+            panic!("a call without a minted token fails");
+        };
+        assert_eq!(
+            error.is_missing_credential(),
+            missing_credential,
+            "{error:?}"
+        );
     }
 
     #[rstest]
@@ -925,7 +1746,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(call.wire.url, format!("{base}{path}"));
-        let signed = outbound_request(
+        let signed = raw_leaf_outbound_request(
             Authenticated {
                 headers: call.wire.headers,
                 signer: call.signer,
@@ -964,9 +1785,13 @@ mod tests {
             .send()
             .await
             .unwrap();
-        let MessagesCallResponse::Stream { mut chunks, .. } =
-            streaming_response(response, Some(streaming::event_stream), "test")
-        else {
+        let MessagesCallResponse::Stream { mut chunks, .. } = streaming_response(
+            response,
+            Some(streaming::event_stream),
+            "test",
+            Duration::from_secs(5),
+            false,
+        ) else {
             panic!("a streaming response returns chunks");
         };
 
@@ -976,5 +1801,49 @@ mod tests {
             None => assert!(chunk.unwrap_err().is_response()),
         }
         assert!(chunks.next().await.is_none());
+    }
+
+    #[rstest]
+    #[case::no_delimiter(b"data: a".as_slice(), 0)]
+    #[case::lf(b"data: a\n\ndata: b", 9)]
+    #[case::crlf(b"data: a\r\n\r\ndata: b", 11)]
+    #[case::cr(b"data: a\r\rdata: b", 9)]
+    #[case::last_of_several(b"data: a\n\ndata: b\n\ndata: c", 18)]
+    fn complete_frames_end_is_after_the_last_delimiter(#[case] pending: &[u8], #[case] end: usize) {
+        assert_eq!(complete_frames_end(pending), end);
+    }
+
+    #[rstest]
+    #[case::split_frame(
+        vec![&b"data: a\n"[..], b"\ndata: ", b"b\n\n"],
+        vec![&b"data: a\n\n"[..], b"data: b\n\n"]
+    )]
+    #[case::several_frames_in_one_chunk(
+        vec![&b"data: a\n\ndata: b\n\nda"[..], b"ta: c\n\n"],
+        vec![&b"data: a\n\ndata: b\n\n"[..], b"data: c\n\n"]
+    )]
+    #[case::unterminated_tail_is_flushed(
+        vec![&b"data: a\n\nda"[..], b"ta: b"],
+        vec![&b"data: a\n\n"[..], b"data: b"]
+    )]
+    #[tokio::test]
+    async fn whole_sse_frames_regroups_chunks_at_frame_boundaries(
+        #[case] chunks: Vec<&'static [u8]>,
+        #[case] expected: Vec<&'static [u8]>,
+    ) {
+        let upstream = futures_util::stream::iter(
+            chunks
+                .into_iter()
+                .map(|chunk| Ok::<_, Error>(Bytes::from_static(chunk))),
+        )
+        .boxed();
+        let framed: Vec<Bytes> = whole_sse_frames(upstream).try_collect().await.unwrap();
+        assert_eq!(
+            framed,
+            expected
+                .into_iter()
+                .map(Bytes::from_static)
+                .collect::<Vec<_>>()
+        );
     }
 }

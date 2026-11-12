@@ -3,6 +3,7 @@
  * Add new endpoints here to extend the comparison functionality.
  */
 
+import type { ParseKeys } from "i18next";
 import { Agent } from "../../llm_calls/fetch_agents";
 
 // Endpoint identifiers
@@ -23,11 +24,11 @@ export interface EndpointConfig {
   id: EndpointIdType;
   label: string;
   selectorType: SelectorType;
-  selectorLabel: string;
-  selectorPlaceholder: string;
-  inputPlaceholder: string;
-  loadingMessage: string;
-  validationMessage: string;
+  selectorLabel: ParseKeys;
+  selectorPlaceholder: ParseKeys;
+  inputPlaceholder: ParseKeys;
+  loadingMessage: ParseKeys;
+  validationMessage: ParseKeys;
 }
 
 // Endpoint configurations
@@ -36,21 +37,21 @@ export const ENDPOINT_CONFIGS: Record<EndpointIdType, EndpointConfig> = {
     id: EndpointId.CHAT_COMPLETIONS,
     label: "/v1/chat/completions",
     selectorType: "model",
-    selectorLabel: "Model",
-    selectorPlaceholder: "Select a model",
-    inputPlaceholder: "Send a prompt to compare models",
-    loadingMessage: "Gathering responses from all models...",
-    validationMessage: "Select a model before sending a message.",
+    selectorLabel: "playground.compare.endpoints.chatCompletions.selectorLabel",
+    selectorPlaceholder: "playground.compare.endpoints.chatCompletions.selectorPlaceholder",
+    inputPlaceholder: "playground.compare.endpoints.chatCompletions.inputPlaceholder",
+    loadingMessage: "playground.compare.endpoints.chatCompletions.loadingMessage",
+    validationMessage: "playground.compare.endpoints.chatCompletions.validationMessage",
   },
   [EndpointId.A2A_AGENTS]: {
     id: EndpointId.A2A_AGENTS,
     label: "/a2a (Agents)",
     selectorType: "agent",
-    selectorLabel: "Agent",
-    selectorPlaceholder: "Select an agent",
-    inputPlaceholder: "Send a message to compare agents",
-    loadingMessage: "Gathering responses from all agents...",
-    validationMessage: "Select an agent before sending a message.",
+    selectorLabel: "playground.compare.endpoints.a2aAgents.selectorLabel",
+    selectorPlaceholder: "playground.compare.endpoints.a2aAgents.selectorPlaceholder",
+    inputPlaceholder: "playground.compare.endpoints.a2aAgents.inputPlaceholder",
+    loadingMessage: "playground.compare.endpoints.a2aAgents.loadingMessage",
+    validationMessage: "playground.compare.endpoints.a2aAgents.validationMessage",
   },
 };
 

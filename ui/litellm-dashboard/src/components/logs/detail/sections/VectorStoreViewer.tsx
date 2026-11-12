@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
+import { Trans, useTranslation } from "react-i18next";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { getProviderLogoAndName } from "../../../provider_info_helpers";
 
@@ -32,6 +33,7 @@ interface VectorStoreViewerProps {
 }
 
 export function VectorStoreViewer({ data }: VectorStoreViewerProps) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(true);
   const [expandedResults, setExpandedResults] = useState<Record<string, boolean>>({});
 
@@ -46,7 +48,7 @@ export function VectorStoreViewer({ data }: VectorStoreViewerProps) {
 
   const calculateDuration = (start: number, end: number): string => {
     const duration = (end - start) * 1000; // convert to milliseconds
-    return `${duration.toFixed(2)}ms`;
+    return t("logs.detail.vectorStore.durationMs", { value: duration.toFixed(2) });
   };
 
   const toggleResult = (index: number, resultIndex: number) => {
@@ -66,7 +68,7 @@ export function VectorStoreViewer({ data }: VectorStoreViewerProps) {
           ) : (
             <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
           )}
-          <h3 className="text-lg font-medium text-foreground">Vector Store Requests</h3>
+          <h3 className="text-lg font-medium text-foreground">{t("logs.detail.vectorStore.title")}</h3>
         </CollapsibleTrigger>
         <CollapsibleContent>
           <div className="p-4">
@@ -76,21 +78,27 @@ export function VectorStoreViewer({ data }: VectorStoreViewerProps) {
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <div className="flex">
-                        <span className="font-medium w-1/3">Query:</span>
+                        <span className="font-medium w-1/3">{t("logs.detail.vectorStore.query")}</span>
                         <span className="font-mono">{request.query}</span>
                       </div>
                       <div className="flex">
-                        <span className="font-medium w-1/3">Vector Store ID:</span>
+                        <span className="font-medium w-1/3">{t("logs.detail.vectorStore.vectorStoreId")}</span>
                         <span className="font-mono">{request.vector_store_id}</span>
                       </div>
                       <div className="flex">
-                        <span className="font-medium w-1/3">Provider:</span>
+                        <span className="font-medium w-1/3">{t("logs.detail.vectorStore.provider")}</span>
                         <span className="flex items-center">
                           {(() => {
                             const { logo, displayName } = getProviderLogoAndName(request.custom_llm_provider);
                             return (
                               <>
-                                {logo && <img src={logo} alt={`${displayName} logo`} className="h-5 w-5 mr-2" />}
+                                {logo && (
+                                  <img
+                                    src={logo}
+                                    alt={t("logs.detail.vectorStore.logoAlt", { name: displayName })}
+                                    className="h-5 w-5 mr-2"
+                                  />
+                                )}
                                 {displayName}
                               </>
                             );
@@ -100,22 +108,22 @@ export function VectorStoreViewer({ data }: VectorStoreViewerProps) {
                     </div>
                     <div className="space-y-2">
                       <div className="flex">
-                        <span className="font-medium w-1/3">Start Time:</span>
+                        <span className="font-medium w-1/3">{t("logs.detail.vectorStore.startTime")}</span>
                         <span>{formatTime(request.start_time)}</span>
                       </div>
                       <div className="flex">
-                        <span className="font-medium w-1/3">End Time:</span>
+                        <span className="font-medium w-1/3">{t("logs.detail.vectorStore.endTime")}</span>
                         <span>{formatTime(request.end_time)}</span>
                       </div>
                       <div className="flex">
-                        <span className="font-medium w-1/3">Duration:</span>
+                        <span className="font-medium w-1/3">{t("logs.detail.vectorStore.duration")}</span>
                         <span>{calculateDuration(request.start_time, request.end_time)}</span>
                       </div>
                     </div>
                   </div>
                 </div>
 
-                <h4 className="font-medium mb-2">Search Results</h4>
+                <h4 className="font-medium mb-2">{t("logs.detail.vectorStore.searchResults")}</h4>
                 <div className="space-y-2">
                   {request.vector_store_search_response.data.map((result, resultIndex) => {
                     const isExpanded = expandedResults[`${index}-${resultIndex}`] || false;
@@ -135,9 +143,14 @@ export function VectorStoreViewer({ data }: VectorStoreViewerProps) {
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                           </svg>
                           <div className="flex items-center">
-                            <span className="font-medium mr-2">Result {resultIndex + 1}</span>
+                            <span className="font-medium mr-2">
+                              {t("logs.detail.vectorStore.result", { index: resultIndex + 1 })}
+                            </span>
                             <span className="text-muted-foreground text-sm">
-                              Score: <span className="font-mono">{result.score.toFixed(4)}</span>
+                              <Trans
+                                i18nKey="logs.detail.vectorStore.score"
+                                components={{ value: <span className="font-mono">{result.score.toFixed(4)}</span> }}
+                              />
                             </span>
                           </div>
                         </div>

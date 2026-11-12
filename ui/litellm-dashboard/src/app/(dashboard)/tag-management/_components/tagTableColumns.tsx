@@ -141,7 +141,7 @@ export const getTagTableColumns = (
     cell: ({ row }) => {
       const description = row.original.description;
       return (
-        <span className="block max-w-72 truncate text-sm text-muted-foreground" title={description}>
+        <span className="block max-w-72 truncate text-sm text-muted-foreground" title={description ?? undefined}>
           {description || "-"}
         </span>
       );

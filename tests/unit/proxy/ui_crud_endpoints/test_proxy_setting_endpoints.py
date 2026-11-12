@@ -1,8 +1,8 @@
 import json
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Final
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -16,6 +16,27 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
 )
 
 client = TestClient(app)
+
+
+@pytest.mark.asyncio
+async def test_sso_settings_without_prisma_reports_database_not_connected(monkeypatch: pytest.MonkeyPatch) -> None:
+    import runpy
+    import sys
+
+    from fastapi import HTTPException
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.ui_crud_endpoints import proxy_setting_endpoints
+
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    with patch.dict(sys.modules, {"prisma": None, "prisma.errors": None}):
+        endpoints: Final = runpy.run_path(proxy_setting_endpoints.__file__)
+        with pytest.raises(HTTPException) as error:
+            await endpoints["update_sso_settings"](SSOConfig(), UserAPIKeyAuth())
+
+    assert error.value.status_code == 500
+    assert error.value.detail == {"error": "Database not connected. Please connect a database."}
 
 
 @pytest.mark.asyncio
@@ -871,6 +892,25 @@ class TestProxySettingEndpoints:
         assert saved["microsoft_client_id"] is None
         assert saved["generic_client_id"] == "stored-client-id"
         assert saved["user_email"] == "new@example.com"
+        env_row_update = prisma_client.db.litellm_config.update.call_args.kwargs
+        assert json.loads(env_row_update["data"]["param_value"]) == {"LANGFUSE_PUBLIC_KEY": "unrelated"}
+
+    def test_update_sso_settings_blank_stored_value_keeps_env_row_secret(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        import json
+
+        response, saved = self._patch_sso_settings(
+            monkeypatch,
+            {**self._STORED_GENERIC_SSO, "generic_client_secret": ""},
+            {"user_email": "new@example.com"},
+            environment_variables={"GENERIC_CLIENT_SECRET": "env-row-secret", "LANGFUSE_PUBLIC_KEY": "unrelated"},
+        )
+
+        from litellm.proxy.proxy_server import prisma_client
+
+        assert response.status_code == 200, response.text
+        assert saved["generic_client_secret"] == "env-row-secret", saved
         env_row_update = prisma_client.db.litellm_config.update.call_args.kwargs
         assert json.loads(env_row_update["data"]["param_value"]) == {"LANGFUSE_PUBLIC_KEY": "unrelated"}
 
@@ -3455,6 +3495,89 @@ def test_update_default_team_settings_without_organization_skips_lookup(
 
     assert resp.status_code == 200, resp.text
     mock_organization_lookup["find_unique"].assert_not_awaited()
+    assert mock_proxy_config["save_call_count"]() == 1
+
+
+@pytest.fixture
+def mock_access_group_lookup(monkeypatch: pytest.MonkeyPatch) -> Callable[[frozenset[str]], AsyncMock]:
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server_module
+
+    def _install(existing_access_group_ids: frozenset[str]) -> AsyncMock:
+        async def _find_many(where: dict[str, dict[str, list[str]]]) -> list[MagicMock]:
+            return [
+                MagicMock(access_group_id=access_group_id)
+                for access_group_id in where["access_group_id"]["in"]
+                if access_group_id in existing_access_group_ids
+            ]
+
+        find_many: Final = AsyncMock(side_effect=_find_many)
+        fake_prisma: Final = MagicMock()
+        fake_prisma.writer_db.litellm_accessgrouptable.find_many = find_many
+
+        monkeypatch.setattr(proxy_server_module, "prisma_client", fake_prisma)
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        monkeypatch.setattr(litellm, "default_team_params", {})
+        return find_many
+
+    return _install
+
+
+def test_update_default_team_settings_rejects_unknown_access_group(
+    mock_proxy_config: dict[str, object],
+    mock_auth: None,
+    mock_access_group_lookup: Callable[[frozenset[str]], AsyncMock],
+) -> None:
+    import litellm
+
+    mock_access_group_lookup(frozenset({"real-group"}))
+
+    resp: Final = client.patch(
+        "/update/default_team_settings",
+        json={"access_group_ids": ["real-group", "ghost-group"]},
+    )
+
+    assert resp.status_code == 400, resp.text
+    assert "ghost-group" in resp.json()["detail"]["error"]
+    assert "real-group" not in resp.json()["detail"]["error"]
+    assert mock_proxy_config["save_call_count"]() == 0
+    assert litellm.default_team_params == {}
+
+
+def test_update_default_team_settings_saves_existing_access_groups(
+    mock_proxy_config: dict[str, object],
+    mock_auth: None,
+    mock_access_group_lookup: Callable[[frozenset[str]], AsyncMock],
+) -> None:
+    import litellm
+
+    mock_access_group_lookup(frozenset({"real-group", "other-group"}))
+
+    resp: Final = client.patch(
+        "/update/default_team_settings",
+        json={"access_group_ids": ["real-group", "other-group"]},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["settings"]["access_group_ids"] == ["real-group", "other-group"]
+    assert mock_proxy_config["save_call_count"]() == 1
+    assert litellm.default_team_params["access_group_ids"] == ["real-group", "other-group"]
+
+
+def test_update_default_team_settings_with_empty_access_groups_skips_lookup(
+    mock_proxy_config: dict[str, object],
+    mock_auth: None,
+    mock_access_group_lookup: Callable[[frozenset[str]], AsyncMock],
+) -> None:
+    find_many: Final = mock_access_group_lookup(frozenset())
+
+    resp: Final = client.patch(
+        "/update/default_team_settings",
+        json={"access_group_ids": []},
+    )
+
+    assert resp.status_code == 200, resp.text
+    find_many.assert_not_awaited()
     assert mock_proxy_config["save_call_count"]() == 1
 
 

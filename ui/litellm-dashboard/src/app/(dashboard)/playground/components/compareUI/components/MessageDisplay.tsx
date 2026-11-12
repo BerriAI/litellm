@@ -1,6 +1,7 @@
 import { Bot, Loader2, UserRound } from "lucide-react";
 import React from "react";
 import ReactMarkdown from "react-markdown";
+import { useTranslation } from "react-i18next";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
 
@@ -18,6 +19,7 @@ interface MessageDisplayProps {
 
 export function MessageDisplay({ messages, isLoading }: MessageDisplayProps) {
   const syntaxTheme = useSyntaxTheme(coy);
+  const { t } = useTranslation();
   if (messages.length === 0) {
     return <div className="h-full" />;
   }
@@ -104,7 +106,7 @@ export function MessageDisplay({ messages, isLoading }: MessageDisplayProps) {
     <div className="flex flex-col gap-6 min-w-0 w-full p-4">
       {conversationBlocks.map((block, blockIndex) => {
         const assistantMessage = block.assistant;
-        const displayModel = assistantMessage?.model || "Assistant";
+        const displayModel = assistantMessage?.model || t("playground.compare.messages.assistant");
         return (
           <div key={blockIndex} className="space-y-4">
             {block.user && (
@@ -113,7 +115,7 @@ export function MessageDisplay({ messages, isLoading }: MessageDisplayProps) {
                   <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-info/15 text-info">
                     <UserRound size={16} />
                   </div>
-                  <div className="text-sm font-semibold text-foreground">You</div>
+                  <div className="text-sm font-semibold text-foreground">{t("playground.compare.messages.you")}</div>
                 </div>
                 {renderMessageBody(block.user)}
               </div>
@@ -155,10 +157,10 @@ export function MessageDisplay({ messages, isLoading }: MessageDisplayProps) {
             ) : isLoading && blockIndex === conversationBlocks.length - 1 ? (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Loader2 size={18} className="animate-spin" />
-                <span>Generating response...</span>
+                <span>{t("playground.compare.messages.generating")}</span>
               </div>
             ) : (
-              <div className="text-sm text-muted-foreground">Waiting for a response...</div>
+              <div className="text-sm text-muted-foreground">{t("playground.compare.messages.waiting")}</div>
             )}
           </div>
         );
@@ -166,7 +168,7 @@ export function MessageDisplay({ messages, isLoading }: MessageDisplayProps) {
       {isLoading && conversationBlocks.length === 0 && (
         <div className="flex items-center gap-2 text-muted-foreground">
           <Loader2 size={18} className="animate-spin" />
-          <span>Generating response...</span>
+          <span>{t("playground.compare.messages.generating")}</span>
         </div>
       )}
     </div>
