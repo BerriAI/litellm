@@ -92,6 +92,7 @@ class MockRequest(BaseModel):
     text_sha1: str
     delay_s: float
     generation_s: float = 0.0
+    user_agent: str | None = None
 
 
 class MockRequestsResponse(BaseModel):
@@ -157,7 +158,9 @@ class RequestLog:
         self._latency = latency
         return self._latency
 
-    def decide(self, *, route: Route, stream: bool, body: object, model: str) -> Decision:
+    def decide(
+        self, *, route: Route, stream: bool, body: object, model: str, user_agent: str | None = None
+    ) -> Decision:
         prompt_text: Final = " ".join(collect_text(body))
         marker: Final = marker_in(prompt_text)
         seed: Final = marker or "unmarked"
@@ -181,6 +184,7 @@ class RequestLog:
                 text_sha1=hashlib.sha1(reply.text.encode()).hexdigest(),
                 delay_s=decision.delay_s,
                 generation_s=decision.generation_s,
+                user_agent=user_agent,
             )
         )
         return decision

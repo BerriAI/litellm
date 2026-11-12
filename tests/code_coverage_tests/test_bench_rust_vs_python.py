@@ -12,6 +12,7 @@ from scripts.bench_rust_vs_python.report import (
     RequestMetrics,
     RunMetrics,
     delta,
+    native_share,
     run_metrics,
     sustained,
     verdict,
@@ -44,7 +45,14 @@ def _write_run(run_dir: Path, *, rust: bool) -> None:
     ]
     _ = (run_dir / "records.jsonl").write_text("\n".join(json.dumps(r) for r in records))
     mock: Final = [
-        {"marker": f"perfreq-{seq:06d}-n", "delay_s": 0.8, "generation_s": 1.0, "stream": False, "output_tokens": 80}
+        {
+            "marker": f"perfreq-{seq:06d}-n",
+            "delay_s": 0.8,
+            "generation_s": 1.0,
+            "stream": False,
+            "output_tokens": 80,
+            "user_agent": "python-httpx/0.28.1" if seq in (1, 2, WARMUP_SEQ_START + 1) else "litellm-rust/1.0",
+        }
         for seq in sends
     ]
     _ = (run_dir / "mock.json").write_text(json.dumps({"requests": mock}))
@@ -75,6 +83,7 @@ def test_run_metrics_drops_warmup_and_charges_window_cpu_to_successful_requests(
     assert len(run.ttft_overheads_s) == 4
     assert run.ttft_overheads_s == pytest.approx((0.1,) * 4)
     assert run.rust_share == 1.0
+    assert run.native_upstream_share == pytest.approx(8 / 10)
     assert run.prometheus_matches and run.s3_matches
 
 
@@ -108,6 +117,7 @@ def _run(variant: str, cpu_ms: float, overhead_s: float) -> RunMetrics:
         measured=100,
         errors=0,
         rust_share=0.0,
+        native_upstream_share=None,
         window_s=60.0,
         cpu_ms_per_request=cpu_ms,
         loadgen_cpu_share=0.1,
@@ -184,3 +194,8 @@ def test_flame_buckets_charge_the_frame_closest_to_the_leaf() -> None:
     assert bucket_of(logging_then_json) == "body parse / pydantic"
     assert folded == Counter({"body parse / pydantic": 30, "router selection": 10, "other": 5})
     assert Profile(samples=folded, rate_hz=100.0, requests=10).ms_per_request("router selection") == pytest.approx(10.0)
+
+
+def test_native_share_ignores_unrecorded_agents_and_is_none_without_any() -> None:
+    assert native_share(("python-httpx/0.28.1", "reqwest/0.12", None, "litellm/1.0")) == pytest.approx(2 / 3)
+    assert native_share((None, None)) is None

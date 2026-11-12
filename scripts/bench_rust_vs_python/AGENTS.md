@@ -23,17 +23,17 @@ python scripts/bench_rust_vs_python/gen_requests.py --path messages --seed 101 -
 ```
 
 ```bash
-python scripts/bench_rust_vs_python/run_bench.py --worktrees ~/bench/wt --plans ~/bench/plans/l1 --out ~/bench/results/l1 --variants A0,A0b,A1,A2,B0,B1 --reps 5
+python scripts/bench_rust_vs_python/run_bench.py --worktrees ~/bench/wt --plans ~/bench/plans/l1 --out ~/bench/results/l1 --variants A0,A0b,A1,B0,B1 --reps 5
 ```
 
 ```bash
-python scripts/bench_rust_vs_python/report.py ~/bench/results/l1 --pairs A0:A1,A0:A2,A2:A1,B0:B1 --noise-pair A0:A0b
+python scripts/bench_rust_vs_python/report.py ~/bench/results/l1 --pairs A0:A1,B0:B1 --noise-pair A0:A0b
 ```
 
 `--ramp first,last,step,step_seconds` on `gen_requests.py` gives the stepped plan for saturation. `--profile-seconds` on `run_bench.py` attaches `py-spy` after warmup, and `flame.py <old run dir> <new run dir> --out <dir>` turns two profiled runs into the subsystem table and, when `inferno-flamegraph` and `inferno-diff-folded` are on PATH, the flame graph SVGs. Profiled runs are separate from measured runs because sampling slows the proxy
 
 ## Validity checks
 
-A run counts only when every A1 record has `litellm_rust` true and no other variant's does (the `rust share` column), the S3 object count and the Prometheus `litellm_requests_metric` delta both cover every successful request, and Locust stayed under 70% of its core. Settings that put a messages request back on Python (retries, fallbacks, response caching, prompt-caching injection, anything in `MESSAGES_PYTHON_FEATURES` in `litellm/rust_bridge/catalog.py`) must stay out of `configs/bench.yaml`
+A run counts only when it took the intended path. Rust streams carry `x-litellm-rust: true` (the `rust header share` column), but non-streaming Rust messages responses are plain dicts and carry no header, so the mock also records each upstream call's user agent and the report gives the share that did not come from Python's `httpx` client (the `native upstream share` column). On main, native anthropic `/v1/messages` is Rust-only and ignores `LITELLM_RUST`, so there is no Rust-off control for it on the same commit. The S3 object count and the Prometheus `litellm_requests_metric` delta must both cover every successful request, and Locust must stay under 70% of its core. Settings that put a messages request back on Python (retries, fallbacks, response caching, prompt-caching injection, anything in `MESSAGES_PYTHON_FEATURES` in `litellm/rust_bridge/catalog.py`) must stay out of `configs/bench.yaml`
 
 Run an A/A pair first. A difference smaller than the A/A interval is noise, whatever its own CI says

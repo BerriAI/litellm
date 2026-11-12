@@ -31,7 +31,11 @@ def build_app() -> FastAPI:
         body: Final = parse_json(await request.body())
         stream: Final = bool_field(body, "stream")
         decision: Final = log.decide(
-            route="messages", stream=stream, body=body, model=str_field(body, "model", "claude-sonnet-5")
+            route="messages",
+            stream=stream,
+            body=body,
+            model=str_field(body, "model", "claude-sonnet-5"),
+            user_agent=request.headers.get("user-agent"),
         )
         return stream_reply(decision, SSE) if stream else await json_reply(decision)
 

@@ -2,14 +2,14 @@ commits:
   base: d06b889d41
   router: 85bc58085e
   head: 2c7ed0713a
+  main: 7461a996cc
 
 variants:
   A0: {worktree: base, path: messages, env: {}}
   A0b: {worktree: base, path: messages, env: {}}
-  A1: {worktree: head, path: messages, env: {LITELLM_RUST: "true"}, expect_rust: true}
-  A2: {worktree: head, path: messages, env: {}}
+  A1: {worktree: main, path: messages, env: {LITELLM_RUST: "true"}, expect_rust: true}
   B0: {worktree: base, path: chat, env: {}}
-  B1: {worktree: head, path: chat, env: {LITELLM_RUST: "true"}}
+  B1: {worktree: main, path: chat, env: {LITELLM_RUST: "true"}}
   R0-messages: {worktree: router, path: messages, env: {LITELLM_RUST: "0"}}
   R1-messages: {worktree: router, path: messages, env: {LITELLM_RUST: "1"}}
   R0-chat: {worktree: router, path: chat, env: {LITELLM_RUST: "0"}}

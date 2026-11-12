@@ -27,7 +27,9 @@ def build_app() -> FastAPI:
 
     async def handle(model_id: str, request: Request, route: Literal["converse", "invoke"], stream: bool) -> Response:
         body: Final = parse_json(await request.body())
-        decision: Final = log.decide(route=route, stream=stream, body=body, model=model_id)
+        decision: Final = log.decide(
+            route=route, stream=stream, body=body, model=model_id, user_agent=request.headers.get("user-agent")
+        )
         return stream_reply(decision, EVENT_STREAM) if stream else await json_reply(decision)
 
     async def converse(model_id: str, request: Request) -> Response:
