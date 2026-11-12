@@ -211,6 +211,11 @@ def _chat_image(uri: str) -> dict[str, object]:
     return {"messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": uri}}]}]}
 
 
+def _chat_image_after_numbers(uri: str) -> dict[str, object]:
+    image_part: Final = {"type": "image_url", "image_url": {"url": uri}}
+    return {"messages": [{"role": "user", "content": [1, 2.5, True, None, image_part]}]}
+
+
 def _responses_image(uri: str) -> dict[str, object]:
     return {"input": [{"role": "user", "content": [{"type": "input_image", "image_url": uri}]}]}
 
@@ -234,6 +239,7 @@ _S3MediaRoute: TypeAlias = Literal["acompletion", "aresponses", "anthropic_messa
 _GEMINI_GENERATE_CONTENT_PATH: Final = "/v1beta/models/nova:generateContent"
 _S3_MEDIA_SURFACES: Final = (
     pytest.param("acompletion", "/v1/chat/completions", _chat_image, id="chat-completions"),
+    pytest.param("acompletion", "/v1/chat/completions", _chat_image_after_numbers, id="chat-completions-numbers-first"),
     pytest.param("aresponses", "/v1/responses", _responses_image, id="responses"),
     pytest.param("anthropic_messages", "/v1/messages", _anthropic_image, id="anthropic-messages"),
     pytest.param("agenerate_content", _GEMINI_GENERATE_CONTENT_PATH, _gemini_snake_case_image, id="gemini-snake-case"),

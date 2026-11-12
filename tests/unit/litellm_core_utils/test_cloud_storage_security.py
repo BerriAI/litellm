@@ -164,6 +164,18 @@ def _gemini_turn(*parts: object) -> dict[str, object]:
             },
             id="responses-computer-screenshot",
         ),
+        pytest.param(
+            {
+                "messages": (
+                    {"role": "user", "content": ({"type": "image_url", "image_url": {"url": _MANAGED_UPLOAD}},)},
+                )
+            },
+            id="tuples",
+        ),
+        pytest.param(
+            _user_turn(1, 2.5, True, None, {"type": "image_url", "image_url": {"url": _MANAGED_UPLOAD}}),
+            id="numbers-before-the-media-part",
+        ),
     ),
 )
 def test_s3_media_uris_finds_an_s3_object_on_every_media_surface(request_body: dict[str, object]):
