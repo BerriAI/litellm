@@ -90,6 +90,7 @@ from litellm.litellm_core_utils.chat_completion_agentic_loop import (
 )
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
 from litellm.litellm_core_utils.dd_tracing import tracer
+from litellm.litellm_core_utils.exception_mapping_utils import mapped_stream_exception
 from litellm.litellm_core_utils.get_litellm_params import (
     AGENTIC_LOOP_CONTROL_KWARGS_KEYS,
     AGENTIC_LOOP_TOOL_CHOICE_KEY,
@@ -1033,7 +1034,7 @@ def _text_completion_response_from_cached_dict(cached_response_dict: Mapping[str
     return TextCompletionResponse(stream=bool(cached_response_dict.get("stream", False)), **fields)
 
 
-async def _async_streaming(response, model, custom_llm_provider, args):
+async def _async_streaming(response, model, custom_llm_provider, litellm_params: Mapping[str, object]):
     try:
         print_verbose(f"received response in _async_streaming: {response}")
         if asyncio.iscoroutine(response):
@@ -1042,11 +1043,11 @@ async def _async_streaming(response, model, custom_llm_provider, args):
             print_verbose(f"line in async streaming: {line}")
             yield line
     except Exception as e:
-        custom_llm_provider = custom_llm_provider or "openai"
-        raise exception_type(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            original_exception=e,
+        raise mapped_stream_exception(
+            e,
+            model if isinstance(model, str) else "",
+            custom_llm_provider if isinstance(custom_llm_provider, str) and custom_llm_provider else "openai",
+            litellm_params,
         )
 
 
@@ -3657,8 +3658,10 @@ def _complete_openrouter(ctx: CompletionDispatchContext) -> _CompletionDispatchR
         or get_secret_str("OR_API_KEY")
     )
 
-    openrouter_site_url: Final = get_secret("OR_SITE_URL") or "https://litellm.ai"
-    openrouter_app_name: Final = get_secret("OR_APP_NAME") or "liteLLM"
+    openrouter_site_url: Final = _OPAQUE_VALUE_ADAPTER.validate_python(
+        get_secret("OR_SITE_URL") or "https://litellm.ai"
+    )
+    openrouter_app_name: Final = _OPAQUE_VALUE_ADAPTER.validate_python(get_secret("OR_APP_NAME") or "liteLLM")
 
     openrouter_headers: Final = {
         "HTTP-Referer": openrouter_site_url,
@@ -3762,8 +3765,10 @@ def _complete_vercel_ai_gateway(
 
     api_key = api_key or litellm.api_key or get_secret("VERCEL_AI_GATEWAY_API_KEY")
 
-    vercel_site_url: Final = get_secret("VERCEL_SITE_URL") or "https://litellm.ai"
-    vercel_app_name: Final = get_secret("VERCEL_APP_NAME") or "liteLLM"
+    vercel_site_url: Final = _OPAQUE_VALUE_ADAPTER.validate_python(
+        get_secret("VERCEL_SITE_URL") or "https://litellm.ai"
+    )
+    vercel_app_name: Final = _OPAQUE_VALUE_ADAPTER.validate_python(get_secret("VERCEL_APP_NAME") or "liteLLM")
 
     vercel_headers: Final = {
         "http-referer": vercel_site_url,
@@ -7349,8 +7354,10 @@ def embedding(
                 or get_secret_str("OR_API_KEY")
             )
 
-            openrouter_site_url: Final = get_secret("OR_SITE_URL") or "https://litellm.ai"
-            openrouter_app_name: Final = get_secret("OR_APP_NAME") or "liteLLM"
+            openrouter_site_url: Final = _OPAQUE_VALUE_ADAPTER.validate_python(
+                get_secret("OR_SITE_URL") or "https://litellm.ai"
+            )
+            openrouter_app_name: Final = _OPAQUE_VALUE_ADAPTER.validate_python(get_secret("OR_APP_NAME") or "liteLLM")
 
             openrouter_headers: Final = {
                 "HTTP-Referer": openrouter_site_url,
@@ -8084,7 +8091,7 @@ async def atext_completion(*args, **kwargs) -> TextCompletionResponse | TextComp
                     response=response,
                     model=model,
                     custom_llm_provider=custom_llm_provider,
-                    args=args,
+                    litellm_params=_REQUEST_KWARGS_ADAPTER.validate_python(kwargs),
                 ),
                 model=model,
                 custom_llm_provider=custom_llm_provider,
@@ -9505,6 +9512,7 @@ async def ahealth_check(
     from litellm.litellm_core_utils.cached_imports import get_litellm_logging_class
     from litellm.litellm_core_utils.health_check_helpers import HealthCheckHelpers, default_health_check_mode
     from litellm.litellm_core_utils.health_check_utils import OPTIONAL_STR
+    from litellm.types.utils import LIST_BATCHES_SUPPORTED_PROVIDERS
 
     # Use cached import helper to lazy-load Logging class (only loads when function is called)
     Logging: Final = get_litellm_logging_class()
@@ -9549,6 +9557,24 @@ async def ahealth_check(
         mode = mode or default_health_check_mode(
             requested_model=requested_model, model=model, custom_llm_provider=custom_llm_provider
         )
+        litellm_logging_obj.model = requested_model
+        litellm_logging_obj.call_type = {
+            "completion": "atext_completion",
+            "embedding": "aembedding",
+            "audio_speech": "aspeech",
+            "audio_transcription": "atranscription",
+            "image_generation": "aimage_generation",
+            "image_edit": "aimage_edit",
+            "video_generation": "avideo_generation",
+            "rerank": "arerank",
+            "realtime": "arealtime",
+            "responses": "aresponses",
+            "anthropic_messages": "anthropic_messages",
+            "ocr": "aocr",
+            "decisions": "asystemone",
+            "extraction": "aextraction",
+            "batch": ("alist_batches" if custom_llm_provider in LIST_BATCHES_SUPPORTED_PROVIDERS else "acompletion"),
+        }.get("decisions" if is_decisions_model_mode(mode) else mode, "acompletion")
         if "*" in model:
             return await HealthCheckHelpers.ahealth_check_wildcard_models(
                 model=model,

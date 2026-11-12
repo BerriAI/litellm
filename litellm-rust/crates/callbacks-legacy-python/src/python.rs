@@ -50,6 +50,10 @@ pub(crate) enum Logging {
     RecordResponse,
     #[strum(serialize = "record_api_window")]
     RecordApiWindow,
+    #[strum(serialize = "times_provider_exchange")]
+    TimesProviderExchange,
+    #[strum(serialize = "retried_request")]
+    RetriedRequest,
     #[strum(serialize = "defers_async_logging")]
     DefersAsync,
     #[strum(serialize = "claim_async_success_log")]
@@ -62,6 +66,8 @@ pub(crate) enum Logging {
     SubmitSuccess,
     #[strum(serialize = "async_success_handler")]
     AsyncSuccessHandler,
+    #[strum(serialize = "cache_hit_success")]
+    CacheHitSuccess,
     #[strum(serialize = "mark_async_success_enqueued")]
     MarkAsyncSuccessEnqueued,
     #[strum(serialize = "enqueue_logging")]

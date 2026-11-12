@@ -13,3 +13,4 @@ pub mod lifecycle;
 pub mod machine;
 pub mod observation;
 pub mod protocol;
+pub mod raw_json;

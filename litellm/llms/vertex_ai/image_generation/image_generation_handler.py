@@ -7,6 +7,7 @@ from openai.types.image import Image
 from pydantic import ConfigDict, TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import json_contains, subscript
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -20,23 +21,24 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 _PREDICTIONS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class VertexImageGeneration(VertexLLM):
     def process_image_generation_response(
         self,
-        json_response: Mapping[str, object],
+        json_response: object,
         model_response: ImageResponse,
         model: str | None = None,
     ) -> ImageResponse:
-        if "predictions" not in json_response:
+        if not json_contains(json_response, "predictions"):
             raise litellm.InternalServerError(
                 message=f"image generation response does not contain 'predictions', got {json_response}",
                 llm_provider="vertex_ai",
                 model=model,
             )
 
-        predictions: Final = _PREDICTIONS.validate_python(json_response["predictions"])
+        predictions: Final = _PREDICTIONS.validate_python(subscript(json_response, "predictions"))
         response_data: Final[list[Image]] = []
 
         for prediction in predictions:
@@ -168,7 +170,7 @@ class VertexImageGeneration(VertexLLM):
         if response.status_code != 200:
             raise Exception(f"Error: {response.status_code} {response.text}")
 
-        json_response: Final[Mapping[str, object]] = response.json()
+        json_response: Final = _DECODED_JSON.validate_python(response.json())
         return self.process_image_generation_response(json_response, model_response, model)
 
     async def aimage_generation(
@@ -272,11 +274,11 @@ class VertexImageGeneration(VertexLLM):
         if response.status_code != 200:
             raise Exception(f"Error: {response.status_code} {response.text}")
 
-        json_response: Final[Mapping[str, object]] = response.json()
+        json_response: Final = _DECODED_JSON.validate_python(response.json())
         return self.process_image_generation_response(json_response, model_response, model)
 
-    def is_image_generation_response(self, json_response: dict[str, Any]) -> bool:
+    def is_image_generation_response(self, json_response: Mapping[str, object]) -> bool:
         if "predictions" in json_response:
-            if "bytesBase64Encoded" in json_response["predictions"][0]:
+            if json_contains(subscript(json_response["predictions"], 0), "bytesBase64Encoded"):
                 return True
         return False

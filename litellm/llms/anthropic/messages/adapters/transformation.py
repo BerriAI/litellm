@@ -4,12 +4,17 @@ import json
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast
 
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_items, normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    attribute_items,
+    normalize_drop_params,
+    require_attributes,
+)
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.llms.anthropic.messages.convertible_blocks import tool_result_text_part
 from litellm.llms.anthropic.messages.utils import (
@@ -252,6 +257,11 @@ if TYPE_CHECKING:
     from litellm.types.llms.anthropic import ContentBlockContentBlockDict
 
 ToolResultContent: TypeAlias = str | list[ToolMessageContentPart]
+
+
+class _CarriesUsage(Protocol):
+    @property
+    def usage(self) -> Usage: ...
 
 
 def target_supports_mid_conversation_system(model: str | None, custom_llm_provider: str | None) -> bool:
@@ -681,7 +691,7 @@ class LiteLLMAnthropicMessagesAdapter:
 
             ## ASSISTANT MESSAGE ##
             assistant_message_str: str | None = None
-            assistant_content_list: list[dict[str, Any]] = []  # For content blocks with cache_control
+            assistant_content_list: list[ChatCompletionTextObject] = []  # For content blocks with cache_control
             has_cache_control_in_text = False
             tool_calls: list[ChatCompletionAssistantToolCall] = []
             thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] = []
@@ -694,7 +704,7 @@ class LiteLLMAnthropicMessagesAdapter:
                             assistant_message_str = str(content)
                         elif isinstance(content, dict):
                             if content.get("type") == "text":
-                                text_block: dict[str, object] = {
+                                text_block: ChatCompletionTextObject = {
                                     "type": "text",
                                     "text": content.get("text", ""),
                                 }
@@ -753,7 +763,7 @@ class LiteLLMAnthropicMessagesAdapter:
             ):
                 # Use list format if any text block has cache_control, otherwise use string
                 if has_cache_control_in_text and len(assistant_content_list) > 0:
-                    assistant_content: Any = assistant_content_list
+                    assistant_content: str | Sequence[ChatCompletionTextObject] | None = assistant_content_list
                 elif len(assistant_content_list) > 0 and not has_cache_control_in_text:
                     # Concatenate text blocks into string when no cache_control
                     assistant_content = "".join(block.get("text", "") for block in assistant_content_list)
@@ -1795,7 +1805,7 @@ class LiteLLMAnthropicMessagesAdapter:
             else translated_finish_reason
         )
         # extract usage
-        usage: Final[Usage] = getattr(response, "usage")
+        usage: Final = require_attributes(response, _CarriesUsage, "usage").usage
         message_usage: Final = self.translate_openai_usage_to_anthropic_usage(usage)
         polyfill_iterations: Final = polyfill_result.iterations_usage if polyfill_result is not None else None
         anthropic_usage: Final[AnthropicUsage] = (

@@ -35,6 +35,8 @@ mod _native {
     #[pymodule_export]
     use crate::errors::{RustBridgeDeclined, RustUpstreamError};
     #[pymodule_export]
+    use crate::http::unsupported_tls_settings;
+    #[pymodule_export]
     use crate::logger::NativeDiagnosticProcessor;
     #[pymodule_export]
     use crate::model_cost::{
@@ -191,6 +193,7 @@ mod tests {
                 "gil_stats",
                 "process_state_started",
                 "reserve_process_for_forking",
+                "unsupported_tls_settings",
             ];
             #[cfg(feature = "huggingface")]
             expected.push("HuggingFaceEncoding");

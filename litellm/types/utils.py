@@ -4029,6 +4029,13 @@ ARIZE_OTLP_PROTOCOLS: Final[frozenset[str]] = frozenset(get_args(ArizeOtlpProtoc
 
 CAPTURE_MESSAGE_CONTENT_VAR: Final = "capture_message_content"
 EXCLUDED_SERVICES_VAR: Final = "excluded_services"
+BAGGAGE_METADATA_KEYS_VAR: Final = "baggage_metadata_keys"
+#: Team and key callback vars that tune that callback's own OTel v2 destination, never sent to the backend.
+OTEL_DESTINATION_VARS: Final[tuple[str, ...]] = (
+    CAPTURE_MESSAGE_CONTENT_VAR,
+    EXCLUDED_SERVICES_VAR,
+    BAGGAGE_METADATA_KEYS_VAR,
+)
 
 
 class CaptureMessageContent(str):
