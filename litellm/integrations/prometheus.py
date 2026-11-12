@@ -1073,6 +1073,27 @@ class PrometheusLogger(CustomLogger):
                 labelnames=self.get_labels_for_metric("litellm_deployment_failed_fallbacks"),
             )
 
+            self.litellm_dynamic_limiter_share_tokens = self._gauge_factory(
+                "litellm_dynamic_limiter_share_tokens",
+                "Dynamic rate limiter: the team's share of the model's TPM, as of the team's last settled request",
+                labelnames=self.get_labels_for_metric("litellm_dynamic_limiter_share_tokens"),
+                multiprocess_mode="livemax",
+            )
+
+            self.litellm_dynamic_limiter_borrowed_tokens = self._gauge_factory(
+                "litellm_dynamic_limiter_borrowed_tokens",
+                "Dynamic rate limiter: tokens the team has used above its share this window, 0 while under its share",
+                labelnames=self.get_labels_for_metric("litellm_dynamic_limiter_borrowed_tokens"),
+                multiprocess_mode="livemax",
+            )
+
+            self.litellm_dynamic_limiter_throttled_total = self._counter_factory(
+                "litellm_dynamic_limiter_throttled_total",
+                "Dynamic rate limiter: requests refused per team, model and reason, "
+                "the reason being the value of the response's rate_limited_by header",
+                labelnames=self.get_labels_for_metric("litellm_dynamic_limiter_throttled_total"),
+            )
+
             # Callback Logging Failure Metrics
             self.litellm_callback_logging_failures_metric = self._counter_factory(
                 name="litellm_callback_logging_failures_metric",
@@ -4171,6 +4192,49 @@ class PrometheusLogger(CustomLogger):
             sanitize_prometheus_label_value(api_provider),
             sanitize_prometheus_label_value(exception_status),
         ).inc()
+
+    def set_dynamic_limiter_share(
+        self,
+        model_group: str,
+        team: str,
+        team_alias: str | None,
+        priority: str,
+        share_tokens: int,
+        borrowed_tokens: int,
+    ) -> None:
+        enum_values: Final = UserAPIKeyLabelValues(
+            model_group=model_group, team=team, team_alias=team_alias, priority=priority
+        )
+        for gauge, metric_name, value in (
+            (self.litellm_dynamic_limiter_share_tokens, "litellm_dynamic_limiter_share_tokens", share_tokens),
+            (self.litellm_dynamic_limiter_borrowed_tokens, "litellm_dynamic_limiter_borrowed_tokens", borrowed_tokens),
+        ):
+            labels: Final = prometheus_label_factory(
+                supported_enum_labels=self.get_labels_for_metric(metric_name=metric_name), enum_values=enum_values
+            )
+            gauge.labels(**labels).set(value)
+
+    def increment_dynamic_limiter_throttled(
+        self,
+        model_group: str,
+        team: str,
+        team_alias: str | None,
+        priority: str,
+        rate_limit_type: str,
+        reason: str,
+    ) -> None:
+        self._inc_labeled_counter(
+            self.litellm_dynamic_limiter_throttled_total,
+            "litellm_dynamic_limiter_throttled_total",
+            UserAPIKeyLabelValues(
+                model_group=model_group,
+                team=team,
+                team_alias=team_alias,
+                priority=priority,
+                rate_limit_type=rate_limit_type,
+                reason=reason,
+            ),
+        )
 
     def increment_callback_logging_failure(
         self,

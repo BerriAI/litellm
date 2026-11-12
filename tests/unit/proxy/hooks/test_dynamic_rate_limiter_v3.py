@@ -13,6 +13,7 @@ from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from prometheus_client import CollectorRegistry
 
 import litellm
 from litellm import DualCache, Router
@@ -29,6 +30,7 @@ from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (
 )
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROXY_MaxParallelRequestsHandler_v3,
+    claim_request_stash_for_data,
 )
 from litellm.proxy.hooks.priority_class_share import pool_member
 from litellm.redis.stores.rate_limits import RateLimitScope
@@ -3359,3 +3361,143 @@ async def test_tokens_served_by_a_fallback_model_land_on_the_teams_counter_for_t
     with pytest.raises(ProxyRateLimitError) as exc:
         await _check(handler, _class_team("team-a"), saturation=0.62, priority="interactive", model="other-model")
     _held_to_class_share(exc.value)
+
+
+def _prometheus_sink(monkeypatch: pytest.MonkeyPatch, sink_class: type | None = None) -> CollectorRegistry:
+    """A PrometheusLogger registered as a callback next to the dynamic rate limiter, on a cleared process registry."""
+    from prometheus_client import REGISTRY
+
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    for collector in list(REGISTRY._collector_to_names):  # pyright: ignore[reportPrivateUsage]  # the only way to list a registry's collectors
+        REGISTRY.unregister(collector)
+    prometheus: Final = (sink_class or PrometheusLogger)()
+    monkeypatch.setattr(litellm, "callbacks", [prometheus, "dynamic_rate_limiter_v3"])
+    registry: CollectorRegistry = REGISTRY
+    return registry
+
+
+def _sample(registry: CollectorRegistry, name: str, **labels: str) -> float | None:
+    matches: Final = tuple(
+        sample.value
+        for metric in registry.collect()
+        for sample in metric.samples
+        if sample.name == name and all(sample.labels.get(label) == value for label, value in labels.items())
+    )  # comprehension-ok: one metric family holds the series of all teams
+    assert len(matches) <= 1, matches
+    return matches[0] if matches else None
+
+
+TEAM_LABELS: Final = {"model_group": "shared-model", "team": "team-a", "priority": "default"}
+
+
+@pytest.mark.asyncio
+async def test_team_share_gauges_follow_settled_usage_above_the_share(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    registry = _prometheus_sink(monkeypatch)
+    assert _sample(registry, "litellm_dynamic_limiter_share_tokens", **TEAM_LABELS) is None
+
+    await _admit_then_settle(handler, _team_key(), tokens=60)
+    assert _sample(registry, "litellm_dynamic_limiter_share_tokens", **TEAM_LABELS) == 100
+    assert _sample(registry, "litellm_dynamic_limiter_borrowed_tokens", **TEAM_LABELS) == 0
+
+    await _admit_then_settle(handler, _team_key(), tokens=70)
+    assert _sample(registry, "litellm_dynamic_limiter_share_tokens", **TEAM_LABELS) == 100
+    assert _sample(registry, "litellm_dynamic_limiter_borrowed_tokens", **TEAM_LABELS) == 30
+    assert _sample(registry, "litellm_dynamic_limiter_throttled_total", **TEAM_LABELS) is None
+
+
+@pytest.mark.asyncio
+async def test_a_failed_request_settles_the_team_share_gauges_too(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    registry = _prometheus_sink(monkeypatch)
+    await _admit_then_settle(handler, _team_key(), tokens=90)
+    claim_request_stash_for_data({"litellm_call_id": "failed-call"})
+    await _check(handler, _team_key(), saturation=0.0, data=_prompt(words=40), priority=None)
+    await handler.async_log_failure_event(
+        kwargs={
+            "litellm_params": {"metadata": {"model_group": "shared-model"}},
+            "litellm_call_id": "failed-call",
+            "standard_logging_object": {"metadata": {"user_api_key_team_id": "team-a"}},
+        },
+        response_obj=litellm.ModelResponse(usage=litellm.Usage(prompt_tokens=50, completion_tokens=0, total_tokens=50)),
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    assert _sample(registry, "litellm_dynamic_limiter_borrowed_tokens", **TEAM_LABELS) == 40
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "auth, burns, saturation, reason",
+    [
+        (_team_key(), (60, 70), 1.0, "model_per_team_saturated"),
+        (_capped_team_key(2), (150, 60), 0.0, "model_per_team_max_borrow_multiple"),
+    ],
+    ids=["saturated", "borrow_cap"],
+)
+async def test_a_refused_request_is_counted_under_the_reason_its_429_header_carries(
+    monkeypatch: pytest.MonkeyPatch, auth: UserAPIKeyAuth, burns: tuple[int, ...], saturation: float, reason: str
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    registry = _prometheus_sink(monkeypatch)
+    for tokens in burns:
+        await _admit_then_settle(handler, auth, tokens=tokens)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, auth, saturation=saturation)
+    assert exc.value.headers is not None
+    assert exc.value.headers["rate_limited_by"] == reason
+    assert _sample(registry, "litellm_dynamic_limiter_throttled_total", **TEAM_LABELS) == 1
+    assert (
+        _sample(
+            registry, "litellm_dynamic_limiter_throttled_total", **TEAM_LABELS, rate_limit_type="tokens", reason=reason
+        )
+        == 1
+    )
+    assert _sample(registry, "litellm_dynamic_limiter_borrowed_tokens", **TEAM_LABELS) == sum(burns) - 100
+
+
+@pytest.mark.asyncio
+async def test_a_class_share_refusal_is_counted_under_the_teams_priority(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=False, splits=True)
+    registry = _prometheus_sink(monkeypatch)
+    await _burn(handler, _class_team("team-b"), "interactive", 20)
+    await _burn(handler, _class_team("team-a", "interactive"), "interactive", 300)
+    await _burn(handler, _class_team("team-a", "batch"), "batch", 300)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _class_team("team-a", "batch"), saturation=0.62, priority="batch")
+    _held_to_class_share(exc.value)
+    assert (
+        _sample(
+            registry,
+            "litellm_dynamic_limiter_throttled_total",
+            model_group="shared-model",
+            team="team-a",
+            priority="batch",
+            reason="priority_class_share_saturated",
+        )
+        == 1
+    )
+    assert _sample(registry, "litellm_dynamic_limiter_throttled_total", team="team-b") is None
+
+
+@pytest.mark.asyncio
+async def test_a_failing_metrics_sink_never_changes_admission(monkeypatch: pytest.MonkeyPatch):
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    class BrokenSink(PrometheusLogger):
+        def set_dynamic_limiter_share(self, **kwargs: object) -> None:
+            raise RuntimeError("metrics backend down")
+
+        def increment_dynamic_limiter_throttled(self, **kwargs: object) -> None:
+            raise RuntimeError("metrics backend down")
+
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    _prometheus_sink(monkeypatch, BrokenSink)
+    await _admit_then_settle(handler, _team_key(), tokens=60)
+    await _admit_then_settle(handler, _team_key(), tokens=70)
+    assert await _team_tokens_remaining(handler) == -30
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _team_key(), saturation=1.0)
+    assert exc.value.headers is not None
+    assert exc.value.headers["rate_limited_by"] == "model_per_team_saturated"
