@@ -2232,7 +2232,9 @@ async def _read_request_body_deferring_parse_failure(
     return populate_request_with_path_params(request_data=parsed_body, request=request), None
 
 
-async def _reject_from_headers_before_reading_body(request: Request, api_key: str, route: str) -> None:
+async def _reject_from_headers_before_reading_body(
+    request: Request, api_key: str | None, custom_litellm_key_header: str | None, route: str
+) -> None:
     """Refuse a request its headers already condemn, a blocked key or an exhausted key limit, before reading its body.
 
     Only a key already in the cache is considered, so a miss changes nothing and the full auth path still runs.
@@ -2244,7 +2246,13 @@ async def _reject_from_headers_before_reading_body(request: Request, api_key: st
     from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
     from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
 
-    bearer_token: Final = get_bearer_token(api_key=api_key)
+    bearer_token: Final = (
+        _get_bearer_token_or_received_api_key(custom_litellm_key_header)
+        if isinstance(custom_litellm_key_header, str)
+        else get_bearer_token(api_key=api_key)
+        if isinstance(api_key, str)
+        else ""
+    )
     if not bearer_token:
         return
     hashed_token: Final = hash_token(bearer_token)
@@ -2269,7 +2277,7 @@ async def _reject_from_headers_before_reading_body(request: Request, api_key: st
             request_data={},
             route=route,
             parent_otel_span=parent_otel_span,
-            api_key=api_key,
+            api_key=bearer_token,
             resolved_identity=cached_key,
         )
         return
@@ -2277,18 +2285,27 @@ async def _reject_from_headers_before_reading_body(request: Request, api_key: st
     if not isinstance(limiter, PROXY_MaxParallelRequestsHandler_v3):
         return
     rate_limited: Final = cached_key.model_copy(
-        update={"api_key": cached_key.api_key or hashed_token, "parent_otel_span": parent_otel_span}
+        update={
+            "api_key": cached_key.api_key or hashed_token,
+            "parent_otel_span": parent_otel_span,
+            "request_route": normalize_request_route(route),
+        }
     )
     try:
         await limiter.raise_if_over_limit_before_body(rate_limited)
     except HTTPException as rejection:
-        await proxy_logging_obj.post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # bare dict in sig
+        transformed: Final = await proxy_logging_obj.post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # bare dict in sig
             request_data={},
             original_exception=rejection,
             user_api_key_dict=rate_limited,
             route=route,
         )
-        raise proxy_exception_from_http_exception(rejection, dict(rejection.headers or {}))
+        failure: Final = transformed if transformed is not None else rejection
+        if isinstance(failure, ProxyException):
+            raise failure
+        if isinstance(failure, HTTPException):
+            raise proxy_exception_from_http_exception(failure, dict(failure.headers or {}))
+        raise failure
 
 
 async def _record_unparsable_body_failure(
@@ -4652,7 +4669,9 @@ async def user_api_key_auth(
     _ensure_parent_otel_span_on_request_state(request)
 
     route: Final[str] = get_request_route(request=request)
-    await _reject_from_headers_before_reading_body(request=request, api_key=api_key, route=route)
+    await _reject_from_headers_before_reading_body(
+        request=request, api_key=api_key, custom_litellm_key_header=custom_litellm_key_header, route=route
+    )
     request_data, body_parse_exception = await _read_request_body_deferring_parse_failure(request=request)
     phase_event("litellm.request.body_parsed")
     ## CHECK IF ROUTE IS ALLOWED

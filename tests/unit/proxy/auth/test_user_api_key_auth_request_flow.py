@@ -14294,14 +14294,14 @@ async def _refusal_before_body(
 ) -> ProxyException:
     from litellm.proxy.utils import hash_token
 
-    user_api_key_cache = DualCache()
+    user_api_key_cache: Final = DualCache()
     await cache_key_object(
         hashed_token=hash_token(api_key),
         user_api_key_obj=cached_key,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=None,
     )
-    proxy_logging_obj = MagicMock()
+    proxy_logging_obj: Final = MagicMock()
     proxy_logging_obj.get_proxy_hook.return_value = limiter
     proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
     with (
@@ -14322,9 +14322,9 @@ async def _refusal_before_body(
 async def test_rate_limited_cached_key_is_refused_before_the_body_is_read() -> None:
     from litellm.proxy.utils import hash_token
 
-    api_key = "sk-flooding-key"
-    cached_key = UserAPIKeyAuth(token=hash_token(api_key), rpm_limit=1, models=["gpt-5.6"])
-    limiter = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
+    api_key: Final = "sk-flooding-key"
+    cached_key: Final = UserAPIKeyAuth(token=hash_token(api_key), rpm_limit=1, models=["gpt-5.6"])
+    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
     await limiter.async_pre_call_hook(
         UserAPIKeyAuth(api_key=hash_token(api_key), rpm_limit=1),
         DualCache(),
@@ -14332,7 +14332,7 @@ async def test_rate_limited_cached_key_is_refused_before_the_body_is_read() -> N
         "acompletion",
     )
 
-    refusal = await _refusal_before_body(cached_key, api_key, limiter)
+    refusal: Final = await _refusal_before_body(cached_key, api_key, limiter)
 
     assert refusal.code == "429", refusal.message
     assert refusal.headers["rate_limited_by"] == "api_key"
@@ -14342,10 +14342,10 @@ async def test_rate_limited_cached_key_is_refused_before_the_body_is_read() -> N
 async def test_blocked_cached_key_is_refused_before_the_body_is_read() -> None:
     from litellm.proxy.utils import hash_token
 
-    api_key = "sk-blocked-key"
-    cached_key = UserAPIKeyAuth(token=hash_token(api_key), blocked=True, models=["gpt-5.6"])
+    api_key: Final = "sk-blocked-key"
+    cached_key: Final = UserAPIKeyAuth(token=hash_token(api_key), blocked=True, models=["gpt-5.6"])
 
-    refusal = await _refusal_before_body(cached_key, api_key, None)
+    refusal: Final = await _refusal_before_body(cached_key, api_key, None)
 
     assert refusal.code == "401", refusal.message
     assert "Key is blocked" in refusal.message
