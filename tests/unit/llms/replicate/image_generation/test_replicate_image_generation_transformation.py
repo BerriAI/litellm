@@ -241,7 +241,11 @@ def test_request_flattens_extra_body_into_native_input():
     body = ReplicateImageGenerationConfig().transform_image_generation_request(
         MODEL,
         "a boat",
-        {"num_outputs": 1, "extra_body": {"seed": 7, "num_outputs": 3}, "response_format": "url"},
+        {
+            "num_outputs": 1,
+            "extra_body": {"seed": 7, "num_outputs": 3, "prompt": "unaudited"},
+            "response_format": "url",
+        },
         {},
         {},
     )
