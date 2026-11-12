@@ -1874,7 +1874,8 @@ _TEXT_FIELD_BY_BLOCK_TYPE: Final = MappingProxyType(
 
 def _is_text_block(block: object) -> bool:
     mapping: Final = as_str_mapping(block)
-    return isinstance(block, str) or (mapping is not None and mapping.get("type") in _TEXT_FIELD_BY_BLOCK_TYPE)
+    block_type: Final = mapping.get("type") if mapping is not None else None
+    return isinstance(block, str) or (isinstance(block_type, str) and block_type in _TEXT_FIELD_BY_BLOCK_TYPE)
 
 
 def _has_only_text_content(message: object) -> bool:

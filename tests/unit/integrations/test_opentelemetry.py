@@ -8063,8 +8063,22 @@ async def test_failed_chat_span_flags_unknown_usage_with_pre_redaction_prompt_es
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "messages",
-    [None, [], list(_UNCOUNTABLE_PROMPT)],
-    ids=["no_messages", "empty_messages", "tokenizer_failure"],
+    [
+        None,
+        [],
+        list(_UNCOUNTABLE_PROMPT),
+        [{"role": "user", "content": [{"type": [], "text": _PROMPT_SECRET}]}],
+        [{"role": "user", "content": [{"type": {"name": "text"}, "text": _PROMPT_SECRET}]}],
+        [{"role": "user", "content": {"type": "text", "text": _PROMPT_SECRET}}],
+    ],
+    ids=[
+        "no_messages",
+        "empty_messages",
+        "tokenizer_failure",
+        "list_block_type",
+        "dict_block_type",
+        "mapping_content",
+    ],
 )
 async def test_failed_chat_span_flags_unknown_usage_without_inventing_an_estimate(
     in_memory_otel: tuple[OpenTelemetry, InMemorySpanExporter], messages: list[dict[str, object]] | None
@@ -8076,6 +8090,9 @@ async def test_failed_chat_span_flags_unknown_usage_without_inventing_an_estimat
     attributes: Final = dict(span.attributes or {})
     _assert_unknown_usage(attributes)
     assert ESTIMATED_INPUT_TOKENS_ATTRIBUTE not in attributes
+    assert span.status.status_code == trace.StatusCode.ERROR
+    assert any("Timeout" in str((event.attributes or {}).get("exception.type")) for event in span.events)
+    assert _PROMPT_SECRET not in _span_text(span)
 
 
 @pytest.mark.asyncio

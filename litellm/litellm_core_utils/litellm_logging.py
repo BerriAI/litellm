@@ -4776,9 +4776,11 @@ class Logging(LiteLLMLoggingBaseClass):
         from litellm.litellm_core_utils.token_counter import has_only_text_content
 
         messages: Final = self.messages
-        if litellm.disable_token_counter or not messages or not has_only_text_content(messages):
+        if litellm.disable_token_counter or not messages:
             return None
         try:
+            if not has_only_text_content(messages):
+                return None
             return get_token_counter_new()(model=self.model, messages=messages, use_default_image_token_count=True)
         except (ValueError, TypeError, LookupError, AttributeError):
             return None
