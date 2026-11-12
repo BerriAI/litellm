@@ -219,7 +219,9 @@ async def test_hook_searches_through_the_injected_router_with_the_request_metada
 async def test_hook_falls_back_to_the_sdk_when_the_runtime_has_no_router(
     registry_with: RegisterStores,
     warnings: list[logging.LogRecord],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(litellm, "set_verbose", False)
     registry_with("vs-sdk", custom_llm_provider="lit6752-not-a-provider")
 
     _, messages, _ = await _run_hook(
