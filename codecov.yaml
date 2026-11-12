@@ -58,6 +58,8 @@ flag_management:
       carryforward: false
     - name: proxy-infra
       carryforward: false
+    - name: proxy-infra-root
+      carryforward: false
     - name: proxy-infra-root-a-p
       carryforward: false
     - name: proxy-infra-root-q-z
