@@ -2,8 +2,44 @@ use std::time::Duration;
 
 use litellm_config::Config;
 use litellm_inference_messages::{MessagesSettings, MessagesShaping};
+use litellm_model_catalog::Catalog;
 use litellm_router::{Deployment, Router};
 use rstest::rstest;
+
+const MODELS: &str = r#"{
+    "no-sampling": {"litellm_provider": "anthropic", "mode": "chat", "supports_sampling_params": false},
+    "vertex_ai/routed-no-sampling": {"litellm_provider": "vertex_ai", "mode": "chat", "supports_sampling_params": false},
+    "sampling": {"litellm_provider": "anthropic", "mode": "chat", "supports_sampling_params": true},
+    "unflagged": {"litellm_provider": "anthropic", "mode": "chat"}
+}"#;
+
+fn models() -> Catalog {
+    Catalog::parse(MODELS.as_bytes()).unwrap().value
+}
+
+#[rstest]
+#[case::provider_prefixed("model: anthropic/no-sampling", false)]
+#[case::custom_provider("model: no-sampling\n      custom_llm_provider: anthropic", false)]
+#[case::routed_key("model: vertex_ai/routed-no-sampling", false)]
+#[case::flagged_with_sampling("model: anthropic/sampling", true)]
+#[case::unflagged("model: anthropic/unflagged", true)]
+#[case::not_in_the_map("model: anthropic/not-in-the-map", true)]
+fn sampling_support_comes_from_the_model_map(#[case] parameters: &str, #[case] expected: bool) {
+    let config = Config::from_yaml(&format!(
+        "model_list:\n  - model_name: public-model\n    litellm_params:\n      {parameters}"
+    ))
+    .unwrap();
+
+    assert_eq!(
+        Router::from_config(&config, &|_: &str| None, &models())
+            .get("public-model")
+            .unwrap()
+            .shaping
+            .capabilities
+            .supports_sampling_params,
+        expected
+    );
+}
 
 #[rstest]
 #[case::minimal("")]
@@ -16,7 +52,7 @@ fn configuration_preserves_deployment_parameters(#[case] parameters: &str) {
         "model_list:\n  - model_name: public-model\n    litellm_params:\n      model: provider/model\n      {parameters}"
     ))
     .unwrap();
-    let router = Router::from_config(&config, &|_: &str| None);
+    let router = Router::from_config(&config, &|_: &str| None, &models());
     let deployment = router.get(&config.model_list[0].model_name).unwrap();
     let params = &config.model_list[0].litellm_params;
 
@@ -44,7 +80,7 @@ fn configuration_types_the_provider_params_of_a_deployment() {
       azure_ad_token: ignored-by-every-group",
     )
     .unwrap();
-    let router = Router::from_config(&config, &|_: &str| None);
+    let router = Router::from_config(&config, &|_: &str| None, &models());
     let params = &router.get("public-model").unwrap().litellm_params;
 
     assert_eq!(
@@ -74,7 +110,7 @@ fn lookup_uses_public_names(#[case] name: &str, #[case] expected: Option<&str>) 
       model: provider/b",
     )
     .unwrap();
-    let router = Router::from_config(&config, &|_: &str| None);
+    let router = Router::from_config(&config, &|_: &str| None, &models());
 
     assert_eq!(router.get(name).map(|entry| entry.model.as_str()), expected);
 }
@@ -84,7 +120,7 @@ fn empty_configuration_has_no_deployment() {
     let config = Config::from_yaml("model_list: []").unwrap();
 
     assert!(
-        Router::from_config(&config, &|_: &str| None)
+        Router::from_config(&config, &|_: &str| None, &models())
             .get("")
             .is_none()
     );

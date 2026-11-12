@@ -596,6 +596,73 @@ mod tests {
         ));
     }
 
+    fn call_requesting_version(
+        shaping: MessagesShaping,
+        provider: &str,
+        version: &str,
+        drop_params: bool,
+    ) -> MessagesCall {
+        MessagesCall {
+            body: body(
+                json!({"model": "claude-test", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16, "temperature": 1}),
+            ),
+            api_key: Some("sk-test".into()),
+            api_base: Some("https://upstream.test".into()),
+            custom_llm_provider: Some(provider.into()),
+            litellm_params: Default::default(),
+            extra_headers: Some(Map::from_iter([(
+                "anthropic-version".to_string(),
+                json!(version),
+            )])),
+            provider_specific_header: None,
+            timeout: None,
+            shaping: MessagesShaping {
+                settings: MessagesSettings {
+                    drop_params,
+                    ..shaping.settings
+                },
+                ..shaping
+            },
+        }
+    }
+
+    #[rstest]
+    #[case::anthropic_under_sdk_2("anthropic", "2026-10-21", None)]
+    #[case::anthropic_under_sdk_1("anthropic", "2023-06-01", Some(json!(1.0)))]
+    #[case::non_anthropic_api_under_sdk_2("deepseek", "2026-10-21", Some(json!(1.0)))]
+    #[tokio::test]
+    async fn temperature_reaches_the_wire_only_under_an_api_version_that_has_it(
+        shaping: MessagesShaping,
+        #[case] provider: &str,
+        #[case] version: &str,
+        #[case] temperature: Option<Value>,
+    ) {
+        let call = provider_call_for(call_requesting_version(shaping, provider, version, true))
+            .await
+            .unwrap();
+        assert_eq!(call.wire.body.get("temperature").cloned(), temperature);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn an_api_version_without_sampling_params_refuses_them_before_the_provider_call(
+        shaping: MessagesShaping,
+    ) {
+        let Err(Error::Llm(litellm_llms::Error::InvalidRequest(detail))) = provider_call_for(
+            call_requesting_version(shaping, "anthropic", "2026-10-21", false),
+        )
+        .await
+        else {
+            panic!("expected an invalid request");
+        };
+        assert_eq!(
+            detail.to_string(),
+            "claude-test does not support temperature=1.0. anthropic-version 2026-10-21 removed \
+             temperature, top_p and top_k. To drop unsupported params, set \
+             `litellm.drop_params = True`."
+        );
+    }
+
     #[rstest]
     #[tokio::test]
     async fn missing_credentials_are_reported_before_the_request_is_transformed(

@@ -10,9 +10,11 @@ use axum::{
     response::Response,
 };
 use futures_util::future::BoxFuture;
-use litellm_gateway_inference::{Deployment, Gateway, router};
+use litellm_config::Config;
+use litellm_gateway_inference::{Deployment, Gateway, ModelRouter, router};
 use litellm_http::{HttpClientPool, HttpSettings, Resolution, media::PublicDnsResolver};
 use litellm_inference::resources::CoreResources;
+use litellm_model_catalog::Catalog;
 use litellm_secrets::{SecretValue, source::SecretSource};
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -113,17 +115,34 @@ fn deployment_app(
     cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
     principal: Option<litellm_gateway_auth::Principal>,
 ) -> Router {
+    models_app(
+        [("public/model".into(), deployment)].into_iter().collect(),
+        permissions,
+        cache,
+        principal,
+    )
+}
+
+pub fn app_from_config(config: &str, models: &Catalog) -> Router {
+    models_app(
+        ModelRouter::from_config(&Config::from_yaml(config).unwrap(), &|_: &str| None, models),
+        litellm_gateway_auth::Permissions::All,
+        None,
+        None,
+    )
+}
+
+fn models_app(
+    models: ModelRouter,
+    permissions: litellm_gateway_auth::Permissions,
+    cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
+    principal: Option<litellm_gateway_auth::Principal>,
+) -> Router {
     let pool = Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver)));
     let http = Resolution::from(&HttpSettings::default()).config;
     let secrets = Arc::new(NoSecrets);
     let resources = CoreResources::new(pool);
-    let gateway = Gateway::new(
-        resources,
-        http,
-        secrets,
-        [("public/model".into(), deployment)].into_iter().collect(),
-    )
-    .unwrap();
+    let gateway = Gateway::new(resources, http, secrets, models).unwrap();
     let gateway = match cache {
         Some(cache) => gateway.with_cache(cache),
         None => gateway,

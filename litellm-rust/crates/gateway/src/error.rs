@@ -12,6 +12,8 @@ pub enum Error {
     Mcp(#[from] litellm_gateway_mcp::ConnectError),
     #[error(transparent)]
     Config(#[from] litellm_config::Error),
+    #[error(transparent)]
+    ModelCatalog(#[from] litellm_model_catalog::Error),
     #[error("invalid Redis setting {setting}: {reason}")]
     RedisInvalid {
         setting: &'static str,

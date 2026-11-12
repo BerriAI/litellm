@@ -4,6 +4,7 @@ use axum::{
     body::{Body, to_bytes},
     http::Request,
 };
+use litellm_model_catalog::Catalog;
 use rstest::rstest;
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -129,6 +130,70 @@ async fn deployment_sampling_params_sit_under_the_client_body(
     assert_eq!(response.status(), 200);
 }
 
+#[rstest]
+#[case::dropped_for_a_model_without_sampling_params(
+    "no-sampling",
+    "\n      drop_params: true",
+    200,
+    Some(None)
+)]
+#[case::refused_without_drop_params("no-sampling", "", 400, None)]
+#[case::kept_for_a_model_with_sampling_params(
+    "sampling",
+    "\n      drop_params: true",
+    200,
+    Some(Some(0.5))
+)]
+#[tokio::test]
+async fn a_deployment_temperature_follows_the_model_map_sampling_flag(
+    #[case] model: &str,
+    #[case] drop_params: &str,
+    #[case] status: u16,
+    #[case] sent_temperature: Option<Option<f64>>,
+) {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "msg_test", "type": "message", "role": "assistant", "model": model,
+            "content": [{"type": "text", "text": "hello"}], "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        })))
+        .mount(&upstream)
+        .await;
+    let models = Catalog::parse(
+        br#"{
+            "no-sampling": {"litellm_provider": "anthropic", "mode": "chat", "supports_sampling_params": false},
+            "sampling": {"litellm_provider": "anthropic", "mode": "chat", "supports_sampling_params": true}
+        }"#,
+    )
+    .unwrap()
+    .value;
+    let app = support::app_from_config(
+        &format!(
+            "model_list:\n  - model_name: public/model\n    litellm_params:\n      model: anthropic/{model}\n      api_base: {}\n      api_key: test-key\n      temperature: 0.5{drop_params}",
+            upstream.uri()
+        ),
+        &models,
+    );
+
+    let response = support::post(
+        app,
+        "/v1/messages",
+        messages_request("public/model", json!({"max_tokens": 16})),
+    )
+    .await;
+
+    assert_eq!(response.status(), status);
+    let sent = upstream.received_requests().await.unwrap();
+    assert_eq!(
+        sent.first().map(|request| {
+            serde_json::from_slice::<Value>(&request.body).unwrap()["temperature"].as_f64()
+        }),
+        sent_temperature
+    );
+}
+
 fn messages_request(model: &str, params: Value) -> Value {
     let mut request = params;
     request["model"] = json!(model);
@@ -148,6 +213,35 @@ async fn invalid_messages_stays_an_anthropic_error() {
     let body = support::json(response).await;
     assert_eq!(body["type"], "error");
     assert_eq!(body["error"]["type"], "invalid_request_error");
+}
+
+#[tokio::test]
+async fn sampling_params_under_an_api_version_that_removed_them_are_refused_without_a_provider_call()
+ {
+    let upstream = MockServer::start().await;
+    let request = Request::post("/v1/messages")
+        .header("content-type", "application/json")
+        .header("anthropic-version", "2026-10-21")
+        .body(Body::from(
+            json!({"model": "public/model", "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 16, "temperature": 1})
+            .to_string(),
+        ))
+        .unwrap();
+    let response = support::app("anthropic/test-model", &upstream.uri())
+        .oneshot(request)
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 400);
+    let body = support::json(response).await;
+    assert_eq!(body["error"]["type"], "invalid_request_error");
+    assert_eq!(
+        body["error"]["message"],
+        "invalid request: test-model does not support temperature=1.0. anthropic-version \
+         2026-10-21 removed temperature, top_p and top_k. To drop unsupported params, set \
+         `litellm.drop_params = True`."
+    );
+    assert!(upstream.received_requests().await.unwrap().is_empty());
 }
 
 const FIRST_EVENT: &str = "event: message_start\ndata: {}\n\n";

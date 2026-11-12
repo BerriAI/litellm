@@ -3,8 +3,13 @@ mod deployment;
 use std::collections::HashMap;
 
 use litellm_config::{Config, Spelled};
-use litellm_core_utils::{serde_compat::parse_pydantic_bool, settings::Lookup};
-use litellm_inference_messages::{MessagesSettings, MessagesShaping};
+use litellm_core_utils::{
+    get_llm_provider_logic::get_custom_llm_provider, serde_compat::parse_pydantic_bool,
+    settings::Lookup,
+};
+use litellm_inference_messages::{MessagesModelCapabilities, MessagesSettings, MessagesShaping};
+use litellm_model_catalog::Catalog;
+use litellm_router_types::LitellmParams;
 
 pub use deployment::Deployment;
 
@@ -24,8 +29,26 @@ fn is_on(flag: Option<&Spelled<bool>>, env: &impl Lookup) -> bool {
     }
 }
 
+fn supports_sampling_params(catalog: &Catalog, params: &LitellmParams) -> bool {
+    let without_provider =
+        get_custom_llm_provider(&params.model, params.custom_llm_provider.as_deref())
+            .map(|resolved| resolved.model);
+    std::iter::once(params.model.as_str())
+        .chain(without_provider)
+        .find_map(|model| {
+            catalog
+                .lookup(model)?
+                .entry
+                .model()?
+                .capabilities
+                .get("supports_sampling_params")
+                .copied()
+        })
+        .unwrap_or(true)
+}
+
 impl Router {
-    pub fn from_config(config: &Config, env: &impl Lookup) -> Self {
+    pub fn from_config(config: &Config, env: &impl Lookup, catalog: &Catalog) -> Self {
         let drops_params_globally = is_on(config.litellm_settings.drop_params.as_ref(), env);
         config
             .model_list
@@ -44,12 +67,18 @@ impl Router {
                         custom_llm_provider: model.litellm_params.custom_llm_provider.clone(),
                         litellm_params: model.litellm_params.clone(),
                         shaping: MessagesShaping {
+                            capabilities: MessagesModelCapabilities {
+                                supports_sampling_params: supports_sampling_params(
+                                    catalog,
+                                    &model.litellm_params,
+                                ),
+                                ..MessagesModelCapabilities::default()
+                            },
                             settings: MessagesSettings {
                                 drop_params: drops_params_globally
                                     || is_on(model.litellm_params.drop_params.as_ref(), env),
                                 ..MessagesSettings::default()
                             },
-                            ..MessagesShaping::default()
                         },
                         ..Deployment::default()
                     },
@@ -72,6 +101,7 @@ impl FromIterator<(String, Deployment)> for Router {
 #[cfg(test)]
 mod tests {
     use litellm_config::Config;
+    use litellm_model_catalog::Catalog;
     use rstest::rstest;
 
     use super::Router;
@@ -114,8 +144,13 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            Router::from_config(&config, &|name: &str| (name == "DROP_PARAMS_FLAG")
-                .then(|| " Yes ".to_owned()))
+            Router::from_config(
+                &config,
+                &|name: &str| (name == "DROP_PARAMS_FLAG").then(|| " Yes ".to_owned()),
+                &Catalog::parse(br#"{"unrelated-model": {"litellm_provider": "anthropic"}}"#)
+                    .unwrap()
+                    .value,
+            )
             .get("public-model")
             .unwrap()
             .shaping
