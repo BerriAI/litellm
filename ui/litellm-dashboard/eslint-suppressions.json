@@ -1805,9 +1805,6 @@
   "src/components/provider_info_helpers.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "prefer-const": {
-      "count": 3
     }
   },
   "src/components/public_model_hub.tsx": {
