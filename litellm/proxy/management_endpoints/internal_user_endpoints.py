@@ -58,6 +58,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     user_object_permission_id_cache_key,
 )
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+from litellm.proxy.guardrails.guardrail_helpers import validate_guardrail_names
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import build_model_max_budget_usage
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
@@ -601,6 +602,13 @@ async def new_user(
             enforce_batch_limits_are_admin_only(data, None, user_api_key_dict, "key")
             enforce_vector_store_index_grants_are_admin_only(data, None, None, user_api_key_dict, "key")
             raise_on_logging_credential_change(data.metadata, None, user_api_key_dict)
+            await validate_guardrail_names(
+                data.guardrails,
+                data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+                None,
+                prisma_client,
+                license_first=False,
+            )
 
         check_permissions_caller_permission(
             data=data,
@@ -1122,13 +1130,13 @@ async def _target_in_caller_admin_org(
     caller_user_id: str,
     target_user_id: str,
 ) -> bool:
-    admin_memberships: Final = await prisma_client.db.litellm_organizationmembership.find_many(
+    admin_memberships: Final = await _organization_membership_table(prisma_client).find_many(
         where={"user_id": caller_user_id, "user_role": LitellmUserRoles.ORG_ADMIN.value}
     )
     if not admin_memberships:
         return False
     admin_org_ids: Final = {membership.organization_id for membership in admin_memberships}
-    target_memberships: Final = await prisma_client.db.litellm_organizationmembership.find_many(
+    target_memberships: Final = await _organization_membership_table(prisma_client).find_many(
         where={"user_id": target_user_id}
     )
     return any(membership.organization_id in admin_org_ids for membership in target_memberships)

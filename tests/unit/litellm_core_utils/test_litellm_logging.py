@@ -79,6 +79,64 @@ from typing import List, Optional
 from litellm.types.utils import LiteLLMCommonStrings
 
 
+@pytest.mark.parametrize("metadata_key", ("metadata", "litellm_metadata"))
+def test_free_usage_uses_deployment_metadata_prices(metadata_key: str) -> None:
+    obj: Final = Logging(
+        model="metadata-free-deployment",
+        messages=[],
+        stream=True,
+        call_type="completion",
+        start_time=1.0,
+        litellm_call_id="metadata-free",
+        function_id="test",
+    )
+    obj.litellm_params = {metadata_key: {"model_info": {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0}}}
+    response: Final = ModelResponse(
+        model="metadata-free-deployment", usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+    )
+
+    assert obj.is_usage_explicitly_free(response) is True
+
+
+@pytest.mark.parametrize("pricing_source", ("model_info", "token_rates"))
+@pytest.mark.parametrize("rate", (0.0, 0.001))
+@pytest.mark.parametrize("calculation_failed", (False, True))
+def test_per_call_free_prices_override_catalog_unless_pricing_failed(
+    monkeypatch: pytest.MonkeyPatch, pricing_source: str, rate: float, calculation_failed: bool
+) -> None:
+    model: Final = "per-call-free-price-test"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 0.01, "output_cost_per_token": 0.02},
+    )
+    obj: Final = Logging(
+        model=model,
+        messages=[],
+        stream=True,
+        call_type="completion",
+        start_time=1.0,
+        litellm_call_id="per-call-free",
+        function_id="test",
+    )
+    obj.litellm_params = {"input_cost_per_token": rate, "output_cost_per_token": rate}
+    if pricing_source == "model_info":
+        obj.set_per_call_pricing(
+            {
+                **litellm.get_model_info(model=model, custom_llm_provider="openai"),
+                "input_cost_per_token": rate,
+                "output_cost_per_token": rate,
+            }
+        )
+    else:
+        obj.custom_cost_per_token = {"input_cost_per_token": rate, "output_cost_per_token": rate}
+    if calculation_failed:
+        obj.model_call_details["response_cost_failure_debug_information"] = {"error": "pricing failed"}
+    response: Final = ModelResponse(model=model, usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15))
+
+    assert obj.is_usage_explicitly_free(response) is (rate == 0.0 and not calculation_failed)
+
+
 @pytest.fixture
 def logging_obj():
     return LitellmLogging(
@@ -2318,6 +2376,7 @@ async def test_anthropic_messages_marks_litellm_params_async():
 
     import litellm
     from litellm.integrations.custom_logger import CustomLogger
+    from litellm.llms.anthropic.messages.native import handler as python_messages
 
     captured = {}
     logged = asyncio.Event()
@@ -2332,7 +2391,7 @@ async def test_anthropic_messages_marks_litellm_params_async():
     original_callbacks = getattr(litellm, "callbacks", [])
     try:
         litellm.callbacks = [logger]
-        await litellm.anthropic_messages(
+        await python_messages.anthropic_messages(
             max_tokens=100,
             messages=[{"role": "user", "content": "Hey"}],
             model="anthropic/claude-sonnet-4-5",
@@ -7141,6 +7200,93 @@ def test_handle_anthropic_messages_response_logging_reparses_the_served_body_wit
     assert isinstance(logged, ModelResponse)
     assert logged.id == "msg_native"
     assert logged.usage.completion_tokens == 7  # type: ignore[attr-defined]
+
+
+def _upstream_messages_reply(usage: Mapping[str, object], message_id: str | None = None) -> dict[str, object]:
+    return {
+        **({} if message_id is None else {"id": message_id}),
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-5-5",
+        "content": [{"type": "text", "text": "answer"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": dict(usage),
+    }
+
+
+def _logging_obj_answered_by(
+    upstream_reply: Mapping[str, object], served_agentic_follow_up: bool, custom_llm_provider: str = "bedrock"
+) -> LitellmLogging:
+    logging_obj: Final = _anthropic_messages_logging_obj()
+    logging_obj.optional_params = {}
+    logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
+    logging_obj.model_call_details["httpx_response"] = httpx.Response(
+        200, json=dict(upstream_reply), request=httpx.Request("POST", "https://upstream.test/v1/messages")
+    )
+    if served_agentic_follow_up:
+        logging_obj.record_served_agentic_follow_up()
+    return logging_obj
+
+
+def test_websearch_first_round_spend_row_keeps_its_own_id_when_the_follow_up_reply_is_served() -> None:
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_spend_logs_id
+
+    first_round: Final = _upstream_messages_reply({"input_tokens": 100, "output_tokens": 10}, "msg_first_round")
+    follow_up: Final = _upstream_messages_reply({"input_tokens": 300, "output_tokens": 30}, "msg_follow_up")
+
+    first_row: Final = _logging_obj_answered_by(first_round, True)._anthropic_messages_logged_response(
+        result=dict(follow_up)
+    )
+    follow_up_row: Final = _logging_obj_answered_by(follow_up, False)._anthropic_messages_logged_response(
+        result=dict(follow_up)
+    )
+
+    first_usage: Final = first_row.model_dump()["usage"]
+    assert (first_usage["prompt_tokens"], first_usage["completion_tokens"]) == (100, 10)
+    assert get_spend_logs_id("anthropic_messages", first_row.model_dump(), {"litellm_call_id": "first"}) == (
+        "msg_first_round"
+    )
+    assert get_spend_logs_id("anthropic_messages", follow_up_row.model_dump(), {"litellm_call_id": "follow"}) == (
+        "msg_follow_up"
+    )
+
+
+@pytest.mark.parametrize(
+    ("upstream_id", "served_agentic_follow_up"),
+    [
+        pytest.param("msg_native", False, id="post_call_hook_replaced_the_served_reply"),
+        pytest.param(None, True, id="follow_up_served_and_upstream_reply_has_no_id"),
+    ],
+)
+def test_anthropic_messages_spend_row_keeps_the_served_id(
+    upstream_id: str | None, served_agentic_follow_up: bool
+) -> None:
+    upstream: Final = _upstream_messages_reply({"input_tokens": 12, "output_tokens": 7}, upstream_id)
+    served: Final = _upstream_messages_reply({"input_tokens": 12, "output_tokens": 7}, "msg_served")
+
+    logged: Final = _logging_obj_answered_by(upstream, served_agentic_follow_up)._anthropic_messages_logged_response(
+        result=served
+    )
+
+    assert logged.id == "msg_served"
+
+
+def test_websearch_first_round_spend_row_bills_the_first_upstream_reported_cost() -> None:
+    from litellm.litellm_core_utils.core_helpers import RESPONSE_COST_HEADER
+
+    first_round: Final = _upstream_messages_reply(
+        {"input_tokens": 100, "output_tokens": 10, "opencode": {"list_cost": 0.25}}, "msg_first_round"
+    )
+    follow_up: Final = _upstream_messages_reply(
+        {"input_tokens": 300, "output_tokens": 30, "opencode": {"list_cost": 1.5}}, "msg_follow_up"
+    )
+
+    first_row: Final = _logging_obj_answered_by(first_round, True, "opencode_go")._anthropic_messages_logged_response(
+        result=follow_up
+    )
+
+    assert first_row.hidden_params["additional_headers"][RESPONSE_COST_HEADER] == 0.25
 
 
 @pytest.mark.parametrize(

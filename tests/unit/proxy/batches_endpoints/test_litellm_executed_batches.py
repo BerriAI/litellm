@@ -252,17 +252,39 @@ class FakeRouter:
     def registry(self) -> "FakeRegistry":
         return FakeRegistry()
 
+    def settings(self) -> "FakeSettings":
+        return FakeSettings()
+
     def get_model_group_info(self, model_group: str) -> None:
         return None
 
 
 class FakeRegistry:
+    def routing_group(self, name: str) -> None:
+        return None
+
+    def index(self, name: Literal["team_model"]) -> Mapping[tuple[str, str], Sequence[int]]:
+        return MappingProxyType({})
+
     def names(self, model_name: str | None = None, *, kind: str = "groups") -> list[str]:
         assert kind == "ids"
         return [DEPLOYMENT_ID] if model_name == BATCH_MODEL else []
 
     def group(self, name: str, *, field: str = "info") -> None:
         return None
+
+    def resolve(self, name: str, *, kind: str = "group") -> None:
+        return None
+
+    def deployments(
+        self, model_name: str | None = None, *, source: str = "group", team_id: str | None = None
+    ) -> list[object]:
+        return []
+
+
+class FakeSettings:
+    def is_set(self, name: str) -> bool:
+        return False
 
 
 class FakeStorageBackend:
