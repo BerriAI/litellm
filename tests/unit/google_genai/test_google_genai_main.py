@@ -1086,7 +1086,16 @@ async def test_custom_content_adapter_accepts_generation_config_it_already_satis
     assert result["candidates"][0]["content"]["parts"] == [{"text": "adapter result"}]
 
 
-@pytest.mark.parametrize("config", [{"responseModalities": ["TEXT", "IMAGE"]}, {"candidateCount": 2}])
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"responseModalities": ["TEXT", "IMAGE"]},
+        {"candidateCount": 2},
+        {"responseMimeType": "application/json"},
+        {"responseMimeType": "application/json", "responseSchema": {"type": "ARRAY", "items": {"type": "STRING"}}},
+        {"responseMimeType": "text/x.enum", "responseSchema": {"type": "STRING", "enum": ["a", "b"]}},
+    ],
+)
 @pytest.mark.parametrize("is_async", [False, True])
 @pytest.mark.asyncio
 async def test_custom_content_adapter_rejects_generation_config_values_it_cannot_satisfy(
@@ -1099,6 +1108,50 @@ async def test_custom_content_adapter_rejects_generation_config_values_it_cannot
     request: Final = dict(model="native_image_test/chat-model", contents=[{"parts": [{"text": "hi"}]}], config=config)
     with pytest.raises(litellm.BadRequestError, match=next(iter(config))):
         _ = await litellm.agenerate_content(**request) if is_async else litellm.generate_content(**request)
+
+
+class ResponseFormatRecorderLLM(CompletionContentLLM):
+    def __init__(self) -> None:
+        super().__init__()
+        self.response_formats: tuple[object, ...] = ()
+
+    def completion(self, **kwargs: object) -> litellm.ModelResponse:
+        optional_params: Final = kwargs["optional_params"]
+        assert isinstance(optional_params, dict)
+        self.response_formats = (*self.response_formats, optional_params.get("response_format"))
+        return super().completion(**kwargs)
+
+
+@pytest.mark.parametrize(
+    ("config", "response_format"),
+    [
+        ({"responseMimeType": "text/plain"}, None),
+        (
+            {
+                "responseMimeType": "application/json",
+                "responseSchema": {"type": "OBJECT", "properties": {"color": {"type": "STRING"}}},
+            },
+            {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "response",
+                    "schema": {"type": "object", "properties": {"color": {"type": "string"}}},
+                },
+            },
+        ),
+    ],
+)
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_custom_content_adapter_sends_the_response_format_it_accepts(
+    native_content_handler: NativeContentLLM, monkeypatch: pytest.MonkeyPatch,
+    is_async: bool, config: dict[str, object], response_format: object,
+) -> None:
+    handler: Final = ResponseFormatRecorderLLM()
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "native_image_test", "custom_handler": handler}])
+    request: Final = dict(model="native_image_test/chat-model", contents=[{"parts": [{"text": "hi"}]}], config=config)
+    _ = await litellm.agenerate_content(**request) if is_async else litellm.generate_content(**request)
+    assert handler.response_formats == (response_format,)
 
 
 @pytest.mark.parametrize("is_async", [False, True])

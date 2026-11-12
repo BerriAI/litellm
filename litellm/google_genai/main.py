@@ -14,7 +14,7 @@ from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH, request_timeout
 
 # Import the adapter for fallback to completion format
 from litellm.google_genai.adapters.handler import CUSTOM_PRICING_PARAMS, GenerateContentToCompletionHandler
-from litellm.google_genai.adapters.transformation import adapter_honors_generation_config
+from litellm.google_genai.adapters.transformation import adapter_untranslated_generation_config
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.litellm_core_utils.per_call_pricing import per_call_model_info
@@ -306,16 +306,12 @@ def _require_adapter_generation_config(setup_result: GenerateContentSetupResult)
         return
     if setup_result.litellm_params.drop_params or litellm.drop_params:
         return
-    untranslated: Final = sorted(
-        key
-        for key, value in setup_result.generate_content_config_dict.items()
-        if not adapter_honors_generation_config(key, value)
-    )
+    untranslated: Final = adapter_untranslated_generation_config(setup_result.generate_content_config_dict)
     if untranslated:
         raise litellm.UnsupportedParamsError(
             message=(
                 f"{setup_result.custom_llm_provider} has no generateContent hook, and the completion adapter cannot "
-                f"send generationConfig {untranslated}. Set drop_params=True to drop them."
+                f"send generationConfig {list(untranslated)}. Set drop_params=True to drop them."
             ),
             llm_provider=setup_result.custom_llm_provider,
             model=setup_result.model,
