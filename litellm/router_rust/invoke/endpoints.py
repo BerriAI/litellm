@@ -867,6 +867,14 @@ def _deployment_params(
     return as_dict(store_search_params(params)) if plan.host_op in _VECTOR_STORE_SEARCH_OPS else params
 
 
+def _validate_decisions_connection(plan: Plan, data: Mapping[str, object], request: Mapping[str, object]) -> None:
+    if _handler_name(plan.host_op) not in {"decisions", "adecisions", "systemone", "asystemone"}:
+        return
+    from litellm.decisions.call import validate_router_connection
+
+    validate_router_connection(str(data.get("model")), _generic_provider(data), request)
+
+
 def attempt_call(
     core: EndpointCore,
     plan: Plan,
@@ -884,6 +892,7 @@ def attempt_call(
     named: Final = {name: kwargs.pop(name) for name in plan.named if name in kwargs}
     data: Final = _deployment_params(plan, deployment)
     model_name: Final = str(data.get("model"))
+    _validate_decisions_connection(plan, data, request)
     cache: Final = core.routing_cache
     caching: Final = shaping.cache_responses
     # A fallback hop routes the target group in a copy of the metadata (`run_async_fallback`).
