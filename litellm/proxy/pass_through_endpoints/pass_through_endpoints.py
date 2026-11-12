@@ -167,8 +167,10 @@ from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
+    LITELLM_PASS_THROUGH_DEPLOYMENT_PRICING_STATE_KEY,
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
+    DeploymentPricingResolver,
     EndpointType,
     PassthroughStandardLoggingPayload,
     WebSocketSessionMeter,
@@ -798,6 +800,14 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         )
         if isinstance(deployment_model_info, Mapping):
             _metadata["model_info"] = dict(deployment_model_info)
+        deployment_pricing: Final = getattr(_request_state, LITELLM_PASS_THROUGH_DEPLOYMENT_PRICING_STATE_KEY, None)
+        priced_model_info: Final = (
+            deployment_pricing.resolve(server_marker_free_body)
+            if isinstance(deployment_pricing, DeploymentPricingResolver)
+            else None
+        )
+        if priced_model_info is not None:
+            _metadata["model_info"] = dict(priced_model_info)
 
         kwargs: Final = {
             "litellm_params": {
@@ -2542,6 +2552,8 @@ def create_pass_through_route(
                         delattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY)
                     if hasattr(request.state, LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY):
                         delattr(request.state, LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY)
+                    if hasattr(request.state, LITELLM_PASS_THROUGH_DEPLOYMENT_PRICING_STATE_KEY):
+                        delattr(request.state, LITELLM_PASS_THROUGH_DEPLOYMENT_PRICING_STATE_KEY)
 
             # The upstream withholds its response headers until its first token, so
             # the whole time-to-first-token is spent inside _relay with nothing on

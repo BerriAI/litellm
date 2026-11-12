@@ -177,7 +177,9 @@ from litellm.types.passthrough_endpoints.eu_jev import EuJevDecisionRequest, EuJ
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
+    LITELLM_PASS_THROUGH_DEPLOYMENT_PRICING_STATE_KEY,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
+    DeploymentPricingResolver,
     WebSocketSessionMeter,
 )
 from litellm.types.passthrough_endpoints.tinyfish import (
@@ -286,12 +288,11 @@ def anthropic_deployment_pricing_model_info(
     llm_router: litellm.Router | None, request_body: Mapping[str, object], team_id: str | None
 ) -> Mapping[str, object] | None:
     """
-    The pass-through forwards the body (or its ``custom_body`` envelope) unchanged, so no deployment is selected
-    for the call. Only a single deployment in the forwarded model's group serving that exact Anthropic model can
-    say what it costs: with several, any pick could bill another deployment's negotiated price.
+    The pass-through selects no deployment, so ``request_body`` is the body it forwards. Only a single deployment in
+    that model's group serving that exact Anthropic model can say what it costs: with several, any pick could bill
+    another deployment's negotiated price.
     """
-    custom_body: Final = _object_mapping(request_body.get("custom_body"))
-    model: Final = (custom_body or request_body).get("model")
+    model: Final = request_body.get("model")
     if llm_router is None or not isinstance(model, str) or not model:
         return None
     candidates: Final = tuple(
@@ -1296,14 +1297,13 @@ async def anthropic_proxy_route(
 
     from litellm.proxy.proxy_server import llm_router
 
-    request_body: Final = _OBJECT_MAPPING.validate_python(
-        await read_request_body(request) if request.method == "POST" else {}
+    setattr(
+        request.state,
+        LITELLM_PASS_THROUGH_DEPLOYMENT_PRICING_STATE_KEY,
+        DeploymentPricingResolver(
+            resolve=partial(anthropic_deployment_pricing_model_info, llm_router, team_id=user_api_key_dict.team_id)
+        ),
     )
-    deployment_model_info: Final = anthropic_deployment_pricing_model_info(
-        llm_router, request_body, user_api_key_dict.team_id
-    )
-    if deployment_model_info is not None:
-        setattr(request.state, LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY, deployment_model_info)
 
     ## CREATE PASS-THROUGH
     auth_header: Final = await AnthropicModelInfo.aget_auth_header(

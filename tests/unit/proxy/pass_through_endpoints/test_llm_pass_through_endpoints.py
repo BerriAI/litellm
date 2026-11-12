@@ -7321,28 +7321,6 @@ def test_anthropic_passthrough_prices_a_deployment_configured_with_the_alias_the
     assert model_info["id"] == "haiku-latest-dep"
 
 
-def test_anthropic_passthrough_prices_the_model_in_the_forwarded_custom_body(monkeypatch):
-    model_info: Final = _passthrough_pricing(
-        monkeypatch,
-        _anthropic_deployment("haiku-dep"),
-        request_body={"model": "claude-opus-5-5", "custom_body": {"model": "claude-haiku-5-5"}},
-    )
-
-    assert model_info is not None
-    assert model_info["id"] == "haiku-dep"
-
-
-def test_anthropic_passthrough_ignores_an_outer_model_the_custom_body_does_not_forward(monkeypatch):
-    assert (
-        _passthrough_pricing(
-            monkeypatch,
-            _anthropic_deployment("haiku-dep"),
-            request_body={"model": "claude-haiku-5-5", "custom_body": {"model": "claude-opus-5-5"}},
-        )
-        is None
-    )
-
-
 @pytest.mark.parametrize(
     ("caller_team_id", "priced"),
     [
@@ -7391,8 +7369,49 @@ def test_anthropic_passthrough_attaches_no_deployment_pricing_without_one_priced
     assert _passthrough_pricing(monkeypatch, *deployments) is None
 
 
+_RELAY_HAIKU_PRICING: Final = MappingProxyType({"input_cost_per_token": 1e-03, "output_cost_per_token": 2e-03})
+_RELAY_OPUS_PRICING: Final = MappingProxyType({"input_cost_per_token": 5e-03, "output_cost_per_token": 6e-03})
+_RELAY_MESSAGES: Final = ({"role": "user", "content": "hi"},)
+
+
+async def _hook_passes_body_through(*, data: dict[str, object], **_: object) -> dict[str, object]:
+    return data
+
+
+async def _hook_upgrades_to_opus(*, data: dict[str, object], **_: object) -> dict[str, object]:
+    return {**data, "model": "claude-opus-5-5"}
+
+
 @pytest.mark.asyncio
-async def test_anthropic_proxy_route_bills_the_deployment_custom_price(monkeypatch):
+@pytest.mark.parametrize(
+    ("request_body", "pre_call_hook", "forwarded_model", "pricing"),
+    [
+        pytest.param(
+            {"model": "claude-haiku-5-5", "messages": [*_RELAY_MESSAGES]},
+            _hook_passes_body_through,
+            "claude-haiku-5-5",
+            _RELAY_HAIKU_PRICING,
+            id="requested-model",
+        ),
+        pytest.param(
+            {"model": "claude-haiku-5-5", "custom_body": {"model": "claude-opus-5-5", "messages": [*_RELAY_MESSAGES]}},
+            _hook_passes_body_through,
+            "claude-opus-5-5",
+            _RELAY_OPUS_PRICING,
+            id="custom-body-envelope",
+        ),
+        pytest.param(
+            {"model": "claude-haiku-5-5", "messages": [*_RELAY_MESSAGES]},
+            _hook_upgrades_to_opus,
+            "claude-opus-5-5",
+            _RELAY_OPUS_PRICING,
+            id="pre-call-hook-rewrite",
+        ),
+    ],
+)
+async def test_anthropic_proxy_route_bills_the_custom_price_of_the_forwarded_model(
+    monkeypatch, request_body, pre_call_hook, forwarded_model, pricing
+):
     for name in (
         "ANTHROPIC_AUTH_TOKEN",
         "ANTHROPIC_API_BASE",
@@ -7406,23 +7425,27 @@ async def test_anthropic_proxy_route_bills_the_deployment_custom_price(monkeypat
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
     monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
-    deployment_pricing: Final = MappingProxyType({"input_cost_per_token": 1e-03, "output_cost_per_token": 2e-03})
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.llm_router",
-        litellm.Router(model_list=[_anthropic_deployment("haiku-dep", model_info_pricing=deployment_pricing)]),
+        litellm.Router(
+            model_list=[
+                _anthropic_deployment("haiku-dep", model_info_pricing=_RELAY_HAIKU_PRICING),
+                _anthropic_deployment(
+                    "opus-dep",
+                    model_name="claude-opus-5-5",
+                    backend="anthropic/claude-opus-5-5",
+                    model_info_pricing=_RELAY_OPUS_PRICING,
+                ),
+            ]
+        ),
     )
-    request_body: Final = {
-        "model": "claude-haiku-5-5",
-        "max_tokens": 20,
-        "messages": [{"role": "user", "content": "hi"}],
-    }
     upstream_response: Final = httpx.Response(
         200,
         json={
-            "id": "msg_haiku",
+            "id": "msg_relay",
             "type": "message",
             "role": "assistant",
-            "model": "claude-haiku-5-5",
+            "model": forwarded_model,
             "content": [{"type": "text", "text": "pong"}],
             "stop_reason": "end_turn",
             "usage": {"input_tokens": 18, "output_tokens": 4},
@@ -7466,7 +7489,7 @@ async def test_anthropic_proxy_route_bills_the_deployment_custom_price(monkeypat
             "litellm.proxy.proxy_server.proxy_logging_obj"
         ) as mock_logging_obj,
     ):
-        mock_logging_obj.pre_call_hook = AsyncMock(return_value=request_body)
+        mock_logging_obj.pre_call_hook = AsyncMock(side_effect=pre_call_hook)
         mock_logging_obj.post_call_success_hook = AsyncMock()
         mock_logging_obj.post_call_failure_hook = AsyncMock()
         mock_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
@@ -7478,7 +7501,9 @@ async def test_anthropic_proxy_route_bills_the_deployment_custom_price(monkeypat
             user_api_key_dict=UserAPIKeyAuth(api_key="sk-caller-virtual-key"),
         )
 
-    assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(18 * 1e-03 + 4 * 2e-03)
+    assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(
+        18 * pricing["input_cost_per_token"] + 4 * pricing["output_cost_per_token"]
+    )
 
 
 class TestAnthropicProxyRouteCallerAuthHeaders:
