@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, TypeAlias, cast
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
@@ -607,10 +607,17 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         Returns:
             Priority string if found, None otherwise
         """
-        team_priority: Final[object] = (user_api_key_dict.team_metadata or {}).get("priority")
-        key_priority: Final[object] = cast(Mapping[str, object], user_api_key_dict.metadata).get("priority")
-        priority: Final = key_priority if team_priority is None else team_priority
-        return priority if isinstance(priority, str) else None
+        priority: str | None = None
+
+        # Check team metadata first (takes precedence)
+        if user_api_key_dict.team_metadata is not None:
+            priority = user_api_key_dict.team_metadata.get("priority", None)
+
+        # Fall back to key metadata
+        if priority is None:
+            priority = user_api_key_dict.metadata.get("priority", None)
+
+        return priority
 
     def _normalize_priority_weights(self, model_info: ModelGroupInfo) -> dict[str, float]:
         """

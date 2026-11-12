@@ -4216,12 +4216,20 @@ class PrometheusLogger(CustomLogger):
         )
 
     def _set_labeled_gauge(
-        self, gauge: Any, metric_name: DEFINED_PROMETHEUS_METRICS, enum_values: UserAPIKeyLabelValues, value: float
+        self,
+        gauge: _MetricLike,
+        metric_name: DEFINED_PROMETHEUS_METRICS,
+        enum_values: UserAPIKeyLabelValues,
+        value: float,
     ) -> None:
-        labels: Final[dict[str, str]] = prometheus_label_factory(
+        from prometheus_client import Gauge
+
+        labels: Final = prometheus_label_factory(
             supported_enum_labels=self.get_labels_for_metric(metric_name=metric_name), enum_values=enum_values
         )
-        gauge.labels(**labels).set(value)
+        series: Final = gauge.labels(**labels)
+        if isinstance(series, Gauge):
+            series.set(value)
 
     def increment_dynamic_limiter_throttled(
         self,
@@ -5294,7 +5302,7 @@ def prometheus_label_factory(
     tag: str | None = None,
     *,
     label_context: PrometheusLabelFactoryContext | None = None,
-) -> dict:
+) -> dict[str, str | None]:
     """
     Returns a dictionary of label + values for prometheus.
 
