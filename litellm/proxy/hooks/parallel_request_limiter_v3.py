@@ -631,6 +631,7 @@ class RequestRateLimiterStash:
         default_factory=lambda: MappingProxyType({})
     )
     priority_class_share: RateLimitDescriptor | None = None
+    dynamic_limiter_priority: str | None = None
     reservation_released: bool = False
     io_reservation_released: bool = False
     tpm_limited_tags: frozenset[str] = field(default_factory=frozenset)

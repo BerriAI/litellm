@@ -91,16 +91,20 @@ def test_a_team_over_its_share_shows_up_as_borrowed_tokens_and_a_matching_thrott
             )
             for _ in range(16)
         )
+        blocked: Final = tuple(response for response in responses if response.status_code == 429)
+        expected_borrowed: Final = max(0, (len(responses) - len(blocked)) * REPLY_TOKENS - TEAM_TPM)
         samples: Final = eventually(
             lambda: scrape(owned),
-            lambda scraped: any(
-                value > 0 for value in _team_series(scraped, "litellm_dynamic_limiter_borrowed_tokens", team).values()
+            lambda scraped: (
+                tuple(_team_series(scraped, "litellm_dynamic_limiter_borrowed_tokens", team).values())
+                == (expected_borrowed,)
+                and tuple(_team_series(scraped, "litellm_dynamic_limiter_throttled_total", team).values())
+                == (len(blocked),)
             ),
             seconds=30,
             return_last_on_timeout=True,
         )
 
-    blocked: Final = tuple(response for response in responses if response.status_code == 429)
     assert responses[0].status_code == 200, responses[0].text
     assert blocked, [r.text for r in responses]
     reason: Final = blocked[0].headers.get("rate_limited_by")
@@ -111,14 +115,13 @@ def test_a_team_over_its_share_shows_up_as_borrowed_tokens_and_a_matching_thrott
     throttled: Final = _team_series(samples, "litellm_dynamic_limiter_throttled_total", team)
     assert share, [s for s in samples if s.name.startswith("litellm_dynamic_limiter")]
     ((share_labels, share_tokens),) = share.items()
-    labels: Final = json.loads(share_labels)
+    labels: Final[dict[str, str]] = json.loads(share_labels)
     assert labels["model_group"] == model and labels["priority"] == "default", labels
     assert share_tokens == TEAM_TPM
-    admitted: Final = len(responses) - len(blocked)
-    assert borrowed[share_labels] == max(0, admitted * REPLY_TOKENS - TEAM_TPM), borrowed
+    assert borrowed[share_labels] == expected_borrowed, borrowed
     assert borrowed[share_labels] > 0, borrowed
     ((throttle_labels, refused),) = throttled.items()
-    throttle: Final = json.loads(throttle_labels)
+    throttle: Final[dict[str, str]] = json.loads(throttle_labels)
     assert throttle["reason"] == reason and throttle["rate_limit_type"] == "tokens", throttle
     assert refused == len(blocked)
 

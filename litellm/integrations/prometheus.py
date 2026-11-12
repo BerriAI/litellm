@@ -1061,33 +1061,33 @@ class PrometheusLogger(CustomLogger):
                 labelnames=self.get_labels_for_metric("litellm_deployment_latency_per_output_token"),
             )
 
-            self.litellm_deployment_successful_fallbacks = self._counter_factory(
+            self.litellm_deployment_successful_fallbacks: _MetricLike = self._counter_factory(
                 "litellm_deployment_successful_fallbacks",
                 "LLM Deployment Analytics - Number of successful fallback requests from primary model -> fallback model",
                 labelnames=self.get_labels_for_metric("litellm_deployment_successful_fallbacks"),
             )
 
-            self.litellm_deployment_failed_fallbacks = self._counter_factory(
+            self.litellm_deployment_failed_fallbacks: _MetricLike = self._counter_factory(
                 "litellm_deployment_failed_fallbacks",
                 "LLM Deployment Analytics - Number of failed fallback requests from primary model -> fallback model",
                 labelnames=self.get_labels_for_metric("litellm_deployment_failed_fallbacks"),
             )
 
-            self.litellm_dynamic_limiter_share_tokens = self._gauge_factory(
+            self.litellm_dynamic_limiter_share_tokens: _MetricLike = self._gauge_factory(
                 "litellm_dynamic_limiter_share_tokens",
                 "Dynamic rate limiter: the team's share of the model's TPM, as of the team's last settled request",
                 labelnames=self.get_labels_for_metric("litellm_dynamic_limiter_share_tokens"),
-                multiprocess_mode="livemax",
+                multiprocess_mode="livemostrecent",
             )
 
-            self.litellm_dynamic_limiter_borrowed_tokens = self._gauge_factory(
+            self.litellm_dynamic_limiter_borrowed_tokens: _MetricLike = self._gauge_factory(
                 "litellm_dynamic_limiter_borrowed_tokens",
                 "Dynamic rate limiter: tokens the team has used above its share this window, 0 while under its share",
                 labelnames=self.get_labels_for_metric("litellm_dynamic_limiter_borrowed_tokens"),
-                multiprocess_mode="livemax",
+                multiprocess_mode="livemostrecent",
             )
 
-            self.litellm_dynamic_limiter_throttled_total = self._counter_factory(
+            self.litellm_dynamic_limiter_throttled_total: _MetricLike = self._counter_factory(
                 "litellm_dynamic_limiter_throttled_total",
                 "Dynamic rate limiter: requests refused per team, model and reason, "
                 "the reason being the value of the response's rate_limited_by header",
@@ -4205,14 +4205,23 @@ class PrometheusLogger(CustomLogger):
         enum_values: Final = UserAPIKeyLabelValues(
             model_group=model_group, team=team, team_alias=team_alias, priority=priority
         )
-        for gauge, metric_name, value in (
-            (self.litellm_dynamic_limiter_share_tokens, "litellm_dynamic_limiter_share_tokens", share_tokens),
-            (self.litellm_dynamic_limiter_borrowed_tokens, "litellm_dynamic_limiter_borrowed_tokens", borrowed_tokens),
-        ):
-            labels: Final = prometheus_label_factory(
-                supported_enum_labels=self.get_labels_for_metric(metric_name=metric_name), enum_values=enum_values
-            )
-            gauge.labels(**labels).set(value)
+        self._set_labeled_gauge(
+            self.litellm_dynamic_limiter_share_tokens, "litellm_dynamic_limiter_share_tokens", enum_values, share_tokens
+        )
+        self._set_labeled_gauge(
+            self.litellm_dynamic_limiter_borrowed_tokens,
+            "litellm_dynamic_limiter_borrowed_tokens",
+            enum_values,
+            borrowed_tokens,
+        )
+
+    def _set_labeled_gauge(
+        self, gauge: Any, metric_name: DEFINED_PROMETHEUS_METRICS, enum_values: UserAPIKeyLabelValues, value: float
+    ) -> None:
+        labels: Final[dict[str, str]] = prometheus_label_factory(
+            supported_enum_labels=self.get_labels_for_metric(metric_name=metric_name), enum_values=enum_values
+        )
+        gauge.labels(**labels).set(value)
 
     def increment_dynamic_limiter_throttled(
         self,
