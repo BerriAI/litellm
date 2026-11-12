@@ -180,7 +180,14 @@ async def test_serve_runs_full_batches_back_to_back_and_waits_after_a_partial_on
 
     with pytest.raises(_Stop):
         await serve(
-            store, pipeline=None, decider=_Decider(), batch_size=4, poll_seconds=5, now=lambda: _AT, sleep=sleep, once=False
+            store,
+            pipeline=None,
+            decider=_Decider(),
+            batch_size=4,
+            poll_seconds=5,
+            now=lambda: _AT,
+            sleep=sleep,
+            once=False,
         )
 
     assert (store.batches, sleeps, store.recovered) == ([], [5, 5], 1)

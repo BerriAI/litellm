@@ -173,7 +173,6 @@ def test_a_task_without_requirements_is_compatible_with_any_model():
 
 def test_model_capabilities_mirror_the_cost_map_and_unknown_models_report_nothing():
     import litellm
-
     from litellm.task_insights.summaries import model_capabilities
 
     model = "anthropic/claude-sonnet-5-5"
