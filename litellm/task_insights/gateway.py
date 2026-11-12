@@ -7,15 +7,52 @@ from itertools import chain
 from typing import Final
 
 from openai import AsyncOpenAI
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
-from litellm.models.task_insights import TASK_INSIGHTS_ANALYSIS_TAG
+from litellm.models.task_insights import TASK_CAPABILITIES, TASK_INSIGHTS_ANALYSIS_TAG, TaskCapability
 from litellm.task_insights.discovery import SynthesizedTask
 
 # DashScope's compatible endpoint rejects more than 20 inputs per call (400 InvalidParameter, 2026-11-12).
 EMBED_BATCH_SIZE: Final = 20
 ANALYSIS_HEADERS: Final = {"x-litellm-tags": TASK_INSIGHTS_ANALYSIS_TAG}
-_SYNTHESIS: Final = TypeAdapter(SynthesizedTask)
+
+
+class _SynthesisReply(BaseModel):
+    """What the synthesis model sends back. Models sometimes list criteria as bullets, which are folded into one
+    sentence each rather than discarding an otherwise usable definition."""
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    name: str
+    description: str = ""
+    inclusion_criteria: str | tuple[str, ...] = ""
+    exclusion_criteria: str | tuple[str, ...] = ""
+    required_capabilities: tuple[str, ...] = ()
+    example_indices: tuple[int, ...] = ()
+
+
+_SYNTHESIS: Final = TypeAdapter(_SynthesisReply)
+_CAPABILITIES: Final = TypeAdapter(tuple[TaskCapability, ...])
+
+
+def _sentence(value: str | tuple[str, ...]) -> str:
+    return (
+        value if isinstance(value, str) else " ".join(item.strip().rstrip(".") + "." for item in value if item.strip())
+    )
+
+
+def _task(reply: _SynthesisReply) -> SynthesizedTask:
+    known: Final = tuple(cap for cap in reply.required_capabilities if cap in TASK_CAPABILITIES)
+    return SynthesizedTask(
+        name=reply.name,
+        description=reply.description,
+        inclusion_criteria=_sentence(reply.inclusion_criteria),
+        exclusion_criteria=_sentence(reply.exclusion_criteria),
+        required_capabilities=_CAPABILITIES.validate_python(known),
+        example_indices=reply.example_indices,
+    )
+
+
 _INTENTS: Final = TypeAdapter(tuple[str, ...])
 _DISTILL_BATCH: Final = 25
 _DISTILL_PROMPT: Final = """Each numbered item is a request a developer sent to a coding agent.
@@ -38,8 +75,8 @@ Rules:
   reasoning and structured_output. Leave it empty when unsure.
 - example_indices lists up to 3 request numbers that best represent the group.
 
-Reply with only a JSON object with the keys name, description, inclusion_criteria, exclusion_criteria,
-required_capabilities and example_indices.
+Reply with only a JSON object. name, description, inclusion_criteria and exclusion_criteria are strings of one or
+two sentences, required_capabilities is an array of strings, and example_indices is an array of integers.
 
 Requests:
 {requests}"""
@@ -122,7 +159,7 @@ class GatewaySynthesizer:
     async def synthesize(self, examples: tuple[str, ...]) -> SynthesizedTask:
         content: Final = await self._complete(_SYNTHESIS_PROMPT.format(requests=_numbered(examples)), 800)
         try:
-            return _SYNTHESIS.validate_json(_json_object(content))
+            return _task(_SYNTHESIS.validate_json(_json_object(content)))
         except ValidationError:
             return SynthesizedTask(
                 name="Unnamed group",

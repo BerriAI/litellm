@@ -97,3 +97,27 @@ async def test_synthesis_parses_the_definition_and_names_an_unusable_reply_for_r
     assert (parsed.name, parsed.required_capabilities) == ("Debug failing tests", ("function_calling",))
     assert fallback.name == "Unnamed group"
     assert '0. "the build fails"' in prompts[0]
+
+
+@pytest.mark.asyncio
+async def test_criteria_returned_as_bullet_lists_still_make_a_named_task():
+    reply = {
+        "name": "Debug failing builds and tests",
+        "description": "Find and fix why a build or test run fails.",
+        "inclusion_criteria": [
+            "Reports a failing test or build",
+            "Asks for the cause or a fix.",
+            " ",
+        ],
+        "exclusion_criteria": ["Writing new tests", "Adding features"],
+        "required_capabilities": ["function_calling", "telepathy"],
+        "example_indices": [0, 2],
+    }
+    synthesizer = GatewaySynthesizer(_client(lambda request: _completion(json.dumps(reply))), "claude")
+
+    task = await synthesizer.synthesize(("a", "b", "c"))
+
+    assert task.name == "Debug failing builds and tests"
+    assert task.inclusion_criteria == "Reports a failing test or build. Asks for the cause or a fix."
+    assert task.exclusion_criteria == "Writing new tests. Adding features."
+    assert (task.required_capabilities, task.example_indices) == (("function_calling",), (0, 2))

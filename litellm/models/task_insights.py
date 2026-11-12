@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Final, Literal, Protocol, TypeAlias
+from typing import Final, Literal, Protocol, TypeAlias, get_args
 
 from pydantic import ConfigDict, Field
 
@@ -17,6 +17,7 @@ TaskSource: TypeAlias = Literal["discovered", "sample"]
 AssignmentOutcome: TypeAlias = Literal["assigned", "unknown", "failed"]
 DiscoveryStatus: TypeAlias = Literal["idle", "requested", "running", "failed", "completed"]
 TaskCapability: TypeAlias = Literal["function_calling", "vision", "reasoning", "structured_output"]
+TASK_CAPABILITIES: Final = frozenset(get_args(TaskCapability))
 PointPlacement: TypeAlias = Literal["embedding", "categorical"]
 
 
