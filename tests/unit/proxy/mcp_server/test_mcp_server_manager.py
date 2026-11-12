@@ -17298,6 +17298,67 @@ async def test_tools_list_that_will_not_be_cached_lists_without_the_credential_f
     assert sum(method == "tools/list" for method, _auth in upstream.requests) == 1
 
 
+_RENAMED_UPSTREAM_TOOL: Final = {"name": "renamed", "description": "changed", "inputSchema": {"type": "object"}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("apply_tool_filters", "names_after_the_upstream_changed", "upstream_listings"),
+    (
+        pytest.param(True, ["example"], 1, id="caller_view_is_cached"),
+        pytest.param(False, ["renamed"], 2, id="admin_catalog_view_is_fresh"),
+    ),
+)
+async def test_tools_list_over_rest_reads_the_upstream_for_the_admin_catalog_view(
+    apply_tool_filters: bool,
+    names_after_the_upstream_changed: list[str],
+    upstream_listings: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.mcp_server import rest_endpoints
+
+    manager: Final = MCPServerManager(discovery_clock=_DiscoveryClock())
+    monkeypatch.setattr(rest_endpoints, "global_mcp_server_manager", manager)
+    upstream: Final = _DiscoveryUpstream()
+    server: Final = _server_with_tools_list_ttl(300)
+
+    async def listed_names() -> list[str]:
+        listed: Final = await rest_endpoints._get_tools_for_single_server(
+            server, None, apply_tool_filters=apply_tool_filters
+        )
+        return [tool.name for tool in listed]
+
+    with _mcp_upstream(upstream.respond):
+        before: Final = await listed_names()
+        upstream.tools = (_RENAMED_UPSTREAM_TOOL,)
+        after: Final = await listed_names()
+    assert (before, after) == (["example"], names_after_the_upstream_changed)
+    assert sum(method == "tools/list" for method, _auth in upstream.requests) == upstream_listings
+
+
+@pytest.mark.asyncio
+async def test_tools_list_for_a_pin_snapshot_reads_the_upstream_while_a_listing_is_cached(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.mcp_server import rest_endpoints
+
+    manager: Final = MCPServerManager(discovery_clock=_DiscoveryClock())
+    monkeypatch.setattr(rest_endpoints, "global_mcp_server_manager", manager)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache()))
+    upstream: Final = _DiscoveryUpstream()
+    server: Final = _server_with_tools_list_ttl(300)
+    admin: Final = UserAPIKeyAuth(api_key="sk-admin", user_id="admin")
+    request: Final = MagicMock()
+    request.client.host = "10.1.2.3"
+    request.headers = {"x-litellm-api-key": "sk-admin"}
+
+    with _mcp_upstream(upstream.respond):
+        before: Final = await rest_endpoints.fetch_pinnable_tool_catalog(server, request, admin)
+        upstream.tools = (_RENAMED_UPSTREAM_TOOL,)
+        after: Final = await rest_endpoints.fetch_pinnable_tool_catalog(server, request, admin)
+    assert (sorted(before), sorted(after)) == (["example"], ["renamed"])
+
+
 @pytest.mark.asyncio
 async def test_tools_list_signed_by_the_gateway_jwt_signer_is_fetched_every_time(
     monkeypatch: pytest.MonkeyPatch,

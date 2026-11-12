@@ -2029,6 +2029,7 @@ async def test_get_tools_for_single_server():
             user_api_key_auth=None,
             proxy_logging_obj=ANY,
             record_listing=False,
+            use_tool_list_cache=True,
         )
 
         # Verify the result
