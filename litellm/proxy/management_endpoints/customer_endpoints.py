@@ -21,6 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, TypeAdapter
 
 if TYPE_CHECKING:
+    from prisma import Json as PrismaJson
     from prisma.models import LiteLLM_BudgetTable as PrismaBudgetRow
     from prisma.models import LiteLLM_EndUserTable as PrismaEndUserRow
 
@@ -48,6 +49,7 @@ from litellm.redis.stores.spend_counters import end_user_counter
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.table_repositories import EndUserRepository
+from litellm.types.proxy.customer_fallbacks import CustomerFallbacks
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
@@ -63,7 +65,15 @@ _STR_OBJECT_DICT: Final = TypeAdapter(dict[str, object])
 _CLEARABLE_LIST_FIELDS: Final = frozenset({"models"})
 
 
+def _customer_fallback_json(fallbacks: CustomerFallbacks | None) -> "PrismaJson":
+    from prisma import Json
+
+    return Json(fallbacks)
+
+
 def _should_update_field(field: str, value: object, sent_fields: AbstractSet[str]) -> bool:
+    if field == "fallbacks":
+        return field in sent_fields
     if value is None:
         return False
     if field in sent_fields and (isinstance(value, bool) or field in _CLEARABLE_LIST_FIELDS):
@@ -473,6 +483,8 @@ async def new_end_user(
         for k, v in _user_data.items():
             if k not in BudgetNewRequest.model_fields:
                 new_end_user_obj[k] = v
+        if data.fallbacks is not None:
+            new_end_user_obj["fallbacks"] = _customer_fallback_json(data.fallbacks)
 
         ## Handle Object Permission - MCP Servers, Vector Stores etc.
         new_end_user_obj = _STR_OBJECT_DICT.validate_python(
@@ -714,6 +726,8 @@ async def update_end_user(
 
             elif k in LiteLLM_EndUserTable.model_fields:
                 update_end_user_table_data[k] = v
+        if "fallbacks" in sent_fields:
+            update_end_user_table_data["fallbacks"] = _customer_fallback_json(data.fallbacks)
 
         ## Handle object permission updates (MCP servers, vector stores, etc.)
         await _handle_customer_object_permission_update(

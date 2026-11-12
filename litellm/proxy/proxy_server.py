@@ -537,6 +537,7 @@ from litellm.proxy.common_utils.config_includes import resolve_include_file_path
 from litellm.proxy.common_utils.config_sync_pubsub import ConfigSyncSubscriber
 from litellm.proxy.common_utils.credential_hydration import decrypted_or_stored
 from litellm.proxy.common_utils.custom_openapi_spec import JsonObject
+from litellm.proxy.common_utils.customer_fallbacks import customer_fallback_settings
 from litellm.proxy.common_utils.debug_utils import init_verbose_loggers
 from litellm.proxy.common_utils.debug_utils import router as debugging_endpoints_router
 from litellm.proxy.common_utils.discoverable_model_filter import (
@@ -8373,7 +8374,7 @@ class ProxyConfig:
     _encrypt_env_variables_for_db = encrypt_env_variables_for_db
 
     @staticmethod
-    def _parse_router_settings_value(value: object) -> dict | None:
+    def _parse_router_settings_value(value: object) -> Mapping[str, object] | None:
         """
         Parse a router_settings value that may be a dict or a JSON/YAML string.
 
@@ -8384,7 +8385,7 @@ class ProxyConfig:
 
         parsed: object = None
         if isinstance(value, dict):
-            parsed = value
+            parsed = _UNTYPED_VALUE.validate_python(value)
         elif isinstance(value, str):
             import json
 
@@ -8396,9 +8397,7 @@ class ProxyConfig:
                 except json.JSONDecodeError:
                     pass
 
-        if isinstance(parsed, dict) and parsed:
-            return parsed
-        return None
+        return as_str_mapping(parsed) or None
 
     async def get_hierarchical_router_settings(
         self,
@@ -8413,7 +8412,21 @@ class ProxyConfig:
         user_api_key_dict: Optional["UserAPIKeyAuth"],
         prisma_client: PrismaClient | None,
         proxy_logging_obj: Optional["ProxyLogging"] = None,
-    ) -> dict | None:
+    ) -> Mapping[str, object] | None:
+        inherited: Final = await self._get_key_and_team_router_settings(
+            user_api_key_dict, prisma_client, proxy_logging_obj
+        )
+        if user_api_key_dict is None:
+            return inherited
+        customer: Final = customer_fallback_settings(user_api_key_dict.end_user_fallbacks)
+        return {**(inherited or {}), **customer} or None
+
+    async def _get_key_and_team_router_settings(
+        self,
+        user_api_key_dict: Optional["UserAPIKeyAuth"],
+        prisma_client: PrismaClient | None,
+        proxy_logging_obj: Optional["ProxyLogging"] = None,
+    ) -> Mapping[str, object] | None:
         """
         Get router_settings in priority order: Key > Team
 

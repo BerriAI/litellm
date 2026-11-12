@@ -8101,7 +8101,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                 request=MagicMock(),
                 general_settings={},
                 proxy_logging_obj=MagicMock(),
-                user_api_key_dict=MagicMock(router_settings=None),
+                user_api_key_dict=ProxyUserAPIKeyAuth(),
                 version=None,
                 proxy_config=MagicMock(),
                 user_model=None,
@@ -8268,7 +8268,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         mock_router = route_entry_points_to_stubs(MagicMock())
         mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo"]}]
 
-        user_api_key_dict = MagicMock()
+        user_api_key_dict = ProxyUserAPIKeyAuth()
         user_api_key_dict.router_settings = {"fallbacks": [{"gpt-4": ["claude-3-haiku"]}]}
 
         with patch.object(
@@ -8365,7 +8365,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                     request=MagicMock(),
                     general_settings={},
                     proxy_logging_obj=MagicMock(),
-                    user_api_key_dict=MagicMock(router_settings=None),
+                    user_api_key_dict=ProxyUserAPIKeyAuth(),
                     version=None,
                     proxy_config=MagicMock(),
                     user_model=None,

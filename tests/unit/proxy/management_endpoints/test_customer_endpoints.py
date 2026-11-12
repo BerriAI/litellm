@@ -971,6 +971,7 @@ _EXPECTED_CUSTOMER = {
     "allowed_model_region": None,
     "default_model": None,
     "models": ["allowed-model"],
+    "fallbacks": None,
     "budget_id": "b1",
     "litellm_budget_table": {
         "budget_id": "b1",

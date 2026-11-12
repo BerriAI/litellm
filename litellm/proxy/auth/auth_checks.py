@@ -2040,7 +2040,13 @@ def _array_is_not_empty(column: str) -> Mapping[str, object]:
 
 def _restricted_end_user_where() -> Mapping[str, object]:
     """Prisma filter selecting every end-user row that carries a restriction auth enforces."""
-    restrictions: Final = (*map(_column_is_set, _RESTRICTED_COLUMNS), _array_is_not_empty("models"))
+    from prisma import Json as PrismaJson
+
+    restrictions: Final = (
+        *map(_column_is_set, _RESTRICTED_COLUMNS),
+        _array_is_not_empty("models"),
+        {"fallbacks": {"not": PrismaJson(None)}},
+    )
     return {"OR": [{"blocked": True}, *restrictions]}
 
 

@@ -145,6 +145,7 @@ from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.team_grants import team_grants
 from litellm.proxy.auth.trusted_proxy_utils import get_trusted_proxy_cidrs
 from litellm.proxy.common_utils.cache_coordinator import EventDrivenCacheCoordinator
+from litellm.proxy.common_utils.customer_fallbacks import prepare_customer_fallback_request
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -214,6 +215,7 @@ from litellm.router_api import (
     request_fallback_chain,
 )
 from litellm.secret_managers.main import get_secret_bool
+from litellm.types.proxy.customer_fallbacks import CustomerFallbacks
 from litellm.types.services import ServiceTypes
 
 try:
@@ -297,7 +299,8 @@ _CLAUDE_MODEL_ROUTES: Final = frozenset(
     f"/{prefix}{endpoint}" for prefix in ("", "v1/") for endpoint in ("messages", "chat/completions", "responses")
 )
 _CLAUDE_MODEL_NORMALIZED: Final = "litellm.claude_model_normalized"
-_GENERAL_SETTINGS_ADAPTER: Final = TypeAdapter(dict[str, object])
+_OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(dict[str, object])
+_CUSTOMER_FALLBACKS_ADAPTER: Final[TypeAdapter[CustomerFallbacks | None]] = TypeAdapter(CustomerFallbacks | None)
 
 
 async def _normalize_claude_model(
@@ -1404,7 +1407,7 @@ def _has_required_baggage_tag_mapping() -> bool:
     from litellm.proxy import proxy_server
     from litellm.proxy.common_utils.request_tag_mappings import REQUEST_TAG_MAPPINGS_ADAPTER
 
-    raw_mappings: Final = _GENERAL_SETTINGS_ADAPTER.validate_python(proxy_server.general_settings).get(
+    raw_mappings: Final = _OBJECT_MAPPING_ADAPTER.validate_python(proxy_server.general_settings).get(
         "request_tag_mappings"
     )
     return bool(raw_mappings) and any(
@@ -1514,7 +1517,11 @@ def update_valid_token_with_end_user_params(valid_token: UserAPIKeyAuth, end_use
         valid_token.end_user_model_tpm_limit = end_user_params["end_user_model_tpm_limit"]  # rebind-ok: in-place
     if "end_user_model_rpm_limit" in end_user_params:
         valid_token.end_user_model_rpm_limit = end_user_params["end_user_model_rpm_limit"]  # rebind-ok: in-place
-    return valid_token
+    return valid_token.model_copy(
+        update={
+            "end_user_fallbacks": _CUSTOMER_FALLBACKS_ADAPTER.validate_python(end_user_params.get("end_user_fallbacks"))
+        }
+    )
 
 
 # Reusable coordinator for global spend to prevent cache stampede
@@ -2812,6 +2819,7 @@ async def user_api_key_auth_builder(
                     )
                 if _end_user_object is not None:
                     end_user_params["allowed_model_region"] = _end_user_object.allowed_model_region
+                    end_user_params["end_user_fallbacks"] = _end_user_object.fallbacks
                     if _end_user_object.litellm_budget_table is not None:
                         _apply_budget_limits_to_end_user_params(
                             end_user_params=end_user_params,
@@ -2839,6 +2847,13 @@ async def user_api_key_auth_builder(
                 if isinstance(e, litellm.BudgetExceededError):
                     raise e
                 verbose_proxy_logger.debug("Unable to find user in db. Error - %s", e)
+
+        if _end_user_object is not None:
+            request_data.update(
+                prepare_customer_fallback_request(
+                    _OBJECT_MAPPING_ADAPTER.validate_python(request_data), _end_user_object.fallbacks
+                )
+            )
 
         ### CHECK IF ADMIN ###
         # note: never string compare api keys, this is vulenerable to a time attack. Use secrets.compare_digest instead
@@ -3061,6 +3076,9 @@ async def user_api_key_auth_builder(
             valid_token.end_user_tpm_limit = end_user_params.get("end_user_tpm_limit")
             valid_token.end_user_rpm_limit = end_user_params.get("end_user_rpm_limit")
             valid_token.end_user_tpd_limit = end_user_params.get("end_user_tpd_limit")
+            valid_token.end_user_fallbacks = _CUSTOMER_FALLBACKS_ADAPTER.validate_python(
+                end_user_params.get("end_user_fallbacks")
+            )
             if "end_user_model_tpm_limit" in end_user_params:
                 valid_token.end_user_model_tpm_limit = end_user_params["end_user_model_tpm_limit"]
             if "end_user_model_rpm_limit" in end_user_params:
@@ -3758,7 +3776,7 @@ async def run_centralized_common_checks(
         body_model: Final = request_data.get("model")
         is_request_body_safe(
             request_body=request_data,
-            general_settings=_GENERAL_SETTINGS_ADAPTER.validate_python(general_settings),
+            general_settings=_OBJECT_MAPPING_ADAPTER.validate_python(general_settings),
             llm_router=llm_router,
             model=body_model if isinstance(body_model, str) else "",
             route=route,
@@ -4436,7 +4454,7 @@ async def _authorize_authenticated_request(
                 await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
                     request=request,
                     request_data=authorized_data,
-                    general_settings=_GENERAL_SETTINGS_ADAPTER.validate_python(general_settings),
+                    general_settings=_OBJECT_MAPPING_ADAPTER.validate_python(general_settings),
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
                 )
@@ -4629,7 +4647,7 @@ async def user_api_key_auth(
             general_settings,  # pyright: ignore[reportUnknownVariableType]  # proxy global is validated below
         )
 
-        settings: Final = _GENERAL_SETTINGS_ADAPTER.validate_python(general_settings)
+        settings: Final = _OBJECT_MAPPING_ADAPTER.validate_python(general_settings)
         user_api_key_auth_obj: Final = (
             authenticated.model_copy() if settings.get("access_group_rules") else authenticated
         )
@@ -4818,6 +4836,7 @@ async def _lookup_end_user_and_apply_budget(
             end_user_params = {
                 "end_user_id": valid_token.end_user_id,
                 "allowed_model_region": end_user_object.allowed_model_region,
+                "end_user_fallbacks": end_user_object.fallbacks,
             }
             if end_user_object.litellm_budget_table is not None:
                 _apply_budget_limits_to_end_user_params(
@@ -4851,7 +4870,10 @@ async def _lookup_end_user_and_apply_budget(
         if isinstance(e, litellm.BudgetExceededError):
             raise e
         verbose_proxy_logger.debug("Unable to find user in db. Error - %s", e)
-    return valid_token, end_user_object
+    resolved_token: Final = valid_token.model_copy(
+        update={"end_user_fallbacks": end_user_object.fallbacks if end_user_object is not None else None}
+    )
+    return resolved_token, end_user_object
 
 
 async def enforce_key_and_fallback_model_access(

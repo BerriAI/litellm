@@ -37,7 +37,7 @@ import litellm
 from litellm._logging import turn_on_json
 from litellm.constants import DEFAULT_SSL_CIPHERS
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
-from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings
+from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings, UserAPIKeyAuth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.common_utils.fips import enforce_fips_mode
 from litellm.proxy.config_resolvers.settings_store import SettingsStore
@@ -4408,7 +4408,7 @@ def test_ProxyConfig__parse_router_settings_value_invalid_returns_none():
 @pytest.mark.asyncio
 async def test_ProxyConfig__get_hierarchical_router_settings_key_wins():
     pc = ProxyConfig()
-    fake_key = SimpleNamespace(
+    fake_key = UserAPIKeyAuth(
         router_settings={"timeout": 30, "retries": 2, "model": "gpt-4"},
         team_id=None,
     )
@@ -4423,7 +4423,7 @@ async def test_ProxyConfig__get_hierarchical_router_settings_key_wins():
 @pytest.mark.asyncio
 async def test_ProxyConfig__get_hierarchical_router_settings_missing_returns_none():
     pc = ProxyConfig()
-    fake_key = SimpleNamespace(router_settings=None, team_id=None)
+    fake_key = UserAPIKeyAuth(router_settings=None, team_id=None)
     out = await pc._get_hierarchical_router_settings(
         user_api_key_dict=fake_key,
         prisma_client=None,
@@ -4437,7 +4437,7 @@ async def test_ProxyConfig__get_hierarchical_router_settings_falls_back_to_team(
     """A key with no router_settings inherits the team's, so a team-level
     model_group_alias reaches the request path at all."""
     pc = ProxyConfig()
-    fake_key = SimpleNamespace(router_settings=None, team_id="team-1")
+    fake_key = UserAPIKeyAuth(router_settings=None, team_id="team-1")
     team_settings = {"model_group_alias": {"group-a": "group-b"}}
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.get_team_object",
@@ -4459,7 +4459,7 @@ async def test_ProxyConfig__get_hierarchical_router_settings_key_shadows_team_en
     per field, so a key that sets any router setting hides every team setting
     including an alias the key itself never set."""
     pc = ProxyConfig()
-    fake_key = SimpleNamespace(router_settings={"num_retries": 3}, team_id="team-1")
+    fake_key = UserAPIKeyAuth(router_settings={"num_retries": 3}, team_id="team-1")
     team_lookup = AsyncMock(return_value=SimpleNamespace(router_settings={"model_group_alias": {"group-a": "group-b"}}))
     monkeypatch.setattr("litellm.proxy.proxy_server.get_team_object", team_lookup)
 
