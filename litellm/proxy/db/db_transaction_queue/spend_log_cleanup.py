@@ -39,9 +39,7 @@ from litellm.proxy.db.db_transaction_queue.spend_logs_partition_manager import (
 )
 from litellm.proxy.db.scheduled_job_runs import (
     InvalidSchedule,
-    JobFailed,
     JobResult,
-    JobSucceeded,
     Schedule,
     ScheduledJob,
     cron_schedule,
@@ -248,12 +246,6 @@ def _cutoff_cast(cutoff: Cutoff) -> str:
 
 def _cutoff_text(cutoff: Cutoff) -> str:
     return cutoff.isoformat() if isinstance(cutoff, datetime) else cutoff
-
-
-@dataclass(frozen=True, slots=True)
-class CleanupRunReport:
-    outcome: RunOutcome
-    summary: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -1423,29 +1415,26 @@ class SpendLogCleanup:
         results: tuple[TableCleanupResult, ...],
         elapsed_seconds: float,
         size_report: SizePassReport | None = None,
-    ) -> str:
+    ) -> None:
         per_table: Final = ", ".join(
             f"{result.table_name}: deleted={result.rows_deleted} stop_reason={result.stop_reason}" for result in results
         )
+        message: Final = "Spend log cleanup run finished: outcome=%s elapsed=%.1fs [%s]%s"
         storage: Final = cls._storage_summary(size_report)
-        message: Final = (
-            f"Spend log cleanup run finished: outcome={outcome} elapsed={elapsed_seconds:.1f}s [{per_table}]{storage}"
-        )
         if outcome == "completed" and (size_report is None or size_report.target_reached):
-            verbose_proxy_logger.info(message)
-            return message
-        verbose_proxy_logger.warning(message)
-        return message
+            verbose_proxy_logger.info(message, outcome, elapsed_seconds, per_table, storage)
+            return
+        verbose_proxy_logger.warning(message, outcome, elapsed_seconds, per_table, storage)
 
-    async def cleanup_old_spend_logs(self, prisma_client: PrismaClient) -> CleanupRunReport:
+    async def cleanup_old_spend_logs(self, prisma_client: PrismaClient) -> RunOutcome:
         """The scheduled retention run: every age rule, plus the size rule when one cron drives both."""
         return await self._run(prisma_client, age_rules=True, size_rule=self._size_pass_runs_with_age_pass())
 
-    async def cleanup_spend_logs_by_size(self, prisma_client: PrismaClient) -> CleanupRunReport:
+    async def cleanup_spend_logs_by_size(self, prisma_client: PrismaClient) -> RunOutcome:
         """The size-check run scheduled on maximum_spend_logs_size_check_interval: the size rule only."""
         return await self._run(prisma_client, age_rules=False, size_rule=True)
 
-    async def _run(self, prisma_client: PrismaClient, age_rules: bool, size_rule: bool) -> CleanupRunReport:
+    async def _run(self, prisma_client: PrismaClient, age_rules: bool, size_rule: bool) -> RunOutcome:
         """
         One pass at a time per pod, so a pass started outside the job claim (a manual call) cannot overlap a
         scheduled one in the same pod. The later one waits rather than skips, because the other job applies a
@@ -1456,7 +1445,7 @@ class SpendLogCleanup:
         async with _PASS_LOCK:
             return await self._run_passes(prisma_client, age_rules, size_rule)
 
-    async def _run_passes(self, prisma_client: PrismaClient, age_rules: bool, size_rule: bool) -> CleanupRunReport:
+    async def _run_passes(self, prisma_client: PrismaClient, age_rules: bool, size_rule: bool) -> RunOutcome:
         run_started_at: Final = self._clock()
         progress: Final = _RunProgress()
         progress_token: Final = _run_progress.set(progress)
@@ -1483,12 +1472,12 @@ class SpendLogCleanup:
                 and active_size_rule is None
             ):
                 SpendLogCleanupMetrics.record_run("skipped_disabled")
-                return CleanupRunReport(outcome="skipped_disabled", summary="no retention or size rule is configured")
+                return "skipped_disabled"
 
             if delete_spend_logs and self.retention_seconds is None:
                 verbose_proxy_logger.error("Retention seconds is None, cannot proceed with cleanup")
                 SpendLogCleanupMetrics.record_run("skipped_disabled")
-                return CleanupRunReport(outcome="skipped_disabled", summary="the retention period could not be read")
+                return "skipped_disabled"
 
             deadline: Final = self._clock() + self.run_budget_seconds
             size_group: Final = int(active_size_rule is not None)
@@ -1558,10 +1547,7 @@ class SpendLogCleanup:
             )
             outcome: Final = self._run_outcome(results)
             SpendLogCleanupMetrics.record_run(outcome)
-            return CleanupRunReport(
-                outcome=outcome,
-                summary=self._log_run_summary(outcome, results, self._clock() - run_started_at, size_report),
-            )
+            self._log_run_summary(outcome, results, self._clock() - run_started_at, size_report)
 
         except asyncio.CancelledError:
             verbose_proxy_logger.error(
@@ -1581,7 +1567,9 @@ class SpendLogCleanup:
                 e,
             )
             SpendLogCleanupMetrics.record_run("aborted")
-            return CleanupRunReport(outcome="aborted", summary=f"Spend log cleanup failed: {type(e).__name__}: {e}")
+            return "aborted"
+        else:
+            return outcome
         finally:
             _run_progress.reset(progress_token)
 
@@ -1613,8 +1601,8 @@ def _cleanup_lease() -> timedelta:
     return timedelta(seconds=run_budget + SCHEDULED_JOB_LEASE_GRACE_SECONDS)
 
 
-def _job_result(report: CleanupRunReport) -> JobResult:
-    return JobFailed(report.summary) if report.outcome == "aborted" else JobSucceeded(report.summary)
+def _job_result(outcome: RunOutcome) -> JobResult:
+    return "FAILED" if outcome == "aborted" else "SUCCEEDED"
 
 
 async def _run_retention(prisma_client: PrismaClient) -> JobResult:

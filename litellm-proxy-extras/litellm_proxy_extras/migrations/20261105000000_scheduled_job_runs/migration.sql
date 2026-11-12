@@ -13,7 +13,6 @@ CREATE TABLE IF NOT EXISTS "LiteLLM_ScheduledJobRun" (
     "claimed_at" TIMESTAMPTZ(3),
     "lease_expires_at" TIMESTAMPTZ(3),
     "finished_at" TIMESTAMPTZ(3),
-    "log" TEXT,
     "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "LiteLLM_ScheduledJobRun_pkey" PRIMARY KEY ("id")

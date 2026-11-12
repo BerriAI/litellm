@@ -10,11 +10,9 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from litellm.proxy.db.scheduled_job_runs import (
     InvalidSchedule,
-    JobFailed,
     JobResult,
     JobScheduler,
     JobState,
-    JobSucceeded,
     NewRun,
     PendingRun,
     Schedule,
@@ -238,7 +236,7 @@ def _finishes(database: _ScriptedDatabase) -> tuple[tuple[object, ...], ...]:
 
 
 class _Job:
-    def __init__(self, result: JobResult | BaseException = JobSucceeded("cleaned")) -> None:
+    def __init__(self, result: JobResult | BaseException = "SUCCEEDED") -> None:
         self.result = result
         self.runs = 0
         self.release = asyncio.Event()
@@ -262,29 +260,24 @@ class _Job:
         return ScheduledJobRunner(definition, worker_id="pod-a", new_id=lambda: "run-1")
 
 
-async def test_a_due_run_is_claimed_by_this_pod_run_and_recorded_with_its_log() -> None:
+async def test_a_due_run_is_claimed_by_this_pod_run_and_recorded_as_succeeded() -> None:
     database: Final = _ScriptedDatabase()
-    job: Final = _Job(JobSucceeded("cleaned"))
+    job: Final = _Job("SUCCEEDED")
     await job.runner().tick(database.client())
 
     assert job.runs == 1
     assert ("claim", ("run-1", "pod-a", 300.0)) in database.writes
-    assert _finishes(database) == (("run-1", "pod-a", "SUCCEEDED", "cleaned"),)
+    assert _finishes(database) == (("run-1", "pod-a", "SUCCEEDED"),)
 
 
 @pytest.mark.parametrize(
-    ("result", "expected_log"),
-    [
-        pytest.param(JobFailed("aborted after 3 batch failures"), "aborted after 3 batch failures", id="reported"),
-        pytest.param(RuntimeError("disk on fire"), "RuntimeError: disk on fire", id="raised"),
-    ],
+    "result",
+    [pytest.param("FAILED", id="reported"), pytest.param(RuntimeError("disk on fire"), id="raised")],
 )
-async def test_a_failed_run_is_recorded_as_failed_with_why(
-    result: JobResult | BaseException, expected_log: str
-) -> None:
+async def test_a_failed_run_is_recorded_as_failed(result: JobResult | BaseException) -> None:
     database: Final = _ScriptedDatabase()
     await _Job(result).runner().tick(database.client())
-    assert _finishes(database) == (("run-1", "pod-a", "FAILED", expected_log),)
+    assert _finishes(database) == (("run-1", "pod-a", "FAILED"),)
 
 
 async def test_a_pod_that_does_not_get_the_group_lock_neither_plans_nor_runs() -> None:
@@ -329,9 +322,7 @@ async def test_a_run_cancelled_mid_flight_records_failed_and_still_cancels() -> 
     tick.cancel()
     with pytest.raises(asyncio.CancelledError):
         await tick
-    ((run_id, worker, status, log),) = _finishes(database)
-    assert (run_id, worker, status) == ("run-1", "pod-a", "FAILED")
-    assert "cancelled" in str(log)
+    assert _finishes(database) == (("run-1", "pod-a", "FAILED"),)
 
 
 async def test_a_result_that_arrives_after_the_lease_expired_is_reported_not_recorded(

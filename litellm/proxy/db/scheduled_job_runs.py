@@ -6,14 +6,13 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
-from typing import TYPE_CHECKING, Final, Protocol, TypeAlias
+from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias
 
 from apscheduler.triggers import cron  # pyright: ignore[reportMissingTypeStubs, reportUnknownVariableType]  # untyped
 from pydantic import AwareDatetime, BaseModel, ConfigDict, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
-    SCHEDULED_JOB_LOG_MAX_CHARS,
     SCHEDULED_JOB_RUN_HISTORY_LIMIT,
     SCHEDULED_JOB_TICK_TIMEOUT_SECONDS,
 )
@@ -109,17 +108,7 @@ def cron_schedule(setting_name: str, value: object) -> Schedule | InvalidSchedul
     return CronSchedule(expression=value, trigger=trigger)
 
 
-@dataclass(frozen=True, slots=True)
-class JobSucceeded:
-    log: str
-
-
-@dataclass(frozen=True, slots=True)
-class JobFailed:
-    log: str
-
-
-JobResult: TypeAlias = JobSucceeded | JobFailed
+JobResult: TypeAlias = Literal["SUCCEEDED", "FAILED"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,10 +221,7 @@ _CLAIMED: Final = TypeAdapter(list[_Claimed])
 
 _REAP_SQL: Final = f"""
     UPDATE "{_TABLE}"
-    SET "status" = 'FAILED', "finished_at" = now(),
-        "log" = concat_ws(
-            E'\\n', "log", 'lease expired at ' || "lease_expires_at" || ' while ' || "claimed_by" || ' held it'
-        )
+    SET "status" = 'FAILED', "finished_at" = now()
     WHERE "lock_group" = $1 AND "status" = 'RUNNING' AND "lease_expires_at" < now()
     RETURNING "id", "job_name"
 """
@@ -254,7 +240,7 @@ _PENDING_SQL: Final = f"""
     ORDER BY "scheduled_for", "created_at"
 """
 _CANCEL_SQL: Final = f"""
-    UPDATE "{_TABLE}" SET "status" = 'CANCELLED', "finished_at" = now(), "log" = 'superseded by a schedule change or a duplicate'
+    UPDATE "{_TABLE}" SET "status" = 'CANCELLED', "finished_at" = now()
     WHERE "id" = $1 AND "status" = 'PENDING'
 """
 _INSERT_SQL: Final = f"""
@@ -269,7 +255,7 @@ _CLAIM_SQL: Final = f"""
     RETURNING "id", "job_name"
 """
 _FINISH_SQL: Final = f"""
-    UPDATE "{_TABLE}" SET "status" = $3::"ScheduledJobRunStatus", "finished_at" = now(), "log" = $4
+    UPDATE "{_TABLE}" SET "status" = $3::"ScheduledJobRunStatus", "finished_at" = now()
     WHERE "id" = $1 AND "claimed_by" = $2 AND "status" = 'RUNNING'
 """
 _PRUNE_SQL: Final = f"""
@@ -375,9 +361,7 @@ class ScheduledJobRunner:
         try:
             result: Final = await self._run_job(prisma_client)
         except asyncio.CancelledError:
-            await asyncio.shield(
-                self._finish(prisma_client, run_id, JobFailed("cancelled before it finished, usually a pod shutdown"))
-            )
+            await asyncio.shield(self._finish(prisma_client, run_id, "FAILED"))
             raise
         await self._finish(prisma_client, run_id, result)
         next_run_id: Final = await self._safe_plan_and_claim(prisma_client)
@@ -387,26 +371,23 @@ class ScheduledJobRunner:
     async def _run_job(self, prisma_client: "PrismaClient") -> JobResult:
         try:
             return await self.job.run(prisma_client)
-        except Exception as e:  # noqa: BLE001 - the failure is recorded on the run row instead of escaping the task
+        except Exception:  # noqa: BLE001 - the failure is recorded on the run row instead of escaping the task
             verbose_proxy_logger.exception("Scheduled job %s raised", self.job.name)
-            return JobFailed(f"{type(e).__name__}: {e}")
+            return "FAILED"
 
     async def _finish(self, prisma_client: "PrismaClient", run_id: str, result: JobResult) -> None:
-        status: Final = "SUCCEEDED" if isinstance(result, JobSucceeded) else "FAILED"
         timeout_ms: Final = int(SCHEDULED_JOB_TICK_TIMEOUT_SECONDS * 1000)
         try:
             async with db_span("scheduled_job_finish", _TABLE), bounded_tx(prisma_client, timeout_ms) as tx:
                 await tx.execute_raw(trusted_sql(f"SET LOCAL statement_timeout = {timeout_ms}"))
-                updated: Final = await tx.execute_raw(
-                    trusted_sql(_FINISH_SQL), run_id, self.worker_id, status, result.log[:SCHEDULED_JOB_LOG_MAX_CHARS]
-                )
+                updated: Final = await tx.execute_raw(trusted_sql(_FINISH_SQL), run_id, self.worker_id, result)
                 await tx.execute_raw(trusted_sql(_PRUNE_SQL), self.job.name, SCHEDULED_JOB_RUN_HISTORY_LIMIT)
         except Exception as e:  # noqa: BLE001 - the lease expiry marks the row when this write cannot
             verbose_proxy_logger.warning(
                 "Scheduled job %s run %s could not record %s: %s: %s",
                 self.job.name,
                 run_id,
-                status,
+                result,
                 type(e).__name__,
                 e,
             )
@@ -416,10 +397,10 @@ class ScheduledJobRunner:
                 "Scheduled job %s run %s finished after its lease expired; its %s result was not recorded",
                 self.job.name,
                 run_id,
-                status,
+                result,
             )
             return
-        verbose_proxy_logger.info("Scheduled job %s run %s %s", self.job.name, run_id, status)
+        verbose_proxy_logger.info("Scheduled job %s run %s %s", self.job.name, run_id, result)
 
 
 class _Locked(BaseModel):

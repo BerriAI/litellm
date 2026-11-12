@@ -35,7 +35,7 @@ from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup_metrics import (
     SpendLogCleanupMetrics,
 )
-from litellm.proxy.db.scheduled_job_runs import InvalidSchedule, JobFailed, JobSucceeded, ScheduledJob
+from litellm.proxy.db.scheduled_job_runs import InvalidSchedule, ScheduledJob
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
 
 
@@ -703,10 +703,9 @@ async def test_a_run_whose_batches_keep_failing_reports_aborted(monkeypatch: pyt
     mock_prisma_client.db.execute_raw = AsyncMock(side_effect=TimeoutError("DB down"))
 
     cleaner = cleanup_module.SpendLogCleanup(general_settings={"maximum_spend_logs_retention_period": "7d"})
-    report: Final = await cleaner.cleanup_old_spend_logs(mock_prisma_client)
+    outcome: Final = await cleaner.cleanup_old_spend_logs(mock_prisma_client)
 
-    assert report.outcome == "aborted"
-    assert "LiteLLM_SpendLogs: deleted=0 stop_reason=aborted" in report.summary
+    assert outcome == "aborted"
 
 
 def test_cleanup_batch_size_env_var(monkeypatch):
@@ -2201,8 +2200,7 @@ async def test_the_retention_job_records_an_aborted_cleanup_as_failed(monkeypatc
 
     result: Final = await SPEND_LOG_RETENTION_JOB.run(mock_prisma_client)
 
-    assert isinstance(result, JobFailed)
-    assert "stop_reason=aborted" in result.log
+    assert result == "FAILED"
 
 
 @pytest.mark.parametrize("job", [SPEND_LOG_RETENTION_JOB, SPEND_LOG_SIZE_CHECK_JOB], ids=["retention", "size"])
@@ -2215,7 +2213,7 @@ async def test_a_cleanup_job_with_no_rule_configured_succeeds_without_touching_t
 
     result: Final = await job.run(mock_prisma_client)
 
-    assert result == JobSucceeded("no retention or size rule is configured")
+    assert result == "SUCCEEDED"
     mock_prisma_client.db.execute_raw.assert_not_awaited()
 
 

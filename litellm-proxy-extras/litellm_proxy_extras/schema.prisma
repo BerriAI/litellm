@@ -1166,7 +1166,6 @@ model LiteLLM_ScheduledJobRun {
   claimed_at       DateTime?             @client.Timestamptz(3)
   lease_expires_at DateTime?             @client.Timestamptz(3)
   finished_at      DateTime?             @client.Timestamptz(3)
-  log              String?
   created_at       DateTime              @default(now()) @client.Timestamptz(3)
 
   @@index([job_name, status])

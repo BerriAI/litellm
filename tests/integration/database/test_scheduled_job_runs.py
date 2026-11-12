@@ -15,7 +15,6 @@ from psycopg.rows import dict_row
 
 from litellm.proxy.db.scheduled_job_runs import (
     JobResult,
-    JobSucceeded,
     Schedule,
     ScheduledJob,
     ScheduledJobRunner,
@@ -70,7 +69,7 @@ class _Job:
         self.outcome: Callable[[], Awaitable[JobResult]] = self._succeed
 
     async def _succeed(self) -> JobResult:
-        return JobSucceeded(f"{self.name} done")
+        return "SUCCEEDED"
 
     async def _run(self, _prisma_client: object) -> JobResult:
         self.started += 1
@@ -150,7 +149,7 @@ async def test_every_pod_ticks_but_exactly_one_runs_and_the_next_run_is_planned_
 
         finished: Final = database.rows("\"status\" = 'SUCCEEDED'")
         pending: Final = database.rows("\"status\" = 'PENDING'")
-        assert [row["log"] for row in finished] == ["job done"]
+        assert len(finished) == 1
         assert finished[0]["claimed_by"] == running[0]["claimed_by"]
         assert len(pending) == 1
         assert pending[0]["scheduled_for"] == finished[0]["finished_at"] + timedelta(hours=1)
@@ -192,7 +191,6 @@ async def test_a_run_that_raises_is_recorded_as_failed_and_the_next_run_is_still
 
         failed: Final = database.rows("\"status\" = 'FAILED'")
         assert len(failed) == 1
-        assert "RuntimeError: disk on fire" in str(failed[0]["log"])
         assert len(database.rows("\"status\" = 'PENDING'")) == 1
 
 
@@ -209,7 +207,6 @@ async def test_a_run_held_by_a_dead_pod_is_failed_once_its_lease_expires_and_the
 
         (reaped,) = database.rows("\"id\" = 'dead'")
         assert reaped["status"] == "FAILED"
-        assert "dead-pod" in str(reaped["log"])
         (pending,) = database.rows("\"status\" = 'PENDING'")
         assert pending["scheduled_for"] == reaped["finished_at"] + timedelta(hours=1)
         assert job.started == 0
@@ -295,4 +292,3 @@ async def test_a_run_cancelled_by_shutdown_is_recorded_as_failed_instead_of_hold
 
         (cancelled,) = database.rows()
         assert cancelled["status"] == "FAILED"
-        assert "cancelled" in str(cancelled["log"])
