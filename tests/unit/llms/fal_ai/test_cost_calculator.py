@@ -99,9 +99,9 @@ def test_gpt_image_25_noncanonical_response_uses_nearest_keyed_row():
         image_response=_image_response_with_dimensions(((1536, 1024),)),
         optional_params={"quality": "low", "image_size": {"width": 1536, "height": 1024}},
     )
-    expected: Final = litellm.model_cost[
-        "fal_ai/low/1024-x-1536/openai/gpt-image-2.5/flare/text-to-image"
-    ]["output_cost_per_image"]
+    expected: Final = litellm.model_cost["fal_ai/low/1024-x-1536/openai/gpt-image-2.5/flare/text-to-image"][
+        "output_cost_per_image"
+    ]
     assert cost == expected
 
 
@@ -305,7 +305,9 @@ def test_passthrough_num_images_multiplies_the_per_image_rate(model):
     entry: Final = litellm.model_cost[f"fal_ai/{model}"]
     assert fal_ai_passthrough_cost(model, {"num_images": 3}) == 3 * entry["output_cost_per_image"] > 0
     assert (
-        fal_ai_passthrough_cost(model, {"resolution": "4K", "num_images": 2}) == 2 * entry["output_cost_per_image_4K"] > 0
+        fal_ai_passthrough_cost(model, {"resolution": "4K", "num_images": 2})
+        == 2 * entry["output_cost_per_image_4K"]
+        > 0
     )
 
 
