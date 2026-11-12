@@ -124,11 +124,13 @@ def _team_admin_may_edit(*fields: str):
             "litellm.proxy.management_endpoints.team_endpoints.SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS",
             frozenset(fields) - (SUPPORTED_TEAM_ADMIN_PERMISSIONS - SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS),
         ),
-        patch(  # test-quality-ok: the block list is a module constant update_team reads directly; no seam to inject
-            "litellm.proxy.management_endpoints.team_endpoints.PROXY_CONTROLLED_TEAM_METADATA_KEYS",
-            PROXY_CONTROLLED_TEAM_METADATA_KEYS - frozenset(fields),
+        patch(  # test-quality-ok: the block list is a module-level lookup update_team reads directly; no seam to inject
+            "litellm.proxy.management_endpoints.team_endpoints.proxy_controlled_team_metadata_keys",
+            lambda: PROXY_CONTROLLED_TEAM_METADATA_KEYS - frozenset(fields),
         ),
-        patch("litellm.proxy.proxy_server.general_settings", {"team_admin_editable_team_fields": list(fields)}),  # test-quality-ok: update_team reads general_settings as a proxy_server module global
+        patch(
+            "litellm.proxy.proxy_server.general_settings", {"team_admin_editable_team_fields": list(fields)}
+        ),  # test-quality-ok: update_team reads general_settings as a proxy_server module global
     ):
         yield
 

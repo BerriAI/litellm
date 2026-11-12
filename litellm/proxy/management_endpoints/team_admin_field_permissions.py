@@ -18,6 +18,7 @@ from fastapi import HTTPException
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS, OTEL_SERVICE_NAME_METADATA_KEYS
 from litellm.models.budget import LiteLLM_BudgetTable
@@ -110,6 +111,14 @@ PROXY_CONTROLLED_TEAM_METADATA_KEYS: Final[frozenset[str]] = frozenset(
         "opik",
     )
 )
+
+
+def proxy_controlled_team_metadata_keys() -> frozenset[str]:
+    settings: Final = litellm.priority_reservation_settings
+    priority_field: Final = settings.priority_metadata_field if settings is not None else "priority"
+    return PROXY_CONTROLLED_TEAM_METADATA_KEYS | {priority_field}
+
+
 _NOT_COLUMNS: Final[frozenset[str]] = frozenset({"team_id", "metadata"})
 _SETTINGS_LOCATION: Final = "Settings > UI > Team admin editable fields"
 

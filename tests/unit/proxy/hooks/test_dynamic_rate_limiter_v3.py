@@ -7,7 +7,6 @@ Core tests to validate that priority weights are respected (0.9/0.1) instead of 
 import asyncio
 import os
 import time
-from collections.abc import Sequence
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
@@ -23,7 +22,7 @@ from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROXY_MaxParallelRequestsHandler_v3,
 )
-from litellm.redis.stores.rate_limits import CounterIncrement, RateLimitScope
+from litellm.redis.stores.rate_limits import RateLimitScope
 from tests.unit.redis.stores.fake_rate_limits import FakeRateLimits
 
 
@@ -1882,12 +1881,10 @@ async def test_async_log_success_event_settles_tokens_on_the_configured_metadata
             ]
         )
     )
-    incremented: list[RateLimitScope] = []
-
-    async def record(pipeline_operations: Sequence[CounterIncrement], parent_otel_span: object = None) -> None:
-        incremented.extend(op.counter.scope for op in pipeline_operations)
-
-    handler.v3_limiter.async_increment_tokens_with_ttl_preservation = record
+    fakes = FakeRateLimits()
+    handler.v3_limiter = PROXY_MaxParallelRequestsHandler_v3(
+        handler.internal_usage_cache, rate_limit_store=fakes.store()
+    )
     response = MagicMock(spec=ModelResponse)
     response.usage = MagicMock(spec=Usage)
     response.usage.prompt_tokens = 10
@@ -1907,5 +1904,8 @@ async def test_async_log_success_event_settles_tokens_on_the_configured_metadata
     ):
         await handler.async_log_success_event(kwargs=kwargs, response_obj=response, start_time=None, end_time=None)
 
-    pools = [scope.descriptor_value for scope in incremented if scope.descriptor_key == "priority_model"]
-    assert pools == [f"{model}:batch"], pools
+    charged = {key: amount for key, amount, _ttl in fakes.redis_increments}
+    assert charged == {
+        f"{{model_saturation_check:{model}}}:tokens": charged[f"{{model_saturation_check:{model}}}:tokens"],
+        f"{{priority_model:{model}:batch}}:tokens": charged[f"{{model_saturation_check:{model}}}:tokens"],
+    }, fakes.redis_increments

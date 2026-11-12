@@ -7,7 +7,7 @@ from typing import Final
 import httpx
 import pytest
 import yaml
-from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment
+from integration._support.client import Gateway, Scenario, gateway_from_environment
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
 
@@ -89,7 +89,8 @@ def test_priority_class_metadata_selects_the_priority_reservation_pool(
         assert {response.headers.get("x-litellm-priority") for response in served} == {priority_class}, [
             dict(r.headers) for r in served
         ]
-        blocked: Final = eventually(attempt, lambda response: response.status_code == 429, seconds=20)
+        blocked: Final = attempt()
+        assert blocked.status_code == 429, blocked.text
         assert blocked.headers.get("x-litellm-priority") == priority_class, blocked.headers
         detail: Final = (
             f"Priority-based rate limit exceeded. Model: {model}, Priority: {priority_class}, "

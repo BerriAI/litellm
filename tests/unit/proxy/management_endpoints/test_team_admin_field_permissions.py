@@ -3,6 +3,7 @@ from typing import Final
 import pytest
 from fastapi import HTTPException
 
+import litellm
 from litellm.models.team import BudgetLimitEntry
 from litellm.models.verification_token import LiteLLM_VerificationToken
 from litellm.proxy._types import (
@@ -19,11 +20,16 @@ from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     TeamAdminEditingDisabled,
     TeamAdminFieldNotPermitted,
     TeamAdminKeyEditAllowed,
+    TeamAdminMemberKeyCreationAllowed,
+    TeamAdminMemberKeyCreationDisabled,
     TeamAdminMemberKeyEditingDisabled,
+    TeamAdminMemberKeyOwnerNotPermitted,
+    TeamAdminMemberKeyTypeNotPermitted,
     TeamAdminMetadataKeyProxyControlled,
     TeamMemberDefaults,
     changed_key_fields,
     changed_team_fields,
+    proxy_controlled_team_metadata_keys,
     resolve_team_admin_editable_fields,
     team_admin_edit_verdict,
     team_admin_key_edit_verdict,
@@ -34,10 +40,6 @@ from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     team_admin_may_raise_max_budget,
     team_admin_member_key_creation_or_raise,
     team_admin_member_key_creation_verdict,
-    TeamAdminMemberKeyCreationAllowed,
-    TeamAdminMemberKeyCreationDisabled,
-    TeamAdminMemberKeyOwnerNotPermitted,
-    TeamAdminMemberKeyTypeNotPermitted,
     team_admin_request_or_raise,
 )
 
@@ -731,3 +733,36 @@ class TestTeamAdminKeyRequestOrRaise:
             team_admin_key_request_or_raise(TeamAdminFieldNotPermitted(field="key_alias"))
         assert exc.value.status_code == 403
         assert "'key_alias'" in exc.value.detail
+
+
+class TestConfiguredPriorityMetadataField:
+    @pytest.mark.parametrize(("field", "settings"), [("priority", None), ("priority_class", "priority_class")])
+    def test_team_admin_cannot_change_the_configured_priority_field(
+        self, monkeypatch: pytest.MonkeyPatch, field: str, settings: str | None
+    ):
+        from litellm.types.utils import PriorityReservationSettings
+
+        monkeypatch.setattr(
+            litellm,
+            "priority_reservation_settings",
+            PriorityReservationSettings(priority_metadata_field=settings) if settings is not None else None,
+        )
+        stored: Final = {**_STORED_METADATA, field: "batch"}
+        verdict: Final = team_admin_edit_verdict(
+            UpdateTeamRequest(team_id="team-1", metadata={**stored, field: "interactive"}),
+            _team(metadata=stored),
+            _permitted("metadata"),
+            proxy_controlled_metadata_keys=proxy_controlled_team_metadata_keys(),
+        )
+        assert verdict == TeamAdminMetadataKeyProxyControlled(key=field)
+
+    def test_an_unconfigured_priority_class_stays_editable(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(litellm, "priority_reservation_settings", None)
+        stored: Final = {**_STORED_METADATA, "priority_class": "batch"}
+        verdict: Final = team_admin_edit_verdict(
+            UpdateTeamRequest(team_id="team-1", metadata={**stored, "priority_class": "interactive"}),
+            _team(metadata=stored),
+            _permitted("metadata"),
+            proxy_controlled_metadata_keys=proxy_controlled_team_metadata_keys(),
+        )
+        assert isinstance(verdict, TeamAdminEditAllowed)
