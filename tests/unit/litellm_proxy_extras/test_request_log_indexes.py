@@ -159,7 +159,6 @@ class _PsycopgCannotLoad(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname: str, path: object, target: object = None) -> None:
         if fullname == "psycopg":
             raise ImportError("couldn't import requested psycopg 'python' implementation: libpq library not found")
-        return None
 
 
 def _make_psycopg_unimportable(monkeypatch: pytest.MonkeyPatch) -> None:
