@@ -4688,6 +4688,7 @@ async def test_mcp_per_key_rejection_does_not_consume_shared_server_rpm_v3() -> 
     assert key_rejected.value.headers is not None
     assert key_rejected.value.headers["retry-after"] == str(handler.window_size)
     assert key_rejected.value.headers["rate_limit_type"] == "requests"
+    assert key_rejected.value.headers["rate_limited_by"] == "mcp_per_key"
     assert key_rejected.value.headers["reset_at"]
     await handler.enforce_mcp_server_rate_limits(second_key, server)
 
@@ -8606,6 +8607,7 @@ def test_rate_limit_error_reports_reset_time_in_utc_on_a_non_utc_proxy(process_t
     assert exc_info.value.headers == {
         "retry-after": str(handler.window_size),
         "rate_limit_type": "requests",
+        "rate_limited_by": "api_key",
         "reset_at": expected_reset,
     }
     assert exc_info.value.detail == (
@@ -9938,6 +9940,8 @@ async def test_end_user_model_rpm_limit_is_shared_across_keys_and_isolated_per_c
         await _rpm_request(handler, cache, acme_via_key_two, "target")
     assert exc.value.status_code == 429
     assert "model_per_end_user: acme:target" in str(exc.value.detail), exc.value.detail
+    assert exc.value.headers is not None
+    assert exc.value.headers["rate_limited_by"] == "model_per_end_user"
 
     await _rpm_request(handler, cache, globex, "target")
     await _rpm_request(handler, cache, acme_via_key_one, "other-model")

@@ -97,7 +97,7 @@ def test_scanner_config_rejects_unsafe_credential_destinations(endpoint: str) ->
 
 
 def test_adapter_authentication_and_exact_remote_source(monkeypatch: pytest.MonkeyPatch) -> None:
-    from cookbook.skill_scanner import server
+    from litellm.proxy.discovery_endpoints.skill_scanner_adapter import server
 
     monkeypatch.setenv("SKILL_SCANNER_API_KEY", "adapter-secret")
     clock: Final = MagicMock()
@@ -123,7 +123,7 @@ def test_adapter_authentication_and_exact_remote_source(monkeypatch: pytest.Monk
 
 
 def test_adapter_accepts_expanded_stored_skill_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
-    from cookbook.skill_scanner import server
+    from litellm.proxy.discovery_endpoints.skill_scanner_adapter import server
     from litellm.proxy.anthropic_endpoints.claude_code_endpoints.skill_upload_archive import (
         build_uploaded_skill_archive,
     )
