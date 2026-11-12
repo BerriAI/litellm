@@ -1119,6 +1119,50 @@ def test_bedrock_invoke_claude_sync_completion_downloads_a_pdf_link_once_and_sen
     }
 
 
+# Bedrock Invoke accepted both undated tool search types with Opus 5, Sonnet 5 and Haiku 4.5, checked live 2026-11-13
+@pytest.mark.parametrize(
+    "search_tool, bedrock_type",
+    [
+        pytest.param(
+            {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"},
+            "tool_search_tool_bm25",
+            id="bm25",
+        ),
+        pytest.param(
+            {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+            "tool_search_tool_regex",
+            id="regex",
+        ),
+    ],
+)
+def test_bedrock_chat_invoke_keeps_the_tool_search_tool_the_caller_sent(
+    local_model_cost_map, local_beta_headers_config, search_tool, bedrock_type
+):
+    deferred_tool: Final = {
+        "type": "function",
+        "function": {
+            "name": "lookup_package_tracking",
+            "description": "Track a parcel by its tracking number",
+            "parameters": {
+                "type": "object",
+                "properties": {"tracking_number": {"type": "string"}},
+                "required": ["tracking_number"],
+            },
+        },
+        "defer_loading": True,
+    }
+
+    result: Final = AmazonAnthropicClaudeConfig().transform_request(
+        model="anthropic.claude-opus-5",
+        messages=[{"role": "user", "content": "Where is my parcel 1Z999AA10123456784?"}],
+        optional_params={"max_tokens": 64, "tools": [search_tool, deferred_tool]},
+        litellm_params={},
+        headers={},
+    )
+
+    assert {"type": bedrock_type, "name": search_tool["name"]} in result["tools"]
+
+
 @pytest.mark.parametrize(
     "model, expected_betas",
     [
