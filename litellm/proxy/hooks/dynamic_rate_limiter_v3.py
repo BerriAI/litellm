@@ -593,7 +593,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                     raise ProxyRateLimitError(
                         detail={
                             "error": f"Team share exceeded for {model}. "
-                            f"Team: {share.team_id}, "
+                            f"Team: {user_api_key_dict.team_alias or share.team_id}, "
                             f"Priority: {share.priority}, "
                             f"Reason: {team_share_plan.reason}, "
                             f"Share: {share.fraction:.1%} of the model "
