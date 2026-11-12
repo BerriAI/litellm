@@ -840,6 +840,24 @@ def test_json_object_instructions_stay_in_the_codex_instructions_when_moving_the
 
 
 @pytest.mark.usefixtures("chatgpt_token_dir")
+@pytest.mark.parametrize("role", ["developer", "system"])
+def test_json_in_instruction_turns_keeps_caller_instructions_in_place(role: str) -> None:
+    user_content: Final = "Paris is the capital of France. Return the city and country."
+    forwarded: Final = _send_responses_with_instructions(
+        _JSON_INSTRUCTION,
+        {"type": "json_object"},
+        user_content,
+        earlier_turns=({"role": role, "content": "Answer as JSON."},),
+    )
+
+    assert forwarded["instructions"] == f"{get_chatgpt_default_instructions()}\n\n{_JSON_INSTRUCTION}"
+    assert forwarded["input"] == [
+        {"role": "developer", "content": "Answer as JSON."},
+        {"role": "user", "content": user_content},
+    ]
+
+
+@pytest.mark.usefixtures("chatgpt_token_dir")
 def test_json_schema_instructions_stay_in_the_codex_instructions() -> None:
     forwarded: Final = _send_responses_with_instructions(
         _JSON_INSTRUCTION, {"type": "json_schema", "name": "city", "schema": _CITY_SCHEMA, "strict": True}

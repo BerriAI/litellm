@@ -1,3 +1,4 @@
+from collections import deque
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -56,17 +57,21 @@ def _system_item_as_developer(item: ResponseInputItemParam) -> ResponseInputItem
 
 
 def _mentions_json(value: object) -> bool:
-    match value:
-        case str():
-            return "json" in value.lower()
-        case {"role": "user" | "developer", "content": object() as content}:
-            return _mentions_json(content)
-        case {"text": object() as text}:
-            return _mentions_json(text)
-        case list():
-            return any(map(_mentions_json, cast("list[object]", value)))  # cast-ok: matched any list
-        case _:
-            return False
+    remaining: Final = deque((value,))
+    while remaining:
+        match node := remaining.pop():
+            case str() as text_value:
+                if "json" in text_value.lower():
+                    return True
+            case {"role": "user" | "developer", "content": object() as content}:
+                remaining.append(content)
+            case {"text": object() as text}:
+                remaining.append(text)
+            case list():
+                remaining.extend(reversed(cast("list[object]", node)))  # cast-ok: matched any list
+            case _:
+                continue
+    return False
 
 
 def _json_object_instructions_missing_from_input(request: object, base_instructions: str) -> str | None:
