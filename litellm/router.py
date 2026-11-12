@@ -76,6 +76,7 @@ from litellm.constants import (
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
+from litellm.decisions.call import validate_router_connection
 from litellm.integrations.custom_guardrail import is_guardrail_intervention
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.routing import routing_decision_attributes
@@ -5764,6 +5765,13 @@ class Router:
                     return await original_generic_function(model=model, **kwargs)
                 raise e
 
+            if handler_name in {"decisions", "adecisions", "systemone", "asystemone"}:
+                connection_params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(deployment["litellm_params"])
+                validate_router_connection(
+                    str(connection_params.get("model")),
+                    provider_for_generic_call(connection_params),
+                    _FALLBACK_HOP_ADAPTER.validate_python(kwargs),
+                )
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, function_name=function_name)
 
             data: Final = deployment["litellm_params"].copy()
@@ -6512,6 +6520,13 @@ class Router:
                     input=kwargs.get("input", None),
                     specific_deployment=kwargs.pop("specific_deployment", None),
                     request_kwargs=kwargs,
+                )
+            if handler_name in {"decisions", "adecisions", "systemone", "asystemone"}:
+                connection_params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(deployment["litellm_params"])
+                validate_router_connection(
+                    str(connection_params.get("model")),
+                    provider_for_generic_call(connection_params),
+                    _FALLBACK_HOP_ADAPTER.validate_python(kwargs),
                 )
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, function_name="generic_api_call")
 

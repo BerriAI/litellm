@@ -619,7 +619,9 @@ _PPLX_USAGE: Final = {"model": "pplx-decider-v1-27b", "usage": {"input_tokens": 
     ("reply", "detail"),
     (
         pytest.param(_PPLX_USAGE, "DecisionsResponse answers: Field required", id="usage"),
-        pytest.param({"error": "Rate limit reached"}, "DecisionsResponse answers: Field required", id="rate_limit_text"),
+        pytest.param(
+            {"error": "Rate limit reached"}, "DecisionsResponse answers: Field required", id="rate_limit_text"
+        ),
         pytest.param({"error": "Request timed out"}, "DecisionsResponse answers: Field required", id="timeout_text"),
         pytest.param(
             {**_PPLX_USAGE, "answers": {"rate_limit": None}},
@@ -631,7 +633,9 @@ _PPLX_USAGE: Final = {"model": "pplx-decider-v1-27b", "usage": {"input_tokens": 
             "DecisionsResponse answers.is_defect",
             id="answer_type_timeout_text",
         ),
-        pytest.param(["Rate limit reached"], "DecisionsResponse Input should be a valid dictionary", id="not_an_object"),
+        pytest.param(
+            ["Rate limit reached"], "DecisionsResponse Input should be a valid dictionary", id="not_an_object"
+        ),
     ),
 )
 async def test_a_malformed_upstream_reply_is_a_server_error_whatever_its_text(
@@ -1475,14 +1479,16 @@ _DEDICATED_DECIDER_PROVIDERS: Final[tuple[str, ...]] = tuple(
 
 
 @pytest.mark.parametrize("provider", _DEDICATED_DECIDER_PROVIDERS)
-def test_every_dedicated_decider_provider_ships_an_evaluation_mode_cost_map_entry(provider: str) -> None:
+def test_every_dedicated_decider_provider_ships_a_decisions_mode_cost_map_entry(provider: str) -> None:
     evaluation_entries: Final = tuple(
         name
         for name, info in litellm.model_cost.items()
-        if isinstance(info, Mapping) and info.get("litellm_provider") == provider and info.get("mode") == "evaluation"
+        if isinstance(info, Mapping)
+        and info.get("litellm_provider") == provider
+        and info.get("mode") in ("evaluation", "decisions")
     )
 
-    assert evaluation_entries, f"a {provider} decider would be health-checked as chat without a mode: evaluation entry"
+    assert evaluation_entries, f"a {provider} decider would be health-checked as chat without a Decisions mode entry"
 
 
 @pytest.mark.asyncio
