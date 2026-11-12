@@ -28,6 +28,7 @@ import uvicorn
 import yaml
 from click.testing import CliRunner
 from gunicorn.config import Config as GunicornConfig
+from pydantic import ValidationError
 from uvicorn.config import LOOP_FACTORIES
 from uvicorn.importer import import_from_string
 
@@ -4292,6 +4293,22 @@ def test_an_empty_litellm_settings_boots_two_workers_from_a_cli_config(
 
     assert result.exit_code == 0, result.output
     assert uvicorn_run.call_args.kwargs["workers"] == 2
+
+
+@pytest.mark.parametrize("litellm_settings", ["callbacks", [{"callbacks": ["prometheus"]}]])
+def test_a_non_mapping_litellm_settings_fails_the_cli_boot_naming_the_key(
+    tmp_path: Path, litellm_settings: object
+) -> None:
+    config_file: Final = tmp_path / "config.yaml"
+    config_file.write_text(yaml.dump({"model_list": [], "litellm_settings": litellm_settings}))
+    unset: Final = frozenset(("DATABASE_URL", "DIRECT_URL", "CONFIG_FILE_PATH"))
+    env: Final = {k: v for k, v in os.environ.items() if k not in unset}
+    with patch.dict(os.environ, env, clear=True), patch("uvicorn.run") as uvicorn_run:
+        result: Final = CliRunner().invoke(run_server, ["--config", str(config_file), "--num_workers", "2"])
+
+    assert isinstance(result.exception, ValidationError)
+    assert "litellm_settings" in str(result.exception)
+    uvicorn_run.assert_not_called()
 
 
 class TestEnforcePrismaMigrationCheckNoticeAroundTheConfigRead:

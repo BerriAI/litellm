@@ -242,10 +242,12 @@ class _ConfigStartupOutputSettings(TypedDict, total=False):
     litellm_settings: ReadOnly[Annotated[StartupOutputSettings | None, BeforeValidator(_empty_as_none)]]
 
 
+class _ConfigLitellmSettings(TypedDict, total=False):
+    litellm_settings: ReadOnly[Annotated[Mapping[str, object] | None, BeforeValidator(_empty_as_none)]]
+
+
 _CONFIG_STARTUP_OUTPUT_SETTINGS: Final = TypeAdapter(_ConfigStartupOutputSettings)
-_LITELLM_SETTINGS: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(
-    Annotated[Mapping[str, object] | None, BeforeValidator(_empty_as_none)]
-)
+_CONFIG_LITELLM_SETTINGS: Final = TypeAdapter(_ConfigLitellmSettings)
 
 
 def _apply_config_suppress_startup_output(litellm_settings: StartupOutputSettings | None) -> None:
@@ -1557,7 +1559,7 @@ def run_server(
             _config: Final = asyncio.run(proxy_config.get_config(config_file_path=config))
 
             ### LITELLM SETTINGS ###
-            litellm_settings = _LITELLM_SETTINGS.validate_python(_config.get("litellm_settings"))
+            litellm_settings = _CONFIG_LITELLM_SETTINGS.validate_python(_config).get("litellm_settings")
             _apply_config_logging_settings(
                 _CONFIG_STARTUP_OUTPUT_SETTINGS.validate_python(_config).get("litellm_settings")
             )
