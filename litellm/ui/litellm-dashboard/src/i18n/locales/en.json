@@ -20656,6 +20656,11 @@
       "unnamedKey": "Unnamed key",
       "back": "Back to customers"
     },
+    "usage": {
+      "title": "Usage",
+      "description": "Daily activity by model across this customer's keys.",
+      "error": "Could not load customer usage"
+    },
     "createDialog": {
       "title": "Create customer",
       "description": "A customer is an end user of your product. Pass its id as `user` on every request to track spend and apply its limits.",
