@@ -83,7 +83,7 @@ def _bad_request(message: str) -> BadRequestError:
     return BadRequestError(message=message, model=None, llm_provider="opensearch")
 
 
-def _with_signed_headers(headers: Mapping[str, str], signed: Mapping[str, str]) -> Mapping[str, str]:
+def _with_signed_headers(headers: Mapping[str, object], signed: Mapping[str, str]) -> Mapping[str, object]:
     signed_names: Final = frozenset(name.lower() for name in signed)
     return {**{name: value for name, value in headers.items() if name.lower() not in signed_names}, **signed}
 
@@ -291,7 +291,11 @@ def _exact_comparison(
     key: Final = comparison.key
     queried: Final = tuple(_queried_field(key, index.mappings, comparison) for index in mappings.values())
     exact: Final = tuple(field for field in queried if field is not None)
-    differently: Final = _InexactKey(key=key, reason=f"the indexes behind this store map {key} differently")
+    differently: Final = _InexactKey(
+        key=key,
+        reason=f"the indexes behind this store map {key} differently",
+        remedy=f"Map {key} to the same keyword field in every index behind the store",
+    )
     if 0 < len(exact) < len(queried):
         return differently
     inexact: Final = next((field for field in exact if isinstance(field, _InexactKey)), None)
@@ -693,8 +697,8 @@ class OpenSearchVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, SignsRequ
         return search.search_filter, f"{api_base}/{quote(search.params.index_name(vector_store_id), safe='')}/_mapping"
 
     def _signed_mapping_read_headers(
-        self, url: str, headers: Mapping[str, str], litellm_params: Mapping[str, object]
-    ) -> Mapping[str, str]:
+        self, url: str, headers: Mapping[str, object], litellm_params: Mapping[str, object]
+    ) -> Mapping[str, object]:
         signed: Final = self.sign_http_request("GET", url, b"", "application/json", litellm_params)
         return _with_signed_headers(headers, dict(signed.headers.items()))
 
@@ -729,8 +733,8 @@ class OpenSearchVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, SignsRequ
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_params: Mapping[str, object],
-        headers: Mapping[str, str],
-        get: Callable[[str, Mapping[str, str]], httpx.Response],
+        headers: Mapping[str, object],
+        get: Callable[[str, Mapping[str, object]], httpx.Response],
     ) -> VectorStoreSearchOptionalRequestParams:
         lookup: Final = self._filter_mapping_url(
             vector_store_id, vector_store_search_optional_params, api_base, litellm_params
@@ -747,8 +751,8 @@ class OpenSearchVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, SignsRequ
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_params: Mapping[str, object],
-        headers: Mapping[str, str],
-        get: Callable[[str, Mapping[str, str]], Awaitable[httpx.Response]],
+        headers: Mapping[str, object],
+        get: Callable[[str, Mapping[str, object]], Awaitable[httpx.Response]],
     ) -> VectorStoreSearchOptionalRequestParams:
         lookup: Final = self._filter_mapping_url(
             vector_store_id, vector_store_search_optional_params, api_base, litellm_params
@@ -779,12 +783,12 @@ class OpenSearchVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, SignsRequ
 
     def sign_request(
         self,
-        headers: Mapping[str, str],
+        headers: Mapping[str, object],
         optional_params: Mapping[str, object],
         request_data: Mapping[str, object],
         api_base: str,
         api_key: str | None = None,
-    ) -> tuple[dict[str, str], bytes]:  # mutable-ok: the shared HTTP handler requires writable headers
+    ) -> tuple[dict[str, object], bytes]:  # mutable-ok: the shared HTTP handler requires writable headers
         body: Final = json.dumps(request_data).encode()
         signed: Final = self.sign_http_request("POST", api_base, body, "application/json", optional_params)
         return dict(_with_signed_headers(headers, dict(signed.headers.items()))), body

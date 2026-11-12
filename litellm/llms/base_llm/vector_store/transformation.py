@@ -292,8 +292,8 @@ class BaseVectorStoreConfig:
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_params: Mapping[str, object],
-        headers: Mapping[str, str],
-        get: Callable[[str, Mapping[str, str]], httpx.Response],
+        headers: Mapping[str, object],
+        get: Callable[[str, Mapping[str, object]], httpx.Response],
     ) -> VectorStoreSearchOptionalRequestParams:
         return vector_store_search_optional_params
 
@@ -303,8 +303,8 @@ class BaseVectorStoreConfig:
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_params: Mapping[str, object],
-        headers: Mapping[str, str],
-        get: Callable[[str, Mapping[str, str]], Awaitable[httpx.Response]],
+        headers: Mapping[str, object],
+        get: Callable[[str, Mapping[str, object]], Awaitable[httpx.Response]],
     ) -> VectorStoreSearchOptionalRequestParams:
         return vector_store_search_optional_params
 

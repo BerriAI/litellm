@@ -833,7 +833,8 @@ TEXT_ONLY: Final = {"litellm-qa-docs": {"properties": {"tenant": {"type": "text"
                 "docs-2026": {"properties": {"category": {"type": "keyword"}}},
             },
             {"type": "eq", "key": "team", "value": "HR"},
-            "the indexes behind this store map team differently",
+            "the indexes behind this store map team differently. Map team to the same keyword field in every "
+            "index behind the store",
             id="only-some-indexes-map-the-key",
         ),
         pytest.param(
@@ -844,7 +845,8 @@ TEXT_ONLY: Final = {"litellm-qa-docs": {"properties": {"tenant": {"type": "text"
                 "docs-2026": {"properties": {"category": {"type": "keyword"}}},
             },
             {"type": "eq", "key": "team", "value": "HR"},
-            "the indexes behind this store map team differently",
+            "the indexes behind this store map team differently. Map team to the same keyword field in every "
+            "index behind the store",
             id="only-some-indexes-alias-the-key",
         ),
         pytest.param(
@@ -1043,16 +1045,40 @@ async def test_the_index_mapping_read_sends_the_caller_headers_and_retries_a_goa
         {
             "filters": {"type": "eq", "key": "category", "value": "hr"},
             "max_num_results": 3,
-            "extra_headers": {"x-gateway-key": "gateway-secret"},
+            "extra_headers": {"x-gateway-key": "gateway-secret", "x-gateway-token": b"gateway-token"},
         },
     )
 
     assert response["data"] == EXPECTED_RESULTS
     goaway, mapping_read = _mapping_reads(respond)
     assert mapping_read.headers["x-gateway-key"] == "gateway-secret"
+    assert mapping_read.headers["x-gateway-token"] == "gateway-token"
     assert _signature_scope(mapping_read) == ("aoss", "us-east-1")
     (search,) = _searches(respond)
     assert json.loads(search.content)["query"] == FILTERED_KNN
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("value", [None, 7, "café"])
+@pytest.mark.asyncio
+async def test_a_header_httpx_cannot_send_fails_a_filtered_search_like_an_unfiltered_one_before_embedding(
+    asynchronous: bool, value: object
+) -> None:
+    respond: Final = _index(DYNAMIC_MAPPING, httpx.Response(200, json=_opensearch_hits("text", "embedding")))
+    executor: Final = RecordingEmbeddingExecutor()
+    headers: Final = {"extra_headers": {"x-trace-id": value}}
+
+    with pytest.raises(openai.APIError) as unfiltered:
+        await _search(asynchronous, respond, RecordingEmbeddingExecutor(), headers)
+    with pytest.raises(openai.APIError) as filtered:
+        await _search(
+            asynchronous, respond, executor, {**headers, "filters": {"type": "eq", "key": "category", "value": "hr"}}
+        )
+
+    assert type(filtered.value) is type(unfiltered.value)
+    assert str(filtered.value) == str(unfiltered.value)
+    assert not _sent(respond)
+    executor.call.assert_not_called()
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])

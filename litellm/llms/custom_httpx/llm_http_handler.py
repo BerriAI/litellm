@@ -407,10 +407,6 @@ class _AgenticLoopParamsView(TypedDict):
 _GOAWAY_RETRY_MESSAGE: Final = "Vector store search connection was closed by an HTTP/2 GOAWAY, retrying once"
 
 
-def _str_headers(headers: Mapping[str, object]) -> Mapping[str, str]:
-    return MappingProxyType({name: value for name, value in headers.items() if isinstance(value, str)})
-
-
 def _closed_by_http2_goaway(error: httpx.RemoteProtocolError) -> bool:
     cause: Final = error.__cause__
     if cause is None:
@@ -10684,7 +10680,6 @@ class BaseLLMHTTPHandler:
 
         if extra_headers:
             headers.update(extra_headers)
-        search_headers: Final = _str_headers(headers)
 
         api_base: Final = await run_off_loop_if_aws(
             vector_store_provider_config,
@@ -10693,19 +10688,19 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        async def lookup(url: str, lookup_headers: Mapping[str, str]) -> httpx.Response:
+        async def lookup(url: str, lookup_headers: Mapping[str, object]) -> httpx.Response:
             try:
                 return await _asend_with_goaway_retry(
                     partial(
-                        async_httpx_client.client.get,
+                        async_httpx_client.get,
                         url,
                         headers=dict(lookup_headers),
-                        timeout=httpx.USE_CLIENT_DEFAULT if timeout is None else timeout,
+                        timeout=timeout,
                     )
                 )
             except httpx.TimeoutException:
                 raise _vector_store_search_timeout(vector_store_provider_config) from None
-            except httpx.TransportError as e:
+            except (httpx.TransportError, TypeError, UnicodeEncodeError) as e:
                 raise self._handle_error(e=e, provider_config=vector_store_provider_config)
 
         search_params: Final = await vector_store_provider_config.aresolve_search_params(
@@ -10713,7 +10708,7 @@ class BaseLLMHTTPHandler:
             vector_store_search_optional_params=vector_store_search_optional_params,
             api_base=api_base,
             litellm_params=MappingProxyType(dict(litellm_params, timeout=timeout)),
-            headers=search_headers,
+            headers=headers,
             get=lookup,
         )
         search_embedding_executor: Final = EmbedOnceExecutor(
@@ -10878,26 +10873,25 @@ class BaseLLMHTTPHandler:
 
         if extra_headers:
             headers.update(extra_headers)
-        search_headers: Final = _str_headers(headers)
 
         api_base: Final = vector_store_provider_config.get_complete_url(
             api_base=litellm_params.api_base,
             litellm_params=dict(litellm_params),
         )
 
-        def lookup(url: str, lookup_headers: Mapping[str, str]) -> httpx.Response:
+        def lookup(url: str, lookup_headers: Mapping[str, object]) -> httpx.Response:
             try:
                 return _send_with_goaway_retry(
                     partial(
-                        sync_httpx_client.client.get,
+                        sync_httpx_client.get,
                         url,
                         headers=dict(lookup_headers),
-                        timeout=httpx.USE_CLIENT_DEFAULT if timeout is None else timeout,
+                        timeout=timeout,
                     )
                 )
             except httpx.TimeoutException:
                 raise _vector_store_search_timeout(vector_store_provider_config) from None
-            except httpx.TransportError as e:
+            except (httpx.TransportError, TypeError, UnicodeEncodeError) as e:
                 raise self._handle_error(e=e, provider_config=vector_store_provider_config)
 
         search_params: Final = vector_store_provider_config.resolve_search_params(
@@ -10905,7 +10899,7 @@ class BaseLLMHTTPHandler:
             vector_store_search_optional_params=vector_store_search_optional_params,
             api_base=api_base,
             litellm_params=MappingProxyType(dict(litellm_params, timeout=timeout)),
-            headers=search_headers,
+            headers=headers,
             get=lookup,
         )
         search_embedding_executor: Final = EmbedOnceExecutor(
