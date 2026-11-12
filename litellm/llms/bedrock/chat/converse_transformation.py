@@ -1330,12 +1330,15 @@ class AmazonConverseConfig(BaseConfig):
         if not (litellm.drop_params or drop_params):
             raise litellm.utils.UnsupportedParamsError(
                 message=(
-                    f"{model} does not support service_tier={value!r} on Bedrock. "
+                    f"{model} does not support service_tier={value!r} on this Bedrock route, which takes "
+                    f"auto, standard, or one of {', '.join(BEDROCK_SERVICE_TIERS)}. "
                     "To drop unsupported params, set `litellm.drop_params = True`."
                 ),
                 status_code=400,
             )
-        verbose_logger.warning("Dropping service_tier=%r for %s, since Bedrock does not serve it.", value, model)
+        verbose_logger.warning(
+            "Dropping service_tier=%r for %s, since this Bedrock route does not serve it.", value, model
+        )
 
     def _translate_response_format_param(
         self,

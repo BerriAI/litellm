@@ -311,6 +311,7 @@ def test_map_openai_service_tier_unmapped_value_answers_400(value: object):
 
     assert error.value.status_code == 400
     assert f"service_tier={value!r}" in error.value.message
+    assert "default, flex, priority, reserved" in error.value.message
     assert "drop_params" in error.value.message
     assert "serviceTier" not in optional_params
 
