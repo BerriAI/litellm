@@ -1834,6 +1834,7 @@ def _steering_router(
     preferred_rpm: int = 2,
     alternate_rpm: int = 1000,
     extra_params: Mapping[str, Mapping[str, object]] = MappingProxyType({}),
+    model_info: Mapping[str, Mapping[str, object]] = MappingProxyType({}),
 ) -> Router:
     return Router(
         model_list=[
@@ -1846,6 +1847,7 @@ def _steering_router(
                     "rpm": rpm,
                     **extra_params.get(name, {}),
                 },
+                "model_info": dict(model_info.get(name, {})),
             }
             for name, rpm in ((preferred, preferred_rpm), (alternate, alternate_rpm))
         ]
@@ -1961,6 +1963,13 @@ async def test_an_alternate_that_adds_model_level_guardrails_is_never_used(monke
     assert steered["model"] == "opus"
     assert steered["metadata"]["guardrails"] == ["opus-only-input-scan"]
 
+    configured: Final = _steering_handler()
+    configured_opus: Final = {"opus": {"guardrails": [{"opus-only-input-scan": {"extra_body": {"strict": True}}}]}}
+    configured.update_variables(llm_router=_steering_router("luna", "opus", extra_params=configured_opus))
+    await _saturate(configured, "luna")
+    plain_scan: Final = {"model": "luna", "metadata": {"guardrails": ["opus-only-input-scan"]}}
+    assert await configured.async_pre_call_hook(flexible, DualCache(), plain_scan, "completion") is None
+
 
 @pytest.mark.asyncio
 async def test_a_steered_request_is_charged_to_the_groups_that_granted_the_alternate(monkeypatch: pytest.MonkeyPatch):
@@ -1973,13 +1982,103 @@ async def test_a_steered_request_is_charged_to_the_groups_that_granted_the_alter
     await _saturate(handler, "luna")
 
     flexible: Final = _team_user(["luna", "opus"], [{"model": "luna", "alternates": ["opus"]}])
-    flexible.matched_model_access_groups = ["luna-pool"]
-    data: Final = {"model": "luna", "metadata": {MODEL_ACCESS_GROUP_METADATA_KEY: ["luna-pool"], "tags": ["t"]}}
+    auth_copy: Final = flexible.model_copy()
+    data: Final = {"model": "luna", "metadata": {"user_api_key_auth": auth_copy, "tags": ["t"]}}
     steered: Final = await handler.async_pre_call_hook(flexible, DualCache(), data, "completion")
     assert isinstance(steered, dict)
     assert steered["model"] == "opus"
-    assert steered["metadata"] == {MODEL_ACCESS_GROUP_METADATA_KEY: ["opus-pool"], "tags": ["t"]}
+    assert steered["metadata"]["tags"] == ["t"]
+    assert steered["metadata"][MODEL_ACCESS_GROUP_METADATA_KEY] == ["opus-pool"]
+    assert steered["metadata"]["user_api_key_auth"].matched_model_access_groups == ["opus-pool"]
     assert flexible.matched_model_access_groups == ["opus-pool"]
+    assert auth_copy.matched_model_access_groups is None
+
+
+@pytest.mark.asyncio
+async def test_an_alternate_granted_by_a_group_the_request_did_not_reserve_against_is_never_used(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "priority_reservation", None)
+    monkeypatch.setattr(litellm.priority_reservation_settings, "saturation_threshold", 0.5)
+    handler: Final = DynamicRateLimitHandler(
+        internal_usage_cache=DualCache(), is_model_authorized=_pooled_team_allowlist
+    )
+    handler.update_variables(llm_router=_steering_router("luna", "opus"))
+    await _saturate(handler, "luna")
+
+    def reserved_against(group: str) -> UserAPIKeyAuth:
+        user: Final = _team_user(["luna", "opus"], [{"model": "luna", "alternates": ["opus"]}])
+        user.budget_reservation = {
+            "entries": [
+                {
+                    "counter_key": f"spend:model_access_group:{group}",
+                    "entity_type": "Model access group",
+                    "entity_id": group,
+                    "reserved_cost": 0.01,
+                    "applied_adjustment": 0.0,
+                }
+            ]
+        }
+        return user
+
+    assert (
+        await handler.async_pre_call_hook(reserved_against("luna-pool"), DualCache(), {"model": "luna"}, "completion")
+        is None
+    )
+    steered: Final = await handler.async_pre_call_hook(
+        reserved_against("opus-pool"), DualCache(), {"model": "luna"}, "completion"
+    )
+    assert isinstance(steered, dict)
+    assert steered["model"] == "opus"
+
+
+@pytest.mark.asyncio
+async def test_an_alternate_that_does_not_serve_the_endpoint_is_never_used(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "priority_reservation", None)
+    monkeypatch.setattr(litellm.priority_reservation_settings, "saturation_threshold", 0.5)
+    handler: Final = _steering_handler()
+    embeddings_only: Final = {"opus": {"enforce_supported_endpoints": True, "supported_endpoints": ["/v1/embeddings"]}}
+    handler.update_variables(llm_router=_steering_router("luna", "opus", model_info=embeddings_only))
+    await _saturate(handler, "luna")
+
+    flexible: Final = _team_user(["luna", "opus"], [{"model": "luna", "alternates": ["opus"]}])
+    assert await handler.async_pre_call_hook(flexible, DualCache(), {"model": "luna"}, "acompletion") is None
+    assert (
+        await handler.async_post_call_response_headers_hook(data={}, user_api_key_dict=flexible, response=None) is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_unpriced_alternate_is_never_used_while_unpriced_models_are_blocked(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "priority_reservation", None)
+    monkeypatch.setattr(litellm.priority_reservation_settings, "saturation_threshold", 0.5)
+    monkeypatch.setattr(litellm, "block_requests_for_models_without_pricing", True)
+    handler: Final = _steering_handler()
+    unpriced_opus: Final = {"opus": {"model": "openai/no-such-model-xyz"}}
+    handler.update_variables(llm_router=_steering_router("luna", "opus", extra_params=unpriced_opus))
+    await _saturate(handler, "luna")
+
+    flexible: Final = _team_user(["luna", "opus"], [{"model": "luna", "alternates": ["opus"]}])
+    assert await handler.async_pre_call_hook(flexible, DualCache(), {"model": "luna"}, "completion") is None
+
+
+@pytest.mark.asyncio
+async def test_a_broken_alternate_check_keeps_the_request_on_the_preferred_model(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "priority_reservation", None)
+    monkeypatch.setattr(litellm.priority_reservation_settings, "saturation_threshold", 0.5)
+
+    async def broken(user_api_key_dict: UserAPIKeyAuth, model: str) -> AlternateGrant | None:
+        raise RuntimeError("membership lookup is down")
+
+    handler: Final = DynamicRateLimitHandler(internal_usage_cache=DualCache(), is_model_authorized=broken)
+    handler.update_variables(llm_router=_steering_router("luna", "opus"))
+    await _saturate(handler, "luna")
+
+    flexible: Final = _team_user(["luna", "opus"], [{"model": "luna", "alternates": ["opus"]}])
+    assert await handler.async_pre_call_hook(flexible, DualCache(), {"model": "luna"}, "completion") is None
+    assert (
+        await handler.async_post_call_response_headers_hook(data={}, user_api_key_dict=flexible, response=None) is None
+    )
 
 
 def _borrowing_handler(

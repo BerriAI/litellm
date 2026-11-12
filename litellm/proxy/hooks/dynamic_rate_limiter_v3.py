@@ -2,6 +2,7 @@
 Dynamic rate limiter v3 - Saturation-aware priority-based rate limiting
 """
 
+import json
 import os
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
@@ -206,9 +207,12 @@ async def alternate_grant_for(user_api_key_dict: UserAPIKeyAuth, model: str) -> 
 
 
 REQUEST_BUCKET: Final = TypeAdapter(dict[str, object])
+REQUEST_ENTRIES: Final = TypeAdapter(tuple[object, ...])
+RESERVATION_ENTRIES: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+MODEL_ACCESS_GROUP_ENTITY: Final = "Model access group"
 
 
-def _metadata_bucket(data: Mapping[str, object], key: str) -> dict[str, object] | None:
+def _metadata_bucket(data: Mapping[str, object], key: str) -> Mapping[str, object] | None:
     """The request's ``key`` metadata bucket as a typed dict, or None when it is absent or not a mapping."""
     value: Final = data.get(key)
     if not isinstance(value, Mapping):
@@ -219,22 +223,67 @@ def _metadata_bucket(data: Mapping[str, object], key: str) -> dict[str, object] 
         return None
 
 
-def _guardrail_entry_count(data: Mapping[str, object]) -> int:
+def _guardrail_entries(data: Mapping[str, object]) -> frozenset[str]:
+    """The request's guardrail entries, settings included, in a form two lists can be compared by."""
     metadata: Final = _metadata_bucket(data, "metadata")
     guardrails: Final = metadata.get("guardrails") if metadata is not None else None
-    if isinstance(guardrails, list):
-        return len(guardrails)  # pyright: ignore[reportUnknownArgumentType]  # untyped request metadata, only counted
-    return 1 if guardrails else 0
+    entries: Final = (
+        REQUEST_ENTRIES.validate_python(guardrails)
+        if isinstance(guardrails, list)
+        else (guardrails,)
+        if guardrails
+        else ()
+    )
+    return frozenset(
+        entry if isinstance(entry, str) else json.dumps(entry, sort_keys=True, default=str) for entry in entries
+    )
+
+
+def _auth_copy_with_groups(bucket: Mapping[str, object], access_groups: tuple[str, ...]) -> dict[str, object]:
+    auth: Final = bucket.get("user_api_key_auth")
+    if isinstance(auth, UserAPIKeyAuth):
+        return {"user_api_key_auth": auth.model_copy(update={"matched_model_access_groups": list(access_groups)})}
+    if isinstance(auth, Mapping):
+        return {
+            "user_api_key_auth": {
+                **REQUEST_BUCKET.validate_python(auth),
+                "matched_model_access_groups": list(access_groups),
+            }
+        }
+    return {}
 
 
 def _with_access_groups(data: Mapping[str, object], access_groups: tuple[str, ...]) -> dict[str, object]:
-    """``data`` with the served model's access groups in every metadata bucket that carries the auth stamp."""
+    """``data`` with the served model's access groups stamped on every metadata bucket, the auth copy in it
+    included, so spend attribution charges the groups that granted the served model and nothing else."""
     stamped: Final = {
-        key: {**bucket, MODEL_ACCESS_GROUP_METADATA_KEY: list(access_groups)}
+        key: {
+            **bucket,
+            MODEL_ACCESS_GROUP_METADATA_KEY: list(access_groups),
+            **_auth_copy_with_groups(bucket, access_groups),
+        }
         for key in ("metadata", "litellm_metadata")
-        if (bucket := _metadata_bucket(data, key)) is not None and MODEL_ACCESS_GROUP_METADATA_KEY in bucket
+        if (bucket := _metadata_bucket(data, key)) is not None
     }
     return {**data, **stamped}
+
+
+def _reservation_covers(user_api_key_dict: UserAPIKeyAuth, access_groups: tuple[str, ...]) -> bool:
+    """Whether every model access group the request already reserved budget against also grants the alternate,
+    so settlement never charges a group that did not serve."""
+    reservation: Final = user_api_key_dict.budget_reservation
+    entries: Final = reservation.get("entries") if reservation is not None else None
+    if not isinstance(entries, list):
+        return True
+    try:
+        reserved: Final = frozenset(
+            entry.get("entity_id")
+            for entry in RESERVATION_ENTRIES.validate_python(entries)
+            if entry.get("entity_type") == MODEL_ACCESS_GROUP_ENTITY
+        )
+    except ValidationError:
+        return False
+    return reserved <= frozenset(access_groups)
 
 
 def alternates_for(user_api_key_dict: UserAPIKeyAuth, model: str) -> tuple[str, ...]:
@@ -1032,7 +1081,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             verbose_proxy_logger.debug("No model group info for %s, allowing request", model)
             return None
 
-        steered: Final = await self._steer_to_alternate(model, requested_group_info, user_api_key_dict, data)
+        steered: Final = await self._steer_to_alternate(model, requested_group_info, user_api_key_dict, data, call_type)
         try:
             admitted: Final = await self._admit_steered_or_preferred(
                 model, requested_group_info, steered, user_api_key_dict
@@ -1062,7 +1111,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         if steered is not None:
             try:
                 await self._admit(steered.model, steered.group_info, user_api_key_dict)
-            except HTTPException:
+            except Exception:  # noqa: BLE001  # the alternate's refusal or error keeps the request on its own model
                 verbose_proxy_logger.info(
                     "Alternate %s refused team %s, staying on %s", steered.model, user_api_key_dict.team_id, model
                 )
@@ -1094,8 +1143,26 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         model_group_info: ModelGroupInfo,
         user_api_key_dict: UserAPIKeyAuth,
         data: Mapping[str, object],
+        call_type: CallTypesLiteral,
     ) -> "SteeredModel | None":
-        """First team alternate below ``saturation_threshold`` once ``model`` is at or above it, else None."""
+        """First team alternate below ``saturation_threshold`` once ``model`` is at or above it, else None. A
+        broken alternate check is logged and leaves the request on ``model``, as the limiter fails open elsewhere."""
+        try:
+            return await self._pick_alternate(model, model_group_info, user_api_key_dict, data, call_type)
+        except Exception:  # noqa: BLE001  # a failing alternate check must not fail a request that can stay put
+            verbose_proxy_logger.warning(
+                "Alternate check failed for team %s, staying on %s", user_api_key_dict.team_id, model, exc_info=True
+            )
+            return None
+
+    async def _pick_alternate(
+        self,
+        model: str,
+        model_group_info: ModelGroupInfo,
+        user_api_key_dict: UserAPIKeyAuth,
+        data: Mapping[str, object],
+        call_type: CallTypesLiteral,
+    ) -> "SteeredModel | None":
         alternates: Final = alternates_for(user_api_key_dict, model)
         if not alternates:
             return None
@@ -1103,23 +1170,40 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         if await self._check_model_saturation(model, model_group_info) < threshold:
             return None
         for alternate in alternates:
-            if alternate == model or not self._steerable(model, alternate, data):
+            if alternate == model or not self._steerable(model, alternate, data, call_type, user_api_key_dict.team_id):
                 continue
             if (candidate := await self._idle_permitted_alternate(alternate, user_api_key_dict, threshold)) is not None:
                 verbose_proxy_logger.info("Steering team %s from %s to %s", user_api_key_dict.team_id, model, alternate)
                 return candidate
         return None
 
-    def _steerable(self, model: str, alternate: str, data: Mapping[str, object]) -> bool:
+    def _steerable(
+        self, model: str, alternate: str, data: Mapping[str, object], call_type: CallTypesLiteral, team_id: str | None
+    ) -> bool:
         """Whether ``alternate`` may serve a request that already passed auth and the guardrail walk as ``model``: a
-        zero-cost ``model`` waived the aggregate budget checks, so only another zero-cost alternate may take it, and
-        an alternate with a model-level guardrail the request has not run would reach it unchecked."""
-        from litellm.proxy.auth.auth_checks import is_model_cost_zero
+        zero-cost ``model`` waived the aggregate budget checks, so only another zero-cost alternate may take it, an
+        unpriced alternate is blocked when unpriced models are, the alternate has to serve this endpoint, and an
+        alternate with a model-level guardrail the request has not run would reach it unchecked."""
+        from litellm.proxy.auth.auth_checks import (
+            _unpriced_models_in_request,  # pyright: ignore[reportPrivateUsage]  # steering shares the fallback contract
+            is_model_cost_zero,
+        )
+        from litellm.proxy.route_llm_request import endpoint_unsupported_by_model
 
         if is_model_cost_zero(model=model, llm_router=self.llm_router) and not is_model_cost_zero(
             model=alternate, llm_router=self.llm_router
         ):
             verbose_proxy_logger.info("Not steering zero-cost %s to priced %s", model, alternate)
+            return False
+        if litellm.block_requests_for_models_without_pricing and _unpriced_models_in_request(
+            model=alternate, llm_router=self.llm_router
+        ):
+            verbose_proxy_logger.info("Not steering %s to unpriced %s", model, alternate)
+            return False
+        if endpoint_unsupported_by_model(call_type, dict(data, model=alternate), self.llm_router, team_id):
+            verbose_proxy_logger.info(
+                "Not steering %s to %s, the alternate does not serve %s", model, alternate, call_type
+            )
             return False
         probe: Final = REQUEST_BUCKET.validate_python(
             check_and_merge_model_level_guardrails(
@@ -1128,7 +1212,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                 trust_client_model_info=False,
             )
         )
-        if _guardrail_entry_count(probe) != _guardrail_entry_count(data):
+        if _guardrail_entries(probe) != _guardrail_entries(data):
             verbose_proxy_logger.info(
                 "Not steering %s to %s, the alternate adds model-level guardrails", model, alternate
             )
@@ -1142,7 +1226,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         if group_info is None:
             return None
         grant: Final = await self._is_model_authorized(user_api_key_dict, alternate)
-        if grant is None:
+        if grant is None or not _reservation_covers(user_api_key_dict, grant.access_groups):
             return None
         if await self._check_model_saturation(alternate, group_info) >= threshold:
             return None
