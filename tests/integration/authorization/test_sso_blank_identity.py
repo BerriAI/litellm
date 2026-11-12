@@ -926,6 +926,26 @@ def test_cli_sign_in_through_saml_completes_while_dashboard_sign_in_stays_refuse
     assert "Admin UI is Disabled" in dashboard.text, dashboard.text
 
 
+def test_cli_sign_in_through_saml_never_prefills_the_code_from_a_crafted_return_to(
+    saml: OwnedProxy, saml_idp: SamlIdp, gateway_module: Gateway
+) -> None:
+    proxy: Final = saml.gateway
+    email: Final = f"saml-cli-crafted-{uuid.uuid4().hex[:12]}@example.com"
+    session: Final = _start_cli_login(proxy)
+    crafted: Final = f"litellm-session-token:{session.login_id}:{session.user_code}"
+    with gateway_module.scenario() as scenario, _browser() as browser:
+        _forget_sign_in(scenario, email)
+        link: Final = browser.get(f"{_proxy_url(proxy)}/sso/key/generate", params={"return_to": crafted})
+        assert link.status_code == 303, f"{link.status_code} {link.text}"
+        acs: Final = f"{_proxy_url(proxy)}/sso/saml/callback"
+        saml_response: Final = saml_idp.response(acs, link.cookies[SAML_STATE_COOKIE], email, email)
+        callback: Final = browser.post(acs, data={"SAMLResponse": saml_response, "RelayState": crafted})
+    assert callback.status_code == 200 and CLI_LOGIN_PAGE_TITLE in callback.text, (
+        f"{callback.status_code} {callback.text}"
+    )
+    assert session.user_code not in callback.text, callback.text
+
+
 def test_saml_sign_in_started_on_one_proxy_completes_on_another(
     saml_pair: SamlPair, saml_idp: SamlIdp, gateway_module: Gateway
 ) -> None:

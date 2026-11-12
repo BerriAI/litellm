@@ -2672,7 +2672,7 @@ async def _complete_cli_sso_callback_session(
         content=_render_cli_sso_verification_page(
             verify_url=verify_url,
             browser_complete_token=browser_complete_token,
-            prefill_user_code=prefill_user_code,
+            prefill_user_code=prefill_user_code if _cli_sso_verification_uri_complete_enabled() else None,
             team_choices=team_choices,
         ),
         status_code=200,

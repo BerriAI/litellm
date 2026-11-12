@@ -3808,9 +3808,10 @@ class TestCLIKeyRegenerationFlow:
         assert "value=" not in input_line
         assert "shown in your terminal" in html
 
+    @pytest.mark.parametrize("prefill_enabled", [True, False])
     @pytest.mark.asyncio
-    async def test_cli_sso_callback_prefills_user_code_on_verify_page(self):
-        """Test the CLI SSO callback threads prefill_user_code into the rendered verify page"""
+    async def test_cli_sso_callback_prefills_user_code_on_verify_page_only_when_enabled(self, prefill_enabled: bool):
+        """Test the verify page shows the state's user_code only when the operator opted into prefill"""
         from litellm.proxy._types import LiteLLM_UserTable
         from litellm.proxy.management_endpoints.ui_sso import cli_sso_callback
 
@@ -3846,6 +3847,10 @@ class TestCLIKeyRegenerationFlow:
             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
             patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
             patch("litellm.proxy.proxy_server.cli_sso_session_cache", mock_cache),
+            patch(
+                "litellm.proxy.proxy_server.general_settings",
+                {"allow_cli_sso_verification_uri_complete": prefill_enabled},
+            ),
         ):
             result = await cli_sso_callback(
                 request=mock_request,
@@ -3855,7 +3860,7 @@ class TestCLIKeyRegenerationFlow:
             )
 
         assert result.status_code == 200
-        assert 'value="WXYZ-2345"' in result.body.decode()
+        assert ("WXYZ-2345" in result.body.decode()) is prefill_enabled
 
     @pytest.mark.asyncio
     async def test_cli_sso_complete_verifies_user_code(self):
