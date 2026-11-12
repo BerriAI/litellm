@@ -76,3 +76,14 @@ describe("deprecationUsageRange", () => {
     });
   });
 });
+
+it("retains daily totals, explicit zeroes and gaps for the alert chart", () => {
+  const alerts = usedDeprecationAlerts(
+    [model],
+    [day("2026-11-04", 12), day("2026-11-04", 3), day("2026-11-02", 0), day("2026-11-01", 8, "example-other")],
+  );
+  expect(alerts[0].history).toEqual([
+    { date: "2026-11-02", value: 0 },
+    { date: "2026-11-04", value: 15 },
+  ]);
+});

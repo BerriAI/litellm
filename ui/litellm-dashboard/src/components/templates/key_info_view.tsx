@@ -1,3 +1,5 @@
+import { useUrlTab } from "@/hooks/useUrlTab";
+import ResourceActivity from "@/components/UsagePage/ResourceActivity";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useModelAccessGroupNames } from "@/app/(dashboard)/hooks/models/useModels";
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
@@ -75,6 +77,7 @@ interface KeyInfoViewProps {
   onDelete?: () => void;
   teams: any[] | null;
   backButtonText?: string;
+  tabParam?: string;
 }
 
 // Premium fields (from LiteLLM_ManagementEndpoint_MetadataFields_Premium in
@@ -105,11 +108,17 @@ export default function KeyInfoView({
   onKeyDataUpdate,
   onDelete,
   backButtonText = i18n.t("keyDetail.keyInfoView.backToKeys"),
+  tabParam = "detail_tab",
 }: KeyInfoViewProps) {
   const { t } = useTranslation();
   const { accessToken, userId: userID, userRole, premiumUser } = useAuthorized();
   const accessGroupNames = useModelAccessGroupNames();
   const activityDateRange = useActivityDateRange();
+  const [activeTab, setActiveTab] = useUrlTab(
+    ["overview", "activity", "savings", "auto-router-usage", "settings"],
+    "overview",
+    tabParam,
+  );
   const queryClient = useQueryClient();
   const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
   const { teams: teamsData } = useTeams();
@@ -741,10 +750,13 @@ export default function KeyInfoView({
         </DialogContent>
       </Dialog>
 
-      <Tabs defaultValue="overview">
+      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(String(value) as typeof activeTab)}>
         <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
           <TabsTrigger value="overview" className="flex-none rounded-none px-4 py-2">
             {t("keyDetail.keyInfoView.tabs.overview")}
+          </TabsTrigger>
+          <TabsTrigger value="activity" className="flex-none rounded-none px-4 py-2">
+            {t("shared.resourceActivity.title")}
           </TabsTrigger>
           <TabsTrigger value="savings" className="flex-none rounded-none px-4 py-2">
             {t("keyDetail.keyInfoView.tabs.savings")}
@@ -948,6 +960,10 @@ export default function KeyInfoView({
                 variant="card"
               />
             </div>
+          </TabsContent>
+
+          <TabsContent value="activity">
+            <ResourceActivity scope="key" id={currentKeyData.token} activity={activityDateRange} />
           </TabsContent>
 
           {/* Savings Panel. No keepMounted: this tab sweeps the daily rollup, and staying mounted

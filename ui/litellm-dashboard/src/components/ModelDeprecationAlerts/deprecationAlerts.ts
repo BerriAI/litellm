@@ -10,6 +10,7 @@ export interface DeprecationAlert {
   requests: number;
   lastUsedDate: string;
   lastDayRequests: number;
+  history?: { date: string; value: number }[];
   state?: components["schemas"]["DeprecationAlertState"];
 }
 
@@ -52,7 +53,23 @@ export function usedDeprecationAlerts(
         }
       }
       if (requests > 0) {
-        const alert = { id, model, usageModel, requests, lastUsedDate, lastDayRequests };
+        const history = Array.from(new Set(days.map((day) => day.date)))
+          .sort()
+          .flatMap((date) => {
+            const recorded = days.filter((day) => day.date === date && day.breakdown?.models?.[usageModel]);
+            return recorded.length
+              ? [
+                  {
+                    date,
+                    value: recorded.reduce(
+                      (sum, day) => sum + (day.breakdown?.models?.[usageModel]?.metrics.api_requests ?? 0),
+                      0,
+                    ),
+                  },
+                ]
+              : [];
+          });
+        const alert = { id, model, usageModel, requests, lastUsedDate, lastDayRequests, history };
         alerts.push(alert);
       }
     }

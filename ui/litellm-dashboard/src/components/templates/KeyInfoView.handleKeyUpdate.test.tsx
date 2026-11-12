@@ -1,4 +1,5 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { renderWithProviders as render } from "../../../tests/test-utils";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "@/lib/toast";
 import type { KeyResponse } from "../key_team_helpers/key_list";
@@ -123,6 +124,7 @@ vi.mock("../common_components/AutoRotationView", () => {
 
 // Mock Next.js router to avoid "invariant expected app router to be mounted" error
 vi.mock("next/navigation", () => ({
+  usePathname: () => "/ui/",
   useRouter: () => ({
     push: vi.fn(),
     replace: vi.fn(),
