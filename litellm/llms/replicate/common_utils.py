@@ -70,12 +70,19 @@ def replicate_auth_headers(
     return {**headers, "Authorization": f"Bearer {resolved_key}", "Content-Type": "application/json"}
 
 
+def replicate_model_path(model: str) -> str:
+    segments: Final = tuple(model.split("/"))
+    if any(segment in ("", ".", "..") for segment in segments):
+        raise ReplicateError(status_code=400, message=f"Invalid Replicate model path: {model!r}", headers={})
+    return "/".join(encode_url_path_segment(segment, field_name="model") for segment in segments)
+
+
 def replicate_prediction_request(
     api_base: str, model: str, prediction_input: Mapping[str, object]
 ) -> ReplicatePredictionRequest:
     if model.startswith("deployments/"):
         return ReplicatePredictionRequest(
-            url=join_api_base(api_base, f"{model}/predictions"),
+            url=join_api_base(api_base, f"{replicate_model_path(model)}/predictions"),
             body=MappingProxyType({"input": prediction_input}),
         )
     if ":" in model:
@@ -85,7 +92,7 @@ def replicate_prediction_request(
             body=MappingProxyType({"version": version, "input": prediction_input}),
         )
     return ReplicatePredictionRequest(
-        url=join_api_base(api_base, f"models/{model}/predictions"),
+        url=join_api_base(api_base, f"models/{replicate_model_path(model)}/predictions"),
         body=MappingProxyType({"input": prediction_input}),
     )
 

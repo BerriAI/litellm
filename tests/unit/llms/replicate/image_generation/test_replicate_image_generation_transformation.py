@@ -360,3 +360,23 @@ def test_oversized_b64_download_is_a_replicate_error():
             {"response_format": "b64_json"},
         )
     assert refused.value.status_code == 502
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "black-forest-labs/../xai/grok-imagine-image",
+        "deployments/acme/../../models/xai/grok-imagine-image",
+        "black-forest-labs//flux-schnell",
+        "./flux-schnell",
+    ],
+)
+def test_model_paths_with_dot_or_empty_segments_are_rejected(model: str):
+    with pytest.raises(ReplicateError) as refused:
+        common_utils.replicate_prediction_request("https://api.replicate.com/v1", model, {})
+    assert refused.value.status_code == 400
+
+
+def test_model_path_segments_are_url_encoded():
+    request = common_utils.replicate_prediction_request("https://api.replicate.com/v1", "acme/odd name?x", {})
+    assert request.url == "https://api.replicate.com/v1/models/acme/odd%20name%3Fx/predictions"

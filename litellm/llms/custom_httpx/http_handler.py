@@ -1722,15 +1722,18 @@ class HTTPHandler:
         response: Final = self.client.send(request, stream=True, follow_redirects=False)
         return self._read_with_response_limit(response, max_bytes=max_bytes, follow_redirects=follow_redirects)
 
+    def _next_redirect_hop(self, hop: httpx.Response) -> httpx.Response:
+        if hop.next_request is None:
+            return hop
+        hop.close()
+        return self.client.send(hop.next_request, auth=None, stream=True, follow_redirects=False)
+
     def _last_redirect_hop(self, response: httpx.Response, *, follow_redirects: bool) -> httpx.Response:
         hop = response  # rebind-ok: walks the redirect chain without recursion
         for _ in range(10):
             if hop.next_request is None or not follow_redirects:
                 return hop
-            hop.close()
-            hop = self.client.send(
-                hop.next_request, auth=None, stream=True, follow_redirects=False
-            )  # rebind-ok: walks the redirect chain without recursion
+            hop = self._next_redirect_hop(hop)  # rebind-ok: walks the redirect chain without recursion
         if hop.next_request is None or not follow_redirects:
             return hop
         hop.close()
