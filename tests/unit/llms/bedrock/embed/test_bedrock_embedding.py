@@ -190,6 +190,34 @@ def test_bedrock_cohere_embedding_returns_the_scripted_vector(respx_mock: respx.
     assert response.data == [{"object": "embedding", "index": 0, "embedding": [0.3, 0.2, 0.1]}]
 
 
+def test_bedrock_cohere_embedding_sends_max_tokens_and_priority(respx_mock: respx.MockRouter) -> None:
+    route = respx_mock.post("https://bedrock-runtime.us-east-1.amazonaws.com/model/cohere.embed-v4:0/invoke").mock(
+        return_value=httpx.Response(
+            200,
+            json={"embeddings": {"float": [[0.3, 0.2, 0.1]]}, "response_type": "embeddings_by_type"},
+        )
+    )
+
+    litellm.embedding(
+        model="bedrock/cohere.embed-v4:0",
+        input=["hello"],
+        api_key="test-bearer-token",
+        aws_region_name="us-east-1",
+        aws_bedrock_runtime_endpoint="https://bedrock-runtime.us-east-1.amazonaws.com",
+        max_tokens=16,
+        priority=5,
+        truncate="END",
+    )
+
+    assert json.loads(route.calls.last.request.read()) == {
+        "input_type": "search_document",
+        "texts": ["hello"],
+        "max_tokens": 16,
+        "priority": 5,
+        "truncate": "END",
+    }
+
+
 GOVCLOUD_WEST_RUNTIME: Final = "https://bedrock-runtime.us-gov-west-1.amazonaws.com"
 
 
