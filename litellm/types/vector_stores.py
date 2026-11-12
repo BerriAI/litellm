@@ -346,25 +346,46 @@ VECTOR_STORE_OPENAI_PARAMS = Literal[
 ]
 
 
-class OpenAIComparisonFilter(LiteLLMBaseModel):
-    model_config = ConfigDict(frozen=True)
+def _require_items(items: tuple[object, ...]) -> tuple[object, ...]:
+    if not items:
+        raise ValueError("must not be empty")
+    return items
 
-    type: Literal["eq", "ne", "gt", "gte", "lt", "lte", "in", "nin"]
+
+class OpenAIEqualityFilter(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["eq", "ne"]
     key: str
-    value: str | bool | int | float | Annotated[tuple[StrictStr | StrictInt | StrictFloat, ...], Field(fail_fast=True)]
+    value: str | bool | int | float
 
 
-def _require_members(members: tuple["OpenAIVectorStoreFilter", ...]) -> tuple["OpenAIVectorStoreFilter", ...]:
-    if not members:
-        raise ValueError("an and/or filter needs at least one member")
-    return members
+class OpenAIRangeFilter(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["gt", "gte", "lt", "lte"]
+    key: str
+    value: StrictInt | StrictFloat
+
+
+class OpenAIMembershipFilter(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["in", "nin"]
+    key: str
+    value: Annotated[
+        tuple[StrictStr | StrictInt | StrictFloat, ...], Field(fail_fast=True), AfterValidator(_require_items)
+    ]
+
+
+OpenAIComparisonFilter: TypeAlias = OpenAIEqualityFilter | OpenAIRangeFilter | OpenAIMembershipFilter
 
 
 class OpenAICompoundFilter(LiteLLMBaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     type: Literal["and", "or"]
-    filters: Annotated[tuple["OpenAIVectorStoreFilter", ...], Field(fail_fast=True), AfterValidator(_require_members)]
+    filters: Annotated[tuple["OpenAIVectorStoreFilter", ...], Field(fail_fast=True), AfterValidator(_require_items)]
 
 
 OpenAIVectorStoreFilter: TypeAlias = Annotated[

@@ -1,7 +1,7 @@
 import re
 from collections.abc import Mapping
 from copy import deepcopy
-from itertools import product
+from itertools import chain, product
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 from urllib.parse import urlparse
@@ -32,6 +32,9 @@ from litellm.types.vector_stores import (
     BaseVectorStoreAuthCredentials,
     OpenAIComparisonFilter,
     OpenAICompoundFilter,
+    OpenAIEqualityFilter,
+    OpenAIMembershipFilter,
+    OpenAIRangeFilter,
     OpenAIVectorStoreFilter,
     VectorStoreIndexEndpoints,
     VectorStoreResultContent,
@@ -60,6 +63,7 @@ _AWS_COMPARISON_OPERATORS: Final = MappingProxyType(
     }
 )
 _AWS_LOGICAL_OPERATORS: Final = MappingProxyType({"and": "andAll", "or": "orAll"})
+_NUMERIC_MEMBERSHIP: Final = MappingProxyType({"in": ("or", "eq"), "nin": ("and", "ne")})
 _AWS_FILTER_KEYS: Final = frozenset(
     (
         *_AWS_COMPARISON_OPERATORS.values(),
@@ -75,14 +79,48 @@ _REASON_END_CHARS: Final = _MAX_REASON_CHARS // 2
 
 
 def _aws_retrieval_filter(openai_filter: OpenAIComparisonFilter | OpenAICompoundFilter) -> Mapping[str, object]:
-    if isinstance(openai_filter, OpenAIComparisonFilter):
-        value: Final = list(openai_filter.value) if isinstance(openai_filter.value, tuple) else openai_filter.value
-        return {_AWS_COMPARISON_OPERATORS[openai_filter.type]: {"key": openai_filter.key, "value": value}}
-    if len(openai_filter.filters) == 1:
-        return _aws_retrieval_filter(openai_filter.filters[0])
-    return {
-        _AWS_LOGICAL_OPERATORS[openai_filter.type]: [_aws_retrieval_filter(member) for member in openai_filter.filters]
-    }
+    match openai_filter:
+        case OpenAICompoundFilter():
+            return _aws_logical_filter(openai_filter.type, openai_filter.filters)
+        case OpenAIMembershipFilter() if _expands_to_logical_filter(openai_filter):
+            return _aws_logical_filter(_NUMERIC_MEMBERSHIP[openai_filter.type][0], (openai_filter,))
+        case OpenAIMembershipFilter():
+            return _aws_comparison(openai_filter.type, openai_filter.key, list(openai_filter.value))
+        case OpenAIEqualityFilter() | OpenAIRangeFilter():
+            return _aws_comparison(openai_filter.type, openai_filter.key, openai_filter.value)
+
+
+def _aws_logical_filter(
+    operator: str, members: tuple[OpenAIComparisonFilter | OpenAICompoundFilter, ...]
+) -> Mapping[str, object]:
+    aws_members: Final = tuple(chain.from_iterable(_aws_group_members(operator, member) for member in members))
+    if len(aws_members) == 1:
+        return aws_members[0]
+    return {_AWS_LOGICAL_OPERATORS[operator]: list(aws_members)}
+
+
+def _aws_group_members(
+    operator: str, member: OpenAIComparisonFilter | OpenAICompoundFilter
+) -> tuple[Mapping[str, object], ...]:
+    match member:
+        case OpenAICompoundFilter() if member.type == operator:
+            return tuple(chain.from_iterable(_aws_group_members(operator, nested) for nested in member.filters))
+        case OpenAIMembershipFilter() if (
+            _expands_to_logical_filter(member) and _NUMERIC_MEMBERSHIP[member.type][0] == operator
+        ):
+            return tuple(
+                _aws_comparison(_NUMERIC_MEMBERSHIP[member.type][1], member.key, item) for item in member.value
+            )
+        case _:
+            return (_aws_retrieval_filter(member),)
+
+
+def _expands_to_logical_filter(membership: OpenAIMembershipFilter) -> bool:
+    return not all(isinstance(item, str) for item in membership.value)
+
+
+def _aws_comparison(operator: str, key: str, value: str | float | list[str | float]) -> Mapping[str, object]:
+    return {_AWS_COMPARISON_OPERATORS[operator]: {"key": key, "value": value}}
 
 
 def _validation_reason(error: ValidationError) -> str:
@@ -261,6 +299,8 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
     def _aws_filters(self, filters: object, drop_params: bool) -> Mapping[str, object] | None:
         if not isinstance(filters, dict):
             return None
+        if not filters:
+            return self._invalid_filters("filters must not be empty", drop_params)
         if "operator" in filters:
             return self._map_operator_filter(filters)
         if "and" in filters or "or" in filters:

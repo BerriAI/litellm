@@ -444,9 +444,29 @@ def _sent_filter(retrieve_route: respx.Route) -> object:
             id="in",
         ),
         pytest.param(
-            {"type": "nin", "key": "year", "value": [2022, 2023]},
-            {"notIn": {"key": "year", "value": [2022, 2023]}},
+            {"type": "nin", "key": "department", "value": ["hr", "sales"]},
+            {"notIn": {"key": "department", "value": ["hr", "sales"]}},
             id="nin",
+        ),
+        pytest.param(
+            {"type": "in", "key": "year", "value": [2023, 2024]},
+            {"orAll": [{"equals": {"key": "year", "value": 2023}}, {"equals": {"key": "year", "value": 2024}}]},
+            id="in-numbers-as-or-of-equals",
+        ),
+        pytest.param(
+            {"type": "nin", "key": "year", "value": [2022, 2023]},
+            {"andAll": [{"notEquals": {"key": "year", "value": 2022}}, {"notEquals": {"key": "year", "value": 2023}}]},
+            id="nin-numbers-as-and-of-not-equals",
+        ),
+        pytest.param(
+            {"type": "in", "key": "code", "value": ["hr", 7]},
+            {"orAll": [{"equals": {"key": "code", "value": "hr"}}, {"equals": {"key": "code", "value": 7}}]},
+            id="in-strings-and-numbers-as-or-of-equals",
+        ),
+        pytest.param(
+            {"type": "in", "key": "year", "value": [2023]},
+            {"equals": {"key": "year", "value": 2023}},
+            id="in-one-number-unwrapped",
         ),
         pytest.param(
             {
@@ -495,6 +515,74 @@ def _sent_filter(retrieve_route: respx.Route) -> object:
             {"type": "or", "filters": [{"type": "eq", "key": "department", "value": "hr"}]},
             {"equals": {"key": "department", "value": "hr"}},
             id="one-member-compound-unwrapped",
+        ),
+        pytest.param(
+            {
+                "type": "and",
+                "filters": [
+                    {"type": "eq", "key": "department", "value": "hr"},
+                    {
+                        "type": "and",
+                        "filters": [
+                            {"type": "gte", "key": "year", "value": 2023},
+                            {"type": "lt", "key": "year", "value": 2025},
+                        ],
+                    },
+                ],
+            },
+            {
+                "andAll": [
+                    {"equals": {"key": "department", "value": "hr"}},
+                    {"greaterThanOrEquals": {"key": "year", "value": 2023}},
+                    {"lessThan": {"key": "year", "value": 2025}},
+                ]
+            },
+            id="and-inside-and-joins-the-group",
+        ),
+        pytest.param(
+            {
+                "type": "and",
+                "filters": [
+                    {"type": "eq", "key": "department", "value": "hr"},
+                    {"type": "nin", "key": "year", "value": [2022, 2023]},
+                ],
+            },
+            {
+                "andAll": [
+                    {"equals": {"key": "department", "value": "hr"}},
+                    {"notEquals": {"key": "year", "value": 2022}},
+                    {"notEquals": {"key": "year", "value": 2023}},
+                ]
+            },
+            id="nin-numbers-inside-and-joins-the-group",
+        ),
+        pytest.param(
+            {
+                "type": "and",
+                "filters": [
+                    {"type": "eq", "key": "department", "value": "hr"},
+                    {
+                        "type": "or",
+                        "filters": [
+                            {"type": "in", "key": "year", "value": [2023, 2024]},
+                            {"type": "eq", "key": "department", "value": "sales"},
+                        ],
+                    },
+                ],
+            },
+            {
+                "andAll": [
+                    {"equals": {"key": "department", "value": "hr"}},
+                    {
+                        "orAll": [
+                            {"equals": {"key": "year", "value": 2023}},
+                            {"equals": {"key": "year", "value": 2024}},
+                            {"equals": {"key": "department", "value": "sales"}},
+                        ]
+                    },
+                ]
+            },
+            id="in-numbers-inside-or-joins-the-group",
         ),
         pytest.param(
             {"andAll": [{"equals": {"key": "a", "value": 1}}, {"startsWith": {"key": "b", "value": "x"}}]},
@@ -615,6 +703,22 @@ INVALID_FILTERS: Final = (
         "filters.and.filters.1",
     ),
     ("bools-in-list", {"type": "in", "key": "remote", "value": [True, False]}, "filters.in.value"),
+    ("empty-object", {}, "filters must not be empty"),
+    (
+        "extra-key-on-comparison",
+        {"type": "eq", "key": "department", "value": "hr", "filters": [{"type": "eq", "key": "year", "value": 2024}]},
+        "filters.eq.filters: Extra inputs are not permitted",
+    ),
+    (
+        "extra-key-on-compound",
+        {"type": "or", "filters": [{"type": "eq", "key": "department", "value": "hr"}], "key": "year"},
+        "filters.or.key: Extra inputs are not permitted",
+    ),
+    ("in-scalar", {"type": "in", "key": "department", "value": "hr"}, "filters.in.value"),
+    ("in-empty-list", {"type": "in", "key": "department", "value": []}, "filters.in.value: Value error, must not be"),
+    ("eq-list", {"type": "eq", "key": "department", "value": ["hr"]}, "filters.eq.value"),
+    ("gt-string", {"type": "gt", "key": "year", "value": "2023"}, "filters.gt.value"),
+    ("gte-bool", {"type": "gte", "key": "year", "value": True}, "filters.gte.value"),
 )
 
 
