@@ -258,12 +258,15 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
           {response.assessments.map((assess, idx) => {
             const policyBadges = (
               <div className="flex flex-wrap gap-1">
-                {assess.wordPolicy && chip("word", "slate")}
-                {assess.contentPolicy && chip("content", "slate")}
-                {assess.topicPolicy && chip("topic", "slate")}
-                {assess.sensitiveInformationPolicy && chip("sensitive-info", "slate")}
-                {assess.contextualGroundingPolicy && chip("contextual-grounding", "slate")}
-                {assess.automatedReasoningPolicy && chip("automated-reasoning", "slate")}
+                {assess.wordPolicy && chip(t("logs.detail.bedrock.policyChips.word"), "slate")}
+                {assess.contentPolicy && chip(t("logs.detail.bedrock.policyChips.content"), "slate")}
+                {assess.topicPolicy && chip(t("logs.detail.bedrock.policyChips.topic"), "slate")}
+                {assess.sensitiveInformationPolicy &&
+                  chip(t("logs.detail.bedrock.policyChips.sensitiveInformation"), "slate")}
+                {assess.contextualGroundingPolicy &&
+                  chip(t("logs.detail.bedrock.policyChips.contextualGrounding"), "slate")}
+                {assess.automatedReasoningPolicy &&
+                  chip(t("logs.detail.bedrock.policyChips.automatedReasoning"), "slate")}
               </div>
             );
 
@@ -415,7 +418,7 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
                             >
                               <div className="flex items-center gap-2">
                                 {chip(r.action ?? t("logs.detail.bedrock.notAvailable"), r.detected ? "red" : "slate")}
-                                <span className="font-medium">{r.name ?? "regex"}</span>
+                                <span className="font-medium">{r.name ?? t("logs.detail.bedrock.unnamedRegex")}</span>
                                 <span className="font-mono text-xs break-all">{r.regex}</span>
                               </div>
                               <div className="flex items-center gap-2">
@@ -439,7 +442,7 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
                         <div key={i} className="px-3 py-1.5 bg-muted rounded-md text-xs">
                           <div className="flex items-center gap-2">
                             {chip(t.action ?? i18n.t("logs.detail.bedrock.notAvailable"), t.detected ? "red" : "slate")}
-                            <span className="font-medium">{t.name ?? "topic"}</span>
+                            <span className="font-medium">{t.name ?? i18n.t("logs.detail.bedrock.unnamedTopic")}</span>
                             {t.type && chip(t.type, "slate")}
                             {boolPill(t.detected)}
                           </div>

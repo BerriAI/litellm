@@ -45,12 +45,22 @@ const autoRouterAnnouncement = (): Announcement => ({
   href: AUTO_ROUTER_DOCS_URL,
 });
 
-const describeRelease = ({ new_features, bug_fixes, other_updates }: LatestReleaseInfo): string =>
-  [
-    i18n.t("shell.notifications.release.newFeatures", { count: new_features }),
-    i18n.t("shell.notifications.release.fixes", { count: bug_fixes }),
-    i18n.t("shell.notifications.release.otherUpdates", { count: other_updates }),
-  ].join(", ");
+const describeUpgrade = (
+  currentVersion: string,
+  { new_features, bug_fixes, other_updates }: LatestReleaseInfo,
+): string => {
+  if (new_features + bug_fixes + other_updates === 0) {
+    return i18n.t("shell.notifications.upgrade.descriptionWithoutCounts", { current: currentVersion });
+  }
+  return i18n.t("shell.notifications.upgrade.description", {
+    summary: [
+      i18n.t("shell.notifications.release.newFeatures", { count: new_features }),
+      i18n.t("shell.notifications.release.fixes", { count: bug_fixes }),
+      i18n.t("shell.notifications.release.otherUpdates", { count: other_updates }),
+    ].join(", "),
+    current: currentVersion,
+  });
+};
 
 const upgradeAnnouncement = (
   currentVersion: string | null | undefined,
@@ -62,10 +72,7 @@ const upgradeAnnouncement = (
   return {
     readKey: `litellm:upgradeBannerDismissed:${latestRelease.version}`,
     title: i18n.t("shell.notifications.upgrade.title", { version: latestRelease.version }),
-    description: i18n.t("shell.notifications.upgrade.description", {
-      summary: describeRelease(latestRelease),
-      current: currentVersion,
-    }),
+    description: describeUpgrade(currentVersion, latestRelease),
     linkLabel: i18n.t("shell.notifications.upgrade.link"),
     href: latestRelease.release_url,
   };

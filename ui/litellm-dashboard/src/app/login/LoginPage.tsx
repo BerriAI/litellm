@@ -31,6 +31,7 @@ import { Trans, useTranslation } from "react-i18next";
 import { z } from "zod";
 import { useWorker } from "@/hooks/useWorker";
 import i18n from "@/i18n/i18n";
+import { productNames } from "@/i18n/untranslated/productNames";
 
 const loginSchema = z.object({
   username: z.string().min(1, { error: () => i18n.t("login.schema.usernameRequired") }),
@@ -211,7 +212,7 @@ function LoginPageContent() {
           <CardContent>
             <div className="flex w-full flex-col gap-4">
               <div className="text-center">
-                <h2 className="text-3xl font-semibold text-foreground">🚅 LiteLLM</h2>
+                <h2 className="text-3xl font-semibold text-foreground">{productNames.liteLLMWithLogo}</h2>
               </div>
 
               <Alert variant="warning">
@@ -238,7 +239,7 @@ function LoginPageContent() {
           <TooltipProvider>
             <div className="flex w-full flex-col gap-4">
               <div className="text-center">
-                <h2 className="text-3xl font-semibold text-foreground">🚅 LiteLLM</h2>
+                <h2 className="text-3xl font-semibold text-foreground">{productNames.liteLLMWithLogo}</h2>
               </div>
 
               <div className="text-center">

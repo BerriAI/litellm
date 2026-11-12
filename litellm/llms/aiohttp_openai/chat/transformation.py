@@ -11,7 +11,8 @@ from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from aiohttp import ClientResponse
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import ConfigDict, JsonValue, TypeAdapter
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
@@ -29,6 +30,16 @@ else:
 _JSON_OBJECTS: Final = TypeAdapter(
     Iterable[Mapping[str, object]], config=ConfigDict(strict=True, hide_input_in_errors=True)
 )
+
+
+class _ChatCompletionBody(TypedDict, extra_items=object):
+    id: ReadOnly[str]
+    created: ReadOnly[int]
+    model: ReadOnly[str]
+    object: ReadOnly[str]
+    choices: ReadOnly[JsonValue]
+    system_fingerprint: ReadOnly[NotRequired[str | None]]
+    service_tier: ReadOnly[NotRequired[str | None]]
 
 
 class AiohttpOpenAIChatConfig(OpenAILikeChatConfig):
@@ -73,7 +84,7 @@ class AiohttpOpenAIChatConfig(OpenAILikeChatConfig):
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
-        _json_response: Final = await raw_response.json()
+        _json_response: Final[_ChatCompletionBody] = await raw_response.json()
         model_response.id = _json_response.get("id")
         model_response.choices = [
             Choices.model_validate(choice) for choice in _JSON_OBJECTS.validate_python(_json_response.get("choices"))

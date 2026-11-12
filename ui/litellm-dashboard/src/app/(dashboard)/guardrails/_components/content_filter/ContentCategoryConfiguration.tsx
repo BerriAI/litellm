@@ -19,6 +19,8 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ACTION_ITEMS, SEVERITY_ITEMS, translateOptions } from "./action_options";
 
+const DEFAULT_CATEGORY_FILE_TYPE = "yaml";
+
 interface ContentCategory {
   name: string;
   display_name: string;
@@ -39,7 +41,7 @@ interface ContentCategoryConfigurationProps {
   selectedCategories: SelectedCategory[];
   onCategoryAdd: (category: SelectedCategory) => void;
   onCategoryRemove: (id: string) => void;
-  onCategoryUpdate: (id: string, field: string, value: any) => void;
+  onCategoryUpdate: (id: string, field: "action" | "severity_threshold", value: any) => void;
   accessToken?: string | null;
   pendingSelection?: string;
   onPendingSelectionChange?: (value: string) => void;
@@ -123,7 +125,7 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
       }
 
       setCategoryYaml((prev) => ({ ...prev, [categoryName]: content }));
-      setCategoryFileTypes((prev) => ({ ...prev, [categoryName]: data.file_type || "yaml" }));
+      setCategoryFileTypes((prev) => ({ ...prev, [categoryName]: data.file_type || DEFAULT_CATEGORY_FILE_TYPE }));
     } catch (error) {
       console.error(`Failed to fetch content for category ${categoryName}:`, error);
     } finally {
@@ -160,7 +162,10 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
           setPreviewYaml(content);
           // Also cache it for later use
           setCategoryYaml((prev) => ({ ...prev, [selectedCategoryName]: content }));
-          setCategoryFileTypes((prev) => ({ ...prev, [selectedCategoryName]: data.file_type || "yaml" }));
+          setCategoryFileTypes((prev) => ({
+            ...prev,
+            [selectedCategoryName]: data.file_type || DEFAULT_CATEGORY_FILE_TYPE,
+          }));
         })
         .catch((error) => {
           console.error(`Failed to fetch preview content for category ${selectedCategoryName}:`, error);
@@ -339,7 +344,7 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
             <DataTable data={selectedCategories} columns={columns} getRowId={(row) => row.id} size="compact" />
             <div className="mt-4 space-y-2">
               {selectedCategories.map((category) => {
-                const fileType = categoryFileTypes[category.category] || "yaml";
+                const fileType = categoryFileTypes[category.category] || DEFAULT_CATEGORY_FILE_TYPE;
                 const isExpanded = expandedYamlCategories.includes(category.category);
 
                 return (
