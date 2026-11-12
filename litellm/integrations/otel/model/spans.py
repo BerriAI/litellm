@@ -260,6 +260,8 @@ _PRISMA_VIEWS: Final[frozenset[str]] = frozenset(
 )
 _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
     (
+        "LiteLLM_Alert",
+        "LiteLLM_PerformanceAlertState",
         "LiteLLM_BudgetTable",
         "LiteLLM_CredentialsTable",
         "LiteLLM_ProxyModelTable",
@@ -292,6 +294,7 @@ _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
         "LiteLLM_SpendLogs",
         "LiteLLM_BudgetWindowSpend",
         "LiteLLM_BackgroundInteractionSettlement",
+        "LiteLLM_BackgroundResponseSettlement",
         "LiteLLM_ErrorLogs",
         "LiteLLM_UserNotifications",
         "LiteLLM_UserProviderCredentials",
@@ -327,6 +330,7 @@ _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
         "LiteLLM_PromptTable",
         "LiteLLM_HealthCheckTable",
         "LiteLLM_SearchToolsTable",
+        "LiteLLM_ScheduledJobRun",
         "LiteLLM_SSOConfig",
         "LiteLLM_ManagedVectorStoreIndexTable",
         "LiteLLM_CacheConfig",

@@ -45,7 +45,7 @@ _ALLOWED_ASPECT_RATIOS: Final[frozenset[str]] = frozenset({"auto", "16:9", "9:16
 class _ModelProfile:
     resolutions: frozenset[str]
     resolution_tiers: tuple[tuple[int, str], ...]
-    default_resolution: str
+    default_resolution: str | None
     integer_duration: bool
     reference_key: str
     reference_as_list: bool
@@ -66,6 +66,14 @@ _H3_PROFILE: Final[_ModelProfile] = _ModelProfile(
     integer_duration=True,
     reference_key="reference_image_urls",
     reference_as_list=True,
+)
+_H3_MAX_PROFILE: Final[_ModelProfile] = _ModelProfile(
+    resolutions=frozenset({"480P", "768P", "1080P"}),
+    resolution_tiers=((480, "480P"), (768, "768P"), (sys.maxsize, "1080P")),
+    default_resolution=None,
+    integer_duration=False,
+    reference_key="image_url",
+    reference_as_list=False,
 )
 _QUEUE_NAMESPACES: Final[frozenset[str]] = frozenset(("workflows", "comfy"))
 _STATUS_MAP: Final[Mapping[str, str]] = MappingProxyType(
@@ -101,7 +109,11 @@ def _duration_value(value: object) -> str | None:
 
 
 def _profile_for_model(model: str) -> _ModelProfile:
-    return _H3_PROFILE if model.startswith("minimax/h3/") else _SEEDANCE_PROFILE
+    if model.startswith("minimax/h3/"):
+        return _H3_PROFILE
+    if model.startswith("minimax/h3-max"):
+        return _H3_MAX_PROFILE
+    return _SEEDANCE_PROFILE
 
 
 def _resolution_for_short_side(short_side: int, profile: _ModelProfile) -> str:

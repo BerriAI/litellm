@@ -208,6 +208,7 @@ class UnsupportedCachePlan:
         "invalid_cache_ttl_order",
         "unsupported_thinking_cache_semantics",
         "token_count_unavailable",
+        "uncountable_system_or_tools_prefix",
         "inconsistent_prefix_token_count",
     ]
 
@@ -583,7 +584,10 @@ async def count_cache_plan(
     counts: Final = tuple(
         await asyncio.gather(*(token_counter(model, api_key, marker.prefix_body) for marker in plan.breakpoints))
     )
-    if any(value is None for value in counts):
+    failed: Final = tuple(marker for marker, value in zip(plan.breakpoints, counts, strict=True) if value is None)
+    if failed and all(not marker.prefix_body.get("messages") for marker in failed):
+        return UnsupportedCachePlan("uncountable_system_or_tools_prefix")
+    if failed:
         return UnsupportedCachePlan("token_count_unavailable")
     known: Final = tuple(value for value in counts if value is not None)
     if any(value < 0 for value in (total, *known)) or any(

@@ -372,6 +372,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_read_input_token_cost_above_512k_tokens: float | None
     cache_read_input_token_cost_batches: ReadOnly[float | None]
     cache_read_input_audio_token_cost_batches: ReadOnly[float | None]
+    cache_read_input_image_token_cost_batches: ReadOnly[float | None]
     cache_read_input_token_cost_above_200k_tokens_batches: ReadOnly[float | None]
     cache_read_input_token_cost_above_100k_tokens_batches: ReadOnly[float | None]
     cache_read_input_token_cost_above_272k_tokens_batches: ReadOnly[float | None]
@@ -4028,6 +4029,13 @@ ARIZE_OTLP_PROTOCOLS: Final[frozenset[str]] = frozenset(get_args(ArizeOtlpProtoc
 
 CAPTURE_MESSAGE_CONTENT_VAR: Final = "capture_message_content"
 EXCLUDED_SERVICES_VAR: Final = "excluded_services"
+BAGGAGE_METADATA_KEYS_VAR: Final = "baggage_metadata_keys"
+#: Team and key callback vars that tune that callback's own OTel v2 destination, never sent to the backend.
+OTEL_DESTINATION_VARS: Final[tuple[str, ...]] = (
+    CAPTURE_MESSAGE_CONTENT_VAR,
+    EXCLUDED_SERVICES_VAR,
+    BAGGAGE_METADATA_KEYS_VAR,
+)
 
 
 class CaptureMessageContent(str):
@@ -4190,6 +4198,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     cache_read_input_token_cost_above_200k_tokens_batches: float | None = None
     cache_read_input_token_cost_above_272k_tokens_batches: float | None = None
     cache_read_input_audio_token_cost_batches: float | None = None
+    cache_read_input_image_token_cost_batches: float | None = None
     cache_creation_input_token_cost_batches: float | None = None
     cache_creation_input_token_cost_above_100k_tokens_batches: float | None = None
     cache_creation_input_token_cost_above_200k_tokens_batches: float | None = None
@@ -4344,6 +4353,14 @@ SHARED_BACKEND_MODEL_INFO_FIELDS: Final[frozenset[str]] = (
     - DEPLOYMENT_SCOPED_TOKEN_COUNT_FIELDS
 )
 
+SHARED_ONLY_WHEN_TRUE_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset({"supports_box_questions"})
+
+
+def _belongs_on_shared_backend_key(field: str, value: object) -> bool:
+    if field in SHARED_ONLY_WHEN_TRUE_CAPABILITY_FIELDS:
+        return value is True
+    return field in SHARED_BACKEND_MODEL_INFO_FIELDS
+
 
 def shared_backend_model_info(model_info: dict[str, Any]) -> dict[str, Any]:
     """Return only the fields safe to register under a shared ``{provider}/{model}``
@@ -4352,8 +4369,13 @@ def shared_backend_model_info(model_info: dict[str, Any]) -> dict[str, Any]:
     ``off_peak_pricing``. Per-deployment metadata (``id``, ``access_via_team_ids``,
     arbitrary custom keys) never belongs on the shared key; it stays under the
     deployment's unique model id.
+
+    A ``SHARED_ONLY_WHEN_TRUE_CAPABILITY_FIELDS`` flag reaches the shared key only as
+    ``True``. Its reader checks the deployment's own flag first, so a ``False`` or
+    non-boolean value already applies to its deployment, and on the shared key it would
+    only take the capability away from same-model deployments that set no flag.
     """
-    return {k: v for k, v in model_info.items() if k in SHARED_BACKEND_MODEL_INFO_FIELDS}
+    return {k: v for k, v in model_info.items() if _belongs_on_shared_backend_key(k, v)}
 
 
 ABOVE_THRESHOLD_COST_KEY_PATTERN: Final = re.compile(r"_above_\d+k?_tokens(?:_batches)?$")
@@ -4818,7 +4840,7 @@ OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS: set[str] = {
 }
 
 FILE_CONTENT_STREAMING_PROVIDERS: Final[frozenset[str]] = frozenset(
-    {*OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS, LlmProviders.VERTEX_AI.value}
+    {*OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS, LlmProviders.VERTEX_AI.value, LlmProviders.GEMINI.value}
 )
 
 LITELLM_EXECUTED_BATCH_PROVIDERS: Final[frozenset[str]] = frozenset({LlmProviders.HOSTED_VLLM.value})
@@ -4854,6 +4876,7 @@ class SearchProviders(str, Enum):
     AGENTCORE = "agentcore"
     NIMBLE = "nimble"
     BING_GROUNDING = "bing_grounding"
+    WEBIQ = "webiq"
     DEEPSEEK = "deepseek"
     XAI = "xai"
 
@@ -5365,6 +5388,10 @@ class PriorityReservationSettings(LiteLLMBaseModel):
     saturation_threshold: float = Field(
         default=0.50,
         description="Saturation threshold (0.0-1.0) at which strict priority enforcement begins. Below this threshold, generous mode allows priority borrowing. Above this threshold, strict mode enforces normalized priority limits.",
+    )
+    team_model_limit_borrows_idle_capacity_from_other_teams: bool = Field(
+        default=False,
+        description="When true, a team's model_tpm_limit and model_rpm_limit on a model this limiter covers stop being ceilings. The team may run past them on capacity other teams are not using while the model is below saturation_threshold, and is held to them once the model saturates.",
     )
 
     saturation_check_cache_ttl: int = Field(

@@ -28,7 +28,7 @@ from litellm.litellm_core_utils.get_model_cost_map import (
     model_cost_inputs,
     refetch_model_cost_map,
 )
-from litellm.rust_bridge.host.model_cost import publish
+from litellm.litellm_core_utils.model_cost_table import publish
 from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
 
 FALLBACK_GENERALIZATIONS_KEY: Final = "fallback_generalizations"

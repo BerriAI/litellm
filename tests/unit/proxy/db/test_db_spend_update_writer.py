@@ -5,7 +5,7 @@ import itertools
 import json
 import logging
 import re
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -39,6 +39,7 @@ from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
     build_window_spend_transaction,
 )
 from litellm.proxy.db.rollup_lock_timeout import ROLLUP_LOCK_TIMEOUT_SQL
+from litellm.proxy.spend_tracking.session_spend_total import SessionSpendTotals
 from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.types.caching import RedisPipelineLpopOperation, RedisPipelineRpushOperation
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
@@ -5887,3 +5888,177 @@ async def test_request_error_counts_survive_the_ledger_path_switch(monkeypatch: 
     assert accumulator.drain() == {RequestErrorKey(
         date="2026-11-02", api_key=prisma.spend_log_transactions[0]["api_key"], team_id="", user_id="user", model_group="ledger-test", status_code=503,
     ): 1}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", ["aresponses", "aget_responses", "acancel_responses"])
+@pytest.mark.parametrize(
+    ("security_disabled", "status", "cost", "keep_read"),
+    [
+        (False, "success", 0.0, True),
+        (True, "success", 0.0, False),
+        (True, "success", None, False),
+        (True, "success", 0.23, True),
+        (True, "failure", 0.0, True),
+    ],
+)
+async def test_unsecured_free_response_reads_leave_the_creation_spend_row_alone(
+    monkeypatch: pytest.MonkeyPatch,
+    call_type: str,
+    security_disabled: bool,
+    status: str,
+    cost: float | None,
+    keep_read: bool,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    writer: Final = DBSpendUpdateWriter()
+    prisma: Final = _tool_usage_prisma()
+    prisma.get_request_status.return_value = status
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "disable_spend_logs", False)
+    monkeypatch.setitem(proxy_server.general_settings, "disable_responses_id_security", security_disabled)
+    now: Final = datetime(2026, 11, 11, tzinfo=timezone.utc)
+    assert await writer.update_database(
+        token="test-token",
+        user_id="test-user",
+        end_user_id=None,
+        team_id=None,
+        org_id=None,
+        kwargs={
+            "model": "response-model",
+            "call_type": call_type,
+            "litellm_call_id": "read-call",
+            "litellm_params": {"metadata": {"user_api_key": "test-token", "status": status}},
+        },
+        completion_response={"id": "resp-shared"},
+        start_time=now,
+        end_time=now,
+        response_cost=cost,
+    )
+    await drain_logging_tasks()
+    expected: Final = [call_type] if call_type == "aresponses" or keep_read else []
+    assert [row["call_type"] for row in prisma.spend_log_transactions] == expected
+
+
+class _SessionTotalsRedis:
+    def __init__(self) -> None:
+        self.values: dict[str, float] = {}  # mutable-ok: stands in for Redis state
+
+    async def async_increment(self, key: str, value: float, ttl: int | None = None, refresh_ttl: bool = False) -> float:
+        self.values[key] = self.values.get(key, 0.0) + value
+        return self.values[key]
+
+    async def async_get_cache(self, key: str) -> object:
+        return self.values.get(key)
+
+
+def _session_writer() -> tuple[DBSpendUpdateWriter, SessionSpendTotals]:
+    redis: Final = _SessionTotalsRedis()
+    totals: Final = SessionSpendTotals(lambda: redis)
+    writer: Final = DBSpendUpdateWriter(session_spend_totals=totals)
+    writer._batch_database_updates = AsyncMock()  # pyright: ignore[reportPrivateUsage]  # the batch rollup needs a database this test does not stand up
+    return writer, totals
+
+
+async def _record_spend_row(writer: DBSpendUpdateWriter, spend: float, litellm_params: Mapping[str, object]) -> None:
+    payload: Final[dict[str, object]] = {
+        **_minimal_spend_payload(),
+        "request_id": "req-1",
+        "call_type": "anthropic_messages",
+        "api_key": "hashed-key",
+        "spend": spend,
+        "status": "success",
+    }
+    with (
+        patch(  # test-quality-ok: update_database reads this proxy_server global at call time, no seam
+            "litellm.proxy.proxy_server.disable_spend_logs", False
+        ),
+        patch(  # test-quality-ok: update_database reads this proxy_server global at call time, no seam
+            "litellm.proxy.proxy_server.prisma_client", _tool_usage_prisma()
+        ),
+        patch(  # test-quality-ok: update_database reads this proxy_server global at call time, no seam
+            "litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"
+        ),
+        patch(  # test-quality-ok: update_database imports the payload builder inside its body, no seam
+            "litellm.proxy.spend_tracking.spend_tracking_utils.get_logging_payload",
+            return_value=payload,
+        ),
+    ):
+        await writer.update_database(
+            token="hashed-key",
+            user_id="test-user",
+            end_user_id=None,
+            team_id=None,
+            org_id=None,
+            kwargs={"model": "claude-haiku-5-5", "litellm_params": dict(litellm_params)},
+            completion_response=None,
+            start_time=datetime(2026, 11, 10, 10, 0, tzinfo=timezone.utc),
+            end_time=datetime(2026, 11, 10, 10, 0, 1, tzinfo=timezone.utc),
+            response_cost=spend,
+        )
+
+
+_CALLER_SESSION: Final[Mapping[str, object]] = {
+    "litellm_session_id": "cc-session-1",
+    "metadata": {"session_id": "cc-session-1"},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "litellm_params",
+    [
+        pytest.param(_CALLER_SESSION, id="direct-call"),
+        pytest.param(
+            {
+                "litellm_session_id": "cc-session-1",
+                "metadata": {"session_id": "cc-session-1", "trace_id": "cc-session-1"},
+            },
+            id="claude-code-session-header",
+        ),
+        pytest.param(
+            {
+                **_CALLER_SESSION,
+                "metadata": {"session_id": "cc-session-1", "internal_call_origin": "autorouter_classifier"},
+            },
+            id="classifier-sub-call",
+        ),
+    ],
+)
+async def test_a_billed_row_in_a_caller_session_adds_its_spend_to_that_sessions_total(
+    litellm_params: Mapping[str, object],
+):
+    writer, totals = _session_writer()
+
+    await _record_spend_row(writer, 0.25, litellm_params)
+
+    assert await totals.read("hashed-key", "cc-session-1") == 0.25
+    assert await totals.read("another-key", "cc-session-1") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("litellm_params", "spend"),
+    [
+        pytest.param(
+            {
+                "litellm_session_id": "minted-1",
+                "metadata": {"session_id": "minted-1", "litellm_session_id_generated": True},
+            },
+            0.25,
+            id="generated-session",
+        ),
+        pytest.param({"metadata": {}}, 0.25, id="no-session"),
+        pytest.param(_CALLER_SESSION, 0.0, id="free-row"),
+    ],
+)
+async def test_a_row_without_a_caller_session_or_cost_adds_nothing(
+    litellm_params: Mapping[str, object], spend: float
+):
+    writer, totals = _session_writer()
+
+    await _record_spend_row(writer, spend, litellm_params)
+
+    assert await totals.read("hashed-key", "cc-session-1") is None
+    assert await totals.read("hashed-key", "minted-1") is None

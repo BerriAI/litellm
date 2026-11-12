@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.10, <3.16"
 resolution-markers = [
     "python_full_version >= '3.15'",
@@ -5138,6 +5138,7 @@ proxy = [
     { name = "soundfile" },
     { name = "starlette" },
     { name = "tomlkit" },
+    { name = "tzdata" },
     { name = "uvicorn" },
     { name = "uvloop", marker = "sys_platform != 'win32'" },
     { name = "websockets" },
@@ -5230,6 +5231,7 @@ ci = [
     { name = "pytest-retry" },
     { name = "tenacity" },
     { name = "traceloop-sdk" },
+    { name = "tzdata" },
 ]
 dev = [
     { name = "basedpyright" },
@@ -5362,8 +5364,8 @@ requires-dist = [
     { name = "jsonschema", specifier = ">=4.0.0,<5.0" },
     { name = "keyring", marker = "extra == 'cli'", specifier = ">=25.6.0,<26.0" },
     { name = "langfuse", marker = "extra == 'proxy-runtime'", specifier = ">=4.7,<5.0" },
-    { name = "litellm-enterprise", marker = "extra == 'proxy'", editable = "enterprise" },
-    { name = "litellm-proxy-extras", marker = "extra == 'proxy'", editable = "litellm-proxy-extras" },
+    { name = "litellm-enterprise", marker = "extra == 'proxy'", editable = "litellm/enterprise" },
+    { name = "litellm-proxy-extras", marker = "extra == 'proxy'", editable = "litellm/proxy-extras" },
     { name = "llm-sandbox", marker = "extra == 'proxy-runtime'", specifier = ">=0.3.39,<1.0" },
     { name = "mangum", marker = "extra == 'proxy-runtime'", specifier = ">=0.17.0,<1.0" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=2.3.0,<3" },
@@ -5422,6 +5424,7 @@ requires-dist = [
     { name = "tomlkit", marker = "extra == 'cli'", specifier = ">=0.13.3,<1.0" },
     { name = "tomlkit", marker = "extra == 'proxy'", specifier = ">=0.13.3,<1.0" },
     { name = "typing-extensions", specifier = ">=4.13.0,<5.0" },
+    { name = "tzdata", marker = "extra == 'proxy'", specifier = ">=2024.1" },
     { name = "uvicorn", marker = "extra == 'proxy'", specifier = ">=0.33.0,<1.0" },
     { name = "uvloop", marker = "sys_platform != 'win32' and extra == 'proxy'", specifier = ">=0.22.1,<1.0" },
     { name = "websockets", marker = "extra == 'proxy'", specifier = ">=15.0.1,<16.0" },
@@ -5468,6 +5471,7 @@ ci = [
     { name = "pytest-retry", specifier = "==1.7.0" },
     { name = "tenacity", specifier = "==8.5.0" },
     { name = "traceloop-sdk", specifier = "==0.34.0" },
+    { name = "tzdata", specifier = "==2026.2" },
 ]
 dev = [
     { name = "basedpyright", specifier = "==1.39.7" },
@@ -5568,17 +5572,17 @@ provides-extras = ["test"]
 [[package]]
 name = "litellm-enterprise"
 version = "0.1.83"
-source = { editable = "enterprise" }
+source = { editable = "litellm/enterprise" }
 
 [[package]]
 name = "litellm-proxy"
 version = "1.109.0"
-source = { editable = "packaging/litellm-proxy" }
+source = { editable = "litellm/packaging/litellm-proxy" }
 
 [[package]]
 name = "litellm-proxy-extras"
 version = "0.4.114"
-source = { editable = "litellm-proxy-extras" }
+source = { editable = "litellm/proxy-extras" }
 dependencies = [
     { name = "psycopg" },
     { name = "psycopg-binary" },
