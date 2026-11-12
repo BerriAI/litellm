@@ -3,10 +3,10 @@ Dynamic rate limiter v3 - Saturation-aware priority-based rate limiting
 """
 
 import os
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
@@ -21,7 +21,7 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
     ensure_response_additional_headers,
     response_has_hidden_params,
 )
-from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import (
     ProxyRateLimitError,
     map_v3_rate_limit_type,
@@ -50,6 +50,7 @@ if TYPE_CHECKING:
 
 
 STEERED_FROM_HEADER: Final = "x-litellm-model-steered-from"
+AlternateAuthorizer: TypeAlias = Callable[[UserAPIKeyAuth, str], Awaitable[bool]]
 
 
 class ModelPreference(BaseModel):
@@ -66,6 +67,31 @@ MODEL_PREFERENCES: Final = TypeAdapter(tuple[ModelPreference, ...])
 class SteeredModel:
     model: str
     group_info: ModelGroupInfo
+
+
+async def caller_may_use_model(user_api_key_dict: UserAPIKeyAuth, model: str) -> bool:
+    """The key and team allowlists plus the key's per-model budget, the same checks a budget fallback passes."""
+    from litellm.proxy.auth.user_api_key_auth import (
+        _is_fallback_model_authorized,  # pyright: ignore[reportPrivateUsage]  # steering shares the fallback contract
+    )
+    from litellm.proxy.proxy_server import (
+        llm_model_list,  # pyright: ignore[reportUnknownVariableType]  # proxy global has untyped deployment entries
+        llm_router,
+        model_max_budget_limiter,
+    )
+
+    if not await _is_fallback_model_authorized(
+        model=model,
+        valid_token=user_api_key_dict,
+        llm_model_list=llm_model_list,  # pyright: ignore[reportUnknownArgumentType]  # proxy global has untyped deployment entries
+        llm_router=llm_router,
+    ):
+        return False
+    try:
+        await model_max_budget_limiter.is_key_within_model_budget(user_api_key_dict=user_api_key_dict, model=model)
+    except litellm.BudgetExceededError:
+        return False
+    return True
 
 
 def alternates_for(user_api_key_dict: UserAPIKeyAuth, model: str) -> tuple[str, ...]:
@@ -127,8 +153,10 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         self,
         internal_usage_cache: DualCache,
         time_provider: Callable[[], datetime] | None = None,
+        is_model_authorized: AlternateAuthorizer = caller_may_use_model,
     ):
         self.internal_usage_cache = InternalUsageCache(dual_cache=internal_usage_cache)
+        self._is_model_authorized = is_model_authorized
         self.v3_limiter = PROXY_MaxParallelRequestsHandler_v3(self.internal_usage_cache, time_provider=time_provider)
 
     def update_variables(self, llm_router: Router) -> None:
@@ -599,7 +627,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
-        data: dict[str, object],
+        data: Mapping[str, object],
         call_type: CallTypesLiteral,
     ) -> Exception | str | dict | None:
         """
@@ -654,8 +682,6 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         steered: Final = await self._steer_to_alternate(model, requested_group_info, user_api_key_dict)
         served_model: Final = model if steered is None else steered.model
         model_group_info: Final = requested_group_info if steered is None else steered.group_info
-        if steered is not None:
-            get_or_create_request_stash().steered_from_model = model
 
         try:
             # STEP 1: Check current saturation level
@@ -690,15 +716,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
         if steered is None:
             return None
+        get_or_create_request_stash().steered_from_model = model
         return dict(data, model=served_model)
-
-    def _team_may_call(self, user_api_key_dict: UserAPIKeyAuth, model: str) -> bool:
-        from litellm.proxy.auth.auth_checks import model_in_access_group
-
-        team_models: Final = user_api_key_dict.team_models
-        if not team_models or SpecialModelNames.all_proxy_models.value in team_models:
-            return True
-        return model_in_access_group(model, team_models, self.llm_router)
 
     async def _steer_to_alternate(
         self, model: str, model_group_info: ModelGroupInfo, user_api_key_dict: UserAPIKeyAuth
@@ -722,7 +741,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         self, alternate: str, user_api_key_dict: UserAPIKeyAuth, threshold: float
     ) -> "SteeredModel | None":
         group_info: Final = self.llm_router.registry().group(alternate)
-        if group_info is None or not self._team_may_call(user_api_key_dict, alternate):
+        if group_info is None or not await self._is_model_authorized(user_api_key_dict, alternate):
             return None
         if await self._check_model_saturation(alternate, group_info) >= threshold:
             return None
@@ -730,7 +749,10 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
     @with_service_target(RATE_LIMITS_TARGET)
     async def async_post_call_success_hook(
-        self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response
+        self,
+        data: dict[str, object],  # mutable-ok: the CustomLogger contract hands the v3 limiter a mutable dict
+        user_api_key_dict: UserAPIKeyAuth,
+        response,
     ) -> LLMResponseTypes:
         """
         Post-call hook to add rate limit headers to response.
@@ -753,16 +775,27 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                         "Skipping x-litellm-priority header: priority %r is not Latin-1 encodable", priority
                     )
                 additional_headers["x-litellm-rate-limiter-version"] = "v3"
-                call_id: Final = data.get("litellm_call_id")
-                stash: Final = get_request_stash_for_call(call_id if isinstance(call_id, str) else None)
-                if stash is not None and stash.steered_from_model is not None:
-                    additional_headers[STEERED_FROM_HEADER] = stash.steered_from_model
 
             return response
 
         except Exception as e:
             verbose_proxy_logger.exception("Error in dynamic rate limiter v3 post-call hook: %s", e)
             return response
+
+    async def async_post_call_response_headers_hook(
+        self,
+        data: Mapping[str, object],
+        user_api_key_dict: UserAPIKeyAuth,
+        response: object,
+        request_headers: Mapping[str, str] | None = None,
+        litellm_call_info: Mapping[str, object] | None = None,
+    ) -> dict[str, str] | None:  # mutable-ok: the CustomLogger contract returns a dict
+        """Names the model the caller asked for when steering served another, on streamed and buffered replies."""
+        call_id: Final = data.get("litellm_call_id")
+        stash: Final = get_request_stash_for_call(call_id if isinstance(call_id, str) else None)
+        if stash is None or stash.steered_from_model is None:
+            return None
+        return {STEERED_FROM_HEADER: stash.steered_from_model}
 
     @with_service_target(RATE_LIMITS_TARGET)
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:

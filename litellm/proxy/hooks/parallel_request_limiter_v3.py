@@ -605,7 +605,7 @@ def get_or_create_request_stash() -> RequestRateLimiterStash:
     return stash
 
 
-def claim_request_stash_for_data(data: dict) -> RequestRateLimiterStash:
+def claim_request_stash_for_data(data: Mapping[str, object]) -> RequestRateLimiterStash:
     stash: Final = get_or_create_request_stash()
     owner_call_id: Final = data.get("litellm_call_id")
     if isinstance(owner_call_id, str):
