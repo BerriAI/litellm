@@ -157,6 +157,7 @@ async def test_a_full_sweep_saves_one_alert_per_real_change_and_nothing_for_norm
     write_rows('INSERT INTO "LiteLLM_UserTable" (user_id) VALUES (%s)', (f"{p}-user-stopped",))
     _seed("user", f"{p}-user-stopped", STEADY, None)
     _seed("user", f"{p}-user-deleted", STEADY, None)
+    _seed("user", f"{p}-user-busy", STEADY, Day(requests=20_000, timed=20_000, response_ms=2_000_000))
     _seed("key", fixture.key("slow"), STEADY, Day(response_ms=1_000_000))
     _seed("model", f"{p}-model", STEADY, Day(failed=100))
 
@@ -170,7 +171,7 @@ async def test_a_full_sweep_saves_one_alert_per_real_change_and_nothing_for_norm
     assert int(str(age["seconds"])) < 300
     assert fixture.saved() == {
         (f"{p}-team-spike", "spend"): ("team", "open"),
-        (f"{p}-user-stopped", "traffic"): ("user", "open"),
+        (f"{p}-user-busy", "traffic"): ("user", "open"),
         (fixture.key("slow"), "latency"): ("key", "open"),
         (f"{p}-model", "reliability"): ("model", "open"),
     }

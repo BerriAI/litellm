@@ -26,7 +26,7 @@ runs:
       id: key
       shell: bash
       env:
-        RUST_BRIDGE_CACHE_KEY: ${{ runner.os }}-rust-bridge-editable-${{ hashFiles('litellm-rust/Cargo.lock', 'litellm-rust/Cargo.toml', 'litellm-rust/crates/**', 'model_prices_and_context_window.json', 'pyproject.toml', 'packaging/litellm-proxy/pyproject.toml') }}
+        RUST_BRIDGE_CACHE_KEY: ${{ runner.os }}-rust-bridge-editable-${{ hashFiles('litellm/rust/Cargo.lock', 'litellm/rust/Cargo.toml', 'litellm/rust/crates/**', 'model_prices_and_context_window.json', 'pyproject.toml', 'litellm/packaging/litellm-proxy/pyproject.toml') }}
       run: echo "key=$RUST_BRIDGE_CACHE_KEY" >> "$GITHUB_OUTPUT"
 
     - name: Restore the Rust bridge

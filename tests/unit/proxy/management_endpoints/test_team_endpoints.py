@@ -9246,6 +9246,12 @@ async def test_update_team_guardrails_with_org_id(
         mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
             return_value=mock_existing_team
         )
+        mock_prisma.writer_db.litellm_guardrailstable.find_many = AsyncMock(
+            return_value=[
+                SimpleNamespace(guardrail_name="aporia-pre-call"),
+                SimpleNamespace(guardrail_name="aporia-post-call"),
+            ]
+        )
         mock_cache.async_set_cache = AsyncMock()
 
         # Mock organization fetch - this is where the bug occurred
@@ -19573,3 +19579,62 @@ async def test_team_info_keeps_the_auth_label_for_a_caller_outside_the_team(monk
         )
 
     assert (exc_info.value.code, exc_info.value.type) == ("403", "auth_error")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fields",
+    ({"guardrails": ["typo"]}, {"metadata": {"guardrails": ["typo"]}}),
+    ids=("top_level", "metadata"),
+)
+async def test_new_team_rejects_an_unregistered_guardrail_before_writing(
+    mock_db_client, mock_admin_auth, monkeypatch, fields
+):
+    from fastapi import Request
+
+    from litellm.proxy._types import NewTeamRequest, ProxyException
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    mock_db_client.db.litellm_teamtable.count = AsyncMock(return_value=0)
+    mock_db_client.db.litellm_teamtable.create = AsyncMock()
+    mock_db_client.writer_db.litellm_guardrailstable.find_many = AsyncMock(return_value=[])
+
+    with pytest.raises(ProxyException) as exc:
+        await new_team(
+            data=NewTeamRequest(team_alias="gr-team", **fields),
+            http_request=MagicMock(spec=Request),
+            user_api_key_dict=mock_admin_auth,
+        )
+
+    assert str(exc.value.code) == "400"
+    assert "typo" in str(exc.value.message)
+    mock_db_client.db.litellm_teamtable.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_team_rejects_an_added_unregistered_guardrail(mock_db_client, mock_admin_auth, monkeypatch):
+    from fastapi import Request
+
+    from litellm.proxy._types import ProxyException, UpdateTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    existing = MagicMock()
+    existing.metadata = {"guardrails": ["stale"]}
+    existing.model_dump.return_value = {"team_id": "t1", "metadata": {"guardrails": ["stale"]}}
+    mock_db_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing)
+    mock_db_client.db.litellm_teamtable.update = AsyncMock()
+    mock_db_client.writer_db.litellm_guardrailstable.find_many = AsyncMock(return_value=[])
+
+    with pytest.raises(ProxyException) as exc:
+        await update_team(
+            data=UpdateTeamRequest(team_id="t1", guardrails=["stale", "typo"]),
+            http_request=MagicMock(spec=Request),
+            user_api_key_dict=mock_admin_auth,
+        )
+
+    assert str(exc.value.code) == "400"
+    assert "typo" in str(exc.value.message)
+    assert "stale" not in str(exc.value.message)
+    mock_db_client.db.litellm_teamtable.update.assert_not_awaited()
