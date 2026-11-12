@@ -179,7 +179,9 @@ def test_trace_read_permissions_with_retired_uploads(
     if scope is None:
         receiver.list_traces.assert_not_awaited()
     else:
-        receiver.list_traces.assert_awaited_once_with(scope=scope, start_ms=1, end_ms=2, cursor=None)
+        receiver.list_traces.assert_awaited_once_with(
+            scope=scope, start_ms=1, end_ms=2, cursor=None, agent=None
+        )
 
     write: Final = client.post("/v1/traces", json={})
     assert write.status_code == 410
@@ -229,7 +231,7 @@ def test_gateway_uploads_return_setup_guidance_without_reading_the_body(
 
 
 def test_list_traces_passes_scope_window_and_cursor(client, receiver):
-    response = client.get("/v1/traces", params={"start_ms": 1, "end_ms": 2, "cursor": "abc"})
+    response = client.get("/v1/traces", params={"start_ms": 1, "end_ms": 2, "cursor": "abc", "agent": "agent-a"})
     assert response.status_code == 200
     assert response.json() == {"data": [], "next_cursor": None}
     receiver.list_traces.assert_awaited_once_with(
@@ -237,6 +239,7 @@ def test_list_traces_passes_scope_window_and_cursor(client, receiver):
         start_ms=1,
         end_ms=2,
         cursor="abc",
+        agent="agent-a",
     )
 
 
@@ -245,6 +248,7 @@ def test_list_traces_defaults_to_last_24h(client, receiver):
     kwargs = receiver.list_traces.call_args.kwargs
     assert kwargs["end_ms"] - kwargs["start_ms"] == tracing_endpoints.MS_PER_DAY
     assert kwargs["cursor"] is None
+    assert kwargs["agent"] is None
 
 
 @pytest.mark.parametrize(
@@ -270,6 +274,7 @@ def test_list_traces_resolves_default_bounds_from_injected_clock(
         start_ms=expected_start_ms,
         end_ms=expected_end_ms,
         cursor=None,
+        agent=None,
     )
 
 
@@ -453,6 +458,7 @@ def test_list_traces_forwards_large_and_negative_bounds_unchanged(client: TestCl
         start_ms=2**63,
         end_ms=-1,
         cursor="next",
+        agent=None,
     )
 
 
@@ -525,6 +531,7 @@ def test_trace_read_routes_accept_and_forward_512_character_cursors(client: Test
         start_ms=NOW_MS - tracing_endpoints.MS_PER_DAY,
         end_ms=NOW_MS,
         cursor=cursor,
+        agent=None,
     )
     receiver.get_trace.assert_awaited_once_with(
         "t1", {"all_teams": 0, "user_id": "user", "team_ids": ()}, "run-one", cursor, None
@@ -570,8 +577,20 @@ def test_trace_read_routes_ignore_unknown_query_parameters(client: TestClient, r
     assert error_unknown_response.status_code == 200, error_unknown_response.text
     receiver.list_traces.assert_has_awaits(
         (
-            call(scope={"all_teams": 0, "user_id": "user", "team_ids": ()}, start_ms=1, end_ms=2, cursor="list-cursor"),
-            call(scope={"all_teams": 0, "user_id": "user", "team_ids": ()}, start_ms=1, end_ms=2, cursor="list-cursor"),
+            call(
+                scope={"all_teams": 0, "user_id": "user", "team_ids": ()},
+                start_ms=1,
+                end_ms=2,
+                cursor="list-cursor",
+                agent=None,
+            ),
+            call(
+                scope={"all_teams": 0, "user_id": "user", "team_ids": ()},
+                start_ms=1,
+                end_ms=2,
+                cursor="list-cursor",
+                agent=None,
+            ),
         )
     )
     receiver.get_trace.assert_has_awaits(

@@ -44,8 +44,9 @@ class LensTraceStorage:
         end_ms: int,
         cursor: str | None = None,
         limit: int = AGENT_TRACING_LIST_PAGE_SIZE,
+        agent: str | None = None,
     ) -> TracePage:
-        result: Final = await self._remote.list_traces(scope, start_ms, end_ms, cursor, limit)
+        result: Final = await self._remote.list_traces(scope, start_ms, end_ms, cursor, limit, agent)
         return _validate_query_response(_TRACE_PAGE, result)
 
     async def get_trace(
