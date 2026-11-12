@@ -1,5 +1,11 @@
 import type { TFunction } from "i18next";
 import i18n from "@/i18n/i18n";
+import {
+  type BudgetAlertRow,
+  budgetAlertEmailsRowsCannotShow,
+  budgetAlertRowsFromMetadata,
+  KEY_MAX_BUDGET_ALERT_EMAILS_KEY,
+} from "../key_team_helpers/budgetAlertEmails";
 
 const WORD_FORM_BUDGET_DURATIONS: Record<string, string> = {
   hourly: "1h",
@@ -73,6 +79,27 @@ export const moveTagsOutOfMetadataJson = (
     .map((tag) => tag.trim())
     .filter((tag, index, all) => tag.length > 0 && !existing.includes(tag) && all.indexOf(tag) === index);
   return { metadata: JSON.stringify(rest, null, 2), tags: [...existing, ...movedTags], movedTags };
+};
+
+export type MovedMetadataBudgetAlerts = {
+  readonly metadata: string;
+  readonly rows: readonly BudgetAlertRow[];
+  readonly movedThresholds: readonly (number | null)[];
+};
+
+export const moveBudgetAlertEmailsOutOfMetadataJson = (
+  metadataJson: string | undefined,
+  currentRows: readonly BudgetAlertRow[] | undefined,
+): MovedMetadataBudgetAlerts | null => {
+  const parsed = metadataJson === undefined ? null : parseJsonObject(metadataJson);
+  const typedRows = budgetAlertRowsFromMetadata(parsed, KEY_MAX_BUDGET_ALERT_EMAILS_KEY);
+  if (parsed === null || typedRows.length === 0) return null;
+  const movedThresholds = typedRows.map((row) => row.threshold);
+  const unmoved = budgetAlertEmailsRowsCannotShow(parsed, KEY_MAX_BUDGET_ALERT_EMAILS_KEY);
+  const { [KEY_MAX_BUDGET_ALERT_EMAILS_KEY]: _moved, ...rest } = parsed;
+  const metadata = Object.keys(unmoved).length > 0 ? { ...rest, [KEY_MAX_BUDGET_ALERT_EMAILS_KEY]: unmoved } : rest;
+  const keptRows = (currentRows ?? []).filter((row) => !movedThresholds.includes(row.threshold));
+  return { metadata: JSON.stringify(metadata, null, 2), rows: [...keptRows, ...typedRows], movedThresholds };
 };
 
 export const currentValuePlaceholder = (
