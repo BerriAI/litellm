@@ -613,6 +613,18 @@ def _lenient_int(value: object, default: int) -> int:
         return default
 
 
+def _request_count(value: object) -> int | None:
+    """A request's count as the crate's u32 reads it: a number spelled as given (``"3"``),
+    clamped to what the crate holds, and ``None`` when it is no count, so the router's
+    limit stays in place (see ``_lenient_int``)."""
+    if isinstance(value, bool | int):
+        return _crate_count(int(value))
+    try:
+        return _crate_count(int(float(str(value))))
+    except (ValueError, OverflowError):
+        return None
+
+
 def _lenient_float(value: object, default: float | None) -> float | None:
     """A seconds setting kept as given, as the crate reads it (see ``_lenient_int``)."""
     if isinstance(value, bool | int | float):
@@ -1010,6 +1022,10 @@ def _listing_team_id(request: Mapping[str, object]) -> str | None:
 # Request fallback settings, which replace the router's for the call.
 _REQUEST_FALLBACK_KEYS: Final = ("fallbacks", "context_window_fallbacks", "content_policy_fallbacks", "max_fallbacks")
 
+# The request fallback lists, read the way the fallback walk reads them: anything that is
+# not a list names no fallback (see ``_as_list``).
+_REQUEST_LIST_KEYS: Final = ("fallbacks", "context_window_fallbacks", "content_policy_fallbacks")
+
 
 def _strings(value: object) -> "tuple[str, ...]":
     """Every string in ``value``, a name or a fallback list of names and dict entries."""
@@ -1040,7 +1056,8 @@ def _start_fields(request: Mapping[str, object]) -> Mapping[str, object]:
     specific: Final = {"specific_deployment": True} if request.get("specific_deployment") is True else {}
     # `record_disable_fallbacks(kwargs, disable_fallbacks is True)`: only True turns them off.
     disabled: Final = {"disable_fallbacks": True} if request.get("disable_fallbacks") is True else {}
-    lists: Final = {key: _plain(request[key]) for key in _REQUEST_FALLBACK_KEYS if key in request}
+    lists: Final = {key: _plain(list(_as_list(request[key]))) for key in _REQUEST_LIST_KEYS if key in request}
+    count: Final = _request_count(request.get("max_fallbacks"))
     weights: Final = request.get("_router_weights")
     team_id: Final = get_request_team_id(request)
     listing_team_id: Final = _listing_team_id(request)
@@ -1053,6 +1070,7 @@ def _start_fields(request: Mapping[str, object]) -> Mapping[str, object]:
         **disabled,
         **({"router_weights": weights} if weights is not None else {}),
         **lists,
+        **({"max_fallbacks": count} if count is not None else {}),
         **({"team_id": team_id} if team_id else {}),
         **({"listing_team_id": listing_team_id} if listing_team_id is not None else {}),
         **caller_fields(request),

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Mapping
 from typing import Final, Literal
 from unittest.mock import MagicMock, patch
 
@@ -1360,3 +1361,39 @@ async def test_ordered_fallback_failures_preserve_the_original_context_error(
     assert tuple(json.loads(call.request.content)["model"] for call in route.calls) == ("primary", "ordered", "generic")
     assert raised.value.status_code == (400 if context_error else backup_status)
     assert (original_message if context_error else "generic deployment unavailable") in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "request_kwargs",
+    [
+        {"fallbacks": "gpt-4o-mini"},
+        {"context_window_fallbacks": "gpt-4o-mini"},
+        {"content_policy_fallbacks": "gpt-4o-mini"},
+        {"max_fallbacks": "not a count"},
+        {"max_fallbacks": 2.5},
+        {"fallbacks": ["gpt-4o-mini"], "max_fallbacks": 2},
+        {},
+    ],
+)
+def test_malformed_request_fallback_settings_are_served(
+    request_kwargs: Mapping[str, object],
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-fake"},
+            }
+        ],
+    )
+    try:
+        response: Final = router.completion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="ok",
+            **request_kwargs,
+        )
+        assert isinstance(response, litellm.ModelResponse)
+        assert response.choices[0].message.content == "ok", request_kwargs
+    finally:
+        router.reset()
