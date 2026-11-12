@@ -193,6 +193,9 @@ async def test_entity_projection_matches_real_request_queues(monkeypatch: pytest
                     "user_api_key_org_id": "org",
                     "user_api_key_project_id": "project",
                     "user_api_key_end_user_id": "end-user",
+                    "user_api_key_customer_member_id": "member",
+                    "user_api_key_customer_team_id": "customer-team",
+                    "user_api_key_customer_org_id": "customer-org",
                     "tags": ["tag", "tag"],
                 },
                 "user": "end-user",
@@ -222,6 +225,9 @@ async def test_entity_projection_matches_real_request_queues(monkeypatch: pytest
                         "team_id": "team",
                         "organization_id": "org",
                         "project_id": "project",
+                        "customer_member_id": "member",
+                        "customer_team_id": "customer-team",
+                        "customer_org_id": "customer-org",
                         "agent_id": "agent",
                     },
                     model_access_groups=(),
@@ -243,6 +249,9 @@ async def test_entity_projection_matches_real_request_queues(monkeypatch: pytest
         ("LiteLLM_EndUserTable", "end_user", "end-user"),
         ("LiteLLM_AgentsTable", "agent", "agent"),
         ("LiteLLM_ProjectTable", "project", "project"),
+        ("LiteLLM_CustomerMemberTable", "customer_member", "member"),
+        ("LiteLLM_CustomerTeamTable", "customer_team", "customer-team"),
+        ("LiteLLM_CustomerOrganizationTable", "customer_org", "customer-org"),
     ):
         assert legacy[(entity, identity)] == next(
             dict(item.increments)["spend"] for item in projected if item.table == table

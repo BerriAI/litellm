@@ -96,6 +96,7 @@ from litellm.proxy.spend_tracking.session_spend_total import SessionSpendTotals
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.repositories.prisma_protocols import BatchTable
 from litellm.responses.streaming_iterator import spawn_logging_task
+from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyIds, customer_hierarchy_ids_from_request
 from litellm.types.utils import CallTypes
 from litellm.types.videos.utils import VIDEO_COST_REQUEST_ID_SUFFIX, VIDEO_STATUS_CALL_TYPES
 
@@ -363,6 +364,9 @@ _SpendTableName = Literal[
     "tag_list_transactions",
     "model_access_group_list_transactions",
     "agent_list_transactions",
+    "customer_org_list_transactions",
+    "customer_team_list_transactions",
+    "customer_member_list_transactions",
 ]
 _SPEND_TABLE_COMMIT_ORDER: Final[tuple[_SpendTableName, ...]] = (
     "org_list_transactions",
@@ -376,6 +380,36 @@ _SPEND_TABLE_COMMIT_ORDER: Final[tuple[_SpendTableName, ...]] = (
     "tag_list_transactions",
     "model_access_group_list_transactions",
     "agent_list_transactions",
+    "customer_org_list_transactions",
+    "customer_team_list_transactions",
+    "customer_member_list_transactions",
+)
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _CustomerHierarchyLevel:
+    transactions: _SpendTableName
+    table: str
+    prisma_table: str
+    id_column: str
+
+
+_CUSTOMER_HIERARCHY_LEVELS: Final = (
+    _CustomerHierarchyLevel(
+        "customer_org_list_transactions",
+        "LiteLLM_CustomerOrganizationTable",
+        "litellm_customerorganizationtable",
+        "customer_org_id",
+    ),
+    _CustomerHierarchyLevel(
+        "customer_team_list_transactions", "LiteLLM_CustomerTeamTable", "litellm_customerteamtable", "customer_team_id"
+    ),
+    _CustomerHierarchyLevel(
+        "customer_member_list_transactions",
+        "LiteLLM_CustomerMemberTable",
+        "litellm_customermembertable",
+        "customer_member_id",
+    ),
 )
 
 
@@ -774,6 +808,7 @@ class DBSpendUpdateWriter:
         )
         use_ledger: Final = proxy_settings.get("use_spend_logs_ledger", True) is not False
         request_fields: Final = _SPEND_METADATA_ADAPTER.validate_python(kwargs or {})
+        customer_hierarchy: Final = customer_hierarchy_ids_from_request(request_fields)
         if kwargs is not None:
             kwargs[ACCOUNTING_LEDGER_KWARG] = use_ledger  # rebind-ok: spend counters leave ledger windows to the worker
         try:
@@ -834,6 +869,7 @@ class DBSpendUpdateWriter:
                         "team_id": team_id,
                         "organization_id": org_id,
                         "project_id": project_id,
+                        **(customer_hierarchy.entities() if customer_hierarchy is not None else {}),
                         "agent_id": payload["agent_id"],
                         "proxy_budget_name": litellm_proxy_budget_name if litellm.max_budget > 0 else None,
                     },
@@ -891,6 +927,7 @@ class DBSpendUpdateWriter:
                         litellm_proxy_budget_name=litellm_proxy_budget_name,
                         payload=payload,
                         request_model_access_groups=get_request_model_access_groups(request_fields),
+                        customer_hierarchy=customer_hierarchy,
                     ),
                     task_name="spend rollups",
                 )
@@ -1357,6 +1394,7 @@ class DBSpendUpdateWriter:
         payload: SpendLogsPayload,
         request_model_access_groups: Sequence[str] = (),
         project_id: str | None = None,
+        customer_hierarchy: CustomerHierarchyIds | None = None,
     ):
         """
         Runs every spend-update helper for one request. Each helper goes through
@@ -1398,6 +1436,13 @@ class DBSpendUpdateWriter:
         await self._run_spend_update_step(
             "_update_project_db",
             self._update_project_db(response_cost=response_cost, project_id=project_id, prisma_client=prisma_client),
+            payload=payload_copy,
+        )
+        await self._run_spend_update_step(
+            "_update_customer_hierarchy_db",
+            self._update_customer_hierarchy_db(
+                response_cost=response_cost, customer_hierarchy=customer_hierarchy, prisma_client=prisma_client
+            ),
             payload=payload_copy,
         )
         await self._run_spend_update_step(
@@ -1588,6 +1633,19 @@ class DBSpendUpdateWriter:
                 exc=e,
             )
             raise e
+
+    async def _update_customer_hierarchy_db(
+        self,
+        response_cost: float | None,
+        customer_hierarchy: CustomerHierarchyIds | None,
+        prisma_client: PrismaClient | None,
+    ) -> None:
+        if customer_hierarchy is None or prisma_client is None:
+            return
+        for entity_type, entity_id in customer_hierarchy.spend_entities():
+            await self.spend_update_queue.add_update(
+                update=SpendUpdateQueueItem(entity_type=entity_type, entity_id=entity_id, response_cost=response_cost)
+            )
 
     async def _update_org_db(
         self,
@@ -1925,7 +1983,7 @@ class DBSpendUpdateWriter:
                     verbose_proxy_logger.info(
                         "Spend tracking - committing spend updates from Redis to DB: "
                         "keys=%d, users=%d, teams=%d, orgs=%d, end_users=%d, team_members=%d, org_members=%d, "
-                        "projects=%d, tags=%d, agents=%d, model_access_groups=%d",
+                        "projects=%d, tags=%d, agents=%d, model_access_groups=%d, customer_members=%d",
                         len(db_spend_update_transactions.get("key_list_transactions") or ()),
                         len(db_spend_update_transactions.get("user_list_transactions") or ()),
                         len(db_spend_update_transactions.get("team_list_transactions") or ()),
@@ -1937,6 +1995,7 @@ class DBSpendUpdateWriter:
                         len(db_spend_update_transactions.get("tag_list_transactions") or ()),
                         len(db_spend_update_transactions.get("agent_list_transactions") or ()),
                         len(db_spend_update_transactions.get("model_access_group_list_transactions") or ()),
+                        len(db_spend_update_transactions.get("customer_member_list_transactions") or ()),
                     )
                     try:
                         await self._commit_spend_updates_to_db(
@@ -2698,6 +2757,99 @@ class DBSpendUpdateWriter:
         )
         if on_table_committed is not None:
             on_table_committed("agent_list_transactions")
+
+        await self._commit_customer_hierarchy_spend(
+            db_spend_update_transactions,
+            prisma_client=prisma_client,
+            n_retry_times=n_retry_times,
+            proxy_logging_obj=proxy_logging_obj,
+            outer_transaction=outer_transaction,
+            on_table_committed=on_table_committed,
+        )
+
+    @staticmethod
+    async def _commit_customer_hierarchy_spend(
+        db_spend_update_transactions: DBSpendUpdateTransactions,
+        *,
+        prisma_client: PrismaClient,
+        n_retry_times: int,
+        proxy_logging_obj: ProxyLogging,
+        outer_transaction: _SpendTransaction | None,
+        on_table_committed: Callable[[_SpendTableName], None] | None,
+    ) -> None:
+        """Increment the customer org, team and member rows a request ran under, one table per commit so a
+        partial failure re-sends only the tables still owed."""
+        for level in _CUSTOMER_HIERARCHY_LEVELS:
+            await DBSpendUpdateWriter._commit_customer_hierarchy_level(
+                level,
+                db_spend_update_transactions.get(level.transactions),
+                prisma_client=prisma_client,
+                n_retry_times=n_retry_times,
+                proxy_logging_obj=proxy_logging_obj,
+                outer_transaction=outer_transaction,
+            )
+            if on_table_committed is not None:
+                on_table_committed(level.transactions)
+
+    @staticmethod
+    async def _commit_customer_hierarchy_level(
+        level: _CustomerHierarchyLevel,
+        transactions: Mapping[str, float] | None,
+        *,
+        prisma_client: PrismaClient,
+        n_retry_times: int,
+        proxy_logging_obj: ProxyLogging,
+        outer_transaction: _SpendTransaction | None,
+    ) -> None:
+        if not transactions:
+            return
+        for attempt in range(n_retry_times + 1):
+            if await DBSpendUpdateWriter._commit_customer_hierarchy_level_once(
+                level,
+                transactions,
+                attempt=attempt,
+                prisma_client=prisma_client,
+                n_retry_times=n_retry_times,
+                proxy_logging_obj=proxy_logging_obj,
+                outer_transaction=outer_transaction,
+            ):
+                return
+
+    @staticmethod
+    async def _commit_customer_hierarchy_level_once(
+        level: _CustomerHierarchyLevel,
+        transactions: Mapping[str, float],
+        *,
+        attempt: int,
+        prisma_client: PrismaClient,
+        n_retry_times: int,
+        proxy_logging_obj: ProxyLogging,
+        outer_transaction: _SpendTransaction | None,
+    ) -> bool:
+        """One attempt at the level's increments; False means the attempt failed and was reported for retry."""
+        start_time: Final = time.time()
+        try:
+            async with (
+                _spend_update_tx(prisma_client, level.table, outer_transaction=outer_transaction) as tx,
+                tx.batch_() as batcher,
+            ):
+                for entity_id, response_cost in sorted(transactions.items()):
+                    getattr(batcher, level.prisma_table).update_many(
+                        where={level.id_column: entity_id},
+                        data={"spend": {"increment": response_cost}},
+                    )
+        except Exception as e:
+            if outer_transaction is not None:
+                raise
+            await DBSpendUpdateWriter.handle_spend_update_failure(
+                e=e,
+                attempt=attempt,
+                n_retry_times=n_retry_times,
+                start_time=start_time,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            return False
+        return True
 
     @staticmethod
     @with_service_target(AUTH_OBJECTS_TARGET)

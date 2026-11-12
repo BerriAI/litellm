@@ -5414,6 +5414,9 @@ class DBSpendUpdateTransactions(TypedDict):
     tag_list_transactions: dict[str, float] | None
     agent_list_transactions: dict[str, float] | None
     model_access_group_list_transactions: ReadOnly[dict[str, float] | None]
+    customer_org_list_transactions: ReadOnly[dict[str, float] | None]  # mutable-ok: aggregated in place like the sibling maps
+    customer_team_list_transactions: ReadOnly[dict[str, float] | None]  # mutable-ok: aggregated in place like the sibling maps
+    customer_member_list_transactions: ReadOnly[dict[str, float] | None]  # mutable-ok: aggregated in place like the sibling maps
 
 
 class SpendUpdateQueueItem(TypedDict, total=False):

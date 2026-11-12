@@ -1911,6 +1911,38 @@ async def test_flexible_team_is_steered_to_its_alternate_once_the_preferred_mode
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("team_allowed_models, granted", [(("luna", "opus"), True), (("luna",), False)])
+async def test_an_alternate_is_granted_only_when_every_customer_level_permits_it(
+    monkeypatch: pytest.MonkeyPatch, team_allowed_models: tuple[str, ...], granted: bool
+):
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth import auth_checks, user_api_key_auth
+    from litellm.proxy.hooks.dynamic_rate_limiter_v3 import alternate_grant_for
+    from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerScopeAuth
+
+    monkeypatch.setattr(proxy_server, "llm_router", _steering_router("luna", "opus"))
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(user_api_key_auth, "_is_fallback_model_authorized", AsyncMock(return_value=True))
+    monkeypatch.setattr(user_api_key_auth, "_is_within_every_model_budget", AsyncMock(return_value=True))
+    monkeypatch.setattr(auth_checks, "collect_matched_model_access_groups", AsyncMock(return_value=()))
+    monkeypatch.setattr(auth_checks, "_model_access_group_max_budget_check", AsyncMock(return_value=None))
+    customer: Final = UserAPIKeyAuth(
+        customer_hierarchy=CustomerHierarchyAuth(
+            customer_member_id="member-1",
+            customer_team_id="team-1",
+            customer_org_id="org-1",
+            scopes=(
+                CustomerScopeAuth(key="customer_org", entity_id="org-1"),
+                CustomerScopeAuth(key="customer_team", entity_id="team-1", allowed_models=team_allowed_models),
+                CustomerScopeAuth(key="customer_member", entity_id="member-1", allowed_models=("luna", "opus")),
+            ),
+        )
+    )
+
+    assert (await alternate_grant_for(customer, "opus") is not None) is granted
+
+
+@pytest.mark.asyncio
 async def test_teams_without_a_permitted_idle_alternate_stay_on_the_preferred_model(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "priority_reservation", None)
     monkeypatch.setattr(litellm.priority_reservation_settings, "saturation_threshold", 0.5)

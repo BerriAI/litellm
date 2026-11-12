@@ -92,6 +92,23 @@ def budget_values(budget: Budget) -> Mapping[str, object]:
     return _VALUES.validate_python(budget.model_dump())
 
 
+_JSON_BUDGET_COLUMNS: Final = frozenset({"model_tpm_limit", "model_rpm_limit"})
+
+
+_MODEL_LIMIT_MAP: Final = TypeAdapter(dict[str, int])
+
+
+def budget_row_values(values: Mapping[str, object]) -> Mapping[str, object]:
+    """Prisma writes Json columns only through ``Json``; the per-model limit maps are the budget's Json columns."""
+    from prisma import Json
+
+    return {
+        key: Json(_MODEL_LIMIT_MAP.validate_python(value)) if key in _JSON_BUDGET_COLUMNS else value
+        for key, value in values.items()
+        if not (key in _JSON_BUDGET_COLUMNS and value is None)
+    }
+
+
 def related_budget(value: object, now: datetime | None = None, inherited_maximum: float | None = None) -> Budget | None:
     record: Final = _BUDGET.validate_python(value)
     if record is None:
@@ -256,11 +273,13 @@ class CustomerHierarchyStore:
         budget_id: Final = str(uuid4())
         await create_budget_row(
             self.budgets,
-            {
-                **budget_values(budget),
-                "allowed_models": budget.allowed_models or (),
-                "budget_id": budget_id,
-            },
+            budget_row_values(
+                {
+                    **budget_values(budget),
+                    "allowed_models": budget.allowed_models or (),
+                    "budget_id": budget_id,
+                }
+            ),
             actor,
         )
         return budget_id
@@ -272,10 +291,12 @@ class CustomerHierarchyStore:
         await update_budget_row(
             self.budgets,
             budget_id,
-            {
-                **patch,
-                **({"allowed_models": budget.allowed_models or ()} if "allowed_models" in patch else {}),
-            },
+            budget_row_values(
+                {
+                    **patch,
+                    **({"allowed_models": budget.allowed_models or ()} if "allowed_models" in patch else {}),
+                }
+            ),
             actor,
         )
         return budget_id

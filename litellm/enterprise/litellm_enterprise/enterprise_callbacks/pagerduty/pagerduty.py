@@ -13,7 +13,7 @@ However, this is under the enterprise license
 import asyncio
 import os
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional, Union
+from typing import Final, List, Optional, Union
 
 from litellm._logging import verbose_logger
 from litellm.caching import DualCache
@@ -102,7 +102,7 @@ class PagerDutyAlerting(SlackAlerting):
         error_info: Optional[StandardLoggingPayloadErrorInformation] = (
             standard_logging_payload.get("error_information") or {}
         )
-        _meta = standard_logging_payload.get("metadata") or {}
+        _meta: Final = standard_logging_payload["metadata"]
 
         self._failure_events.append(
             PagerDutyInternalEvent(
@@ -128,6 +128,9 @@ class PagerDutyAlerting(SlackAlerting):
                 user_api_key_user_id=_meta.get("user_api_key_user_id"),
                 user_api_key_team_alias=_meta.get("user_api_key_team_alias"),
                 user_api_key_end_user_id=_meta.get("user_api_key_end_user_id"),
+                user_api_key_customer_member_id=_meta.get("user_api_key_customer_member_id"),
+                user_api_key_customer_team_id=_meta.get("user_api_key_customer_team_id"),
+                user_api_key_customer_org_id=_meta.get("user_api_key_customer_org_id"),
                 user_api_key_user_email=_meta.get("user_api_key_user_email"),
                 user_api_key_request_route=_meta.get("user_api_key_request_route"),
                 user_api_key_auth_metadata=_meta.get("user_api_key_auth_metadata"),
@@ -215,6 +218,21 @@ class PagerDutyAlerting(SlackAlerting):
                 user_api_key_user_id=user_api_key_dict.user_id,
                 user_api_key_team_alias=user_api_key_dict.team_alias,
                 user_api_key_end_user_id=user_api_key_dict.end_user_id,
+                user_api_key_customer_member_id=(
+                    user_api_key_dict.customer_hierarchy.customer_member_id
+                    if user_api_key_dict.customer_hierarchy
+                    else None
+                ),
+                user_api_key_customer_team_id=(
+                    user_api_key_dict.customer_hierarchy.customer_team_id
+                    if user_api_key_dict.customer_hierarchy
+                    else None
+                ),
+                user_api_key_customer_org_id=(
+                    user_api_key_dict.customer_hierarchy.customer_org_id
+                    if user_api_key_dict.customer_hierarchy
+                    else None
+                ),
                 user_api_key_user_email=user_api_key_dict.user_email,
                 user_api_key_request_route=user_api_key_dict.request_route,
                 user_api_key_auth_metadata=user_api_key_dict.metadata,

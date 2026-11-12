@@ -80,6 +80,9 @@ def _entity_contributions(row: Mapping[str, object], metadata: Mapping[str, obje
         ("LiteLLM_TeamTable", "team_id", entities.get("team_id")),
         ("LiteLLM_OrganizationTable", "organization_id", entities.get("organization_id")),
         ("LiteLLM_EndUserTable", "user_id", entities.get("end_user")),
+        ("LiteLLM_CustomerOrganizationTable", "customer_org_id", entities.get("customer_org_id")),
+        ("LiteLLM_CustomerTeamTable", "customer_team_id", entities.get("customer_team_id")),
+        ("LiteLLM_CustomerMemberTable", "customer_member_id", entities.get("customer_member_id")),
         ("LiteLLM_AgentsTable", "agent_id", entities.get("agent_id")),
         ("LiteLLM_ProjectTable", "project_id", entities.get("project_id")),
     )

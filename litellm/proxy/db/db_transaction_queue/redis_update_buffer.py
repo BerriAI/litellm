@@ -89,6 +89,9 @@ _SpendTransactionField: TypeAlias = Literal[
     "tag_list_transactions",
     "agent_list_transactions",
     "model_access_group_list_transactions",
+    "customer_org_list_transactions",
+    "customer_team_list_transactions",
+    "customer_member_list_transactions",
 ]
 
 _SPEND_TRANSACTION_FIELDS: Final[tuple[_SpendTransactionField, ...]] = (
@@ -103,6 +106,9 @@ _SPEND_TRANSACTION_FIELDS: Final[tuple[_SpendTransactionField, ...]] = (
     "tag_list_transactions",
     "agent_list_transactions",
     "model_access_group_list_transactions",
+    "customer_org_list_transactions",
+    "customer_team_list_transactions",
+    "customer_member_list_transactions",
 )
 
 _ValueT = TypeVar("_ValueT")
@@ -487,6 +493,18 @@ class RedisUpdateBuffer:
                 (
                     Litellm_EntityType.MODEL_ACCESS_GROUP,
                     db_spend_update_transactions.get("model_access_group_list_transactions"),
+                ),
+                (
+                    Litellm_EntityType.CUSTOMER_ORG,
+                    db_spend_update_transactions.get("customer_org_list_transactions"),
+                ),
+                (
+                    Litellm_EntityType.CUSTOMER_TEAM,
+                    db_spend_update_transactions.get("customer_team_list_transactions"),
+                ),
+                (
+                    Litellm_EntityType.CUSTOMER_MEMBER,
+                    db_spend_update_transactions.get("customer_member_list_transactions"),
                 ),
             ]
             for entity_type, entities in entity_entries:
@@ -1048,6 +1066,15 @@ class RedisUpdateBuffer:
             agent_list_transactions=_merged_entity_transactions(list_of_transactions, "agent_list_transactions"),
             model_access_group_list_transactions=_merged_entity_transactions(
                 list_of_transactions, "model_access_group_list_transactions"
+            ),
+            customer_org_list_transactions=_merged_entity_transactions(
+                list_of_transactions, "customer_org_list_transactions"
+            ),
+            customer_team_list_transactions=_merged_entity_transactions(
+                list_of_transactions, "customer_team_list_transactions"
+            ),
+            customer_member_list_transactions=_merged_entity_transactions(
+                list_of_transactions, "customer_member_list_transactions"
             ),
         )
 
