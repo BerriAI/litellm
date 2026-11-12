@@ -22,7 +22,7 @@ from litellm.redis.store_settings import RedisBreakerSettings, RedisStoreSetting
 from litellm.rust_bridge._native import NativeRedisClient, NativeRouterCooldowns
 from litellm.rust_bridge.host import settings
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
-from tests.unit.caching.test_redis_batch import (
+from tests.unit.caching.redis_batch_double import (
     FakeNativePending,
     FakeNatives,
     ReadyPending,

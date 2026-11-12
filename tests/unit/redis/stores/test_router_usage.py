@@ -13,7 +13,7 @@ from litellm.redis.stores.connection import connect
 from litellm.redis.stores.router_usage import CounterIncrement, RouterUsageStore, UsageCounter
 from litellm.rust_bridge._native import NativeRedisClient
 from litellm.types.utils import ModelResponse
-from tests.unit.caching.test_redis_batch import FakeNatives, fake_send
+from tests.unit.caching.redis_batch_double import FakeNatives, fake_send
 
 T = TypeVar("T")
 

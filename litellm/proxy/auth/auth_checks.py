@@ -3248,7 +3248,7 @@ async def cache_team_object(
     if team_table.team_alias:
         alias_key: Final = f"team_alias:{team_table.team_alias}"
         try:
-            pipelined_delete: Final = await user_api_key_cache.async_delete_cache_pre_call(alias_key)
+            pipelined_delete: Final = user_api_key_cache.declare_delete(alias_key)
             if pipelined_delete is None:
                 await user_api_key_cache.async_delete_cache(key=alias_key)
             else:
