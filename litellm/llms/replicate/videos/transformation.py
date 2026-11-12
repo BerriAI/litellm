@@ -261,8 +261,8 @@ class ReplicateVideoConfig(BaseVideoConfig):
         headers: _VideoHeaders,
     ) -> tuple[_VideoParams, RequestFiles, str]:
         prediction_input: Final = {
-            "prompt": prompt,
             **{key: value for key, value in video_create_optional_request_params.items() if key != "model"},
+            "prompt": prompt,
         }
         request: Final = replicate_prediction_request(api_base, model, prediction_input)
         return dict(request.body), [], request.url

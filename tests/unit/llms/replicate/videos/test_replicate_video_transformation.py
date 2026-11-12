@@ -135,6 +135,18 @@ def test_transform_video_create_request(model: str, url: str, extra_body: dict[s
     assert body == {**extra_body, "input": {"prompt": "a quiet ocean", "duration": 5, "resolution": "720p"}}
 
 
+def test_transform_video_create_request_keeps_the_inspected_prompt():
+    body, _, _ = ReplicateVideoConfig().transform_video_create_request(
+        model="minimax/h3-lite",
+        prompt="a quiet ocean",
+        api_base=API_BASE,
+        video_create_optional_request_params={"duration": 5, "prompt": "unaudited"},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert body["input"] == {"duration": 5, "prompt": "a quiet ocean"}
+
+
 def test_get_complete_url_defaults_and_override():
     config = ReplicateVideoConfig()
     assert config.get_complete_url(MODEL, None, {}) == API_BASE
