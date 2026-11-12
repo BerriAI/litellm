@@ -49,6 +49,22 @@ class HeldUpstream:
         body: Final = await reader.readexactly(lengths[0] if lengths else 0)
         marker: Final = str(JSON_OBJECT.validate_json(body)["query"])
         self.events.put(Event(marker, "arrived", time.monotonic()))
+        if marker.startswith("answer-"):
+            reply: Final = json.dumps(
+                {
+                    "id": marker,
+                    "results": [{"index": 1, "relevance_score": 0.9}, {"index": 0, "relevance_score": 0.1}],
+                    "meta": {"api_version": {"version": "2"}, "billed_units": {"search_units": 1}},
+                }
+            ).encode()
+            writer.write(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n"
+                + f"Content-Length: {len(reply)}\r\n\r\n".encode()
+                + reply
+            )
+            await writer.drain()
+            writer.close()
+            return
         await reader.read()
         self.events.put(Event(marker, "closed", time.monotonic()))
 
@@ -157,7 +173,9 @@ def test_hang_up_cancels_the_upstream_rerank_without_a_retry_and_logs_499(cancel
     call_id: Final = str(uuid.uuid4())
     hung_up: Final = hang_up_once_upstream_holds(cancelling, marker, call_id)
     closed: Final = eventually(
-        lambda: cancelling.times(marker, "closed"), lambda times: len(times) >= 1, seconds=2 * DEPLOYMENT_TIMEOUT_SECONDS
+        lambda: cancelling.times(marker, "closed"),
+        lambda times: len(times) >= 1,
+        seconds=2 * DEPLOYMENT_TIMEOUT_SECONDS,
     )
     assert closed[0] - hung_up < CANCEL_DEADLINE_SECONDS, f"upstream held {closed[0] - hung_up:.2f}s after hang-up"
     assert logged_error_codes(cancelling, call_id) == {"499"}
@@ -187,3 +205,28 @@ def test_connected_client_still_times_out_and_retries_with_the_flag_on(cancellin
     )
     assert response.status_code == 408, response.text
     assert len(cancelling.times(marker, "arrived")) == 2
+
+
+@pytest.mark.timeout(CELL_TIMEOUT)
+def test_connected_client_gets_the_rerank_answer_headers_and_a_success_row_with_the_flag_on(cancelling: Rig) -> None:
+    marker: Final = f"answer-{uuid.uuid4().hex}"
+    call_id: Final = str(uuid.uuid4())
+    response: Final = cancelling.gateway.client.post(
+        "/v1/rerank",
+        json={"model": MODEL, "query": marker, "documents": ["alpha", "beta"]},
+        headers={"Authorization": f"Bearer {cancelling.gateway.key}", "x-litellm-call-id": call_id},
+        timeout=4 * DEPLOYMENT_TIMEOUT_SECONDS + 10,
+    )
+    assert response.status_code == 200, response.text
+    assert [result["index"] for result in response.json()["results"]] == [1, 0]
+    assert response.headers["x-litellm-call-id"] == call_id
+    assert "x-litellm-response-cost" in response.headers
+    rows: Final = eventually(
+        lambda: cancelling.gateway.rows(
+            'SELECT status, call_type FROM "LiteLLM_SpendLogs" WHERE request_id=%s', (marker,)
+        ),
+        lambda found: len(found) == 1,
+        seconds=70,
+    )
+    assert (rows[0]["status"], rows[0]["call_type"]) == ("success", "arerank")
+    assert len(cancelling.times(marker, "arrived")) == 1
