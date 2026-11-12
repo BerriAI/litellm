@@ -7,10 +7,12 @@ from typing import Final, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
+from litellm._internal_context import with_service_target
 from litellm.constants import KEY_EXPIRY_ALERT_MAX_DAYS
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy.common_utils.key_expiry_alerts import key_expiry_alert_days
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.user_repository import UserRepository
 
 _METADATA: Final = TypeAdapter(dict[str, object])
@@ -117,7 +119,7 @@ class KeyExpiryAlertManager:
         user_ids: Final = sorted(frozenset(key.user_id for key in keys if key.user_id))
         if not user_ids:
             return
-        owners: Final = await UserRepository(self.prisma_client).table.find_many(where={"user_id": {"in": user_ids}})
+        owners: Final = await find_many_in(UserRepository(self.prisma_client).table, "user_id", user_ids)
         owner_emails: Final = {owner.user_id: owner.user_email for owner in owners if owner.user_email}
         for key in keys:
             try:
@@ -125,6 +127,7 @@ class KeyExpiryAlertManager:
             except Exception:
                 logger.exception("Failed to process a key expiry alert")
 
+    @with_service_target("key_expiry_alerts")
     async def _process_key(self, key: _ExpiryAlertKey, now: datetime, owner_emails: Mapping[str, str]) -> None:
         if not key.user_id or key.expires is None:
             return

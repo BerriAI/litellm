@@ -11,6 +11,7 @@ from litellm_enterprise.enterprise_callbacks.send_emails.base_email import BaseE
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import KEY_EXPIRY_ALERT_MAX_DAYS
 from litellm.proxy.common_utils.key_expiry_alert_manager import KeyExpiryAlertManager
+from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE
 
 NOW: Final = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
 
@@ -89,6 +90,27 @@ async def test_bad_raw_row_does_not_block_valid_row() -> None:
     email: Final = MagicMock(send_key_expiring_email=AsyncMock())
     await KeyExpiryAlertManager(db, DualCache(), email, lambda: NOW).process_alerts()
     assert email.send_key_expiring_email.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_owner_lookup_over_one_chunk_still_notifies_owners_in_each_chunk() -> None:
+    owner_ids: Final = tuple(f"owner-{index:05d}" for index in range(IN_LIST_CHUNK_SIZE + 1))
+    recipients: Final = frozenset((owner_ids[0], owner_ids[-1]))
+    db: Final = _database(tuple(_key(token=owner, user_id=owner) for owner in owner_ids))
+
+    async def bounded_owners(where: dict[str, dict[str, list[str]]]) -> tuple[SimpleNamespace, ...]:
+        ids: Final = where["user_id"]["in"]
+        if len(ids) > IN_LIST_CHUNK_SIZE:
+            raise RuntimeError("owner lookup exceeds the database parameter budget")
+        return tuple(
+            SimpleNamespace(user_id=owner, user_email=f"{owner}@example.com") for owner in ids if owner in recipients
+        )
+
+    db.db.litellm_usertable.find_many.side_effect = bounded_owners
+    email: Final = MagicMock(send_key_expiring_email=AsyncMock())
+    await KeyExpiryAlertManager(db, DualCache(), email, lambda: NOW).process_alerts()
+    assert email.send_key_expiring_email.await_count == len(recipients)
+    assert frozenset(call.kwargs["user_id"] for call in email.send_key_expiring_email.await_args_list) == recipients
 
 
 @pytest.mark.asyncio
