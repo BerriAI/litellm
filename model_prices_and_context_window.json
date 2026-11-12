@@ -26475,6 +26475,46 @@
             "/v1/images/generations"
         ]
     },
+    "fal_ai/google/nano-banana-2.1": {
+        "litellm_provider": "fal_ai",
+        "metadata": {
+            "comment": "fal bills this endpoint by tokens and reports the charge in the x-fal-billable-units response header, priced at output_cost_per_billable_unit dollars per unit. The per-image prices are fal's representative costs by the request's resolution field (1K default, 2K, 4K) for a short prompt, used when the header is absent"
+        },
+        "mode": "image_generation",
+        "output_cost_per_billable_unit": 1.0,
+        "output_cost_per_image": 0.04,
+        "output_cost_per_image_1K": 0.04,
+        "output_cost_per_image_2K": 0.059,
+        "output_cost_per_image_4K": 0.134,
+        "source": "https://fal.ai/models/google/nano-banana-2.1",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/google/nano-banana-2.1/edit": {
+        "litellm_provider": "fal_ai",
+        "metadata": {
+            "comment": "fal bills this endpoint by tokens and reports the charge in the x-fal-billable-units response header, priced at output_cost_per_billable_unit dollars per unit. The per-image prices are fal's representative costs by the request's resolution field (1K default, 2K, 4K) for a short prompt and two 1K input images, used when the header is absent"
+        },
+        "mode": "image_generation",
+        "output_cost_per_billable_unit": 1.0,
+        "output_cost_per_image": 0.044,
+        "output_cost_per_image_1K": 0.044,
+        "output_cost_per_image_2K": 0.063,
+        "output_cost_per_image_4K": 0.138,
+        "source": "https://fal.ai/models/google/nano-banana-2.1/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/google/nano-banana-latest": {
+        "alias_of": "fal_ai/google/nano-banana-2.1"
+    },
+    "fal_ai/google/nano-banana-latest/edit": {
+        "alias_of": "fal_ai/google/nano-banana-2.1/edit"
+    },
     "fal_ai/openai/gpt-image-2": {
         "litellm_provider": "fal_ai",
         "metadata": {

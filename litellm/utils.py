@@ -7489,6 +7489,7 @@ def get_model_info_helper(
                 output_cost_per_image=_model_info.get("output_cost_per_image", None),
                 output_cost_per_image_1K=_model_info.get("output_cost_per_image_1K", None),
                 output_cost_per_image_2K=_model_info.get("output_cost_per_image_2K", None),
+                output_cost_per_billable_unit=_model_info.get("output_cost_per_billable_unit", None),
                 output_cost_per_pixel=_model_info.get("output_cost_per_pixel", None),
                 output_cost_per_image_token=_model_info.get("output_cost_per_image_token", None),
                 output_cost_per_image_token_batches=_model_info.get("output_cost_per_image_token_batches", None),

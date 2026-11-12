@@ -4,7 +4,8 @@ import pytest
 
 import litellm
 from litellm.litellm_core_utils.llm_cost_calc.utils import CostCalculatorUtils
-from litellm.llms.fal_ai.cost_calculator import cost_calculator, fal_ai_passthrough_cost
+from litellm.litellm_core_utils.core_helpers import set_provider_response_headers_in_hidden_params
+from litellm.llms.fal_ai.cost_calculator import FAL_BILLABLE_UNITS_HEADER, cost_calculator, fal_ai_passthrough_cost
 from litellm.types.utils import ImageObject, ImageResponse
 
 
@@ -316,3 +317,69 @@ def test_passthrough_without_a_positive_integer_num_images_charges_one_image(num
         == litellm.model_cost["fal_ai/fal-ai/nano-banana-2"]["output_cost_per_image"]
         > 0
     )
+
+
+BILLABLE_UNIT_MODELS: Final = ("google/nano-banana-2.1", "google/nano-banana-2.1/edit")
+
+
+def _image_response_with_headers(headers: dict[str, str], num_images: int = 1) -> ImageResponse:
+    response: Final = _image_response(num_images=num_images)
+    set_provider_response_headers_in_hidden_params(response, headers)
+    return response
+
+
+@pytest.mark.parametrize("model", BILLABLE_UNIT_MODELS)
+def test_reported_billable_units_set_the_cost_over_the_per_image_price(model):
+    unit_price: Final = litellm.model_cost[f"fal_ai/{model}"]["output_cost_per_billable_unit"]
+    cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model=model,
+        custom_llm_provider="fal_ai",
+        completion_response=_image_response_with_headers({FAL_BILLABLE_UNITS_HEADER: "0.062173746"}, num_images=2),
+        optional_params={"resolution": "4K", "num_images": 2},
+    )
+    assert cost == pytest.approx(0.062173746 * unit_price)
+
+
+@pytest.mark.parametrize("headers", [{}, {FAL_BILLABLE_UNITS_HEADER: "nan"}, {FAL_BILLABLE_UNITS_HEADER: "-1"}])
+@pytest.mark.parametrize("model", BILLABLE_UNIT_MODELS)
+def test_unusable_billable_units_fall_back_to_the_resolution_price(model, headers):
+    entry: Final = litellm.model_cost[f"fal_ai/{model}"]
+    cost: Final = cost_calculator(
+        model=f"fal_ai/{model}",
+        image_response=_image_response_with_headers(headers, num_images=2),
+        optional_params={"resolution": "2K", "num_images": 2},
+    )
+    assert cost == 2 * entry["output_cost_per_image_2K"] > 0
+
+
+def test_billable_units_are_ignored_without_a_unit_price():
+    entry: Final = litellm.model_cost["fal_ai/fal-ai/nano-banana-2"]
+    assert "output_cost_per_billable_unit" not in entry
+    cost: Final = cost_calculator(
+        model="fal_ai/fal-ai/nano-banana-2",
+        image_response=_image_response_with_headers({FAL_BILLABLE_UNITS_HEADER: "7"}),
+        optional_params={},
+    )
+    assert cost == entry["output_cost_per_image"]
+
+
+def test_billable_unit_price_scales_the_reported_units(monkeypatch):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "fal_ai/fal-ai/megapixel-billed-model",
+        {"litellm_provider": "fal_ai", "mode": "image_generation", "output_cost_per_billable_unit": 0.003},
+    )
+    cost: Final = cost_calculator(
+        model="fal_ai/fal-ai/megapixel-billed-model",
+        image_response=_image_response_with_headers({FAL_BILLABLE_UNITS_HEADER: "2"}, num_images=2),
+    )
+    assert cost == pytest.approx(0.006)
+
+
+def test_deployment_price_overrides_reported_billable_units():
+    cost: Final = cost_calculator(
+        model="fal_ai/google/nano-banana-2.1",
+        image_response=_image_response_with_headers({FAL_BILLABLE_UNITS_HEADER: "0.5"}, num_images=2),
+        model_info={"output_cost_per_image": 0.01},
+    )
+    assert cost == pytest.approx(0.02)
