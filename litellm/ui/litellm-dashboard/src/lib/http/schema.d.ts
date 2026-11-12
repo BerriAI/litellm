@@ -37220,6 +37220,8 @@ export interface components {
             output_cost_per_audio_per_second?: number | null;
             /** Output Cost Per Audio Token */
             output_cost_per_audio_token?: number | null;
+            /** Output Cost Per Billable Unit */
+            output_cost_per_billable_unit?: number | null;
             /** Output Cost Per Character */
             output_cost_per_character?: number | null;
             /** Output Cost Per Character Above 128K Tokens */
@@ -53508,6 +53510,8 @@ export interface components {
             output_cost_per_audio_per_second?: number | null;
             /** Output Cost Per Audio Token */
             output_cost_per_audio_token?: number | null;
+            /** Output Cost Per Billable Unit */
+            output_cost_per_billable_unit?: number | null;
             /** Output Cost Per Character */
             output_cost_per_character?: number | null;
             /** Output Cost Per Character Above 128K Tokens */
