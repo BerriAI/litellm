@@ -6949,9 +6949,11 @@
         "fallbacks": "Fallbacks",
         "actions": "Actions"
       },
+      "overrides": "Overrides",
       "actions": {
         "test": "Test fallback",
         "edit": "Edit fallback",
+        "editOverrides": "Edit parameter overrides through the API or config file",
         "delete": "Delete fallback"
       },
       "deleteModal": {
