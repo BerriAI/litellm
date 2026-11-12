@@ -241,6 +241,43 @@ class TestMistralReasoningSupport:
         assert optional_params["reasoning_effort"] == sent
         assert "thinking" not in optional_params
 
+    @pytest.mark.parametrize("thinking_first", (False, True))
+    @pytest.mark.parametrize(
+        ("requested", "thinking", "sent"),
+        (
+            ("HIGH", {"type": "disabled"}, "none"),
+            (5, {"type": "disabled"}, "none"),
+            ({"effort": None}, {"type": "disabled"}, "none"),
+            ("HIGH", {"type": "enabled", "budget_tokens": 1024}, "high"),
+            ("HIGH", {"type": "adaptive"}, "high"),
+            ("high", {"type": "disabled"}, "high"),
+            ({"effort": "high", "summary": "auto"}, {"type": "disabled"}, "high"),
+            ("default", {"type": "disabled"}, None),
+            ({"effort": "default", "summary": "auto"}, {"type": "disabled"}, None),
+        ),
+    )
+    def test_magistral_uses_thinking_only_when_effort_was_dropped(
+        self,
+        local_model_cost_map: None,
+        requested: object,
+        thinking: Mapping[str, object],
+        sent: str | None,
+        thinking_first: bool,
+    ) -> None:
+        params: Final = (
+            {"thinking": thinking, "reasoning_effort": requested}
+            if thinking_first
+            else {"reasoning_effort": requested, "thinking": thinking}
+        )
+        result: Final = MistralConfig().map_openai_params(
+            non_default_params=params,
+            optional_params={},
+            model="magistral-small-latest",
+            drop_params=True,
+        )
+        expected: Final = {} if sent is None else {"reasoning_effort": sent}
+        assert result == expected
+
     def test_magistral_prefers_reasoning_effort_over_thinking(self, local_model_cost_map: None) -> None:
         import litellm
 

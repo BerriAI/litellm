@@ -97,9 +97,7 @@ _MISTRAL_FILE_PART: Final = TypeAdapter(MistralFilePart)
 _DECODED_JSON: Final = TypeAdapter(object)
 _REASONING_LEVELS: Final = frozenset(REASONING_EFFORT_ADVERTISEMENT_ORDER)
 _PROVIDER_DEFAULT_EFFORT: Final = "default"
-_NON_LEVEL_EFFORT_REASON: Final = (
-    "the Mistral API takes it only as a level such as 'high', so Mistral applies its default effort."
-)
+_NON_LEVEL_EFFORT_REASON: Final = "the Mistral API takes it only as a level such as 'high'."
 _UNUSABLE_TOOL_CHOICE_REASON: Final = (
     "the Mistral API takes tool_choice only as 'auto', 'none', 'any', 'required', "
     "or {'type': 'function', 'function': {'name': <tool name>}}."
@@ -245,6 +243,13 @@ class MistralConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
+        requested: Final = _MISTRAL_REASONING_EFFORT_PARAMS.validate_python(non_default_params)
+        reasoning_level: Final = (
+            self._reasoning_level_to_send(model, requested, drop_params) if "reasoning_effort" in requested else None
+        )
+        leaves_level_to_mistral: Final = (
+            _reasoning_level_and_summary(requested.get("reasoning_effort"))[0] == _PROVIDER_DEFAULT_EFFORT
+        )
         for param, value in non_default_params.items():
             if param == "max_tokens":
                 optional_params["max_tokens"] = value
@@ -269,19 +274,12 @@ class MistralConfig(OpenAIGPTConfig):
                         optional_params["tool_choice"] = tool_choice
             if param == "seed":
                 optional_params["extra_body"] = {"random_seed": value}
-            if (
-                param == "reasoning_effort"
-                and (
-                    reasoning_level := self._reasoning_level_to_send(
-                        model, _MISTRAL_REASONING_EFFORT_PARAMS.validate_python(non_default_params), drop_params
-                    )
-                )
-                is not None
-            ):
+            if param == "reasoning_effort" and reasoning_level is not None:
                 optional_params["reasoning_effort"] = reasoning_level
             if (
                 param == "thinking"
-                and "reasoning_effort" not in non_default_params
+                and reasoning_level is None
+                and not leaves_level_to_mistral
                 and (thinking_effort := _thinking_as_reasoning_effort(value, model=model, drop_params=drop_params))
                 is not None
             ):
