@@ -1,6 +1,6 @@
-"""``with_service_target`` and ``service_caller`` carry the purpose and the caller of a datastore call
-to code that cannot see them from its own frames, and every Redis producer on the proxy request path
-declares a key family so no request-path span renders as a bare ``redis.get``."""
+"""``with_service_target`` carries the purpose of a datastore call to code that cannot see it from its own
+frames, and every Redis producer on the proxy request path declares a key family so no request-path span renders
+as a bare ``redis.get``."""
 
 import ast
 import asyncio
@@ -11,14 +11,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-import pytest
-
 from litellm._internal_context import (
     current_request_parent_otel_span,
-    current_service_caller,
     current_service_target,
     request_parent_otel_span,
-    service_caller,
     service_target,
     set_request_parent_otel_span,
     with_service_target,
@@ -100,8 +96,7 @@ _CACHE_CALL: Final = re.compile(
     r"\.(?:async_)?(?:get_cache|set_cache|batch_get_cache|batch_get_cache_shared|increment_cache|increment_if_present|increment"
     r"|set_cache_pipeline|set_cache_pipeline_with_ttls|set_cache_sadd|delete_cache|batch_set_cache|increment_pipeline"
     r"|rpush|lpop|scan_iter|get_ttl|mget)\("
-    r"|\b(?:reserve_redis_batch_reads|_prepare_batch_get)\("
-    r"|\bbatch\.(?:set|delete|script|increment)\("
+    r"|\b_prepare_batch_get\("
 )
 _DECLARES_TARGET: Final = re.compile(r"\b(?:with_service_target|service_target|response_cache_phase)\(")
 _BUILDS_A_REDIS_CACHE: Final = re.compile(r"\bRedisCache\(|\bredis_cache=(?!None\b)")
@@ -171,27 +166,6 @@ def test_with_service_target_keeps_the_wrapped_signature_and_coroutine_ness() ->
     assert inspect.iscoroutinefunction(hook)
     assert tuple(inspect.signature(hook).parameters) == ("self", "data", "call_type")
     assert hook.__name__ == "hook"
-
-
-def test_service_caller_is_inherited_by_a_task_spawned_inside_it_and_cleared_after() -> None:
-    async def spawned() -> str | None:
-        return current_service_caller()
-
-    async def main() -> tuple[str | None, str | None]:
-        with service_caller("prefetch <- auth"):
-            task = asyncio.create_task(spawned())
-        return await task, current_service_caller()
-
-    assert asyncio.run(main()) == ("prefetch <- auth", None)
-
-
-@pytest.mark.parametrize("value", [None, "x"])
-def test_service_caller_restores_the_outer_value(value: str | None) -> None:
-    with service_caller(value):
-        with service_caller("inner"):
-            assert current_service_caller() == "inner"
-        assert current_service_caller() == value
-    assert current_service_caller() is None
 
 
 class _Suspend:
