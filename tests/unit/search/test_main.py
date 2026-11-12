@@ -57,6 +57,19 @@ def _proxy_style_logging_obj() -> Logging:
 
 
 @pytest.mark.usefixtures("_local_model_cost_map")
+def test_webiq_search_reports_the_catalog_query_cost(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post("https://api.microsoft.ai/v3/search/web").respond(
+        json={"webResults": [{"title": "A source", "url": "https://example.com", "content": "A passage"}]}
+    )
+    response: Final = litellm.search(query="litellm release notes", search_provider="webiq", api_key="test-webiq-key")
+
+    assert response._hidden_params["response_cost"] > 0
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        litellm.model_cost["webiq/search"]["input_cost_per_query"]
+    )
+
+
+@pytest.mark.usefixtures("_local_model_cost_map")
 def test_search_bills_search_tool_input_cost_per_query(respx_mock: respx.MockRouter) -> None:
     respx_mock.post(EXA_SEARCH_URL).respond(json={"results": [{"title": "t", "url": "https://example.com"}]})
     map_price, _ = search_provider_cost_per_query(model="exa_ai/search", custom_llm_provider="exa_ai")

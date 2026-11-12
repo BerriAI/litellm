@@ -10,6 +10,7 @@ import threading
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from itertools import chain
 from pathlib import Path
 from types import CodeType, FrameType, MappingProxyType, TracebackType
 from typing import AsyncIterator, Callable, Final, Iterator, Literal, NoReturn, Optional, cast
@@ -27,14 +28,20 @@ from litellm.exceptions import MidStreamFallbackError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+    convert_to_streaming_response,
+    convert_to_streaming_response_async,
+)
 from litellm.litellm_core_utils.streaming_handler import (
     CustomStreamWrapper,
     _ProviderChunkEarlyReturn,
     _ProviderChunkParsed,
 )
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator as AnthropicModelResponseIterator
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.custom_httpx.http_handler import HTTPHandler, MaskedHTTPStatusError
+from litellm.llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
 from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
+from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     ModelResponseIterator as GeminiModelResponseIterator,
 )
@@ -267,6 +274,37 @@ def test_is_chunk_non_empty(initialized_custom_stream_wrapper: CustomStreamWrapp
         completion_obj=MagicMock(),
         model_response=ModelResponseStream(**chunk),
         response_obj=MagicMock(),
+    )
+
+
+def test_is_chunk_non_empty_keeps_thinking_blocks_without_other_content(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """Encrypted reasoning arrives as thinking_blocks and nothing else, so that delta has to be yielded."""
+    chunk: Final = ModelResponseStream(
+        id="chunk-thinking",
+        object="chat.completion.chunk",
+        created=1,
+        model="chatgpt/gpt-6.1-sol",
+        choices=[
+            StreamingChoices(
+                index=0,
+                finish_reason=None,
+                delta=Delta(
+                    thinking_blocks=[
+                        {"type": "redacted_thinking", "data": "litellm_encrypted_reasoning:gAAAA"}
+                    ]
+                ),
+            )
+        ],
+    )
+    assert (
+        initialized_custom_stream_wrapper.is_chunk_non_empty(
+            completion_obj={},
+            model_response=chunk,
+            response_obj={},
+        )
+        is True
     )
 
 
@@ -1396,6 +1434,102 @@ def test_sync_streaming_bad_request_not_midstream(logging_obj: Logging):
     assert "invalid maxOutputTokens" in str(excinfo.value)
 
 
+def _gemini_stream_error(status_code: int, sync_mode: bool) -> Exception:
+    if not sync_mode:
+        return VertexAIError(status_code=status_code, message="upstream said no", headers=None)
+    request: Final = httpx.Request("POST", "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash")
+    body: Final = b'{"error": {"message": "upstream said no"}}'
+    response: Final = httpx.Response(status_code, request=request, content=body)
+    return MaskedHTTPStatusError(
+        httpx.HTTPStatusError("upstream said no", request=request, response=response),
+        message=body,  # pyright: ignore[reportArgumentType]  # the sync stream handler passes the raw body bytes
+        text=body,  # pyright: ignore[reportArgumentType]  # the sync stream handler passes the raw body bytes
+    )
+
+
+def _gemini_stream_opened_by(error: BaseException, sync_mode: bool, logging_obj: Logging) -> CustomStreamWrapper:
+    def make_sync_call(client: object) -> NoReturn:
+        raise error
+
+    async def make_call(client: object) -> NoReturn:
+        raise error
+
+    return CustomStreamWrapper(
+        completion_stream=None,
+        model="gemini-2.5-flash",
+        logging_obj=logging_obj,
+        custom_llm_provider="gemini",
+        make_call=make_sync_call if sync_mode else make_call,
+    )
+
+
+async def _fetch(stream: CustomStreamWrapper, sync_mode: bool) -> object:
+    return stream.fetch_sync_stream() if sync_mode else await stream.fetch_stream()
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    ("status_code", "expected_error"),
+    [
+        (400, litellm.BadRequestError),
+        (429, litellm.RateLimitError),
+        (503, litellm.ServiceUnavailableError),
+    ],
+)
+async def test_a_gemini_stream_that_fails_to_open_raises_the_mapped_error_from_fetch(
+    logging_obj: Logging,
+    sync_mode: bool,
+    status_code: int,
+    expected_error: type[litellm.BadRequestError | litellm.RateLimitError | litellm.ServiceUnavailableError],
+) -> None:
+    provider_error: Final = _gemini_stream_error(status_code, sync_mode)
+    stream: Final = _gemini_stream_opened_by(provider_error, sync_mode, logging_obj)
+    with pytest.raises(expected_error, match="upstream said no") as excinfo:
+        await _fetch(stream, sync_mode)
+    assert (excinfo.value.status_code, excinfo.value.llm_provider) == (status_code, "gemini")
+    assert excinfo.value.__cause__ is provider_error
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_a_stream_open_error_that_is_already_mapped_is_raised_as_is(
+    logging_obj: Logging, sync_mode: bool
+) -> None:
+    already_mapped: Final = litellm.BadRequestError(
+        message="already mapped", model="gemini-2.5-flash", llm_provider="gemini"
+    )
+    stream: Final = _gemini_stream_opened_by(already_mapped, sync_mode, logging_obj)
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        await _fetch(stream, sync_mode)
+    assert excinfo.value is already_mapped
+    assert excinfo.value.__cause__ is None
+
+
+async def test_a_cancelled_stream_open_stays_cancelled(logging_obj: Logging) -> None:
+    stream: Final = _gemini_stream_opened_by(asyncio.CancelledError(), False, logging_obj)
+    with pytest.raises(asyncio.CancelledError):
+        await stream.fetch_stream()
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_a_stream_that_opens_is_opened_once(logging_obj: Logging, sync_mode: bool) -> None:
+    def make_sync_call(client: object) -> ModelResponseListIterator:
+        return ModelResponseListIterator(model_responses=[])
+
+    async def make_call(client: object) -> ModelResponseListIterator:
+        return ModelResponseListIterator(model_responses=[])
+
+    stream: Final = CustomStreamWrapper(
+        completion_stream=None,
+        model="gemini-2.5-flash",
+        logging_obj=logging_obj,
+        custom_llm_provider="gemini",
+        make_call=make_sync_call if sync_mode else make_call,
+    )
+    opened: Final = await _fetch(stream, sync_mode)
+    assert isinstance(opened, ModelResponseListIterator)
+    assert await _fetch(stream, sync_mode) is opened
+
+
 def _bedrock_error_event(exception_type: str):
     """A mocked botocore event-stream error event: status_code is botocore's
     hard-coded 400, with the real type in the :exception-type header."""
@@ -2076,37 +2210,32 @@ async def test_in_body_stream_error_500_wraps_for_midstream_fallback(
     assert "internal engine crash" in str(excinfo.value)
 
 
-@pytest.mark.asyncio
-async def test_async_streaming_read_timeout_triggers_midstream_fallback(
-    logging_obj: Logging,
-):
-    """A mid-stream httpx.ReadTimeout must wrap into MidStreamFallbackError so
-    the Router's FallbackStreamWrapper can switch to a fallback model.
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_a_read_timeout_while_opening_the_stream_triggers_midstream_fallback(
+    logging_obj: Logging, sync_mode: bool
+) -> None:
+    read_timeout: Final = httpx.ReadTimeout("Timeout on reading data from socket")
 
-    Previously __anext__ caught httpx.TimeoutException and re-raised it raw,
-    which bypassed _handle_stream_fallback_error and prevented stream_timeout
-    from triggering fallbacks the way connection-phase timeout does.
-    """
-    import httpx
+    def make_sync_call(client: object) -> NoReturn:
+        raise read_timeout
 
-    from litellm.exceptions import MidStreamFallbackError
+    async def make_call(client: object) -> NoReturn:
+        raise read_timeout
 
-    async def _raise_read_timeout(**kwargs):
-        raise httpx.ReadTimeout("Timeout on reading data from socket")
-
-    response = CustomStreamWrapper(
+    response: Final = CustomStreamWrapper(
         completion_stream=None,
         model="gpt-4",
         logging_obj=logging_obj,
         custom_llm_provider="openai",
-        make_call=_raise_read_timeout,
+        make_call=make_sync_call if sync_mode else make_call,
     )
 
     with pytest.raises(MidStreamFallbackError) as excinfo:
-        await response.__anext__()
+        next(response) if sync_mode else await response.__anext__()
 
     assert excinfo.value.is_pre_first_chunk is True
     assert isinstance(excinfo.value.original_exception, litellm.Timeout)
+    assert excinfo.value.original_exception.__cause__ is read_timeout
 
 
 def _raw_read_timeout() -> NoReturn:
@@ -3517,6 +3646,34 @@ def test_is_chunk_non_empty_with_valid_tool_calls(
     )
 
 
+@pytest.mark.parametrize(
+    ("tool_calls", "non_empty"),
+    [([{"id": "call_1", "type": "function", "function": {"name": "f", "arguments": "{}"}}], True), ([], False)],
+)
+def test_is_chunk_non_empty_reads_tool_calls_from_the_completion_obj(
+    initialized_custom_stream_wrapper: CustomStreamWrapper, tool_calls: list[dict[str, object]], non_empty: bool
+):
+    assert (
+        initialized_custom_stream_wrapper.is_chunk_non_empty(
+            completion_obj={"tool_calls": tool_calls},
+            model_response=ModelResponseStream(),
+            response_obj={},
+        )
+        is non_empty
+    )
+
+
+def test_is_chunk_non_empty_rejects_completion_obj_tool_calls_without_a_length(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    with pytest.raises(TypeError, match="object of type 'generator' has no len"):
+        initialized_custom_stream_wrapper.is_chunk_non_empty(
+            completion_obj={"tool_calls": (tool_call for tool_call in ())},
+            model_response=ModelResponseStream(),
+            response_obj={},
+        )
+
+
 def _make_chunk(content: Optional[str]) -> ModelResponseStream:
     return ModelResponseStream(
         id="test",
@@ -4647,6 +4804,25 @@ def test_dispatch_triton_stream(
     assert isinstance(result, _ProviderChunkParsed)
     assert completion_obj["content"] == "triton text"
     assert initialized_custom_stream_wrapper.received_finish_reason == "stop"
+
+
+@pytest.mark.parametrize(
+    "chunk",
+    [
+        'data: {"text_output": "triton text", "is_finished": true, "stop_reason": "stop", "generated_token_count": 2}',
+        b'data: {"text_output": "triton text", "is_finished": true, "stop_reason": "stop", "generated_token_count": 2}',
+    ],
+)
+def test_handle_triton_stream_parses_sse_text_output_lines(
+    initialized_custom_stream_wrapper: CustomStreamWrapper, chunk: str | bytes
+):
+    assert initialized_custom_stream_wrapper.handle_triton_stream(chunk) == {
+        "text": "triton text",
+        "is_finished": True,
+        "finish_reason": "stop",
+        "prompt_tokens": 0,
+        "completion_tokens": 2,
+    }
 
 
 def test_dispatch_text_completion_openai_with_usage(
@@ -6971,6 +7147,327 @@ def test_chunk_creator_keeps_upstream_index_on_single_choice_chunk(logging_obj: 
     assert result.choices[0].delta.content == "hello"
 
 
+_TOKEN_IDS: Final = TypeAdapter(list[int] | None)
+_CHOICE_INDEX: Final = TypeAdapter(int)
+_DELTA: Final = TypeAdapter(Mapping[str, object])
+
+
+def _joined_token_ids(choices: Sequence[Mapping[str, object]]) -> tuple[int, ...]:
+    return tuple(chain.from_iterable(_TOKEN_IDS.validate_python(choice.get("token_ids")) or () for choice in choices))
+
+
+def _hosted_vllm_stream(
+    logging_obj: Logging, upstream_choices: Sequence[Mapping[str, object]]
+) -> CustomStreamWrapper:
+    sse_lines: Final = (
+        *(
+            "data: " + json.dumps({"id": "chatcmpl-1", "object": "chat.completion.chunk", "model": "m", "choices": [c]})
+            for c in upstream_choices
+        ),
+        "data: [DONE]",
+    )
+    completion_stream: Final = HostedVLLMChatConfig().get_model_response_iterator(
+        streaming_response=iter(sse_lines), sync_stream=True, json_mode=False
+    )
+    return CustomStreamWrapper(
+        completion_stream=completion_stream, model="m", custom_llm_provider="hosted_vllm", logging_obj=logging_obj
+    )
+
+
+def _hosted_vllm_stream_choices(
+    logging_obj: Logging, upstream_choices: Sequence[Mapping[str, object]]
+) -> tuple[dict[str, object], ...]:
+    return tuple(chunk.choices[0].model_dump() for chunk in _hosted_vllm_stream(logging_obj, upstream_choices))
+
+
+@pytest.mark.parametrize("stop_reason", [",5", 151645])
+@pytest.mark.parametrize("final_content", [",3", ""], ids=["content-then-finish", "finish-only"])
+def test_hosted_vllm_stream_keeps_stop_reason_and_every_token_id(
+    logging_obj: Logging, final_content: str, stop_reason: str | int
+) -> None:
+    emitted: Final = _hosted_vllm_stream_choices(
+        logging_obj,
+        (
+            {"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},
+            {"index": 0, "delta": {"content": ""}, "finish_reason": None, "token_ids": [16]},
+            {"index": 0, "delta": {"content": "1,2"}, "finish_reason": None, "token_ids": [11, 17]},
+            {
+                "index": 0,
+                "delta": {"content": final_content},
+                "finish_reason": "stop",
+                "stop_reason": stop_reason,
+                "token_ids": [20],
+            },
+        ),
+    )
+
+    assert [choice.get("stop_reason") for choice in emitted if choice["finish_reason"] is not None] == [stop_reason]
+    assert [
+        (_DELTA.validate_python(choice["delta"]).get("content"), choice["stop_reason"])
+        for choice in emitted
+        if choice["finish_reason"] is None and choice.get("stop_reason") is not None
+    ] == ([(final_content, stop_reason)] if final_content else [])
+    assert _joined_token_ids(emitted) == (16, 11, 17, 20)
+
+
+def test_hosted_vllm_stream_sends_empty_content_on_token_id_only_chunks(logging_obj: Logging) -> None:
+    emitted: Final = _hosted_vllm_stream_choices(
+        logging_obj,
+        (
+            {"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},
+            {"index": 0, "delta": {"content": ""}, "finish_reason": None, "token_ids": [11]},
+            {"index": 0, "delta": {"content": ""}, "finish_reason": None, "token_ids": [220]},
+            {"index": 0, "delta": {"content": "1"}, "finish_reason": None, "token_ids": [16]},
+        ),
+    )
+
+    assert [
+        (_DELTA.validate_python(choice["delta"]).get("content"), choice.get("token_ids"))
+        for choice in emitted
+        if choice.get("token_ids")
+    ] == [("", [11]), ("", [220]), ("1", [16])]
+
+
+def test_hosted_vllm_stream_keeps_held_back_token_ids_on_their_own_choice(logging_obj: Logging) -> None:
+    emitted: Final = _hosted_vllm_stream_choices(
+        logging_obj,
+        (
+            {"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},
+            {"index": 1, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},
+            {"index": 1, "delta": {"content": ""}, "finish_reason": None, "token_ids": [16]},
+            {"index": 0, "delta": {"content": "1"}, "finish_reason": None, "token_ids": [17]},
+            {"index": 1, "delta": {"content": "2"}, "finish_reason": None, "token_ids": [18]},
+        ),
+    )
+
+    assert [(choice["index"], choice.get("token_ids")) for choice in emitted if choice.get("token_ids")] == [
+        (1, [16]),
+        (0, [17]),
+        (1, [18]),
+    ]
+
+
+def _rejects_a_two(text: str) -> bool:
+    return "2" not in text
+
+
+def _choices_sent_before_rule_failure(stream: CustomStreamWrapper) -> Iterator[dict[str, object]]:
+    try:
+        yield from (chunk.choices[0].model_dump() for chunk in stream)
+    except MidStreamFallbackError:
+        return
+
+
+def test_hosted_vllm_stream_sends_no_token_ids_ahead_of_a_failing_post_call_rule(
+    logging_obj: Logging, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "post_call_rules", [_rejects_a_two])
+    stream: Final = _hosted_vllm_stream(
+        logging_obj,
+        (
+            {"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},
+            {"index": 0, "delta": {"content": ""}, "finish_reason": None, "token_ids": [16]},
+            {"index": 0, "delta": {"content": "1"}, "finish_reason": None, "token_ids": [11, 17]},
+            {"index": 0, "delta": {"content": ",2"}, "finish_reason": "stop", "stop_reason": None, "token_ids": [20]},
+        ),
+    )
+
+    assert [
+        (_DELTA.validate_python(choice["delta"]).get("content"), choice.get("token_ids"))
+        for choice in _choices_sent_before_rule_failure(stream)
+    ] == [("", None), ("1", None)]
+
+
+def _held_back_stop_string_stream(token_ids: Mapping[str, None]) -> tuple[Mapping[str, object], ...]:
+    return (
+        {"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},
+        {"index": 0, "delta": {"content": ""}, "finish_reason": None, **token_ids},
+        {"index": 0, "delta": {"content": "1,2"}, "finish_reason": None, **token_ids},
+        {"index": 0, "delta": {"content": ""}, "finish_reason": "stop", "stop_reason": ",3", **token_ids},
+    )
+
+
+def test_hosted_vllm_stream_with_null_token_ids_emits_the_same_chunks_as_without_them(logging_obj: Logging) -> None:
+    with_null_ids: Final = _hosted_vllm_stream_choices(logging_obj, _held_back_stop_string_stream({"token_ids": None}))
+    without_ids: Final = _hosted_vllm_stream_choices(logging_obj, _held_back_stop_string_stream({}))
+
+    assert [(c["delta"], c["finish_reason"]) for c in with_null_ids] == [
+        (c["delta"], c["finish_reason"]) for c in without_ids
+    ]
+
+
+_TWO_CHOICE_STOP_REASONS: Final[Mapping[int, str | int]] = MappingProxyType({0: ", 3", 1: 151645})
+_TWO_CHOICE_TOKEN_IDS: Final[Mapping[int, tuple[int, int]]] = MappingProxyType({0: (16, 17), 1: (26, 27)})
+
+
+def _two_choice_stream(first_finished: int, finish_contents: tuple[str, str]) -> tuple[Mapping[str, object], ...]:
+    return (
+        *({"index": index, "delta": {"role": "assistant", "content": ""}, "finish_reason": None} for index in (0, 1)),
+        *(
+            {"index": index, "delta": {"content": "1"}, "finish_reason": None, "token_ids": [ids[0]]}
+            for index, ids in _TWO_CHOICE_TOKEN_IDS.items()
+        ),
+        *(
+            {
+                "index": index,
+                "delta": {"content": content},
+                "finish_reason": "stop",
+                "stop_reason": _TWO_CHOICE_STOP_REASONS[index],
+                "token_ids": [_TWO_CHOICE_TOKEN_IDS[index][1]],
+            }
+            for index, content in zip((first_finished, 1 - first_finished), finish_contents)
+        ),
+    )
+
+
+def _carries_another_choices_fields(choice: Mapping[str, object]) -> bool:
+    own_index: Final = _CHOICE_INDEX.validate_python(choice["index"])
+    token_ids: Final = _TOKEN_IDS.validate_python(choice.get("token_ids")) or ()
+    return not set(token_ids) <= set(_TWO_CHOICE_TOKEN_IDS[own_index]) or choice.get("stop_reason") not in (
+        None,
+        _TWO_CHOICE_STOP_REASONS[own_index],
+    )
+
+
+@pytest.mark.parametrize("first_finished", [0, 1])
+@pytest.mark.parametrize(
+    "finish_contents",
+    [("", ""), ("2", ""), ("2", "2")],
+    ids=["both-finish-only", "content-then-finish-only", "both-content-then-finish"],
+)
+def test_hosted_vllm_stream_with_two_choices_keeps_ids_and_stop_reason_on_their_own_choice(
+    logging_obj: Logging, first_finished: int, finish_contents: tuple[str, str]
+) -> None:
+    emitted: Final = _hosted_vllm_stream_choices(logging_obj, _two_choice_stream(first_finished, finish_contents))
+
+    assert [
+        (choice["index"], choice.get("token_ids"), choice.get("stop_reason"))
+        for choice in emitted
+        if _carries_another_choices_fields(choice)
+    ] == []
+
+
+@pytest.mark.parametrize("first_finished", [0, 1])
+@pytest.mark.parametrize(
+    "finish_contents", [("2", ""), ("2", "2")], ids=["content-then-finish-only", "both-content-then-finish"]
+)
+def test_hosted_vllm_stream_with_two_choices_keeps_each_stop_reason_on_its_final_content_chunk(
+    logging_obj: Logging, first_finished: int, finish_contents: tuple[str, str]
+) -> None:
+    emitted: Final = _hosted_vllm_stream_choices(logging_obj, _two_choice_stream(first_finished, finish_contents))
+    content_chunk_stop_reasons: Final = frozenset(
+        (choice["index"], choice["stop_reason"])
+        for choice in emitted
+        if _DELTA.validate_python(choice["delta"]).get("content") and choice.get("stop_reason") is not None
+    )
+    finished_with_content: Final = frozenset(
+        (index, _TWO_CHOICE_STOP_REASONS[index])
+        for index, content in zip((first_finished, 1 - first_finished), finish_contents)
+        if content
+    )
+
+    assert content_chunk_stop_reasons == finished_with_content
+
+
+@pytest.mark.parametrize("first_finished", [0, 1])
+@pytest.mark.parametrize(
+    "finish_contents",
+    [("", ""), ("2", ""), ("", "2"), ("2", "2")],
+    ids=["both-finish-only", "content-then-finish-only", "finish-only-then-content", "both-content-then-finish"],
+)
+def test_hosted_vllm_stream_with_two_choices_delivers_every_token_id_and_stop_reason_of_each_choice(
+    logging_obj: Logging, first_finished: int, finish_contents: tuple[str, str]
+) -> None:
+    emitted: Final = _hosted_vllm_stream_choices(logging_obj, _two_choice_stream(first_finished, finish_contents))
+
+    assert {
+        index: _joined_token_ids([choice for choice in emitted if choice["index"] == index])
+        for index in _TWO_CHOICE_TOKEN_IDS
+    } == _TWO_CHOICE_TOKEN_IDS
+    assert frozenset(
+        (choice["index"], choice["stop_reason"]) for choice in emitted if choice.get("stop_reason") is not None
+    ) == frozenset(_TWO_CHOICE_STOP_REASONS.items())
+
+
+def test_hosted_vllm_stream_with_two_choices_finishes_the_first_choice_before_the_other_choice_streams_on(
+    logging_obj: Logging,
+) -> None:
+    emitted: Final = _hosted_vllm_stream_choices(
+        logging_obj,
+        (
+            *({"index": index, "delta": {"role": "assistant", "content": ""}, "finish_reason": None} for index in (0, 1)),
+            {"index": 0, "delta": {"content": "1"}, "finish_reason": "stop", "stop_reason": ",2", "token_ids": [16]},
+            {"index": 1, "delta": {"content": ""}, "finish_reason": None, "token_ids": [26]},
+            {"index": 1, "delta": {"content": ""}, "finish_reason": None, "token_ids": [11]},
+            {"index": 1, "delta": {"content": "1,"}, "finish_reason": None, "token_ids": [27]},
+            {"index": 1, "delta": {"content": "3"}, "finish_reason": "stop", "stop_reason": 151645, "token_ids": [28]},
+        ),
+    )
+    first_choice_finish: Final = next(
+        position for position, choice in enumerate(emitted) if choice["index"] == 0 and choice["finish_reason"]
+    )
+
+    assert emitted[first_choice_finish]["stop_reason"] == ",2"
+    assert _joined_token_ids([choice for choice in emitted[first_choice_finish:] if choice["index"] == 1]) == (
+        26,
+        11,
+        27,
+        28,
+    )
+
+
+_CACHED_VLLM_TOKEN_IDS: Final = (16, 11, 220, 17, 11, 220, 18, 11, 220, 19)
+
+
+def _cached_vllm_completion() -> dict[str, object]:
+    return {
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "Qwen/Qwen3-0.6B",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "1, 2, 3, 4"},
+                "finish_reason": "stop",
+                "stop_reason": ", 5",
+                "token_ids": list(_CACHED_VLLM_TOKEN_IDS),
+            }
+        ],
+    }
+
+
+async def _replayed_cache_hit_choices(logging_obj: Logging, replay: str) -> tuple[dict[str, object], ...]:
+    if replay == "async":
+        async_wrapper: Final = CustomStreamWrapper(
+            completion_stream=convert_to_streaming_response_async(_cached_vllm_completion()),
+            model="m",
+            custom_llm_provider="cached_response",
+            logging_obj=logging_obj,
+        )
+        return tuple([chunk.choices[0].model_dump() async for chunk in async_wrapper if chunk.choices])
+    sync_wrapper: Final = CustomStreamWrapper(
+        completion_stream=convert_to_streaming_response(_cached_vllm_completion()),
+        model="m",
+        custom_llm_provider="cached_response",
+        logging_obj=logging_obj,
+    )
+    return tuple(chunk.choices[0].model_dump() for chunk in sync_wrapper if chunk.choices)
+
+
+@pytest.mark.parametrize("replay", ["sync", "async"])
+@pytest.mark.asyncio
+async def test_a_streamed_cache_hit_keeps_the_vllm_stop_reason_and_every_token_id(
+    logging_obj: Logging, replay: str
+) -> None:
+    emitted: Final = await _replayed_cache_hit_choices(logging_obj, replay)
+
+    assert [
+        (choice["finish_reason"], choice["stop_reason"]) for choice in emitted if choice.get("stop_reason") is not None
+    ] == [("stop", ", 5")]
+    assert _joined_token_ids(emitted) == _CACHED_VLLM_TOKEN_IDS
+
+
 def _later_chunk_outputs(
     custom_llm_provider: str, later_chunks: Sequence[ChatCompletionChunk], logging_obj: Logging
 ) -> tuple[ModelResponseStream, ...]:
@@ -7020,6 +7517,121 @@ def test_azure_chunk_creator_streams_choice_content_filter_results_on_later_chun
 
     assert [_wire_dump(output)["choices"][0]["content_filter_results"] for output in outputs] == [filter_results]
     assert ["content_filter_results" in output.choices[0].model_fields_set for output in outputs] == [True]
+
+
+def _parsed_openai_like_chunk(
+    chunk_id: str, delta: Mapping[str, object], finish_reason: str | None = None, **choice_extras: object
+) -> ModelResponseStream:
+    parser: Final = OpenAIChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
+    return parser.chunk_parser(
+        {
+            "id": chunk_id,
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "served-model",
+            "choices": [{"index": 0, "delta": dict(delta), "finish_reason": finish_reason, **choice_extras}],
+        }
+    )
+
+
+def _parsed_stream_wrapper(custom_llm_provider: str, logging_obj: Logging) -> CustomStreamWrapper:
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(()),
+        model="served-model",
+        custom_llm_provider=custom_llm_provider,
+        logging_obj=logging_obj,
+    )
+    wrapper.chunk_creator(chunk=_parsed_openai_like_chunk("chunk-0", {"role": "assistant", "content": ""}))
+    return wrapper
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["hosted_vllm", "deepseek", "groq"])
+def test_parsed_openai_like_chunk_creator_builds_one_delta_and_choice_and_no_dump_per_later_chunk(
+    logging_obj: Logging, custom_llm_provider: str
+) -> None:
+    wrapper: Final = _parsed_stream_wrapper(custom_llm_provider, logging_obj)
+    later_chunks: Final = (
+        _parsed_openai_like_chunk("chunk-1", {"content": "hello"}, stop_reason=None),
+        _parsed_openai_like_chunk("chunk-2", {"reasoning": "thought"}, stop_reason=None),
+        _parsed_openai_like_chunk("chunk-3", {"content": " world", "reasoning_content": None}, logprobs=None),
+    )
+    delta_init: Final = Delta.__init__.__code__
+    streaming_choices_init: Final = StreamingChoices.__init__.__code__
+    model_dump: Final = BaseModel.model_dump.__code__
+
+    outputs, calls = _chunk_creator_calls(
+        wrapper, later_chunks, frozenset({delta_init, streaming_choices_init, model_dump})
+    )
+
+    assert sum(call.code is delta_init for call in calls) == len(later_chunks)
+    assert sum(call.code is streaming_choices_init for call in calls) == len(later_chunks)
+    assert sum(call.code is model_dump for call in calls) == 0
+    assert [_wire_dump(output)["choices"] for output in outputs if output is not None] == [
+        [{"index": 0, "delta": {"content": "hello"}}],
+        [{"index": 0, "delta": {"reasoning_content": "thought"}}],
+        [{"index": 0, "delta": {"content": " world"}}],
+    ]
+
+
+def test_parsed_openai_like_chunk_creator_keeps_choice_extras_ahead_of_choice_keys(logging_obj: Logging) -> None:
+    wrapper: Final = _parsed_stream_wrapper("hosted_vllm", logging_obj)
+    later_chunks: Final = (
+        _parsed_openai_like_chunk("chunk-1", {"content": "hi"}, stop_reason=None, token_ids=[7, 8]),
+        _parsed_openai_like_chunk("chunk-2", {"content": "!"}, stop_reason=None, matched_stop=2),
+    )
+
+    outputs: Final = tuple(wrapper.chunk_creator(chunk=chunk) for chunk in later_chunks)
+
+    choice_dumps: Final = [output.choices[0].model_dump() for output in outputs if output is not None]
+    assert [list(choice_dump) for choice_dump in choice_dumps] == [
+        ["stop_reason", "token_ids", "finish_reason", "index", "delta", "logprobs"],
+        ["stop_reason", "matched_stop", "finish_reason", "index", "delta", "logprobs"],
+    ]
+    assert [choice_dump["token_ids"] for choice_dump in choice_dumps[:1]] == [[7, 8]]
+    assert [choice_dump["matched_stop"] for choice_dump in choice_dumps[1:]] == [2]
+    assert [choice_dump["delta"]["content"] for choice_dump in choice_dumps] == ["hi", "!"]
+
+
+def test_parsed_openai_like_stream_still_emits_tool_calls_and_finish_after_reused_chunks(
+    logging_obj: Logging,
+) -> None:
+    wrapper: Final = _parsed_stream_wrapper("deepseek", logging_obj)
+    later_chunks: Final = (
+        _parsed_openai_like_chunk("chunk-1", {"content": "checking"}),
+        _parsed_openai_like_chunk(
+            "chunk-2",
+            {
+                "tool_calls": [
+                    {"index": 0, "id": "call_1", "type": "function", "function": {"name": "f", "arguments": ""}}
+                ]
+            },
+        ),
+        _parsed_openai_like_chunk("chunk-3", {"tool_calls": [{"index": 0, "function": {"arguments": "{}"}}]}),
+        _parsed_openai_like_chunk("chunk-4", {}, finish_reason="tool_calls"),
+    )
+
+    outputs: Final = tuple(wrapper.chunk_creator(chunk=chunk) for chunk in later_chunks)
+
+    assert [_wire_dump(output)["choices"] for output in outputs if output is not None] == [
+        [{"index": 0, "delta": {"content": "checking"}}],
+        [
+            {
+                "index": 0,
+                "delta": {
+                    "tool_calls": [
+                        {"id": "call_1", "function": {"arguments": "", "name": "f"}, "type": "function", "index": 0}
+                    ]
+                },
+            }
+        ],
+        [
+            {
+                "index": 0,
+                "delta": {"tool_calls": [{"function": {"arguments": "{}"}, "type": "function", "index": 0}]},
+            }
+        ],
+        [{"finish_reason": "tool_calls", "index": 0, "delta": {}}],
+    ]
 
 
 @pytest.mark.parametrize(
@@ -7127,6 +7739,85 @@ def test_chunk_creator_preserves_hidden_provider_specific_fields_from_parsed_chu
     assembled = litellm.stream_chunk_builder(chunks=[result])
     assert assembled is not None
     assert assembled._hidden_params["provider_specific_fields"] == {"traffic_type": "ON_DEMAND_FLEX"}
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    ("rates", "expected_cost"),
+    [
+        ({"input_cost_per_token": 0.0, "output_cost_per_token": 0.0}, 0.0),
+        ({"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}, 20e-6),
+        ({"input_cost_per_token": 0.0}, None),
+        ({}, None),
+        (
+            {
+                "input_cost_per_token": 0.01,
+                "output_cost_per_token": 0.02,
+                "tiered_pricing": [
+                    {"range": [0, 128000], "input_cost_per_token": 0.0, "output_cost_per_token": 0.0}
+                ],
+            },
+            0.0,
+        ),
+        (
+            {
+                "tiered_pricing": [
+                    {"range": [0, 128000], "input_cost_per_token": 0.0, "output_cost_per_token": 0.0}
+                ]
+            },
+            0.0,
+        ),
+    ],
+)
+async def test_stream_usage_distinguishes_free_from_unpriced_calls(
+    monkeypatch: pytest.MonkeyPatch, sync_mode: bool, rates: dict[str, object], expected_cost: float | None
+) -> None:
+    model: Final = "stream-zero-cost-regression"
+    monkeypatch.setitem(litellm.model_cost, model, {"litellm_provider": "openai", "mode": "chat", **rates})
+    logging_obj: Final = Logging(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="completion" if sync_mode else "acompletion",
+        start_time=1.0,
+        litellm_call_id="free-stream",
+        function_id="test",
+    )
+    logging_obj.optional_params = {}
+    logging_obj.litellm_params = {}
+    logging_obj.stream_options = {"include_usage": True}
+    logging_obj.model_call_details["custom_llm_provider"] = "openai"
+    chunks: Final = [
+        ModelResponseStream(
+            id="free-stream",
+            created=1,
+            model=model,
+            choices=[StreamingChoices(index=0, delta=Delta(content="hi"), finish_reason="stop")],
+        ),
+        ModelResponseStream(
+            id="free-stream",
+            created=1,
+            model=model,
+            choices=[],
+            usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        ),
+    ]
+    stream: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=chunks),
+        model=model,
+        custom_llm_provider="openai",
+        logging_obj=logging_obj,
+        stream_options={"include_usage": True},
+    )
+    emitted: Final = tuple(stream) if sync_mode else tuple([chunk async for chunk in stream])
+    usage_chunks: Final = tuple(chunk for chunk in emitted if getattr(chunk, "usage", None) is not None)
+
+    assert len(usage_chunks) == 1
+    assert usage_chunks[0].usage.prompt_tokens == 10
+    assert usage_chunks[0].usage.completion_tokens == 5
+    assert getattr(usage_chunks[0].usage, "cost", None) == (
+        pytest.approx(expected_cost) if expected_cost is not None else None
+    )
 
 
 def test_the_usage_chunk_carries_the_bill_the_builder_priced_for_the_spend_row() -> None:
@@ -9244,3 +9935,134 @@ def test_chunk_creator_usage_only_chunk_with_dict_usage_keeps_details(
     assert usage.prompt_tokens_details.cached_tokens == 80
     assert usage.completion_tokens_details is not None
     assert usage.completion_tokens_details.reasoning_tokens == 5
+
+
+def _stream_of(chunks: Sequence[object], sync_mode: bool) -> Iterator[object] | AsyncIterator[object]:
+    return iter(chunks) if sync_mode else _as_async(iter(chunks))
+
+
+def _streamed_text_and_finish_reasons(received: Sequence[ModelResponseStream]) -> tuple[str, list[str]]:
+    return (
+        "".join(chunk.choices[0].delta.content or "" for chunk in received if chunk.choices),
+        [chunk.choices[0].finish_reason for chunk in received if chunk.choices and chunk.choices[0].finish_reason],
+    )
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_predibase_byte_stream_yields_token_text_then_the_reported_finish_reason(
+    sync_mode: bool, logging_obj: Logging
+) -> None:
+    lines: Final = (
+        b'data: {"token": {"id": 1, "text": "Hel"}}',
+        b'data: {"token": {"id": 2, "text": "lo"}, "details": {"finish_reason": "length"}}',
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=_stream_of(lines, sync_mode),
+        model="llama-3-1-8b-instruct",
+        custom_llm_provider="predibase",
+        logging_obj=logging_obj,
+    )
+
+    received: Final = await _collect(wrapper, sync_mode)
+
+    assert _streamed_text_and_finish_reasons(received) == ("Hello", ["length"])
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_predibase_error_event_fails_the_stream_with_the_upstream_message(
+    sync_mode: bool, logging_obj: Logging
+) -> None:
+    lines: Final = (
+        b'data: {"token": {"id": 1, "text": "Hel"}}',
+        b'data: {"error": "Request failed during generation: CUDA out of memory"}',
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=_stream_of(lines, sync_mode),
+        model="llama-3-1-8b-instruct",
+        custom_llm_provider="predibase",
+        logging_obj=logging_obj,
+    )
+
+    with pytest.raises(MidStreamFallbackError) as raised:
+        await _collect(wrapper, sync_mode)
+
+    assert "CUDA out of memory" in str(raised.value)
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_nlp_cloud_stream_drops_the_done_marker_and_finishes_with_stop(
+    sync_mode: bool, logging_obj: Logging
+) -> None:
+    lines: Final = ('{"generated_text": "Hello"}', '{"generated_text": " world[DONE]"}')
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=_stream_of(lines, sync_mode),
+        model="finetuned-llama-3-70b",
+        custom_llm_provider="nlp_cloud",
+        logging_obj=logging_obj,
+    )
+
+    received: Final = await _collect(wrapper, sync_mode)
+
+    assert _streamed_text_and_finish_reasons(received) == ("Hello world", ["stop"])
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_aleph_alpha_stream_yields_the_completion_text_and_stops(sync_mode: bool, logging_obj: Logging) -> None:
+    lines: Final = (b'{"completions": [{"completion": " Paris", "finish_reason": "maximum_tokens"}]}',)
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=_stream_of(lines, sync_mode),
+        model="luminous-base",
+        custom_llm_provider="aleph_alpha",
+        logging_obj=logging_obj,
+    )
+
+    received: Final = await _collect(wrapper, sync_mode)
+
+    assert _streamed_text_and_finish_reasons(received) == (" Paris", ["stop"])
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_generic_tool_use_streams_as_a_function_call_when_the_caller_passed_functions(
+    sync_mode: bool, logging_obj: Logging
+) -> None:
+    logging_obj.update_environment_variables(
+        model="bedrock/invoke-endpoint",
+        user=None,
+        optional_params={"functions": [{"name": "get_weather", "parameters": {"type": "object", "properties": {}}}]},
+        litellm_params={"litellm_call_id": "functions-stream"},
+    )
+    tool_use: Final = {
+        "id": "call_1",
+        "type": "function",
+        "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+        "index": 0,
+    }
+    chunks: Final = [
+        {
+            "text": "",
+            "tool_use": tool_use,
+            "is_finished": True,
+            "finish_reason": "tool_calls",
+            "usage": None,
+            "index": 0,
+        }
+    ]
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=chunks),
+        model="bedrock/invoke-endpoint",
+        custom_llm_provider="bedrock",
+        logging_obj=logging_obj,
+    )
+
+    received: Final = await _collect(wrapper, sync_mode)
+
+    deltas: Final = [chunk.choices[0].delta for chunk in received if chunk.choices]
+    assert [
+        (delta.function_call.name, delta.function_call.arguments) for delta in deltas if delta.function_call is not None
+    ] == [("get_weather", '{"city": "Paris"}')]
+    assert [delta.tool_calls for delta in deltas if delta.tool_calls] == []
