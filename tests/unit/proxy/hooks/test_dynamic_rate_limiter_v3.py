@@ -3140,6 +3140,47 @@ def _held_to_borrow_cap(exc: ProxyRateLimitError, rate_limit_type: str, limit_se
     ), exc.detail
 
 
+async def _cap_tokens_remaining(handler: _PROXY_DynamicRateLimitHandlerV3, auth: UserAPIKeyAuth) -> int:
+    share: Final = handler._borrowing_team_share("shared-model", auth)
+    assert share is not None and share.ceiling is not None
+    response: Final = await handler.v3_limiter.should_rate_limit(
+        [share.ceiling], read_only=True, skip_parallel_check=True
+    )
+    return next(s["limit_remaining"] for s in response["statuses"] if s["rate_limit_type"] == "tokens")
+
+
+@pytest.mark.asyncio
+async def test_a_capped_borrowers_idle_usage_counts_toward_its_cap_but_not_toward_its_share(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    await _check(handler, _capped_team_key(2), saturation=0.0)
+    await _settle_tokens(handler, 150)
+    assert await _cap_tokens_remaining(handler, _capped_team_key(2)) == 50
+    assert await _team_tokens_remaining(handler, _capped_team_key(2)) == 100
+    await _check(handler, _capped_team_key(2), saturation=0.5)
+    await _settle_tokens(handler, 30)
+    assert await _cap_tokens_remaining(handler, _capped_team_key(2)) == 20
+    assert await _team_tokens_remaining(handler, _capped_team_key(2)) == 70
+
+
+@pytest.mark.asyncio
+async def test_a_capped_borrower_is_held_to_its_cap_while_idle_after_a_saturated_stretch(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    await _check(handler, _capped_team_key(2), saturation=0.0)
+    await _settle_tokens(handler, 150)
+    await _check(handler, _capped_team_key(2), saturation=0.5)
+    await _settle_tokens(handler, 60)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _capped_team_key(2), saturation=0.49)
+    _held_to_borrow_cap(exc.value, "tokens", "model_tpm_limit")
+    with pytest.raises(ProxyRateLimitError) as saturated:
+        await _check(handler, _capped_team_key(2), saturation=0.5)
+    _held_to_borrow_cap(saturated.value, "tokens", "model_tpm_limit")
+
+
 @pytest.mark.asyncio
 async def test_team_borrows_past_its_share_while_it_stays_under_its_max_borrow_multiple(
     monkeypatch: pytest.MonkeyPatch,
@@ -3444,6 +3485,13 @@ async def _admit_at_the_hook(handler: _PROXY_DynamicRateLimitHandlerV3, auth: Us
     await _settle_tokens(handler, tokens)
 
 
+async def _saturate_model(handler: _PROXY_DynamicRateLimitHandlerV3, tokens: int) -> None:
+    """Idle usage that pushes the model past its saturation threshold without touching any team's share, from a
+    priority class of its own so the default pool the measured team sits in stays untouched."""
+    warm_up: Final = UserAPIKeyAuth(api_key="sk-warm-up", team_id="team-warm-up", team_metadata={"priority": "batch"})
+    await _admit_at_the_hook(handler, warm_up, tokens=tokens)
+
+
 async def _refused_at_the_hook(
     handler: _PROXY_DynamicRateLimitHandlerV3, auth: UserAPIKeyAuth, model: str = "shared-model"
 ) -> ProxyRateLimitError:
@@ -3486,9 +3534,9 @@ async def test_team_share_gauges_follow_settled_usage_above_the_share(monkeypatc
 async def test_a_failed_request_settles_the_team_share_gauges_too(monkeypatch: pytest.MonkeyPatch):
     handler = _borrowing_handler(monkeypatch, borrows=True)
     registry = _prometheus_sink(monkeypatch)
-    await _admit_then_settle(handler, _team_key(), tokens=90)
+    await _admit_then_settle(handler, _team_key(), tokens=60)
     claim_request_stash_for_data({"litellm_call_id": "failed-call"})
-    await _check(handler, _team_key(), saturation=0.0, data=_prompt(words=40), priority=None)
+    await _check(handler, _team_key(), saturation=0.5, data=_prompt(words=5), priority=None)
     await handler.async_log_failure_event(
         kwargs={
             "litellm_params": {"metadata": {"model_group": "shared-model"}},
@@ -3499,27 +3547,30 @@ async def test_a_failed_request_settles_the_team_share_gauges_too(monkeypatch: p
         start_time=datetime.now(),
         end_time=datetime.now(),
     )
-    assert _sample(registry, "litellm_dynamic_limiter_borrowed_tokens", **TEAM_LABELS) == 40
+    assert _sample(registry, "litellm_dynamic_limiter_borrowed_tokens", **TEAM_LABELS) == 10
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "auth, burns, saturation_threshold, reason",
+    "auth, warm_up, burns, saturation_threshold, reason",
     [
-        (_team_key(), (60, 70), 0.1, "model_per_team_saturated"),
-        (_capped_team_key(2), (150, 60), 0.5, "model_per_team_max_borrow_multiple"),
+        (_team_key(), 200, (60, 70), 0.1, "model_per_team_saturated"),
+        (_capped_team_key(2), 0, (150, 60), 0.5, "model_per_team_max_borrow_multiple"),
     ],
     ids=["saturated", "borrow_cap"],
 )
 async def test_a_refused_request_is_counted_under_the_reason_its_429_header_carries(
     monkeypatch: pytest.MonkeyPatch,
     auth: UserAPIKeyAuth,
+    warm_up: int,
     burns: tuple[int, ...],
     saturation_threshold: float,
     reason: str,
 ):
     handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=saturation_threshold)
     registry = _prometheus_sink(monkeypatch)
+    if warm_up:
+        await _saturate_model(handler, warm_up)
     for tokens in burns:
         await _admit_at_the_hook(handler, auth, tokens=tokens)
     refusal = await _refused_at_the_hook(handler, auth)
@@ -3603,6 +3654,7 @@ async def test_share_gauges_and_throttles_carry_the_teams_priority_so_the_series
         team_id="team-a",
         team_metadata={"model_tpm_limit": {"shared-model": 100}, "priority": "interactive"},
     )
+    await _saturate_model(handler, 200)
     await _admit_at_the_hook(handler, team, tokens=60)
     await _admit_at_the_hook(handler, team, tokens=70)
     labels: Final = {"model_group": "shared-model", "team": "team-a", "priority": "interactive"}
@@ -3622,6 +3674,7 @@ async def test_a_fallback_served_request_publishes_the_teams_share_on_the_fallba
     handler = _borrowing_handler(monkeypatch, borrows=True)
     registry = _prometheus_sink(monkeypatch)
     team: Final = _team_key(team_limits={"model_tpm_limit": {"other-model": 40, "shared-model": 100}})
+    await _saturate_model(handler, 500)
     assert await handler.async_pre_call_hook(team, DualCache(), {"model": "other-model"}, "completion") is None
     assert await handler.async_fallback_target_allowed(team, "shared-model", {}) is True
     await _settle_tokens(handler, 150, model_group="shared-model")
@@ -3644,6 +3697,7 @@ async def test_a_failing_metrics_sink_never_changes_admission(monkeypatch: pytes
 
     handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.1)
     _prometheus_sink(monkeypatch, BrokenSink)
+    await _saturate_model(handler, 200)
     await _admit_at_the_hook(handler, _team_key(), tokens=60)
     await _admit_at_the_hook(handler, _team_key(), tokens=70)
     assert await _team_tokens_remaining(handler) == -30
