@@ -5,11 +5,12 @@ import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from functools import cache
 from importlib.resources import files
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import ConfigDict, TypeAdapter
-from typing_extensions import ReadOnly, TypedDict, assert_never
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -283,26 +284,35 @@ def _agent_create_fields() -> tuple[AgentCreateInfo, ...]:
     response_model=list[ModelGroupInfoProxy],
 )
 async def public_model_hub():
-    from litellm.proxy.health_endpoints._health_endpoints import (
-        convert_health_check_to_dict,
-    )
-    from litellm.proxy.proxy_server import prisma_client
-
     rows: Final = published_hub_rows()
     if isinstance(rows, NoModelsConfigured):
         raise HTTPException(status_code=400, detail=CommonProxyErrors.no_llm_router.value)
 
-    # Fetch health check information if available
-    health_checks_map: Final[dict[str, Mapping[str, object]]] = {}
-    if prisma_client is not None:
-        try:
-            latest_checks: Final = await prisma_client.get_all_latest_health_checks()
-            for model_name, check in latest_by_model_name(latest_checks).items():
-                health_checks_map[model_name] = convert_health_check_to_dict(check)
-        except Exception:
-            pass
-
+    health_checks_map: Final = await _legacy_health_checks()
     return [_with_legacy_health(row, health_checks_map) for row in rows]
+
+
+async def _legacy_health_checks() -> Mapping[str, Mapping[str, object]]:
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        return MappingProxyType({})
+    try:
+        latest_checks: Final = await prisma_client.get_all_latest_health_checks()
+        return MappingProxyType(
+            {
+                model_name: MappingProxyType(
+                    {
+                        "status": check.status,
+                        "response_time_ms": check.response_time_ms,
+                        "checked_at": check.checked_at.isoformat() if check.checked_at else None,
+                    }
+                )
+                for model_name, check in latest_by_model_name(latest_checks).items()
+            }
+        )
+    except Exception:
+        return MappingProxyType({})
 
 
 def _with_legacy_health(row: HubRow, health_checks_map: Mapping[str, Mapping[str, object]]) -> ModelGroupInfoProxy:
@@ -320,8 +330,6 @@ def _with_legacy_health(row: HubRow, health_checks_map: Mapping[str, Mapping[str
                     "health_checked_at": health_info.get("checked_at"),
                 }
             )
-        case _:
-            return assert_never(row)
 
 
 @router.get(

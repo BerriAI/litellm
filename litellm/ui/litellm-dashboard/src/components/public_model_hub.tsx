@@ -875,7 +875,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                       </div>
                       {selectedModel.pass_through_path && (
                         <div>
-                          <p className="font-medium">Endpoint:</p>
+                          <p className="font-medium">{t("passThroughModelHub.endpoint")}</p>
                           <p className="font-mono text-sm">{selectedModel.pass_through_path}</p>
                         </div>
                       )}

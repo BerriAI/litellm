@@ -462,7 +462,9 @@ describe("PublicModelHub", () => {
 
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("/clinical-ner")).toBeInTheDocument();
-    expect(within(dialog).getByText(/curl -X "POST" "https:\/\/backend.example.com\/clinical-ner"/)).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(/curl -X "POST" "https:\/\/backend.example.com\/clinical-ner"/),
+    ).toBeInTheDocument();
     expect(within(dialog).queryByText("Token & Cost Information")).not.toBeInTheDocument();
   });
 
@@ -485,7 +487,9 @@ describe("PublicModelHub", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Tenant" }));
 
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText(/curl -X "POST" "https:\/\/backend.example.com\/tenant\/\\\$acct"/)).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(/curl -X "POST" "https:\/\/backend.example.com\/tenant\/\\\$acct"/),
+    ).toBeInTheDocument();
   });
 
   it("writes the usage example with a method the pass-through route accepts", async () => {

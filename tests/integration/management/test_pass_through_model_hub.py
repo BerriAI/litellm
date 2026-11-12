@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import re
-import signal
 import uuid
 from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
@@ -20,7 +19,6 @@ from pathlib import Path
 from typing import Final
 
 import httpx
-import psutil
 import yaml
 from pydantic import JsonValue, TypeAdapter
 
@@ -444,7 +442,7 @@ def test_hub_reads_survive_a_killed_proxy_worker(gateway: Gateway, tmp_path: Pat
         assert hub_row(hub_rows(owned.gateway), display_name)["pass_through_path"] == shown.path
         with ThreadPoolExecutor(8) as pool:
             futures: Final = [pool.submit(read, owned.gateway if index % 2 else gateway) for index in range(BURST)]
-            psutil.Process(workers[0]).send_signal(signal.SIGKILL)
+            owned.kill_worker(workers[0])
             results: Final = [future.result() for future in futures]
         assert all(status == 200 for status in results[0::2]), f"shared proxy answers: {results[0::2]!r}"
         answered: Final = tuple(status for status in results[1::2] if isinstance(status, int))

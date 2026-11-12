@@ -333,7 +333,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                   )}
                   {endpointData.show_in_model_hub && (
                     <div>
-                      <Badge variant="secondary">On Model Hub</Badge>
+                      <Badge variant="secondary">{t("passThroughModelHub.published")}</Badge>
                     </div>
                   )}
                 </div>
@@ -438,13 +438,19 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                     <FormField
                       control={form.control}
                       name="display_name"
-                      label="Display Name"
-                      description="Shown on the Model Hub instead of the path"
+                      label={t("passThroughModelHub.displayName")}
+                      description={t("passThroughModelHub.displayNameHint")}
                     >
-                      {({ value, ...field }) => <Input {...field} placeholder="Clinical NER" value={value ?? ""} />}
+                      {({ value, ...field }) => (
+                        <Input
+                          {...field}
+                          placeholder={t("passThroughModelHub.displayNamePlaceholder")}
+                          value={value ?? ""}
+                        />
+                      )}
                     </FormField>
 
-                    <FormField control={form.control} name="show_in_model_hub" label="Show on Model Hub">
+                    <FormField control={form.control} name="show_in_model_hub" label={t("passThroughModelHub.show")}>
                       {({ value, onChange, ref: _ref, ...field }) => (
                         <Switch {...field} checked={value} onCheckedChange={onChange} />
                       )}
@@ -574,14 +580,16 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                     </div>
                     {endpointData.display_name && (
                       <div>
-                        <p className="text-sm font-medium">Display Name</p>
+                        <p className="text-sm font-medium">{t("passThroughModelHub.displayName")}</p>
                         <div>{endpointData.display_name}</div>
                       </div>
                     )}
                     <div>
-                      <p className="text-sm font-medium">Show on Model Hub</p>
+                      <p className="text-sm font-medium">{t("passThroughModelHub.show")}</p>
                       <Badge variant={endpointData.show_in_model_hub ? "secondary" : "outline"}>
-                        {endpointData.show_in_model_hub ? "Yes" : "No"}
+                        {endpointData.show_in_model_hub
+                          ? t("passThroughInfo.settings.yes")
+                          : t("passThroughInfo.settings.no")}
                       </Badge>
                     </div>
                     <div>

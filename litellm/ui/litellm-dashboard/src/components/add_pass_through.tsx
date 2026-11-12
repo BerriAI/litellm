@@ -343,33 +343,35 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                 </Card>
 
                 <Card className="block p-6">
-                  <h3 className="mb-2 text-lg font-semibold text-foreground">Model Hub</h3>
-                  <p className="mb-6 text-sm text-muted-foreground">
-                    Optionally list this endpoint on the public Model Hub page
-                  </p>
+                  <h3 className="mb-2 text-lg font-semibold text-foreground">{t("passThroughModelHub.title")}</h3>
+                  <p className="mb-6 text-sm text-muted-foreground">{t("passThroughModelHub.description")}</p>
 
                   <div className="space-y-5">
                     <FormField
                       control={form.control}
                       name="display_name"
-                      label="Display Name"
-                      description="Shown on the Model Hub instead of the path. Example: Clinical NER"
+                      label={t("passThroughModelHub.displayName")}
+                      description={t("passThroughModelHub.displayNameCreateHint")}
                     >
-                      {({ value, ...field }) => <Input {...field} placeholder="Clinical NER" value={value ?? ""} />}
+                      {({ value, ...field }) => (
+                        <Input
+                          {...field}
+                          placeholder={t("passThroughModelHub.displayNamePlaceholder")}
+                          value={value ?? ""}
+                        />
+                      )}
                     </FormField>
 
                     <div className="flex items-center justify-between py-3">
                       <div>
-                        <div className="text-sm font-medium text-foreground">Show on Model Hub</div>
-                        <div className="mt-0.5 text-xs text-muted-foreground">
-                          Publish this endpoint on the public Model Hub page
-                        </div>
+                        <div className="text-sm font-medium text-foreground">{t("passThroughModelHub.show")}</div>
+                        <div className="mt-0.5 text-xs text-muted-foreground">{t("passThroughModelHub.showHint")}</div>
                       </div>
                       <FormField control={form.control} name="show_in_model_hub">
                         {({ value, onChange, ref: _ref, ...field }) => (
                           <Switch
                             {...field}
-                            aria-label="Show on Model Hub"
+                            aria-label={t("passThroughModelHub.show")}
                             checked={value ?? false}
                             onCheckedChange={onChange}
                           />

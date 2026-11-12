@@ -40,7 +40,7 @@ def pass_through_row(endpoint: PassThroughGenericEndpoint) -> PassThroughRow:
             mode=PASS_THROUGH_MODE,
             is_public_model_group=True,
             pass_through_path=endpoint.path,
-            pass_through_methods=endpoint.methods,
+            pass_through_methods=tuple(endpoint.methods) if endpoint.methods is not None else None,
         )
     )
 
