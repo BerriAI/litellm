@@ -46,39 +46,41 @@ async def test_mistral_chat_transformation():
     )
 
 
+@pytest.fixture
+def fixed_reasoning_capabilities(local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+
+    declarations: Final = (
+        ("mistral-medium-latest", ("none", "high")),
+        ("mistral-small-latest", ("none", "high")),
+        ("mistral-vibe-cli-latest", ("none", "high")),
+        ("magistral-small-latest", ("none", "high")),
+        ("magistral-medium-latest", ("none", "high")),
+        ("zai-glm-5", ("none", "low", "high", "max")),
+        ("zai-glm-5-2", ("none", "low", "medium", "high", "xhigh", "max")),
+    )
+    for model, levels in declarations:
+        monkeypatch.setitem(
+            litellm.model_cost,
+            f"mistral/{model}",
+            {
+                "litellm_provider": "mistral",
+                "mode": "chat",
+                "supports_reasoning": True,
+                "reasoning_effort_levels": levels,
+            },
+        )
+    for model in ("codestral-latest", "mistral-large-latest"):
+        monkeypatch.setitem(
+            litellm.model_cost,
+            f"mistral/{model}",
+            {"litellm_provider": "mistral", "mode": "chat", "supports_reasoning": False},
+        )
+
+
+@pytest.mark.usefixtures("fixed_reasoning_capabilities")
 class TestMistralReasoningSupport:
     """Test suite for Mistral Magistral reasoning functionality."""
-
-    @pytest.fixture(autouse=True)
-    def fixed_reasoning_capabilities(self, local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch) -> None:
-        import litellm
-
-        declarations: Final = (
-            ("mistral-medium-latest", ("none", "high")),
-            ("mistral-small-latest", ("none", "high")),
-            ("mistral-vibe-cli-latest", ("none", "high")),
-            ("magistral-small-latest", ("none", "high")),
-            ("magistral-medium-latest", ("none", "high")),
-            ("zai-glm-5", ("none", "low", "high", "max")),
-            ("zai-glm-5-2", ("none", "low", "medium", "high", "xhigh", "max")),
-        )
-        for model, levels in declarations:
-            monkeypatch.setitem(
-                litellm.model_cost,
-                f"mistral/{model}",
-                {
-                    "litellm_provider": "mistral",
-                    "mode": "chat",
-                    "supports_reasoning": True,
-                    "reasoning_effort_levels": levels,
-                },
-            )
-        for model in ("codestral-latest", "mistral-large-latest"):
-            monkeypatch.setitem(
-                litellm.model_cost,
-                f"mistral/{model}",
-                {"litellm_provider": "mistral", "mode": "chat", "supports_reasoning": False},
-            )
 
     def test_get_supported_openai_params_magistral_model(self):
         """Test that magistral models support reasoning parameters."""
@@ -1607,7 +1609,7 @@ def _warnings_naming(caplog: pytest.LogCaptureFixture, param: str) -> tuple[str,
     ),
 )
 def test_magistral_reasoning_request_is_sent_as_a_level_without_a_drop_warning(
-    local_model_cost_map: None, param: str, value: object, sent: str, caplog: pytest.LogCaptureFixture
+    fixed_reasoning_capabilities: None, param: str, value: object, sent: str, caplog: pytest.LogCaptureFixture
 ) -> None:
     with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
         result: Final = MistralConfig().map_openai_params(
