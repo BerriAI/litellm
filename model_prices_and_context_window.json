@@ -26230,6 +26230,9 @@
             "video"
         ]
     },
+    "fal_ai/bytedance/seedance-latest/text-to-video": {
+        "alias_of": "fal_ai/bytedance/seedance-2.5/text-to-video"
+    },
     "fal_ai/bytedance/seedance-2.5/image-to-video": {
         "litellm_provider": "fal_ai",
         "mode": "video_generation",
@@ -26248,6 +26251,9 @@
             "video"
         ]
     },
+    "fal_ai/bytedance/seedance-latest/image-to-video": {
+        "alias_of": "fal_ai/bytedance/seedance-2.5/image-to-video"
+    },
     "fal_ai/bytedance/seedance-2.5/reference-to-video": {
         "litellm_provider": "fal_ai",
         "mode": "video_generation",
@@ -26265,6 +26271,9 @@
         "supported_output_modalities": [
             "video"
         ]
+    },
+    "fal_ai/bytedance/seedance-latest/reference-to-video": {
+        "alias_of": "fal_ai/bytedance/seedance-2.5/reference-to-video"
     },
     "fal_ai/minimax/h3/text-to-video": {
         "litellm_provider": "fal_ai",
@@ -56747,6 +56756,9 @@
             "comment": "Output: 20/30/68 credits per second at 480p/720p/1080p @ $0.01 per credit; input video billed additionally at 10/15/34 credits per input second and the 80 credit minimum per task are not modeled"
         }
     },
+    "runwayml/seedance-latest": {
+        "alias_of": "runwayml/seedance2_5"
+    },
     "runwayml/hailuo3": {
         "litellm_provider": "runwayml",
         "mode": "video_generation",
@@ -68564,10 +68576,12 @@
     "xai/grok-imagine-image-quality": {
         "deprecation_date": "2026-11-02",
         "deprecation_source": "https://docs.x.ai/developers/migration/imagine-image-quality-nov-2",
-        "input_cost_per_image": 0.05,
+        "input_cost_per_image": 0.04,
         "litellm_provider": "xai",
         "mode": "image_generation",
-        "source": "https://docs.x.ai/docs/models",
+        "output_cost_per_image_1K": 0.04,
+        "output_cost_per_image_2K": 0.06,
+        "source": "https://docs.x.ai/developers/migration/imagine-image-quality-nov-2",
         "successor_model": "xai/grok-imagine-image-2.0",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -68583,10 +68597,12 @@
     "xai/grok-imagine-image-quality-20260403": {
         "deprecation_date": "2026-11-02",
         "deprecation_source": "https://docs.x.ai/developers/migration/imagine-image-quality-nov-2",
-        "input_cost_per_image": 0.05,
+        "input_cost_per_image": 0.04,
         "litellm_provider": "xai",
         "mode": "image_generation",
-        "source": "https://docs.x.ai/docs/models",
+        "output_cost_per_image_1K": 0.04,
+        "output_cost_per_image_2K": 0.06,
+        "source": "https://docs.x.ai/developers/migration/imagine-image-quality-nov-2",
         "successor_model": "xai/grok-imagine-image-2.0",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -68602,10 +68618,12 @@
     "xai/grok-imagine-image-quality-latest": {
         "deprecation_date": "2026-11-02",
         "deprecation_source": "https://docs.x.ai/developers/migration/imagine-image-quality-nov-2",
-        "input_cost_per_image": 0.05,
+        "input_cost_per_image": 0.04,
         "litellm_provider": "xai",
         "mode": "image_generation",
-        "source": "https://docs.x.ai/docs/models",
+        "output_cost_per_image_1K": 0.04,
+        "output_cost_per_image_2K": 0.06,
+        "source": "https://docs.x.ai/developers/migration/imagine-image-quality-nov-2",
         "successor_model": "xai/grok-imagine-image-2.0",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -68621,10 +68639,12 @@
     "xai/grok-imagine-image-pro": {
         "deprecation_date": "2026-05-15",
         "deprecation_source": "https://docs.x.ai/developers/migration/may-15-retirement",
-        "input_cost_per_image": 0.05,
+        "input_cost_per_image": 0.04,
         "litellm_provider": "xai",
         "mode": "image_generation",
-        "source": "https://docs.x.ai/docs/models",
+        "output_cost_per_image_1K": 0.04,
+        "output_cost_per_image_2K": 0.06,
+        "source": "https://docs.x.ai/developers/migration/imagine-image-quality-nov-2",
         "successor_model": "xai/grok-imagine-image-2.0",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -77928,6 +77948,9 @@
         "tpm": 4000000.0,
         "web_search_billing_unit": "per_query"
     },
+    "gemini/nano-banana-latest": {
+        "alias_of": "gemini/gemini-nano-banana-2.1"
+    },
     "gemini-nano-banana-2.1": {
         "cache_read_input_token_cost": 1.5e-07,
         "cache_read_input_token_cost_batches": 7.5e-08,
@@ -78021,6 +78044,9 @@
         "supports_vision": true,
         "supports_web_search": true,
         "web_search_billing_unit": "per_query"
+    },
+    "vertex_ai/nano-banana-latest": {
+        "alias_of": "vertex_ai/gemini-nano-banana-2.1"
     },
     "azure_ai/grok-4.7": {
         "cache_read_input_token_cost": 5e-07,
@@ -86829,6 +86855,15 @@
         "output_cost_per_token": 1e-05,
         "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
     },
+    "gmi/google/gemini-4-carbon": {
+        "cache_read_input_token_cost": 1e-07,
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
     "gmi/google/gemma-4-26b-a4b-it": {
         "input_cost_per_token": 1.3e-07,
         "litellm_provider": "gmi",
@@ -87160,6 +87195,18 @@
         "max_input_tokens": 2000000,
         "mode": "chat",
         "output_cost_per_token": 6e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/xai/grok4.7": {
+        "cache_read_input_token_cost": 5e-07,
+        "cache_read_input_token_cost_above_200k_tokens": 1e-06,
+        "input_cost_per_token": 2e-06,
+        "input_cost_per_token_above_200k_tokens": 4e-06,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 500000,
+        "mode": "chat",
+        "output_cost_per_token": 6e-06,
+        "output_cost_per_token_above_200k_tokens": 1.2e-05,
         "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
     },
     "gmi/zai-org/GLM-4.5-Air-FP8": {
@@ -97755,6 +97802,9 @@
         "output_cost_per_image_4K": 0.1134,
         "source": "https://replicate.com/google/nano-banana-2.1"
     },
+    "replicate/google/nano-banana-latest": {
+        "alias_of": "replicate/google/nano-banana-2.1"
+    },
     "replicate/heygen/avatar-iv": {
         "litellm_provider": "replicate",
         "mode": "video_generation",
@@ -100827,5 +100877,21 @@
         "supports_vision": true,
         "supports_web_search": false,
         "tpm": 1000000
+    },
+    "runwayml/kling_4": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"Promo rate through 2026-11-30 UTC: 12.56 credits per second (720p) and 18.8 (1080p) without input video @ $0.01 per credit = $0.1256 and $0.188 per second; list rate 15.7/23.5 credits per second applies from 2026-12-01 UTC (ruling runwayml-kling-4-promo-rate). The with-input-video rate (7.52/11.28 credits per output second plus the same per second of the greater of input and output duration) and rounding up to the next credit are not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1256,
+        "output_cost_per_second_1080p": 0.188,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
     }
 }
