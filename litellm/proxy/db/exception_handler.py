@@ -3,7 +3,7 @@ from collections.abc import Awaitable, Callable, Iterator, Mapping
 from http import HTTPStatus
 from typing import Final, Protocol, TypeVar
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import require_attributes
@@ -92,6 +92,22 @@ def _exception_types(*candidates: object) -> tuple[type[BaseException], ...]:
     False. Dropping the non-types lets the call fall through to the other checks.
     """
     return tuple(c for c in candidates if isinstance(c, type) and issubclass(c, BaseException))
+
+
+class _PrismaValidationIssue(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    kind: str
+    errors: tuple["_PrismaValidationIssue", ...] = ()
+
+
+def _only_refuses_value_types(e: Exception) -> bool:
+    try:
+        issue: Final = _PrismaValidationIssue.model_validate(getattr(e, "meta", None))
+    except ValidationError:
+        return False
+    leaves: Final = issue.errors if issue.kind == "Union" else (issue,)
+    return len(leaves) > 0 and all(leaf.kind == "InvalidArgumentType" for leaf in leaves)
 
 
 class _CodedError(Protocol):
@@ -247,17 +263,17 @@ class PrismaDBExceptionHandler:
 
     @staticmethod
     def is_rejected_row_error(e: Exception) -> bool:
-        """True iff the rows themselves were refused: a base ``DataError``, a ``FieldNotFoundError`` (prisma's query
-        validation rejecting a row's value, such as a number in a text column), or a raw query failing with a data
-        exception (SQLSTATE class 22), integrity violation (class 23) or a value too large for an index (class 54).
-        Systemic raw failures such as a missing table (42P01) or a deadlock (40P01) stay False so the batch is retried
-        instead of dropped."""
+        """True iff the rows themselves were refused: a base ``DataError``, a ``FieldNotFoundError`` whose only issues
+        are values of the wrong type (a number in a text column), or a raw query failing with a data exception
+        (SQLSTATE class 22), integrity violation (class 23) or a value too large for an index (class 54). Systemic
+        failures such as an unknown field from a stale generated client, a missing table (42P01) or a deadlock (40P01)
+        stay False so the batch is retried instead of dropped."""
         import prisma
 
         if PrismaDBExceptionHandler.is_prisma_data_error(e):
             return True
         if isinstance(e, _exception_types(prisma.errors.FieldNotFoundError)):
-            return True
+            return _only_refuses_value_types(e)
         if not isinstance(e, _exception_types(prisma.errors.RawQueryError)):
             return False
         sqlstate: Final = PrismaDBExceptionHandler.postgres_sqlstate(e)
