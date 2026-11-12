@@ -24,7 +24,7 @@ from litellm.types.llms.bedrock import (
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
-from ...common_utils import BEDROCK_SERVICE_TIER_HEADER
+from ...common_utils import served_service_tier
 from ..converse_transformation import AmazonConverseConfig
 from .base_invoke_transformation import AmazonInvokeConfig
 
@@ -157,9 +157,10 @@ class AmazonInvokeNovaConfig(AmazonInvokeConfig, AmazonConverseConfig):
             api_key,
             json_mode,
         )
-        if BEDROCK_SERVICE_TIER_HEADER in raw_response.headers:
-            setattr(response, "service_tier", raw_response.headers[BEDROCK_SERVICE_TIER_HEADER])  # noqa: B010  # pydantic extra, not a declared field
-        return response
+        served_tier: Final = served_service_tier(raw_response.headers)
+        if served_tier is None:
+            return response
+        return response.model_copy(update={"service_tier": served_tier})
 
     @staticmethod
     def _inline_cache_points(request: BedrockInvokeNovaRequest) -> BedrockInvokeNovaRequest:

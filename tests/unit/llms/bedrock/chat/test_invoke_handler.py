@@ -2095,41 +2095,38 @@ NOVA_INVOKE_STREAM_EVENTS: Final = (
 )
 
 
-def _nova_invoke_served_flex(request: httpx.Request) -> httpx.Response:
-    if request.url.path.endswith("/invoke-with-response-stream"):
+def _nova_invoke(served_tier: str | None) -> httpx.MockTransport:
+    tier_header: Final = {} if served_tier is None else {"X-Amzn-Bedrock-Service-Tier": served_tier}
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/invoke-with-response-stream"):
+            return httpx.Response(
+                200,
+                headers={"content-type": "application/vnd.amazon.eventstream", **tier_header},
+                content=b"".join(_bedrock_event_stream_frame(event) for event in NOVA_INVOKE_STREAM_EVENTS),
+            )
         return httpx.Response(
             200,
-            headers={"content-type": "application/vnd.amazon.eventstream", "X-Amzn-Bedrock-Service-Tier": "flex"},
-            content=b"".join(_bedrock_event_stream_frame(event) for event in NOVA_INVOKE_STREAM_EVENTS),
+            headers=tier_header,
+            json={
+                "output": {"message": {"role": "assistant", "content": [{"text": "hi"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1000, "outputTokens": 1000, "totalTokens": 2000},
+            },
         )
-    return httpx.Response(
-        200,
-        headers={"X-Amzn-Bedrock-Service-Tier": "flex"},
-        json={
-            "output": {"message": {"role": "assistant", "content": [{"text": "hi"}]}},
-            "stopReason": "end_turn",
-            "usage": {"inputTokens": 1000, "outputTokens": 1000, "totalTokens": 2000},
-        },
-    )
+
+    return httpx.MockTransport(reply)
 
 
-@pytest.mark.parametrize(
-    "requested_tier",
-    [
-        pytest.param({"serviceTier": {"type": "priority"}}, id="native"),
-        pytest.param({"service_tier": "priority"}, id="openai"),
-    ],
-)
-@pytest.mark.asyncio
-async def test_a_nova_invoke_stream_reports_and_bills_the_tier_bedrock_served_like_a_non_streaming_call(
-    requested_tier: Mapping[str, object],
-) -> None:
+async def _nova_invoke_calls(
+    requested_tier: Mapping[str, object], served_tier: str | None
+) -> tuple[litellm.ModelResponse, Sequence[ModelResponseStream], Sequence[ModelResponseStream]]:
     def completion(stream: bool) -> object:
         return litellm.completion(
             model="bedrock/invoke/us.amazon.nova-pro-v1:0",
             messages=[{"role": "user", "content": "hi"}],
             stream=stream,
-            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_nova_invoke_served_flex))),
+            client=HTTPHandler(client=httpx.Client(transport=_nova_invoke(served_tier))),
             aws_access_key_id="fake",
             aws_secret_access_key="fake",
             aws_region_name="us-east-1",
@@ -2140,20 +2137,57 @@ async def test_a_nova_invoke_stream_reports_and_bills_the_tier_bedrock_served_li
         model="bedrock/invoke/us.amazon.nova-pro-v1:0",
         messages=[{"role": "user", "content": "hi"}],
         stream=True,
-        client=AsyncHTTPHandler(transport=httpx.MockTransport(_nova_invoke_served_flex)),
+        client=AsyncHTTPHandler(transport=_nova_invoke(served_tier)),
         aws_access_key_id="fake",
         aws_secret_access_key="fake",
         aws_region_name="us-east-1",
         **requested_tier,
     )
     non_streaming: Final = completion(stream=False)
-    sync_streamed: Final = litellm.stream_chunk_builder(list(completion(stream=True)))
-    async_streamed: Final = litellm.stream_chunk_builder([chunk async for chunk in async_stream])
-
     assert isinstance(non_streaming, litellm.ModelResponse)
-    assert sync_streamed.service_tier == async_streamed.service_tier == non_streaming.service_tier == "flex"
+    return non_streaming, tuple(completion(stream=True)), tuple([chunk async for chunk in async_stream])
+
+
+@pytest.mark.parametrize(
+    ("requested_tier", "served_tier"),
+    [
+        pytest.param({"serviceTier": {"type": "priority"}}, "flex", id="native"),
+        pytest.param({"service_tier": "priority"}, "flex", id="openai"),
+        pytest.param({"service_tier": "flex"}, "priority", id="openai-served-priority"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_nova_invoke_stream_reports_and_bills_the_tier_bedrock_served_like_a_non_streaming_call(
+    requested_tier: Mapping[str, object], served_tier: str
+) -> None:
+    non_streaming, sync_chunks, async_chunks = await _nova_invoke_calls(requested_tier, served_tier)
+    sync_streamed: Final = litellm.stream_chunk_builder(list(sync_chunks))
+    async_streamed: Final = litellm.stream_chunk_builder(list(async_chunks))
+
+    assert {getattr(chunk, "service_tier", None) for chunk in (*sync_chunks, *async_chunks)} == {served_tier}
+    assert sync_streamed.service_tier == async_streamed.service_tier == non_streaming.service_tier == served_tier
     assert (
         litellm.completion_cost(sync_streamed)
         == litellm.completion_cost(async_streamed)
         == non_streaming._hidden_params["response_cost"]
     )
+
+
+@pytest.mark.parametrize(
+    "requested_tier",
+    [
+        pytest.param({"serviceTier": {"type": "priority"}}, id="native"),
+        pytest.param({"service_tier": "priority"}, id="openai"),
+    ],
+)
+@pytest.mark.parametrize("served_tier", [pytest.param(None, id="no-header"), pytest.param("", id="empty-header")])
+@pytest.mark.asyncio
+async def test_a_nova_invoke_stream_without_a_served_tier_reports_no_tier(
+    requested_tier: Mapping[str, object], served_tier: str | None
+) -> None:
+    non_streaming, sync_chunks, async_chunks = await _nova_invoke_calls(requested_tier, served_tier)
+
+    assert {getattr(chunk, "service_tier", None) for chunk in (*sync_chunks, *async_chunks)} == {None}
+    assert getattr(litellm.stream_chunk_builder(list(sync_chunks)), "service_tier", None) is None
+    assert getattr(litellm.stream_chunk_builder(list(async_chunks)), "service_tier", None) is None
+    assert getattr(non_streaming, "service_tier", None) is None

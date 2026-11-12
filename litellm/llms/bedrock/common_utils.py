@@ -87,6 +87,13 @@ BedrockRoute = Literal[
 ]
 
 
+def served_service_tier(response_headers: Mapping[str, str] | None) -> str | None:
+    tier_header: Final = BEDROCK_SERVICE_TIER_HEADER.lower()
+    return next(
+        (value for name, value in (response_headers or {}).items() if name.lower() == tier_header and value), None
+    )
+
+
 def error_response_text(response: httpx.Response) -> str:
     try:
         return response.text

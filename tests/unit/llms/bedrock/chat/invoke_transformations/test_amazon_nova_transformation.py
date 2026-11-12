@@ -165,7 +165,10 @@ def test_invoke_sends_the_service_tier_in_the_header_invoke_model_takes(service_
     assert "serviceTier" not in json.loads(request.content)
 
 
-def test_invoke_reports_and_bills_the_tier_bedrock_served_over_the_tier_requested():
+@pytest.mark.parametrize(("requested_tier", "served_tier"), [("priority", "flex"), ("flex", "priority")])
+def test_invoke_reports_and_bills_the_tier_bedrock_served_over_the_tier_requested(
+    requested_tier: str, served_tier: str
+) -> None:
     reply: Final = {
         "output": {"message": {"role": "assistant", "content": [{"text": "hi"}]}},
         "stopReason": "end_turn",
@@ -174,7 +177,7 @@ def test_invoke_reports_and_bills_the_tier_bedrock_served_over_the_tier_requeste
 
     def invoke(tier: Mapping[str, object]) -> litellm.ModelResponse:
         send: Final = MagicMock(
-            return_value=httpx.Response(200, json=reply, headers={"X-Amzn-Bedrock-Service-Tier": "flex"})
+            return_value=httpx.Response(200, json=reply, headers={"X-Amzn-Bedrock-Service-Tier": served_tier})
         )
         return litellm.completion(
             model=f"bedrock/invoke/{MODEL}",
@@ -186,13 +189,13 @@ def test_invoke_reports_and_bills_the_tier_bedrock_served_over_the_tier_requeste
             **tier,
         )
 
-    native_priority: Final = invoke({"serviceTier": {"type": "priority"}})
-    openai_priority: Final = invoke({"service_tier": "priority"})
-    openai_flex: Final = invoke({"service_tier": "flex"})
+    native_requested: Final = invoke({"serviceTier": {"type": requested_tier}})
+    openai_requested: Final = invoke({"service_tier": requested_tier})
+    openai_served: Final = invoke({"service_tier": served_tier})
 
-    assert native_priority.service_tier == openai_priority.service_tier == "flex"
+    assert native_requested.service_tier == openai_requested.service_tier == served_tier
     assert (
-        native_priority._hidden_params["response_cost"]
-        == openai_priority._hidden_params["response_cost"]
-        == openai_flex._hidden_params["response_cost"]
+        native_requested._hidden_params["response_cost"]
+        == openai_requested._hidden_params["response_cost"]
+        == openai_served._hidden_params["response_cost"]
     )

@@ -48,7 +48,6 @@ from litellm.types.utils import (
 from litellm.types.utils import GenericStreamingChunk as GChunk
 
 from ..common_utils import (
-    BEDROCK_SERVICE_TIER_HEADER,
     BedrockError,
     BedrockEventStreamResponseDict,
     bedrock_event_chunk_text,
@@ -62,6 +61,7 @@ from ..common_utils import (
     get_bedrock_stream_event_statuses,
     get_bedrock_tool_name,
     parse_bedrock_event_stream,
+    served_service_tier,
 )
 
 bedrock_tool_name_mappings: Final[InMemoryCache] = InMemoryCache(max_size_in_memory=50, default_ttl=600)
@@ -223,9 +223,9 @@ _StreamChunk: Final = TypeVar("_StreamChunk")
 
 
 def _with_served_service_tier(chunk: _StreamChunk, served_tier: str | None) -> _StreamChunk:
-    if served_tier and isinstance(chunk, ModelResponseStream):
-        setattr(chunk, "service_tier", served_tier)  # noqa: B010  # pydantic extra, not a declared field
-    return chunk
+    if served_tier is None or not isinstance(chunk, ModelResponseStream):
+        return chunk
+    return chunk.model_copy(update={"service_tier": served_tier})
 
 
 async def make_call(
@@ -861,7 +861,7 @@ class AWSEventStreamDecoder:
         event_stream_buffer: Final = EventStreamBuffer()
         tally: Final = _EventStreamTally(get_bedrock_stream_event_statuses())
         request_id_headers: Final = provider_request_id_headers(response_headers)
-        served_tier: Final = (response_headers or {}).get(BEDROCK_SERVICE_TIER_HEADER)
+        served_tier: Final = served_service_tier(response_headers)
         for chunk in iterator:
             event_stream_buffer.add_data(chunk)
             tally.add_chunk(chunk)
@@ -887,7 +887,7 @@ class AWSEventStreamDecoder:
         event_stream_buffer: Final = EventStreamBuffer()
         tally: Final = _EventStreamTally(get_bedrock_stream_event_statuses())
         request_id_headers: Final = provider_request_id_headers(response_headers)
-        served_tier: Final = (response_headers or {}).get(BEDROCK_SERVICE_TIER_HEADER)
+        served_tier: Final = served_service_tier(response_headers)
         async for chunk in iterator:
             event_stream_buffer.add_data(chunk)
             tally.add_chunk(chunk)
