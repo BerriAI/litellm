@@ -134,3 +134,19 @@ class TestEmbeddingInputCap:
         _encoder(router, max_input_chars=20).encode_queries(["route me please, then a huge pasted file"])
 
         assert router.embedded_inputs == [["route me please, the"]]
+
+
+@pytest.mark.parametrize(
+    "embeds",
+    [
+        {"data": [{"embedding": [0.1]}]},
+        [{"embedding": [0.1]}],
+        type("HasData", (), {"data": [{"embedding": [0.1]}]})(),
+    ],
+    ids=["dict", "list", "object-with-data"],
+)
+def test_litellm_to_list_rejects_anything_but_an_embedding_response(embeds: object) -> None:
+    from litellm.router_strategy.auto_router.litellm_encoder import litellm_to_list
+
+    with pytest.raises(ValueError, match="No embeddings found"):
+        litellm_to_list(embeds)

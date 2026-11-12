@@ -30,9 +30,11 @@ import googleLogo from "../../public/assets/logos/google.svg";
 import groqLogo from "../../public/assets/logos/groq.svg";
 import huggingfaceLogo from "../../public/assets/logos/huggingface.svg";
 import hyperbolicLogo from "../../public/assets/logos/hyperbolic.svg";
+import hostingerLogo from "../../public/assets/logos/hostinger.png";
 import infinityLogo from "../../public/assets/logos/infinity.png";
 import jinaLogo from "../../public/assets/logos/jina.png";
 import lambdaLogo from "../../public/assets/logos/lambda.svg";
+import litellmLogo from "../../public/assets/logos/litellm_monogram.svg";
 import lmstudioLogo from "../../public/assets/logos/lmstudio.svg";
 import metaLlamaLogo from "../../public/assets/logos/meta_llama.svg";
 import microsoft365CopilotLogo from "../../public/assets/logos/microsoft_365_copilot.svg";
@@ -49,6 +51,7 @@ import ollamaLogo from "../../public/assets/logos/ollama.svg";
 import openaiSmallLogo from "../../public/assets/logos/openai_small.svg";
 import openrouterLogo from "../../public/assets/logos/openrouter.svg";
 import oracleLogo from "../../public/assets/logos/oracle.svg";
+import parallelAiLogo from "../../public/assets/logos/parallel_ai.png";
 import perplexityAiLogo from "../../public/assets/logos/perplexity-ai.svg";
 import qwenLogo from "../../public/assets/logos/qwen.png";
 import recraftLogo from "../../public/assets/logos/recraft.svg";
@@ -116,6 +119,7 @@ export enum Providers {
   DOTPROMPT = "Dotprompt",
   EDENAI = "Eden AI",
   ElevenLabs = "ElevenLabs",
+  EMPIRIOLABS = "EmpirioLabs AI",
   EMPOWER = "Empower",
   FalAI = "Fal AI",
   FEATHERLESS_AI = "Featherless Ai",
@@ -131,12 +135,14 @@ export enum Providers {
   Hosted_Vllm = "Hosted vLLM",
   HUGGINGFACE = "Huggingface",
   HYPERBOLIC = "Hyperbolic",
+  HOSTINGER_ROUTER = "Hostinger Router",
   Infinity = "Infinity",
   JinaAI = "Jina AI",
   OPENCODE_GO = "OpenCode Go",
   LAMBDA_AI = "Lambda Ai",
   Laya = "Laya",
   LEMONADE = "Lemonade",
+  LITELLM_PROXY = "LiteLLM Gateway",
   LLAMAFILE = "Llamafile",
   LM_STUDIO = "Lm Studio",
   LLAMA = "Meta Llama",
@@ -189,6 +195,7 @@ export enum Providers {
   Triton = "Triton",
   TypeSafe = "TypeSafe",
   Nace = "Nace",
+  PARALLEL_AI = "Parallel AI",
   V0 = "V0",
   VERCEL_AI_GATEWAY = "Vercel Ai Gateway",
   Vertex_AI = "Vertex AI (Anthropic, Gemini, etc.)",
@@ -248,6 +255,7 @@ export const provider_map: Record<string, string> = {
   DOTPROMPT: "dotprompt",
   EDENAI: "edenai",
   ElevenLabs: "elevenlabs",
+  EMPIRIOLABS: "empiriolabs",
   EMPOWER: "empower",
   FalAI: "fal_ai",
   FEATHERLESS_AI: "featherless_ai",
@@ -263,12 +271,14 @@ export const provider_map: Record<string, string> = {
   Hosted_Vllm: "hosted_vllm",
   HUGGINGFACE: "huggingface",
   HYPERBOLIC: "hyperbolic",
+  HOSTINGER_ROUTER: "hostinger_router",
   Infinity: "infinity",
   JinaAI: "jina_ai",
   OPENCODE_GO: "opencode_go",
   LAMBDA_AI: "lambda_ai",
   Laya: "laya",
   LEMONADE: "lemonade",
+  LITELLM_PROXY: "litellm_proxy",
   LLAMAFILE: "llamafile",
   LLAMA: "meta_llama",
   META: "meta",
@@ -322,6 +332,7 @@ export const provider_map: Record<string, string> = {
   Triton: "triton",
   TypeSafe: "typesafe",
   Nace: "nace",
+  PARALLEL_AI: "parallel_ai",
   V0: "v0",
   VERCEL_AI_GATEWAY: "vercel_ai_gateway",
   Vertex_AI: "vertex_ai",
@@ -389,10 +400,12 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.Hosted_Vllm]: vllmLogo.src,
   [Providers.HUGGINGFACE]: huggingfaceLogo.src,
   [Providers.HYPERBOLIC]: hyperbolicLogo.src,
+  [Providers.HOSTINGER_ROUTER]: hostingerLogo.src,
   [Providers.Infinity]: infinityLogo.src,
   [Providers.JinaAI]: jinaLogo.src,
   [Providers.OPENCODE_GO]: opencodeLogo.src,
   [Providers.LAMBDA_AI]: lambdaLogo.src,
+  [Providers.LITELLM_PROXY]: litellmLogo.src,
   [Providers.LM_STUDIO]: lmstudioLogo.src,
   [Providers.LLAMA]: metaLlamaLogo.src,
   [Providers.META]: metaLlamaLogo.src,
@@ -415,6 +428,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.OpenAI_Compatible]: openaiSmallLogo.src,
   [Providers.Openrouter]: openrouterLogo.src,
   [Providers.Oracle]: oracleLogo.src,
+  [Providers.PARALLEL_AI]: parallelAiLogo.src,
   [Providers.Perplexity]: perplexityAiLogo.src,
   [Providers.Qwen_AI_Platform]: qwenLogo.src,
   [Providers.QwenCloud]: qwenLogo.src,
@@ -491,9 +505,12 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.Cursor]: "cursor/claude-4-sonnet",
   [Providers.DeepInfra]: "deepinfra/<any-model-on-deepinfra>",
   [Providers.EDENAI]: "edenai/openai/gpt-mini-latest",
+  [Providers.EMPIRIOLABS]: "empiriolabs/aplomb-1",
   [Providers.FalAI]: "fal_ai/fal-ai/flux-pro/v1.1-ultra",
   [Providers.Google_AI_Studio]: "gemini-pro",
+  [Providers.HOSTINGER_ROUTER]: "hostinger_router/claude-sonnet-5",
   [Providers.JinaAI]: "jina_ai/",
+  [Providers.LITELLM_PROXY]: "litellm_proxy/*",
   [Providers.META]: "meta/muse-spark-1.1",
   [Providers.MICROSOFT_365_COPILOT]: "microsoft_365_copilot/chat",
   [Providers.NVIDIA_RIVA]: "nvidia_riva/nvidia/parakeet-ctc-1_1b-asr",
@@ -509,6 +526,7 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.Tencent]: "tencent/deepseek-v4-pro",
   [Providers.TypeSafe]: "typesafe/jev-latest",
   [Providers.Nace]: "nace/drex-latest",
+  [Providers.PARALLEL_AI]: "parallel_ai/decision",
   [Providers.StreamLake]: "streamlake/<model-or-endpoint>",
   [Providers.Vertex_AI]: "gemini-pro",
   [Providers.VolcEngine]: "volcengine/<any-model-on-volcengine>",

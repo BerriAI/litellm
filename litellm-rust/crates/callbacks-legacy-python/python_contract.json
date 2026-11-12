@@ -11,7 +11,8 @@
     "logger",
     "kwargs",
     "start_time",
-    "end_time"
+    "end_time",
+    "cache_hit"
   ],
   "update_logging": [
     "logger",
@@ -27,18 +28,53 @@
     "api_key",
     "additional_args"
   ],
+  "messages_input": [
+    "body",
+    "kwargs"
+  ],
   "post_call": [
     "logger",
     "original_response",
     "api_key",
     "additional_args"
   ],
+  "record_response": [
+    "logger",
+    "status",
+    "headers",
+    "body",
+    "sent"
+  ],
+  "retried_request": [
+    "logger",
+    "logged_body",
+    "body",
+    "reasons"
+  ],
+  "record_api_window": [
+    "logger",
+    "start",
+    "end"
+  ],
+  "times_provider_exchange": [
+    "client",
+    "timeout"
+  ],
   "defers_async_logging": [
+    "logger"
+  ],
+  "claim_async_success_log": [
+    "logger"
+  ],
+  "mark_async_success_enqueued": [
     "logger"
   ],
   "defer_success": [
     "logger",
-    "pending"
+    "pending",
+    "response",
+    "start",
+    "end"
   ],
   "sync_success_for_async_call": [
     "logger",
@@ -60,6 +96,12 @@
     "end"
   ],
   "async_success_handler": [
+    "logger",
+    "response",
+    "start",
+    "end"
+  ],
+  "cache_hit_success": [
     "logger",
     "response",
     "start",
@@ -89,7 +131,16 @@
   ],
   "stream_opened": [
     "logger",
-    "head"
+    "head",
+    "keeps_requested"
+  ],
+  "stamp_stream_head": [
+    "head",
+    "logger",
+    "kwargs",
+    "start_time",
+    "end_time",
+    "cache_hit"
   ],
   "stream_success": [
     "logger",
@@ -99,7 +150,8 @@
     "chunks",
     "start",
     "end",
-    "first_chunk"
+    "first_chunk",
+    "stream_teardown"
   ],
   "stream_failure": [
     "logger",

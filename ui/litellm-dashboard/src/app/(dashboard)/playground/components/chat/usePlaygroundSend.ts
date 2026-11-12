@@ -1,4 +1,6 @@
 import { useRef, useState, type RefObject } from "react";
+import type { TFunction } from "i18next";
+import { useTranslation } from "react-i18next";
 import { v4 as uuidv4 } from "uuid";
 import { EndpointType } from "@/components/chat_ui/mode_endpoint_mapping";
 import type { MessageType, ReplyTrace } from "@/components/chat_ui/types";
@@ -7,6 +9,7 @@ import type { CustomHeaders } from "@/components/llm_calls/request_headers";
 import type { MCPToolArgumentsFormRef } from "@/components/mcp_tools/MCPToolArgumentsForm";
 import type { MCPServer, MCPToolset } from "@/components/mcp_tools/types";
 import { toast } from "@/lib/toast";
+import i18n from "@/i18n/i18n";
 import type { UseChatHistoryReturn } from "../../hooks/useChatHistory";
 import type { UseCodeInterpreterReturn } from "../../hooks/useCodeInterpreter";
 import { createChatMultimodalMessage } from "../chat_ui/ChatImageUtils";
@@ -49,17 +52,20 @@ const previewFor = (file: File): string | undefined => {
   return url.startsWith("blob:") ? url : undefined;
 };
 
-const missingInput = (deps: SendDeps, text: string, files: readonly DraftFile[]): string | null => {
+const missingInput = (
+  deps: SendDeps,
+  text: string,
+  files: readonly DraftFile[],
+  t: TFunction = i18n.t.bind(i18n),
+): string | null => {
   const { settings, capabilities } = deps;
   if (settings.endpoint === EndpointType.IMAGE_EDITS && files.length === 0)
-    return "Please upload at least one image for editing";
+    return t("playground.chat.send.missingImage");
   if (settings.endpoint === EndpointType.TRANSCRIPTION && files.length === 0)
-    return "Please upload an audio file for transcription";
+    return t("playground.chat.send.missingAudio");
   if (capabilities.textRequired && text.trim() === "") return "";
-  if (settings.endpoint === EndpointType.A2A_AGENTS && !settings.agent)
-    return "Please select an agent to send a message";
-  if (MODEL_ENDPOINTS.includes(settings.endpoint) && !settings.model)
-    return "Please select a model before sending a request";
+  if (settings.endpoint === EndpointType.A2A_AGENTS && !settings.agent) return t("playground.chat.send.missingAgent");
+  if (MODEL_ENDPOINTS.includes(settings.endpoint) && !settings.model) return t("playground.chat.send.missingModel");
   return null;
 };
 
@@ -103,6 +109,7 @@ type PreparedRequest = Readonly<{
 }>;
 
 export function usePlaygroundSend(deps: SendDeps) {
+  const { t } = useTranslation();
   const [text, setText] = useState("");
   const [draft, setDraft] = useState<Draft>({ kind: null, files: [] });
   const [isLoading, setIsLoading] = useState(false);
@@ -140,37 +147,37 @@ export function usePlaygroundSend(deps: SendDeps) {
   const cancel = () => {
     if (!abortRef.current) return;
     stop();
-    toast.info("Request cancelled");
+    toast.info(t("playground.chat.send.cancelled"));
   };
 
   const prepare = async (): Promise<PreparedRequest | null> => {
     const { settings } = deps;
-    const missing = missingInput(deps, text, files);
+    const missing = missingInput(deps, text, files, t);
     if (missing !== null) {
       if (missing) toast.fromError(missing);
       return null;
     }
     const direct = settings.endpoint === EndpointType.MCP ? deps.directCall() : null;
     if (settings.endpoint === EndpointType.MCP && !direct) {
-      toast.fromError("Pick an MCP server and a tool to call");
+      toast.fromError(t("playground.chat.send.missingTool"));
       return null;
     }
     const toolArguments = await (direct
       ? deps.toolArgsForm.current?.getSubmitValues().catch((error: unknown) => {
-          toast.fromError(error instanceof Error ? error.message : "Please fill in all required parameters");
+          toast.fromError(error instanceof Error ? error.message : t("playground.chat.send.missingParameters"));
           return null;
         })
       : Promise.resolve({}));
     if (toolArguments === null) return null;
     if (!deps.signedIn) return null;
     if (!deps.apiKey) {
-      toast.fromError("Please provide a Virtual Key or select Current UI Session");
+      toast.fromError(t("playground.chat.send.missingKey"));
       return null;
     }
 
     const userMessage = await apiMessage(settings.endpoint, text, files[0]?.file).catch(() => null);
     if (!userMessage) {
-      toast.fromError("Failed to process the attachment. Please try again.");
+      toast.fromError(t("playground.chat.send.attachmentFailed"));
       return null;
     }
     return { direct, toolArguments: toolArguments ?? {}, userMessage };
