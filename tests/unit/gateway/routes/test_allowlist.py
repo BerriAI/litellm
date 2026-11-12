@@ -85,3 +85,8 @@ def test_each_gateway_prefix_group_fits_one_alb_rule(group: tuple[str, ...]) -> 
 def test_gateway_prefix_groups_list_each_prefix_once() -> None:
     flattened: Final = [prefix for group in _CHART_PREFIX_GROUPS for prefix in group]
     assert len(flattened) == len(set(flattened)), sorted(p for p in set(flattened) if flattened.count(p) > 1)
+
+
+@pytest.mark.parametrize("group", _CHART_PREFIX_GROUPS, ids=lambda group: " ".join(group))
+def test_each_gateway_prefix_group_lists_its_shorter_prefix_first(group: tuple[str, ...]) -> None:
+    assert len(group[0]) <= len(group[-1]), f"{group} would order its ALB rule by the longer prefix"
