@@ -637,8 +637,8 @@ def _fold_choices_into_one(
         "\n\n"
         if index
         and requested_phase(message) == "commentary"
-        and (message.provider_specific_fields or {}).get("responses_item_id")
-        != (content_messages[index - 1].provider_specific_fields or {}).get("responses_item_id")
+        and (message.provider_specific_fields or {}).get("responses_output_index")
+        != (content_messages[index - 1].provider_specific_fields or {}).get("responses_output_index")
         else ""
         for index, message in enumerate(content_messages)
     )
@@ -981,7 +981,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                             role=item.get("role", "assistant"),
                             content=response_text if response_text else "",
                             annotations=annotations,
-                            provider_specific_fields={"phase": item.get("phase"), "responses_item_id": item.get("id")},
+                            provider_specific_fields={"phase": item.get("phase")},
                         )
                         choice = Choices(message=msg, finish_reason="stop", index=index)
                         return choice, index + 1
@@ -1461,7 +1461,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         annotations=annotations,
                         provider_specific_fields={
                             "phase": getattr(item, "phase", None),
-                            "responses_item_id": output_position,
+                            "responses_output_index": output_position,
                         },
                         reasoning_items=cast(
                             list[ChatCompletionReasoningItem] | None,
@@ -1532,7 +1532,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                                         update={
                                             "provider_specific_fields": {
                                                 **(choice.message.provider_specific_fields or {}),
-                                                "responses_item_id": output_position,
+                                                "responses_output_index": output_position,
                                             }
                                         }
                                     )

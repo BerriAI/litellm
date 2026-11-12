@@ -352,6 +352,21 @@ def _with_text(item: Mapping[str, object], text: str) -> Mapping[str, object]:
 
 
 @pytest.mark.parametrize("stream", [False, True], ids=["json", "stream"])
+def test_two_commentary_notes_before_a_tool_call_assemble_with_a_separator(stream: bool) -> None:
+    second_note: Final = {**_with_text(COMMENTARY, "Looking up the weather now."), "id": "msg_second_note"}
+    assistant: Final = _assistant_turn((COMMENTARY, second_note, WEATHER_CALL), stream=stream)
+
+    assert assistant["content"] == "Checking the weather.\n\nLooking up the weather now."
+    assert "commentary" not in _replayed_fields(assistant)
+    sent: Final = _next_turn_input(assistant)
+    assert sent[1:-1] == [
+        REPLAYED[0],
+        {**REPLAYED[0], "content": [{"type": "output_text", "text": "Looking up the weather now."}]},
+        REPLAYED[3],
+    ]
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["json", "stream"])
 def test_a_structured_output_turn_carries_the_phase_of_the_message_it_returns(stream: bool) -> None:
     output: Final = (_with_text(COMMENTARY, '{"city":"Paris"}'), _with_text(FINAL_ANSWER, '{"city":"Lyon"}'))
 
