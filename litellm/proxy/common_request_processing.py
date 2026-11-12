@@ -2266,6 +2266,20 @@ def _timing_values(
     return getattr(logging_obj, "response_timing_metrics", None) or {}
 
 
+async def _fallback_model_authorized(
+    fallback_model: str, user_api_key_dict: UserAPIKeyAuth, llm_router: Router | None
+) -> bool:
+    """Whether the caller could have asked for ``fallback_model`` directly, the same key, team and project model
+    access check the router runs on its own fallbacks while ``enforce_fallback_model_access`` is on."""
+    from litellm.proxy.auth.fallback_model_access import is_model_authorized_for_token, router_fallback_access_check
+
+    if llm_router is None or not router_fallback_access_check.is_enforced():
+        return True
+    return await is_model_authorized_for_token(
+        model=fallback_model, valid_token=user_api_key_dict, llm_router=llm_router
+    )
+
+
 async def _team_member_within_fallback_model_budget(
     user_api_key_dict: UserAPIKeyAuth,
     model: str,
@@ -2918,8 +2932,11 @@ class ProxyBaseLLMRequestProcessing:
             PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS,
             ProxyRateLimitError,
             RateLimitFallback,
+            fallback_on_saturation_enabled,
+            is_saturation_fallback,
             per_model_rate_limits_disable_fallbacks,
             with_rate_limit_fallback,
+            with_saturation_fallbacks_exhausted,
         )
 
         general_settings_view: Final = cast(  # cast-ok: this method keeps its legacy bare-dict settings parameter
@@ -2932,12 +2949,21 @@ class ProxyBaseLLMRequestProcessing:
                 and per_model_rate_limits_disable_fallbacks(general_settings_view)
             )
 
-        configured_fallbacks: Final = (
-            self._configured_fallbacks(llm_router=llm_router, user_api_key_dict=user_api_key_dict)
+        router_settings: Final = (
+            await self._hierarchical_router_settings(user_api_key_dict, proxy_config, proxy_logging_obj)
             if llm_router is not None
             else None
         )
-        pristine: Final = independent_snapshot(self.data) if configured_fallbacks else None
+        configured_fallbacks: Final = (
+            self._configured_fallbacks(llm_router=llm_router, router_settings=router_settings)
+            if llm_router is not None
+            else None
+        )
+        pristine: Final = (
+            independent_snapshot(self.data)
+            if configured_fallbacks or fallback_on_saturation_enabled(router_settings)
+            else None
+        )
 
         try:
             return await self.common_processing_pre_call_logic(
@@ -2959,20 +2985,17 @@ class ProxyBaseLLMRequestProcessing:
         except ProxyRateLimitError as original_exc:
             rate_limited_data: Final = self.data
             original_model: Final = rate_limited_data.get("model")
-            if (
-                pristine is None
-                or not configured_fallbacks
-                or rate_limited_data.get("disable_fallbacks")
-                or not isinstance(original_model, str)
-                or is_hard_per_model_limit(original_exc)
-            ):
+            # The limiter raises this one while the requested model still has room, so a walk that admits nothing
+            # ends on that model instead of a 429.
+            at_saturation: Final = is_saturation_fallback(original_exc)
+            if pristine is None or not isinstance(original_model, str) or is_hard_per_model_limit(original_exc):
                 raise
-
-            fallback_models: Final = self._resolve_fallback_models(
-                model=original_model,
-                fallbacks=configured_fallbacks,
+            fallback_models: Final = (
+                self._resolve_fallback_models(model=original_model, fallbacks=configured_fallbacks)
+                if configured_fallbacks and not rate_limited_data.get("disable_fallbacks")
+                else None
             )
-            if not fallback_models:
+            if not fallback_models and not at_saturation:
                 raise
 
             verbose_proxy_logger.info(
@@ -2990,8 +3013,10 @@ class ProxyBaseLLMRequestProcessing:
             )
             attempt_numbers: Final[Iterator[int]] = itertools.count(1)
             try:
-                for fallback_model in fallback_models:
+                for fallback_model in fallback_models or ():
                     if fallback_model == original_model:
+                        continue
+                    if not await _fallback_model_authorized(fallback_model, user_api_key_dict, llm_router):
                         continue
                     if not await _team_member_within_fallback_model_budget(
                         user_api_key_dict=user_api_key_dict,
@@ -3050,18 +3075,60 @@ class ProxyBaseLLMRequestProcessing:
                         )
                         self.data = stamped
                         return stamped, admitted_logging_obj
+                if not at_saturation:
+                    self.data = rate_limited_data
+                    raise original_exc
+                verbose_proxy_logger.info(
+                    "No fallback of model=%s is below the saturation threshold, serving it on model=%s",
+                    original_model,
+                    original_model,
+                )
+                exhausted: dict = dict(  # mutable-ok: caller-defined request-payload shape
+                    with_saturation_fallbacks_exhausted(
+                        independent_snapshot(pristine), get_metadata_variable_name(request, pristine)
+                    )
+                )
+                self.data = exhausted
+                return await self.common_processing_pre_call_logic(
+                    request=request,
+                    general_settings=general_settings,
+                    proxy_logging_obj=proxy_logging_obj,
+                    user_api_key_dict=user_api_key_dict,
+                    version=version,
+                    proxy_config=proxy_config,
+                    user_model=user_model,
+                    user_temperature=user_temperature,
+                    user_request_timeout=user_request_timeout,
+                    user_max_tokens=user_max_tokens,
+                    user_api_base=user_api_base,
+                    model=original_model,
+                    route_type=route_type,
+                    llm_router=llm_router,
+                )
             except BaseException:
                 self.data = rate_limited_data
                 raise
 
-            self.data = rate_limited_data
-            raise original_exc
+    @staticmethod
+    async def _hierarchical_router_settings(
+        user_api_key_dict: UserAPIKeyAuth, proxy_config: ProxyConfig, proxy_logging_obj: ProxyLogging
+    ) -> Mapping[str, object] | None:
+        """The key's ``router_settings``, else its team's, read through the same cached lookup the request body
+        gets them from, so the pre-call fallback walk and the router agree on Key > Team > Global."""
+        from litellm.proxy.proxy_server import prisma_client
+
+        return _ROUTER_SETTINGS_ADAPTER.validate_python(
+            await proxy_config.get_hierarchical_router_settings(
+                user_api_key_dict=user_api_key_dict,
+                prisma_client=prisma_client,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        )
 
     @staticmethod
-    def _configured_fallbacks(llm_router: Router, user_api_key_dict: UserAPIKeyAuth) -> list | None:
-        key_router_settings: Final = user_api_key_dict.router_settings
-        key_fallbacks: Final = key_router_settings.get("fallbacks") if isinstance(key_router_settings, dict) else None
-        fallbacks: Final = key_fallbacks if key_fallbacks is not None else llm_router.settings().fallbacks
+    def _configured_fallbacks(llm_router: Router, router_settings: Mapping[str, object] | None) -> list | None:
+        settings_fallbacks: Final = router_settings.get("fallbacks") if router_settings is not None else None
+        fallbacks: Final = settings_fallbacks if settings_fallbacks is not None else llm_router.settings().fallbacks
         return fallbacks if isinstance(fallbacks, list) and fallbacks else None
 
     @staticmethod

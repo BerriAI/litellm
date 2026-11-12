@@ -2,16 +2,15 @@
 Dynamic rate limiter v3 - Saturation-aware priority-based rate limiting
 """
 
-import json
 import os
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, TypeAlias
+from typing import TYPE_CHECKING, Final, Literal
 
 from fastapi import HTTPException
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 from redis.exceptions import RedisError
 
 import litellm
@@ -27,11 +26,12 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
     ensure_response_additional_headers,
     response_has_hidden_params,
 )
-from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.litellm_core_utils.token_counter import offload_token_count
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import (
+    SATURATION_FALLBACK_DESCRIPTOR_KEY,
     ProxyRateLimitError,
+    fallback_on_saturation_requested,
     map_v3_rate_limit_type,
 )
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (  # noqa: F401  # legacy module exports
@@ -73,277 +73,13 @@ from litellm.proxy.hooks.rate_limiter_utils import (
     resolve_llm_provider_for_rate_limit,
     socket_session_usage,
 )
-from litellm.proxy.utils import InternalUsageCache, check_and_merge_model_level_guardrails
+from litellm.proxy.utils import InternalUsageCache
 from litellm.redis.stores.rate_limits import RATE_LIMITS_TARGET, CounterIncrement, RateLimitCounter, RateLimitScope
 from litellm.types.router import ModelGroupInfo
 from litellm.types.utils import CallTypesLiteral, LLMResponseTypes, Usage
 
 if TYPE_CHECKING:
     from litellm.types.utils import PriorityReservationSettings
-
-
-STEERED_FROM_HEADER: Final = "x-litellm-model-steered-from"
-
-
-@dataclass(frozen=True, slots=True)
-class AlternateGrant:
-    """What an authorized alternate carries onto the request: the budgeted access groups that granted it."""
-
-    access_groups: tuple[str, ...] = ()
-
-
-AlternateAuthorizer: TypeAlias = Callable[[UserAPIKeyAuth, str], Awaitable[AlternateGrant | None]]
-
-
-class ModelPreference(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="ignore")
-
-    model: str
-    alternates: tuple[str, ...] = ()
-
-
-MODEL_PREFERENCES: Final = TypeAdapter(tuple[ModelPreference, ...])
-
-
-@dataclass(frozen=True, slots=True)
-class SteeredModel:
-    model: str
-    group_info: ModelGroupInfo
-    access_groups: tuple[str, ...] = ()
-
-
-async def alternate_grant_for(user_api_key_dict: UserAPIKeyAuth, model: str) -> AlternateGrant | None:
-    """The grant a budget fallback to ``model`` would get: the key, team, member, project and customer allowlists,
-    every model budget layer and the budgets of the access groups that authorize it, else None."""
-    from litellm.exceptions import BudgetExceededError
-    from litellm.proxy.auth.auth_checks import (
-        _model_access_group_max_budget_check,  # pyright: ignore[reportPrivateUsage]  # steering shares the fallback contract
-        can_customer_access_model,
-        collect_matched_model_access_groups,
-        get_end_user_object,
-        get_project_object,
-        get_team_membership,
-        get_team_object,
-    )
-    from litellm.proxy.auth.user_api_key_auth import (
-        _is_fallback_model_authorized,  # pyright: ignore[reportPrivateUsage]  # steering shares the fallback contract
-        _is_within_every_model_budget,  # pyright: ignore[reportPrivateUsage]  # steering shares the fallback contract
-    )
-    from litellm.proxy.proxy_server import (
-        llm_model_list,  # pyright: ignore[reportUnknownVariableType]  # proxy global has untyped deployment entries
-        llm_router,
-        model_max_budget_limiter,
-        prisma_client,
-        proxy_logging_obj,
-        user_api_key_cache,
-    )
-
-    user_id: Final = user_api_key_dict.user_id
-    team_id: Final = user_api_key_dict.team_id
-    project_id: Final = user_api_key_dict.project_id
-    end_user_id: Final = user_api_key_dict.end_user_id
-    try:
-        team_object: Final = (
-            await get_team_object(
-                team_id=team_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                proxy_logging_obj=proxy_logging_obj,
-            )
-            if team_id is not None
-            else None
-        )
-        team_membership: Final = (
-            await get_team_membership(
-                user_id=user_id,
-                team_id=team_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                proxy_logging_obj=proxy_logging_obj,
-            )
-            if user_id is not None and team_id is not None
-            else None
-        )
-        project_object: Final = (
-            await get_project_object(
-                project_id=project_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                proxy_logging_obj=proxy_logging_obj,
-            )
-            if project_id is not None
-            else None
-        )
-        end_user_object: Final = (
-            await get_end_user_object(
-                end_user_id=end_user_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                proxy_logging_obj=proxy_logging_obj,
-            )
-            if end_user_id is not None
-            else None
-        )
-        if end_user_object is not None and end_user_object.models:
-            can_customer_access_model(
-                model=model, end_user_object=end_user_object, llm_router=llm_router, valid_token=user_api_key_dict
-            )
-    except Exception:  # noqa: BLE001  # a failed team, member, project or customer lookup must not authorize an alternate
-        return None
-    if not await _is_fallback_model_authorized(
-        model=model,
-        valid_token=user_api_key_dict,
-        llm_model_list=llm_model_list,  # pyright: ignore[reportUnknownArgumentType]  # proxy global has untyped deployment entries
-        llm_router=llm_router,
-        prisma_client=prisma_client,
-        team_membership=team_membership,
-        project_object=project_object,
-        refuse_agent_keys=True,
-        team_object=team_object,
-    ):
-        return None
-    if not await _is_within_every_model_budget(
-        valid_token=user_api_key_dict, model_max_budget_limiter=model_max_budget_limiter, model=model
-    ):
-        return None
-    try:
-        access_groups: Final = await collect_matched_model_access_groups(
-            model=model,
-            valid_token=user_api_key_dict,
-            team_object=team_object,
-            project_object=project_object,
-            llm_router=llm_router,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-            team_membership=team_membership,
-            team_membership_loaded=True,
-        )
-        await _model_access_group_max_budget_check(
-            matched_model_access_groups=access_groups,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-        )
-    except BudgetExceededError:
-        return None
-    except Exception:  # noqa: BLE001  # an unreadable group budget must not authorize an alternate
-        return None
-    return AlternateGrant(access_groups=access_groups)
-
-
-REQUEST_BUCKET: Final = TypeAdapter(dict[str, object])
-REQUEST_ENTRIES: Final = TypeAdapter(tuple[object, ...])
-RESERVATION_ENTRIES: Final = TypeAdapter(tuple[Mapping[str, object], ...])
-MODEL_ACCESS_GROUP_ENTITY: Final = "Model access group"
-
-
-def _metadata_bucket(data: Mapping[str, object], key: str) -> Mapping[str, object] | None:
-    """The request's ``key`` metadata bucket as a typed dict, or None when it is absent or not a mapping."""
-    value: Final = data.get(key)
-    if not isinstance(value, Mapping):
-        return None
-    try:
-        return REQUEST_BUCKET.validate_python(value)
-    except ValidationError:
-        return None
-
-
-def _guardrail_entries(data: Mapping[str, object]) -> frozenset[str]:
-    """The request's guardrail entries, settings included, in a form two lists can be compared by."""
-    metadata: Final = _metadata_bucket(data, "metadata")
-    guardrails: Final = metadata.get("guardrails") if metadata is not None else None
-    entries: Final = (
-        REQUEST_ENTRIES.validate_python(guardrails)
-        if isinstance(guardrails, list)
-        else (guardrails,)
-        if guardrails
-        else ()
-    )
-    return frozenset(
-        entry if isinstance(entry, str) else json.dumps(entry, sort_keys=True, default=str) for entry in entries
-    )
-
-
-def _auth_copy_with_groups(bucket: Mapping[str, object], access_groups: tuple[str, ...]) -> dict[str, object]:
-    auth: Final = bucket.get("user_api_key_auth")
-    if isinstance(auth, UserAPIKeyAuth):
-        return {"user_api_key_auth": auth.model_copy(update={"matched_model_access_groups": list(access_groups)})}
-    if isinstance(auth, Mapping):
-        return {
-            "user_api_key_auth": {
-                **REQUEST_BUCKET.validate_python(auth),
-                "matched_model_access_groups": list(access_groups),
-            }
-        }
-    return {}
-
-
-def _with_access_groups(data: Mapping[str, object], access_groups: tuple[str, ...]) -> dict[str, object]:
-    """``data`` with the served model's access groups stamped on every metadata bucket, the auth copy in it
-    included, so spend attribution charges the groups that granted the served model and nothing else."""
-    stamped: Final = {
-        key: {
-            **bucket,
-            MODEL_ACCESS_GROUP_METADATA_KEY: list(access_groups),
-            **_auth_copy_with_groups(bucket, access_groups),
-        }
-        for key in ("metadata", "litellm_metadata")
-        if (bucket := _metadata_bucket(data, key)) is not None
-    }
-    return {**data, **stamped}
-
-
-def _priced_within(preferred: ModelGroupInfo, alternate: ModelGroupInfo) -> bool:
-    """Whether ``alternate`` costs no more per token than ``preferred``, so a budget reserved for the preferred
-    model's estimate still covers the alternate."""
-    if alternate.input_cost_per_token is None or alternate.output_cost_per_token is None:
-        return False
-    return alternate.input_cost_per_token <= (preferred.input_cost_per_token or 0.0) and (
-        alternate.output_cost_per_token <= (preferred.output_cost_per_token or 0.0)
-    )
-
-
-def _reservation_covers(
-    user_api_key_dict: UserAPIKeyAuth,
-    access_groups: tuple[str, ...],
-    preferred: ModelGroupInfo,
-    alternate: ModelGroupInfo,
-) -> bool:
-    """Whether the budget the request already reserved still fits the alternate: the alternate costs no more per
-    token than the preferred model the estimate was made for, and every model access group reserved against also
-    grants the alternate, so settlement never charges a group that did not serve."""
-    reservation: Final = user_api_key_dict.budget_reservation
-    if reservation is None:
-        return True
-    if not _priced_within(preferred, alternate):
-        return False
-    entries: Final = reservation.get("entries")
-    if not isinstance(entries, list):
-        return True
-    try:
-        reserved: Final = frozenset(
-            entry.get("entity_id")
-            for entry in RESERVATION_ENTRIES.validate_python(entries)
-            if entry.get("entity_type") == MODEL_ACCESS_GROUP_ENTITY
-        )
-    except ValidationError:
-        return False
-    return reserved <= frozenset(access_groups)
-
-
-def alternates_for(user_api_key_dict: UserAPIKeyAuth, model: str) -> tuple[str, ...]:
-    """The team's opt-in alternates for ``model`` from ``team_metadata.model_preferences``, or none."""
-    raw: Final = (user_api_key_dict.team_metadata or {}).get("model_preferences")
-    if raw is None:
-        return ()
-    try:
-        preferences: Final = MODEL_PREFERENCES.validate_python(raw)
-    except ValidationError as error:
-        verbose_proxy_logger.warning(
-            "Ignoring malformed team model_preferences for team %s: %s", user_api_key_dict.team_id, error
-        )
-        return ()
-    return next((preference.alternates for preference in preferences if preference.model == model), ())
 
 
 class _SettlementMetadata(BaseModel):
@@ -523,10 +259,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         self,
         internal_usage_cache: DualCache,
         time_provider: Callable[[], datetime] | None = None,
-        is_model_authorized: AlternateAuthorizer = alternate_grant_for,
     ):
         self.internal_usage_cache = InternalUsageCache(dual_cache=internal_usage_cache)
-        self._is_model_authorized = is_model_authorized
         self.v3_limiter = PROXY_MaxParallelRequestsHandler_v3(self.internal_usage_cache, time_provider=time_provider)
         self.active_teams = ActiveTeamRegistry(internal_usage_cache)
 
@@ -1476,45 +1210,14 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             verbose_proxy_logger.debug("No model group info for %s, allowing request", model)
             return None
 
-        steered: Final = await self._steer_to_alternate(model, requested_group_info, user_api_key_dict, data, call_type)
         try:
-            admitted: Final = await self._admit_steered_or_preferred(
-                model, requested_group_info, steered, user_api_key_dict, data, call_type
-            )
+            await self._admit(model, requested_group_info, user_api_key_dict, data, call_type)
         except HTTPException:
             raise
         except Exception as e:
             verbose_proxy_logger.error("Error in dynamic rate limiter: %s, allowing request", e)
             # Fail open on unexpected errors
             return None
-
-        if admitted is None:
-            return None
-        get_or_create_request_stash().steered_from_model = model
-        groups: Final = list(admitted.access_groups)
-        user_api_key_dict.matched_model_access_groups = groups  # rebind-ok: spend charges the served model's groups
-        return _with_access_groups(dict(data, model=admitted.model), admitted.access_groups)
-
-    async def _admit_steered_or_preferred(
-        self,
-        model: str,
-        requested_group_info: ModelGroupInfo,
-        steered: "SteeredModel | None",
-        user_api_key_dict: UserAPIKeyAuth,
-        data: Mapping[str, object],
-        call_type: str | None,
-    ) -> "SteeredModel | None":
-        """The alternate once it admits the request, else None after the preferred model's own check."""
-        if steered is not None:
-            try:
-                await self._admit(steered.model, steered.group_info, user_api_key_dict, data, call_type)
-            except Exception:  # noqa: BLE001  # the alternate's refusal or error keeps the request on its own model
-                verbose_proxy_logger.info(
-                    "Alternate %s refused team %s, staying on %s", steered.model, user_api_key_dict.team_id, model
-                )
-            else:
-                return steered
-        await self._admit(model, requested_group_info, user_api_key_dict, data, call_type)
         return None
 
     async def _admit(
@@ -1525,7 +1228,9 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         data: Mapping[str, object],
         call_type: str | None,
     ) -> None:
-        """Read saturation, then the three-phase rate limit check, raising the 429 when ``model`` is out of capacity."""
+        """Read saturation, then the three-phase rate limit check, raising the 429 when ``model`` is out of capacity.
+        A key or team with ``router_settings.fallback_on_saturation`` is sent to its fallbacks first once ``model`` is
+        at or above ``saturation_threshold``, and comes back here only when none of them admitted the request."""
         priority: Final = self._get_priority_from_user_api_key_dict(user_api_key_dict=user_api_key_dict)
         saturation: Final = await self._check_model_saturation(model, model_group_info)
         saturation_threshold: Final = _get_priority_settings().saturation_threshold
@@ -1533,6 +1238,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             f"[Dynamic Rate Limiter] Model={model}, Saturation={saturation:.1%}, "
             f"Threshold={saturation_threshold:.1%}, Priority={priority}"
         )
+        if saturation >= saturation_threshold and fallback_on_saturation_requested(data):
+            raise self._saturation_fallback_error(model, saturation, priority)
         await self._check_rate_limits(
             model=model,
             model_group_info=model_group_info,
@@ -1543,104 +1250,19 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             call_type=call_type,
         )
 
-    async def _steer_to_alternate(
-        self,
-        model: str,
-        model_group_info: ModelGroupInfo,
-        user_api_key_dict: UserAPIKeyAuth,
-        data: Mapping[str, object],
-        call_type: CallTypesLiteral,
-    ) -> "SteeredModel | None":
-        """First team alternate below ``saturation_threshold`` once ``model`` is at or above it, else None. A
-        broken alternate check is logged and leaves the request on ``model``, as the limiter fails open elsewhere."""
-        try:
-            return await self._pick_alternate(model, model_group_info, user_api_key_dict, data, call_type)
-        except Exception:  # noqa: BLE001  # a failing alternate check must not fail a request that can stay put
-            verbose_proxy_logger.warning(
-                "Alternate check failed for team %s, staying on %s", user_api_key_dict.team_id, model, exc_info=True
-            )
-            return None
-
-    async def _pick_alternate(
-        self,
-        model: str,
-        model_group_info: ModelGroupInfo,
-        user_api_key_dict: UserAPIKeyAuth,
-        data: Mapping[str, object],
-        call_type: CallTypesLiteral,
-    ) -> "SteeredModel | None":
-        alternates: Final = alternates_for(user_api_key_dict, model)
-        if not alternates:
-            return None
-        threshold: Final = _get_priority_settings().saturation_threshold
-        if await self._check_model_saturation(model, model_group_info) < threshold:
-            return None
-        for alternate in alternates:
-            if alternate == model or not self._steerable(model, alternate, data, call_type, user_api_key_dict.team_id):
-                continue
-            if (
-                candidate := await self._idle_permitted_alternate(
-                    alternate, user_api_key_dict, threshold, model_group_info
-                )
-            ) is not None:
-                verbose_proxy_logger.info("Steering team %s from %s to %s", user_api_key_dict.team_id, model, alternate)
-                return candidate
-        return None
-
-    def _steerable(
-        self, model: str, alternate: str, data: Mapping[str, object], call_type: CallTypesLiteral, team_id: str | None
-    ) -> bool:
-        """Whether ``alternate`` may serve a request that already passed auth and the guardrail walk as ``model``: a
-        zero-cost ``model`` waived the aggregate budget checks, so only another zero-cost alternate may take it, an
-        unpriced alternate is blocked when unpriced models are, the alternate has to serve this endpoint, and an
-        alternate with a model-level guardrail the request has not run would reach it unchecked."""
-        from litellm.proxy.auth.auth_checks import (
-            _unpriced_models_in_request,  # pyright: ignore[reportPrivateUsage]  # steering shares the fallback contract
-            is_model_cost_zero,
+    def _saturation_fallback_error(self, model: str, saturation: float, priority: str | None) -> ProxyRateLimitError:
+        resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(model)
+        return ProxyRateLimitError(
+            detail={
+                "error": f"Model {model} is at {saturation:.0%} of its capacity, at or above the saturation "
+                f"threshold of {_get_priority_settings().saturation_threshold:.0%}, trying fallbacks first. "
+                f"Priority: {priority}"
+            },
+            headers={"retry-after": str(self.v3_limiter.window_size), "x-litellm-priority": priority or "default"},
+            model=resolved_model,
+            llm_provider=llm_provider,
+            descriptor_key=SATURATION_FALLBACK_DESCRIPTOR_KEY,
         )
-        from litellm.proxy.route_llm_request import endpoint_unsupported_by_model
-
-        if is_model_cost_zero(model=model, llm_router=self.llm_router) and not is_model_cost_zero(
-            model=alternate, llm_router=self.llm_router
-        ):
-            verbose_proxy_logger.info("Not steering zero-cost %s to priced %s", model, alternate)
-            return False
-        if litellm.block_requests_for_models_without_pricing and _unpriced_models_in_request(
-            model=alternate, llm_router=self.llm_router
-        ):
-            verbose_proxy_logger.info("Not steering %s to unpriced %s", model, alternate)
-            return False
-        if endpoint_unsupported_by_model(call_type, dict(data, model=alternate), self.llm_router, team_id):
-            verbose_proxy_logger.info(
-                "Not steering %s to %s, the alternate does not serve %s", model, alternate, call_type
-            )
-            return False
-        probe: Final = REQUEST_BUCKET.validate_python(
-            check_and_merge_model_level_guardrails(
-                data=dict(data, model=alternate, metadata=_metadata_bucket(data, "metadata") or {}),
-                llm_router=self.llm_router,
-                trust_client_model_info=False,
-            )
-        )
-        if _guardrail_entries(probe) != _guardrail_entries(data):
-            verbose_proxy_logger.info(
-                "Not steering %s to %s, the alternate adds model-level guardrails", model, alternate
-            )
-            return False
-        return True
-
-    async def _idle_permitted_alternate(
-        self, alternate: str, user_api_key_dict: UserAPIKeyAuth, threshold: float, preferred: ModelGroupInfo
-    ) -> "SteeredModel | None":
-        group_info: Final = self.llm_router.registry().group(alternate)
-        if group_info is None:
-            return None
-        grant: Final = await self._is_model_authorized(user_api_key_dict, alternate)
-        if grant is None or not _reservation_covers(user_api_key_dict, grant.access_groups, preferred, group_info):
-            return None
-        if await self._check_model_saturation(alternate, group_info) >= threshold:
-            return None
-        return SteeredModel(model=alternate, group_info=group_info, access_groups=grant.access_groups)
 
     @with_service_target(RATE_LIMITS_TARGET)
     async def async_post_call_success_hook(
@@ -1676,21 +1298,6 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         except Exception as e:
             verbose_proxy_logger.exception("Error in dynamic rate limiter v3 post-call hook: %s", e)
             return response
-
-    async def async_post_call_response_headers_hook(
-        self,
-        data: Mapping[str, object],
-        user_api_key_dict: UserAPIKeyAuth,
-        response: object,
-        request_headers: Mapping[str, str] | None = None,
-        litellm_call_info: Mapping[str, object] | None = None,
-    ) -> dict[str, str] | None:  # mutable-ok: the CustomLogger contract returns a dict
-        """Names the model the caller asked for when steering served another, on streamed and buffered replies."""
-        call_id: Final = data.get("litellm_call_id")
-        stash: Final = get_request_stash_for_call(call_id if isinstance(call_id, str) else None)
-        if stash is None or stash.steered_from_model is None or not _is_latin1_encodable(stash.steered_from_model):
-            return None
-        return {STEERED_FROM_HEADER: stash.steered_from_model}
 
     @with_service_target(RATE_LIMITS_TARGET)
     async def async_log_success_event(

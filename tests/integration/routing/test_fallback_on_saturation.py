@@ -13,9 +13,10 @@ from integration._support.wire import Reply, Request, wire_server
 
 OPENAI_MODEL: Final = "gpt-5.6"
 PREFERRED_RPM: Final = 2
-ALTERNATE_RPM: Final = 1000
+FALLBACK_RPM: Final = 1000
 SATURATION_THRESHOLD: Final = 0.5
-STEERED_FROM_HEADER: Final = "x-litellm-model-steered-from"
+FALLBACK_REASON_HEADER: Final = "x-litellm-fallback-reason"
+SATURATION_REASON: Final = "rate_limit:model_saturation_fallback"
 
 
 def _reply() -> bytes:
@@ -25,15 +26,15 @@ def _reply() -> bytes:
             "object": "chat.completion",
             "created": 1700000000,
             "model": OPENAI_MODEL,
-            "choices": [{"index": 0, "message": {"role": "assistant", "content": "steered"}, "finish_reason": "stop"}],
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "served"}, "finish_reason": "stop"}],
             "usage": {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30},
         }
     ).encode()
 
 
 @pytest.fixture(scope="module")
-def steering_proxy(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[Gateway, str]]:
-    directory: Final = tmp_path_factory.mktemp("model-preference-steering")
+def saturation_proxy(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[Gateway, str]]:
+    directory: Final = tmp_path_factory.mktemp("fallback-on-saturation")
     base: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     configuration: Final = {
         **base,
@@ -46,7 +47,7 @@ def steering_proxy(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[G
             },
         },
     }
-    path: Final = directory / "model_preference_steering.yaml"
+    path: Final = directory / "fallback_on_saturation.yaml"
     path.write_text(yaml.safe_dump(configuration))
 
     def respond(request: Request) -> Reply:
@@ -73,7 +74,7 @@ def _chat(owned: Gateway, key: str, model: str) -> httpx.Response:
     return owned.request(
         "POST",
         "/v1/chat/completions",
-        {"model": model, "messages": [{"role": "user", "content": f"model preference steering {uuid.uuid4().hex}"}]},
+        {"model": model, "messages": [{"role": "user", "content": f"fallback on saturation {uuid.uuid4().hex}"}]},
         key=key,
     )
 
@@ -84,61 +85,69 @@ def _spend_row(owned: Gateway, response: httpx.Response) -> list[dict[str, objec
     )
 
 
-def test_flexible_team_is_steered_to_its_permitted_alternate_once_the_preferred_model_saturates(
-    steering_proxy: tuple[Gateway, str],
+def test_a_team_with_fallback_on_saturation_is_served_by_its_fallback_once_the_model_saturates(
+    saturation_proxy: tuple[Gateway, str],
 ) -> None:
-    owned, upstream = steering_proxy
+    owned, upstream = saturation_proxy
     with owned.scenario() as scenario:
         preferred, preferred_id = _deployment(owned, scenario, upstream, PREFERRED_RPM)
-        alternate, alternate_id = _deployment(owned, scenario, upstream, ALTERNATE_RPM)
-        rigid_key: Final = scenario.key(team_id=scenario.team(models=[preferred, alternate]))
+        fallback, fallback_id = _deployment(owned, scenario, upstream, FALLBACK_RPM)
+        rigid_key: Final = scenario.key(team_id=scenario.team(models=[preferred, fallback]))
         flexible_key: Final = scenario.key(
             team_id=scenario.team(
-                models=[preferred, alternate],
-                metadata={"model_preferences": [{"model": preferred, "alternates": [alternate]}]},
+                models=[preferred, fallback],
+                router_settings={"fallbacks": [{preferred: [fallback]}], "fallback_on_saturation": True},
             )
         )
 
         warmup: Final = _chat(owned, rigid_key, preferred)
         assert warmup.status_code == 200, warmup.text
         assert warmup.headers["x-litellm-model-id"] == preferred_id
-        assert STEERED_FROM_HEADER not in warmup.headers
+        assert FALLBACK_REASON_HEADER not in warmup.headers
 
-        steered: Final = eventually(
+        fell_back: Final = eventually(
             lambda: _chat(owned, flexible_key, preferred),
-            lambda response: STEERED_FROM_HEADER in response.headers,
+            lambda response: response.headers.get(FALLBACK_REASON_HEADER) == SATURATION_REASON,
             seconds=15,
             return_last_on_timeout=True,
         )
-        assert steered.status_code == 200, steered.text
-        assert steered.headers[STEERED_FROM_HEADER] == preferred
-        assert steered.headers["x-litellm-model-id"] == alternate_id
+        assert fell_back.status_code == 200, fell_back.text
+        assert fell_back.headers[FALLBACK_REASON_HEADER] == SATURATION_REASON
+        assert fell_back.headers["x-litellm-attempted-fallbacks"] == "1"
+        assert fell_back.headers["x-litellm-model-id"] == fallback_id
 
         rigid: Final = _chat(owned, rigid_key, preferred)
         assert rigid.status_code == 200, rigid.text
         assert rigid.headers["x-litellm-model-id"] == preferred_id
-        assert STEERED_FROM_HEADER not in rigid.headers
+        assert FALLBACK_REASON_HEADER not in rigid.headers
 
-        charged: Final = eventually(lambda: _spend_row(owned, steered), lambda rows: len(rows) == 1, seconds=30)
-        assert charged[0]["model_group"] == alternate
+        charged: Final = eventually(lambda: _spend_row(owned, fell_back), lambda rows: len(rows) == 1, seconds=30)
+        assert charged[0]["model_group"] == fallback
 
 
-def test_alternate_the_team_may_not_call_is_never_used(steering_proxy: tuple[Gateway, str]) -> None:
-    owned, upstream = steering_proxy
+def test_a_fallback_the_team_may_not_call_is_never_used(saturation_proxy: tuple[Gateway, str]) -> None:
+    owned, upstream = saturation_proxy
     with owned.scenario() as scenario:
-        preferred, _ = _deployment(owned, scenario, upstream, PREFERRED_RPM)
-        forbidden, _ = _deployment(owned, scenario, upstream, ALTERNATE_RPM)
+        preferred, preferred_id = _deployment(owned, scenario, upstream, PREFERRED_RPM)
+        forbidden, _ = _deployment(owned, scenario, upstream, FALLBACK_RPM)
         key: Final = scenario.key(
             team_id=scenario.team(
                 models=[preferred],
-                metadata={"model_preferences": [{"model": preferred, "alternates": [forbidden]}]},
+                router_settings={"fallbacks": [{preferred: [forbidden]}], "fallback_on_saturation": True},
             )
         )
 
         first: Final = _chat(owned, key, preferred)
         assert first.status_code == 200, first.text
+        assert first.headers["x-litellm-model-id"] == preferred_id
         second: Final = eventually(
-            lambda: _chat(owned, key, preferred), lambda response: response.status_code != 200, seconds=15
+            lambda: _chat(owned, key, preferred),
+            lambda response: response.status_code != 200 or response.headers["x-litellm-model-id"] == preferred_id,
+            seconds=15,
+            return_last_on_timeout=True,
         )
-        assert second.status_code == 429, second.text
-        assert STEERED_FROM_HEADER not in second.headers
+        assert FALLBACK_REASON_HEADER not in second.headers
+        if second.status_code == 200:
+            assert second.headers["x-litellm-model-id"] == preferred_id
+        else:
+            assert second.status_code == 429, second.text

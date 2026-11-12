@@ -75,6 +75,57 @@ def per_model_rate_limits_disable_fallbacks(general_settings: Mapping[str, objec
         return False
 
 
+FALLBACK_ON_SATURATION_SETTING: Final = "fallback_on_saturation"
+SATURATION_FALLBACK_DESCRIPTOR_KEY: Final = "model_saturation_fallback"
+SATURATION_FALLBACKS_EXHAUSTED_METADATA_KEY: Final = "saturation_fallbacks_exhausted"
+_FALLBACK_ON_SATURATION_FLAG: Final[TypeAdapter[bool | None]] = TypeAdapter(bool | None)
+
+
+def fallback_on_saturation_enabled(router_settings: object) -> bool:
+    """Whether the key's or team's ``router_settings`` ask for fallbacks once the requested model reaches
+    ``saturation_threshold``, before the dynamic rate limiter admits or refuses the request on that model."""
+    if not isinstance(router_settings, Mapping):
+        return False
+    raw_value: Final = _metadata_bucket(router_settings).get(FALLBACK_ON_SATURATION_SETTING)
+    try:
+        return _FALLBACK_ON_SATURATION_FLAG.validate_python(raw_value) is True
+    except ValidationError:
+        verbose_proxy_logger.warning(
+            "router_settings.%s=%r is not a boolean, treating it as disabled", FALLBACK_ON_SATURATION_SETTING, raw_value
+        )
+        return False
+
+
+def saturation_fallbacks_exhausted(request_data: Mapping[str, object]) -> bool:
+    """Whether this request already tried every fallback at saturation and is back on the model it asked for."""
+    return any(
+        _metadata_bucket(request_data.get(bucket_name)).get(SATURATION_FALLBACKS_EXHAUSTED_METADATA_KEY) is True
+        for bucket_name in ("metadata", "litellm_metadata")
+    )
+
+
+def fallback_on_saturation_requested(request_data: Mapping[str, object]) -> bool:
+    """Whether the dynamic rate limiter should hand a saturated model's request to the fallback walk instead of
+    admitting or refusing it: the key or team opted in through ``router_settings_override`` and the walk has not
+    already run for this request."""
+    return fallback_on_saturation_enabled(
+        request_data.get("router_settings_override")
+    ) and not saturation_fallbacks_exhausted(request_data)
+
+
+def with_saturation_fallbacks_exhausted(request_data: Mapping[str, object], bucket_name: str) -> Mapping[str, object]:
+    bucket: Final = _metadata_bucket(request_data.get(bucket_name))
+    return MappingProxyType(
+        {**request_data, bucket_name: {**bucket, SATURATION_FALLBACKS_EXHAUSTED_METADATA_KEY: True}}
+    )
+
+
+def is_saturation_fallback(exc: "ProxyRateLimitError") -> bool:
+    """Whether ``exc`` is the limiter asking for the fallback walk rather than refusing the request. The model it
+    names still has room, so when no fallback admits the request it goes back to that model instead of a 429."""
+    return exc.descriptor_key == SATURATION_FALLBACK_DESCRIPTOR_KEY
+
+
 RATE_LIMIT_FALLBACK_METADATA_KEY: Final = "rate_limit_fallback"
 RATE_LIMIT_FALLBACK_REASON_HEADER: Final = "x-litellm-fallback-reason"
 ATTEMPTED_FALLBACKS_HEADER: Final = "x-litellm-attempted-fallbacks"
