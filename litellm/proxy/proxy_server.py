@@ -13472,11 +13472,14 @@ def _passthrough_block_response(e: ModifyResponseException) -> ModelResponse:
     )
 
 
-async def _record_passthrough_block(e: ModifyResponseException, user_api_key_dict: UserAPIKeyAuth) -> None:
+async def _record_passthrough_block(
+    e: ModifyResponseException, user_api_key_dict: UserAPIKeyAuth, *, reply_logs_success: bool = False
+) -> None:
     await proxy_logging_obj.post_call_failure_hook(
         user_api_key_dict=user_api_key_dict,
         original_exception=e,
         request_data=e.request_data,
+        reply_logs_success=reply_logs_success,
     )
 
 
@@ -13485,7 +13488,8 @@ async def _stream_chat_passthrough_block(
 ) -> StreamingResponse:
     # Read before post_call_failure_hook, which pops it from the request data.
     logging_obj: Final = e.request_data.get("litellm_logging_obj")
-    await _record_passthrough_block(e, user_api_key_dict)
+    # The stream wrapper below logs this reply as a success event once it has been sent.
+    await _record_passthrough_block(e, user_api_key_dict, reply_logs_success=True)
     streaming_response: Final = litellm.CustomStreamWrapper(
         completion_stream=litellm.utils.ModelResponseIterator(
             model_response=_passthrough_block_response(e), convert_to_delta=True

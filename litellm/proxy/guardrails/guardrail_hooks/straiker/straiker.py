@@ -1414,6 +1414,8 @@ class StraikerGuardrail(CustomGuardrail):
         # A route that cannot send a reply maps this exception to an HTTP error and reads the
         # status from it. Without one the block is reported as a 500.
         reply.status_code = 400  # pyright: ignore[reportAttributeAccessIssue]  # the class declares no status
+        # A blocked prompt answered as a reply reaches no logging callback unless it asks to.
+        reply.log_as_failure = True
         raise reply
 
     @staticmethod

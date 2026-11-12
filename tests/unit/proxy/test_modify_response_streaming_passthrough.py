@@ -148,6 +148,35 @@ class _BlockEveryRequestOnceReleased(CustomGuardrail):
         self.failures = (*self.failures, original_exception)
 
 
+class _BlockEveryRequestAskingToBeLogged(CustomGuardrail):
+    """Blocks the prompt with a reply and asks for the block to be logged. Records the logging events it is sent."""
+
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="deny-list", event_hook=GuardrailEventHooks.pre_call, default_on=True)
+        self.logged: tuple[str, ...] = ()
+
+    async def async_pre_call_hook(
+        self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict[str, object], call_type: str
+    ) -> None:
+        raise ModifyResponseException(
+            message=_BLOCK_TEXT,
+            model="gpt-4o",
+            request_data=data,
+            guardrail_name=self.guardrail_name,
+            log_as_failure=True,
+        )
+
+    async def async_log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.logged = (*self.logged, "failure")
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.logged = (*self.logged, "success")
+
+
 class _RejectEveryRequest(CustomLogger):
     async def async_pre_call_hook(
         self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict[str, object], call_type: str
@@ -189,6 +218,7 @@ async def _reply(
     rail: CustomLogger,
     released: asyncio.Event,
     keepalive_interval: float | None,
+    route: str | None = None,
 ) -> tuple[object, tuple[str, ...]]:
     endpoint: Final = chat_completion if path == "/v1/chat/completions" else completion
     with (
@@ -201,7 +231,9 @@ async def _reply(
         ),  # test-quality-ok: the operator's keepalive interval is read from this global
     ):
         response: Final = await endpoint(
-            request=_post(path, body), fastapi_response=Response(), user_api_key_dict=UserAPIKeyAuth()
+            request=_post(path, body),
+            fastapi_response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(request_route=route),
         )
         if not isinstance(response, StreamingResponse):
             return response, ()
@@ -284,6 +316,31 @@ async def test_a_blocked_text_completion_without_streaming_gets_the_block_text_a
     assert response.choices[0].text == _BLOCK_TEXT
     assert response.choices[0].finish_reason == "content_filter"
     assert [type(failure) for failure in blocker.failures] == [ModifyResponseException]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "body", "logged"),
+    [
+        ("/v1/chat/completions", {"model": "gpt-4o", "messages": [], "stream": False}, ("failure",)),
+        # A streamed chat reply goes out through a stream wrapper that logs it as a success event.
+        ("/v1/chat/completions", {"model": "gpt-4o", "messages": [], "stream": True}, ("success",)),
+        ("/v1/completions", {"model": "gpt-4o", "prompt": "hi", "stream": False}, ("failure",)),
+        ("/v1/completions", {"model": "gpt-4o", "prompt": "hi", "stream": True}, ("failure",)),
+    ],
+    ids=["chat", "chat-streamed", "text", "text-streamed"],
+)
+async def test_a_blocked_prompt_that_asks_to_be_logged_reaches_the_logging_callbacks_exactly_once(
+    path: str, body: Mapping[str, object], logged: tuple[str, ...]
+) -> None:
+    released: Final = asyncio.Event()
+    released.set()
+    blocker: Final = _BlockEveryRequestAskingToBeLogged()
+
+    await _reply(path, body, blocker, released, None, route=path)
+    await asyncio.sleep(0.2)  # the stream wrapper logs its success event in a task of its own
+
+    assert blocker.logged == logged
 
 
 @pytest.mark.asyncio

@@ -4368,6 +4368,7 @@ class ProxyLogging:
         route: str | None = None,
         traceback_str: str | None = None,
         dispatched_call_type: str | None = None,
+        reply_logs_success: bool = False,
     ) -> HTTPException | None:
         """
         Allows users to raise custom exceptions/log when a call fails, without having to deal with parsing Request body.
@@ -4385,6 +4386,7 @@ class ProxyLogging:
             - error_type: Optional[ProxyErrorTypes] - The error type.
             - route: Optional[str] - The route.
             - traceback_str: Optional[str] - The traceback string, sometimes upstream endpoints might need to send the upstream traceback. In which case we use this
+            - reply_logs_success: bool - True when the caller answers a guardrail's reply-style block through a stream that logs the reply as a success event, so the block is not also logged as a failure.
 
         Returns:
             - Optional[HTTPException]: If any callback returns or raises an HTTPException, the first one found is returned.
@@ -4425,7 +4427,7 @@ class ProxyLogging:
         ### LOGGING ###
         if isinstance(logging_obj, Logging) and logging_obj.prepared_cost is not None:
             await self._dispatch_proxy_only_failure_handlers(logging_obj, original_exception)
-        elif self._is_proxy_only_llm_api_error(
+        elif not reply_logs_success and self._is_proxy_only_llm_api_error(
             original_exception=original_exception,
             error_type=error_type,
             route=user_api_key_dict.request_route,
@@ -4521,6 +4523,7 @@ class ProxyLogging:
             - HTTP HTTPException (rate limit errors)
             - ProxyException (guardrail blocks, budget / rate-limit errors)
             - GuardrailRaisedException (guardrail blocks / guardrail failures)
+            - ModifyResponseException that asks for it (a guardrail block answered as a reply)
         """
 
         #########################################################
@@ -4538,7 +4541,11 @@ class ProxyLogging:
         if RouteChecks.is_dashboard_session_info_route(route, team_id):
             return False
 
-        return isinstance(original_exception, _PROXY_ONLY_LLM_API_ERRORS) or (error_type == ProxyErrorTypes.auth_error)
+        return (
+            isinstance(original_exception, _PROXY_ONLY_LLM_API_ERRORS)
+            or (error_type == ProxyErrorTypes.auth_error)
+            or (isinstance(original_exception, ModifyResponseException) and original_exception.log_as_failure)
+        )
 
     async def _handle_logging_proxy_only_error(
         self,

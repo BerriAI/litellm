@@ -1397,12 +1397,16 @@ class ModifyResponseException(Exception):
         guardrail_name: str | None = None,
         detection_info: Mapping[str, object] | None = None,
         original_response: object = None,
+        log_as_failure: bool = False,
     ):
         self.message = message
         self.model = model
         self.request_data = request_data
         self.guardrail_name = guardrail_name
         self.detection_info = detection_info or {}
+        # A block of the prompt never calls the LLM, and its 200 reply runs no success logging, so
+        # it reaches no logging callback. True asks the proxy to log it as a failure event instead.
+        self.log_as_failure = log_as_failure
         # The LLM response that was blocked (post-call). Carries the real token
         # usage the upstream call consumed, so the synthetic block response can
         # report it instead of discarding it. None for pre-call blocks (the LLM

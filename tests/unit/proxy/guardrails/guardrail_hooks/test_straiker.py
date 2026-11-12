@@ -1198,6 +1198,8 @@ async def test_v3_a_blocked_prompt_is_a_reply_on_the_routes_that_can_send_one(ca
         )
     assert blocked.value.message == V3_GATEWAY_BLOCK["straiker"]["block_message"]
     assert blocked.value.status_code == 400
+    # The model was never called and a reply logs nothing, so the block asks to be logged.
+    assert blocked.value.log_as_failure is True
 
 
 @pytest.mark.parametrize("call_type", [None, "aembedding", "agenerate_content", "acompletion"])
