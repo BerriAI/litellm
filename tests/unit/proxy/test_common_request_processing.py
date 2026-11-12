@@ -531,10 +531,6 @@ async def _send_s3_media(
     )
 
 
-class _StopAfterTheS3Check(Exception):
-    pass
-
-
 class TestProxyBaseLLMRequestProcessing:
     @pytest.mark.asyncio
     async def test_base_passthrough_process_llm_request_preserves_litellm_headers_for_non_streaming_response(
@@ -802,28 +798,31 @@ class TestProxyBaseLLMRequestProcessing:
         ("route_type", "refused"), [("call_mcp_tool", False), ("acompletion", True)], ids=["mcp-tool", "chat"]
     )
     async def test_s3_media_check_covers_model_requests_and_leaves_mcp_tool_arguments_alone(
-        self, monkeypatch, route_type: Literal["call_mcp_tool", "acompletion"], refused: bool
+        self, route_type: Literal["call_mcp_tool", "acompletion"], refused: bool
     ):
         tool_argument: Final = {"type": "image_url", "image_url": {"url": "s3://other-bucket/cat.png"}}
         processing_obj: Final = ProxyBaseLLMRequestProcessing(data={"name": "describe", "arguments": tool_argument})
         mock_request: Final = MagicMock(spec=Request)
         mock_request.headers = {}
-        reached_request_setup: Final = AsyncMock(side_effect=_StopAfterTheS3Check)
-        monkeypatch.setattr(
-            litellm.proxy.common_request_processing, "add_litellm_data_to_request", reached_request_setup
+
+        pre_call: Final = processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=ProxyUserAPIKeyAuth(
+                api_key="sk-test", user_id="user-a", user_role=LitellmUserRoles.INTERNAL_USER
+            ),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()),
+            proxy_config=MagicMock(spec=ProxyConfig),
+            route_type=route_type,
         )
 
-        with pytest.raises(HTTPException if refused else _StopAfterTheS3Check):
-            await processing_obj.common_processing_pre_call_logic(
-                request=mock_request,
-                general_settings={},
-                user_api_key_dict=ProxyUserAPIKeyAuth(
-                    api_key="sk-test", user_id="user-a", user_role=LitellmUserRoles.INTERNAL_USER
-                ),
-                proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()),
-                proxy_config=MagicMock(spec=ProxyConfig),
-                route_type=route_type,
-            )
+        if not refused:
+            await pre_call
+            return
+        with pytest.raises(HTTPException) as refusal:
+            await pre_call
+        assert refusal.value.status_code == 403
+        assert "s3://other-bucket/cat.png" in str(refusal.value.detail)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("requested_model", [{"bad": "value"}, ["gpt-5.2"], 1])
