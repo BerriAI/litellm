@@ -1,6 +1,7 @@
 import copy
 import enum
 import re
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final, cast
 
 import httpx
@@ -8,6 +9,9 @@ from httpx import Response
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.exceptions import UnsupportedParamsError
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     audio_or_image_in_message_content,
     convert_content_list_to_str,
@@ -19,10 +23,15 @@ from litellm.llms.azure_ai.common_utils import (
     is_foundry_model_inference_base,
 )
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
+from litellm.llms.fireworks_ai.common_utils import AZURE_FOUNDRY_FIREWORKS_MODEL_ID_PREFIX
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.llms.openai.common_utils import drop_params_from_unprocessable_entity_error
 from litellm.llms.openai.openai import OpenAIConfig
 from litellm.llms.xai.chat.transformation import XAIChatConfig
+from litellm.router_utils.reasoning_effort_capability import (
+    declared_reasoning_efforts,
+    nearest_declared_reasoning_effort,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
@@ -43,6 +52,53 @@ NON_OPENAI_SPEC_MESSAGE_FIELDS: Final = (
     "provider_specific_fields",
     "cache_control",
 )
+
+
+def _catalog_reasoning_efforts(model: str) -> tuple[str, ...] | None:
+    row: Final = GetModelCostMap.loaded_model_cost_map().get(f"azure_ai/{model}")
+    return declared_reasoning_efforts(row) if row is not None else None
+
+
+def _declares_reasoning_effort(model: str) -> bool:
+    return bool(_catalog_reasoning_efforts(model))
+
+
+def _reasoning_effort_level(
+    requested: object, model: str, declared: Sequence[str], drop_params: bool
+) -> Mapping[str, str]:
+    fields: Final = as_str_mapping(requested)
+    level: Final = fields.get("effort") if fields is not None else requested
+    if isinstance(level, str):
+        return {"reasoning_effort": nearest_declared_reasoning_effort(level, declared)}
+    if not drop_params and litellm.drop_params is not True:
+        raise UnsupportedParamsError(
+            message=f"azure_ai takes reasoning_effort only as a level such as 'high', got {requested!r}. To drop "
+            "unsupported openai params from the call, set `litellm.drop_params = True`",
+            llm_provider="azure_ai",
+            model=model,
+            status_code=400,
+        )
+    verbose_logger.warning(
+        "Dropping reasoning_effort=%r for model=%r (drop_params=True) because Azure AI Foundry takes only a level name.",
+        requested,
+        model,
+    )
+    return {}
+
+
+def _declared_reasoning_effort_param(
+    non_default_params: Mapping[str, object], model: str, drop_params: bool
+) -> Mapping[str, str]:
+    declared: Final = _catalog_reasoning_efforts(model)
+    if "reasoning_effort" not in non_default_params or not declared:
+        return {}
+    return _reasoning_effort_level(non_default_params["reasoning_effort"], model, declared, drop_params)
+
+
+def _message_fields_to_strip(model: str) -> tuple[str, ...]:
+    if not model.upper().startswith(AZURE_FOUNDRY_FIREWORKS_MODEL_ID_PREFIX):
+        return NON_OPENAI_SPEC_MESSAGE_FIELDS
+    return tuple(field for field in NON_OPENAI_SPEC_MESSAGE_FIELDS if field != "reasoning_content")
 
 
 class AzureAIGPT5Config(OpenAIGPT5Config):
@@ -67,7 +123,7 @@ azureAIGPT5Config: Final = AzureAIGPT5Config()
 
 
 class AzureAIStudioConfig(OpenAIConfig):
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         model_supports_tool_choice = True  # azure ai supports this by default
         if not supports_tool_choice(model=f"azure_ai/{model}"):
             model_supports_tool_choice = False
@@ -87,7 +143,12 @@ class AzureAIStudioConfig(OpenAIConfig):
         if not self._supports_stop_reason(model):
             supported_params = [param for param in supported_params if param != "stop"]
 
-        return supported_params
+        declared_extra: Final = (
+            ("reasoning_effort",)
+            if "reasoning_effort" not in supported_params and _declares_reasoning_effort(model)
+            else ()
+        )
+        return [*supported_params, *declared_extra]
 
     def map_openai_params(
         self,
@@ -99,7 +160,10 @@ class AzureAIStudioConfig(OpenAIConfig):
         if not azureAIGPT5Config.is_model_gpt_5_model(model):
             return super().map_openai_params(
                 non_default_params=non_default_params,
-                optional_params=optional_params,
+                optional_params={
+                    **optional_params,
+                    **_declared_reasoning_effort_param(non_default_params, model, drop_params),
+                },
                 model=model,
                 drop_params=drop_params,
             )
@@ -232,6 +296,8 @@ class AzureAIStudioConfig(OpenAIConfig):
                Azure AI Foundry backends set additionalProperties=false and reject
                these with "Extra inputs are not permitted", which breaks multi-turn
                Anthropic-format clients that echo thinking blocks back as history.
+               Fireworks-hosted FW- models accept reasoning_content and Kimi reads its
+               earlier reasoning back from it, so those models keep it.
             2. Transforms list content to a string.
             3. If message contains an image or audio, send as is (user-intended)
 
@@ -241,7 +307,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         stripped_messages: Final = copy.deepcopy(messages)
         for message in stripped_messages:
             message_dict = cast(dict, message)  # cast-ok: TypedDict is a runtime dict stripped on our copy
-            for field in NON_OPENAI_SPEC_MESSAGE_FIELDS:
+            for field in _message_fields_to_strip(model):
                 filter_value_from_dict(message_dict, field)
 
             # Do nothing if the message contains an image or audio
