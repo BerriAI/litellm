@@ -11,7 +11,7 @@ from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequenc
 from functools import partial
 from typing import Final, cast
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
@@ -27,6 +27,7 @@ from litellm.llms.base_llm.anthropic_messages.transformation import (
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
 from litellm.types.llms.anthropic import AllAnthropicToolsValues
 from litellm.types.llms.anthropic_messages.anthropic_request import AnthropicMetadata
 from litellm.types.llms.anthropic_messages.anthropic_response import (
@@ -55,6 +56,15 @@ __all__ = ("anthropic_messages", "anthropic_messages_handler")
 _RESPONSES_API_PROVIDERS: Final = frozenset({"openai"})
 _SAFEGUARD_KWARGS: Final = TypeAdapter(Mapping[str, object])
 _SAFEGUARD_MESSAGES: Final = TypeAdapter(Sequence[Mapping[str, object]])
+_DROP_PATHS: Final = TypeAdapter(list[object])
+
+
+def additional_drop_paths(kwargs: Mapping[str, object]) -> tuple[str, ...]:
+    try:
+        configured: Final = _DROP_PATHS.validate_python(kwargs.get("additional_drop_params"))
+    except ValidationError:
+        return ()
+    return tuple(path for path in configured if isinstance(path, str))
 
 
 def _bridges_to_responses_api(model: str, custom_llm_provider: str) -> bool:
@@ -569,38 +579,34 @@ def anthropic_messages_handler(
     # downstream path (native passthrough and both bridges) gets real tools rather than a
     # reference the provider cannot resolve. Popped from kwargs so it never reaches the provider.
     skip_mcp_handler: Final = kwargs.pop("_skip_mcp_handler", False)
-    if not skip_mcp_handler and tools:
+    if not skip_mcp_handler and tools and may_name_litellm_mcp_gateway(tools):  # pyright: ignore[reportUnknownArgumentType]  # untyped tools list
         from litellm.llms.anthropic.pass_through.messages.mcp_handler import (
             anthropic_messages_with_mcp,
         )
-        from litellm.responses.mcp.litellm_proxy_mcp_handler import (
-            LiteLLM_Proxy_MCP_Handler,
-        )
 
-        if LiteLLM_Proxy_MCP_Handler.should_use_litellm_mcp_gateway(tools=tools):
-            return anthropic_messages_with_mcp(
-                max_tokens=max_tokens,
-                messages=messages,
-                model=model,
-                metadata=metadata,
-                stop_sequences=stop_sequences,
-                stream=stream,
-                system=cast(  # cast-ok: anthropic accepts list system blocks; handler signature is narrower
-                    "str | None", system
-                ),
-                temperature=temperature,
-                thinking=thinking,
-                tool_choice=tool_choice,
-                tools=tools,
-                top_k=top_k,
-                top_p=top_p,
-                container=container,
-                api_key=api_key,
-                api_base=api_base,
-                client=client,
-                custom_llm_provider=custom_llm_provider,
-                **kwargs,
-            )
+        return anthropic_messages_with_mcp(
+            max_tokens=max_tokens,
+            messages=messages,
+            model=model,
+            metadata=metadata,
+            stop_sequences=stop_sequences,
+            stream=stream,
+            system=cast(  # cast-ok: anthropic accepts list system blocks; handler signature is narrower
+                "str | None", system
+            ),
+            temperature=temperature,
+            thinking=thinking,
+            tool_choice=tool_choice,
+            tools=tools,
+            top_k=top_k,
+            top_p=top_p,
+            container=container,
+            api_key=api_key,
+            api_base=api_base,
+            client=client,
+            custom_llm_provider=custom_llm_provider,
+            **kwargs,
+        )
 
     anthropic_messages_provider_config: Final = _native_messages_config(
         model, custom_llm_provider, kwargs.get("model_info")
@@ -682,6 +688,7 @@ def anthropic_messages_handler(
             model=model,
             drop_params=litellm_params.get("drop_params") is True,
             custom_llm_provider=custom_llm_provider,
+            additional_drop_params=additional_drop_paths(request_kwargs),
         )
     )
     resolved_api_base: Final = (
