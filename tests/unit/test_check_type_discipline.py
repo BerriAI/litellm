@@ -308,8 +308,39 @@ def test_rebind_ok_suppresses_a_repeated_unpack(tmp_path):
     assert "LIT010" not in _codes(tmp_path, src)
 
 
-def test_loop_body_assignment_is_exempt(tmp_path):
-    assert "LIT010" not in _codes(tmp_path, "for i in range(3):\n    x = i\n")
+@pytest.mark.parametrize("loop", ("for item in (1, 2):", "while True:", "async for item in source:"))
+@pytest.mark.parametrize("assignment", ("value = 1", "value: int = 1", "left, right = (1, 2)", "(value := 1)"))
+def test_first_loop_body_assignment_needs_no_final(tmp_path: Path, loop: str, assignment: str) -> None:
+    source: Final = f"async def f(source):\n    {loop}\n        {assignment}\n"
+    assert "LIT010" not in _codes(tmp_path, source)
+
+
+@pytest.mark.parametrize("loop", ("for item in (1, 2):", "while True:", "async for item in source:"))
+@pytest.mark.parametrize("assignment", ("value = 2", "value: int = 2", "value += 2", "(value := 2)"))
+def test_second_loop_body_assignment_is_rejected(tmp_path: Path, loop: str, assignment: str) -> None:
+    source: Final = f"async def f(source):\n    {loop}\n        value = 1\n        {assignment}\n"
+    assert _codes(tmp_path, source).count("LIT010") == 1
+
+
+@pytest.mark.parametrize("loop", ("for item in (1, 2):", "while True:", "async for item in source:"))
+def test_loop_repeated_unpack_flags_each_name(tmp_path: Path, loop: str) -> None:
+    source: Final = f"async def f(source):\n    {loop}\n        left, right = (1, 2)\n        left, right = (3, 4)\n"
+    assert _codes(tmp_path, source).count("LIT010") == 2
+
+
+@pytest.mark.parametrize("loop", ("for item in (1, 2):", "while True:", "async for item in source:"))
+def test_loop_assignment_cannot_rebind_an_outer_name(tmp_path: Path, loop: str) -> None:
+    source: Final = f"async def f(source):\n    value, = (1,)\n    {loop}\n        value = 2\n"
+    assert _codes(tmp_path, source).count("LIT010") == 1
+
+
+@pytest.mark.parametrize("loop", ("for item in (1, 2):", "while True:", "async for item in source:"))
+def test_loop_reassignment_accepts_explicit_exception(tmp_path: Path, loop: str) -> None:
+    source: Final = (
+        f"async def f(source):\n    {loop}\n        value = 1\n"
+        "        value = 2  # rebind-ok: update the running accumulator\n"
+    )
+    assert _codes(tmp_path, source) == []
 
 
 def test_non_assignment_binding_forms_are_exempt(tmp_path):
