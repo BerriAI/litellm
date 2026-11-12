@@ -549,7 +549,7 @@ async def test_completion_sagemaker(
 
     assert route.called
     assert response.choices[0].message.content == "SageMaker reply"
-    assert litellm.completion_cost(completion_response=response) == pytest.approx(rate)
+    assert litellm.completion_cost(completion_response=response, custom_cost_per_second=rate) == pytest.approx(rate)
 
 
 @pytest.mark.asyncio

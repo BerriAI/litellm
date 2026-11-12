@@ -19,6 +19,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+    RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.databricks.common_utils import DatabricksException
@@ -2591,6 +2592,50 @@ def test_databricks_claude_json_schema_preserves_refs_in_tool_parameters() -> No
     ]
 
 
+@pytest.mark.parametrize(
+    ("model", "thinking_params", "forced"),
+    (
+        ("databricks-claude-opus-5", {}, False),
+        ("databricks-claude-opus-4-8", {"thinking": {"type": "adaptive"}}, False),
+        ("databricks-claude-opus-5-5", {}, False),
+        ("databricks-claude-opus-4-8", {}, True),
+        ("databricks-claude-opus-5", {"thinking": {"type": "disabled"}}, True),
+    ),
+    ids=(
+        "opus-5-default-thinking",
+        "opus-4-8-adaptive",
+        "opus-5-5-without-forced-tools",
+        "opus-4-8-default-off",
+        "opus-5-thinking-disabled",
+    ),
+)
+def test_databricks_claude_json_tool_is_forced_only_when_the_model_will_not_think(
+    local_model_cost_map: None, model: str, thinking_params: dict[str, object], forced: bool
+) -> None:
+    optional_params: Final = litellm.utils.get_optional_params(
+        model=model,
+        custom_llm_provider="databricks",
+        response_format=copy.deepcopy(JSON_SCHEMA_RESPONSE_FORMAT),
+        **thinking_params,
+    )
+    request: Final[dict[str, object]] = TypeAdapter(dict[str, object]).validate_python(
+        DatabricksConfig().transform_request(  # pyright: ignore[reportUnknownMemberType]  # inherited hook is untyped
+            model=model,
+            messages=[{"role": "user", "content": "Name the capital of France."}],
+            optional_params=dict(optional_params),
+            litellm_params={},
+            headers={},
+        )
+    )
+
+    assert (
+        request.get("tool_choice") == {"type": "function", "function": {"name": "json_tool_call"}}
+    ) is forced
+    assert optional_params["tools"][0]["function"].get("description") == (
+        None if forced else RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION
+    )
+
+
 def test_databricks_pydantic_json_schema_preserves_nested_refs() -> None:
     class Person(BaseModel):
         model_config = ConfigDict(frozen=True)
@@ -3046,6 +3091,74 @@ def test_claude_json_schema_stream_split_across_json_tools_keeps_the_non_stream_
     assert [choice.finish_reason for choice in choices if choice.finish_reason] == [answer.finish_reason]
 
 
+_HOSTED_MCP_TOOL: Final = {
+    "type": "mcp",
+    "server_label": "deepwiki",
+    "server_url": "https://mcp.deepwiki.com/mcp",
+    "require_approval": "never",
+}
+_WEATHER_FUNCTION_TOOL: Final = {
+    "type": "function",
+    "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+}
+
+
+def test_databricks_claude_answers_400_for_a_hosted_mcp_tool_without_drop_params(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(litellm.utils.UnsupportedParamsError) as raised:
+        DatabricksConfig().map_openai_params(
+            non_default_params={"tools": [_WEATHER_FUNCTION_TOOL, _HOSTED_MCP_TOOL]},
+            optional_params={},
+            model="databricks-claude-opus-5-5",
+            drop_params=False,
+        )
+    assert raised.value.status_code == 400
+    assert "databricks-claude-opus-5-5 on databricks " in str(raised.value)
+    assert "`deepwiki`" in str(raised.value)
+
+
+def test_databricks_claude_drops_a_hosted_mcp_tool_under_drop_params_and_keeps_the_function_tool(monkeypatch, caplog):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with caplog.at_level("WARNING"):
+        mapped: Final = DatabricksConfig().map_openai_params(
+            non_default_params={"tools": [_HOSTED_MCP_TOOL, _WEATHER_FUNCTION_TOOL]},
+            optional_params={},
+            model="databricks-claude-opus-5-5",
+            drop_params=True,
+        )
+    assert [tool["function"]["name"] for tool in mapped["tools"]] == ["get_weather"]
+    assert any(
+        "`deepwiki`" in record.getMessage() and " on databricks (" in record.getMessage() for record in caplog.records
+    )
+
+
+def test_databricks_claude_sends_no_tools_when_drop_params_drops_every_hosted_mcp_tool(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    mapped: Final = DatabricksConfig().map_openai_params(
+        non_default_params={"tools": [_HOSTED_MCP_TOOL], "tool_choice": "required"},
+        optional_params={},
+        model="databricks-claude-opus-5-5",
+        drop_params=True,
+    )
+    assert "tools" not in mapped
+    assert "tool_choice" not in mapped
+
+
+def test_databricks_claude_still_sends_max_completion_tokens_as_max_tokens_when_dropping_a_hosted_mcp_tool(
+    monkeypatch,
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    mapped: Final = DatabricksConfig().map_openai_params(
+        non_default_params={"tools": [_HOSTED_MCP_TOOL, _WEATHER_FUNCTION_TOOL], "max_completion_tokens": 64},
+        optional_params={},
+        model="databricks-claude-opus-5-5",
+        drop_params=True,
+    )
+    assert mapped["max_tokens"] == 64
+    assert "max_completion_tokens" not in mapped
+    assert [tool["function"]["name"] for tool in mapped["tools"]] == ["get_weather"]
+
+
 @pytest.mark.parametrize(
     ("model", "base_model"),
     [("databricks-claude-haiku-5-5", None), ("support-bot-endpoint", "databricks/databricks-claude-haiku-5-5")],
@@ -3107,3 +3220,18 @@ def test_databricks_claude_cache_control_cap_keeps_room_for_a_top_level_cache_co
 
     assert "cache_control" not in json.dumps(body["messages"][0])
     assert json.dumps(body["messages"]).count('"cache_control"') == 3
+
+
+@pytest.mark.parametrize(
+    "model, expected",
+    [
+        ("databricks-claude-sonnet-5", {"type": "disabled"}),
+        ("databricks-claude-haiku-4-5", None),
+        ("databricks-claude-sonnet-5-5", None),
+    ],
+)
+def test_none_disables_only_optional_default_thinking(model: str, expected: dict[str, str] | None) -> None:
+    params: Final = _map_reasoning_effort(model, "none")
+    assert params.get("thinking") == expected
+    assert "output_config" not in params
+    assert "reasoning_effort" not in params

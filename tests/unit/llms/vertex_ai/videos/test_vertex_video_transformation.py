@@ -6,11 +6,12 @@ import base64
 import json
 from collections.abc import Mapping
 from pathlib import Path
-from typing import cast
+from typing import Final, cast
 from unittest.mock import Mock, patch
 
 import httpx
 import pytest
+from litellm.exceptions import UnsupportedParamsError
 
 import litellm
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
@@ -970,3 +971,17 @@ class TestImageAndParametersPassthrough:
         assert "parameters" not in data["parameters"]
 
         assert url.endswith(":predictLongRunning")
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_existing_scalar_parameters_remain_accepted(drop_params: bool) -> None:
+    params: Final = {"seed": 7, "duration": 6, "aspect_ratio": "9:16", "generate_audio": False}
+    assert VertexAIVideoConfig().map_openai_params(params, "veo-3.1-generate-001", drop_params) == {}
+
+
+@pytest.mark.parametrize("field", ["frame_images", "input_references"])
+def test_first_class_video_fields_are_rejected_or_dropped(field: str) -> None:
+    config: Final = VertexAIVideoConfig()
+    with pytest.raises(UnsupportedParamsError, match=field):
+        config.map_openai_params({field: 1}, "video-model", False)
+    assert config.map_openai_params({field: 1}, "video-model", True) == config.map_openai_params({}, "video-model", True)

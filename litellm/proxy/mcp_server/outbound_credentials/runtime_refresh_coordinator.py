@@ -28,7 +28,7 @@ from litellm.proxy.mcp_server.outbound_credentials.redis_refresh_coordinator imp
 def runtime_refresh_coordinator() -> RefreshCoordinator | None:
     from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415  # runtime global
 
-    redis_cache: Final = user_api_key_cache.redis_cache
+    redis_cache: Final = user_api_key_cache.redis_connection
     if redis_cache is None:
         return None
     # The Redis client from init_async_client() is only partially typed; the lock validates every

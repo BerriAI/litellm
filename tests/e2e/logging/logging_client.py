@@ -18,10 +18,11 @@ import json
 import os
 import time
 from dataclasses import dataclass
-from typing import Callable, Literal
+from datetime import datetime, timedelta, timezone
+from typing import Callable, Final, Literal
 
 import pytest
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError, field_validator
 
 from e2e_config import POLL_INTERVAL, POLL_TIMEOUT, settle_propagation
 from e2e_metadata import step
@@ -124,21 +125,37 @@ class CreateGuardrailResponse(BaseModel):
     guardrail_name: str | None = None
 
 
+_LANGFUSE_JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+
+
 class LangfuseObservation(BaseModel):
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    model_config = ConfigDict(extra="ignore", populate_by_name=True, frozen=True)
 
     id: str
     trace_id: str | None = Field(default=None, alias="traceId")
     name: str | None = None
     type: str | None = None
-    calculated_total_cost: float | None = Field(default=None, alias="calculatedTotalCost")
+    calculated_total_cost: float | None = Field(
+        default=None, validation_alias=AliasChoices("totalCost", "calculatedTotalCost")
+    )
     level: str | None = None
-    input: object | None = None
-    output: object | None = None
-    metadata: object | None = None
+    input: JsonValue = None
+    output: JsonValue = None
+    metadata: JsonValue = None
     usage: object | None = None
     usage_details: object | None = Field(default=None, alias="usageDetails")
     model: str | None = None
+
+
+    @field_validator("input", "output", "metadata", mode="before")
+    @classmethod
+    def decode_json_fields(cls, value: object) -> JsonValue:
+        if not isinstance(value, str):
+            return _LANGFUSE_JSON.validate_python(value)
+        try:
+            return _LANGFUSE_JSON.validate_json(value)
+        except ValidationError:
+            return value
 
 
 class LangfuseObservationList(BaseModel):
@@ -171,12 +188,15 @@ def is_otel_v2_generation(obs: LangfuseObservation, *, key_alias: str) -> bool:
 
 
 class LangfuseListParams(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(populate_by_name=True, frozen=True)
 
     limit: int = 100
     trace_id: str | None = Field(default=None, alias="traceId")
     name: str | None = None
-    from_start_time: str | None = Field(default=None, alias="fromStartTime")
+    from_start_time: str = Field(alias="fromStartTime")
+    to_start_time: str = Field(alias="toStartTime")
+    fields: str = "core,basic,io,metadata,model,usage"
+    expand_metadata: str = Field(default="attributes", alias="expandMetadata")
 
 
 @dataclass(frozen=True, slots=True)
@@ -580,14 +600,16 @@ class LoggingClient:
         name: str | None = None,
         from_start_time: str | None = None,
     ) -> list[LangfuseObservation]:
-        result = get(
-            URL(f"{creds.host}/api/public/observations"),
+        now: Final = datetime.now(timezone.utc)
+        result: Final = get(
+            URL(f"{creds.host}/api/public/v2/observations"),
             headers=creds.auth_headers,
             params=LangfuseListParams(
                 limit=100,
                 traceId=trace_id,
                 name=name,
-                fromStartTime=from_start_time,
+                fromStartTime=from_start_time or (now - timedelta(minutes=15)).isoformat(),
+                toStartTime=now.isoformat(),
             ),
             response_type=LangfuseObservationList,
             timeout=30.0,

@@ -55,7 +55,7 @@ _ENTITY_INPUT_KEYS: Final[Mapping[DailySpendEntity, str]] = MappingProxyType(
         "tag": "request_tags",
     }
 )
-_TAGS: Final = TypeAdapter(tuple[str, ...])
+_TAGS: Final = TypeAdapter(tuple[object, ...])
 
 
 def daily_spend_entity_ids(payload: Mapping[str, object], entity: DailySpendEntity) -> tuple[str | None, ...]:
@@ -67,7 +67,7 @@ def daily_spend_entity_ids(payload: Mapping[str, object], entity: DailySpendEnti
         if value is None:
             return ()
         tags: Final = _TAGS.validate_json(value) if isinstance(value, str) else _TAGS.validate_python(value)
-        return tuple(dict.fromkeys(tags))
+        return tuple(dict.fromkeys(tag for tag in tags if isinstance(tag, str)))
     if value is None:
         return (None,) if entity == "user" else ()
     if not isinstance(value, str) or (entity == "end_user" and not value):
@@ -98,6 +98,7 @@ _SPEND_COLUMNS: Final = (
     "prompt_caching_savings_spend",
     "gateway_injected_caching_savings_spend",
     "autorouter_savings_spend",
+    "guardrail_spend",
 )
 
 _CASTS: Final[Mapping[str, str]] = MappingProxyType(

@@ -65,7 +65,7 @@ from litellm.constants import (
     MICROSOFT_USER_ID_ATTRIBUTE,
     MICROSOFT_USER_LAST_NAME_ATTRIBUTE,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -78,7 +78,6 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     Member,
     NewTeamRequest,
-    NewUserRequest,
     NewUserRequestTeam,
     NewUserResponse,
     ProxyErrorTypes,
@@ -164,6 +163,7 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     MicrosoftGraphAPIUserGroupResponse,
     MicrosoftServicePrincipalTeam,
     RoleMappings,
+    SSONewUserRequest,
     TeamMappings,
 )
 from litellm.types.proxy.ui_sso import ParsedOpenIDResult
@@ -2915,7 +2915,7 @@ async def insert_sso_user(
     if user_defined_values["user_role"] is None:
         user_defined_values["user_role"] = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
 
-    new_user_request: Final = NewUserRequest(
+    new_user_request: Final = SSONewUserRequest(
         user_id=user_defined_values["user_id"],
         user_email=normalize_email(user_defined_values["user_email"]),
         user_alias=_get_sso_user_alias(result_openid),
@@ -2924,10 +2924,8 @@ async def insert_sso_user(
         budget_duration=user_defined_values["budget_duration"],
         sso_user_id=user_defined_values["user_id"],
         auto_create_key=False,
+        metadata={"auth_provider": getattr(result_openid, "provider")} if hasattr(result_openid, "provider") else {},
     )
-
-    if result_openid and hasattr(result_openid, "provider"):
-        new_user_request.metadata = {"auth_provider": getattr(result_openid, "provider")}
 
     from litellm.proxy.proxy_server import premium_user
 
@@ -3178,7 +3176,7 @@ def set_session_token_cookie(response: Response, request: Request, jwt_token: st
 
     Not HttpOnly: the dashboard reads this cookie via ``document.cookie`` to
     populate its own Authorization headers (see
-    ``ui/litellm-dashboard/src/utils/cookieUtils.ts``), so marking it
+    ``litellm/ui/litellm-dashboard/src/utils/cookieUtils.ts``), so marking it
     HttpOnly would break login. Secure is still required whenever the public
     origin is HTTPS, resolved the same trust-aware way as every other
     litellm cookie."""
@@ -3332,7 +3330,6 @@ class SSOAuthenticationHandler:
         Returns:
             RedirectResponse: The redirect response from the SSO provider.
         """
-        asks_for_refresh_token: Final = await login_asks_for_refresh_token(retention_enabled)
         # Google SSO Auth
         if google_client_id is not None:
             google_client_secret: Final = os.getenv("GOOGLE_CLIENT_SECRET", None)
@@ -3353,11 +3350,11 @@ class SSOAuthenticationHandler:
                 redirect_url,
                 google_client_id,
             )
+            google_params: Final = (
+                dict(GOOGLE_REFRESH_TOKEN_PARAMS) if await login_asks_for_refresh_token(retention_enabled) else None
+            )
             with google_sso:
-                return await google_sso.get_login_redirect(
-                    state=state,
-                    params=dict(GOOGLE_REFRESH_TOKEN_PARAMS) if asks_for_refresh_token else None,
-                )
+                return await google_sso.get_login_redirect(state=state, params=google_params)
         # Microsoft SSO Auth
         elif microsoft_client_id is not None:
             microsoft_client_secret: Final = os.getenv("MICROSOFT_CLIENT_SECRET", None)
@@ -3375,7 +3372,11 @@ class SSOAuthenticationHandler:
                 tenant=microsoft_tenant,
                 redirect_uri=redirect_url,
                 allow_insecure_http=True,
-                scope=[*CustomMicrosoftSSO.scope, MICROSOFT_REFRESH_TOKEN_SCOPE] if asks_for_refresh_token else None,
+                scope=(
+                    [*CustomMicrosoftSSO.scope, MICROSOFT_REFRESH_TOKEN_SCOPE]
+                    if await login_asks_for_refresh_token(retention_enabled)
+                    else None
+                ),
             )
             with microsoft_sso:
                 return await microsoft_sso.get_login_redirect(state=state)
@@ -4858,7 +4859,7 @@ class MicrosoftSSOHandler:
 
             # Decode the JWT without signature verification
             # (signature is already verified by fastapi_sso)
-            decoded_token: Final = jwt.decode(id_token, options={"verify_signature": False})
+            decoded_token: Final = decoded_json_object(jwt.decode(id_token, options={"verify_signature": False}))
 
             # Extract app_roles claim from the token
             ## check for both 'roles' and 'app_roles' claims
