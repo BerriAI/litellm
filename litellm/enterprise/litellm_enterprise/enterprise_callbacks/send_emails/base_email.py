@@ -6,6 +6,7 @@ Base class for sending emails to user after creating keys or invite links
 import html
 import json
 import os
+from datetime import datetime, timezone
 from typing import Final, List, Literal, Optional
 
 from litellm_enterprise.types.enterprise_callbacks.send_emails import (
@@ -76,6 +77,7 @@ class BaseEmailLogger(CustomLogger):
         EmailEvent.new_user_invitation: "LiteLLM: {event_message}",
         EmailEvent.virtual_key_created: "LiteLLM: {event_message}",
         EmailEvent.virtual_key_rotated: "LiteLLM: {event_message}",
+        EmailEvent.virtual_key_expiring: "LiteLLM: Virtual Key Expiring",
     }
 
     def __init__(
@@ -172,6 +174,35 @@ class BaseEmailLogger(CustomLogger):
             html_body=email_html_content,
         )
         pass
+
+    async def send_key_expiring_email(
+        self,
+        *,
+        user_id: str,
+        user_email: str,
+        key_display: str,
+        expires: datetime,
+        days_remaining: int,
+    ) -> None:
+        email_params: Final = await self._get_email_params(
+            user_id=user_id,
+            user_email=user_email,
+            email_event=EmailEvent.virtual_key_expiring,
+            event_message="Virtual Key Expiring",
+        )
+        expiry_display: Final = expires.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        body: Final = (
+            f"<p>Your virtual key <strong>{html.escape(key_display)}</strong> expires at {expiry_display} "
+            f"({days_remaining} days remaining).</p>"
+            f'<p><a href="{html.escape(email_params.base_url, quote=True)}">Regenerate your key in the dashboard</a></p>'
+            f"{email_params.signature}"
+        )
+        await self.send_email(
+            from_email=self.DEFAULT_LITELLM_EMAIL,
+            to_email=[email_params.recipient_email],
+            subject=email_params.subject,
+            html_body=body,
+        )
 
     async def send_key_rotated_email(
         self, send_key_rotated_email_event: SendKeyRotatedEmailEvent
@@ -785,7 +816,7 @@ class BaseEmailLogger(CustomLogger):
                 "key rotated subject template",
             )
         else:
-            subject_template = "LiteLLM: {event_message}"
+            subject_template = self.DEFAULT_SUBJECT_TEMPLATES.get(email_event, "LiteLLM: {event_message}")
 
         subject = (
             subject_template.format(event_message=event_message)

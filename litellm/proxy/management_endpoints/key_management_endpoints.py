@@ -82,6 +82,7 @@ from litellm.proxy.common_utils.config_sync_pubsub import (
     coordination_redis_cache,
     publish_config_change,
 )
+from litellm.proxy.common_utils.key_expiry_alerts import key_expiry_alert_metadata_error
 from litellm.proxy.common_utils.openai_error_payload import openai_error_param, proxy_exception_for
 from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_keys
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time, keeps_due_budget_reset
@@ -951,6 +952,9 @@ def raise_on_invalid_key_logging_config(metadata: Mapping[str, object] | None) -
     error: Final = logging_metadata_config_error(metadata)
     if error is not None:
         raise HTTPException(status_code=400, detail={"error": error})
+    expiry_error: Final = key_expiry_alert_metadata_error(metadata)
+    if expiry_error is not None:
+        raise HTTPException(status_code=400, detail={"error": expiry_error})
 
 
 def raise_on_logging_credential_change(

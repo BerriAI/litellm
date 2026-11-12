@@ -39,6 +39,7 @@ class EmailEvent(str, enum.Enum):
     virtual_key_created = "Virtual Key Created"
     new_user_invitation = "New User Invitation"
     virtual_key_rotated = "Virtual Key Rotated"
+    virtual_key_expiring = "Virtual Key Expiring"
     soft_budget_crossed = "Soft Budget Crossed"
     max_budget_alert = "Max Budget Alert"
 
@@ -66,6 +67,7 @@ class DefaultEmailSettings(LiteLLMBaseModel):
             EmailEvent.virtual_key_created: True,  # On by default
             EmailEvent.new_user_invitation: True,  # On by default
             EmailEvent.virtual_key_rotated: True,  # On by default
+            EmailEvent.virtual_key_expiring: True,
             EmailEvent.soft_budget_crossed: True,  # On by default
             EmailEvent.max_budget_alert: True,  # On by default
         }

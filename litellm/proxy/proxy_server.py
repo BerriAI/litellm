@@ -387,6 +387,7 @@ from litellm.litellm_core_utils.audio_utils.transcription_streaming import (
 )
 from litellm.litellm_core_utils.audio_utils.utils import resolve_speech_media_type
 from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
     as_str_mapping,
     drop_params_flag,
     get_litellm_metadata_from_kwargs,
@@ -12229,6 +12230,39 @@ class ProxyStartupEvent:
                 verbose_proxy_logger.warning("Failed to setup key rotation job: %s", e)
         else:
             verbose_proxy_logger.debug("Key rotation disabled (set LITELLM_KEY_ROTATION_ENABLED=true to enable)")
+
+        if premium_user is True and prisma_client is not None:
+            if TYPE_CHECKING:
+                from litellm.enterprise.litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
+                    BaseEmailLogger,
+                )
+            else:
+                from litellm_enterprise.enterprise_callbacks.send_emails.base_email import BaseEmailLogger
+
+            from litellm.constants import LITELLM_KEY_EXPIRY_ALERT_CHECK_INTERVAL_SECONDS
+            from litellm.proxy.common_utils.key_expiry_alert_manager import KeyExpiryAlertManager
+
+            expiry_email_loggers: Final = litellm.logging_callback_manager.get_custom_loggers_for_type(
+                callback_type=BaseEmailLogger
+            )
+            expiry_alerting_config: Final = _GENERAL_SETTINGS_VIEW.validate_python(general_settings).get("alerting")
+            if expiry_email_loggers or "email" in (as_object_list(expiry_alerting_config) or ()):
+                expiry_email_logger: Final = next(
+                    (logger for logger in expiry_email_loggers if isinstance(logger, BaseEmailLogger)),
+                    proxy_logging_obj.email_logging_instance,
+                )
+                if isinstance(expiry_email_logger, BaseEmailLogger):
+                    expiry_alert_manager: Final = KeyExpiryAlertManager(
+                        prisma_client=prisma_client,
+                        cache=proxy_logging_obj.internal_usage_cache.dual_cache,
+                        email_logger=expiry_email_logger,
+                    )
+                    scheduler.add_job(  # pyright: ignore[reportUnknownMemberType]  # APScheduler stubs are incomplete
+                        expiry_alert_manager.process_alerts,
+                        "interval",
+                        seconds=LITELLM_KEY_EXPIRY_ALERT_CHECK_INTERVAL_SECONDS,
+                        id="key_expiry_alert_job",
+                    )
 
         await cls._initialize_expired_ui_session_key_cleanup_background_job(scheduler=scheduler)
 
