@@ -9584,6 +9584,138 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/customer_members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Customer Members
+         * @description Create a customer member and its resolved budget. Proxy admins only.
+         */
+        post: operations["post_customer_members_management_v1_customer_members_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/customer_members/{customer_member_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Customer Members
+         * @description Get a customer member and its resolved budget. Proxy admins only.
+         */
+        get: operations["get_customer_members_management_v1_customer_members__customer_member_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Patch Customer Members
+         * @description Update a customer member and its resolved budget. Proxy admins only.
+         */
+        patch: operations["patch_customer_members_management_v1_customer_members__customer_member_id__patch"];
+        trace?: never;
+    };
+    "/management/v1/customer_organizations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Customer Organizations
+         * @description Create a customer organization and its resolved budget. Proxy admins only.
+         */
+        post: operations["post_customer_organizations_management_v1_customer_organizations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/customer_organizations/{customer_org_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Customer Organizations
+         * @description Get a customer organization and its resolved budget. Proxy admins only.
+         */
+        get: operations["get_customer_organizations_management_v1_customer_organizations__customer_org_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Patch Customer Organizations
+         * @description Update a customer organization and its resolved budget. Proxy admins only.
+         */
+        patch: operations["patch_customer_organizations_management_v1_customer_organizations__customer_org_id__patch"];
+        trace?: never;
+    };
+    "/management/v1/customer_teams": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Customer Teams
+         * @description Create a customer team and its resolved budget. Proxy admins only.
+         */
+        post: operations["post_customer_teams_management_v1_customer_teams_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/customer_teams/{customer_team_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Customer Teams
+         * @description Get a customer team and its resolved budget. Proxy admins only.
+         */
+        get: operations["get_customer_teams_management_v1_customer_teams__customer_team_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Patch Customer Teams
+         * @description Update a customer team and its resolved budget. Proxy admins only.
+         */
+        patch: operations["patch_customer_teams_management_v1_customer_teams__customer_team_id__patch"];
+        trace?: never;
+    };
     "/management/v1/spend_logs/end_users": {
         parameters: {
             query?: never;
@@ -29149,6 +29281,19 @@ export interface components {
                 [key: string]: components["schemas"]["MetricWithMetadata"];
             } | null;
         };
+        /** Budget */
+        Budget: {
+            /** Allowed Models */
+            allowed_models?: string[] | null;
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
+        };
         /** BudgetConfig */
         BudgetConfig: {
             /** Budget Duration */
@@ -29286,6 +29431,24 @@ export interface components {
         BudgetRequest: {
             /** Budgets */
             budgets: string[];
+        };
+        /** BudgetTemplate */
+        BudgetTemplate: {
+            /** Allowed Models */
+            allowed_models?: string[] | null;
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /**
+             * Is Default
+             * @default false
+             */
+            is_default: boolean;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
         };
         /**
          * BulkDeleteUserRequest
@@ -32801,6 +32964,32 @@ export interface components {
              * @constant
              */
             type: "custom";
+        };
+        /** CustomerMember */
+        CustomerMember: {
+            /** Alias */
+            alias?: string | null;
+            budget?: components["schemas"]["Budget"] | null;
+            /** Budget Id */
+            budget_id?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /** Customer Member Id */
+            customer_member_id: string;
+            /** Parent Team Id */
+            parent_team_id: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Updated By */
+            updated_by: string;
         };
         /**
          * CustomerResponse
@@ -40014,6 +40203,18 @@ export interface components {
              */
             user_id?: string | null;
         };
+        /** MemberCreate */
+        MemberCreate: {
+            /** Alias */
+            alias?: string | null;
+            budget?: components["schemas"]["Budget"] | null;
+            /** Budget Template Id */
+            budget_template_id?: string | null;
+            /** Customer Member Id */
+            customer_member_id?: string | null;
+            /** Parent Team Id */
+            parent_team_id: string;
+        };
         /** MemoryCreateRequest */
         MemoryCreateRequest: {
             /**
@@ -41876,6 +42077,34 @@ export interface components {
              */
             user_id?: string | null;
         };
+        /** Organization */
+        Organization: {
+            /** Alias */
+            alias?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /** Customer Org Id */
+            customer_org_id: string;
+            /** Default Budget Id */
+            default_budget_id?: string | null;
+            /**
+             * Default Budgets
+             * @default []
+             */
+            default_budgets: components["schemas"]["OrganizationBudget"][];
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Updated By */
+            updated_by: string;
+        };
         /** OrganizationAddMemberResponse */
         OrganizationAddMemberResponse: {
             /** Organization Id */
@@ -41884,6 +42113,35 @@ export interface components {
             updated_organization_memberships: components["schemas"]["LiteLLM_OrganizationMembershipTable"][];
             /** Updated Users */
             updated_users: components["schemas"]["LiteLLM_UserTable"][];
+        };
+        /** OrganizationBudget */
+        OrganizationBudget: {
+            /** Allowed Models */
+            allowed_models?: string[] | null;
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Budget Id */
+            budget_id: string;
+            /**
+             * Is Default
+             * @default false
+             */
+            is_default: boolean;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
+        };
+        /** OrganizationCreate */
+        OrganizationCreate: {
+            /** Alias */
+            alias?: string | null;
+            /** Customer Org Id */
+            customer_org_id?: string | null;
+            /** Default Budgets */
+            default_budgets?: components["schemas"]["BudgetTemplate"][] | null;
         };
         /** OrganizationMemberAddRequest */
         OrganizationMemberAddRequest: {
@@ -41914,6 +42172,13 @@ export interface components {
             user_email?: string | null;
             /** User Id */
             user_id?: string | null;
+        };
+        /** OrganizationPatch */
+        OrganizationPatch: {
+            /** Alias */
+            alias?: string | null;
+            /** Default Budgets */
+            default_budgets?: components["schemas"]["BudgetTemplate"][] | null;
         };
         /** OrganizationRequest */
         OrganizationRequest: {
@@ -48722,6 +48987,32 @@ export interface components {
             /** Tpm Limit */
             tpm_limit?: number | null;
         };
+        /** Team */
+        Team: {
+            /** Alias */
+            alias?: string | null;
+            budget?: components["schemas"]["Budget"] | null;
+            /** Budget Id */
+            budget_id?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /** Customer Team Id */
+            customer_team_id: string;
+            /** Parent Org Id */
+            parent_org_id: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Updated By */
+            updated_by: string;
+        };
         /** TeamAddMemberResponse */
         TeamAddMemberResponse: {
             /** Access Group Ids */
@@ -48844,6 +49135,16 @@ export interface components {
             success_callbacks: string[];
             /** Team Id */
             team_id: string;
+        };
+        /** TeamCreate */
+        TeamCreate: {
+            /** Alias */
+            alias?: string | null;
+            budget?: components["schemas"]["Budget"] | null;
+            /** Customer Team Id */
+            customer_team_id?: string | null;
+            /** Parent Org Id */
+            parent_org_id: string;
         };
         /**
          * TeamListCallerMembership
@@ -49323,6 +49624,12 @@ export interface components {
             models: string[];
             /** Team Id */
             team_id: string;
+        };
+        /** TeamPatch */
+        TeamPatch: {
+            /** Alias */
+            alias?: string | null;
+            budget?: components["schemas"]["Budget"] | null;
         };
         /** TeamUserSpendResponse */
         TeamUserSpendResponse: {
@@ -67520,6 +67827,303 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ListResponse_BudgetListItem_"];
+                };
+            };
+        };
+    };
+    post_customer_members_management_v1_customer_members_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MemberCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomerMember"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_customer_members_management_v1_customer_members__customer_member_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                customer_member_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomerMember"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_customer_members_management_v1_customer_members__customer_member_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                customer_member_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TeamPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomerMember"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_customer_organizations_management_v1_customer_organizations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrganizationCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Organization"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_customer_organizations_management_v1_customer_organizations__customer_org_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                customer_org_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Organization"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_customer_organizations_management_v1_customer_organizations__customer_org_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                customer_org_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrganizationPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Organization"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_customer_teams_management_v1_customer_teams_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TeamCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Team"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_customer_teams_management_v1_customer_teams__customer_team_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                customer_team_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Team"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_customer_teams_management_v1_customer_teams__customer_team_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                customer_team_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TeamPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Team"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
