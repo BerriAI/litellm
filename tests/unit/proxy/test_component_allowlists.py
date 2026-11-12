@@ -255,7 +255,7 @@ def test_retired_otlp_routes_reject_uploads_without_dependencies_on_each_compone
     assert response.json() == {"message": "Send traces and logs directly to the Lens endpoint shown in Lens setup."}
 
 
-def test_gateway_plus_backend_covers_full_app():
+def test_gateway_plus_backend_covers_full_app(no_subprocess_coverage: None):
     """Every route on the proxy app must be served by gateway or backend.
 
     ``gateway.main`` and ``backend.main`` trim the route table once, inside the

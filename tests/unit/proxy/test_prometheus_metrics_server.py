@@ -151,7 +151,9 @@ def test_main_rejects_missing_multiproc_dir(monkeypatch: pytest.MonkeyPatch):
     run.assert_not_called()
 
 
-def test_start_metrics_server_process_returns_only_once_child_serves(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_start_metrics_server_process_returns_only_once_child_serves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_subprocess_coverage: None
+):
     monkeypatch.setenv("PROMETHEUS_MULTIPROC_DIR", str(tmp_path))
     _write_worker_sample(pid=3001, value=4)
     port: Final = _free_port()
@@ -170,7 +172,7 @@ def test_start_metrics_server_process_returns_only_once_child_serves(tmp_path: P
         process.wait(timeout=10)
 
 
-def test_start_metrics_server_process_fails_when_port_is_taken(tmp_path: Path):
+def test_start_metrics_server_process_fails_when_port_is_taken(tmp_path: Path, no_subprocess_coverage: None):
     with socket.socket() as occupied:
         occupied.bind(("127.0.0.1", 0))
         occupied.listen()
@@ -198,7 +200,9 @@ class _ImpostorMetrics(BaseHTTPRequestHandler):
         return
 
 
-def test_start_metrics_server_process_rejects_metrics_from_another_service_on_the_port(tmp_path: Path):
+def test_start_metrics_server_process_rejects_metrics_from_another_service_on_the_port(
+    tmp_path: Path, no_subprocess_coverage: None
+):
     with ThreadingHTTPServer(("127.0.0.1", 0), _ImpostorMetrics) as impostor:
         threading.Thread(target=impostor.serve_forever, daemon=True).start()
         port: Final = impostor.server_address[1]
@@ -214,7 +218,9 @@ def test_start_metrics_server_process_rejects_metrics_from_another_service_on_th
         impostor.shutdown()
 
 
-def test_metrics_server_process_serves_and_exits_with_parent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_metrics_server_process_serves_and_exits_with_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_subprocess_coverage: None
+):
     monkeypatch.setenv("PROMETHEUS_MULTIPROC_DIR", str(tmp_path))
     _write_worker_sample(pid=2001, value=7)
     port: Final = _free_port()

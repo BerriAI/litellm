@@ -53,6 +53,14 @@ def disconnected_prisma() -> DisconnectedPrisma:
     return DisconnectedPrisma()
 
 
+@pytest.fixture
+def no_subprocess_coverage(monkeypatch: pytest.MonkeyPatch) -> None:
+    """pytest-cov traces every child interpreter that inherits COV_CORE_*, which makes a child that
+    imports the proxy several times slower and pushes it past its timeout on a busy CI runner."""
+    for key in tuple(key for key in os.environ if key.startswith("COV_CORE_")):
+        monkeypatch.delenv(key)
+
+
 # Top-level assignments of these types are the ones importlib.reload(litellm)
 # would have effectively reset. We snapshot them at conftest import time and
 # deep-copy the snapshot back before every test.
