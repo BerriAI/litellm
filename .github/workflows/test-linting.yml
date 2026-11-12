@@ -145,7 +145,7 @@ jobs:
       - name: Run Ruff linting (test tree)
         if: steps.changes.outputs.decision != 'skip'
         run: |
-          uv run --no-sync ruff check --config ruff-tests.toml tests
+          uv run --no-sync ruff check --config .github/linters/ruff-tests.toml tests
 
       - name: Check strict ruff rules (delta vs merge-base counts)
         if: steps.changes.outputs.decision != 'skip'
@@ -191,7 +191,7 @@ jobs:
       - name: Check tests/e2e basedpyright (zero errors)
         if: steps.changes.outputs.decision != 'skip'
         run: |
-          if git diff --name-only --diff-filter=ACMRD "$GATE_BASE_SHA" HEAD -- ':(glob)tests/e2e/**/*.py' ':(glob)tests/e2e_harness/**/*.py' pyrightconfig.json | grep -q .; then
+          if git diff --name-only --diff-filter=ACMRD "$GATE_BASE_SHA" HEAD -- ':(glob)tests/e2e/**/*.py' ':(glob)tests/e2e_harness/**/*.py' pyproject.toml | grep -q .; then
             uv run --no-sync basedpyright tests/e2e tests/e2e_harness
           else
             echo "No changed tests/e2e Python files; skipping."
@@ -703,7 +703,7 @@ jobs:
           version: "0.10.9"
 
       - name: Run Semgrep (custom rules)
-        run: uv tool run --from 'semgrep==1.157.0' semgrep scan --config .semgrep/rules . --error
+        run: uv tool run --from 'semgrep==1.157.0' semgrep scan --config .github/semgrep/rules . --error
   lint-passed:
     name: lint passed
     needs: [python, secret-scan, ui, ui-api-types, code-quality, ci-coverage, semgrep]

@@ -1987,7 +1987,15 @@
         "download": "Download retained ZIP",
         "downloadFailed": "Could not download this version.",
         "newer": "Newer",
-        "older": "Older"
+        "older": "Older",
+        "restore": "Restore this version",
+        "restoreTitle": "Restore version {{version}}",
+        "restoreDescription": "Publish this version's files and metadata as a new release. Existing versions, access permissions, and public or private status are preserved.",
+        "newVersion": "New version (optional)",
+        "versionHint": "Leave blank to increment the current patch version, or enter a higher semantic version. Legacy versions require an explicit version.",
+        "confirmRestore": "Restore as new version",
+        "restoring": "Restoring…",
+        "restoreFailed": "Could not restore this version. Reload the skill and try again."
       },
       "back": "Skills Hub",
       "tabs": {
@@ -5778,6 +5786,84 @@
     "dismiss": "Dismiss banner"
   },
   "alerts": {
+    "unified": {
+      "title": "Alerts",
+      "saveError": "Could not save status. Please try again.",
+      "resourceHeading": "This alert is tied to the following resource",
+      "migrationDetails": "View migration details",
+      "loading": "Loading alerts…",
+      "adminRequired": "Only gateway admins can view alerts.",
+      "back": "Back to Alerts",
+      "loadError": "Could not load this alert. It may have been removed or you may no longer have access.",
+      "unavailable": "This alert is no longer available.",
+      "typeFilter": "Alert type",
+      "refresh": "Refresh",
+      "deprecationsError": "Could not load model deprecations.",
+      "performanceError": "Could not load performance alerts.",
+      "loadingMore": "Loading…",
+      "loadMore": "Load more",
+      "empty": {
+        "open": "No open alerts.",
+        "resolved": "No resolved alerts.",
+        "dismissed": "No dismissed alerts."
+      },
+      "types": {
+        "all": "All alerts",
+        "performance": "Performance",
+        "spend": "Spend",
+        "traffic": "Traffic",
+        "latency": "Latency",
+        "reliability": "Reliability"
+      },
+      "retiredTitle": "{{name}} retired on {{date}}",
+      "retiresTitle": "{{name}} retires on {{date}}",
+      "deprecationDescription": "{{requests}} recorded requests. Last used {{date}} UTC.",
+      "retired": "Retired",
+      "retires": "Retires",
+      "lastUsed": "Last used",
+      "keyFallback": "Key {{id}}",
+      "deprecation": "Model deprecation",
+      "metrics": {
+        "spend": "Spend",
+        "traffic": "Traffic",
+        "latency": "Mean response time",
+        "reliability": "Error rate",
+        "model_deprecation": "Usage"
+      },
+      "comparison": {
+        "fell": "{{label}} on {{name}} fell to {{ratio}}× its baseline",
+        "rose": "{{label}} on {{name}} rose to {{ratio}}× its baseline"
+      },
+      "value": {
+        "fell": "{{label}} on {{name}} fell to {{value}}",
+        "rose": "{{label}} on {{name}} rose to {{value}}"
+      },
+      "description": "{{value}} on {{date}} UTC, compared with the usual {{baseline}}.",
+      "links": {
+        "gateway": "View Usage",
+        "model": "View model routing",
+        "key": "View key activity",
+        "team": "View team activity",
+        "user": "View user activity"
+      },
+      "observed": "Observed",
+      "firstDetected": "First detected",
+      "chart": {
+        "unavailable": "Daily history is unavailable. The saved alert comparison is shown above.",
+        "baseline": "Dashed line: saved baseline of {{value}}. ",
+        "missingDays": "Missing days are left blank.",
+        "currentUsage": " Bars show current Usage, which may have changed since detection.",
+        "values": "{{title}} values",
+        "date": "Date",
+        "value": "Value",
+        "titles": {
+          "usd": "Daily spend",
+          "requests": "Daily requests",
+          "milliseconds": "Mean response time per day",
+          "ratio": "Daily error rate"
+        }
+      }
+    },
     "page": {
       "tabs": {
         "modelDeprecations": "Model deprecations"
@@ -5920,6 +6006,18 @@
       "showMore": "Show {{hidden}} more usage tags",
       "showLess": "Show less",
       "more": "+{{hidden}} more"
+    },
+    "monitoring": {
+      "title": "Performance monitoring",
+      "loading": "Loading monitoring settings…",
+      "allowance": "{{used}} of {{limit}} free alerts used.",
+      "enterprise": "On with Enterprise.",
+      "off": "Off. Saved alerts remain available.",
+      "exhausted": "You’ve used all 5 free alerts. New performance alerts are paused.",
+      "disabledByConfig": "Disabled in proxy settings.",
+      "upgrade": "Upgrade to Enterprise",
+      "loadError": "Could not load monitoring settings.",
+      "saveError": "Could not save monitoring settings. Try again."
     }
   },
   "caching": {
@@ -7994,14 +8092,16 @@
         "observability": "OBSERVABILITY",
         "accessControl": "ACCESS CONTROL",
         "developerTools": "DEVELOPER TOOLS",
-        "settings": "SETTINGS"
+        "settings": "SETTINGS",
+        "customerPortal": "CUSTOMER PORTAL"
       },
       "sections": {
         "aiGateway": "AI Gateway",
         "observability": "Observability",
         "accessControl": "Access Control",
         "developerTools": "Developer Tools",
-        "settings": "Settings"
+        "settings": "Settings",
+        "customerPortal": "Customer Portal"
       },
       "items": {
         "home": "Home",
@@ -8033,9 +8133,7 @@
         "organizations": "Organizations",
         "accessGroups": "Access Groups",
         "budgets": "Budgets",
-        "apiReference": "API Reference",
         "aiHub": "AI Hub",
-        "learningResources": "Learning Resources",
         "responseCache": "Response Cache",
         "experimental": "Experimental",
         "prompts": "Prompts",
@@ -8047,7 +8145,9 @@
         "adminSettings": "Admin Settings",
         "costTracking": "Cost Tracking",
         "uiTheme": "UI Theme",
-        "telemetry": "Telemetry"
+        "telemetry": "Telemetry",
+        "customers": "Customers",
+        "chargebacks": "Chargebacks"
       },
       "homeLink": "LiteLLM home"
     },
@@ -8079,9 +8179,7 @@
       "projects": "Manage projects within teams",
       "accessGroups": "Manage access groups for role-based permissions",
       "budgets": "Set and monitor spending budgets",
-      "apiRef": "Browse API documentation and endpoints",
       "modelHubTable": "Explore available AI models and providers",
-      "learningResources": "Access tutorials and documentation",
       "caching": "Configure response caching and coordination Redis settings",
       "transformRequest": "Set up request transformation rules",
       "costTracking": "Track and analyze API costs",
@@ -8204,22 +8302,21 @@
       "upgrade": {
         "title": "LiteLLM v{{version}} is available",
         "description": "{{summary}}. Your current version is v{{current}}",
+        "descriptionWithoutCounts": "Your current version is v{{current}}",
         "link": "View release notes"
       },
       "announcement": {
         "markAsRead": "Mark as read"
       },
       "bell": {
-        "triggerDeprecations_one": "Notifications, {{count}} model deprecation alert needs attention",
-        "triggerDeprecations_other": "Notifications, {{count}} model deprecation alerts need attention",
-        "deprecationsTitle": "Model deprecations",
-        "viewAllDeprecations": "View all {{total}}",
-        "deprecationsDescription": "Model migrations across your keys and teams.",
+        "triggerAlerts": "Notifications, alerts need attention",
+        "seeAll": "See all",
+        "comparison": "{{value}} vs. {{baseline}} usual",
+        "noOpenAlerts": "No open alerts.",
         "announcementsHeading": "Announcements",
-        "viewDeprecations": "View model deprecations",
         "trigger": "Notifications",
         "triggerUnread": "Notifications, {{unread}} unread",
-        "title": "What's new"
+        "title": "Notifications"
       }
     },
     "dashboardCommunityLinks": {
@@ -8551,20 +8648,6 @@
       "empty": "No posts yet"
     }
   },
-  "apiReference": {
-    "page": {
-      "featureName": "The API Reference tab"
-    },
-    "view": {
-      "title": "OpenAI Compatible Proxy: API Reference",
-      "description": "LiteLLM is OpenAI Compatible. This means your API Key works with the OpenAI SDK. Just replace the base_url to point to your litellm proxy. Example Below"
-    },
-    "docLink": {
-      "title": "Open documentation in a new tab",
-      "label": "API Reference Docs",
-      "newTab": "(opens in a new tab)"
-    }
-  },
   "uiTheme": {
     "settings": {
       "toasts": {
@@ -8623,6 +8706,12 @@
     }
   },
   "shared": {
+    "resourceActivity": {
+      "title": "Activity",
+      "ownUsage": "Showing your usage only.",
+      "teamScope": "Showing usage for the team keys you have permission to view.",
+      "modelScope": "Usage for {{model}} across deployments of this model."
+    },
     "credentialOptions": {
       "none": "None"
     },
@@ -14948,7 +15037,8 @@
         "users": "Users",
         "organizations": "Organizations",
         "models": "Models",
-        "agents": "Agents"
+        "agents": "Agents",
+        "guardrails": "Guardrails"
       },
       "drawer": {
         "notAvailable": "N/A",
@@ -20493,5 +20583,113 @@
     "removeGroup": "Remove weights for {{group}}",
     "summary": "Deployment Weights:",
     "loadFailed": "Could not load this model group's deployments. Saved weights are kept."
+  },
+  "customerPortal": {
+    "switcher": {
+      "label": "Customer Portal",
+      "description": "End customers, budgets and chargebacks"
+    },
+    "status": {
+      "active": "Active",
+      "overBudget": "Over budget",
+      "blocked": "Blocked"
+    },
+    "common": {
+      "noBudget": "No budget",
+      "cancel": "Cancel",
+      "save": "Save",
+      "block": "Block",
+      "blockHint": "Block and Unblock change the customer record. The proxy only rejects a blocked customer's requests when the blocked_user_check callback is enabled in litellm_settings.callbacks.",
+      "unblock": "Unblock",
+      "edit": "Edit",
+      "total": "Total",
+      "loading": "Loading..."
+    },
+    "toasts": {
+      "blocked": "Customer blocked",
+      "unblocked": "Customer unblocked",
+      "created": "Created {{name}}",
+      "updated": "Customer updated",
+      "createFailed": "Failed to create customer: {{error}}",
+      "updateFailed": "Failed to update customer: {{error}}"
+    },
+    "list": {
+      "title": "Customers",
+      "subtitle": "End users of your product, identified by customer id on every request.",
+      "create": "Create Customer",
+      "searchPlaceholder": "Search by customer id or alias",
+      "columns": {
+        "customer": "Customer",
+        "spend": "Spend this month",
+        "budget": "Budget",
+        "keys": "Keys",
+        "status": "Status"
+      },
+      "loading": "Loading customers...",
+      "empty": "No customers yet. Create one to start tracking spend.",
+      "budgetUsage": "{{spend}} / {{max}}"
+    },
+    "detail": {
+      "spendThisMonth": "Spend this month",
+      "ofBudget": "of {{max}} budget",
+      "noBudget": "no budget",
+      "tpm": "{{val}} TPM",
+      "rpm": "{{val}} RPM",
+      "keysTitle": "Keys",
+      "keysSubtitle": "Keys that sent requests as this customer this month.",
+      "keysEmpty": "No traffic from this customer this month.",
+      "columns": {
+        "key": "Key",
+        "requests": "Requests",
+        "tokens": "Tokens",
+        "spend": "Spend"
+      },
+      "unnamedKey": "Unnamed key",
+      "back": "Back to customers"
+    },
+    "createDialog": {
+      "title": "Create customer",
+      "description": "A customer is an end user of your product. Pass its id as `user` on every request to track spend and apply its limits.",
+      "customerId": "Customer id",
+      "customerIdPlaceholder": "e.g. acme-corp",
+      "alias": "Alias",
+      "aliasPlaceholder": "Optional display name",
+      "maxBudget": "Monthly budget (USD)",
+      "maxBudgetPlaceholder": "Leave empty for no budget",
+      "tpm": "TPM limit",
+      "rpm": "RPM limit",
+      "noLimit": "No limit",
+      "limitsHelp": "Budget and limits apply to this customer across every key it uses.",
+      "submit": "Create"
+    },
+    "editDialog": {
+      "title": "Edit customer",
+      "alias": "Alias",
+      "maxBudget": "Max budget (USD)",
+      "maxBudgetPlaceholder": "Leave empty for no budget",
+      "sharedBudgetWarning": "This customer is on budget {{budgetId}}. Changing the budget here changes it for every customer on that budget."
+    },
+    "chargebacks": {
+      "title": "Chargebacks",
+      "subtitle": "Spend per customer for a month, from the daily spend rollup.",
+      "groupBy": {
+        "customer": "Group by customer",
+        "key": "Customer and key",
+        "model": "Customer and model"
+      },
+      "dimension": {
+        "key": "Key",
+        "model": "Model"
+      },
+      "exportCsv": "Export CSV",
+      "columns": {
+        "customer": "Customer",
+        "requests": "Requests",
+        "inputTokens": "Input tokens",
+        "outputTokens": "Output tokens",
+        "spend": "Spend"
+      },
+      "empty": "No customer traffic in {{month}}."
+    }
   }
 }

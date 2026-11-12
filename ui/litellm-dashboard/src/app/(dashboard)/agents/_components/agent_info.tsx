@@ -51,6 +51,7 @@ import AgentCostView from "./agent_cost_view";
 import { detectAgentType, parseDynamicAgentForForm } from "./agent_type_utils";
 import AgentCardDiscovery, { DiscoveredAgentCardSelection } from "./agent_card_discovery";
 import { buildDiscoveryRequest, overlayDiscoveredCardParams } from "./agent_discovery_utils";
+import { useResetDetailState } from "@/hooks/useUrlTab";
 
 interface AgentInfoViewProps {
   agentId: string;
@@ -81,8 +82,13 @@ const DetailItem: React.FC<{ label: React.ReactNode; children: React.ReactNode }
 
 const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessToken, isAdmin }) => {
   const { t } = useTranslation();
+  const resetDetailState = useResetDetailState();
   const [agent, setAgent] = useState<Agent | null>(null);
   const [selectedKey, setSelectedKey] = useState<KeyResponse | null>(null);
+  const closeKey = () => {
+    resetDetailState();
+    setSelectedKey(null);
+  };
   const { data: keysData, isLoading: keysLoading, refetch: refetchAgentKeys } = useKeys(1, 100, { agentID: agentId });
   const agentKeys = keysData?.keys ?? [];
   const [isLoading, setIsLoading] = useState(true);
@@ -310,9 +316,9 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
       <KeyInfoView
         keyId={selectedKey.token}
         keyData={selectedKey}
-        onClose={() => setSelectedKey(null)}
+        onClose={closeKey}
         onDelete={() => {
-          setSelectedKey(null);
+          closeKey();
           refetchAgentKeys();
         }}
         teams={null}
@@ -424,7 +430,14 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
               <DetailItem label={t("agents.info.details.updatedAt")}>{formatDate(agent.updated_at)}</DetailItem>
             </DetailList>
 
-            <AgentVirtualKeys keys={agentKeys} isLoading={keysLoading} onKeyClick={setSelectedKey} />
+            <AgentVirtualKeys
+              keys={agentKeys}
+              isLoading={keysLoading}
+              onKeyClick={(key) => {
+                resetDetailState();
+                setSelectedKey(key);
+              }}
+            />
 
             {agent.object_permission &&
               (agent.object_permission.mcp_servers?.length ||

@@ -49,6 +49,7 @@ from litellm.constants import (
 )
 from litellm.files.types import FileRetrieveCallOptions, FileRetrieveProvider
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.cloud_storage_security import stored_s3_bucket_kwargs
 from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.litellm_core_utils.internal_call_metadata import requests_background
@@ -396,6 +397,7 @@ class _CursorPageArgs(TypedDict, total=False):
 class _RouterFileCallKwargs(TypedDict, total=False):
     client: ReadOnly[AsyncOpenAI | None]
     custom_llm_provider: ReadOnly[str | None]
+    stored_s3_bucket_name: ReadOnly[str]
 
 
 _MODEL_FILE_ID_MAPPING: Final = TypeAdapter(dict[str, str])
@@ -463,7 +465,7 @@ async def _delete_provider_file(
     await llm_router.afile_delete(
         model=model_id,
         file_id=provider_file_id,
-        **cast(_RouterFileCallKwargs, delete_data),
+        **cast(_RouterFileCallKwargs, {**delete_data, **stored_s3_bucket_kwargs(provider_file_id)}),
     )
 
 
@@ -1157,7 +1159,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         retrieve_file: Final = cast(_ManagedFileRetrieve, litellm.afile_retrieve)
         retrieve_options: Final = cast(
             FileRetrieveCallOptions,
-            {**call_options, "max_retries": 0},
+            {**call_options, **stored_s3_bucket_kwargs(provider_file_id), "max_retries": 0},
         )
         for attempt in range(len(_PROVIDER_FILE_RETRIEVE_RETRY_DELAYS_SECONDS) + 1):
             if attempt > 0:
@@ -1795,8 +1797,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             if potential_file_id and "llm_output_file_id," in potential_file_id:
                 model_id = self.get_model_id_from_unified_file_id(potential_file_id)
                 if model_id:
+                    provider_file_id: Final = self.get_output_file_id_from_unified_file_id(potential_file_id)
                     data["model"] = model_id
-                    data["file_id"] = self.get_output_file_id_from_unified_file_id(potential_file_id)
+                    data["file_id"] = provider_file_id
+                    data.update(stored_s3_bucket_kwargs(provider_file_id))
         elif call_type == CallTypes.acreate_batch.value:
             input_file_id = cast(Optional[str], data.get("input_file_id"))
             if input_file_id:
@@ -2894,7 +2898,17 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                         await llm_router.afile_content(
                             model=model_id,
                             file_id=provider_file_id,
-                            **cast(_RouterFileCallKwargs, data),
+                            **cast(
+                                _RouterFileCallKwargs,
+                                {
+                                    **data,
+                                    **(
+                                        stored_s3_bucket_kwargs(provider_file_id)
+                                        if isinstance(provider_file_id, str)
+                                        else {}
+                                    ),
+                                },
+                            ),
                         ),
                     )
                 except Exception as e:

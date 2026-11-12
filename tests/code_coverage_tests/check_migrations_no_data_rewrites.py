@@ -27,7 +27,7 @@ table without a default is still free on every version.
 An index on a request-log table cannot ship as a migration at all. A plain `CREATE
 INDEX` blocks writes to the table until the build finishes, and `CREATE INDEX
 CONCURRENTLY` is refused by Postgres on a partitioned parent, which LiteLLM_SpendLogs
-is wherever the operator ran db_scripts/partition_spend_logs.sql. The migration job builds
+is wherever the operator ran scripts/db/partition_spend_logs.sql. The migration job builds
 those indexes after `migrate deploy`, concurrently and per partition, from the list in
 litellm_proxy_extras/request_log_indexes.py, so that list is where a new one goes.
 

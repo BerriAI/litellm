@@ -11,7 +11,8 @@
     "logger",
     "kwargs",
     "start_time",
-    "end_time"
+    "end_time",
+    "cache_hit"
   ],
   "update_logging": [
     "logger",
@@ -41,12 +42,23 @@
     "logger",
     "status",
     "headers",
-    "body"
+    "body",
+    "sent"
+  ],
+  "retried_request": [
+    "logger",
+    "logged_body",
+    "body",
+    "reasons"
   ],
   "record_api_window": [
     "logger",
     "start",
     "end"
+  ],
+  "times_provider_exchange": [
+    "client",
+    "timeout"
   ],
   "defers_async_logging": [
     "logger"
@@ -89,6 +101,12 @@
     "start",
     "end"
   ],
+  "cache_hit_success": [
+    "logger",
+    "response",
+    "start",
+    "end"
+  ],
   "enqueue_logging": [
     "coroutine"
   ],
@@ -113,14 +131,16 @@
   ],
   "stream_opened": [
     "logger",
-    "head"
+    "head",
+    "keeps_requested"
   ],
   "stamp_stream_head": [
     "head",
     "logger",
     "kwargs",
     "start_time",
-    "end_time"
+    "end_time",
+    "cache_hit"
   ],
   "stream_success": [
     "logger",
