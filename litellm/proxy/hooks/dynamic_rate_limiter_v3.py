@@ -75,7 +75,8 @@ class SteeredModel:
 
 
 async def caller_may_use_model(user_api_key_dict: UserAPIKeyAuth, model: str) -> bool:
-    """The key and team allowlists plus the key's per-model budget, the same checks a budget fallback passes."""
+    """The key, team, team member and project allowlists plus the key's per-model budget, as a budget fallback passes."""
+    from litellm.proxy.auth.auth_checks import get_project_object, get_team_membership
     from litellm.proxy.auth.user_api_key_auth import (
         _is_fallback_model_authorized,  # pyright: ignore[reportPrivateUsage]  # steering shares the fallback contract
     )
@@ -83,13 +84,46 @@ async def caller_may_use_model(user_api_key_dict: UserAPIKeyAuth, model: str) ->
         llm_model_list,  # pyright: ignore[reportUnknownVariableType]  # proxy global has untyped deployment entries
         llm_router,
         model_max_budget_limiter,
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
     )
 
+    user_id: Final = user_api_key_dict.user_id
+    team_id: Final = user_api_key_dict.team_id
+    project_id: Final = user_api_key_dict.project_id
+    try:
+        team_membership: Final = (
+            await get_team_membership(
+                user_id=user_id,
+                team_id=team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            if user_id is not None and team_id is not None
+            else None
+        )
+        project_object: Final = (
+            await get_project_object(
+                project_id=project_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            if project_id is not None
+            else None
+        )
+    except Exception:  # noqa: BLE001  # a failed membership or project lookup must not authorize an alternate
+        return False
     if not await _is_fallback_model_authorized(
         model=model,
         valid_token=user_api_key_dict,
         llm_model_list=llm_model_list,  # pyright: ignore[reportUnknownArgumentType]  # proxy global has untyped deployment entries
         llm_router=llm_router,
+        prisma_client=prisma_client,
+        team_membership=team_membership,
+        project_object=project_object,
     ):
         return False
     try:
@@ -941,7 +975,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         """Names the model the caller asked for when steering served another, on streamed and buffered replies."""
         call_id: Final = data.get("litellm_call_id")
         stash: Final = get_request_stash_for_call(call_id if isinstance(call_id, str) else None)
-        if stash is None or stash.steered_from_model is None:
+        if stash is None or stash.steered_from_model is None or not _is_latin1_encodable(stash.steered_from_model):
             return None
         return {STEERED_FROM_HEADER: stash.steered_from_model}
 

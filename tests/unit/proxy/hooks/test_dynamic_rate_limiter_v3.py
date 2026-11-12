@@ -1879,6 +1879,13 @@ async def test_flexible_team_is_steered_to_its_alternate_once_the_preferred_mode
     )
     assert headers == {"x-litellm-model-steered-from": "luna"}
 
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import get_or_create_request_stash
+
+    get_or_create_request_stash().steered_from_model = "luna\u2728"
+    assert (
+        await handler.async_post_call_response_headers_hook(data={}, user_api_key_dict=flexible, response=None) is None
+    )
+
 
 @pytest.mark.asyncio
 async def test_teams_without_a_permitted_idle_alternate_stay_on_the_preferred_model(monkeypatch):
