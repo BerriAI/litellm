@@ -93,12 +93,18 @@ def _guardrail_path_error(
 ) -> CustomGuardrailPathError | None:
     if callable(resolved):
         return None
-    if isinstance(resolved, CustomLogger):
+    if isinstance(resolved, CustomGuardrail):
         return CustomGuardrailPathError(
             f"Guardrail '{guardrail_name}' sets guardrail: {guardrail_path}, which is a {type(resolved).__name__} "
             "instance, but the proxy builds each guardrail itself and needs the class. Point it at the class, e.g. "
-            f"`guardrail: {_class_path(guardrail_path, type(resolved))}`. "
-            "Instances like this one belong under litellm_settings.callbacks."
+            f"`guardrail: {_class_path(guardrail_path, type(resolved))}`."
+        )
+    if isinstance(resolved, CustomLogger):
+        return CustomGuardrailPathError(
+            f"Guardrail '{guardrail_name}' sets guardrail: {guardrail_path}, which is a {type(resolved).__name__} "
+            "instance. It is a CustomLogger but not a CustomGuardrail, so the proxy cannot run it as a guardrail. "
+            f"To run it on every request, list `{guardrail_path}` under litellm_settings.callbacks instead. "
+            "To run it as a guardrail, subclass CustomGuardrail and point guardrail: at that class."
         )
     return CustomGuardrailPathError(
         f"Guardrail '{guardrail_name}' sets guardrail: {guardrail_path}, which is a {type(resolved).__name__} "
