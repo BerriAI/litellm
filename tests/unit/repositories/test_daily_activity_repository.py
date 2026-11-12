@@ -1,5 +1,5 @@
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Final
 
@@ -16,6 +16,7 @@ from litellm.repositories.daily_activity_sql import (
     build_key_page_sql,
     build_key_search_sql,
     build_model_top_keys_sql,
+    build_user_page_sql,
 )
 from litellm.types.repositories.daily_activity import (
     DailyActivityScope,
@@ -25,6 +26,9 @@ from litellm.types.repositories.daily_activity import (
     KeyPage,
     KeySpendRow,
     SpendLogsWindow,
+    UserMetadataRow,
+    UserPage,
+    UserSpendRow,
 )
 
 
@@ -83,6 +87,20 @@ def _key_spend_row(api_key: str) -> dict[str, object]:
         "failed_requests": 0,
         "cache_read_input_tokens": 3,
         "cache_creation_input_tokens": 1,
+    }
+
+
+def _user_spend_row(user_id: str | None, **overrides: object) -> dict[str, object]:
+    return {
+        "user_id": user_id,
+        "spend": 1.0,
+        "prompt_tokens": 10,
+        "completion_tokens": 2,
+        "total_tokens": 12,
+        "api_requests": 1,
+        "successful_requests": 1,
+        "failed_requests": 0,
+        **overrides,
     }
 
 
@@ -160,6 +178,7 @@ class _FakeDatabase:
     def __init__(self, responses: Sequence[Sequence[Mapping[str, object]] | None] = ()) -> None:
         self.responses = tuple(responses)
         self.query_calls: list[tuple[str, tuple[object, ...]]] = []
+        self.litellm_usertable = _FakeTable()
         self.litellm_verificationtoken = _FakeTable()
         self.litellm_deletedverificationtoken = _FakeTable()
         self.litellm_dailyuserspend = _FakeTable()
@@ -278,8 +297,134 @@ async def test_key_page_maps_rows_and_keeps_total_for_an_empty_page() -> None:
 
 
 @pytest.mark.asyncio
+async def test_user_page_maps_rows_and_keeps_total_for_an_empty_page() -> None:
+    database: Final = _FakeDatabase(
+        (
+            ({"total_users": 2, **_user_spend_row("user-a")},),
+            ({"total_users": 2, "user_id": None},),
+        )
+    )
+    repository, _ = _repository(database)
+    scope: Final = _scope()
+
+    first_page: Final = await repository.user_page(scope, offset=0, limit=1)
+    empty_page: Final = await repository.user_page(scope, offset=2, limit=1)
+
+    assert first_page == UserPage(
+        rows=(
+            UserSpendRow(
+                user_id="user-a",
+                spend=1.0,
+                prompt_tokens=10,
+                completion_tokens=2,
+                total_tokens=12,
+                api_requests=1,
+                successful_requests=1,
+                failed_requests=0,
+            ),
+        ),
+        total_users=2,
+    )
+    assert empty_page == UserPage(rows=(), total_users=2)
+    assert database.query_calls == [
+        (
+            build_user_page_sql(scope, offset=0, limit=1).sql,
+            build_user_page_sql(scope, offset=0, limit=1).params,
+        ),
+        (
+            build_user_page_sql(scope, offset=2, limit=1).sql,
+            build_user_page_sql(scope, offset=2, limit=1).params,
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_user_page_keeps_null_and_empty_user_id_rows() -> None:
+    database: Final = _FakeDatabase(
+        (
+            (
+                {"total_users": 1, **_user_spend_row(None, spend=0.0, prompt_tokens=0)},
+                {"total_users": 1, **_user_spend_row("", api_requests=0)},
+            ),
+        )
+    )
+    repository, _ = _repository(database)
+
+    page: Final = await repository.user_page(_scope(), offset=0, limit=50)
+
+    assert page == UserPage(
+        rows=(
+            UserSpendRow(
+                user_id=None,
+                spend=0.0,
+                prompt_tokens=0,
+                completion_tokens=2,
+                total_tokens=12,
+                api_requests=1,
+                successful_requests=1,
+                failed_requests=0,
+            ),
+            UserSpendRow(
+                user_id=None,
+                spend=1.0,
+                prompt_tokens=10,
+                completion_tokens=2,
+                total_tokens=12,
+                api_requests=0,
+                successful_requests=1,
+                failed_requests=0,
+            ),
+        ),
+        total_users=1,
+    )
+
+
+@pytest.mark.asyncio
+async def test_user_page_rejects_limits_outside_bounds() -> None:
+    database: Final = _FakeDatabase()
+    repository, _ = _repository(database)
+
+    with pytest.raises(ValueError, match="limit"):
+        await repository.user_page(_scope(), offset=0, limit=0)
+    with pytest.raises(ValueError, match="limit"):
+        await repository.user_page(_scope(), offset=0, limit=constants.USAGE_USER_PAGE_MAX + 1)
+    with pytest.raises(ValueError, match="offset"):
+        await repository.user_page(_scope(), offset=-1, limit=1)
+    assert database.query_calls == []
+
+
+@dataclass(frozen=True, slots=True)
+class _FakeUserRow:
+    user_id: str
+    user_email: str | None
+    user_alias: str | None
+
+
+@pytest.mark.asyncio
+async def test_user_metadata_resolves_email_and_alias_in_one_lookup() -> None:
+    database: Final = _FakeDatabase()
+    database.litellm_usertable = _FakeTable(
+        (
+            _FakeUserRow(user_id="user-a", user_email="a@example.test", user_alias="alias-a"),
+            _FakeUserRow(user_id="user-b", user_email=None, user_alias=None),
+        )
+    )
+    repository, _ = _repository(database)
+
+    metadata: Final = await repository.user_metadata(frozenset(("user-a", "user-b", "user-missing")))
+
+    assert metadata == {
+        "user-a": UserMetadataRow(user_email="a@example.test", user_alias="alias-a"),
+        "user-b": UserMetadataRow(user_email=None, user_alias=None),
+    }
+    assert len(database.litellm_usertable.find_many_calls) == 1
+    assert await repository.user_metadata(frozenset()) == {}
+    assert len(database.litellm_usertable.find_many_calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_key_methods_reject_limits_outside_bounds() -> None:
-    database = _FakeDatabase()
+    database: Final = _FakeDatabase()
     repository, _ = _repository(database)
 
     with pytest.raises(ValueError, match="limit"):
@@ -309,7 +454,7 @@ async def test_key_spend_validation_rejects_malformed_rows() -> None:
 
 @pytest.mark.asyncio
 async def test_key_metadata_prefers_active_rows_and_recovers_all_requested_keys() -> None:
-    database = _FakeDatabase()
+    database: Final = _FakeDatabase()
     active: Final = _FakeVerificationToken(
         token="active",
         key_alias="current",
@@ -515,6 +660,37 @@ async def test_daily_rows_selects_the_table_and_applies_filters_and_pagination(
     assert selected_table.find_many_calls == [expected_where]
     assert selected_table.pagination_calls == [(4, 2, ({"date": "desc"}, {"id": "asc"}))]
     assert sum(len(daily_table.find_many_calls) for daily_table in tables.values()) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("empty", (False, True))
+async def test_customer_team_page_returns_loaded_metrics_and_retains_count_on_empty_pages(empty: bool) -> None:
+    stored: Final = {
+        **_key_spend_row("key-a"),
+        "id": "row-a",
+        "end_user_id": "customer-a",
+        "date": "2026-01-01",
+        "compression_saved_tokens": 2,
+        "compression_savings_spend": 0.5,
+        "prompt_caching_savings_spend": 0.25,
+        "gateway_injected_caching_savings_spend": 0.125,
+        "autorouter_savings_spend": 0.0,
+        "guardrail_spend": 0.0,
+        "total_response_time_ms": 10,
+        "timed_requests": 1,
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z",
+    }
+    database: Final = _FakeDatabase((({"total_count": 33000, "rows": [] if empty else [stored]},),))
+    repository, _ = _repository(database)
+    scope: Final = replace(_scope(table=DailyActivityTable.CUSTOMER), team_ids=("team-a",))
+
+    result: Final = await repository.daily_rows(scope, page=3301 if empty else 1, page_size=10)
+
+    assert result.total_count == 33000
+    assert tuple((row.id, row.api_key, row.spend, row.prompt_tokens) for row in result.rows) == (
+        () if empty else (("row-a", "key-a", 1.0, 10),)
+    )
 
 
 @pytest.mark.asyncio

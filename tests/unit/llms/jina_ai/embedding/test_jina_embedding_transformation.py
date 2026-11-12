@@ -1,8 +1,13 @@
+import json
+from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
+import respx
 from pydantic import ValidationError
+
+import litellm
 
 
 from litellm.llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig
@@ -81,7 +86,7 @@ class TestJinaAIEmbeddingTransform:
         sentinel = f"resolved-via-{env_name.lower()}"
         monkeypatch.setenv(env_name, sentinel)
 
-        _, _, dynamic_api_key = self.config._get_openai_compatible_provider_info(api_base=None, api_key=None)
+        _, _, dynamic_api_key = self.config.get_openai_compatible_provider_info(api_base=None, api_key=None)
 
         assert dynamic_api_key == sentinel
 
@@ -95,7 +100,7 @@ class TestJinaAIEmbeddingTransform:
             monkeypatch.setenv(name, f"resolved-via-{name.lower()}")
 
         for expected_name in JINA_KEY_ENV_NAMES:
-            _, _, dynamic_api_key = self.config._get_openai_compatible_provider_info(api_base=None, api_key=None)
+            _, _, dynamic_api_key = self.config.get_openai_compatible_provider_info(api_base=None, api_key=None)
             assert dynamic_api_key == f"resolved-via-{expected_name.lower()}"
             monkeypatch.delenv(expected_name)
 
@@ -108,7 +113,7 @@ class TestJinaAIEmbeddingTransform:
         for name in JINA_KEY_ENV_NAMES:
             monkeypatch.setenv(name, f"resolved-via-{name.lower()}")
 
-        _, _, dynamic_api_key = self.config._get_openai_compatible_provider_info(
+        _, _, dynamic_api_key = self.config.get_openai_compatible_provider_info(
             api_base=None, api_key="passed-in-by-caller"
         )
 
@@ -134,6 +139,44 @@ class TestJinaAIEmbeddingTransform:
             "input": expected_input,
         }
         assert result == expected_result
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_jina_ai_embedding_forwards_task_and_dimensions_and_parses_values(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post("https://api.jina.ai/v1/embeddings").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "model": "jina-embeddings-v3",
+                "object": "list",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+                "usage": {"prompt_tokens": 3, "total_tokens": 3},
+            },
+        )
+    )
+
+    response: Final = litellm.embedding(
+        model="jina_ai/jina-embeddings-v3",
+        input=["a"],
+        task="separation",
+        dimensions=1024,
+        api_key="jina-test-key",
+        api_base="https://api.jina.ai/v1",
+        num_retries=0,
+        max_retries=0,
+    )
+    request_body: Final = json.loads(route.calls[0].request.content)
+
+    assert request_body == {
+        "model": "jina-embeddings-v3",
+        "input": ["a"],
+        "task": "separation",
+        "dimensions": 1024,
+    }
+    assert response.data[0]["embedding"] == [0.1, 0.2]
+    assert response.usage.prompt_tokens == 3
 
 
 def _transform(raw_response: httpx.Response) -> EmbeddingResponse:
@@ -192,3 +235,57 @@ def test_transform_embedding_response_invalid_field_is_reported_by_name(field: s
 
     assert exc_info.value.title == "EmbeddingResponse"
     assert [error["loc"] for error in exc_info.value.errors()] == [(field,)]
+
+
+_PIXEL_PNG: Final = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+
+
+@pytest.mark.parametrize(
+    ("input_data", "expected_payload_input"),
+    [
+        (["hello world", "foo bar"], ["hello world", "foo bar"]),
+        (
+            ["A picture of a cat", f"data:image/png;base64,{_PIXEL_PNG}"],
+            [{"text": "A picture of a cat"}, {"image": _PIXEL_PNG}],
+        ),
+        ([f"data:image/png;base64,{_PIXEL_PNG}"], [{"image": _PIXEL_PNG}]),
+    ],
+    ids=["text_only", "text_and_image", "image_only"],
+)
+def test_jina_ai_img_embeddings_transforms_mixed_text_and_image_inputs(
+    input_data: list[str], expected_payload_input: list[object], respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post("https://api.jina.ai/v1/embeddings").respond(
+        json={
+            "object": "list",
+            "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+            "model": "jina-embeddings-v4",
+            "usage": {"prompt_tokens": 3, "total_tokens": 3},
+        }
+    )
+
+    response: Final = litellm.embedding(model="jina_ai/jina-embeddings-v4", input=input_data, api_key="jina-test-key")
+
+    assert route.call_count == 1
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "jina-embeddings-v4",
+        "input": expected_payload_input,
+    }
+    assert response.data[0]["embedding"] == [0.1, 0.2]
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://gateway.example.com/jina/v1",
+        "https://gateway.example.com/jina/v1/",
+        "https://gateway.example.com/jina/v1/embeddings/",
+    ],
+)
+def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str):
+    assert (
+        JinaAIEmbeddingConfig().get_complete_url(
+            api_base=api_base, api_key=None, model="jina-embeddings-v3", optional_params={}, litellm_params={}
+        )
+        == "https://gateway.example.com/jina/v1/embeddings"
+    )

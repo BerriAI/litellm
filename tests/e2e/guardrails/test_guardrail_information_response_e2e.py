@@ -9,6 +9,7 @@ import pytest
 
 from e2e_config import unique_marker
 from e2e_http import unwrap
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from guardrails_client import (
     BlockedWordBody,
     ContentFilterParamsBody,
@@ -18,6 +19,8 @@ from lifecycle import ResourceManager
 from models import ChatResponse, GuardrailInformationEntry
 
 pytestmark = pytest.mark.e2e
+
+BACKEND_MODEL: Final = "openai/gpt-4.1-mini"
 
 GUARDRAIL_PROPAGATION_DEADLINE_SECONDS: Final = 40.0
 GUARDRAIL_PROPAGATION_POLL_INTERVAL_SECONDS: Final = 5.0
@@ -60,6 +63,14 @@ class TestGuardrailInformationResponse:
         "guardrail.litellm_content_filter.pre_call.returns_guardrail_information",
         exercised_on=["chat_completions"],
     )
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            providers=(Provider.OPENAI,),
+            models=(BACKEND_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_flag_returns_guardrail_information_for_the_guardrail_that_ran(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
     ) -> None:
@@ -68,7 +79,7 @@ class TestGuardrailInformationResponse:
         model = client.create_backend_model(
             resources,
             prefix="e2e-guardrail-info-backend",
-            backend="openai/gpt-4.1-mini",
+            backend=BACKEND_MODEL,
             api_key="os.environ/OPENAI_API_KEY",
         )
         deadline = time.monotonic() + GUARDRAIL_PROPAGATION_DEADLINE_SECONDS
@@ -91,6 +102,14 @@ class TestGuardrailInformationResponse:
                 )
             time.sleep(GUARDRAIL_PROPAGATION_POLL_INTERVAL_SECONDS)
 
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            providers=(Provider.OPENAI,),
+            models=(BACKEND_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_without_flag_response_has_no_guardrail_information(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
     ) -> None:
@@ -99,7 +118,7 @@ class TestGuardrailInformationResponse:
         model = client.create_backend_model(
             resources,
             prefix="e2e-guardrail-info-backend",
-            backend="openai/gpt-4.1-mini",
+            backend=BACKEND_MODEL,
             api_key="os.environ/OPENAI_API_KEY",
         )
 

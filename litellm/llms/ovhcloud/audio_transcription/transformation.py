@@ -12,6 +12,7 @@ import httpx
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
@@ -63,9 +64,8 @@ class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        api_base = "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1" if api_base is None else api_base.rstrip("/")
-        complete_url: Final = f"{api_base}/audio/transcriptions"
-        return complete_url
+        base_url: Final = "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1" if api_base is None else api_base
+        return join_api_base(base_url, "audio/transcriptions")
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return OVHCloudException(
@@ -144,7 +144,7 @@ class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             response_json: Final = raw_response.json()
         except Exception:
             raise OVHCloudException(
-                message=raw_response.text,
+                message="Received non-JSON response from OVHCloud audio transcription",
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
@@ -163,5 +163,5 @@ class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         if duration is not None:
             response_json["duration"] = duration
 
-        response._hidden_params = response_json
+        response.hidden_params = response_json
         return response

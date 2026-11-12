@@ -1,0 +1,101 @@
+"use client";
+
+import HomePage from "@/app/(dashboard)/home/_components/HomePage";
+import LoadingScreen from "@/components/common_components/LoadingScreen";
+import { getRuntimeBackendBaseUrl, getUiPageUrl, proxyBaseUrl } from "@/components/networking";
+import { useAuth } from "@/contexts/AuthContext";
+import {
+  buildLoginUrlWithReturn,
+  consumeReturnUrl,
+  getLoginUrl,
+  isValidReturnUrl,
+  normalizeUrlForCompare,
+  storeReturnUrl,
+} from "@/utils/returnUrlUtils";
+import { legacyPageRedirectHref } from "@/app/(dashboard)/legacyPageRoutes";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useRef } from "react";
+
+function CreateKeyPageContent() {
+  const { authLoading, token } = useAuth();
+
+  const router = useRouter();
+  const searchParams = useSearchParams()!;
+
+  // Track if we've already attempted a return URL redirect to prevent race conditions
+  const hasAttemptedReturnRedirectRef = useRef(false);
+
+  const redirectToLogin = authLoading === false && token === null;
+
+  useEffect(() => {
+    if (redirectToLogin) {
+      // Store the current URL so we can redirect back after login
+      storeReturnUrl();
+      // Build login URL with return URL parameter
+      const baseLoginUrl = getUiPageUrl(getLoginUrl(proxyBaseUrl || ""));
+      const dest = buildLoginUrlWithReturn(baseLoginUrl);
+      // Replace instead of assigning to avoid back-button loops
+      window.location.replace(dest);
+    }
+  }, [redirectToLogin]);
+
+  const legacyRedirectHref = legacyPageRedirectHref(searchParams);
+  useEffect(() => {
+    if (!authLoading && legacyRedirectHref !== null) {
+      router.replace(legacyRedirectHref);
+    }
+  }, [authLoading, legacyRedirectHref, router]);
+
+  // Check for a stored return URL after successful authentication
+  // This handles the case where user comes back from SSO and we need to redirect to the original URL
+  useEffect(() => {
+    // Skip if still loading, no token, or we've already attempted a redirect
+    if (authLoading || !token || hasAttemptedReturnRedirectRef.current) {
+      return;
+    }
+
+    // Mark that we've attempted the redirect to prevent race conditions
+    // This prevents duplicate redirects if token changes (e.g., refresh)
+    hasAttemptedReturnRedirectRef.current = true;
+
+    // Check for a stored return URL
+    const returnUrl = consumeReturnUrl(getRuntimeBackendBaseUrl());
+    if (returnUrl && isValidReturnUrl(returnUrl, getRuntimeBackendBaseUrl())) {
+      // Inline origin check: only redirect to same-origin URLs to prevent open redirect.
+      const safeUrl = new URL(getUiPageUrl(returnUrl, true), window.location.origin);
+      if (safeUrl.origin !== window.location.origin) {
+        return;
+      }
+      const currentUrl = window.location.href;
+      const normalizedReturnUrl = normalizeUrlForCompare(returnUrl);
+      const normalizedCurrentUrl = normalizeUrlForCompare(currentUrl);
+      // Only redirect if the return URL is different from the current URL
+      // This prevents infinite redirect loops
+      if (normalizedReturnUrl !== normalizedCurrentUrl) {
+        window.location.replace(safeUrl.href);
+      }
+    }
+  }, [authLoading, token]);
+
+  useEffect(() => {
+    if (!token) {
+      hasAttemptedReturnRedirectRef.current = false;
+    }
+  }, [token]);
+
+  const isRedirecting = redirectToLogin || legacyRedirectHref !== null;
+
+  if (authLoading || isRedirecting) {
+    return <LoadingScreen />;
+  }
+
+  return <HomePage />;
+}
+
+export default function CreateKeyPage() {
+  return (
+    <Suspense fallback={<LoadingScreen />}>
+      <CreateKeyPageContent />
+    </Suspense>
+  );
+}

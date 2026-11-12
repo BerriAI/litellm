@@ -8,7 +8,8 @@ middleware is a transparent pass-through when no recorder is injected.
 
 import asyncio
 import threading
-from typing import List, Optional, Tuple
+from datetime import datetime, timezone
+from typing import Final, List, Optional, Tuple
 
 import pytest
 from starlette.applications import Starlette
@@ -28,6 +29,7 @@ from litellm.proxy.middleware.billable_request_metrics_middleware import (
 from litellm.proxy.middleware.in_flight_requests_middleware import (
     InFlightRequestsMiddleware,
 )
+from litellm.types.proxy.gateway_requests import GatewayRequestCounts, GatewayRequestKey
 
 
 class FakeRecorder:
@@ -35,9 +37,7 @@ class FakeRecorder:
         self.calls: List[dict] = []
 
     def record(self, *, category: BillableCategory, route: str, status_code: int, model_id: Optional[str]) -> None:
-        self.calls.append(
-            {"category": category, "route": route, "status_code": status_code, "model_id": model_id}
-        )
+        self.calls.append({"category": category, "route": route, "status_code": status_code, "model_id": model_id})
 
 
 def _make_app(recorder: Optional[FakeRecorder], status_code: int = 200, model_id: Optional[str] = None) -> Starlette:
@@ -105,6 +105,7 @@ def test_is_pure_asgi_not_base_http_middleware():
         # SpendLogs-producing routes surfaced by the route-inventory audit
         ("/v1/search", (BillableCategory.LLM, "/search")),
         ("/v1/vector_stores/vs_1/search", (BillableCategory.LLM, "/search")),
+        ("/opensearch/docs/_search", (BillableCategory.LLM, "/opensearch")),
         ("/v1/rag/query", (BillableCategory.LLM, "/rag/query")),
         ("/rag/ingest", (BillableCategory.LLM, "/rag/ingest")),
         # Provider passthrough carries real inference and writes SpendLogs
@@ -123,6 +124,7 @@ def test_is_pure_asgi_not_base_http_middleware():
         ("/azure_speech/speechtotext/v3.2/transcriptions", (BillableCategory.LLM, "/azure_speech")),
         ("/transcribe", (BillableCategory.LLM, "/transcribe")),
         ("/transcribe/StartTranscriptionJob", (BillableCategory.LLM, "/transcribe")),
+        ("/eu_jev/v1/systemone", (BillableCategory.LLM, "/eu_jev/v1/systemone")),
         ("/mcp", (BillableCategory.MCP, "/mcp")),
         ("/mcp/", (BillableCategory.MCP, "/mcp")),
         ("/mcp/tools/list", (BillableCategory.MCP, "/mcp")),
@@ -163,8 +165,22 @@ def test_classify_billable(path: str, expected: Tuple[BillableCategory, str]):
         "/v1beta/interactions/int_123/cancel",
         # observability passthrough writes no SpendLogs row
         "/langfuse/api/public/ingestion",
+        "/opensearch/docs/_doc",
+        "/opensearch/docs/_doc/_search",
+        "/opensearch/docs/_doc/1",
+        "/opensearch/docs/_bulk",
+        "/opensearch/docs/_update/1",
+        "/opensearch/docs/_count",
+        "/opensearch/docs/_mget",
+        "/opensearch/docs/_doc/search",
+        "/opensearch/docs/_update/search",
+        "/opensearch/docs/_create/embeddings",
+        "/opensearch/docs/_doc/completions",
+        "/opensearch/docs/_explain/rerank",
         # a bare provider prefix is not an inference call
         "/bedrock",
+        "/eu_jev/v1/systemone/extra",
+        "/eu_jev/v1/systemone2",
         "/v1/mcp",
         "/v1/mcp/tools",
         "/v1/mcp/server",
@@ -182,6 +198,11 @@ def test_classify_billable(path: str, expected: Tuple[BillableCategory, str]):
 )
 def test_classify_non_billable_returns_none(path: str):
     assert classify_billable_request(path) is None
+
+
+@pytest.mark.usefixtures("configured_eu_jev_route")
+def test_a_pass_through_configured_at_the_eu_jev_decision_path_is_not_billed() -> None:
+    assert classify_billable_request("/eu_jev/v1/systemone") is None
 
 
 @pytest.mark.parametrize(
@@ -505,14 +526,18 @@ def test_varying_model_ids_fold_into_a_single_persisted_key():
     that is. The SGR key is persisted, so it must not carry that dimension: a
     caller who could vary it could mint an unbounded number of table rows.
     """
-    accumulator = GatewayRequestAccumulator()
+    frozen_now: Final = datetime(2026, 3, 14, 12, 0, tzinfo=timezone.utc)
+    accumulator = GatewayRequestAccumulator(clock=lambda: frozen_now)
     for model_id in ("deploy-1", "deploy-2", "deploy-3"):
         client = TestClient(_make_sink_app(None, accumulator, status_code=200, model_id=model_id))
         client.post("/v1/chat/completions")
 
-    snapshot = accumulator.drain()
-    assert len(snapshot) == 1
-    assert next(iter(snapshot.values())).successful_requests == 3
+    snapshot: Final = accumulator.drain()
+    assert snapshot == {
+        GatewayRequestKey(
+            date=frozen_now.strftime("%Y-%m-%d"), category="llm", route="/chat/completions", status_code=200
+        ): (GatewayRequestCounts(successful_requests=3, failed_requests=0))
+    }
 
 
 @pytest.mark.parametrize("status_code", [400, 429, 500, 503])

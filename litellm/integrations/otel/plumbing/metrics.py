@@ -11,6 +11,7 @@ identical metrics. The attribute cardinality filter is reused from v1 by import
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
+from types import MappingProxyType
 from typing import Any, Final, Literal, Protocol, TypeAlias
 
 from opentelemetry.metrics import Histogram, Meter
@@ -21,11 +22,12 @@ from litellm._logging import verbose_logger
 from litellm.integrations.opentelemetry import (
     METRIC_METADATA_KEYS,
     TOKEN_TYPE_ATTRIBUTE,
-    _build_metric_attribute_filter,
-    _resolve_metric_attribute_filter,
+    build_metric_attribute_filter,
+    resolve_metric_attribute_filter,
 )
 from litellm.integrations.otel.model.metadata import time_to_first_chunk_seconds
 from litellm.integrations.otel.model.semconv import (
+    PASSTHROUGH_OPERATION_KEY,
     Error,
     GenAI,
     Metric,
@@ -33,6 +35,7 @@ from litellm.integrations.otel.model.semconv import (
     resolve_provider,
 )
 from litellm.integrations.otel.model.utils import to_seconds
+from litellm.litellm_core_utils.core_helpers import attribute_or_none, require_attributes
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
@@ -173,9 +176,17 @@ class _MetricKwargs(TypedDict, total=False):
     response_cost: ReadOnly[float | None]
     completion_start_time: ReadOnly[datetime | float | str | None]
     api_call_start_time: ReadOnly[datetime | float | str | None]
+    end_time: ReadOnly[datetime | float | str | None]
 
 
-def resolve_error_type(kwargs: Mapping[str, Any]) -> str:
+class _SupportsGet(Protocol):
+    def get(self, key: str, /) -> object: ...
+
+
+_NO_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def resolve_error_type(kwargs: Mapping[str, object]) -> str:
     """The ``error.type`` value for a failed request.
 
     Bounded by construction: the mapped provider exception's class name (the same
@@ -186,8 +197,13 @@ def resolve_error_type(kwargs: Mapping[str, Any]) -> str:
     span and its exception event, where high cardinality is free.
     """
     std_log: Final = kwargs.get("standard_logging_object")
-    info: Final = getattr(std_log, "error_information", None) or (std_log or {}).get("error_information") or {}
-    error_class: Final = info.get("error_class") or info.get("error_code")
+    info: Final = (
+        attribute_or_none(std_log, "error_information")
+        or require_attributes(std_log or _NO_FIELDS, _SupportsGet, "get").get("error_information")
+        or _NO_FIELDS
+    )
+    info_fields: Final = require_attributes(info, _SupportsGet, "get")
+    error_class: Final = info_fields.get("error_class") or info_fields.get("error_code")
     if error_class:
         return str(error_class)
     exception: Final = kwargs.get("exception")
@@ -279,7 +295,9 @@ class GenAIMetricRecorder:
     def _common_attributes(self, kwargs: Mapping[str, Any]) -> dict:
         params: Final = kwargs.get("litellm_params") or {}
         common_attrs: Final[dict] = {
-            GenAI.OPERATION_NAME: resolve_operation(kwargs.get("call_type")).value,
+            GenAI.OPERATION_NAME: resolve_operation(
+                kwargs.get("call_type"), kwargs.get(PASSTHROUGH_OPERATION_KEY)
+            ).value,
             **_provider_attributes(params.get("custom_llm_provider")),
             GenAI.REQUEST_MODEL: kwargs.get("model"),
             "gen_ai.framework": "litellm",
@@ -324,13 +342,13 @@ class GenAIMetricRecorder:
             otel_settings: Final = (litellm.callback_settings or {}).get("otel") or {}
             raw: Final[object] = otel_settings.get("attributes") if isinstance(otel_settings, dict) else None
             if raw is not None:
-                attributes = _build_metric_attribute_filter(raw)
+                attributes = build_metric_attribute_filter(raw)
         # A bad filter (include_list + exclude_list both set, an unfilterable name)
         # raises here; the caller (logger._record_metrics) surfaces it once at ERROR
         # so the operator-fixable config error is visible. Not cached on the raise
         # path -- _filter_resolved stays False -- so a corrected config takes effect
         # without reconstructing the recorder.
-        self._include, self._exclude = _resolve_metric_attribute_filter(attributes)
+        self._include, self._exclude = resolve_metric_attribute_filter(attributes)
         self._filter_resolved = True
         self._warn_about_metric_ineligible_names()
 
@@ -414,15 +432,12 @@ class GenAIMetricRecorder:
         if generation_time > 0:
             self._metrics.time_per_output_token.record(generation_time / completion_tokens, attributes=common_attrs)
 
-    def _record_response_duration(self, kwargs: Mapping[str, Any], end_time: datetime, common_attrs: dict) -> None:
+    def _record_response_duration(self, kwargs: _MetricKwargs, end_time: datetime, common_attrs: dict) -> None:
         api_call_start_time: Final = kwargs.get("api_call_start_time")
         if api_call_start_time is None:
             return
-        _end_time = kwargs.get("end_time") or end_time
-        if _end_time is None:
-            _end_time = datetime.now()
         api_call_start: Final = to_seconds(api_call_start_time)
-        end_ts: Final = to_seconds(_end_time)
+        end_ts: Final = to_seconds(kwargs.get("end_time") or end_time)
         if api_call_start is None or end_ts is None:
             return
         duration: Final = end_ts - api_call_start

@@ -2,14 +2,16 @@
 Types and field definitions for router settings management endpoints
 """
 
-from typing import Any, Final, Literal
+from typing import Final, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import Field, field_validator
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 # Fallback Management Types
 
 
-class FallbackCreateRequest(BaseModel):
+class FallbackCreateRequest(LiteLLMBaseModel):
     """Request model for creating/updating fallbacks"""
 
     model: str = Field(description="The model name to configure fallbacks for (e.g., 'gpt-3.5-turbo')")
@@ -39,7 +41,7 @@ class FallbackCreateRequest(BaseModel):
         return v.strip()
 
 
-class FallbackResponse(BaseModel):
+class FallbackResponse(LiteLLMBaseModel):
     """Response model for fallback operations"""
 
     model: str = Field(description="The model name")
@@ -48,7 +50,7 @@ class FallbackResponse(BaseModel):
     message: str = Field(description="Success message")
 
 
-class FallbackGetResponse(BaseModel):
+class FallbackGetResponse(LiteLLMBaseModel):
     """Response model for getting fallbacks"""
 
     model: str = Field(description="The model name")
@@ -56,7 +58,7 @@ class FallbackGetResponse(BaseModel):
     fallback_type: str = Field(description="Type of fallback")
 
 
-class FallbackDeleteResponse(BaseModel):
+class FallbackDeleteResponse(LiteLLMBaseModel):
     """Response model for deleting fallbacks"""
 
     model: str = Field(description="The model name")
@@ -67,12 +69,12 @@ class FallbackDeleteResponse(BaseModel):
 # Router Settings Types
 
 
-class RouterSettingsField(BaseModel):
+class RouterSettingsField(LiteLLMBaseModel):
     field_name: str
     field_type: str
-    field_value: Any
+    field_value: object
     field_description: str
-    field_default: Any = None
+    field_default: object = None
     options: list[str] | None = None  # For fields with predefined options/enum values
     ui_field_name: str  # User-friendly display name
     link: str | None = None  # Documentation link for the field

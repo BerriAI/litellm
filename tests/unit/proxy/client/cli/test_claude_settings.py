@@ -15,6 +15,7 @@ import pytest
 from click.testing import CliRunner
 
 from litellm.litellm_core_utils.private_json import commit_staged_json, write_private_bytes
+from litellm.proxy.client.cli.commands.autoroute.process import AUTOROUTE_DIR
 from litellm.proxy.client.cli.commands.claude_settings import (
     ANTHROPIC_DEFAULT_MODEL_ENV_KEYS,
     AUTOROUTE_BACKUP_PATH,
@@ -196,8 +197,6 @@ class TestConflictingOwnersOfTheSettingsFile:
 
     def test_the_registry_matches_the_paths_the_commands_actually_use(self):
         """A second definition of the autoroute dir must not drift from this one."""
-        from litellm.proxy.client.cli.commands.autoroute.process import AUTOROUTE_DIR
-
         assert AUTOROUTE_BACKUP_PATH == AUTOROUTE_DIR / "claude_settings_backup.json"
         assert {o.backup_path for o in SETTINGS_FILE_OWNERS} == {BACKUP_PATH, AUTOROUTE_BACKUP_PATH}
         assert {o.stop_command for o in SETTINGS_FILE_OWNERS} == {"lite down", "lite autoroute stop"}

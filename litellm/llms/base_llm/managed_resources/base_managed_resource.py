@@ -16,7 +16,7 @@ from litellm.llms.base_llm.managed_resources.isolation import (
     can_access_resource,
     resolve_resource_owner_id,
 )
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.utils import SpecialEnums
 
 MANAGED_RESOURCES_TARGET: Final = "managed_resources"
@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient as _PrismaClient
     from litellm.router import Router as _Router
 
-    Span = _Span | Any
+    Span = _Span
     InternalUsageCache = _InternalUsageCache
     PrismaClient = _PrismaClient
     Router = _Router
@@ -141,7 +141,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         self,
         llm_router: Router,
         model: str,
-        request_data: dict[str, Any],
+        request_data: dict[str, object],
         litellm_parent_otel_span: Span,
     ) -> ResourceObjectType:
         """
@@ -399,7 +399,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
     async def create_resource_for_each_model(
         self,
         llm_router: Router,
-        request_data: dict[str, Any],
+        request_data: dict[str, object],
         target_model_names_list: list[str],
         litellm_parent_otel_span: Span,
     ) -> list[ResourceObjectType]:
@@ -550,7 +550,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         limit: int | None = None,
         after: str | None = None,
         additional_filters: Mapping[str, object] | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         List resources created by a user.
 

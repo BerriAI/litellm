@@ -2,28 +2,34 @@ import asyncio
 import hashlib
 import json
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from typing import Final
+from typing import TYPE_CHECKING, Final, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 from pytest_mock import MockerFixture
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
+    LiteLLM_UserTable,
     LiteLLM_UserTableFiltered,
     LitellmUserRoles,
     NewUserRequest,
+    NewUserResponse,
     ProxyErrorTypes,
     ProxyException,
     UpdateUserRequest,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth import auth_checks
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     _authorize_user_list_request,
     _resolve_org_filter_for_user_search,
@@ -34,6 +40,7 @@ from litellm.proxy.management_endpoints.internal_user_endpoints import (
     ui_view_users,
 )
 from litellm.proxy.proxy_server import app
+from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import InsensitiveContains
 from tests.unit.proxy.management_endpoints.jwt_key_mapping_doubles import (
     CascadingJWTMappingTable,
@@ -41,6 +48,55 @@ from tests.unit.proxy.management_endpoints.jwt_key_mapping_doubles import (
 )
 
 client = TestClient(app)
+
+
+@pytest.mark.parametrize("user_id", ["", " \t\n", "user\x00id", 123, True, [], {}])
+def test_new_user_rejects_invalid_custom_id(user_id: object) -> None:
+    with pytest.raises(ValidationError) as exc:
+        NewUserRequest.model_validate({"user_id": user_id})
+    assert exc.value.errors()[0]["loc"] == ("user_id",)
+
+
+@pytest.mark.parametrize("user_id", [None, "employee-42", "社員@example.test", "  employee-42  "])
+def test_new_user_normalizes_custom_id_and_preserves_auto_generation(user_id: str | None) -> None:
+    request: Final = NewUserRequest(user_id=user_id)
+    assert request.user_id == (user_id.strip() if user_id is not None else None)
+
+
+@pytest.mark.asyncio
+async def test_new_user_returns_conflict_when_id_is_taken_after_duplicate_check(mocker: MockerFixture) -> None:
+    from prisma.errors import UniqueViolationError
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.utils import PrismaClient
+
+    table: Final = SimpleNamespace(
+        find_first=AsyncMock(return_value=None),
+        count=AsyncMock(return_value=0),
+        create=AsyncMock(side_effect=UniqueViolationError(
+            {"user_facing_error": {"meta": {"target": ["user_id"]}}},
+            message="Unique constraint failed on user_id",
+        )),
+        upsert=AsyncMock(return_value=LiteLLM_UserTable(user_id="employee-42")),
+    )
+    mocker.patch("prisma.Prisma", return_value=SimpleNamespace(litellm_usertable=table))
+    database: Final = PrismaClient(
+        database_url="postgresql://unused:unused@localhost/unused",
+        proxy_logging_obj=proxy_server.proxy_logging_obj,
+    )
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", database)
+    with pytest.raises(ProxyException) as exc:
+        await new_user(
+            data=NewUserRequest(user_id="employee-42", auto_create_key=False, send_invite_email=False),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+    assert str(exc.value.code) == "409"
+    assert "employee-42" in exc.value.message
+
+
+if TYPE_CHECKING:
+    from litellm.caching.redis_cache import RedisCache
+    from litellm.proxy.utils import PrismaClient
 
 
 @pytest.mark.asyncio
@@ -118,6 +174,11 @@ async def test_ui_view_users_proxy_admin_no_org_filter(mocker):
 
 
 UserWhereCondition = InsensitiveContains | Sequence[Mapping[str, InsensitiveContains]]
+
+
+@asynccontextmanager
+async def _transaction_over(db: object) -> AsyncIterator[SimpleNamespace]:
+    yield SimpleNamespace(query_raw=AsyncMock(return_value=[]), litellm_usertable=getattr(db, "litellm_usertable"))
 
 
 def _matches_user_where(row: LiteLLM_UserTableFiltered, where: Mapping[str, UserWhereCondition]) -> bool:
@@ -1238,6 +1299,69 @@ async def test_new_user_admin_can_set_permissions(mocker):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "limit_key",
+    ["max_batch_file_records", "max_batch_file_uploads_per_day", "max_file_downloads_per_minute"],
+)
+async def test_new_user_only_proxy_admin_sets_batch_limits_on_the_created_key(mocker, limit_key):
+    from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
+
+    mock_prisma_client = mocker.MagicMock()
+
+    async def mock_count(*args, **kwargs):
+        return 5
+
+    mock_prisma_client.db.litellm_usertable.count = mock_count
+
+    async def mock_check(*_args, **_kwargs):
+        return None
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_email",
+        mock_check,
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_id",
+        mock_check,
+    )
+    mock_license_check = mocker.MagicMock()
+    mock_license_check.is_over_limit.return_value = False
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch("litellm.proxy.proxy_server._license_check", mock_license_check)
+
+    created_with: list[dict[str, object]] = []
+
+    async def stub_helper(**kwargs):
+        created_with.append(kwargs)
+        return {"user_id": "alice", "key": "sk-alice", "expires": None}
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.generate_key_helper_fn",
+        stub_helper,
+    )
+    org_admin = UserAPIKeyAuth(user_id="org-admin", user_role=LitellmUserRoles.ORG_ADMIN)
+    admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    def request(auto_create_key: bool) -> NewUserRequest:
+        return NewUserRequest(
+            user_email="alice@example.com",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            metadata={limit_key: 1000},
+            auto_create_key=auto_create_key,
+        )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await new_user(data=request(auto_create_key=True), user_api_key_dict=org_admin)
+    assert str(exc_info.value.code) == "403"
+    assert f"Only proxy admins can set {limit_key} on a key" in str(exc_info.value.message)
+    assert created_with == []
+
+    await new_user(data=request(auto_create_key=False), user_api_key_dict=org_admin)
+    await new_user(data=request(auto_create_key=True), user_api_key_dict=admin)
+    assert [call["metadata"] for call in created_with] == [{limit_key: 1000}, {limit_key: 1000}]
+
+
+@pytest.mark.asyncio
 async def test_update_single_user_non_admin_permissions_rejected(mocker):
     """`_update_single_user_helper` rejects a non-admin when `permissions`
     is present in the request body. Covers both `/user/update` and
@@ -1568,6 +1692,79 @@ async def test_new_user_default_teams_flow(mocker):
         # Restore original default params (always assign, never delattr — the attribute
         # is defined in litellm/__init__.py and delattr-ing it breaks parallel tests)
         litellm.default_internal_user_params = original_default_params
+
+
+@pytest.mark.asyncio
+async def test_new_user_clears_recent_missing_user_lookup(mocker: MockerFixture) -> None:
+    user_id: Final = "sso-created-user"
+    db_access_time_key: Final = f"user_id:{user_id}"
+    auth_checks.last_db_access_time.pop(db_access_time_key, None)
+    mocker.patch.object(auth_checks, "db_cache_expiry", 3600)
+    prisma_client: Final = mocker.MagicMock()
+    prisma_client.db.litellm_usertable.count = mocker.AsyncMock(return_value=1)
+    prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(return_value=None)
+    prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(return_value=None)
+    user_api_key_cache: Final = UserApiKeyCache()
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)
+    license_check: Final = mocker.MagicMock()
+    license_check.is_over_limit.return_value = False
+    mocker.patch("litellm.proxy.proxy_server._license_check", license_check)
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_email",
+        new=mocker.AsyncMock(return_value=None),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_id",
+        new=mocker.AsyncMock(return_value=None),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.check_if_default_team_set",
+        return_value=None,
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.generate_key_helper_fn",
+        new=mocker.AsyncMock(
+            return_value={"user_id": user_id, "token": "sk-sso-created-user", "expires": None}
+        ),
+    )
+
+    try:
+        with pytest.raises(UserNotFoundError):
+            await auth_checks.get_user_object(
+                user_id=user_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                user_id_upsert=False,
+                sso_user_id="sso-user-id",
+                user_email="sso-created-user@example.com",
+            )
+
+        created_user: Final[NewUserResponse] = await new_user(
+            data=NewUserRequest(
+                user_id=user_id,
+                user_email="sso-created-user@example.com",
+                user_role=LitellmUserRoles.INTERNAL_USER,
+            ),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+        assert created_user.user_id == user_id
+
+        prisma_client.db.litellm_usertable.find_unique.return_value = LiteLLM_UserTable(
+            user_id=user_id,
+            user_email="sso-created-user@example.com",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+        user: Final = await auth_checks.get_user_object(
+            user_id=user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            user_id_upsert=False,
+        )
+
+        assert user is not None
+        assert user.user_id == user_id
+    finally:
+        auth_checks.last_db_access_time.pop(db_access_time_key, None)
 
 
 def test_update_internal_new_user_params_proxy_admin_role():
@@ -2109,6 +2306,18 @@ def test_update_internal_user_params_ignores_other_nones():
     assert non_default_values["max_budget"] == 100.0
 
 
+@pytest.mark.parametrize("field", ["tpm_limit", "rpm_limit"], ids=["tpm_limit", "rpm_limit"])
+def test_update_internal_user_params_explicit_null_clears_rate_limit_but_omitted_is_untouched(
+    field: str,
+) -> None:
+    data: Final = UpdateUserRequest(user_id="limit-clear", **{field: None})
+    result: Final = _update_internal_user_params(data_json=data.model_dump(exclude_unset=True), data=data)
+    other_field: Final = "rpm_limit" if field == "tpm_limit" else "tpm_limit"
+
+    assert result[field] is None
+    assert other_field not in result
+
+
 def test_update_internal_user_params_keeps_original_max_budget_when_not_provided():
     """
     Test that _update_internal_user_params does not include max_budget
@@ -2251,6 +2460,54 @@ async def test_user_status_update_refreshes_cached_user(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_fields", "role_default_duration", "stored_reset_at", "moves_reset"),
+    [
+        ({"budget_duration": "30d"}, None, datetime(2020, 1, 1, tzinfo=timezone.utc), False),
+        ({"budget_duration": "30d"}, None, datetime(2099, 1, 1, tzinfo=timezone.utc), True),
+        ({"budget_duration": "7d"}, None, datetime(2020, 1, 1, tzinfo=timezone.utc), True),
+        ({"user_role": LitellmUserRoles.INTERNAL_USER}, "30d", datetime(2020, 1, 1, tzinfo=timezone.utc), False),
+    ],
+)
+async def test_user_update_keeps_a_due_budget_reset_when_the_duration_is_resent(
+    mocker: MockerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    request_fields: dict[str, object],
+    role_default_duration: str | None,
+    stored_reset_at: datetime,
+    moves_reset: bool,
+) -> None:
+    import litellm
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _update_single_user_helper
+
+    monkeypatch.setattr(litellm, "internal_user_budget_duration", role_default_duration)
+    saved_user: Final = LiteLLM_UserTable(
+        user_id="user-spruce",
+        budget_duration="30d",
+        budget_reset_at=stored_reset_at,
+    )
+    prisma_client: Final = mocker.MagicMock()
+    prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(return_value=saved_user)
+    prisma_client.update_data = mocker.AsyncMock(return_value={"user_id": saved_user.user_id, "data": saved_user})
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)  # test-quality-ok: substitute the database dependency
+    mocker.patch(  # test-quality-ok: keep the Redis publication boundary offline
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        new_callable=mocker.AsyncMock,
+    )
+
+    await _update_single_user_helper(
+        user_request=UpdateUserRequest(user_id=saved_user.user_id, **request_fields),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin-spruce", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    written: Final = prisma_client.update_data.call_args.kwargs["data"]
+    reset_at: Final = written.get("budget_reset_at")
+    assert (isinstance(reset_at, datetime) and reset_at > datetime.now(timezone.utc)) is moves_reset
+    assert ("budget_reset_at" in written) is moves_reset
+
+
+@pytest.mark.asyncio
 async def test_bulk_user_model_budget_clear_serializes_and_refreshes_cache(mocker: MockerFixture) -> None:
     from litellm.proxy._types import LiteLLM_UserTable
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -2261,6 +2518,7 @@ async def test_bulk_user_model_budget_clear_serializes_and_refreshes_cache(mocke
     prisma_client: Final = mocker.MagicMock()
     prisma_client.db.litellm_usertable.find_many = mocker.AsyncMock(return_value=[saved_user])
     prisma_client.db.litellm_usertable.update_many = mocker.AsyncMock(return_value=1)
+    prisma_client.tx = lambda: _transaction_over(prisma_client.db)
     mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)  # test-quality-ok: substitute the database dependency
     cache: Final = UserApiKeyCache()
     await cache.async_set_cache(key=saved_user.user_id, value=saved_user, model_type=LiteLLM_UserTable)
@@ -2307,6 +2565,7 @@ async def test_user_max_budget_update_evicts_cached_user_on_every_worker(mocker:
     prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(return_value=saved_user)
     prisma_client.db.litellm_usertable.find_many = mocker.AsyncMock(return_value=[saved_user])
     prisma_client.db.litellm_usertable.update_many = mocker.AsyncMock(return_value=1)
+    prisma_client.tx = lambda: _transaction_over(prisma_client.db)
     prisma_client.get_data = mocker.AsyncMock(return_value=[saved_user])
     prisma_client.update_data = mocker.AsyncMock(return_value={"user_id": saved_user.user_id, "data": saved_user})
     mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)  # test-quality-ok: substitute the database dependency
@@ -2335,6 +2594,204 @@ async def test_user_max_budget_update_evicts_cached_user_on_every_worker(mocker:
 
     assert await cache.async_get_cache(key=saved_user.user_id, model_type=LiteLLM_UserTable) is None
     broadcast.assert_awaited_once_with(cache_key=saved_user.user_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "new_value"),
+    [
+        ("tpm_limit", 100),
+        ("rpm_limit", 1),
+        ("tpm_limit", None),
+        ("rpm_limit", None),
+        ("models", ["model-fir"]),
+        ("user_role", LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value),
+    ],
+    ids=[
+        "tpm_limit",
+        "rpm_limit",
+        "tpm_limit-cleared",
+        "rpm_limit-cleared",
+        "models",
+        "user_role",
+    ],
+)
+@pytest.mark.parametrize("all_users", [False, True], ids=["single-user", "bulk-all-users"])
+async def test_user_update_reaches_cached_user_on_every_worker(
+    mocker: MockerFixture, field: str, new_value: object, all_users: bool
+) -> None:
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.auth.auth_checks import get_user_object
+    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import AuthCacheInvalidationSubscriber
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.management_endpoints.internal_user_endpoints import bulk_user_update, user_update
+    from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
+        BulkUpdateUserRequest,
+        UpdateUserRequestNoUserIDorEmail,
+    )
+
+    published: Final[list[tuple[str, str]]] = []  # mutable-ok: captures messages from the async Redis publisher
+
+    class _RecordingRedisClient:
+        async def publish(self, channel: str, message: str) -> int:
+            published.append((channel, message))
+            return 1
+
+    class _FakeRedisCache:
+        namespace: str | None = None
+
+        def init_pubsub_client(self) -> _RecordingRedisClient:
+            return _RecordingRedisClient()
+
+    class _UserTableMocks:
+        def __init__(
+            self,
+            find_first: AsyncMock,
+            find_unique: AsyncMock,
+            find_many: AsyncMock,
+            update_many: AsyncMock,
+        ) -> None:
+            self.find_first = find_first
+            self.find_unique = find_unique
+            self.find_many = find_many
+            self.update_many = update_many
+
+    class _DatabaseMocks:
+        def __init__(self, litellm_usertable: _UserTableMocks) -> None:
+            self.litellm_usertable = litellm_usertable
+
+    class _PrismaClientMock:
+        def __init__(
+            self,
+            db: _DatabaseMocks,
+            get_data: AsyncMock,
+            updated_user: LiteLLM_UserTable,
+        ) -> None:
+            self.db = db
+            self.get_data = get_data
+            self.updated_user = updated_user
+            self.update_data_payload: dict[str, object] | None = None
+
+        async def update_data(self, user_id: str, data: dict[str, object], table_name: str) -> dict[str, object]:
+            self.update_data_payload = data
+            return {"user_id": user_id, "data": self.updated_user}
+
+        def tx(self) -> AbstractAsyncContextManager[SimpleNamespace]:
+            return _transaction_over(self.db)
+
+    saved_user: Final = LiteLLM_UserTable(
+        user_id="user-spruce",
+        tpm_limit=100000,
+        rpm_limit=1000,
+        models=["model-spruce"],
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    updated_user: Final = saved_user.model_copy(update={field: new_value})
+    old_value: Final = saved_user.model_dump()[field]
+    assert old_value != new_value
+
+    prisma_client: Final = _PrismaClientMock(
+        db=_DatabaseMocks(
+            litellm_usertable=_UserTableMocks(
+                find_first=mocker.AsyncMock(return_value=saved_user),
+                find_unique=mocker.AsyncMock(return_value=updated_user),
+                find_many=mocker.AsyncMock(
+                    return_value=[*(LiteLLM_UserTable(user_id=f"user-pine-{index}") for index in range(50)), saved_user]
+                ),
+                update_many=mocker.AsyncMock(return_value=1),
+            )
+        ),
+        get_data=mocker.AsyncMock(return_value=saved_user),
+        updated_user=updated_user,
+    )
+    prisma_client_for_auth: Final = cast("PrismaClient", prisma_client)
+    mocker.patch(  # test-quality-ok: substitute the database dependency
+        "litellm.proxy.proxy_server.prisma_client", prisma_client
+    )
+
+    handling_worker_cache: Final = UserApiKeyCache()
+    other_worker_cache: Final = UserApiKeyCache()
+    await handling_worker_cache.async_set_cache(
+        key=saved_user.user_id,
+        value=saved_user,
+        model_type=LiteLLM_UserTable,
+    )
+    await other_worker_cache.async_set_cache(
+        key=saved_user.user_id,
+        value=saved_user,
+        model_type=LiteLLM_UserTable,
+    )
+    mocker.patch(  # test-quality-ok: exercise a real isolated cache for the endpoint's worker
+        "litellm.proxy.proxy_server.user_api_key_cache", handling_worker_cache
+    )
+    mocker.patch(  # test-quality-ok: inject an in-memory pub/sub client without live Redis
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
+        return_value=_FakeRedisCache(),
+    )
+
+    handling_user_before: Final = await get_user_object(
+        user_id=saved_user.user_id,
+        prisma_client=prisma_client_for_auth,
+        user_api_key_cache=handling_worker_cache,
+        user_id_upsert=False,
+    )
+    other_user_before: Final = await get_user_object(
+        user_id=saved_user.user_id,
+        prisma_client=prisma_client_for_auth,
+        user_api_key_cache=other_worker_cache,
+        user_id_upsert=False,
+    )
+    assert handling_user_before is not None
+    assert handling_user_before.model_dump()[field] == old_value
+    assert other_user_before is not None
+    assert other_user_before.model_dump()[field] == old_value
+
+    admin: Final = UserAPIKeyAuth(user_id="admin-spruce", user_role=LitellmUserRoles.PROXY_ADMIN)
+    if all_users:
+        await bulk_user_update(
+            data=BulkUpdateUserRequest(
+                all_users=True,
+                user_updates=UpdateUserRequestNoUserIDorEmail.model_validate({field: new_value}),
+            ),
+            user_api_key_dict=admin,
+            litellm_changed_by=None,
+        )
+        prisma_client.db.litellm_usertable.update_many.assert_awaited_once_with(where={}, data={field: new_value})
+    else:
+        await user_update(
+            data=UpdateUserRequest.model_validate({"user_id": saved_user.user_id, field: new_value}),
+            user_api_key_dict=admin,
+        )
+        assert prisma_client.update_data_payload is not None
+        assert prisma_client.update_data_payload[field] == new_value
+
+    remote_subscriber: Final = AuthCacheInvalidationSubscriber(
+        redis_cache=cast("RedisCache", _FakeRedisCache()),
+        user_api_key_cache=other_worker_cache,
+    )
+    for _, message in published:
+        remote_subscriber._apply_message(  # pyright: ignore[reportPrivateUsage]  # exercising the real cross-worker message handler, not a public API
+            {"type": "message", "data": message}
+        )
+
+    handling_user_after: Final = await get_user_object(
+        user_id=saved_user.user_id,
+        prisma_client=prisma_client_for_auth,
+        user_api_key_cache=handling_worker_cache,
+        user_id_upsert=False,
+    )
+    other_user_after: Final = await get_user_object(
+        user_id=saved_user.user_id,
+        prisma_client=prisma_client_for_auth,
+        user_api_key_cache=other_worker_cache,
+        user_id_upsert=False,
+    )
+    assert handling_user_after is not None
+    assert handling_user_after.model_dump()[field] == new_value
+    assert other_user_after is not None
+    assert other_user_after.model_dump()[field] == new_value, (
+        "another worker still serves the old user row; the update was never broadcast"
+    )
 
 
 def test_generate_request_base_validator():
@@ -2477,6 +2934,17 @@ async def test_get_user_daily_activity_rejects_service_account_caller(monkeypatc
     mock_get_daily.assert_not_called()
 
 
+def _serve_locked_user_delete(prisma_client: MagicMock, *users: object) -> None:
+    @asynccontextmanager
+    async def tx(*, timeout: object = None) -> AsyncIterator[MagicMock]:
+        yield prisma_client.db
+
+    prisma_client.tx = tx
+    prisma_client.db.query_raw = AsyncMock(return_value=[])
+    prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=list(users))
+    prisma_client.db.litellm_teammembership.find_many = AsyncMock(return_value=[])
+
+
 @pytest.mark.asyncio
 async def test_delete_user_cleans_up_created_by_invitation_links(mocker):
     """
@@ -2529,6 +2997,7 @@ async def test_delete_user_cleans_up_created_by_invitation_links(mocker):
     mock_prisma_client.db.litellm_usertable.delete_many = mocker.AsyncMock(
         return_value=1
     )
+    _serve_locked_user_delete(mock_prisma_client, mock_user_row)
 
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
@@ -2618,6 +3087,7 @@ async def test_delete_user_evicts_jwt_key_mapping_cache_of_its_keys(mocker):
     mock_prisma_client.db.litellm_organizationmembership.delete_many = mocker.AsyncMock(return_value=0)
     mock_prisma_client.db.litellm_teammembership.delete_many = mocker.AsyncMock(return_value=0)
     mock_prisma_client.db.litellm_usertable.delete_many = mocker.AsyncMock(return_value=1)
+    _serve_locked_user_delete(mock_prisma_client, user_row)
 
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)  # test-quality-ok: substitute the database dependency
     mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", cache)  # test-quality-ok: exercise a real isolated cache
@@ -2747,49 +3217,65 @@ async def test_user_update_rejects_silent_create_for_non_proxy_admin(mocker):
 
 
 @pytest.mark.asyncio
-async def test_user_info_v2_proxy_admin_can_query_any_user(mocker):
+async def test_user_info_v2_proxy_admin_can_query_any_user(mocker: MockerFixture) -> None:
     """
     Test that proxy admin can query any user via /v2/user/info.
     """
     from fastapi import Request
 
-    from litellm.proxy._types import UserInfoV2Response
+    from litellm.proxy._types import LiteLLM_UserTable, UserInfoV2Response
     from litellm.proxy.management_endpoints.internal_user_endpoints import user_info_v2
 
-    mock_prisma_client = mocker.MagicMock()
+    mock_user_row: Final = LiteLLM_UserTable(
+        user_id="target-user-123",
+        user_email="target@example.com",
+        user_alias="Target User",
+        user_role="internal_user",
+        spend=42.5,
+        max_budget=100.0,
+        tpm_limit=100000,
+        rpm_limit=1000,
+        models=["gpt-4"],
+        budget_duration="30d",
+        budget_reset_at=None,
+        metadata={"team": "engineering"},
+        created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        updated_at=datetime(2024, 6, 1, tzinfo=timezone.utc),
+        sso_user_id="sso-abc",
+        teams=["team-1", "team-2"],
+    )
 
-    mock_user_row = mocker.MagicMock()
-    mock_user_row.model_dump.return_value = {
-        "user_id": "target-user-123",
-        "user_email": "target@example.com",
-        "user_alias": "Target User",
-        "user_role": "internal_user",
-        "spend": 42.5,
-        "max_budget": 100.0,
-        "models": ["gpt-4"],
-        "budget_duration": "30d",
-        "budget_reset_at": None,
-        "metadata": {"team": "engineering"},
-        "created_at": datetime(2024, 1, 1, tzinfo=timezone.utc),
-        "updated_at": datetime(2024, 6, 1, tzinfo=timezone.utc),
-        "sso_user_id": "sso-abc",
-        "teams": ["team-1", "team-2"],
-    }
+    class _UserTable:
+        def __init__(self, find_unique: AsyncMock) -> None:
+            self.find_unique = find_unique
 
-    async def mock_find_unique(*args, **kwargs):
-        if kwargs.get("where", {}).get("user_id") == "target-user-123":
+    class _Database:
+        def __init__(self, litellm_usertable: _UserTable) -> None:
+            self.litellm_usertable = litellm_usertable
+
+    class _PrismaClient:
+        def __init__(self, db: _Database) -> None:
+            self.db = db
+
+    async def mock_find_unique(*_args: object, **kwargs: object) -> LiteLLM_UserTable | None:
+        where: Final = kwargs.get("where")
+        if isinstance(where, Mapping) and where.get("user_id") == "target-user-123":
             return mock_user_row
         return None
 
-    mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(side_effect=mock_find_unique)
+    mock_prisma_client: Final = _PrismaClient(
+        db=_Database(
+            litellm_usertable=_UserTable(find_unique=mocker.AsyncMock(side_effect=mock_find_unique))
+        )
+    )
 
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
-    mock_request = mocker.MagicMock(spec=Request)
+    mock_request: Final = mocker.MagicMock(spec=Request)
 
-    admin_key = UserAPIKeyAuth(user_id="admin-user", user_role=LitellmUserRoles.PROXY_ADMIN)
+    admin_key: Final = UserAPIKeyAuth(user_id="admin-user", user_role=LitellmUserRoles.PROXY_ADMIN)
 
-    response = await user_info_v2(
+    response: Final = await user_info_v2(
         request=mock_request,
         user_id="target-user-123",
         user_api_key_dict=admin_key,
@@ -2802,6 +3288,8 @@ async def test_user_info_v2_proxy_admin_can_query_any_user(mocker):
     assert response.user_role == "internal_user"
     assert response.spend == 42.5
     assert response.max_budget == 100.0
+    assert response.tpm_limit == 100000
+    assert response.rpm_limit == 1000
     assert response.models == ["gpt-4"]
     assert response.teams == ["team-1", "team-2"]
     assert response.sso_user_id == "sso-abc"
@@ -2968,6 +3456,8 @@ async def test_user_info_v2_internal_user_cannot_query_other(mocker):
 
     mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(side_effect=mock_find_unique)
 
+    mock_prisma_client.db.litellm_organizationmembership.find_many = mocker.AsyncMock(return_value=[])
+
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     mock_request = mocker.MagicMock(spec=Request)
@@ -3072,6 +3562,40 @@ async def test_user_info_v2_nonexistent_user_returns_404(mocker):
     assert "nonexistent-user-id" in str(exc_info.value.message)
 
 
+@pytest.mark.parametrize(
+    ("find_unique", "expected_code", "logs_traceback"),
+    [
+        (AsyncMock(return_value=None), "404", False),
+        (AsyncMock(side_effect=RuntimeError("db down")), "500", True),
+    ],
+)
+@pytest.mark.asyncio
+async def test_user_info_v2_logs_traceback_only_for_server_errors(
+    mocker: MockerFixture,
+    caplog: pytest.LogCaptureFixture,
+    find_unique: AsyncMock,
+    expected_code: str,
+    logs_traceback: bool,
+) -> None:
+    from fastapi import Request
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import user_info_v2
+
+    prisma: Final = mocker.MagicMock()
+    prisma.db.litellm_usertable.find_unique = find_unique
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma)
+
+    with caplog.at_level(logging.ERROR), pytest.raises(ProxyException) as exc_info:
+        await user_info_v2(
+            request=mocker.MagicMock(spec=Request),
+            user_id="some-user",
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-user", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert exc_info.value.code == expected_code
+    assert any(record.exc_info for record in caplog.records) is logs_traceback
+
+
 @pytest.mark.asyncio
 async def test_user_info_v2_response_shape(mocker):
     """
@@ -3132,6 +3656,8 @@ async def test_user_info_v2_response_shape(mocker):
         "user_role",
         "spend",
         "max_budget",
+        "tpm_limit",
+        "rpm_limit",
         "models",
         "budget_duration",
         "budget_reset_at",
@@ -3150,7 +3676,7 @@ async def test_user_info_v2_response_shape(mocker):
     # these two, so dropping them makes a save replace the user's budgets.
     assert response_dict["model_max_budget"] == {"gpt-3.5-turbo": {"budget_limit": 5.0, "time_period": "30d"}}
     assert response_dict["model_max_budget_usage"] == {
-        "gpt-3.5-turbo": {"current_spend": 0.0, "budget_limit": 5.0, "time_period": "30d"}
+        "gpt-3.5-turbo": {"current_spend": 0.0, "budget_limit": 5.0, "time_period": "30d", "budget_reset_at": None}
     }
 
     # Verify teams is a list of strings (team IDs), not team objects
@@ -3288,6 +3814,8 @@ async def test_user_info_v2_team_admin_cannot_query_non_team_member(mocker):
 
     mock_prisma_client.db.litellm_teamtable.find_many = mocker.AsyncMock(side_effect=mock_find_many_teams)
 
+    mock_prisma_client.db.litellm_organizationmembership.find_many = mocker.AsyncMock(return_value=[])
+
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     mock_request = mocker.MagicMock(spec=Request)
@@ -3299,6 +3827,80 @@ async def test_user_info_v2_team_admin_cannot_query_non_team_member(mocker):
             request=mock_request,
             user_id="non-member-user",
             user_api_key_dict=team_admin_key,
+        )
+
+    assert exc_info.value.code == "404"
+
+
+_ORG_MEMBERSHIPS: Final = (
+    SimpleNamespace(user_id="org-admin-user", organization_id="org-a", user_role="org_admin"),
+    SimpleNamespace(user_id="org-admin-user", organization_id="org-c", user_role="internal_user"),
+    SimpleNamespace(user_id="member-of-a", organization_id="org-a", user_role="internal_user"),
+    SimpleNamespace(user_id="member-of-b", organization_id="org-b", user_role="internal_user"),
+    SimpleNamespace(user_id="member-of-c", organization_id="org-c", user_role="internal_user"),
+)
+
+
+def _membership_matches(membership: SimpleNamespace, where: Mapping[str, object]) -> bool:
+    return membership.user_id == where["user_id"] and (
+        "user_role" not in where or membership.user_role == where["user_role"]
+    )
+
+
+def _org_admin_prisma(mocker: MockerFixture) -> MagicMock:
+    def user_row(user_id: str) -> MagicMock:
+        row: Final = mocker.MagicMock()
+        row.teams = []
+        row.model_dump.return_value = {"user_id": user_id, "user_email": f"{user_id}@example.com", "teams": []}
+        return row
+
+    async def find_unique(**kwargs: dict[str, str]) -> MagicMock | None:
+        user_id: Final = kwargs["where"]["user_id"]
+        return user_row(user_id) if user_id in {m.user_id for m in _ORG_MEMBERSHIPS} else None
+
+    async def find_many(**kwargs: Mapping[str, object]) -> list[SimpleNamespace]:
+        return [m for m in _ORG_MEMBERSHIPS if _membership_matches(m, kwargs["where"])]
+
+    prisma: Final = mocker.MagicMock()
+    prisma.db.litellm_usertable.find_unique = mocker.AsyncMock(side_effect=find_unique)
+    prisma.db.litellm_organizationmembership.find_many = mocker.AsyncMock(side_effect=find_many)
+    return prisma
+
+
+@pytest.mark.asyncio
+async def test_user_info_v2_org_admin_can_query_member_of_their_org(mocker: MockerFixture) -> None:
+    from fastapi import Request
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import user_info_v2
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", _org_admin_prisma(mocker))
+
+    response: Final = await user_info_v2(
+        request=mocker.MagicMock(spec=Request),
+        user_id="member-of-a",
+        user_api_key_dict=UserAPIKeyAuth(user_id="org-admin-user", user_role=LitellmUserRoles.INTERNAL_USER),
+    )
+
+    assert response.user_id == "member-of-a"
+    assert response.user_email == "member-of-a@example.com"
+
+
+@pytest.mark.parametrize("target_user_id", ["member-of-b", "member-of-c"])
+@pytest.mark.asyncio
+async def test_user_info_v2_org_admin_cannot_query_user_outside_their_admin_orgs(
+    mocker: MockerFixture, target_user_id: str
+) -> None:
+    from fastapi import Request
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import user_info_v2
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", _org_admin_prisma(mocker))
+
+    with pytest.raises(ProxyException) as exc_info:
+        await user_info_v2(
+            request=mocker.MagicMock(spec=Request),
+            user_id=target_user_id,
+            user_api_key_dict=UserAPIKeyAuth(user_id="org-admin-user", user_role=LitellmUserRoles.INTERNAL_USER),
         )
 
     assert exc_info.value.code == "404"
@@ -3655,7 +4257,7 @@ async def test_admin_user_update_spend_invalidates_counter(mocker):
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     mocker.patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
     mock_invalidate = mocker.patch(
-        "litellm.proxy.proxy_server._invalidate_spend_counter",
+        "litellm.proxy.proxy_server.invalidate_spend_counter",
         new=mocker.AsyncMock(),
     )
 
@@ -3668,7 +4270,10 @@ async def test_admin_user_update_spend_invalidates_counter(mocker):
     admin_caller = UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
 
     await _update_single_user_helper(user_request=user_request, user_api_key_dict=admin_caller)
-    mock_invalidate.assert_awaited_once_with(counter_key="spend:user:target-user")
+    assert [call.kwargs["counter_key"] for call in mock_invalidate.await_args_list] == [
+        "spend:user:target-user",
+        "spend:committed:user:target-user",
+    ]
 
 
 @pytest.mark.asyncio
@@ -3689,7 +4294,7 @@ async def test_user_update_rejects_non_finite_spend(mocker):
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     mocker.patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
     mock_invalidate = mocker.patch(
-        "litellm.proxy.proxy_server._invalidate_spend_counter",
+        "litellm.proxy.proxy_server.invalidate_spend_counter",
         new=mocker.AsyncMock(),
     )
 
@@ -3810,6 +4415,65 @@ async def test_add_new_user_to_default_team_string_teams_have_no_member_budget(m
 
 
 @pytest.mark.asyncio
+async def test_add_new_user_to_default_team_joins_teams_in_the_order_given_and_past_a_failing_team(
+    mocker: MockerFixture,
+) -> None:
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        add_new_user_to_default_team,
+    )
+
+    requested: Final = ("team-zeta", "team-broken", "team-mu", "team-alpha")
+    seconds_per_team: Final = {"team-zeta": 0.03, "team-broken": 0.0, "team-mu": 0.02, "team-alpha": 0.0}
+    finished: Final = mocker.MagicMock()
+
+    async def join_team(*, team_id: str, **_: object) -> None:
+        await asyncio.sleep(seconds_per_team[team_id])
+        if team_id == "team-broken":
+            raise RuntimeError("team row locked")
+        finished(team_id)
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._add_user_to_team",
+        side_effect=join_team,
+    )
+
+    await add_new_user_to_default_team(
+        user_id="scim-user",
+        user_email=None,
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        teams=list(requested),
+        prisma_client=mocker.MagicMock(),
+    )
+
+    assert [call.args[0] for call in finished.call_args_list] == ["team-zeta", "team-mu", "team-alpha"]
+
+
+@pytest.mark.asyncio
+async def test_add_new_user_to_default_team_rejects_an_invalid_team_before_joining_any(
+    mocker: MockerFixture,
+) -> None:
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        add_new_user_to_default_team,
+    )
+
+    join_team: Final = mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._add_user_to_team",
+        new_callable=mocker.AsyncMock,
+    )
+
+    with pytest.raises(ValueError, match="Invalid team type"):
+        await add_new_user_to_default_team(
+            user_id="new-user",
+            user_email=None,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            teams=["team-zeta", {"team_id": "team-mu"}],
+            prisma_client=mocker.MagicMock(),
+        )
+
+    join_team.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_add_user_to_team_logs_unknown_team_at_error(mocker, caplog):
     """A default team that no longer exists makes every membership write 404.
 
@@ -3906,6 +4570,34 @@ async def test_get_user_info_for_proxy_admin_validates_keys_and_teams():
     assert returned_key["models"] == []
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raw_rows",
+    [
+        [{"teams": None, "keys": "sk-row-content-must-not-leak"}],
+        [{"teams": None, "keys": ["sk-row-content-must-not-leak"]}],
+    ],
+)
+async def test_get_user_info_for_proxy_admin_errors_do_not_echo_row_content(raw_rows):
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from pydantic import ValidationError
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _get_user_info_for_proxy_admin,
+    )
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.query_raw = AsyncMock(return_value=raw_rows)
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
+        with pytest.raises(ValidationError) as exc_info:
+            await _get_user_info_for_proxy_admin(user_api_key_dict=UserAPIKeyAuth(user_id=None))
+
+    assert "sk-row-content-must-not-leak" not in str(exc_info.value)
+
+
 def _object_permission_mocks(mocker, existing_object_permission_id=None):
     """Prisma double whose user row optionally already links a permission row."""
     mock_prisma_client = mocker.MagicMock()
@@ -3927,7 +4619,7 @@ def _object_permission_mocks(mocker, existing_object_permission_id=None):
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     mocker.patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
     mocker.patch(
-        "litellm.proxy.proxy_server._invalidate_spend_counter",
+        "litellm.proxy.proxy_server.invalidate_spend_counter",
         new=mocker.AsyncMock(),
     )
     return mock_prisma_client
@@ -3997,6 +4689,34 @@ async def test_user_update_invalidates_the_cached_entitlement(mocker):
 
     deleted = {call.kwargs["key"] for call in cache.async_delete_cache.call_args_list}
     assert deleted == {
+        "object_permission_id:perm-new",
+        "user_object_permission_id:target-user",
+        "target-user",
+    }
+
+
+@pytest.mark.asyncio
+async def test_user_update_broadcasts_the_entitlement_invalidation_to_other_workers(mocker: MockerFixture):
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_single_user_helper,
+    )
+
+    _object_permission_mocks(mocker)
+    cache: Final = mocker.MagicMock()
+    cache.async_delete_cache = mocker.AsyncMock()
+    mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", cache)  # test-quality-ok: substitute the cache dependency
+    broadcast: Final = mocker.patch(  # test-quality-ok: observe the Redis publication boundary
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        new_callable=mocker.AsyncMock,
+    )
+
+    await _update_single_user_helper(
+        user_request=UpdateUserRequest(user_id="target-user", object_permission={"vector_stores": []}),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    broadcast_keys: Final = {call.kwargs["cache_key"] for call in broadcast.await_args_list}
+    assert broadcast_keys == {
         "object_permission_id:perm-new",
         "user_object_permission_id:target-user",
         "target-user",
@@ -4239,7 +4959,9 @@ async def test_user_new_persists_model_max_budget(monkeypatch, model_max_budget,
         models = []
 
     class _FakePrisma:
-        async def insert_data(self, data, table_name):
+        async def insert_data(
+            self, data: Mapping[str, object], table_name: str, *, allow_existing_user: bool = True
+        ) -> _FakeUserRow | SimpleNamespace:
             if table_name == "user":
                 captured["user_data"] = dict(data)
                 return _FakeUserRow()
@@ -4530,6 +5252,7 @@ async def test_delete_user_evicts_cached_user_rows(mocker: MockerFixture) -> Non
     prisma_client.db.litellm_organizationmembership.delete_many = mocker.AsyncMock(return_value=0)
     prisma_client.db.litellm_teammembership.delete_many = mocker.AsyncMock(return_value=0)
     prisma_client.db.litellm_usertable.delete_many = mocker.AsyncMock(return_value=1)
+    _serve_locked_user_delete(prisma_client, deleted)
     mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)  # test-quality-ok: substitute the database dependency
     cache: Final = UserApiKeyCache()
     for row in (deleted, survivor):
@@ -4551,11 +5274,44 @@ async def test_delete_user_evicts_cached_user_rows(mocker: MockerFixture) -> Non
     broadcast.assert_awaited_once_with(cache_key=deleted.user_id)
 
 
+@pytest.mark.asyncio
+async def test_delete_user_drops_the_committed_spend_of_the_users_it_deleted(mocker: MockerFixture) -> None:
+    from litellm.proxy._types import DeleteUserRequest, LiteLLM_UserTable
+    from litellm.proxy.management_endpoints.internal_user_endpoints import delete_user
+    from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+
+    spend: Final = FakeSpendCounters(
+        redis=None, memory={"spend:committed:user:user-gone": 7.0, "spend:committed:user:user-stays": 3.0}
+    )
+    mocker.patch("litellm.proxy.proxy_server.spend_counter_store", spend.store())  # test-quality-ok: substitute the spend counter dependency
+    deleted: Final = LiteLLM_UserTable(user_id="user-gone", user_email="gone@example.test", teams=[])
+    prisma_client: Final = mocker.MagicMock()
+    prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(return_value=deleted)
+    prisma_client.db.litellm_teamtable.find_many = mocker.AsyncMock(return_value=[])
+    prisma_client.db.litellm_jwtkeymapping.find_many = mocker.AsyncMock(return_value=[])
+    prisma_client.db.litellm_verificationtoken.find_many = mocker.AsyncMock(return_value=[])
+    prisma_client.db.litellm_verificationtoken.delete_many = mocker.AsyncMock(return_value=0)
+    prisma_client.db.litellm_invitationlink.delete_many = mocker.AsyncMock(return_value=0)
+    prisma_client.db.litellm_organizationmembership.delete_many = mocker.AsyncMock(return_value=0)
+    prisma_client.db.litellm_teammembership.delete_many = mocker.AsyncMock(return_value=0)
+    prisma_client.db.litellm_usertable.delete_many = mocker.AsyncMock(return_value=1)
+    _serve_locked_user_delete(prisma_client, deleted)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)  # test-quality-ok: substitute the database dependency
+    mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj", None)  # test-quality-ok: delete_user reads it off proxy_server at call time
+
+    await delete_user(
+        data=DeleteUserRequest(user_ids=[deleted.user_id]),
+        user_api_key_dict=UserAPIKeyAuth(user_id="proxy-admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert spend.memory == {"spend:committed:user:user-stays": 3.0}
+
+
 _DB_OUTAGE_503_BODY: Final = {
     "error": {
         "message": "Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly.",
         "type": "no_db_connection",
-        "param": "None",
+        "param": None,
         "code": "503",
     }
 }
@@ -4702,16 +5458,17 @@ async def test_delete_user_writes_deleted_audit_log_for_user_keys(mocker):
     mock_prisma_client.db.litellm_teammembership.delete_many = mocker.AsyncMock(return_value=0)
     mock_prisma_client.db.litellm_jwtkeymapping.find_many = mocker.AsyncMock(return_value=[])
     mock_prisma_client.db.litellm_usertable.delete_many = mocker.AsyncMock(return_value=1)
+    _serve_locked_user_delete(mock_prisma_client, mock_user_row)
 
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     mocker.patch("litellm.store_audit_logs", True)
     captured: Final[list] = []
 
-    async def _capture(request_data):
-        captured.append(request_data)
+    async def _capture(rows):
+        captured.extend(rows)
 
     mocker.patch(
-        "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+        "litellm.proxy.management_helpers.audit_logs.create_audit_logs_for_updates",
         new=_capture,
     )
 
@@ -4795,3 +5552,31 @@ async def test_user_update_without_password_revokes_nothing(_admin_prisma, mocke
     await _update_single_user_helper(user_request=user_request, user_api_key_dict=admin_caller)
 
     revoke_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_user_update_reports_a_bad_budget_duration_as_a_request_error_not_an_auth_error(_admin_prisma: MagicMock) -> None:
+    from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
+
+    with pytest.raises(ProxyException) as exc_info:
+        await user_update(
+            data=UpdateUserRequest(user_id="target-user", budget_duration="not-a-duration"),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert (exc_info.value.code, exc_info.value.type) == ("400", "invalid_request_error")
+    assert "Invalid budget_duration" in exc_info.value.message
+    assert "Authentication Error" not in exc_info.value.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fips_mode")
+async def test_fips_user_update_hashes_off_the_event_loop(pbkdf2_on_event_loop: list[bool]) -> None:
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _hash_password_in_dict
+
+    data: Final = {"password": "Str0ng!Passw0rd"}
+
+    await _hash_password_in_dict(data, {"password_policy_check_breached_passwords": False})
+
+    assert pbkdf2_on_event_loop == [False]
+    assert data["password"].startswith("pbkdf2:")

@@ -1,12 +1,19 @@
+import asyncio
+import copy
 import datetime
 import json
 import os
+import queue
 import unittest
-from typing import TYPE_CHECKING, Final, List, Literal, Optional, Tuple, get_args
+from collections.abc import AsyncIterator, Mapping, Sequence
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final, List, Literal, Optional, Tuple, cast, get_args
 from unittest.mock import ANY, MagicMock, Mock, patch
 
 import httpx
 import pytest
+import respx
 from openai.types.responses import (
     ResponseFunctionToolCall,
     ResponseOutputMessage,
@@ -21,14 +28,533 @@ import litellm
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
     LiteLLMResponsesTransformationHandler,
 )
-from litellm.types.llms.openai import REASONING_EFFORT
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.types.llms.openai import AllMessageValues, REASONING_EFFORT, ResponsesAPIResponse
+from litellm.types.utils import ModelResponse, StandardLoggingPayload, TextCompletionResponse
 
 if TYPE_CHECKING:
     from openai.types.responses import ResponseOutputItem
     from openai.types.responses.response_reasoning_item import ResponseReasoningItem
 
-    from litellm.types.llms.openai import ResponsesAPIResponse
-    from litellm.types.utils import ModelResponse
+
+def test_completion_over_responses_maps_anthropic_search_tool_to_openai_tool_search() -> None:
+    response_body: Final = {
+        "id": "resp_tool_search_bridge",
+        "object": "response",
+        "created_at": 1789788253,
+        "status": "completed",
+        "model": "gpt-5.5",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_tool_search_bridge",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    }
+    tools: Final = [
+        {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"},
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get the weather",
+                "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+            },
+            "defer_loading": True,
+        },
+    ]
+
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post("https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(200, json=response_body)
+        )
+
+        litellm.completion(
+            model="openai/responses/gpt-5.5",
+            messages=[{"role": "user", "content": "Find a tool"}],
+            tools=tools,
+            api_key="sk-test",
+            cache={"no-cache": True},
+        )
+
+    request_body: Final = json.loads(upstream.calls[0].request.content)
+    assert request_body["tools"][0] == {"type": "tool_search", "execution": "server"}
+
+
+_MANTLE_RESPONSES_URL: Final = "https://bedrock-mantle.us-east-1.api.aws/openai/v1/responses"
+
+
+@pytest.mark.parametrize(
+    "extra_body",
+    [
+        {"reasoning_effort": "low", "reasoningSummary": "auto"},
+        {"reasoning_effort": {"effort": "low"}, "reasoning_summary": "auto"},
+    ],
+    ids=["string-effort", "dict-effort"],
+)
+@pytest.mark.parametrize(
+    ("model", "url", "model_info"),
+    [
+        ("openai/gpt-5.4", "https://api.openai.com/v1/responses", None),
+        ("bedrock_mantle/openai.gpt-5.6-terra", _MANTLE_RESPONSES_URL, {"mode": "chat"}),
+    ],
+    ids=["openai", "mantle-chat-pin"],
+)
+def test_a_summary_alias_beside_an_extra_body_effort_reaches_the_responses_api(
+    monkeypatch: pytest.MonkeyPatch,
+    extra_body: Mapping[str, object],
+    model: str,
+    url: str,
+    model_info: Mapping[str, object] | None,
+) -> None:
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    response_body: Final = {
+        "id": "resp_nested_effort_summary",
+        "object": "response",
+        "created_at": 1789788253,
+        "status": "completed",
+        "model": model.rsplit("/", 1)[-1],
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_nested_effort_summary",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    }
+
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post(url).mock(return_value=httpx.Response(200, json=response_body))
+        litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "ping"}],
+            extra_body=dict(extra_body),
+            model_info=model_info,
+            api_key="test-key",
+            aws_region_name="us-east-1",
+        )
+
+    assert json.loads(upstream.calls.last.request.content)["reasoning"] == {"effort": "low", "summary": "auto"}
+
+
+@pytest.mark.parametrize(
+    ("model", "url", "expected_summary"),
+    [
+        ("bedrock_mantle/openai.gpt-5.6-terra", _MANTLE_RESPONSES_URL, "auto"),
+        ("openai/responses/gpt-5.5", "https://api.openai.com/v1/responses", "detailed"),
+    ],
+)
+@pytest.mark.parametrize("endpoint", ["chat_completions", "responses"])
+def test_auto_summary_sends_the_level_the_target_accepts(
+    monkeypatch: pytest.MonkeyPatch, model: str, url: str, expected_summary: str, endpoint: str
+) -> None:
+    monkeypatch.setattr(litellm, "reasoning_auto_summary", True)
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    response_body: Final = {
+        "id": "resp_auto_summary",
+        "object": "response",
+        "created_at": 1789788253,
+        "status": "completed",
+        "model": model.rsplit("/", 1)[-1],
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_auto_summary",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    }
+
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post(url).mock(return_value=httpx.Response(200, json=response_body))
+        if endpoint == "chat_completions":
+            litellm.completion(
+                model=model,
+                messages=[{"role": "user", "content": "ping"}],
+                reasoning_effort="low",
+                api_key="test-key",
+                aws_region_name="us-east-1",
+            )
+        else:
+            litellm.responses(
+                model=model, input="ping", reasoning_effort="low", api_key="test-key", aws_region_name="us-east-1"
+            )
+
+    request_body: Final = json.loads(upstream.calls[0].request.content)
+    assert request_body["reasoning"] == {"effort": "low", "summary": expected_summary}
+
+
+@dataclass(frozen=True, slots=True)
+class _LoggedSuccess:
+    call_type: str
+    payload: StandardLoggingPayload
+    response_obj: object
+    complete_streaming_response: object
+
+
+class _LoggedCallTypes(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen_by_caller: Final = MappingProxyType(
+            {
+                "completion": queue.SimpleQueue[_LoggedSuccess](),
+                "acompletion": queue.SimpleQueue[_LoggedSuccess](),
+            }
+        )
+
+    @staticmethod
+    def _logged(kwargs: Mapping[str, object], response_obj: object, streaming_key: str) -> _LoggedSuccess:
+        return _LoggedSuccess(
+            call_type=str(kwargs["call_type"]),
+            payload=cast(StandardLoggingPayload, kwargs["standard_logging_object"]),
+            response_obj=response_obj,
+            complete_streaming_response=kwargs.get(streaming_key),
+        )
+
+    def log_success_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        self.seen_by_caller["completion"].put(self._logged(kwargs, response_obj, "complete_streaming_response"))
+
+    async def async_log_success_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        self.seen_by_caller["acompletion"].put(
+            self._logged(kwargs, response_obj, "async_complete_streaming_response")
+        )
+
+
+_GET_WEATHER_TOOL: Final = {
+    "type": "function",
+    "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+}
+
+_BRIDGED_PROVIDERS: Final = pytest.mark.parametrize(
+    ("model", "url", "provider_kwargs"),
+    [
+        ("openai/gpt-5.3-codex", "https://api.openai.com/v1/responses", {}),
+        (
+            "azure/gpt-6-sol",
+            "https://example.invalid/openai/responses",
+            {"api_base": "https://example.invalid", "api_version": "2025-04-01-preview"},
+        ),
+        ("bedrock_mantle/openai.gpt-5.6-terra", _MANTLE_RESPONSES_URL, {"aws_region_name": "us-east-1"}),
+    ],
+    ids=["openai-responses-only", "azure-tools", "bedrock-mantle-tools"],
+)
+
+
+_PONG_MESSAGE: Final[Mapping[str, object]] = {
+    "type": "message",
+    "id": "msg_logged_call_type",
+    "status": "completed",
+    "role": "assistant",
+    "content": [{"type": "output_text", "text": "pong", "annotations": []}],
+}
+
+
+def _searched_responses_body(model: str) -> Mapping[str, object]:
+    return {
+        "id": "resp_logged_call_type",
+        "object": "response",
+        "created_at": 1789788253,
+        "status": "completed",
+        "model": model.rsplit("/", 1)[-1],
+        "output": [
+            {
+                "type": "web_search_call",
+                "id": "ws_logged_call_type",
+                "status": "completed",
+                "action": {"type": "search", "query": "weather"},
+            },
+            _PONG_MESSAGE,
+        ],
+        "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+    }
+
+
+def _responses_sse(response_body: Mapping[str, object]) -> str:
+    events: Final = (
+        {"type": "response.created", "response": {**response_body, "status": "in_progress", "output": [], "usage": None}},
+        {
+            "type": "response.output_text.delta",
+            "item_id": "msg_logged_call_type",
+            "output_index": 1,
+            "content_index": 0,
+            "delta": "pong",
+        },
+        {"type": "response.completed", "response": response_body},
+    )
+    return "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events)
+
+
+def _bridged_request(model: str, provider_kwargs: Mapping[str, object], stream: bool) -> Mapping[str, object]:
+    return {
+        "model": model,
+        "messages": [{"role": "user", "content": "ping"}],
+        "tools": [_GET_WEATHER_TOOL],
+        "api_key": "test-key",
+        "cache": {"no-cache": True},
+        "stream": stream,
+        **provider_kwargs,
+    }
+
+
+async def _served_chunk_ids(caller: str, request: Mapping[str, object]) -> frozenset[str]:
+    if caller == "acompletion":
+        async_stream: Final = await litellm.acompletion(**request)
+        assert isinstance(async_stream, CustomStreamWrapper)
+        return frozenset([chunk.id async for chunk in async_stream])
+    sync_stream: Final = litellm.completion(**request)
+    assert isinstance(sync_stream, CustomStreamWrapper)
+    return frozenset(chunk.id for chunk in sync_stream)
+
+
+@pytest.mark.parametrize("caller", ["completion", "acompletion"])
+@_BRIDGED_PROVIDERS
+@pytest.mark.asyncio
+async def test_bridged_chat_call_is_logged_with_the_callers_call_type(
+    monkeypatch: pytest.MonkeyPatch, caller: str, model: str, url: str, provider_kwargs: Mapping[str, object]
+) -> None:
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _LoggedCallTypes()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    response_body: Final = _searched_responses_body(model)
+    request: Final = _bridged_request(model, provider_kwargs, stream=False)
+
+    with respx.mock(assert_all_called=True) as router:
+        router.post(url__startswith=url).mock(return_value=httpx.Response(200, json=response_body))
+        if caller == "acompletion":
+            await litellm.acompletion(**request)
+        else:
+            litellm.completion(**request)
+        logged: Final = await asyncio.to_thread(recorder.seen_by_caller[caller].get, timeout=10)
+
+    assert (logged.call_type, logged.payload["call_type"]) == (caller, caller)
+    assert isinstance(logged.response_obj, ModelResponse)
+    assert logged.response_obj.id == response_body["id"]
+    assert logged.response_obj.choices[0].message.content == "pong"
+    assert logged.payload["response"]["choices"][0]["message"]["content"] == "pong"
+    assert logged.payload["response_cost"] == litellm.completion_cost(
+        completion_response=ResponsesAPIResponse.model_validate(response_body), model=model
+    )
+
+
+@pytest.mark.parametrize("caller", ["completion", "acompletion"])
+@_BRIDGED_PROVIDERS
+@pytest.mark.asyncio
+async def test_bridged_chat_stream_is_logged_as_the_chat_completion_it_streamed(
+    monkeypatch: pytest.MonkeyPatch, caller: str, model: str, url: str, provider_kwargs: Mapping[str, object]
+) -> None:
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _LoggedCallTypes()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    response_body: Final = _searched_responses_body(model)
+    request: Final = _bridged_request(model, provider_kwargs, stream=True)
+
+    with respx.mock(assert_all_called=True) as router:
+        router.post(url__startswith=url).mock(
+            return_value=httpx.Response(
+                200, text=_responses_sse(response_body), headers={"content-type": "text/event-stream"}
+            )
+        )
+        served_ids: Final = await _served_chunk_ids(caller, request)
+        logged: Final = await asyncio.to_thread(recorder.seen_by_caller[caller].get, timeout=10)
+
+    assert isinstance(logged.complete_streaming_response, ModelResponse)
+    assert logged.response_obj is logged.complete_streaming_response
+    assert served_ids == {logged.complete_streaming_response.id}
+    assert logged.complete_streaming_response.choices[0].message.content == "pong"
+    assert logged.payload["response"]["choices"][0]["message"]["content"] == "pong"
+    assert logged.payload["response_cost"] == litellm.completion_cost(
+        completion_response=ResponsesAPIResponse.model_validate(response_body), model=model
+    )
+
+
+def _json_message(item_id: str, document: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        "type": "message",
+        "id": item_id,
+        "status": "completed",
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": json.dumps(document), "annotations": []}],
+    }
+
+
+@pytest.mark.parametrize("caller", ["completion", "acompletion"])
+@pytest.mark.asyncio
+async def test_bridged_structured_output_call_is_logged_with_the_json_document_the_client_got(
+    monkeypatch: pytest.MonkeyPatch, caller: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _LoggedCallTypes()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    response_body: Final = {
+        **_searched_responses_body("openai/gpt-5.3-codex"),
+        "output": [_json_message("msg_first", {"answer": "pong"}), _json_message("msg_second", {"answer": "again"})],
+    }
+    request: Final = {
+        **_bridged_request("openai/gpt-5.3-codex", {}, stream=False),
+        "response_format": {"type": "json_object"},
+    }
+
+    with respx.mock(assert_all_called=True) as router:
+        router.post(url__startswith="https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(200, json=response_body)
+        )
+        served: Final = await litellm.acompletion(**request) if caller == "acompletion" else litellm.completion(**request)
+        logged: Final = await asyncio.to_thread(recorder.seen_by_caller[caller].get, timeout=10)
+
+    assert isinstance(served, ModelResponse)
+    assert isinstance(logged.response_obj, ModelResponse)
+    served_message: Final = served.choices[0].message
+    logged_message: Final = logged.response_obj.choices[0].message
+    assert json.loads(served_message.content) == {"answer": "pong"}
+    assert logged_message.content == served_message.content
+    assert logged_message.provider_specific_fields == served_message.provider_specific_fields
+    assert logged.payload["response"]["choices"][0]["message"]["content"] == served_message.content
+
+
+async def _logged_text_completion(
+    monkeypatch: pytest.MonkeyPatch, caller: str
+) -> tuple[TextCompletionResponse, _LoggedSuccess, Mapping[str, object]]:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _LoggedCallTypes()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    response_body: Final = _searched_responses_body("openai/gpt-5.3-codex")
+    request: Final = {"model": "openai/gpt-5.3-codex", "prompt": "ping", "api_key": "test-key"}
+
+    with respx.mock(assert_all_called=True) as router:
+        router.post(url__startswith="https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(200, json=response_body)
+        )
+        served: Final = (
+            await litellm.atext_completion(**request) if caller == "acompletion" else litellm.text_completion(**request)
+        )
+        logged: Final = await asyncio.to_thread(recorder.seen_by_caller[caller].get, timeout=10)
+    assert isinstance(served, TextCompletionResponse)
+    return served, logged, response_body
+
+
+@pytest.mark.parametrize(("caller", "call_type"), [("completion", "text_completion"), ("acompletion", "atext_completion")])
+@pytest.mark.asyncio
+async def test_bridged_text_completion_is_logged_and_priced_under_the_callers_call_type(
+    monkeypatch: pytest.MonkeyPatch, caller: str, call_type: str
+) -> None:
+    served, logged, response_body = await _logged_text_completion(monkeypatch, caller)
+
+    assert (logged.call_type, logged.payload["call_type"]) == (call_type, call_type)
+    assert getattr(logged.response_obj, "id") == served.id == response_body["id"]
+    assert logged.payload["response_cost"] == litellm.completion_cost(
+        completion_response=ResponsesAPIResponse.model_validate(response_body), model="openai/gpt-5.3-codex"
+    )
+
+
+@pytest.mark.parametrize("caller", ["completion", "acompletion"])
+@pytest.mark.asyncio
+async def test_bridged_text_completion_is_logged_as_the_text_completion_it_served(
+    monkeypatch: pytest.MonkeyPatch, caller: str
+) -> None:
+    served, logged, _ = await _logged_text_completion(monkeypatch, caller)
+
+    assert isinstance(logged.response_obj, TextCompletionResponse)
+    assert logged.response_obj.choices[0].text == served.choices[0].text == "pong"
+    assert logged.payload["response"]["object"] == served.object == "text_completion"
+    assert logged.payload["response"]["choices"][0]["text"] == "pong"
+
+
+def _served_message_start_id(events: Sequence[bytes]) -> object:
+    lines: Final = b"".join(events).decode().splitlines()
+    starts: Final = tuple(
+        json.loads(line.removeprefix("data:")) for line in lines if line.startswith("data:") and '"message_start"' in line
+    )
+    assert len(starts) == 1
+    return starts[0]["message"]["id"]
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["non-stream", "stream"])
+@pytest.mark.asyncio
+async def test_bridged_messages_call_is_logged_as_anthropic_messages_under_the_id_the_client_got(
+    monkeypatch: pytest.MonkeyPatch, stream: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "use_chat_completions_url_for_anthropic_messages", True)
+    recorder: Final = _LoggedCallTypes()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    response_body: Final = {**_searched_responses_body("openai/gpt-5.3-codex"), "output": [_PONG_MESSAGE]}
+    upstream: Final = (
+        httpx.Response(200, text=_responses_sse(response_body), headers={"content-type": "text/event-stream"})
+        if stream
+        else httpx.Response(200, json=response_body)
+    )
+
+    with respx.mock(assert_all_called=True) as router:
+        router.post(url__startswith="https://api.openai.com/v1/responses").mock(return_value=upstream)
+        served: Final = await litellm.anthropic.messages.acreate(
+            model="openai/gpt-5.3-codex",
+            max_tokens=64,
+            messages=[{"role": "user", "content": "ping"}],
+            api_key="test-key",
+            stream=stream,
+        )
+        served_id: Final = (
+            _served_message_start_id([event async for event in cast(AsyncIterator[bytes], served)])
+            if stream
+            else cast(Mapping[str, object], served)["id"]
+        )
+        logged: Final = await asyncio.to_thread(recorder.seen_by_caller["acompletion"].get, timeout=10)
+
+    assert (logged.call_type, logged.payload["call_type"]) == ("anthropic_messages", "anthropic_messages")
+    assert logged.payload["id"] == served_id
+    assert logged.payload["response"]["choices"][0]["message"]["content"] == "pong"
+
+
+@pytest.mark.parametrize("caller", ["completion", "acompletion"])
+@pytest.mark.asyncio
+async def test_bridged_chat_stream_keeps_the_upstream_headers_when_its_output_cannot_be_translated(
+    monkeypatch: pytest.MonkeyPatch, caller: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _LoggedCallTypes()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    response_body: Final = {**_searched_responses_body("openai/gpt-5.3-codex"), "output": []}
+    request: Final = _bridged_request("openai/gpt-5.3-codex", {}, stream=True)
+
+    with respx.mock(assert_all_called=True) as router:
+        router.post(url__startswith="https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(
+                200,
+                text=_responses_sse(response_body),
+                headers={"content-type": "text/event-stream", "x-request-id": "req_upstream"},
+            )
+        )
+        await _served_chunk_ids(caller, request)
+        logged: Final = await asyncio.to_thread(recorder.seen_by_caller[caller].get, timeout=10)
+
+    assert isinstance(logged.complete_streaming_response, ModelResponse)
+    assert logged.complete_streaming_response.id == response_body["id"]
+    assert logged.payload["hidden_params"]["additional_headers"]["llm_provider-x-request-id"] == "req_upstream"
 
 
 def test_convert_chat_completion_messages_to_responses_api_image_input():
@@ -135,9 +661,7 @@ def test_convert_chat_completion_messages_to_responses_api_tool_result_with_imag
             function_call_output = item
             break
 
-    assert (
-        function_call_output is not None
-    ), "function_call_output not found in response"
+    assert function_call_output is not None, "function_call_output not found in response"
     assert function_call_output["call_id"] == "call_abc123"
 
     # Check that the output is correctly transformed
@@ -147,12 +671,8 @@ def test_convert_chat_completion_messages_to_responses_api_tool_result_with_imag
 
     image_item = output[0]
     # Should be transformed to Responses API format
-    assert (
-        image_item["type"] == "input_image"
-    ), f"Expected type 'input_image', got '{image_item.get('type')}'"
-    assert (
-        image_item["image_url"] == test_image_base64
-    ), "image_url should be a flat string, not a nested object"
+    assert image_item["type"] == "input_image", f"Expected type 'input_image', got '{image_item.get('type')}'"
+    assert image_item["image_url"] == test_image_base64, "image_url should be a flat string, not a nested object"
     assert "detail" in image_item, "detail field should be present"
 
     print("✓ Tool result with image correctly transformed to Responses API format")
@@ -214,9 +734,7 @@ def test_convert_chat_completion_messages_to_responses_api_tool_result_with_text
             function_call_output = item
             break
 
-    assert (
-        function_call_output is not None
-    ), "function_call_output not found in response"
+    assert function_call_output is not None, "function_call_output not found in response"
     assert function_call_output["call_id"] == "call_abc123"
 
     # Check that the output is correctly transformed to use input_text, not output_text
@@ -226,16 +744,12 @@ def test_convert_chat_completion_messages_to_responses_api_tool_result_with_text
 
     text_item = output[0]
     # Should be transformed to use input_text for tool results in Responses API format
-    assert (
-        text_item["type"] == "input_text"
-    ), f"Expected type 'input_text' for tool result, got '{text_item.get('type')}'"
-    assert (
-        text_item["text"] == "15 degrees"
-    ), f"Expected text '15 degrees', got '{text_item.get('text')}'"
-
-    print(
-        "✓ Tool result with text correctly transformed to use input_text for Responses API format"
+    assert text_item["type"] == "input_text", (
+        f"Expected type 'input_text' for tool result, got '{text_item.get('type')}'"
     )
+    assert text_item["text"] == "15 degrees", f"Expected text '15 degrees', got '{text_item.get('text')}'"
+
+    print("✓ Tool result with text correctly transformed to use input_text for Responses API format")
 
 
 def test_openai_responses_chunk_parser_reasoning_summary():
@@ -244,9 +758,7 @@ def test_openai_responses_chunk_parser_reasoning_summary():
     )
     from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
 
     chunk = {
         "delta": "**Compar",
@@ -272,15 +784,52 @@ def test_openai_responses_chunk_parser_reasoning_summary():
     assert delta.function_call is None
 
 
+def test_bridged_reasoning_summary_parts_rebuild_into_the_one_choice_they_streamed_on():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    events = (
+        {"type": "response.reasoning_summary_part.added", "output_index": 0, "summary_index": 0},
+        {
+            "type": "response.reasoning_summary_text.delta",
+            "delta": "First part.",
+            "output_index": 0,
+            "summary_index": 0,
+        },
+        {"type": "response.reasoning_summary_part.done", "output_index": 0, "summary_index": 0},
+        {"type": "response.reasoning_summary_part.added", "output_index": 0, "summary_index": 1},
+        {
+            "type": "response.reasoning_summary_text.delta",
+            "delta": "Second part.",
+            "output_index": 0,
+            "summary_index": 1,
+        },
+        {"type": "response.reasoning_summary_part.added", "output_index": 1, "summary_index": 0},
+        {
+            "type": "response.reasoning_summary_text.delta",
+            "delta": "Next item.",
+            "output_index": 1,
+            "summary_index": 0,
+        },
+        {"type": "response.output_text.delta", "delta": "Answer", "output_index": 2, "content_index": 0},
+    )
+
+    rebuilt = litellm.stream_chunk_builder(chunks=[iterator.chunk_parser(event) for event in events])
+
+    assert [(choice.index, choice.message.reasoning_content, choice.message.content) for choice in rebuilt.choices] == [
+        (0, "First part. Second part. Next item.", "Answer")
+    ]
+
+
 def test_chunk_parser_string_output_text_delta_produces_text():
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         OpenAiResponsesToChatCompletionStreamIterator,
     )
     from litellm.types.utils import ModelResponseStream
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
 
     chunk = {"type": "response.output_text.delta", "delta": "literal text"}
 
@@ -301,9 +850,7 @@ def test_chunk_parser_enum_output_text_delta_produces_text():
     from litellm.types.llms.openai import ResponsesAPIStreamEvents
     from litellm.types.utils import ModelResponseStream
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
 
     chunk = {"type": ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA, "delta": "enum text"}
 
@@ -324,9 +871,7 @@ def test_chunk_parser_function_call_added_produces_tool_use():
     from litellm.types.llms.openai import ResponsesAPIStreamEvents
     from litellm.types.utils import ModelResponseStream
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
 
     chunk = {
         "type": ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
@@ -347,6 +892,222 @@ def test_chunk_parser_function_call_added_produces_tool_use():
     assert tool_call.function.name == "fn"
     assert tool_call.function.arguments == '{"key": "value"}'
     assert choice.finish_reason is None
+
+
+def test_streamed_function_call_namespace_replays_on_next_turn():
+    from unittest.mock import Mock
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+    from litellm.types.llms.openai import ResponsesAPIStreamEvents
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    streamed = iterator.chunk_parser(
+        {
+            "type": ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+            "item": {
+                "type": "function_call",
+                "name": "get_weather",
+                "call_id": "call-ns",
+                "arguments": '{"city": "Paris"}',
+                "namespace": "get_weather",
+            },
+        }
+    )
+    tool_call = streamed.choices[0].delta.tool_calls[0].model_dump(exclude_none=True)
+
+    request = LiteLLMResponsesTransformationHandler().transform_request(
+        model="gpt-5.5",
+        messages=[
+            {"role": "user", "content": "weather in Paris"},
+            {"role": "assistant", "content": None, "tool_calls": [tool_call]},
+            {"role": "tool", "tool_call_id": "call-ns", "content": "sunny"},
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    function_calls = [item for item in request["input"] if item.get("type") == "function_call"]
+    assert [call["namespace"] for call in function_calls] == ["get_weather"]
+
+
+def test_function_level_namespace_replays_when_tool_call_level_is_missing():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    tool_call = {
+        "id": "call-ns",
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "arguments": '{"city": "Paris"}',
+            "provider_specific_fields": {"namespace": "get_weather"},
+        },
+    }
+
+    input_items, _ = LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(
+        [
+            {"role": "user", "content": "weather in Paris"},
+            {"role": "assistant", "content": None, "tool_calls": [tool_call]},
+            {"role": "tool", "tool_call_id": "call-ns", "content": "sunny"},
+        ],
+        include_namespace=True,
+    )
+
+    function_calls = [item for item in input_items if item.get("type") == "function_call"]
+    assert [call["namespace"] for call in function_calls] == ["get_weather"]
+
+
+def test_shared_converter_leaves_tool_search_items_and_namespace_out_by_default():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    tool_call = {
+        "id": "call-ns",
+        "type": "function",
+        "function": {"name": "get_weather", "arguments": "{}"},
+        "provider_specific_fields": {"namespace": "weather"},
+    }
+    search_items = [
+        {"type": "tool_search_call", "id": "tsc_1", "arguments": {"paths": ["weather"]}},
+        {"type": "tool_search_output", "id": "tso_1", "tools": [{"type": "function", "name": "get_weather"}]},
+    ]
+
+    input_items, _ = LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(
+        [
+            {"role": "user", "content": "weather in Paris"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [tool_call],
+                "provider_specific_fields": {"tool_search_items": search_items},
+            },
+            {"role": "tool", "tool_call_id": "call-ns", "content": "sunny"},
+        ]
+    )
+
+    assert input_items == [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "weather in Paris"}]},
+        {"type": "function_call", "call_id": "call-ns", "name": "get_weather", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "call-ns", "output": [{"type": "input_text", "text": "sunny"}]},
+    ]
+
+
+def test_streamed_tool_search_turn_replays_with_its_reasoning_item():
+    from unittest.mock import Mock
+
+    import litellm
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+    from litellm.types.llms.openai import ResponsesAPIStreamEvents
+
+    function_call = {
+        "type": "function_call",
+        "id": "fc_1",
+        "name": "get_weather",
+        "call_id": "call-ts",
+        "arguments": '{"city": "Paris"}',
+        "namespace": "get_weather",
+        "status": "completed",
+    }
+    tool_search_call = {
+        "type": "tool_search_call",
+        "id": "tsc_1",
+        "arguments": {"paths": ["get_weather"]},
+        "call_id": None,
+        "created_by": None,
+        "execution": "server",
+        "status": "completed",
+    }
+    tool_search_output = {
+        "type": "tool_search_output",
+        "id": "tso_1",
+        "call_id": None,
+        "execution": "server",
+        "status": "completed",
+        "tools": [{"type": "function", "name": "get_weather", "parameters": {}, "defer_loading": True}],
+    }
+    reasoning = {"type": "reasoning", "id": "rs_1", "encrypted_content": "enc", "summary": []}
+    later_reasoning = {"type": "reasoning", "id": "rs_2", "encrypted_content": "enc_2", "summary": []}
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    chunks = [
+        iterator.chunk_parser({"type": ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, "item": function_call}),
+        iterator.chunk_parser(
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_1",
+                    "status": "completed",
+                    "output": [reasoning, tool_search_call, tool_search_output, later_reasoning, function_call],
+                    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+                },
+            }
+        ),
+    ]
+    user = {"role": "user", "content": "weather in Paris"}
+    message = litellm.stream_chunk_builder(chunks, messages=[user]).choices[0].message
+
+    request = LiteLLMResponsesTransformationHandler().transform_request(
+        model="gpt-5.5",
+        messages=[user, message.model_dump(), {"role": "tool", "tool_call_id": "call-ts", "content": "sunny"}],
+        optional_params={"tools": [{"type": "tool_search"}]},
+        litellm_params={},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    assert [(item["type"], item.get("id")) for item in request["input"][1:-1]] == [
+        ("reasoning", "rs_1"),
+        ("tool_search_call", "tsc_1"),
+        ("tool_search_output", "tso_1"),
+        ("reasoning", "rs_2"),
+        ("function_call", None),
+    ]
+    assert request["input"][2] == {key: value for key, value in tool_search_call.items() if value is not None}
+    assert request["input"][5]["namespace"] == "get_weather"
+
+
+@pytest.mark.parametrize(
+    "answer_item",
+    [
+        ResponseFunctionToolCall(
+            type="function_call", id="fc_1", call_id="call_weather", name="get_weather", arguments="{}"
+        ),
+        ResponseOutputMessage(
+            type="message",
+            id="msg_1",
+            role="assistant",
+            status="completed",
+            content=[ResponseOutputText(type="output_text", text="Rain.", annotations=[])],
+        ),
+    ],
+    ids=["tool-call", "message"],
+)
+def test_every_reasoning_item_before_an_answer_reaches_an_openai_chat_message(answer_item: object) -> None:
+    reasoning: Final = tuple(
+        ResponseReasoningItem(
+            type="reasoning",
+            id=f"rs_{name}",
+            summary=[Summary(type="summary_text", text=f"{name.title()}.")],
+            encrypted_content=f"enc_{name}",
+        )
+        for name in ("first", "second")
+    )
+
+    message: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        [*reasoning, answer_item], replay_openai_history=True
+    )[0].message
+
+    assert [item["id"] for item in message.reasoning_items] == ["rs_first", "rs_second"]
+    assert message.reasoning_content == "First. Second."
 
 
 def test_transform_response_with_reasoning_and_output():
@@ -411,9 +1172,7 @@ Tomorrow will bring its petitions and promises,
 but for now the city breathes slow and wide,
 and I learn to carry this small calm home."""
 
-    output_text = ResponseOutputText(
-        annotations=[], text=poem_text, type="output_text", logprobs=[]
-    )
+    output_text = ResponseOutputText(annotations=[], text=poem_text, type="output_text", logprobs=[])
     output_message = ResponseOutputMessage(
         id="msg_04c8021b8b3188a00068e9ae0b92f4819dac64d85b4abb67ec",
         content=[output_text],
@@ -425,9 +1184,7 @@ and I learn to carry this small calm home."""
     # Create usage information
     usage = ResponseAPIUsage(
         input_tokens=16,
-        input_tokens_details=InputTokensDetails(
-            audio_tokens=None, cached_tokens=0, text_tokens=None
-        ),
+        input_tokens_details=InputTokensDetails(audio_tokens=None, cached_tokens=0, text_tokens=None),
         output_tokens=195,
         output_tokens_details=OutputTokensDetails(reasoning_tokens=0, text_tokens=None),
         total_tokens=211,
@@ -776,17 +1533,31 @@ def test_recover_output_items_merges_text_only_items_at_distinct_indices():
         ]
     )
 
-    recovered = (
-        LiteLLMResponsesTransformationHandler._recover_output_items_from_raw_sse(
-            raw_sse
-        )
-    )
+    recovered = LiteLLMResponsesTransformationHandler._recover_output_items_from_raw_sse(raw_sse)
 
     assert len(recovered) == 2
     assert recovered[0]["id"] == "msg_item_0"
     assert recovered[0]["content"][0]["text"] == "From OUTPUT_ITEM_DONE"
     assert recovered[1]["id"] == "msg_text_1"
     assert recovered[1]["content"][0]["text"] == "From OUTPUT_TEXT_DONE only"
+
+
+def test_recover_output_items_keeps_an_item_whose_text_holds_unicode_line_separators() -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    item: Final = {
+        "type": "message",
+        "id": "msg_item_0",
+        "role": "assistant",
+        "status": "completed",
+        "content": [{"type": "output_text", "text": "From\u2028OUTPUT_ITEM\u2029DONE", "annotations": []}],
+    }
+    event: Final = {"type": "response.output_item.done", "output_index": 0, "item": item}
+    raw_sse: Final = f"data: {json.dumps(event, ensure_ascii=False)}\ndata: [DONE]\n"
+
+    assert LiteLLMResponsesTransformationHandler._recover_output_items_from_raw_sse(raw_sse) == [item]
 
 
 def test_transform_response_prefers_completed_output_from_raw_sse():
@@ -858,6 +1629,166 @@ def test_convert_tools_to_responses_format_passes_flat_function_tool_through():
     assert converted == [flat_tool]
 
 
+@pytest.mark.parametrize(
+    ("tool", "expected_defer_loading"),
+    [
+        ({"type": "function", "function": {"name": "lookup"}, "defer_loading": True}, True),
+        ({"type": "function", "function": {"name": "lookup", "defer_loading": True}}, True),
+        ({"type": "function", "function": {"name": "lookup", "defer_loading": True}, "defer_loading": False}, False),
+        ({"type": "function", "function": {"name": "lookup", "defer_loading": True}, "defer_loading": None}, True),
+    ],
+    ids=["tool-level", "function-level", "tool-level-wins", "null-tool-level-falls-back"],
+)
+def test_convert_tools_to_responses_format_keeps_defer_loading(tool, expected_defer_loading):
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    converted = LiteLLMResponsesTransformationHandler()._convert_tools_to_responses_format(
+        [{"type": "tool_search"}, tool]
+    )
+
+    assert converted == [
+        {"type": "tool_search"},
+        {
+            "type": "function",
+            "name": "lookup",
+            "parameters": None,
+            "strict": None,
+            "description": None,
+            "defer_loading": expected_defer_loading,
+        },
+    ]
+
+
+_TOOL_SEARCH: Final = {"type": "tool_search"}
+
+
+@pytest.mark.parametrize(
+    "deferred_tool",
+    [
+        {"type": "function", "function": {"name": "lookup"}, "defer_loading": True},
+        {"type": "function", "function": {"name": "lookup", "defer_loading": True}},
+        {"type": "function", "name": "lookup", "defer_loading": True},
+    ],
+    ids=["tool-level", "function-level", "flat"],
+)
+@pytest.mark.parametrize(
+    ("drop_params", "with_tool_search", "expected_defer_loading"),
+    [(True, False, None), (True, True, True), (False, True, True)],
+    ids=["drop-params-no-search", "drop-params-with-search", "no-drop-params-with-search"],
+)
+def test_transform_request_forwards_defer_loading_only_beside_tool_search(
+    deferred_tool, drop_params, with_tool_search, expected_defer_loading
+):
+    tools: Final = [_TOOL_SEARCH, deferred_tool] if with_tool_search else [deferred_tool]
+
+    result = LiteLLMResponsesTransformationHandler().transform_request(
+        model="gpt-5.5",
+        messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+        optional_params={"tools": tools},
+        litellm_params={"drop_params": drop_params},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    lookup_tool: Final = next(tool for tool in result["tools"] if tool.get("name") == "lookup")
+    assert lookup_tool.get("defer_loading") == expected_defer_loading
+
+
+@pytest.mark.parametrize(
+    "deferred_tool",
+    [
+        {"type": "function", "function": {"name": "lookup"}, "defer_loading": True},
+        {"type": "function", "function": {"name": "lookup", "defer_loading": True}},
+    ],
+    ids=["tool-level", "function-level"],
+)
+@pytest.mark.parametrize("drop_params", [False, True], ids=["no-drop-params", "drop-params"])
+@pytest.mark.parametrize(
+    "tool_search_tool",
+    [{"type": "tool_search", "execution": "client"}, {"type": "tool_search"}],
+    ids=["client-only", "hosted-and-client"],
+)
+def test_transform_request_drops_defer_loading_beside_client_tool_search(deferred_tool, drop_params, tool_search_tool):
+    tool_search_tools: Final = (
+        [tool_search_tool]
+        if tool_search_tool.get("execution") == "client"
+        else [tool_search_tool, {"type": "tool_search", "execution": "client"}]
+    )
+
+    result = LiteLLMResponsesTransformationHandler().transform_request(
+        model="gpt-5.5",
+        messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+        optional_params={"tools": [*tool_search_tools, deferred_tool]},
+        litellm_params={"drop_params": drop_params},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    lookup_tool: Final = next(tool for tool in result["tools"] if tool.get("name") == "lookup")
+    assert "defer_loading" not in lookup_tool
+
+
+@pytest.mark.parametrize(
+    "deferred_tool",
+    [
+        {"type": "function", "function": {"name": "lookup"}, "defer_loading": True},
+        {"type": "function", "function": {"name": "lookup", "defer_loading": True}},
+        {"type": "function", "name": "lookup", "defer_loading": True},
+    ],
+    ids=["tool-level", "function-level", "flat"],
+)
+def test_convert_tools_to_responses_format_rejects_deferred_tool_without_tool_search(deferred_tool):
+    with pytest.raises(litellm.UnsupportedParamsError, match=r"tool_search.*drop_params"):
+        LiteLLMResponsesTransformationHandler()._convert_tools_to_responses_format([deferred_tool])
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [
+        {"type": "function", "function": {"name": "lookup"}, "defer_loading": False},
+        {"type": "function", "name": "lookup", "defer_loading": False},
+    ],
+    ids=["nested", "flat"],
+)
+def test_convert_tools_to_responses_format_omits_false_defer_loading_without_tool_search(tool):
+    converted: Final = LiteLLMResponsesTransformationHandler()._convert_tools_to_responses_format([tool])
+
+    assert "defer_loading" not in converted[0]
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [
+        {"type": "function", "function": {"name": "lookup"}, "defer_loading": "true"},
+        {"type": "function", "function": {"name": "lookup", "defer_loading": "yes"}},
+        {"type": "function", "name": "lookup", "defer_loading": "true"},
+    ],
+    ids=["tool-level", "function-level", "flat"],
+)
+def test_convert_tools_to_responses_format_rejects_non_bool_defer_loading_without_drop_params(tool):
+    with pytest.raises(litellm.UnsupportedParamsError, match="defer_loading must be a boolean"):
+        LiteLLMResponsesTransformationHandler()._convert_tools_to_responses_format([_TOOL_SEARCH, tool])
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [
+        {"type": "function", "function": {"name": "lookup"}, "defer_loading": "true"},
+        {"type": "function", "name": "lookup", "defer_loading": "true"},
+    ],
+    ids=["nested", "flat"],
+)
+def test_convert_tools_to_responses_format_drops_non_bool_defer_loading_under_drop_params(tool):
+    converted: Final = LiteLLMResponsesTransformationHandler()._convert_tools_to_responses_format(
+        [_TOOL_SEARCH, tool], drop_params=True
+    )
+
+    lookup_tool: Final = next(item for item in converted if item.get("name") == "lookup")
+    assert "defer_loading" not in lookup_tool
+
+
 def test_extract_extra_body_params_reasoning_effort_override():
     """Test that reasoning_effort from extra_body overrides top-level reasoning_effort"""
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
@@ -918,13 +1849,56 @@ def test_transform_request_system_only_message_maps_to_system_input_item():
         {
             "type": "message",
             "role": "system",
-            "content": [
-                {"type": "input_text", "text": "You are a helpful assistant."}
-            ],
+            "content": [{"type": "input_text", "text": "You are a helpful assistant."}],
         }
     ]
     # System content lives in input only; not duplicated into instructions.
     assert not result.get("instructions")
+
+
+_JSON_SYSTEM_PROMPT: Final = "You output JSON objects."
+_PLAIN_USER_ITEM: Final = {
+    "type": "message",
+    "role": "user",
+    "content": [{"type": "input_text", "text": "List three colors."}],
+}
+_COLORS_SCHEMA: Final = {
+    "type": "json_schema",
+    "json_schema": {"name": "colors", "schema": {"type": "object", "properties": {}}},
+}
+
+
+@pytest.mark.parametrize(
+    ("response_format", "expected_input", "expected_instructions"),
+    [
+        (
+            {"type": "json_object"},
+            [
+                {"type": "message", "role": "system", "content": [{"type": "input_text", "text": _JSON_SYSTEM_PROMPT}]},
+                _PLAIN_USER_ITEM,
+            ],
+            None,
+        ),
+        (_COLORS_SCHEMA, [_PLAIN_USER_ITEM], _JSON_SYSTEM_PROMPT),
+    ],
+    ids=["json_object_keeps_system_in_input", "json_schema_keeps_system_in_instructions"],
+)
+def test_transform_request_json_object_keeps_system_prompt_where_the_json_word_check_reads_it(
+    response_format, expected_input, expected_instructions
+):
+    result = LiteLLMResponsesTransformationHandler().transform_request(
+        model="gpt-5.4-mini",
+        messages=[
+            {"role": "system", "content": _JSON_SYSTEM_PROMPT},
+            {"role": "user", "content": "List three colors."},
+        ],
+        optional_params={"response_format": response_format},
+        litellm_params={},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    assert (result["input"], result.get("instructions")) == (expected_input, expected_instructions), result
 
 
 def test_transform_request_single_char_keys_not_matched():
@@ -992,9 +1966,7 @@ def test_transform_request_single_char_keys_not_matched():
     assert result_correct.get("metadata") == {"user_id": "123"}
     assert result_correct.get("previous_response_id") == "resp_abc"
 
-    print(
-        "✓ Single-character keys are not incorrectly matched to metadata/previous_response_id"
-    )
+    print("✓ Single-character keys are not incorrectly matched to metadata/previous_response_id")
 
 
 # =============================================================================
@@ -1014,9 +1986,7 @@ def test_message_done_does_not_emit_is_finished():
         OpenAiResponsesToChatCompletionStreamIterator,
     )
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
 
     chunk = {
         "type": "response.output_item.done",
@@ -1028,9 +1998,9 @@ def test_message_done_does_not_emit_is_finished():
     # After the fix, message completion should NOT set finish_reason
     # ModelResponseStream doesn't have is_finished - check finish_reason instead
     assert len(result.choices) > 0, "result should have choices"
-    assert (
-        result.choices[0].finish_reason is None or result.choices[0].finish_reason == ""
-    ), "message completion should not emit finish_reason"
+    assert result.choices[0].finish_reason is None or result.choices[0].finish_reason == "", (
+        "message completion should not emit finish_reason"
+    )
 
 
 def test_response_completed_emits_is_finished():
@@ -1042,9 +2012,7 @@ def test_response_completed_emits_is_finished():
         OpenAiResponsesToChatCompletionStreamIterator,
     )
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
 
     chunk = {"type": "response.completed"}
 
@@ -1052,9 +2020,7 @@ def test_response_completed_emits_is_finished():
 
     # response.completed should emit finish_reason='stop'
     assert len(result.choices) > 0, "result should have choices"
-    assert (
-        result.choices[0].finish_reason == "stop"
-    ), "response.completed should emit finish_reason='stop'"
+    assert result.choices[0].finish_reason == "stop", "response.completed should emit finish_reason='stop'"
 
 
 def test_response_completed_with_function_calls_emits_tool_calls_finish_reason():
@@ -1073,9 +2039,7 @@ def test_response_completed_with_function_calls_emits_tool_calls_finish_reason()
         OpenAiResponsesToChatCompletionStreamIterator,
     )
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
 
     # Simulate a response.completed event with function_call in output
     # This matches what Azure/OpenAI sends for gpt-5.1-codex-mini and similar models
@@ -1101,9 +2065,9 @@ def test_response_completed_with_function_calls_emits_tool_calls_finish_reason()
 
     # response.completed with function_call should emit finish_reason='tool_calls'
     assert len(result.choices) > 0, "result should have choices"
-    assert (
-        result.choices[0].finish_reason == "tool_calls"
-    ), "response.completed with function_call output should emit finish_reason='tool_calls'"
+    assert result.choices[0].finish_reason == "tool_calls", (
+        "response.completed with function_call output should emit finish_reason='tool_calls'"
+    )
 
 
 def test_response_completed_with_message_only_emits_stop_finish_reason():
@@ -1114,9 +2078,7 @@ def test_response_completed_with_message_only_emits_stop_finish_reason():
         OpenAiResponsesToChatCompletionStreamIterator,
     )
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
 
     # Simulate a response.completed event with only message output
     chunk = {
@@ -1140,9 +2102,9 @@ def test_response_completed_with_message_only_emits_stop_finish_reason():
 
     # response.completed with only message should emit finish_reason='stop'
     assert len(result.choices) > 0, "result should have choices"
-    assert (
-        result.choices[0].finish_reason == "stop"
-    ), "response.completed with only message output should emit finish_reason='stop'"
+    assert result.choices[0].finish_reason == "stop", (
+        "response.completed with only message output should emit finish_reason='stop'"
+    )
 
 
 def test_response_completed_preserves_usage_with_cached_tokens():
@@ -1158,9 +2120,7 @@ def test_response_completed_preserves_usage_with_cached_tokens():
         OpenAiResponsesToChatCompletionStreamIterator,
     )
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
 
     chunk = {
         "type": "response.completed",
@@ -1189,18 +2149,12 @@ def test_response_completed_preserves_usage_with_cached_tokens():
     result = iterator.chunk_parser(chunk)
 
     assert result.usage is not None, "usage should be set on response.completed chunk"
-    assert (
-        result.usage.prompt_tokens == 1226
-    ), "prompt_tokens should map from input_tokens"
-    assert (
-        result.usage.completion_tokens == 5
-    ), "completion_tokens should map from output_tokens"
-    assert (
-        result.usage.prompt_tokens_details is not None
-    ), "prompt_tokens_details should be set"
-    assert (
-        result.usage.prompt_tokens_details.cached_tokens == 1024
-    ), "cached_tokens should be preserved from input_tokens_details"
+    assert result.usage.prompt_tokens == 1226, "prompt_tokens should map from input_tokens"
+    assert result.usage.completion_tokens == 5, "completion_tokens should map from output_tokens"
+    assert result.usage.prompt_tokens_details is not None, "prompt_tokens_details should be set"
+    assert result.usage.prompt_tokens_details.cached_tokens == 1024, (
+        "cached_tokens should be preserved from input_tokens_details"
+    )
 
 
 def test_function_call_done_emits_is_finished():
@@ -1214,9 +2168,7 @@ def test_function_call_done_emits_is_finished():
         OpenAiResponsesToChatCompletionStreamIterator,
     )
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
 
     chunk = {
         "type": "response.output_item.done",
@@ -1236,9 +2188,9 @@ def test_function_call_done_emits_is_finished():
         "output_item.done for function_call must not emit finish_reason; "
         "response.completed is responsible for the terminal finish_reason"
     )
-    assert not result.choices[
-        0
-    ].delta.tool_calls, "output_item.done for function_call must not include a duplicate tool_calls delta"
+    assert not result.choices[0].delta.tool_calls, (
+        "output_item.done for function_call must not include a duplicate tool_calls delta"
+    )
 
 
 def test_text_plus_tool_calls_sequence():
@@ -1253,9 +2205,7 @@ def test_text_plus_tool_calls_sequence():
         OpenAiResponsesToChatCompletionStreamIterator,
     )
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
 
     # Simulate the sequence from OpenAI Responses API
     chunks = [
@@ -1294,28 +2244,23 @@ def test_text_plus_tool_calls_sequence():
     # Check message done (index 2) does NOT have finish_reason set
     message_done_result = results[2]
     assert len(message_done_result.choices) > 0, "message done should have choices"
-    assert (
-        message_done_result.choices[0].finish_reason is None
-        or message_done_result.choices[0].finish_reason == ""
-    ), "message done should not have finish_reason"
+    assert message_done_result.choices[0].finish_reason is None or message_done_result.choices[0].finish_reason == "", (
+        "message done should not have finish_reason"
+    )
 
     # Check function_call done (index 5) does NOT have finish_reason set
     # (response.completed is responsible for the terminal finish_reason)
     function_done_result = results[5]
-    assert (
-        len(function_done_result.choices) > 0
-    ), "function_call done should have choices"
-    assert (
-        function_done_result.choices[0].finish_reason is None
-    ), "output_item.done for function_call must not emit finish_reason"
+    assert len(function_done_result.choices) > 0, "function_call done should have choices"
+    assert function_done_result.choices[0].finish_reason is None, (
+        "output_item.done for function_call must not emit finish_reason"
+    )
 
     # Check response.completed (index 6) has finish_reason='stop'
     # (the mock chunk has no nested 'response' data, so has_function_calls is False → 'stop')
     completed_result = results[6]
     assert len(completed_result.choices) > 0, "response.completed should have choices"
-    assert (
-        completed_result.choices[0].finish_reason == "stop"
-    ), "response.completed should have finish_reason='stop'"
+    assert completed_result.choices[0].finish_reason == "stop", "response.completed should have finish_reason='stop'"
 
 
 # =============================================================================
@@ -1332,7 +2277,11 @@ def test_developer_message_content_uses_input_text():
 
     assert instructions is None
     assert input_items == [
-        {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "Always answer in French."}]}
+        {
+            "type": "message",
+            "role": "developer",
+            "content": [{"type": "input_text", "text": "Always answer in French."}],
+        }
     ]
 
 
@@ -1394,9 +2343,7 @@ def test_tool_message_output_uses_input_text_not_output_text():
     output = function_call_output["output"]
     assert isinstance(output, list), f"output should be a list, got {type(output)}"
     assert len(output) == 1
-    assert (
-        output[0]["type"] == "input_text"
-    ), f"Expected input_text, got {output[0].get('type')}"
+    assert output[0]["type"] == "input_text", f"Expected input_text, got {output[0].get('type')}"
     assert output[0]["text"] == '{"temperature": 15, "condition": "sunny"}'
 
     print("✓ Tool message output correctly uses input_text type")
@@ -1577,29 +2524,25 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
             del os.environ["LITELLM_REASONING_AUTO_SUMMARY"]
 
         for effort in effort_levels:
-            result = handler._map_reasoning_effort(effort)
+            result = handler.map_reasoning_effort(effort)
 
             assert result is not None, f"Result should not be None for effort={effort}"
             assert result["effort"] == effort, f"Effort should be {effort}"
-            assert (
-                "summary" not in result
-            ), f"Summary should NOT be present by default for effort={effort}"
+            assert "summary" not in result, f"Summary should NOT be present by default for effort={effort}"
 
-            print(
-                f"✓ reasoning_effort='{effort}' correctly maps to effort='{effort}' (no summary by default)"
-            )
+            print(f"✓ reasoning_effort='{effort}' correctly maps to effort='{effort}' (no summary by default)")
 
         # Test 2: With flag enabled - summary IS added
         litellm.reasoning_auto_summary = True
 
         for effort in effort_levels:
-            result = handler._map_reasoning_effort(effort)
+            result = handler.map_reasoning_effort(effort)
 
             assert result is not None, f"Result should not be None for effort={effort}"
             assert result["effort"] == effort, f"Effort should be {effort}"
-            assert (
-                result["summary"] == "detailed"
-            ), f"Summary should be 'detailed' when flag is enabled for effort={effort}"
+            assert result["summary"] == "detailed", (
+                f"Summary should be 'detailed' when flag is enabled for effort={effort}"
+            )
 
             print(
                 f"✓ reasoning_effort='{effort}' correctly maps to effort='{effort}', summary='detailed' (flag enabled)"
@@ -1609,10 +2552,8 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
         litellm.reasoning_auto_summary = False
         monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
 
-        result = handler._map_reasoning_effort("high")
-        assert (
-            result["summary"] == "detailed"
-        ), "Summary should be 'detailed' when env var is enabled"
+        result = handler.map_reasoning_effort("high")
+        assert result["summary"] == "detailed", "Summary should be 'detailed' when env var is enabled"
         print("✓ LITELLM_REASONING_AUTO_SUMMARY env var works correctly")
 
         # Test 4: Dict input is passed through as-is (no modification)
@@ -1621,14 +2562,12 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
             del os.environ["LITELLM_REASONING_AUTO_SUMMARY"]
 
         dict_input = {"effort": "high", "summary": "custom_summary"}
-        result_dict = handler._map_reasoning_effort(dict_input)
+        result_dict = handler.map_reasoning_effort(dict_input)
         assert result_dict["effort"] == "high"
         assert result_dict["summary"] == "custom_summary"
         print("✓ Dict input is passed through without modification")
 
-        print(
-            "✓ All reasoning_effort behaviors work correctly with flag/env var control"
-        )
+        print("✓ All reasoning_effort behaviors work correctly with flag/env var control")
 
     finally:
         # Restore original values
@@ -1704,9 +2643,7 @@ def test_transform_response_preserves_annotations():
     # Create usage information
     usage = ResponseAPIUsage(
         input_tokens=10,
-        input_tokens_details=InputTokensDetails(
-            audio_tokens=None, cached_tokens=0, text_tokens=None
-        ),
+        input_tokens_details=InputTokensDetails(audio_tokens=None, cached_tokens=0, text_tokens=None),
         output_tokens=20,
         output_tokens_details=OutputTokensDetails(reasoning_tokens=0, text_tokens=None),
         total_tokens=30,
@@ -1793,13 +2730,9 @@ def test_transform_response_preserves_annotations():
     assert choice.message.content == "Here is some information with citations."
 
     # Check that annotations are preserved
-    assert hasattr(
-        choice.message, "annotations"
-    ), "Message should have annotations attribute"
+    assert hasattr(choice.message, "annotations"), "Message should have annotations attribute"
     assert choice.message.annotations is not None, "Annotations should not be None"
-    assert (
-        len(choice.message.annotations) == 2
-    ), f"Expected 2 annotations, got {len(choice.message.annotations)}"
+    assert len(choice.message.annotations) == 2, f"Expected 2 annotations, got {len(choice.message.annotations)}"
 
     # Verify annotation content
     annotation1 = choice.message.annotations[0]
@@ -1821,9 +2754,7 @@ def test_transform_response_preserves_annotations():
     assert result.usage.completion_tokens == 20
     assert result.usage.total_tokens == 30
 
-    print(
-        "✓ Annotations from Responses API are correctly preserved in Chat Completions format"
-    )
+    print("✓ Annotations from Responses API are correctly preserved in Chat Completions format")
 
 
 def test_apply_patch_tool_call_converted_to_chat_completion_tool_call():
@@ -1988,9 +2919,7 @@ def test_multi_tool_call_stream_no_premature_finish():
         OpenAiResponsesToChatCompletionStreamIterator,
     )
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
 
     chunks = [
         # 0: response created
@@ -2066,12 +2995,10 @@ def test_multi_tool_call_stream_no_premature_finish():
         r = results[done_idx]
         assert r is not None, f"{label}: chunk_parser must return a result"
         assert len(r.choices) > 0, f"{label}: result must have choices"
-        assert (
-            r.choices[0].finish_reason is None
-        ), f"{label}: output_item.done must not emit finish_reason (stream would terminate prematurely)"
-        assert not r.choices[
-            0
-        ].delta.tool_calls, (
+        assert r.choices[0].finish_reason is None, (
+            f"{label}: output_item.done must not emit finish_reason (stream would terminate prematurely)"
+        )
+        assert not r.choices[0].delta.tool_calls, (
             f"{label}: output_item.done must not include a duplicate tool_calls delta"
         )
 
@@ -2083,12 +3010,8 @@ def test_multi_tool_call_stream_no_premature_finish():
         r = results[added_idx]
         if r is not None and r.choices and r.choices[0].delta.tool_calls:
             tc = r.choices[0].delta.tool_calls[0]
-            assert (
-                tc.function.name == expected_name
-            ), f"output_item.added for {expected_name}: tool_call name mismatch"
-            assert (
-                tc.id == expected_call_id
-            ), f"output_item.added for {expected_name}: call_id mismatch"
+            assert tc.function.name == expected_name, f"output_item.added for {expected_name}: tool_call name mismatch"
+            assert tc.id == expected_call_id, f"output_item.added for {expected_name}: call_id mismatch"
 
     # 3. argument delta events (indices 2 and 5) should carry arguments
     for delta_idx, expected_args, label in [
@@ -2098,17 +3021,15 @@ def test_multi_tool_call_stream_no_premature_finish():
         r = results[delta_idx]
         if r is not None and r.choices and r.choices[0].delta.tool_calls:
             tc = r.choices[0].delta.tool_calls[0]
-            assert (
-                tc.function.arguments == expected_args
-            ), f"{label}: argument delta mismatch"
+            assert tc.function.arguments == expected_args, f"{label}: argument delta mismatch"
 
     # 4. Only response.completed (index 7) emits the terminal finish_reason
     completed_result = results[7]
     assert completed_result is not None, "response.completed must return a result"
     assert len(completed_result.choices) > 0, "response.completed must have choices"
-    assert (
-        completed_result.choices[0].finish_reason == "tool_calls"
-    ), "response.completed with function_call outputs must emit finish_reason='tool_calls'"
+    assert completed_result.choices[0].finish_reason == "tool_calls", (
+        "response.completed with function_call outputs must emit finish_reason='tool_calls'"
+    )
 
     # 5. No chunk before the last one should have finish_reason set
     for idx, r in enumerate(results[:-1]):
@@ -2118,9 +3039,7 @@ def test_multi_tool_call_stream_no_premature_finish():
                 f"— only response.completed should terminate the stream"
             )
 
-    print(
-        "✓ Multi-tool-call stream completes without premature finish_reason termination"
-    )
+    print("✓ Multi-tool-call stream completes without premature finish_reason termination")
 
 
 # =============================================================================
@@ -2201,16 +3120,13 @@ def test_streaming_parallel_tool_calls_have_distinct_indices():
     ]
 
     for chunk in chunks:
-        result = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
-            chunk
-        )
+        result = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(chunk)
         expected_index = chunk["output_index"]
         for choice in result.choices:
             if choice.delta.tool_calls:
                 for tc in choice.delta.tool_calls:
                     assert tc.index == expected_index, (
-                        f"Event {chunk['type']}: expected tool_call.index={expected_index}, "
-                        f"got {tc.index}"
+                        f"Event {chunk['type']}: expected tool_call.index={expected_index}, got {tc.index}"
                     )
 
 
@@ -2338,9 +3254,7 @@ def test_parallel_tool_calls_comprehensive_streaming_integration():
         },
     ]
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
     results = [iterator.chunk_parser(chunk) for chunk in chunks]
 
     # 1. output_item.done events (indices 4 and 8) must NOT emit finish_reason
@@ -2352,9 +3266,7 @@ def test_parallel_tool_calls_comprehensive_streaming_integration():
             f"{label}: output_item.done must not emit finish_reason "
             f"(would prematurely terminate stream before subsequent tool calls arrive)"
         )
-        assert not r.choices[
-            0
-        ].delta.tool_calls, (
+        assert not r.choices[0].delta.tool_calls, (
             f"{label}: output_item.done must not emit a duplicate tool_calls delta"
         )
 
@@ -2388,19 +3300,15 @@ def test_parallel_tool_calls_comprehensive_streaming_integration():
         for tc in tool_calls:
             if tc.function and tc.function.arguments:
                 idx = tc.index
-                assembled_args[idx] = (
-                    assembled_args.get(idx, "") + tc.function.arguments
-                )
+                assembled_args[idx] = assembled_args.get(idx, "") + tc.function.arguments
 
     # delta 1 = '{"path":' + delta 2 = '"/etc/foo"}' → '{"path":"/etc/foo"}'
     assert assembled_args.get(0) == '{"path":"/etc/foo"}', (
-        f"Assembled args for index 0 (read_file): "
-        f"expected '{{\"path\":\"/etc/foo\"}}', got '{assembled_args.get(0)}'"
+        f"Assembled args for index 0 (read_file): expected '{{\"path\":\"/etc/foo\"}}', got '{assembled_args.get(0)}'"
     )
     # delta 1 = '{"path":' + delta 2 = '"/tmp"}' → '{"path":"/tmp"}'
     assert assembled_args.get(1) == '{"path":"/tmp"}', (
-        f"Assembled args for index 1 (list_dir): "
-        f"expected '{{\"path\":\"/tmp\"}}', got '{assembled_args.get(1)}'"
+        f"Assembled args for index 1 (list_dir): expected '{{\"path\":\"/tmp\"}}', got '{assembled_args.get(1)}'"
     )
 
     # 4. Stream terminates with exactly one finish event, at the final response.completed chunk
@@ -2409,16 +3317,13 @@ def test_parallel_tool_calls_comprehensive_streaming_integration():
         for i, r in enumerate(results)
         if r is not None and r.choices and r.choices[0].finish_reason
     ]
-    assert (
-        len(finish_events) == 1
-    ), f"Expected exactly 1 finish event, got {len(finish_events)}: {finish_events}"
+    assert len(finish_events) == 1, f"Expected exactly 1 finish event, got {len(finish_events)}: {finish_events}"
     assert finish_events[0][0] == len(chunks) - 1, (
-        f"Finish event must be at the last chunk (index {len(chunks) - 1}), "
-        f"but was at index {finish_events[0][0]}"
+        f"Finish event must be at the last chunk (index {len(chunks) - 1}), but was at index {finish_events[0][0]}"
     )
-    assert (
-        finish_events[0][1] == "tool_calls"
-    ), f"Terminal finish_reason must be 'tool_calls', got '{finish_events[0][1]}'"
+    assert finish_events[0][1] == "tool_calls", (
+        f"Terminal finish_reason must be 'tool_calls', got '{finish_events[0][1]}'"
+    )
 
     # 5. Parallel tool calls have distinct indices matching output_index (0 and 1)
     # Collect indices from output_item.added chunks only (they carry the call id)
@@ -2434,9 +3339,7 @@ def test_parallel_tool_calls_comprehensive_streaming_integration():
         1,
     }, f"Parallel tool calls must have distinct indices {{0, 1}}, got: {set(added_tool_call_indices)}"
 
-    print(
-        "✓ Parallel tool calls with split argument deltas stream correctly end-to-end"
-    )
+    print("✓ Parallel tool calls with split argument deltas stream correctly end-to-end")
 
 
 def test_map_optional_params_preserves_reasoning_summary():
@@ -2460,9 +3363,7 @@ def test_map_optional_params_preserves_reasoning_summary():
     }
 
     responses_api_request = ResponsesAPIOptionalRequestParams()
-    handler._map_optional_params_to_responses_api_request(
-        optional_params, responses_api_request
-    )
+    handler._map_optional_params_to_responses_api_request(optional_params, responses_api_request)
 
     # Verify reasoning_effort dict with summary was fully preserved
     assert "reasoning" in responses_api_request
@@ -2574,6 +3475,38 @@ def test_map_optional_params_tool_choice_chat_nested_to_responses_api():
             {"type": "custom", "name": "ApplyPatch"},
         ),
         ({"type": "custom"}, {"type": "custom"}),
+        (
+            {
+                "type": "allowed_tools",
+                "allowed_tools": {
+                    "mode": "required",
+                    "tools": [
+                        {"type": "function", "function": {"name": "get_time"}},
+                        {"type": "custom", "custom": {"name": "apply_patch"}},
+                        {"type": "mcp", "server_label": "docs"},
+                        {"type": "function", "name": "already_flat"},
+                    ],
+                },
+            },
+            {
+                "type": "allowed_tools",
+                "mode": "required",
+                "tools": [
+                    {"type": "function", "name": "get_time"},
+                    {"type": "custom", "name": "apply_patch"},
+                    {"type": "mcp", "server_label": "docs"},
+                    {"type": "function", "name": "already_flat"},
+                ],
+            },
+        ),
+        (
+            {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": [{"type": "function"}]}},
+            {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": [{"type": "function"}]}},
+        ),
+        (
+            {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "get_time"}]},
+            {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "get_time"}]},
+        ),
     ],
 )
 def test_normalize_tool_choice_for_responses_api(tool_choice, expected):
@@ -2735,9 +3668,7 @@ def test_reasoning_items_non_streaming_round_trip():
     )
     usage = ResponseAPIUsage(
         input_tokens=10,
-        input_tokens_details=InputTokensDetails(
-            audio_tokens=None, cached_tokens=0, text_tokens=None
-        ),
+        input_tokens_details=InputTokensDetails(audio_tokens=None, cached_tokens=0, text_tokens=None),
         output_tokens=20,
         output_tokens_details=OutputTokensDetails(reasoning_tokens=0, text_tokens=None),
         total_tokens=30,
@@ -2801,9 +3732,7 @@ def test_reasoning_items_non_streaming_round_trip():
     assert len(result.choices) == 1
     msg = result.choices[0].message
 
-    assert (
-        msg.reasoning_content == summary_text
-    ), "reasoning_content should equal summary text"
+    assert msg.reasoning_content == summary_text, "reasoning_content should equal summary text"
 
     assert msg.reasoning_items is not None, "reasoning_items should be set"
     assert len(msg.reasoning_items) == 1
@@ -2828,13 +3757,9 @@ def test_reasoning_items_non_streaming_round_trip():
 
     # The reasoning input item must appear before the assistant message item
     types = [item.get("type") for item in input_items]
-    assert (
-        "reasoning" in types
-    ), "reasoning input item must be emitted for the assistant turn"
+    assert "reasoning" in types, "reasoning input item must be emitted for the assistant turn"
 
-    reasoning_input = next(
-        item for item in input_items if item.get("type") == "reasoning"
-    )
+    reasoning_input = next(item for item in input_items if item.get("type") == "reasoning")
     assert reasoning_input["id"] == "rs_test001"
     assert reasoning_input["encrypted_content"] == encrypted
     assert reasoning_input["summary"][0]["text"] == summary_text
@@ -2842,13 +3767,9 @@ def test_reasoning_items_non_streaming_round_trip():
     # reasoning item must come before the assistant message item
     reasoning_idx = types.index("reasoning")
     assistant_msg_idx = next(
-        i
-        for i, item in enumerate(input_items)
-        if item.get("type") == "message" and item.get("role") == "assistant"
+        i for i, item in enumerate(input_items) if item.get("type") == "message" and item.get("role") == "assistant"
     )
-    assert (
-        reasoning_idx < assistant_msg_idx
-    ), "reasoning input item must precede the assistant message item"
+    assert reasoning_idx < assistant_msg_idx, "reasoning input item must precede the assistant message item"
 
 
 def test_reasoning_items_streaming_emitted_on_response_completed():
@@ -2861,9 +3782,7 @@ def test_reasoning_items_streaming_emitted_on_response_completed():
         OpenAiResponsesToChatCompletionStreamIterator,
     )
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
 
     encrypted = "gAAAAABpw5xyz987FAKE=="
     summary_text = "**Reasoning summary**\n\nModel thought about this carefully."
@@ -2907,17 +3826,395 @@ def test_reasoning_items_streaming_emitted_on_response_completed():
     assert result.choices[0].finish_reason == "stop"
 
     # reasoning_items must be on the delta
-    assert (
-        getattr(delta, "reasoning_items", None) is not None
-    ), "reasoning_items must be present on the response.completed delta"
+    assert getattr(delta, "reasoning_items", None) is not None, (
+        "reasoning_items must be present on the response.completed delta"
+    )
     assert len(delta.reasoning_items) == 1
     ri = delta.reasoning_items[0]
     assert ri["type"] == "reasoning"
     assert ri["id"] == "rs_stream001"
-    assert (
-        ri["encrypted_content"] == encrypted
-    ), "encrypted_content must be preserved in streaming"
+    assert ri["encrypted_content"] == encrypted, "encrypted_content must be preserved in streaming"
     assert ri["summary"][0]["text"] == summary_text
+
+
+def test_reasoning_output_item_done_emits_signed_thinking_blocks_the_stream_keeps():
+    """A chatgpt /v1/messages stream drops the reasoning item unless this delta carries thinking_blocks.
+
+    response.output_item.done is the only event that has encrypted_content. The chat delta has to
+    expose it as a signed thinking block, and that block alone has to count as stream content.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+    from litellm.litellm_core_utils.prompt_templates.common_utils import encrypted_reasoning_signature
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+
+    encrypted: Final = "gAAAA_round_trip"
+    done: Final = {
+        "type": "response.output_item.done",
+        "output_index": 0,
+        "item": {
+            "type": "reasoning",
+            "id": "rs_done",
+            "encrypted_content": encrypted,
+            "summary": [],
+        },
+    }
+    result: Final = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True, streams_reasoning_signatures=True
+    ).chunk_parser(done)
+    blocks: Final = result.choices[0].delta.thinking_blocks
+    assert blocks is not None
+    assert blocks[0]["type"] == "redacted_thinking"
+    assert blocks[0]["data"] == encrypted_reasoning_signature(encrypted)
+    assert blocks[0]["index"] == 0
+    assert getattr(result.choices[0].delta, "reasoning_content", None) in (None, "")
+
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=None,
+        model="chatgpt/gpt-6.1-sol",
+        logging_obj=MagicMock(),
+        custom_llm_provider="chatgpt",
+    )
+    assert wrapper.is_chunk_non_empty({}, result, {}) is True
+
+    block_type, start = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_chunk_to_anthropic_content_block(
+        choices=result.choices
+    )
+    assert block_type == "redacted_thinking"
+    assert start["data"] == encrypted_reasoning_signature(encrypted)
+
+
+_SIGNED_REASONING_STREAM_BODY: Final[Mapping[str, object]] = {
+    **_searched_responses_body("azure/gpt-6-sol"),
+    "output": [
+        {"type": "reasoning", "id": "rs_signed", "summary": [], "encrypted_content": "gAAAA_consumer"},
+        _PONG_MESSAGE,
+    ],
+}
+
+
+def _signed_reasoning_sse() -> str:
+    events: Final = (
+        {
+            "type": "response.created",
+            "response": {**_SIGNED_REASONING_STREAM_BODY, "status": "in_progress", "output": [], "usage": None},
+        },
+        {"type": "response.output_item.done", "output_index": 0, "item": _SIGNED_REASONING_STREAM_BODY["output"][0]},
+        {
+            "type": "response.output_text.delta",
+            "item_id": "msg_logged_call_type",
+            "output_index": 1,
+            "content_index": 0,
+            "delta": "pong",
+        },
+        {"type": "response.completed", "response": _SIGNED_REASONING_STREAM_BODY},
+    )
+    return "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events)
+
+
+_AZURE_BRIDGE_KWARGS: Final[Mapping[str, object]] = {
+    "api_base": "https://example.invalid",
+    "api_version": "2025-04-01-preview",
+    "api_key": "test-key",
+}
+
+
+@pytest.mark.asyncio
+async def test_streamed_reasoning_signature_reaches_messages_clients_and_never_chat_completions_deltas(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.litellm_core_utils.prompt_templates.common_utils import encrypted_reasoning_signature
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock(assert_all_called=True) as router:
+        router.post(url__startswith="https://example.invalid/openai/responses").mock(
+            side_effect=lambda _request: httpx.Response(
+                200, text=_signed_reasoning_sse(), headers={"content-type": "text/event-stream"}
+            )
+        )
+        chat_stream: Final = await litellm.acompletion(
+            model="azure/gpt-6-sol",
+            messages=[{"role": "user", "content": "ping"}],
+            tools=[_GET_WEATHER_TOOL],
+            stream=True,
+            **_AZURE_BRIDGE_KWARGS,
+        )
+        chat_deltas: Final = [chunk.choices[0].delta async for chunk in chat_stream if chunk.choices]
+        messages_stream: Final = await litellm.anthropic.messages.acreate(
+            model="azure/gpt-6-sol",
+            messages=[{"role": "user", "content": "ping"}],
+            tools=[{"name": "get_weather", "input_schema": {"type": "object", "properties": {}}}],
+            max_tokens=64,
+            stream=True,
+            **_AZURE_BRIDGE_KWARGS,
+        )
+        sse: Final = b"".join([chunk async for chunk in messages_stream]).decode()
+
+    assert [getattr(delta, "thinking_blocks", None) for delta in chat_deltas if getattr(delta, "thinking_blocks", None)] == []
+    assert "".join(delta.content or "" for delta in chat_deltas) == "pong"
+    messages_events: Final = [json.loads(line[len("data: ") :]) for line in sse.splitlines() if line.startswith("data: ")]
+    started: Final = [event["content_block"] for event in messages_events if event.get("type") == "content_block_start"]
+    assert [block["type"] for block in started] == ["redacted_thinking", "text"]
+    assert started[0]["data"] == encrypted_reasoning_signature("gAAAA_consumer")
+
+
+def test_reasoning_output_item_done_with_summary_signs_the_thinking_text():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+    from litellm.litellm_core_utils.prompt_templates.common_utils import encrypted_reasoning_signature
+
+    encrypted: Final = "gAAAA_with_summary"
+    done: Final = {
+        "type": "response.output_item.done",
+        "output_index": 2,
+        "item": {
+            "type": "reasoning",
+            "id": "rs_sum",
+            "encrypted_content": encrypted,
+            "summary": [{"type": "summary_text", "text": "Oslo is colder."}],
+        },
+    }
+    result: Final = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True, streams_reasoning_signatures=True
+    ).chunk_parser(done)
+    block: Final = result.choices[0].delta.thinking_blocks[0]
+    assert block["type"] == "thinking"
+    assert block["thinking"] == "Oslo is colder."
+    assert block["signature"] == encrypted_reasoning_signature(encrypted)
+    assert block["index"] == 2
+
+
+def test_streamed_reasoning_summary_reaches_messages_clients_once_with_its_signature():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+    from litellm.litellm_core_utils.prompt_templates.common_utils import encrypted_reasoning_signature
+    from litellm.llms.anthropic.messages.adapters.streaming_iterator import AnthropicStreamWrapper
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    encrypted: Final = "gAAAA_streamed_summary"
+    events: Final = (
+        {"type": "response.reasoning_summary_part.added", "output_index": 0, "summary_index": 0},
+        {"type": "response.reasoning_summary_text.delta", "output_index": 0, "delta": "Oslo is "},
+        {"type": "response.reasoning_summary_text.delta", "output_index": 0, "delta": "colder."},
+        {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": {
+                "type": "reasoning",
+                "id": "rs_streamed",
+                "encrypted_content": encrypted,
+                "summary": [{"type": "summary_text", "text": "Oslo is colder."}],
+            },
+        },
+        {"type": "response.output_text.delta", "output_index": 1, "delta": "Oslo."},
+    )
+    parser: Final = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True, streams_reasoning_signatures=True
+    )
+    chunks: Final = (
+        *(parser.chunk_parser(event) for event in events),
+        ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(), finish_reason="stop")]),
+    )
+
+    sse_events: Final = list(AnthropicStreamWrapper(completion_stream=iter(chunks), model="chatgpt/gpt-5.5"))
+    deltas: Final = [event["delta"] for event in sse_events if event.get("type") == "content_block_delta"]
+    assert "".join(d.get("thinking", "") for d in deltas if d["type"] == "thinking_delta") == "Oslo is colder."
+    assert [d["signature"] for d in deltas if d["type"] == "signature_delta"] == [
+        encrypted_reasoning_signature(encrypted)
+    ]
+
+
+def test_reasoning_item_repeated_at_stream_end_reaches_messages_clients_once():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+    from litellm.litellm_core_utils.prompt_templates.common_utils import encrypted_reasoning_signature
+    from litellm.llms.anthropic.messages.adapters.streaming_iterator import AnthropicStreamWrapper
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    encrypted: Final = "gAAAA_completed_repeat"
+    reasoning_item: Final = {"type": "reasoning", "id": "rs_repeat", "summary": [], "encrypted_content": encrypted}
+    events: Final = (
+        {"type": "response.output_item.done", "output_index": 0, "item": reasoning_item},
+        {"type": "response.output_text.delta", "output_index": 1, "delta": "Oslo."},
+    )
+    parser: Final = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True, streams_reasoning_signatures=True
+    )
+    chunks: Final = (
+        *(parser.chunk_parser(event) for event in events),
+        ModelResponseStream(
+            choices=[StreamingChoices(index=0, delta=Delta(reasoning_items=[reasoning_item]), finish_reason=None)]
+        ),
+        ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(), finish_reason="stop")]),
+    )
+
+    sse_events: Final = list(AnthropicStreamWrapper(completion_stream=iter(chunks), model="azure/gpt-5.4-nano"))
+    started: Final = [event["content_block"] for event in sse_events if event.get("type") == "content_block_start"]
+    assert [block["type"] for block in started] == ["redacted_thinking", "text"]
+    assert started[0]["data"] == encrypted_reasoning_signature(encrypted)
+
+
+def test_reasoning_output_item_done_without_encrypted_content_stays_empty():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    done: Final = {
+        "type": "response.output_item.done",
+        "output_index": 0,
+        "item": {
+            "type": "reasoning",
+            "id": "rs_plain",
+            "summary": [{"type": "summary_text", "text": "already streamed"}],
+        },
+    }
+    result: Final = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True, streams_reasoning_signatures=True
+    ).chunk_parser(done)
+    assert getattr(result.choices[0].delta, "thinking_blocks", None) in (None, [])
+
+
+def test_transform_response_hands_encrypted_reasoning_to_messages_clients_only():
+    from unittest.mock import Mock
+
+    from litellm.litellm_core_utils.prompt_templates.common_utils import encrypted_reasoning_signature
+    from litellm.llms.anthropic.messages.adapters.transformation import (
+        LiteLLMAnthropicMessagesAdapter,
+    )
+    from litellm.types.llms.openai import ResponsesAPIResponse
+    from litellm.types.utils import ModelResponse, Usage
+
+    encrypted: Final = "gAAAA_non_stream"
+    reasoning: Final = ResponseReasoningItem(
+        id="rs_tool",
+        summary=[],
+        type="reasoning",
+        content=None,
+        encrypted_content=encrypted,
+        status=None,
+    )
+    function_call: Final = ResponseFunctionToolCall(
+        id="fc_1",
+        type="function_call",
+        status="completed",
+        arguments='{"city":"Oslo"}',
+        call_id="call_1",
+        name="get_weather",
+    )
+    raw: Final = ResponsesAPIResponse.model_construct(
+        id="resp_tool",
+        created_at=1,
+        error=None,
+        incomplete_details=None,
+        model="gpt-6.1-sol",
+        output=[reasoning, function_call],
+        status="completed",
+        usage=None,
+    )
+    model_response: Final = ModelResponse(
+        id="chatcmpl-tool",
+        created=1,
+        model=None,
+        object="chat.completion",
+        system_fingerprint=None,
+        choices=[],
+        usage=Usage(completion_tokens=0, prompt_tokens=0, total_tokens=0),
+    )
+    result: Final = LiteLLMResponsesTransformationHandler().transform_response(
+        model="gpt-6.1-sol",
+        raw_response=raw,
+        model_response=model_response,
+        logging_obj=Mock(),
+        request_data={"model": "gpt-6.1-sol"},
+        messages=[{"role": "user", "content": "Which city?"}],
+        optional_params={},
+        litellm_params={},
+        encoding=Mock(),
+    )
+    message: Final = result.choices[0].message
+    assert message.reasoning_items[0]["encrypted_content"] == encrypted
+    assert "thinking_blocks" not in result.model_dump()["choices"][0]["message"]
+    assert message.tool_calls[0].function.name == "get_weather"
+
+    anthropic_response: Final = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(
+        response=result, tool_name_mapping=None
+    )
+    content: Final = anthropic_response["content"]
+    assert [block["type"] for block in content] == ["redacted_thinking", "tool_use"]
+    assert content[0]["data"] == encrypted_reasoning_signature(encrypted)
+
+
+@pytest.mark.parametrize(
+    ("call_type", "kept_ids"),
+    [
+        pytest.param("anthropic_messages", ["rs_first", "rs_second"], id="messages_client_keeps_every_item"),
+        pytest.param("acompletion", ["rs_second"], id="chat_client_keeps_the_last_item"),
+    ],
+)
+def test_non_streamed_tool_turn_hands_messages_clients_every_reasoning_item(
+    call_type: str, kept_ids: list[str]
+) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from litellm.types.llms.openai import ResponsesAPIResponse
+    from litellm.types.utils import ModelResponse, Usage
+
+    def reasoning(item_id: str) -> ResponseReasoningItem:
+        return ResponseReasoningItem(
+            id=item_id, summary=[], type="reasoning", content=None, encrypted_content=f"gAAAA_{item_id}", status=None
+        )
+
+    def call(index: int, city: str) -> ResponseFunctionToolCall:
+        return ResponseFunctionToolCall(
+            id=f"fc_{index}",
+            type="function_call",
+            status="completed",
+            arguments=json.dumps({"city": city}),
+            call_id=f"call_{index}",
+            name="get_weather",
+        )
+
+    raw: Final = ResponsesAPIResponse.model_construct(
+        id="resp_two_reasoning",
+        created_at=1,
+        error=None,
+        incomplete_details=None,
+        model="gpt-5.4-nano",
+        output=[reasoning("rs_first"), call(1, "Oslo"), reasoning("rs_second"), call(2, "Lyon")],
+        status="completed",
+        usage=None,
+    )
+    result: Final = LiteLLMResponsesTransformationHandler().transform_response(
+        model="gpt-5.4-nano",
+        raw_response=raw,
+        model_response=ModelResponse(
+            id="chatcmpl-two-reasoning",
+            created=1,
+            model=None,
+            object="chat.completion",
+            system_fingerprint=None,
+            choices=[],
+            usage=Usage(completion_tokens=0, prompt_tokens=0, total_tokens=0),
+        ),
+        logging_obj=SimpleNamespace(call_type=call_type),
+        request_data={"model": "gpt-5.4-nano"},
+        messages=[{"role": "user", "content": "Oslo or Lyon?"}],
+        optional_params={},
+        litellm_params={"custom_llm_provider": "azure"},
+        encoding=Mock(),
+    )
+
+    message: Final = result.choices[0].message
+    assert [item["id"] for item in message.reasoning_items] == kept_ids
+    assert [tool_call.function.name for tool_call in message.tool_calls] == ["get_weather", "get_weather"]
 
 
 def test_streaming_function_call_tool_id_for_degenerate_call_id():
@@ -2943,9 +4240,7 @@ def test_streaming_function_call_tool_id_for_degenerate_call_id():
                 "arguments": "",
             },
         }
-        out = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
-            chunk
-        )
+        out = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(chunk)
         tool_calls = out.model_dump()["choices"][0]["delta"]["tool_calls"]
         assert tool_calls, "expected a tool_call chunk in the streaming delta"
         return tool_calls[0]["id"]
@@ -2964,9 +4259,7 @@ def test_streaming_chunks_share_one_chat_completion_id():
         OpenAiResponsesToChatCompletionStreamIterator,
     )
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
     events = [
         {"type": "response.created", "response": {"id": "resp_abc", "output": []}},
         {"type": "response.output_text.delta", "delta": "Hel"},
@@ -2982,12 +4275,10 @@ def test_streaming_chunks_share_one_chat_completion_id():
     assert len(set(ids)) == 1, f"streamed chunks carried different ids: {ids}"
     assert ids[0], "streamed chunks carried an empty id"
 
-    other_stream = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
+    other_stream = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    assert other_stream.chunk_parser(events[1]).id != ids[0], (
+        "a separate stream must get its own id, not a process-wide one"
     )
-    assert (
-        other_stream.chunk_parser(events[1]).id != ids[0]
-    ), "a separate stream must get its own id, not a process-wide one"
 
 
 @pytest.mark.asyncio
@@ -2998,9 +4289,7 @@ def test_streaming_chunks_share_one_chat_completion_id():
         ({"include_usage": True}, None),
     ],
 )
-async def test_acompletion_bridge_normalizes_stream_options_on_the_wire(
-    stream_options, expected_wire_stream_options
-):
+async def test_acompletion_bridge_normalizes_stream_options_on_the_wire(stream_options, expected_wire_stream_options):
     """include_usage must be stripped from the /v1/responses body; include_obfuscation must survive as a dict."""
     from unittest.mock import AsyncMock
 
@@ -3076,9 +4365,7 @@ def test_chunk_parser_custom_tool_call_stream_sequence():
         OpenAiResponsesToChatCompletionStreamIterator,
     )
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
 
     added = iterator.chunk_parser(
         {
@@ -3156,9 +4443,7 @@ def test_chunk_parser_remaps_tool_call_indices_sequentially():
         OpenAiResponsesToChatCompletionStreamIterator,
     )
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
 
     first = iterator.chunk_parser(
         {
@@ -3643,6 +4928,20 @@ def test_output_item_done_with_stream_map_keeps_empty_delta():
         ({"type": "required"}, "required"),
         ("auto", "auto"),
         ({"type": "function", "function": {"name": "get_weather"}}, {"type": "function", "name": "get_weather"}),
+        (
+            {
+                "type": "allowed_tools",
+                "allowed_tools": {
+                    "mode": "required",
+                    "tools": [{"type": "function", "function": {"name": "get_weather"}}],
+                },
+            },
+            {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function", "name": "get_weather"}]},
+        ),
+        (
+            {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function", "name": "get_weather"}]},
+            {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function", "name": "get_weather"}]},
+        ),
     ],
 )
 async def test_acompletion_bridge_normalizes_tool_choice_on_the_wire(
@@ -3715,6 +5014,7 @@ async def test_acompletion_bridge_normalizes_tool_choice_on_the_wire(
     post_kwargs = mock_post.call_args.kwargs
     request_body = post_kwargs["json"] if "json" in post_kwargs else json.loads(post_kwargs["data"])
     assert request_body["tool_choice"] == expected_wire_tool_choice
+    assert [tool["name"] for tool in request_body["tools"]] == ["get_weather"]
 
 
 def _make_incomplete_responses_api_response(
@@ -3735,9 +5035,7 @@ def _make_incomplete_responses_api_response(
         created_at=1760144904,
         error=None,
         incomplete_details=(
-            {"reason": incomplete_reason}
-            if incomplete_reason is not None or empty_incomplete_details
-            else None
+            {"reason": incomplete_reason} if incomplete_reason is not None or empty_incomplete_details else None
         ),
         instructions=None,
         metadata={},
@@ -3757,13 +5055,9 @@ def _make_incomplete_responses_api_response(
         truncation="disabled",
         usage=ResponseAPIUsage(
             input_tokens=37,
-            input_tokens_details=InputTokensDetails(
-                audio_tokens=None, cached_tokens=0, text_tokens=None
-            ),
+            input_tokens_details=InputTokensDetails(audio_tokens=None, cached_tokens=0, text_tokens=None),
             output_tokens=16,
-            output_tokens_details=OutputTokensDetails(
-                reasoning_tokens=16, text_tokens=None
-            ),
+            output_tokens_details=OutputTokensDetails(reasoning_tokens=16, text_tokens=None),
             total_tokens=53,
             cost=None,
         ),
@@ -3813,9 +5107,7 @@ def _call_transform_response(
 
 def test_transform_response_incomplete_reasoning_only_returns_empty_length_choice():
     handler = LiteLLMResponsesTransformationHandler()
-    raw_response = _make_incomplete_responses_api_response(
-        "max_output_tokens", [_make_reasoning_only_output_item()]
-    )
+    raw_response = _make_incomplete_responses_api_response("max_output_tokens", [_make_reasoning_only_output_item()])
 
     result = _call_transform_response(handler, raw_response)
 
@@ -3832,11 +5124,214 @@ def test_transform_response_incomplete_reasoning_only_returns_empty_length_choic
     assert result.usage.completion_tokens_details.reasoning_tokens == 16
 
 
+@pytest.mark.parametrize(
+    ("status", "incomplete_reason", "finish_reason"),
+    [("completed", None, "stop"), ("incomplete", "max_output_tokens", "length")],
+)
+def test_search_only_turn_keeps_tool_search_items_for_the_next_request(status, incomplete_reason, finish_reason):
+    search_items = [
+        {"type": "tool_search_call", "id": "tsc_1", "arguments": {"paths": ["get_weather"]}, "status": "completed"},
+        {"type": "tool_search_output", "id": "tso_1", "status": "completed", "tools": [{"name": "get_weather"}]},
+    ]
+    raw_response = _make_incomplete_responses_api_response(
+        incomplete_reason,
+        [{"type": "reasoning", "id": "rs_raw", "summary": []}, _make_reasoning_only_output_item(), *search_items],
+        status=status,
+    )
+
+    choice = _call_transform_response(LiteLLMResponsesTransformationHandler(), raw_response).choices[0]
+
+    stored = choice.message.provider_specific_fields["tool_search_items"]
+    assert [item["id"] for item in stored] == ["rs_raw", "rs_incomplete", "tsc_1", "tso_1"]
+    assert stored[2:] == search_items
+    assert [item["id"] for item in choice.message.reasoning_items] == ["rs_raw", "rs_incomplete"]
+    assert choice.finish_reason == finish_reason
+    replayed, _ = LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(
+        [choice.message.model_dump()], replay_tool_search=True
+    )
+    assert [item["id"] for item in replayed] == ["rs_raw", "rs_incomplete", "tsc_1", "tso_1"]
+
+
+_CLIENT_SEARCH_CALL: Final = {
+    "type": "tool_search_call",
+    "id": "tsc_client",
+    "arguments": {"query": "weather"},
+    "call_id": "call_search",
+    "execution": "client",
+    "status": "completed",
+}
+
+
+def _non_streamed_client_search_turn() -> "ModelResponse":
+    raw_response = _make_incomplete_responses_api_response(None, [_CLIENT_SEARCH_CALL], status="completed")
+    return _call_transform_response(LiteLLMResponsesTransformationHandler(), raw_response)
+
+
+def _streamed_client_search_turn() -> "ModelResponse":
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator: Final = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    completed: Final = iterator.chunk_parser(
+        {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_client_search",
+                "status": "completed",
+                "output": [_CLIENT_SEARCH_CALL],
+                "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            },
+        }
+    )
+    built: Final = litellm.stream_chunk_builder([completed], messages=[{"role": "user", "content": "weather in Paris"}])
+    assert isinstance(built, litellm.ModelResponse)
+    return built
+
+
+@pytest.mark.parametrize(
+    "client_search_turn",
+    [_non_streamed_client_search_turn, _streamed_client_search_turn],
+    ids=["non-streaming", "streaming"],
+)
+def test_client_search_turn_returns_its_call_and_replays_with_the_client_output(client_search_turn):
+    choice: Final = client_search_turn().choices[0]
+    client_output: Final = {
+        "type": "tool_search_output",
+        "call_id": "call_search",
+        "execution": "client",
+        "status": "completed",
+        "tools": [{"type": "function", "name": "get_weather", "parameters": {}, "defer_loading": True}],
+    }
+
+    assert choice.finish_reason == "stop"
+    assert choice.message.provider_specific_fields["tool_search_items"] == [_CLIENT_SEARCH_CALL]
+    answered: Final = {
+        **choice.message.model_dump(),
+        "provider_specific_fields": {"tool_search_items": [_CLIENT_SEARCH_CALL, client_output]},
+    }
+    request: Final = LiteLLMResponsesTransformationHandler().transform_request(
+        model="gpt-5.5",
+        messages=[{"role": "user", "content": "weather in Paris"}, answered],
+        optional_params={"tools": [{"type": "tool_search", "execution": "client"}]},
+        litellm_params={},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+    assert request["input"][1:3] == [_CLIENT_SEARCH_CALL, client_output]
+
+
+def test_reasoning_after_a_tool_search_replays_after_the_search_it_followed():
+    from unittest.mock import Mock
+
+    from openai.types.responses import ResponseFunctionToolCall
+
+    search_items = [
+        {"type": "tool_search_call", "id": "tsc_1", "arguments": {"paths": ["get_weather"]}, "status": "completed"},
+        {"type": "tool_search_output", "id": "tso_1", "status": "completed", "tools": [{"name": "get_weather"}]},
+    ]
+    function_calls = [
+        ResponseFunctionToolCall(
+            type="function_call", id=f"fc_{city}", call_id=f"call_{city}", name="get_weather", arguments="{}"
+        )
+        for city in ("paris", "berlin")
+    ]
+    raw_response = _make_incomplete_responses_api_response(
+        None,
+        [
+            {"type": "reasoning", "id": "rs_search", "summary": [], "encrypted_content": "enc_1"},
+            *search_items,
+            {"type": "reasoning", "id": "rs_call", "summary": [], "encrypted_content": "enc_2"},
+            *function_calls,
+        ],
+        status="completed",
+    )
+    message = _call_transform_response(LiteLLMResponsesTransformationHandler(), raw_response).choices[0].message
+
+    request = LiteLLMResponsesTransformationHandler().transform_request(
+        model="gpt-5.5",
+        messages=[
+            {"role": "user", "content": "weather in Paris and Berlin"},
+            message.model_dump(),
+            {"role": "tool", "tool_call_id": "call_paris", "content": "sunny"},
+            {"role": "tool", "tool_call_id": "call_berlin", "content": "rainy"},
+        ],
+        optional_params={"tools": [{"type": "tool_search"}]},
+        litellm_params={},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    assert [(item["type"], item.get("id", item.get("call_id"))) for item in request["input"][1:]] == [
+        ("reasoning", "rs_search"),
+        ("tool_search_call", "tsc_1"),
+        ("tool_search_output", "tso_1"),
+        ("reasoning", "rs_call"),
+        ("function_call", "call_paris"),
+        ("function_call", "call_berlin"),
+        ("function_call_output", "call_paris"),
+        ("function_call_output", "call_berlin"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("tools", "replayed_types"),
+    [
+        (
+            [{"type": "tool_search"}],
+            ["message", "tool_search_call", "tool_search_output", "function_call", "function_call_output"],
+        ),
+        (
+            [{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+            ["message", "function_call", "function_call_output"],
+        ),
+    ],
+    ids=["tool_search_requested", "tool_search_not_requested"],
+)
+def test_tool_search_items_replay_only_to_a_request_that_carries_tool_search(tools, replayed_types):
+    from unittest.mock import Mock
+
+    messages: Final = [
+        {"role": "user", "content": "weather in Paris"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"city":"Paris"}'},
+                }
+            ],
+            "provider_specific_fields": {
+                "tool_search_items": [
+                    {"type": "tool_search_call", "id": "tsc_1", "arguments": {"paths": ["get_weather"]}},
+                    {
+                        "type": "tool_search_output",
+                        "id": "tso_1",
+                        "tools": [{"type": "function", "name": "get_weather"}],
+                    },
+                ]
+            },
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+    ]
+
+    request: Final = LiteLLMResponsesTransformationHandler().transform_request(
+        model="gpt-5-mini",
+        messages=messages,
+        optional_params={"tools": tools},
+        litellm_params={},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    assert [item["type"] for item in request["input"]] == replayed_types
+
+
 def test_transform_response_incomplete_content_filter_maps_finish_reason():
     handler = LiteLLMResponsesTransformationHandler()
-    raw_response = _make_incomplete_responses_api_response(
-        "content_filter", [_make_reasoning_only_output_item()]
-    )
+    raw_response = _make_incomplete_responses_api_response("content_filter", [_make_reasoning_only_output_item()])
 
     result = _call_transform_response(handler, raw_response)
 
@@ -3859,11 +5354,7 @@ def test_transform_response_completed_with_reasonless_incomplete_details_keeps_s
     handler = LiteLLMResponsesTransformationHandler()
     output_message = ResponseOutputMessage(
         id="msg_complete",
-        content=[
-            ResponseOutputText(
-                annotations=[], text="full answer", type="output_text", logprobs=[]
-            )
-        ],
+        content=[ResponseOutputText(annotations=[], text="full answer", type="output_text", logprobs=[])],
         role="assistant",
         status="completed",
         type="message",
@@ -3885,11 +5376,7 @@ def test_transform_response_incomplete_partial_text_overrides_finish_reason_to_l
     handler = LiteLLMResponsesTransformationHandler()
     output_message = ResponseOutputMessage(
         id="msg_partial",
-        content=[
-            ResponseOutputText(
-                annotations=[], text="partial answer", type="output_text", logprobs=[]
-            )
-        ],
+        content=[ResponseOutputText(annotations=[], text="partial answer", type="output_text", logprobs=[])],
         role="assistant",
         status="incomplete",
         type="message",
@@ -3911,9 +5398,7 @@ def test_response_incomplete_stream_event_emits_length_and_usage():
         OpenAiResponsesToChatCompletionStreamIterator,
     )
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
 
     chunk = {
         "type": "response.incomplete",
@@ -3954,9 +5439,7 @@ def test_response_incomplete_stream_event_content_filter_maps_finish_reason():
         OpenAiResponsesToChatCompletionStreamIterator,
     )
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
 
     chunk = {
         "type": "response.incomplete",
@@ -3978,9 +5461,7 @@ def test_response_incomplete_stream_event_without_details_defaults_to_length():
         OpenAiResponsesToChatCompletionStreamIterator,
     )
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
 
     chunk = {
         "type": "response.incomplete",
@@ -4060,9 +5541,7 @@ def test_thinking_only_assistant_turn_still_sends_its_reasoning():
         {
             "role": "assistant",
             "content": None,
-            "thinking_blocks": [
-                {"type": "thinking", "thinking": "August in Denver is dry.", "signature": "sig1"}
-            ],
+            "thinking_blocks": [{"type": "thinking", "thinking": "August in Denver is dry.", "signature": "sig1"}],
         },
         {"role": "user", "content": "Why?"},
     ]
@@ -4088,9 +5567,7 @@ def test_stored_reasoning_items_win_over_thinking_blocks():
                     "summary": [{"type": "summary_text", "text": "August in Denver is dry."}],
                 }
             ],
-            "thinking_blocks": [
-                {"type": "thinking", "thinking": "August in Denver is dry.", "signature": "rs_real"}
-            ],
+            "thinking_blocks": [{"type": "thinking", "thinking": "August in Denver is dry.", "signature": "rs_real"}],
         },
     ]
 
@@ -4357,6 +5834,491 @@ def _system_input_item(text: str) -> dict[str, object]:
     return {"type": "message", "role": "system", "content": [{"type": "input_text", "text": text}]}
 
 
+@pytest.mark.parametrize(
+    ("content_block", "expected_content"),
+    [
+        (
+            {"type": "text", "text": "Stable prefix"},
+            {"type": "input_text", "text": "Stable prefix"},
+        ),
+        (
+            {"type": "image_url", "image_url": "https://example.com/image.png"},
+            {"type": "input_image", "image_url": "https://example.com/image.png", "detail": "auto"},
+        ),
+        (
+            {"type": "file", "file": {"file_id": "file-123"}},
+            {"type": "input_file", "file_id": "file-123"},
+        ),
+    ],
+    ids=("text", "image_url", "file"),
+)
+def test_prompt_cache_breakpoint_survives_chat_to_responses_conversion(
+    content_block: dict[str, object], expected_content: dict[str, object]
+) -> None:
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    cache_breakpoint: Final = {"mode": "explicit"}
+    marked_content: Final = {**content_block, "prompt_cache_breakpoint": cache_breakpoint}
+
+    request: Final = handler.transform_request(
+        model="gpt-5.6-sol",
+        messages=[
+            {
+                "role": "user",
+                "content": [marked_content],
+            }
+        ],
+        optional_params={"prompt_cache_options": cache_breakpoint},
+        litellm_params={},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    assert request["input"][0] == {
+        "type": "message",
+        "role": "user",
+        "content": [{**expected_content, "prompt_cache_breakpoint": cache_breakpoint}],
+    }
+    assert request["prompt_cache_options"] == cache_breakpoint
+
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "keep_marker"),
+    [
+        ("openai.gpt-5.6-sol", "bedrock_mantle", True),
+        ("openai.gpt-5.4", "bedrock_mantle", False),
+        ("openai.gpt-5.6-sol", "azure_ai", False),
+    ],
+    ids=("flagged-hosted-deployment", "unflagged-hosted-deployment", "provider-without-flag"),
+)
+def test_transform_request_uses_provider_keyed_prompt_cache_breakpoint_flag(
+    model: str, custom_llm_provider: str, keep_marker: bool
+) -> None:
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    cache_breakpoint: Final = {"mode": "explicit"}
+    messages: Final = [
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "Stable prefix", "prompt_cache_breakpoint": cache_breakpoint}],
+        },
+        {"role": "user", "content": "Hi"},
+    ]
+
+    request: Final = handler.transform_request(
+        model=model,
+        messages=messages,
+        optional_params={},
+        litellm_params={"custom_llm_provider": custom_llm_provider},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    assert request["input"][0] == {
+        "type": "message",
+        "role": "system",
+        "content": [
+            {
+                "type": "input_text",
+                "text": "Stable prefix",
+                **({"prompt_cache_breakpoint": cache_breakpoint} if keep_marker else {}),
+            }
+        ],
+    }
+
+
+def test_prompt_cache_breakpoint_read_tolerates_non_string_content_block_keys() -> None:
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    # Non-string keys are not JSON-representable but are accepted by chat completion
+    # callers passing Python dicts; reading the marker must not validate or reject them.
+    content: Final = [
+        {"type": "text", "text": "Stable prefix", 1: "ignored"},
+        {"type": "image_url", "image_url": "https://example.com/image.png", 2: "ignored"},
+        {"type": "file", "file": {"file_id": "file-123"}, 3: "ignored"},
+    ]
+    messages: Final = [{"role": "user", "content": content}]
+
+    for model in ("gpt-5.6", "gpt-4o"):  # marker keep path and strip path both read the block
+        request: dict[str, object] = handler.transform_request(
+            model=model,
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+            litellm_logging_obj=Mock(),
+        )
+
+        assert request["input"] == [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "Stable prefix"},
+                    {
+                        "type": "input_image",
+                        "image_url": "https://example.com/image.png",
+                        "detail": "auto",
+                    },
+                    {"type": "input_file", "file_id": "file-123"},
+                ],
+            }
+        ]
+
+
+def test_prompt_cache_breakpoints_are_dropped_for_unsupported_models() -> None:
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    cache_breakpoint: Final = {"mode": "explicit"}
+    marked_content: Final = [
+        {"type": "text", "text": "Stable prefix", "prompt_cache_breakpoint": cache_breakpoint},
+        {
+            "type": "image_url",
+            "image_url": "https://example.com/image.png",
+            "prompt_cache_breakpoint": cache_breakpoint,
+        },
+        {
+            "type": "file",
+            "file": {"file_id": "file-123"},
+            "prompt_cache_breakpoint": cache_breakpoint,
+        },
+    ]
+    messages: Final = [{"role": "user", "content": marked_content}]
+
+    request: Final = handler.transform_request(
+        model="gpt-5.4-mini",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    assert request["input"] == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "Stable prefix"},
+                {"type": "input_image", "image_url": "https://example.com/image.png", "detail": "auto"},
+                {"type": "input_file", "file_id": "file-123"},
+            ],
+        }
+    ]
+    assert "prompt_cache_options" not in request
+    assert messages == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Stable prefix", "prompt_cache_breakpoint": {"mode": "explicit"}},
+                {
+                    "type": "image_url",
+                    "image_url": "https://example.com/image.png",
+                    "prompt_cache_breakpoint": {"mode": "explicit"},
+                },
+                {
+                    "type": "file",
+                    "file": {"file_id": "file-123"},
+                    "prompt_cache_breakpoint": {"mode": "explicit"},
+                },
+            ],
+        }
+    ]
+
+
+def test_prompt_cache_breakpoints_are_dropped_from_function_call_output_for_unsupported_models() -> None:
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    cache_breakpoint: Final = {"mode": "explicit"}
+    messages: Final = cast(
+        list[AllMessageValues],
+        [
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": [{"type": "text", "text": "Tool result", "prompt_cache_breakpoint": cache_breakpoint}],
+            }
+        ],
+    )
+
+    request: Final = cast(
+        dict[str, object],
+        handler.transform_request(
+            model="gpt-5.4-mini",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+            litellm_logging_obj=Mock(),
+        ),
+    )
+
+    assert request["input"] == [
+        {
+            "type": "function_call_output",
+            "call_id": "call_1",
+            "output": [{"type": "input_text", "text": "Tool result"}],
+        }
+    ]
+    assert messages == [
+        {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": [{"type": "text", "text": "Tool result", "prompt_cache_breakpoint": {"mode": "explicit"}}],
+        }
+    ]
+
+
+def test_convert_chat_completion_messages_to_responses_api_drops_prompt_cache_breakpoints_unless_kept() -> None:
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    cache_breakpoint: Final = {"mode": "explicit"}
+    image_data_url: Final = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
+    file_data: Final = "data:application/pdf;base64,JVBERi0xLjQK"
+    messages: Final = cast(
+        list[AllMessageValues],
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Review these inputs", "prompt_cache_breakpoint": cache_breakpoint},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": image_data_url},
+                        "prompt_cache_breakpoint": cache_breakpoint,
+                    },
+                    {
+                        "type": "file",
+                        "file": {"file_data": file_data, "filename": "input.pdf"},
+                        "prompt_cache_breakpoint": cache_breakpoint,
+                    },
+                ],
+            },
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "lookup", "arguments": "{}"},
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": [{"type": "text", "text": "Tool result", "prompt_cache_breakpoint": cache_breakpoint}],
+            },
+        ],
+    )
+    messages_before: Final = copy.deepcopy(messages)
+
+    default_input, default_instructions = handler.convert_chat_completion_messages_to_responses_api(messages)
+    kept_input, kept_instructions = handler.convert_chat_completion_messages_to_responses_api(
+        messages,
+        keep_prompt_cache_breakpoints=True,
+    )
+
+    assert default_instructions is None
+    assert default_input == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "Review these inputs"},
+                {"type": "input_image", "image_url": image_data_url, "detail": "auto"},
+                {"type": "input_file", "file_data": file_data, "filename": "input.pdf"},
+            ],
+        },
+        {
+            "type": "function_call",
+            "call_id": "call_1",
+            "name": "lookup",
+            "arguments": "{}",
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call_1",
+            "output": [{"type": "input_text", "text": "Tool result"}],
+        },
+    ]
+    assert kept_instructions is None
+    assert kept_input == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": "Review these inputs",
+                    "prompt_cache_breakpoint": cache_breakpoint,
+                },
+                {
+                    "type": "input_image",
+                    "image_url": image_data_url,
+                    "detail": "auto",
+                    "prompt_cache_breakpoint": cache_breakpoint,
+                },
+                {
+                    "type": "input_file",
+                    "file_data": file_data,
+                    "filename": "input.pdf",
+                    "prompt_cache_breakpoint": cache_breakpoint,
+                },
+            ],
+        },
+        {
+            "type": "function_call",
+            "call_id": "call_1",
+            "name": "lookup",
+            "arguments": "{}",
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call_1",
+            "output": [{"type": "input_text", "text": "Tool result", "prompt_cache_breakpoint": cache_breakpoint}],
+        },
+    ]
+    assert messages == messages_before
+
+
+@pytest.mark.parametrize(
+    ("litellm_params", "keep_marker"),
+    (({"base_model": "gpt-5.6"}, True), ({}, False)),
+    ids=("supported-base-model", "missing-base-model"),
+)
+def test_prompt_cache_breakpoint_supports_model_alias_with_base_model(
+    litellm_params: dict[str, object],
+    keep_marker: bool,
+) -> None:
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    cache_breakpoint: Final = {"mode": "explicit"}
+    marked_content: Final = {"type": "text", "text": "Stable prefix", "prompt_cache_breakpoint": cache_breakpoint}
+
+    request: Final = handler.transform_request(
+        model="mydeployment",
+        messages=[{"role": "user", "content": [marked_content]}],
+        optional_params={},
+        litellm_params=litellm_params,
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    expected_content: Final = {
+        "type": "input_text",
+        "text": "Stable prefix",
+        **({"prompt_cache_breakpoint": cache_breakpoint} if keep_marker else {}),
+    }
+    assert request["input"] == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [expected_content],
+        }
+    ]
+
+
+_MANTLE_GPT_ROW: Final = {
+    "litellm_provider": "bedrock_mantle",
+    "mode": "responses",
+    "supports_prompt_cache_breakpoint": True,
+}
+_MARKED_SYSTEM_PART: Final = {"type": "text", "text": "Stable prefix", "prompt_cache_breakpoint": {"mode": "explicit"}}
+
+
+def _bridged_input_for_served_provider(
+    model: str, custom_llm_provider: str, **litellm_params: object
+) -> list[dict[str, object]]:
+    request: Final = LiteLLMResponsesTransformationHandler().transform_request(
+        model=model,
+        messages=cast(
+            List[AllMessageValues],
+            [{"role": "system", "content": [_MARKED_SYSTEM_PART]}, {"role": "user", "content": "hi"}],
+        ),  # cast-ok: the test builds chat messages as plain mappings
+        optional_params={},
+        litellm_params={"custom_llm_provider": custom_llm_provider, **litellm_params},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+    return cast(list[dict[str, object]], request["input"])  # cast-ok: the bridge emits message item mappings
+
+
+@pytest.mark.parametrize("model", ["openai.gpt-5.6-sol", "us-east-1/openai.gpt-5.6-sol"])
+def test_transform_request_keeps_the_breakpoint_for_a_hosted_openai_model_by_its_served_provider(
+    monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    """The bridge is handed the provider-stripped deployment name, which has no cost-map row and no
+    ``gpt-`` version of its own: the row keyed for the serving provider states the dialect."""
+    monkeypatch.setitem(litellm.model_cost, "bedrock_mantle/openai.gpt-5.6-sol", _MANTLE_GPT_ROW)
+
+    assert _bridged_input_for_served_provider(model, "bedrock_mantle") == [
+        {
+            "type": "message",
+            "role": "system",
+            "content": [{**_MARKED_SYSTEM_PART, "type": "input_text"}],
+        },
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+    ]
+
+
+def test_transform_request_keeps_the_breakpoint_when_the_served_providers_row_is_the_base_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, "bedrock_mantle/openai.gpt-5.6-sol", _MANTLE_GPT_ROW)
+
+    assert _bridged_input_for_served_provider("my-alias", "bedrock_mantle", base_model="openai.gpt-5.6-sol")[0][
+        "content"
+    ] == [{**_MARKED_SYSTEM_PART, "type": "input_text"}]
+
+
+def test_transform_request_strips_the_breakpoint_when_the_served_providers_row_opts_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost, "bedrock_mantle/gpt-6-luna", {**_MANTLE_GPT_ROW, "supports_prompt_cache_breakpoint": False}
+    )
+
+    assert _bridged_input_for_served_provider("gpt-6-luna", "bedrock_mantle")[0]["content"] == [
+        {"type": "input_text", "text": "Stable prefix"}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("sibling_flag", "model_info", "keeps_the_breakpoint"),
+    [
+        (True, {"id": "flagless"}, False),
+        (True, {"id": "opted-out", "supports_prompt_cache_breakpoint": False}, False),
+        (False, {"id": "opted-in", "supports_prompt_cache_breakpoint": True}, True),
+    ],
+    ids=["flagless", "opted-out", "opted-in"],
+)
+def test_transform_request_reads_the_routed_deployments_own_flag_not_a_siblings_on_the_shared_key(
+    monkeypatch: pytest.MonkeyPatch,
+    sibling_flag: bool,
+    model_info: Mapping[str, object],
+    keeps_the_breakpoint: bool,
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "bedrock_mantle/qa-mantle-shared",
+        {**_MANTLE_GPT_ROW, "supports_prompt_cache_breakpoint": sibling_flag},
+    )
+
+    system_content: Final = _bridged_input_for_served_provider(
+        "qa-mantle-shared", "bedrock_mantle", model_info=model_info
+    )[0]["content"]
+
+    assert system_content == [
+        {**_MARKED_SYSTEM_PART, "type": "input_text"}
+        if keeps_the_breakpoint
+        else {"type": "input_text", "text": "Stable prefix"}
+    ]
+
+
+def test_transform_request_strips_the_breakpoint_for_a_served_provider_without_a_row_of_its_own(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, "bedrock_mantle/openai.gpt-5.6-sol", _MANTLE_GPT_ROW)
+
+    assert _bridged_input_for_served_provider("openai.gpt-5.6-sol", "azure")[0]["content"] == [
+        {"type": "input_text", "text": "Stable prefix"}
+    ]
+
+
 def test_mid_conversation_system_string_stays_in_input_after_a_user_turn():
     handler: Final = LiteLLMResponsesTransformationHandler()
 
@@ -4560,3 +6522,540 @@ def test_every_bridged_chunk_after_response_created_carries_the_served_service_t
     relayed = [iterator.chunk_parser(event).model_dump().get("service_tier") for event in events]
 
     assert relayed == ["default"] * len(events), relayed
+
+
+_AUDIO_PART: Final = {"type": "input_audio", "input_audio": {"data": "Zm9v", "format": "wav"}}
+_TEXT_PART: Final = {"type": "text", "text": "Transcribe this"}
+
+
+def test_convert_chat_completion_messages_to_responses_api_maps_input_audio_block():
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    messages: Final = [
+        {
+            "role": "user",
+            "content": [_TEXT_PART, {**_AUDIO_PART, "prompt_cache_breakpoint": {"mode": "explicit"}}],
+        }
+    ]
+
+    items, _ = handler.convert_chat_completion_messages_to_responses_api(messages, keep_prompt_cache_breakpoints=True)
+
+    assert items[0]["content"] == [
+        {"type": "input_text", "text": "Transcribe this"},
+        {
+            "type": "input_audio",
+            "input_audio": {"data": "Zm9v", "format": "wav"},
+            "prompt_cache_breakpoint": {"mode": "explicit"},
+        },
+    ]
+
+
+def test_convert_chat_completion_messages_to_responses_api_drops_malformed_input_audio_breakpoint_under_drop_params():
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    messages: Final = [{"role": "user", "content": [{**_AUDIO_PART, "prompt_cache_breakpoint": ["explicit"]}]}]
+
+    items, _ = handler.convert_chat_completion_messages_to_responses_api(
+        messages, drop_params=True, keep_prompt_cache_breakpoints=True
+    )
+
+    assert items[0]["content"] == [_AUDIO_PART]
+
+
+@pytest.fixture
+def registered_audio_models(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "unit-audio-capable",
+        {"litellm_provider": "openai", "mode": "chat", "supports_audio_input": True},
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "unit-text-only",
+        {
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "supports_audio_input": False,
+            "supports_prompt_cache_breakpoint": True,
+        },
+    )
+
+
+def _bridge_input(
+    model: str,
+    drop_params: bool | None,
+    messages: Sequence[Mapping[str, object]] | None = None,
+    **extra_litellm_params: object,
+) -> list[dict[str, object]]:
+    chat_messages: Final = cast(
+        List[AllMessageValues], list(messages or [{"role": "user", "content": [_TEXT_PART, _AUDIO_PART]}])
+    )  # cast-ok: the tests build chat messages as plain mappings
+    request: Final = LiteLLMResponsesTransformationHandler().transform_request(
+        model=model,
+        messages=chat_messages,
+        optional_params={},
+        litellm_params={"custom_llm_provider": "openai", "drop_params": drop_params, **extra_litellm_params},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+    return cast(list[dict[str, object]], request["input"])  # cast-ok: the bridge emits message item mappings
+
+
+def test_transform_request_forwards_input_audio_without_drop_params(
+    monkeypatch: pytest.MonkeyPatch, registered_audio_models: None
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    assert _bridge_input("unit-text-only", drop_params=False)[0]["content"] == [
+        {"type": "input_text", "text": "Transcribe this"},
+        _AUDIO_PART,
+    ]
+
+
+def test_transform_request_drops_input_audio_under_drop_params_when_model_lacks_audio_input(
+    monkeypatch: pytest.MonkeyPatch, registered_audio_models: None
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    assert _bridge_input("unit-text-only", drop_params=True)[0]["content"] == [
+        {"type": "input_text", "text": "Transcribe this"}
+    ]
+
+
+def test_transform_request_keeps_input_audio_under_drop_params_when_model_supports_audio_input(
+    monkeypatch: pytest.MonkeyPatch, registered_audio_models: None
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    assert _bridge_input("unit-audio-capable", drop_params=True)[0]["content"] == [
+        {"type": "input_text", "text": "Transcribe this"},
+        _AUDIO_PART,
+    ]
+
+
+def test_transform_request_keeps_input_audio_under_drop_params_when_base_model_supports_audio_input(
+    monkeypatch: pytest.MonkeyPatch, registered_audio_models: None
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    assert _bridge_input("my-audio-deployment", drop_params=True, base_model="unit-audio-capable")[0]["content"] == [
+        {"type": "input_text", "text": "Transcribe this"},
+        _AUDIO_PART,
+    ]
+
+
+def test_transform_request_drops_input_audio_under_global_drop_params(
+    monkeypatch: pytest.MonkeyPatch, registered_audio_models: None
+):
+    monkeypatch.setattr(litellm, "drop_params", True)
+
+    assert _bridge_input("unit-text-only", drop_params=None)[0]["content"] == [
+        {"type": "input_text", "text": "Transcribe this"}
+    ]
+
+
+def test_transform_request_drops_input_audio_from_tool_output_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch, registered_audio_models: None
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    messages: Final = [
+        {"role": "user", "content": "Describe the recording"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "record", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": [_TEXT_PART, _AUDIO_PART]},
+    ]
+
+    forwarded: Final = _bridge_input("unit-text-only", drop_params=False, messages=messages)
+    dropped: Final = _bridge_input("unit-text-only", drop_params=True, messages=messages)
+
+    assert forwarded[-1]["type"] == "function_call_output"
+    assert forwarded[-1]["output"] == [{"type": "input_text", "text": "Transcribe this"}, _AUDIO_PART]
+    assert dropped[-1]["output"] == [{"type": "input_text", "text": "Transcribe this"}]
+
+
+def test_transform_request_moves_the_dropped_audio_part_breakpoint_to_the_preceding_part(
+    monkeypatch: pytest.MonkeyPatch, registered_audio_models: None
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    messages: Final = [
+        {"role": "user", "content": [_TEXT_PART, {**_AUDIO_PART, "prompt_cache_breakpoint": {"mode": "explicit"}}]}
+    ]
+
+    assert _bridge_input("unit-text-only", drop_params=True, messages=messages)[0]["content"] == [
+        {"type": "input_text", "text": "Transcribe this", "prompt_cache_breakpoint": {"mode": "explicit"}}
+    ]
+
+
+def test_transform_request_keeps_the_preceding_part_breakpoint_over_the_dropped_audio_part_breakpoint(
+    monkeypatch: pytest.MonkeyPatch, registered_audio_models: None
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    messages: Final = [
+        {
+            "role": "user",
+            "content": [
+                {**_TEXT_PART, "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"}},
+                {**_AUDIO_PART, "prompt_cache_breakpoint": {"mode": "explicit"}},
+            ],
+        }
+    ]
+
+    assert _bridge_input("unit-text-only", drop_params=True, messages=messages)[0]["content"] == [
+        {"type": "input_text", "text": "Transcribe this", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"}}
+    ]
+
+
+def test_convert_chat_completion_messages_to_responses_api_keeps_prompt_cache_breakpoint_on_unknown_block():
+    """The hook marks the last block of its target message, so a message ending in a block the bridge
+    cannot map reaches the stringify path and has to keep the marker there."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+    breakpoint_marker = {"mode": "explicit"}
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "describe this"},
+                {
+                    "type": "video_url",
+                    "video_url": {"url": "https://example.com/clip.mp4"},
+                    "prompt_cache_breakpoint": breakpoint_marker,
+                },
+            ],
+        },
+    ]
+
+    response, _ = handler.convert_chat_completion_messages_to_responses_api(
+        messages, keep_prompt_cache_breakpoints=True
+    )
+
+    content = response[0]["content"]
+    assert [block["type"] for block in content] == ["input_text", "input_text"]
+    assert content[1]["prompt_cache_breakpoint"] == breakpoint_marker
+
+
+_HAND_WRITTEN_PROMPT_CACHE_BREAKPOINT_BLOCKS: Final = (
+    {"type": "text", "text": "a string marker", "prompt_cache_breakpoint": "explicit"},
+    {"type": "text", "text": "an unknown mode", "prompt_cache_breakpoint": {"mode": "bogus"}},
+    {
+        "type": "input_audio",
+        "input_audio": {"data": "Zm9v", "format": "wav"},
+        "prompt_cache_breakpoint": ["explicit"],
+    },
+    {"type": "text", "text": "unsupported ttl", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"}},
+    {"type": "text", "text": "unknown key", "prompt_cache_breakpoint": {"mode": "explicit", "scope": "all"}},
+    {"type": "text", "text": "supported ttl", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"}},
+    {"type": "text", "text": "well formed", "prompt_cache_breakpoint": {"mode": "explicit"}},
+)
+
+
+def test_convert_chat_completion_messages_to_responses_api_drops_only_an_unreadable_prompt_cache_breakpoint_under_drop_params():
+    """The target's Responses config decides which ttl and keys its API takes, so the bridge keeps every marker
+    whose mode some target reads."""
+    handler = LiteLLMResponsesTransformationHandler()
+    messages = [{"role": "user", "content": list(_HAND_WRITTEN_PROMPT_CACHE_BREAKPOINT_BLOCKS)}]
+
+    response, _ = handler.convert_chat_completion_messages_to_responses_api(
+        messages, drop_params=True, keep_prompt_cache_breakpoints=True
+    )
+
+    content = response[0]["content"]
+    assert [block.get("prompt_cache_breakpoint") for block in content] == [
+        None,
+        None,
+        None,
+        {"mode": "explicit", "ttl": "1h"},
+        {"mode": "explicit", "scope": "all"},
+        {"mode": "explicit", "ttl": "30m"},
+        {"mode": "explicit"},
+    ]
+    assert all("prompt_cache_breakpoint" not in block for block in content[:3])
+
+
+def test_convert_chat_completion_messages_to_responses_api_keeps_malformed_prompt_cache_breakpoint_by_default():
+    handler = LiteLLMResponsesTransformationHandler()
+    messages = [{"role": "user", "content": list(_HAND_WRITTEN_PROMPT_CACHE_BREAKPOINT_BLOCKS)}]
+
+    response, _ = handler.convert_chat_completion_messages_to_responses_api(
+        messages, keep_prompt_cache_breakpoints=True
+    )
+
+    content = response[0]["content"]
+    assert [block["prompt_cache_breakpoint"] for block in content] == [
+        block["prompt_cache_breakpoint"] for block in _HAND_WRITTEN_PROMPT_CACHE_BREAKPOINT_BLOCKS
+    ]
+
+
+def test_transform_request_drop_params_in_litellm_params_gates_the_prompt_cache_breakpoint_carry():
+    handler = LiteLLMResponsesTransformationHandler()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": "explicit"}]}]
+
+    result = handler.transform_request(
+        model="gpt-6.1-sol",
+        messages=messages,
+        optional_params={},
+        litellm_params={"drop_params": True},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    assert "prompt_cache_breakpoint" not in result["input"][0]["content"][0]
+
+
+_TTL_MARKED_CONTENT: Final = (
+    {"type": "text", "text": "unsupported ttl", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"}},
+    {"type": "text", "text": "well formed", "prompt_cache_breakpoint": {"mode": "explicit"}},
+)
+
+
+@pytest.mark.parametrize(
+    "global_drop_params,deployment_drop_params,expected",
+    [
+        ("true", None, [None, {"mode": "explicit"}]),
+        (False, True, [{"mode": "explicit", "ttl": "1h"}, {"mode": "explicit"}]),
+        (True, None, [{"mode": "explicit", "ttl": "1h"}, {"mode": "explicit"}]),
+    ],
+    ids=("string-global-target-keeps-raw-markers", "deployment-drop-params", "global-drop-params"),
+)
+def test_transform_request_hands_a_marker_to_the_target_whole_only_when_the_target_trims_it(
+    monkeypatch: pytest.MonkeyPatch,
+    global_drop_params: object,
+    deployment_drop_params: bool | None,
+    expected: list[object],
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+    request: Final = LiteLLMResponsesTransformationHandler().transform_request(
+        model="gpt-6.1-sol",
+        messages=[{"role": "user", "content": list(_TTL_MARKED_CONTENT)}],
+        optional_params={},
+        litellm_params={"custom_llm_provider": "openai", "drop_params": deployment_drop_params},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+    (item,) = cast(list[dict[str, object]], request["input"])  # cast-ok: the bridge emits message item mappings
+    parts: Final = cast(list[dict[str, object]], item["content"])  # cast-ok: message items carry content parts
+    assert [part.get("prompt_cache_breakpoint") for part in parts] == expected
+
+
+def test_convert_response_output_folds_two_messages_and_function_call_into_one_choice() -> None:
+    first: Final = ResponseOutputMessage.model_validate(
+        {
+            "id": "msg_first",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "First message.", "annotations": []}],
+        }
+    )
+    second_annotation: Final = {
+        "type": "url_citation",
+        "start_index": 0,
+        "end_index": 6,
+        "title": "Second",
+        "url": "https://example.com/second",
+    }
+    second: Final = ResponseOutputMessage.model_validate(
+        {
+            "id": "msg_second",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "Second message.", "annotations": [second_annotation]}],
+        }
+    )
+    function_call: Final = ResponseFunctionToolCall(
+        id="fc_1",
+        type="function_call",
+        status="completed",
+        arguments='{"city":"Paris"}',
+        call_id="call_1",
+        name="get_weather",
+    )
+
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(  # pyright: ignore[reportPrivateUsage]  # exercises the converter directly
+        (first, second, function_call)
+    )
+
+    assert len(choices) == 1
+    assert choices[0].index == 0
+    assert choices[0].finish_reason == "tool_calls"
+    assert choices[0].message.content == "First message.Second message."
+    assert choices[0].message.annotations == [
+        {**second_annotation, "start_index": len("First message."), "end_index": len("First message.") + 6}
+    ]
+    tool_calls: Final = choices[0].message.tool_calls
+    assert tool_calls is not None
+    assert [call.model_dump(exclude_none=True) for call in tool_calls] == [
+        {
+            "id": "fc_1",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"city":"Paris"}'},
+            "index": 0,
+        }
+    ]
+
+
+def test_convert_response_output_folds_commentary_and_final_answer_into_one_choice() -> None:
+    commentary: Final = ResponseOutputMessage.model_validate(
+        {
+            "id": "msg_commentary",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "phase": "commentary",
+            "content": [{"type": "output_text", "text": "Let me answer that.", "annotations": []}],
+        }
+    )
+    final_answer: Final = ResponseOutputMessage.model_validate(
+        {
+            "id": "msg_final",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "phase": "final_answer",
+            "content": [{"type": "output_text", "text": '{"city": "Paris"}', "annotations": []}],
+        }
+    )
+
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(  # pyright: ignore[reportPrivateUsage]  # exercises the converter directly
+        (commentary, final_answer)
+    )
+
+    assert len(choices) == 1
+    assert choices[0].index == 0
+    assert choices[0].finish_reason == "stop"
+    assert choices[0].message.content == 'Let me answer that.{"city": "Paris"}'
+    assert choices[0].message.tool_calls is None
+
+
+def test_convert_response_output_numbers_two_function_calls_zero_and_one() -> None:
+    message: Final = ResponseOutputMessage.model_validate(
+        {
+            "id": "msg_only",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "Checking both.", "annotations": []}],
+        }
+    )
+    weather: Final = ResponseFunctionToolCall(
+        id="fc_1",
+        type="function_call",
+        status="completed",
+        arguments='{"city":"Paris"}',
+        call_id="call_1",
+        name="get_weather",
+    )
+    time: Final = ResponseFunctionToolCall(
+        id="fc_2",
+        type="function_call",
+        status="completed",
+        arguments='{"city":"Paris"}',
+        call_id="call_2",
+        name="get_time",
+    )
+
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(  # pyright: ignore[reportPrivateUsage]  # the fold is the unit under test
+        (message, weather, time)
+    )
+
+    assert len(choices) == 1
+    tool_calls: Final = choices[0].message.tool_calls
+    assert tool_calls is not None
+    assert [(call.index, call.function.name) for call in tool_calls] == [(0, "get_weather"), (1, "get_time")]
+
+
+def _final_answer_message(item_id: str, text: str) -> ResponseOutputMessage:
+    return ResponseOutputMessage.model_validate(
+        {
+            "id": item_id,
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "phase": "final_answer",
+            "content": [{"type": "output_text", "text": text, "annotations": []}],
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "structured_output, expected_content",
+    [
+        (True, '{"city":"Paris"}'),
+        (False, '{"city":"Paris"}{"city":"Paris"}'),
+    ],
+)
+def test_convert_response_output_structured_output_keeps_first_message_item(
+    structured_output: bool, expected_content: str
+) -> None:
+    """gpt-5.4-mini on /responses with a strict json_schema and a 'say what you will do first'
+    system prompt returned two final_answer items, each the whole document (captured 2026-10-14)."""
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(  # pyright: ignore[reportPrivateUsage]  # exercises the converter directly
+        (_final_answer_message("msg_1", '{"city":"Paris"}'), _final_answer_message("msg_2", '{"city":"Paris"}')),
+        structured_output=structured_output,
+    )
+
+    assert len(choices) == 1
+    assert choices[0].index == 0
+    assert choices[0].finish_reason == "stop"
+    assert choices[0].message.content == expected_content
+    if structured_output:
+        assert json.loads(expected_content) == {"city": "Paris"}
+
+
+@pytest.mark.parametrize(
+    "optional_params, expected",
+    [
+        ({"response_format": {"type": "json_schema", "json_schema": {"name": "a", "schema": {}}}}, True),
+        ({"response_format": {"type": "json_object"}}, True),
+        ({"response_format": {"type": "text"}}, False),
+        ({}, False),
+    ],
+)
+def test_is_structured_output_request(optional_params: dict[str, object], expected: bool) -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        is_structured_output_request,
+    )
+
+    assert is_structured_output_request(optional_params) is expected
+
+
+@pytest.mark.parametrize(
+    "structured_output, expected_content",
+    [
+        (True, '{"city":"Paris"}'),
+        (False, '{"city":"Paris"}{"city":"Paris"}'),
+    ],
+)
+def test_stream_structured_output_drops_text_after_first_message_item(
+    structured_output: bool, expected_content: str
+) -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=iter(()), sync_stream=True, structured_output=structured_output
+    )
+    events: Final[tuple[dict[str, object], ...]] = (
+        {"type": "response.output_item.added", "output_index": 0, "item": {"type": "message", "content": []}},
+        {"type": "response.output_text.delta", "output_index": 0, "delta": '{"city":'},
+        {"type": "response.output_text.delta", "output_index": 0, "delta": '"Paris"}'},
+        {"type": "response.output_item.done", "output_index": 0, "item": {"type": "message", "content": []}},
+        {"type": "response.output_item.added", "output_index": 1, "item": {"type": "message", "content": []}},
+        {"type": "response.output_text.delta", "output_index": 1, "delta": '{"city":'},
+        {"type": "response.output_text.delta", "output_index": 1, "delta": '"Paris"}'},
+        {"type": "response.output_item.done", "output_index": 1, "item": {"type": "message", "content": []}},
+        {"type": "response.completed"},
+    )
+
+    chunks: Final = [iterator.chunk_parser(event) for event in events]
+
+    content: Final = "".join(chunk.choices[0].delta.content or "" for chunk in chunks)
+    assert content == expected_content
+    assert chunks[-1].choices[0].finish_reason == "stop"

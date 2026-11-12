@@ -10,14 +10,15 @@ import httpx
 from httpx._types import FileContent, RequestFiles
 from pydantic import TypeAdapter
 
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.base_llm.videos.async_task_utils import unsupported_video_fields
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # shared HTTP factory is private
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # shared HTTP factory lacks typed params
+    get_httpx_client,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # shared HTTP factory is private
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
@@ -44,7 +45,7 @@ _ALLOWED_ASPECT_RATIOS: Final[frozenset[str]] = frozenset({"auto", "16:9", "9:16
 class _ModelProfile:
     resolutions: frozenset[str]
     resolution_tiers: tuple[tuple[int, str], ...]
-    default_resolution: str
+    default_resolution: str | None
     integer_duration: bool
     reference_key: str
     reference_as_list: bool
@@ -65,6 +66,14 @@ _H3_PROFILE: Final[_ModelProfile] = _ModelProfile(
     integer_duration=True,
     reference_key="reference_image_urls",
     reference_as_list=True,
+)
+_H3_MAX_PROFILE: Final[_ModelProfile] = _ModelProfile(
+    resolutions=frozenset({"480P", "768P", "1080P"}),
+    resolution_tiers=((480, "480P"), (768, "768P"), (sys.maxsize, "1080P")),
+    default_resolution=None,
+    integer_duration=False,
+    reference_key="image_url",
+    reference_as_list=False,
 )
 _QUEUE_NAMESPACES: Final[frozenset[str]] = frozenset(("workflows", "comfy"))
 _STATUS_MAP: Final[Mapping[str, str]] = MappingProxyType(
@@ -100,7 +109,11 @@ def _duration_value(value: object) -> str | None:
 
 
 def _profile_for_model(model: str) -> _ModelProfile:
-    return _H3_PROFILE if model.startswith("minimax/h3/") else _SEEDANCE_PROFILE
+    if model.startswith("minimax/h3/"):
+        return _H3_PROFILE
+    if model.startswith("minimax/h3-max"):
+        return _H3_MAX_PROFILE
+    return _SEEDANCE_PROFILE
 
 
 def _resolution_for_short_side(short_side: int, profile: _ModelProfile) -> str:
@@ -279,7 +292,7 @@ def _status_video_object(
 class FalAIVideoConfig(BaseVideoConfig):
     def __init__(
         self,
-        sync_client_factory: Callable[[], HTTPHandler] = _get_httpx_client,
+        sync_client_factory: Callable[[], HTTPHandler] = get_httpx_client,
         async_client_factory: Callable[[], AsyncHTTPHandler] = _get_fal_ai_async_httpx_client,
     ) -> None:
         super().__init__()
@@ -304,6 +317,13 @@ class FalAIVideoConfig(BaseVideoConfig):
         model: str,
         drop_params: bool,
     ) -> _VideoParams:
+        unsupported: Final = unsupported_video_fields(
+            video_create_optional_params,
+            model,
+            "fal_ai",
+            drop_params,
+            frozenset({"generate_audio", "aspect_ratio", "seed", "duration"}),
+        )
         supported_params: Final[frozenset[str]] = frozenset(self.get_supported_openai_params(model))
         input_reference: Final[object] = video_create_optional_params.get("input_reference")
         if "input_reference" in video_create_optional_params and not isinstance(input_reference, str):
@@ -338,7 +358,11 @@ class FalAIVideoConfig(BaseVideoConfig):
             **duration_params,
             **size_params,
             **user_params,
-            **{key: value for key, value in video_create_optional_params.items() if key not in supported_params},
+            **{
+                key: value
+                for key, value in video_create_optional_params.items()
+                if key not in supported_params and key not in unsupported
+            },
         }
         return mapped_params
 
@@ -445,7 +469,7 @@ class FalAIVideoConfig(BaseVideoConfig):
         request_id, model_id = self._decode_video_id(video_id)
         encoded_request_id: Final[str] = encode_url_path_segment(request_id, field_name="video_id")
         return (
-            f"{api_base.rstrip('/')}/{_queue_request_base_path(model_id)}/requests/{encoded_request_id}/status",
+            join_api_base(api_base, f"{_queue_request_base_path(model_id)}/requests/{encoded_request_id}/status"),
             {},
         )
 
@@ -541,7 +565,7 @@ class FalAIVideoConfig(BaseVideoConfig):
         request_id, model_id = self._decode_video_id(video_id)
         encoded_request_id: Final[str] = encode_url_path_segment(request_id, field_name="video_id")
         return (
-            f"{api_base.rstrip('/')}/{_queue_request_base_path(model_id)}/requests/{encoded_request_id}",
+            join_api_base(api_base, f"{_queue_request_base_path(model_id)}/requests/{encoded_request_id}"),
             {},
         )
 
@@ -562,7 +586,12 @@ class FalAIVideoConfig(BaseVideoConfig):
             raise ValueError(f"fal.ai video result did not include a video URL: {error_message}")
         raise ValueError("fal.ai video result did not include a video URL")
 
-    def transform_video_content_response(self, raw_response: httpx.Response, logging_obj: object) -> bytes:
+    def transform_video_content_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: object,
+        client: "HTTPHandler | None" = None,
+    ) -> bytes:
         error: Final[str | None] = _result_error(raw_response)
         if error is not None:
             raise FalAIVideoError(
@@ -580,7 +609,12 @@ class FalAIVideoConfig(BaseVideoConfig):
         video_response.raise_for_status()
         return video_response.content
 
-    async def async_transform_video_content_response(self, raw_response: httpx.Response, logging_obj: object) -> bytes:
+    async def async_transform_video_content_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: object,
+        client: "AsyncHTTPHandler | None" = None,
+    ) -> bytes:
         error: Final[str | None] = _result_error(raw_response)
         if error is not None:
             raise FalAIVideoError(

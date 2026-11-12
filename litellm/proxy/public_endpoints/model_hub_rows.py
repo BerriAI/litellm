@@ -60,7 +60,7 @@ def _serving_pass_through_endpoints() -> Iterator[PassThroughGenericEndpoint]:
 def _published_model_group_rows() -> tuple[ModelGroupRow, ...] | None:
     """None when there is no router, which differs from a router that publishes nothing."""
     from litellm.proxy.proxy_server import (
-        _get_model_group_info,  # pyright: ignore[reportPrivateUsage]  # the hub routes have always read it here
+        get_model_group_info,
         llm_router,
     )
 
@@ -70,7 +70,7 @@ def _published_model_group_rows() -> tuple[ModelGroupRow, ...] | None:
         return ()
     return tuple(
         ModelGroupRow(info=info)
-        for info in _get_model_group_info(
+        for info in get_model_group_info(
             llm_router=llm_router, all_models_str=litellm.public_model_groups, model_group=None
         )
     )

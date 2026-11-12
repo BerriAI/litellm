@@ -3,25 +3,27 @@ CRUD ENDPOINTS FOR GUARDRAILS
 """
 
 import asyncio
+import copy
 import inspect
 import json
 import os
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType, UnionType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, Union, cast, get_args, get_origin
+from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar, Union, cast, get_args, get_origin
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import CustomGuardrail, GuardrailSetupError
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import AUDIT_ACTIONS, LitellmTableNames, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.callback_utils import CALLBACK_VAR_ENCRYPTED_PREFIX
+from litellm.proxy.common_utils.openai_error_payload import status_typed_proxy_exception
 from litellm.proxy.common_utils.path_utils import is_within, safe_join
 from litellm.proxy.guardrails.content_filter_data import CATEGORIES_DIR, DATA_ROOTS, category_dirs, find_category_file
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.bounded_execution import (
@@ -36,18 +38,28 @@ from litellm.proxy.guardrails.guardrail_hooks.custom_code.sandbox import (
 )
 from litellm.proxy.guardrails.guardrail_registry import (
     GuardrailRegistry,
+    configured_event_hooks,
     contains_encrypted_marker,
     decrypt_guardrail_litellm_params,
     encrypt_guardrail_litellm_params,
+    parse_tolerant_litellm_params,
+)
+from litellm.proxy.guardrails.response_handlers import (
+    GUARDRAIL_RESPONSE_HANDLERS,
+    GuardrailEndpointResponse,
+    StandardGuardrailResponseHandler,
 )
 from litellm.proxy.guardrails.usage_endpoints import router as guardrails_usage_router
-from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # legacy module exports
+    _user_has_admin_view,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    user_api_key_has_admin_view,
+)
+from litellm.proxy.management_helpers.audit_logs import create_object_audit_log, is_audit_logging_enabled
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import GuardrailsRepository
 from litellm.types.guardrails import (
     PII_ENTITY_CATEGORIES_MAP,
     ApplyGuardrailRequest,
-    ApplyGuardrailResponse,
     BaseLitellmParams,
     BedrockGuardrailConfigModel,
     BedrockGuardrailStreamingParams,
@@ -60,11 +72,14 @@ from litellm.types.guardrails import (
     LitellmParams,
     PatchGuardrailRequest,
     PiiAction,
+    PiiEntityCategoryMap,
     PiiEntityType,
     PresidioPresidioConfigModelUserInterface,
     SupportedGuardrailIntegrations,
     ToolPermissionGuardrailConfigModel,
+    with_tolerated_stream_scope,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.guardrails.guardrail_hooks.hide_secrets import (
     HideSecretsGuardrailConfigModel,
 )
@@ -81,6 +96,8 @@ if TYPE_CHECKING:
 
 router: Final = APIRouter()
 GUARDRAIL_REGISTRY: Final = GuardrailRegistry()
+_DECODED_JSON: Final = TypeAdapter(object)
+_DECODED_YAML: Final = TypeAdapter(object)
 
 
 def _as_str_object_mapping(mapping: Mapping[str, object]) -> Mapping[str, object]:
@@ -95,6 +112,84 @@ def _reject_encrypted_litellm_params(litellm_params: object) -> None:
             status_code=400,
             detail=f"litellm_params values must not start with {CALLBACK_VAR_ENCRYPTED_PREFIX!r}",
         )
+
+
+_AUDIT_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
+_AUDITED_GUARDRAIL_FIELDS: Final = ("guardrail_id", "guardrail_name", "guardrail_info", "status", "team_id")
+_AUDITED_LITELLM_PARAMS: Final = ("guardrail", "mode", "default_on")
+_NEW_GUARDRAIL_STATUS: Final = "active"
+
+
+def _as_audit_mapping(value: object) -> Mapping[str, object]:
+    """Rows can hold JSON columns as strings, and an audit snapshot must never fail a change that is already saved."""
+    candidate: Final = (
+        value.model_dump(exclude_none=True)
+        if isinstance(value, BaseModel)
+        else _parse_json_field(value)
+        if isinstance(value, str)
+        else value
+    )
+    try:
+        return _AUDIT_JSON_OBJECT.validate_python(candidate or {})
+    except ValidationError:
+        return {}
+
+
+def _litellm_params_of(guardrail: object) -> Mapping[str, object]:
+    return _as_audit_mapping(_as_audit_mapping(guardrail).get("litellm_params"))
+
+
+def _guardrail_audit_snapshot(guardrail: object) -> Mapping[str, object]:
+    """A guardrail as written to the audit log. Provider settings can hold credentials under any name, so only the
+    provider, mode and default_on values are kept."""
+    fields: Final = _as_audit_mapping(guardrail)
+    params: Final = _litellm_params_of(guardrail)
+    return {
+        **{key: fields[key] for key in _AUDITED_GUARDRAIL_FIELDS if fields.get(key) is not None},
+        "litellm_params": {key: params[key] for key in _AUDITED_LITELLM_PARAMS if key in params},
+    }
+
+
+def _changed_litellm_param_names(before: object, after: object) -> tuple[str, ...]:
+    """Names, never values, of the provider settings an update changed beyond the ones the snapshot shows."""
+    old: Final = _litellm_params_of(before)
+    new: Final = _litellm_params_of(after)
+    return tuple(
+        sorted(
+            key
+            for key in old.keys() | new.keys()
+            if key not in _AUDITED_LITELLM_PARAMS and old.get(key) != new.get(key)
+        )
+    )
+
+
+async def _audit_guardrail_change(
+    *,
+    guardrail_id: str,
+    action: AUDIT_ACTIONS,
+    user_api_key_dict: UserAPIKeyAuth,
+    before: object = None,
+    after: object = None,
+) -> None:
+    from litellm.proxy.proxy_server import litellm_proxy_admin_name
+
+    if not is_audit_logging_enabled():
+        return
+    changed: Final = _changed_litellm_param_names(before, after) if before is not None and after is not None else ()
+    await create_object_audit_log(
+        object_id=guardrail_id,
+        action=action,
+        litellm_changed_by=None,
+        user_api_key_dict=user_api_key_dict,
+        litellm_proxy_admin_name=litellm_proxy_admin_name,
+        table_name=LitellmTableNames.GUARDRAILS_TABLE_NAME,
+        before_value=None if before is None else safe_dumps(_guardrail_audit_snapshot(before)),
+        after_value=None
+        if after is None
+        else safe_dumps(
+            {**_guardrail_audit_snapshot(after), **({"changed_litellm_params": list(changed)} if changed else {})}
+        ),
+    )
 
 
 def _guardrails_table(prisma_client: "PrismaClient") -> "TableActions[LiteLLM_GuardrailsTable]":
@@ -126,24 +221,27 @@ def _get_guardrails_list_response(
     """
     Helper function to get the guardrails list response
     """
-    from litellm.litellm_core_utils.litellm_logging import _get_masked_values
+    from litellm.litellm_core_utils.litellm_logging import get_masked_values
 
     guardrail_configs: Final[list[GuardrailInfoResponse]] = []
     for guardrail in guardrails_config:
         litellm_params = guardrail.get("litellm_params") or {}
-        masked_params = _get_masked_values(
+        masked_params = get_masked_values(
             litellm_params,
             unmasked_length=4,
             number_of_asterisks=4,
         )
-        guardrail_configs.append(
-            GuardrailInfoResponse(
-                guardrail_id=guardrail.get("guardrail_id"),
-                guardrail_name=guardrail.get("guardrail_name"),
-                litellm_params=masked_params,
-                guardrail_info=guardrail.get("guardrail_info"),
-            )
+        guardrail_info_response = GuardrailInfoResponse(
+            guardrail_id=guardrail.get("guardrail_id"),
+            guardrail_name=guardrail.get("guardrail_name"),
+            guardrail_info=guardrail.get("guardrail_info"),
         )
+        guardrail_info_response.litellm_params = parse_tolerant_litellm_params(
+            with_tolerated_stream_scope(masked_params),
+            guardrail_info_response.guardrail_name,
+            params_model=BaseLitellmParams,
+        )
+        guardrail_configs.append(guardrail_info_response)
     return ListGuardrailsResponse(guardrails=guardrail_configs)
 
 
@@ -240,11 +338,11 @@ async def list_guardrails_v2(
     }
     ```
     """
-    from litellm.litellm_core_utils.litellm_logging import _get_masked_values
+    from litellm.litellm_core_utils.litellm_logging import get_masked_values
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
 
-    is_admin: Final = _user_has_admin_view(user_api_key_dict)
+    is_admin: Final = user_api_key_has_admin_view(user_api_key_dict)
 
     try:
         guardrails = (
@@ -276,13 +374,19 @@ async def list_guardrails_v2(
                 if isinstance(litellm_params, LitellmParams)
                 else litellm_params
             ) or {}
-            masked_litellm_params_dict = _get_masked_values(
+            masked_litellm_params_dict = get_masked_values(
                 litellm_params_dict,
                 unmasked_length=4,
                 number_of_asterisks=4,
             )
             masked_litellm_params = (
-                BaseLitellmParams(**masked_litellm_params_dict) if masked_litellm_params_dict else None
+                parse_tolerant_litellm_params(
+                    with_tolerated_stream_scope(masked_litellm_params_dict),
+                    guardrail.get("guardrail_name") or "Unknown",
+                    params_model=BaseLitellmParams,
+                )
+                if masked_litellm_params_dict
+                else None
             )
             guardrail_configs.append(
                 GuardrailInfoResponse(
@@ -317,13 +421,19 @@ async def list_guardrails_v2(
                 if isinstance(in_memory_litellm_params_raw, LitellmParams)
                 else in_memory_litellm_params_raw
             ) or {}
-            masked_in_memory_litellm_params = _get_masked_values(
+            masked_in_memory_litellm_params = get_masked_values(
                 in_memory_litellm_params_dict,
                 unmasked_length=4,
                 number_of_asterisks=4,
             )
             masked_in_memory_litellm_params_typed = (
-                BaseLitellmParams(**masked_in_memory_litellm_params) if masked_in_memory_litellm_params else None
+                parse_tolerant_litellm_params(
+                    with_tolerated_stream_scope(masked_in_memory_litellm_params),
+                    guardrail.get("guardrail_name") or "Unknown",
+                    params_model=BaseLitellmParams,
+                )
+                if masked_in_memory_litellm_params
+                else None
             )
             guardrail_configs.append(
                 GuardrailInfoResponse(
@@ -342,7 +452,7 @@ async def list_guardrails_v2(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-class CreateGuardrailRequest(BaseModel):
+class CreateGuardrailRequest(LiteLLMBaseModel):
     guardrail: Guardrail
 
 
@@ -422,11 +532,15 @@ async def create_guardrail(
         guardrail_id: Final = result.get("guardrail_id", "Unknown")
 
         try:
-            IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(guardrail=cast(Guardrail, result), source="db")
+            IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(
+                guardrail=cast(Guardrail, result),
+                source="db",
+                reject_invalid_logging_only_scope=True,
+            )
             verbose_proxy_logger.info(
                 "Immediate sync: Successfully initialized guardrail '%s' (ID: %s)", guardrail_name, guardrail_id
             )
-        except (ValueError, TypeError, CustomCodeCompilationError) as init_error:
+        except (ValueError, TypeError, CustomCodeCompilationError, GuardrailSetupError) as init_error:
             # Configuration error — roll back the DB write so the guardrail isn't orphaned
             if prisma_client is not None:
                 try:
@@ -445,6 +559,12 @@ async def create_guardrail(
                 init_error,
             )
 
+        await _audit_guardrail_change(
+            guardrail_id=str(guardrail_id),
+            action="created",
+            user_api_key_dict=user_api_key_dict,
+            after={**result, "status": _NEW_GUARDRAIL_STATUS},
+        )
         return result
     except HTTPException:
         raise
@@ -453,7 +573,7 @@ async def create_guardrail(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-class UpdateGuardrailRequest(BaseModel):
+class UpdateGuardrailRequest(LiteLLMBaseModel):
     guardrail: Guardrail
 
 
@@ -545,9 +665,13 @@ async def update_guardrail(
         )
 
         guardrail_name: Final = result.get("guardrail_name", "Unknown")
+        saved_guardrail: Final = copy.deepcopy(dict(result))
 
         try:
-            IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(guardrail=cast(Guardrail, result))
+            IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(
+                guardrail=cast(Guardrail, result),
+                reject_invalid_logging_only_scope=True,
+            )
             verbose_proxy_logger.info(
                 "Immediate sync: Successfully updated guardrail '%s' (ID: %s)", guardrail_name, guardrail_id
             )
@@ -575,6 +699,13 @@ async def update_guardrail(
                 update_error,
             )
 
+        await _audit_guardrail_change(
+            guardrail_id=guardrail_id,
+            action="updated",
+            user_api_key_dict=user_api_key_dict,
+            before=existing_guardrail,
+            after=saved_guardrail,
+        )
         return result
     except HTTPException as e:
         raise e
@@ -650,6 +781,12 @@ async def delete_guardrail(
                 delete_error,
             )
 
+        await _audit_guardrail_change(
+            guardrail_id=guardrail_id,
+            action="deleted",
+            user_api_key_dict=user_api_key_dict,
+            before=existing_guardrail,
+        )
         return result
     except HTTPException as e:
         raise e
@@ -662,7 +799,7 @@ async def delete_guardrail(
 GENERIC_GUARDRAIL_API: Final = "generic_guardrail_api"
 
 
-class RegisterGuardrailRequest(BaseModel):
+class RegisterGuardrailRequest(LiteLLMBaseModel):
     """Request body for POST /guardrails/register. Follows Generic Guardrail API config."""
 
     guardrail_name: str
@@ -674,21 +811,21 @@ class RegisterGuardrailRequest(BaseModel):
         return dict(self.litellm_params)
 
 
-class RegisterGuardrailResponse(BaseModel):
+class RegisterGuardrailResponse(LiteLLMBaseModel):
     guardrail_id: str
     guardrail_name: str
     status: str
     submitted_at: datetime | None = None
 
 
-class GuardrailSubmissionSummary(BaseModel):
+class GuardrailSubmissionSummary(LiteLLMBaseModel):
     total: int
     pending_review: int
     active: int
     rejected: int
 
 
-class GuardrailSubmissionItem(BaseModel):
+class GuardrailSubmissionItem(LiteLLMBaseModel):
     guardrail_id: str
     guardrail_name: str
     status: str  # pending_review | active | rejected
@@ -706,7 +843,7 @@ class GuardrailSubmissionItem(BaseModel):
     updated_at: datetime | None = None
 
 
-class ListGuardrailSubmissionsResponse(BaseModel):
+class ListGuardrailSubmissionsResponse(LiteLLMBaseModel):
     submissions: list[GuardrailSubmissionItem]
     summary: GuardrailSubmissionSummary
 
@@ -816,6 +953,12 @@ async def register_guardrail(
                 "updated_at": now,
             },
         )
+        await _audit_guardrail_change(
+            guardrail_id=created.guardrail_id,
+            action="created",
+            user_api_key_dict=user_api_key_dict,
+            after=created,
+        )
         return RegisterGuardrailResponse(
             guardrail_id=created.guardrail_id,
             guardrail_name=created.guardrail_name,
@@ -865,12 +1008,12 @@ async def _get_user_team_ids(user_api_key_dict: UserAPIKeyAuth) -> list[str]:
 
 
 def _row_to_submission_item(row: "LiteLLM_GuardrailsTable") -> GuardrailSubmissionItem:
-    from litellm.litellm_core_utils.litellm_logging import _get_masked_values
+    from litellm.litellm_core_utils.litellm_logging import get_masked_values
 
     guardrail_info: Final = _parse_json_field(row.guardrail_info) or {}
     team_guardrail: Final = row.team_id is not None
     raw_params: Final = decrypt_guardrail_litellm_params(_parse_json_field(row.litellm_params) or {})
-    masked_params: Final = _get_masked_values(raw_params, unmasked_length=4, number_of_asterisks=4)
+    masked_params: Final = get_masked_values(raw_params, unmasked_length=4, number_of_asterisks=4)
     return GuardrailSubmissionItem(
         guardrail_id=row.guardrail_id,
         guardrail_name=row.guardrail_name,
@@ -920,7 +1063,7 @@ async def list_guardrail_submissions(
     # Admin Viewer follows the read-parity rule: see all submissions like a
     # Proxy Admin would (no writes — registration / approval still gated
     # elsewhere by their own per-action checks).
-    is_admin: Final = _user_has_admin_view(user_api_key_dict)
+    is_admin: Final = user_api_key_has_admin_view(user_api_key_dict)
     visible_team_ids: list[str] | None = None
     if not is_admin:
         visible_team_ids = await _get_user_team_ids(user_api_key_dict)
@@ -999,7 +1142,7 @@ async def get_guardrail_submission(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
-    is_admin: Final = _user_has_admin_view(user_api_key_dict)
+    is_admin: Final = user_api_key_has_admin_view(user_api_key_dict)
 
     try:
         row: Final = await _guardrails_table(prisma_client).find_unique(where={"guardrail_id": guardrail_id})
@@ -1058,9 +1201,16 @@ async def approve_guardrail_submission(
             )
 
         now: Final = datetime.now(timezone.utc)
-        await _guardrails_table(prisma_client).update(
+        approved: Final = await _guardrails_table(prisma_client).update(
             where={"guardrail_id": guardrail_id},
             data={"status": "active", "reviewed_at": now, "updated_at": now},
+        )
+        await _audit_guardrail_change(
+            guardrail_id=guardrail_id,
+            action="updated",
+            user_api_key_dict=user_api_key_dict,
+            before=row,
+            after=approved,
         )
 
         guardrail_info: Final = _parse_json_field(row.guardrail_info)
@@ -1137,9 +1287,16 @@ async def reject_guardrail_submission(
             )
 
         now: Final = datetime.now(timezone.utc)
-        await _guardrails_table(prisma_client).update(
+        rejected: Final = await _guardrails_table(prisma_client).update(
             where={"guardrail_id": guardrail_id},
             data={"status": "rejected", "reviewed_at": now, "updated_at": now},
+        )
+        await _audit_guardrail_change(
+            guardrail_id=guardrail_id,
+            action="updated",
+            user_api_key_dict=user_api_key_dict,
+            before=row,
+            after=rejected,
         )
         return {
             "guardrail_id": guardrail_id,
@@ -1237,19 +1394,51 @@ async def patch_guardrail(
 
         # Update litellm_params if default_on is provided or pii_entities_config is provided
         existing_litellm_params: Final = _as_str_object_mapping(dict(existing_guardrail.get("litellm_params", {})))
-        litellm_params = LitellmParams(**existing_litellm_params)
-        if request.litellm_params is not None:
-            requested_litellm_params: Final = request.litellm_params.model_dump(exclude_unset=True)
-            litellm_params_dict: Final = litellm_params.model_dump(exclude_unset=True)
-            litellm_params_dict.update(requested_litellm_params)
-            merged_litellm_params: Final = _as_str_object_mapping(litellm_params_dict)
-            try:
-                litellm_params = LitellmParams(**merged_litellm_params)
-            except ValidationError as validation_error:
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"Invalid guardrail configuration, update rejected: {validation_error}",
-                ) from validation_error
+        current_litellm_params: Final = parse_tolerant_litellm_params(
+            with_tolerated_stream_scope(existing_litellm_params),
+            existing_guardrail.get("guardrail_name") or "Unknown",
+        )
+        requested_litellm_params: Final[Mapping[str, object]] = (
+            MappingProxyType(request.litellm_params.model_dump(exclude_unset=True))
+            if request.litellm_params is not None
+            else MappingProxyType({})
+        )
+        merged_litellm_params: Final = _as_str_object_mapping(
+            MappingProxyType({**current_litellm_params.model_dump(exclude_unset=True), **requested_litellm_params})
+        )
+        try:
+            parsed_litellm_params: Final = LitellmParams(**with_tolerated_stream_scope(merged_litellm_params))
+        except ValidationError as validation_error:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid guardrail configuration, update rejected: {validation_error}",
+            ) from validation_error
+        mode_lacks_logging_only: Final = GuardrailEventHooks.logging_only.value not in configured_event_hooks(
+            parsed_litellm_params.mode
+        )
+        merged_overrides: Final = MappingProxyType(
+            {
+                **(
+                    {"logging_only_scope": None}
+                    if "logging_only_scope" not in requested_litellm_params
+                    and parsed_litellm_params.logging_only_scope is not None
+                    and mode_lacks_logging_only
+                    else {}
+                ),
+                **(
+                    {"logging_only_continue_on_input_failure": None}
+                    if "logging_only_continue_on_input_failure" not in requested_litellm_params
+                    and parsed_litellm_params.logging_only_continue_on_input_failure
+                    and mode_lacks_logging_only
+                    else {}
+                ),
+            }
+        )
+        litellm_params: Final = (
+            LitellmParams(**MappingProxyType({**merged_litellm_params, **merged_overrides}))
+            if merged_overrides
+            else parsed_litellm_params
+        )
 
         # Update guardrail_info if provided
         guardrail_info: Final = (
@@ -1278,6 +1467,9 @@ async def patch_guardrail(
         try:
             IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(
                 guardrail=guardrail,
+                reject_invalid_logging_only_scope=bool(
+                    {"logging_only_scope", "logging_only_continue_on_input_failure"} & set(requested_litellm_params)
+                ),
             )
             verbose_proxy_logger.info(
                 "Immediate sync: Successfully updated guardrail '%s' (ID: %s)", guardrail_name, guardrail_id
@@ -1291,15 +1483,7 @@ async def patch_guardrail(
             # the caller instead of a misleading 200.
             await GUARDRAIL_REGISTRY.update_guardrail_in_db(
                 guardrail_id=guardrail_id,
-                guardrail=Guardrail(
-                    guardrail_id=guardrail_id,
-                    guardrail_name=existing_guardrail.get("guardrail_name") or "",
-                    litellm_params=LitellmParams(**existing_litellm_params),
-                    guardrail_info=existing_guardrail.get(
-                        "guardrail_info",
-                        {},
-                    ),
-                ),
+                guardrail=existing_guardrail,
                 prisma_client=prisma_client,
             )
             raise HTTPException(
@@ -1314,6 +1498,13 @@ async def patch_guardrail(
                 update_error,
             )
 
+        await _audit_guardrail_change(
+            guardrail_id=guardrail_id,
+            action="updated",
+            user_api_key_dict=user_api_key_dict,
+            before=existing_guardrail,
+            after=result,
+        )
         return result
     except HTTPException as e:
         raise e
@@ -1365,7 +1556,7 @@ async def get_guardrail_info(guardrail_id: str):
     ```
     """
 
-    from litellm.litellm_core_utils.litellm_logging import _get_masked_values
+    from litellm.litellm_core_utils.litellm_logging import get_masked_values
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
     from litellm.types.guardrails import GUARDRAIL_DEFINITION_LOCATION
@@ -1395,12 +1586,20 @@ async def get_guardrail_info(guardrail_id: str):
             if isinstance(litellm_params, LitellmParams)
             else litellm_params
         ) or {}
-        masked_litellm_params_dict: Final = _get_masked_values(
+        masked_litellm_params_dict: Final = get_masked_values(
             result_litellm_params_dict,
             unmasked_length=4,
             number_of_asterisks=4,
         )
-        masked_litellm_params = BaseLitellmParams(**masked_litellm_params_dict) if masked_litellm_params_dict else None
+        masked_litellm_params = (
+            parse_tolerant_litellm_params(
+                with_tolerated_stream_scope(masked_litellm_params_dict),
+                result.get("guardrail_name") or "Unknown",
+                params_model=BaseLitellmParams,
+            )
+            if masked_litellm_params_dict
+            else None
+        )
 
         return GuardrailInfoResponse(
             guardrail_id=result.get("guardrail_id"),
@@ -1417,12 +1616,23 @@ async def get_guardrail_info(guardrail_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _undeclared_logging_only(
+    guardrail_class: type[CustomGuardrail], hooks: Sequence[GuardrailEventHooks]
+) -> tuple[GuardrailEventHooks, ...]:
+    """logging_only when the class accepts it at save time without declaring it in its hooks."""
+    return (
+        (GuardrailEventHooks.logging_only,)
+        if guardrail_class.accepts_logging_only_mode() and GuardrailEventHooks.logging_only not in hooks
+        else ()
+    )
+
+
 @router.get(
     "/guardrails/ui/add_guardrail_settings",
     tags=["Guardrails"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def get_guardrail_ui_settings():
+async def get_guardrail_ui_settings() -> GuardrailUIAddGuardrailSettings:
     """
     Get the UI settings for the guardrails
 
@@ -1432,6 +1642,7 @@ async def get_guardrail_ui_settings():
     - PII entity categories for UI organization
     - Content filter settings (patterns and categories)
     """
+    from litellm.decisions.call import supported_decisions_providers
     from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.patterns import (
         PATTERN_CATEGORIES,
         get_available_content_categories,
@@ -1439,7 +1650,7 @@ async def get_guardrail_ui_settings():
     )
     from litellm.proxy.guardrails.guardrail_registry import guardrail_class_registry
 
-    category_maps: Final = [
+    category_maps: Final[list[PiiEntityCategoryMap]] = [
         {
             "category": category.value,
             "entities": [entity.value for entity in entities],
@@ -1448,7 +1659,7 @@ async def get_guardrail_ui_settings():
     ]
 
     supported_modes_by_provider: Final = {
-        provider: [hook.value for hook in hooks]
+        provider: [hook.value for hook in (*hooks, *_undeclared_logging_only(guardrail_class, hooks))]
         for provider, guardrail_class in guardrail_class_registry.items()
         if (hooks := guardrail_class.get_supported_event_hooks()) is not None
     } | MappingProxyType(
@@ -1456,13 +1667,20 @@ async def get_guardrail_ui_settings():
         # above; it only runs on pre_call.
         {SupportedGuardrailIntegrations.HIDE_SECRETS.value: [GuardrailEventHooks.pre_call.value]}
     )
+    providers_without_directional_logging_only_scope: Final = tuple(
+        provider
+        for provider, guardrail_class in guardrail_class_registry.items()
+        if not guardrail_class.supports_logging_only_scope()
+    )
 
     return GuardrailUIAddGuardrailSettings(
         supported_entities=[entity.value for entity in PiiEntityType],
         supported_actions=[action.value for action in PiiAction],
         supported_modes=[mode.value for mode in GuardrailEventHooks],
         supported_modes_by_provider=supported_modes_by_provider,
+        providers_without_directional_logging_only_scope=providers_without_directional_logging_only_scope,
         pii_entity_categories=category_maps,
+        decision_model_providers=supported_decisions_providers(),
         content_filter_settings={
             "prebuilt_patterns": get_pattern_metadata(),
             "pattern_categories": list(PATTERN_CATEGORIES.keys()),
@@ -1546,7 +1764,7 @@ async def get_major_airlines():
         with open(airlines_path, "r", encoding="utf-8") as f:
             import json
 
-            airlines: Final = json.load(f)
+            airlines: Final = _DECODED_JSON.validate_python(json.load(f))
         return {"airlines": airlines}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error reading major_airlines.json: {e}") from e
@@ -1597,7 +1815,7 @@ async def validate_blocked_words_file(request: dict[str, str]):
         if not file_content:
             return {"valid": False, "error": "No file content provided"}
 
-        data: Final = yaml.safe_load(file_content)
+        data: Final = _DECODED_YAML.validate_python(yaml.safe_load(file_content))
 
         if not isinstance(data, dict) or "blocked_words" not in data:
             return {
@@ -2028,7 +2246,7 @@ async def get_provider_specific_params():
     return provider_params
 
 
-class TestCustomCodeGuardrailRequest(BaseModel):
+class TestCustomCodeGuardrailRequest(LiteLLMBaseModel):
     """Request model for testing custom code guardrails."""
 
     custom_code: str
@@ -2044,7 +2262,7 @@ class TestCustomCodeGuardrailRequest(BaseModel):
     """Optional mock request_data (model, user_id, team_id, metadata, etc.)."""
 
 
-class TestCustomCodeGuardrailResponse(BaseModel):
+class TestCustomCodeGuardrailResponse(LiteLLMBaseModel):
     """Response model for testing custom code guardrails."""
 
     success: bool
@@ -2263,13 +2481,7 @@ async def _run_test_guardrail(execute_guardrail: Callable[[], object], timeout: 
     return await await_with_timeout(raw_result, remaining, label="test")
 
 
-def _resolve_guardrail_input_type(active_guardrail: CustomGuardrail, input_type: str) -> Literal["request", "response"]:
-    """Return the effective input_type, auto-upgrading to 'response' for post_call guardrails."""
-    if input_type == "request":
-        hook: Final = getattr(active_guardrail, "event_hook", None)
-        if hook == GuardrailEventHooks.post_call or hook == "post_call":
-            return "response"
-    return "response" if input_type == "response" else "request"
+_RESPONSE: Final[TypeAdapter[GuardrailEndpointResponse]] = TypeAdapter(GuardrailEndpointResponse)
 
 
 class _GuardrailLoggingObj(Protocol):
@@ -2281,9 +2493,6 @@ class _GuardrailLoggingObj(Protocol):
 
     @property
     def async_success_handler(self) -> "Callable[..., Awaitable[object]]": ...
-
-    @property
-    def success_handler(self) -> "Callable[..., object]": ...
 
 
 class _GuardrailProxyLogging(Protocol):
@@ -2300,39 +2509,43 @@ def _patch_logging_obj_for_guardrail(litellm_logging_obj: _GuardrailLoggingObj, 
     )
 
 
-async def _emit_guardrail_success_logs(
+async def _guardrail_response_after_success_hook(
+    response_handler: StandardGuardrailResponseHandler,
     proxy_logging_obj: _GuardrailProxyLogging,
-    litellm_logging_obj: _GuardrailLoggingObj | None,
-    data: dict,
+    data: Mapping[str, object],
     user_api_key_dict: UserAPIKeyAuth,
-    response: ApplyGuardrailResponse,
-    start_time: datetime,
-) -> ApplyGuardrailResponse:
-    """Fire proxy and LiteLLM success hooks after a successful guardrail run.
-
-    Each hook is wrapped defensively so a callback failure never prevents the
-    caller from receiving the guardrail response.  Returns the (possibly
-    hook-modified) response.
-    """
-    from litellm.litellm_core_utils.thread_pool_executor import (
-        executor as thread_pool_executor,
-    )
-
+    response: GuardrailEndpointResponse,
+) -> GuardrailEndpointResponse:
     try:
         modified: Final = await proxy_logging_obj.post_call_success_hook(
             data=data,
             user_api_key_dict=user_api_key_dict,
             response=response,
         )
-        if isinstance(modified, ApplyGuardrailResponse):
-            response = modified
+        return response_handler.accept_hook_result(response, modified)
     except Exception:
         verbose_proxy_logger.exception("apply_guardrail: post_call_success_hook failed")
+    return response
+
+
+async def _emit_guardrail_success_logs(
+    response_handler: StandardGuardrailResponseHandler,
+    proxy_logging_obj: _GuardrailProxyLogging,
+    litellm_logging_obj: _GuardrailLoggingObj | None,
+    data: Mapping[str, object],
+    user_api_key_dict: UserAPIKeyAuth,
+    response: GuardrailEndpointResponse,
+    start_time: datetime,
+) -> GuardrailEndpointResponse:
+    """Apply the success hook and log the response returned to the caller."""
+    updated_response: Final = await _guardrail_response_after_success_hook(
+        response_handler, proxy_logging_obj, data, user_api_key_dict, response
+    )
 
     # Build the logging payload after post_call_success_hook so that logged
     # data matches what the caller actually receives if the hook modified
     # the response.
-    response_for_logging: Final = {"response": response.model_dump(exclude_none=True)}
+    response_for_logging: Final = {"response": _RESPONSE.dump_python(updated_response, mode="json")}
 
     if litellm_logging_obj is not None:
         end_time: Final = datetime.now(timezone.utc)
@@ -2345,22 +2558,12 @@ async def _emit_guardrail_success_logs(
             )
         except Exception:
             verbose_proxy_logger.exception("apply_guardrail: async_success_handler failed")
-        try:
-            thread_pool_executor.submit(
-                litellm_logging_obj.success_handler,
-                response_for_logging,
-                start_time,
-                end_time,
-                False,
-            )
-        except Exception:
-            verbose_proxy_logger.exception("apply_guardrail: success_handler submit failed")
 
-    return response
+    return updated_response
 
 
-@router.post("/guardrails/apply_guardrail", response_model=ApplyGuardrailResponse)
-@router.post("/apply_guardrail", response_model=ApplyGuardrailResponse)
+@router.post("/guardrails/apply_guardrail", response_model=GuardrailEndpointResponse)
+@router.post("/apply_guardrail", response_model=GuardrailEndpointResponse)
 async def apply_guardrail(
     fastapi_request: Request,
     request: ApplyGuardrailRequest,
@@ -2385,7 +2588,7 @@ async def apply_guardrail(
     )
     from litellm.proxy.utils import handle_exception_on_proxy
 
-    data: dict = {
+    data: dict[str, object] = {
         "guardrail_name": request.guardrail_name,
         "input": [request.text],
         "messages": request.messages or [],
@@ -2425,18 +2628,15 @@ async def apply_guardrail(
         if litellm_logging_obj is not None:
             _patch_logging_obj_for_guardrail(litellm_logging_obj, request)
 
-        request_data: Final[dict] = {
-            **({"messages": request.messages} if request.messages is not None else {}),
-            **({"metadata": request.metadata} if request.metadata is not None else {}),
-        }
-        _input_type: Final = _resolve_guardrail_input_type(active_guardrail, request.input_type)
+        response_handler: Final = GUARDRAIL_RESPONSE_HANDLERS[request.response_format]
+        request_data: Final = dict(response_handler.prepare_request_data(request))
+        input_type: Final = response_handler.resolve_input_type(request, active_guardrail)
         guardrailed_inputs: Final = await active_guardrail.apply_guardrail(
             inputs={"texts": [request.text]},
             request_data=request_data,
-            input_type=_input_type,
+            input_type=input_type,
         )
-        response_text: Final = guardrailed_inputs.get("texts", [])
-        response = ApplyGuardrailResponse(response_text=response_text[0] if response_text else request.text)
+        response: Final = response_handler.build_response(request, guardrailed_inputs, request_data)
     except Exception as e:
         if litellm_logging_obj is not None and not isinstance(e, HTTPException):
             try:
@@ -2464,10 +2664,11 @@ async def apply_guardrail(
                 e = transformed_exception
         except Exception:
             verbose_proxy_logger.exception("apply_guardrail: post_call_failure_hook failed")
-        raise handle_exception_on_proxy(e)
+        raise handle_exception_on_proxy(status_typed_proxy_exception(e) if isinstance(e, HTTPException) else e)
 
     # Success logging outside except so a hook error never triggers failure handlers.
-    response = await _emit_guardrail_success_logs(
+    logged_response: Final = await _emit_guardrail_success_logs(
+        response_handler=response_handler,
         proxy_logging_obj=proxy_logging_obj,
         litellm_logging_obj=litellm_logging_obj,
         data=data,
@@ -2475,7 +2676,7 @@ async def apply_guardrail(
         response=response,
         start_time=start_time,
     )
-    return response
+    return logged_response
 
 
 # Usage (dashboard) endpoints: overview, detail, logs

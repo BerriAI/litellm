@@ -2,16 +2,18 @@ from collections.abc import Mapping
 from typing import Final
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE
 from litellm.types.llms.openai import AllMessageValues, OpenAITextCompletionUserMessage
 from litellm.utils import supports_reasoning
 
 from ...base_llm.completion.transformation import BaseTextCompletionConfig
-from ...openai.completion.utils import _transform_prompt
+from ...openai.completion.utils import transform_prompt
 from ..chat.transformation import (
     EFFORT_KWARG_KEYS,
     NIM_VLLM_STRIP_PARAMS,
     FireworksAIConfig,
     effort_from_chat_template_kwargs,
+    warn_dropped_effort_kwargs,
 )
 from ..common_utils import FireworksAIMixin, resolve_fireworks_resource_name
 
@@ -129,10 +131,7 @@ class FireworksAITextCompletionConfig(FireworksAIMixin, BaseTextCompletionConfig
             )
             return result
         if not supports_reasoning(model=model, custom_llm_provider="fireworks_ai"):
-            verbose_logger.debug(
-                "fireworks_ai model %r does not support reasoning; dropping chat_template_kwargs effort keys.",
-                model,
-            )
+            warn_dropped_effort_kwargs(OPAQUE_VALUE.validate_python(chat_template_kwargs), effort, model)
             return result
         return {**result, "reasoning_effort": effort}
 
@@ -159,7 +158,7 @@ class FireworksAITextCompletionConfig(FireworksAIMixin, BaseTextCompletionConfig
         headers: dict,
     ) -> dict:
         translated_params: Final = self.map_extra_body_params(optional_params=optional_params, model=model)
-        prompt: Final = _transform_prompt(messages=messages)
+        prompt: Final = transform_prompt(messages=messages)
 
         data: Final = {
             "model": resolve_fireworks_resource_name(model),

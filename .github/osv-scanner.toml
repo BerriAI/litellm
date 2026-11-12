@@ -1,0 +1,37 @@
+[[IgnoredVulns]]
+id = "GHSA-69hj-f68j-2879"
+ignoreUntil = 2027-02-01
+reason = "filelock UnixFileLock truncates and chmods a file another user renames or hard-links in at the lock path, in every release before 4.2.1, which needs Python >= 3.11. Python 3.11+ now locks 4.2.4 and only the Python 3.10 resolution stays on 3.20.3, held below 3.20.4 by a [tool.uv] constraint because every newer 3.10-compatible release carries more filelock advisories. litellm's CLI takes FileLock only inside ~/.litellm, which it creates owner-only, and huggingface_hub takes it in the Hugging Face cache, which litellm reaches only to download the Kimi K3 tokenizer for Bedrock token counting, so the attack needs another local user who can rename or link files in that cache. Remove once 3.10 is dropped"
+
+[[IgnoredVulns]]
+id = "GHSA-8mx5-7m5m-r77g"
+ignoreUntil = 2027-02-01
+reason = "filelock WindowsFileLock ignores mode in every release from 3.10.0 before 4.2.1, which needs Python >= 3.11. Python 3.11+ now locks 4.2.4 and only the Python 3.10 resolution stays on 3.20.3, held below 3.20.4 by a [tool.uv] constraint because every newer 3.10-compatible release carries more filelock advisories. The proxy image is Linux, so only Windows installs on Python 3.10 run it, and there litellm's CLI takes FileLock only inside the owner-only ~/.litellm, whose lock file holds no data, while huggingface_hub takes it in the Hugging Face cache, which litellm reaches only to download the Kimi K3 tokenizer. Remove once 3.10 is dropped"
+
+[[IgnoredVulns]]
+id = "GHSA-pcg2-g6cj-q92c"
+ignoreUntil = 2027-02-01
+reason = "tornado 6.6 (published 2026-10-21) is the only fix and requires Python >= 3.11, so the Python 3.10 resolution stays on 6.5.10 while 3.11+ locks 6.6; litellm starts no tornado server or client, since semantic-router and aurelio-sdk only declare it and tenacity and sentry-sdk import it only to wrap tornado code when it is present, so tornado's HTTP header parsing is never reached; remove this entry once 3.10 is dropped"
+
+[[IgnoredVulns]]
+id = "GHSA-pw9p-v7r6-gx4p"
+ignoreUntil = 2027-02-01
+reason = "tornado 6.6 (published 2026-10-21) is the only fix and requires Python >= 3.11, so the Python 3.10 resolution stays on 6.5.10 while 3.11+ locks 6.6; litellm starts no tornado server or client, since semantic-router and aurelio-sdk only declare it and tenacity and sentry-sdk import it only to wrap tornado code when it is present, so tornado's RedirectHandler is never reached; remove this entry once 3.10 is dropped"
+
+[[IgnoredVulns]]
+id = "GHSA-r4j5-9xpp-3985"
+ignoreUntil = 2027-02-01
+reason = "tornado 6.6 (published 2026-10-21) is the only fix and requires Python >= 3.11, so the Python 3.10 resolution stays on 6.5.10 while 3.11+ locks 6.6; litellm starts no tornado server or client, since semantic-router and aurelio-sdk only declare it and tenacity and sentry-sdk import it only to wrap tornado code when it is present, so tornado's chunked body reading is never reached; remove this entry once 3.10 is dropped"
+
+[[IgnoredVulns]]
+id = "GHSA-45c3-73f7-pv4m"
+ignoreUntil = 2027-02-01
+reason = "dnspython 2.9.0 (published 2026-10-09) is the only fix and requires Python >= 3.11, so the Python 3.10 resolution stays on 2.8.0 while 3.11+ locks 2.9.0; the advisory is CPU use in dns.name.from_wire_parser and litellm only reaches dnspython through pydantic EmailStr, which never does DNS lookups; remove this entry once 3.10 is dropped or a 3.10-compatible fix ships"
+
+[[PackageOverrides]]
+name = "pillow"
+version = "12.3.0"
+ecosystem = "PyPI"
+vulnerability.ignore = true
+effectiveUntil = 2027-02-01
+reason = "pillow 13.0.0 requires Python >= 3.11, so the Python 3.10 resolution of the ci and dev groups and of the mlflow extra stays on 12.3.0; 3.11+ is on 13.0.0; pillow has never shipped an older-major release after the next major (no 10.x after 11.0.0, no 11.x after 12.0.0), so 13.x is the only fix line; extended to 2027-02-01 with maintainer approval, same date as every other Python 3.10 entry; remove once 3.10 is dropped"

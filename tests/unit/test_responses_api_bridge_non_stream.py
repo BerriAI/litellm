@@ -138,7 +138,7 @@ def test_transform_usage_no_token_details():
     )
 
     # Transform to Responses API usage format
-    responses_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+    responses_usage = LiteLLMCompletionResponsesConfig.transform_chat_completion_usage_to_responses_usage(
         completion_response
     )
 
@@ -169,7 +169,7 @@ def test_transform_usage_with_cached_tokens_only():
         reasoning_tokens=None,  # No reasoning tokens
     )
 
-    responses_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+    responses_usage = LiteLLMCompletionResponsesConfig.transform_chat_completion_usage_to_responses_usage(
         completion_response
     )
 
@@ -207,7 +207,7 @@ def test_transform_usage_maps_nested_cache_creation_input_tokens():
         },
     )
 
-    responses_usage: Final = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+    responses_usage: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_usage_to_responses_usage(
         usage
     )
 
@@ -230,7 +230,7 @@ def test_transform_usage_with_reasoning_tokens_only():
         reasoning_tokens=60,  # Has reasoning tokens
     )
 
-    responses_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+    responses_usage = LiteLLMCompletionResponsesConfig.transform_chat_completion_usage_to_responses_usage(
         completion_response
     )
 
@@ -266,7 +266,7 @@ def test_transform_usage_with_both_token_details():
         text_tokens=50,  # Also include text_tokens
     )
 
-    responses_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+    responses_usage = LiteLLMCompletionResponsesConfig.transform_chat_completion_usage_to_responses_usage(
         completion_response
     )
 
@@ -306,7 +306,7 @@ def test_transform_usage_with_zero_values():
         reasoning_tokens=0,  # Explicitly 0 — preserved
     )
 
-    responses_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+    responses_usage = LiteLLMCompletionResponsesConfig.transform_chat_completion_usage_to_responses_usage(
         completion_response
     )
 
@@ -338,7 +338,7 @@ def test_transform_usage_unknown_reasoning_split_keeps_output_tokens_details():
         completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=None, text_tokens=None),
     )
 
-    responses_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(usage)
+    responses_usage = LiteLLMCompletionResponsesConfig.transform_chat_completion_usage_to_responses_usage(usage)
 
     assert responses_usage.output_tokens_details is not None
     assert responses_usage.output_tokens_details.reasoning_tokens == 0
@@ -436,7 +436,7 @@ def test_all_providers_transformation_scenarios():
         )
 
         # This should not raise any errors
-        responses_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+        responses_usage = LiteLLMCompletionResponsesConfig.transform_chat_completion_usage_to_responses_usage(
             completion_response
         )
 

@@ -4,14 +4,16 @@ import json
 import types
 from datetime import datetime, timedelta, timezone
 from typing import Final
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 from fastapi.testclient import TestClient
 
 import litellm.proxy.proxy_server as ps
+from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.proxy_server import app
-from litellm.proxy._types import UserAPIKeyAuth, LitellmUserRoles, CommonProxyErrors
-
 
 
 @pytest.fixture
@@ -103,6 +105,25 @@ async def test_update_budget_rejects_a_duration_that_never_advances(client_and_m
 
 
 @pytest.mark.asyncio
+async def test_update_budget_evicts_local_cache_when_redis_delete_fails(
+    client_and_mocks, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, _, _ = client_and_mocks
+    cache_key = "team_member_default_budget:budget_456"
+    cache = UserApiKeyCache(in_memory_cache=InMemoryCache())
+    cache.set_cache(cache_key, {"budget_id": "budget_456"}, local_only=True)
+    redis_cache = MagicMock()
+    redis_cache.async_delete_cache = AsyncMock(side_effect=RuntimeError("redis unavailable"))
+    cache.redis_cache = redis_cache
+    monkeypatch.setattr(ps, "user_api_key_cache", cache)
+
+    response = client.post("/budget/update", json={"budget_id": "budget_456", "max_budget": 10.0})
+
+    assert response.status_code == 200, response.text
+    assert cache.get_cache(cache_key, local_only=True) is None
+
+
+@pytest.mark.asyncio
 async def test_new_budget_db_not_connected(client_and_mocks, monkeypatch):
     client, mock_prisma, mock_table = client_and_mocks
 
@@ -137,6 +158,26 @@ async def test_update_budget_success(client_and_mocks, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_update_budget_evicts_team_member_default_budget_cache(client_and_mocks, monkeypatch):
+    client, _, _ = client_and_mocks
+    cache: Final = UserApiKeyCache(in_memory_cache=InMemoryCache())
+    monkeypatch.setattr(ps, "user_api_key_cache", cache)
+    cache_key: Final = "team_member_default_budget:budget_456"
+    await cache.async_set_cache(key=cache_key, value={"budget_id": "budget_456"})
+    assert await cache.async_get_cache(key=cache_key) == {"budget_id": "budget_456"}
+
+    try:
+        response: Final = client.post(
+            "/budget/update",
+            json={"budget_id": "budget_456", "max_budget": 10.0},
+        )
+        assert response.status_code == 200, response.text
+        assert await cache.async_get_cache(key=cache_key) is None
+    finally:
+        await cache.async_delete_cache(key=cache_key)
+
+
+@pytest.mark.asyncio
 async def test_new_and_update_budget_persist_tpd_limit(client_and_mocks):
     client, _, mock_table = client_and_mocks
 
@@ -149,6 +190,43 @@ async def test_new_and_update_budget_persist_tpd_limit(client_and_mocks):
     assert resp.status_code == 200, resp.text
     assert resp.json()["tpd_limit"] == 500000
     assert mock_table.update.await_args.kwargs["data"]["tpd_limit"] == 500000
+
+
+@pytest.mark.asyncio
+async def test_new_and_update_budget_persist_per_model_tpm_and_rpm_limits(client_and_mocks):
+    client, _, mock_table = client_and_mocks
+
+    resp = client.post(
+        "/budget/new",
+        json={"budget_id": "budget_models", "model_tpm_limit": {"gpt-4o": 400000}, "model_rpm_limit": {"gpt-4o": 200}},
+    )
+    assert resp.status_code == 200, resp.text
+    created: Final = mock_table.create.await_args.kwargs["data"]
+    assert json.loads(created["model_tpm_limit"]) == {"gpt-4o": 400000}, created
+    assert json.loads(created["model_rpm_limit"]) == {"gpt-4o": 200}, created
+
+    resp = client.post("/budget/update", json={"budget_id": "budget_models", "model_tpm_limit": {"gpt-4o": 0}})
+    assert resp.status_code == 200, resp.text
+    updated: Final = mock_table.update.await_args.kwargs["data"]
+    assert json.loads(updated["model_tpm_limit"]) == {"gpt-4o": 0}, updated
+    assert "model_rpm_limit" not in updated, updated
+
+
+@pytest.mark.parametrize("route", ["/budget/new", "/budget/update"])
+@pytest.mark.parametrize("field", ["model_tpm_limit", "model_rpm_limit"])
+@pytest.mark.parametrize("value", [-1, 1.5])
+@pytest.mark.asyncio
+async def test_budget_rejects_a_per_model_limit_that_is_not_a_whole_number_of_zero_or_more(
+    client_and_mocks, route, field, value
+):
+    client, _, mock_table = client_and_mocks
+
+    resp = client.post(route, json={"budget_id": "budget_models", field: {"gpt-4o": value}})
+
+    assert resp.status_code == 422, resp.text
+    assert field in resp.text
+    mock_table.create.assert_not_awaited()
+    mock_table.update.assert_not_awaited()
 
 
 @pytest.mark.asyncio

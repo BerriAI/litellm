@@ -1,10 +1,12 @@
 from typing import Final, cast
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm import verbose_logger
 from litellm.caching import InMemoryCache
+from litellm.litellm_core_utils.core_helpers import subscript
 from litellm.litellm_core_utils.prompt_templates import factory as ptf
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
@@ -23,6 +25,13 @@ class WatsonXAIError(BaseLLMException):
 
 
 iam_token_cache: Final = InMemoryCache()
+_IAM_TOKEN_RESPONSE: Final = TypeAdapter(object)
+
+
+def _ttl_with_buffer(expires_in: object) -> float:
+    if isinstance(expires_in, (int, float)):
+        return expires_in - 10
+    raise TypeError(f"unsupported operand type(s) for -: '{type(expires_in).__name__}' and 'int'")
 
 
 def get_watsonx_iam_url():
@@ -30,7 +39,7 @@ def get_watsonx_iam_url():
 
 
 def generate_iam_token(api_key=None, **params) -> str:
-    result: str | None = iam_token_cache.get_cache(api_key)
+    result: object = iam_token_cache.get_cache(api_key)
 
     if result is None:
         headers: Final = {}
@@ -58,26 +67,29 @@ def generate_iam_token(api_key=None, **params) -> str:
         )
         response: Final = litellm.module_level_client.post(url=iam_token_url, data=data, headers=headers)
         response.raise_for_status()
-        json_data: Final = response.json()
+        json_data: Final = _IAM_TOKEN_RESPONSE.validate_python(response.json())
 
-        result = json_data["access_token"]
+        result = subscript(json_data, "access_token")
         iam_token_cache.set_cache(
             key=api_key,
             value=result,
-            ttl=json_data["expires_in"] - 10,  # leave some buffer
+            ttl=_ttl_with_buffer(subscript(json_data, "expires_in")),
         )
 
     return cast(str, result)
 
 
-def _generate_watsonx_token(api_key: str | None, token: str | None) -> str:
+def generate_watsonx_token(api_key: str | None, token: str | None) -> str:
     if token is not None:
         return token
     token = generate_iam_token(api_key)
     return token
 
 
-def _get_api_params(params: dict, model: str | None = None) -> WatsonXAPIParams:
+_generate_watsonx_token = generate_watsonx_token
+
+
+def get_api_params(params: dict, model: str | None = None) -> WatsonXAPIParams:
     """
     Find watsonx.ai credentials in the params or environment variables and return the headers for authentication.
     """
@@ -120,6 +132,9 @@ def _get_api_params(params: dict, model: str | None = None) -> WatsonXAPIParams:
     )
 
 
+_get_api_params = get_api_params
+
+
 async def _aconvert_watsonx_messages_core(
     model: str,
     messages: list[AllMessageValues],
@@ -135,7 +150,7 @@ async def _aconvert_watsonx_messages_core(
         model_prompt_dict: Final = custom_prompt_dict[model]
         return ptf.custom_prompt(
             messages=messages,
-            role_dict=model_prompt_dict.get("role_dict", model_prompt_dict.get("roles")),
+            role_dict=model_prompt_dict.get("role_dict", model_prompt_dict.get("roles", {})),
             initial_prompt_value=model_prompt_dict.get("initial_prompt_value", ""),
             final_prompt_value=model_prompt_dict.get("final_prompt_value", ""),
             bos_token=model_prompt_dict.get("bos_token", ""),
@@ -167,7 +182,7 @@ def _convert_watsonx_messages_core(
         model_prompt_dict: Final = custom_prompt_dict[model]
         return ptf.custom_prompt(
             messages=messages,
-            role_dict=model_prompt_dict.get("role_dict", model_prompt_dict.get("roles")),
+            role_dict=model_prompt_dict.get("role_dict", model_prompt_dict.get("roles", {})),
             initial_prompt_value=model_prompt_dict.get("initial_prompt_value", ""),
             final_prompt_value=model_prompt_dict.get("final_prompt_value", ""),
             bos_token=model_prompt_dict.get("bos_token", ""),
@@ -252,7 +267,7 @@ class IBMWatsonXMixin:
         elif zen_api_key:
             headers["Authorization"] = f"ZenApiKey {zen_api_key}"
         else:
-            token = _generate_watsonx_token(api_key=api_key, token=token)
+            token = generate_watsonx_token(api_key=api_key, token=token)
             # build auth headers
             headers["Authorization"] = f"Bearer {token}"
         return {**default_headers, **headers}
@@ -343,3 +358,10 @@ class IBMWatsonXMixin:
         else:
             payload["space_id"] = api_params["space_id"]
         return payload
+
+    def prepare_payload(
+        self,
+        model: str,
+        api_params: WatsonXAPIParams,
+    ) -> dict[str, object]:  # mutable-ok: mirrors override contract
+        return self._prepare_payload(model, api_params)

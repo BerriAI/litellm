@@ -23,13 +23,14 @@ from pydantic import BaseModel, Field
 
 from e2e_config import unique_marker
 from e2e_http import StreamingResponse
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import ChatBody, ChatMessage, ChatTool, ChatToolFunction, LiteLLMParamsBody
 from passthrough_client import PassthroughClient
 
 pytestmark = pytest.mark.e2e
 
-RESPONSES_ONLY_BACKEND = "openai/gpt-5.3-codex"
+RESPONSES_ONLY_BACKEND: Final = "openai/gpt-5.3-codex"
 
 
 class _BridgeToolCallFunction(BaseModel):
@@ -99,6 +100,15 @@ class TestResponsesBridgeChatCompletionsStreaming:
         "llm.chat_completions.openai.basic.stream.bridge_shares_chunk_id",
         exercised_on=["chat_completions"],
     )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(RESPONSES_ONLY_BACKEND,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_bridged_stream_shares_one_chunk_id(
         self, client: PassthroughClient, resources: ResourceManager, bridged_model: str
     ) -> None:
@@ -124,6 +134,15 @@ class TestResponsesBridgeChatCompletionsStreaming:
         "llm.chat_completions.openai.basic.stream.bridge_streams_sse",
         exercised_on=["chat_completions"],
     )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(RESPONSES_ONLY_BACKEND,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_bridged_stream_delivers_content_finish_reason_and_done(
         self, client: PassthroughClient, resources: ResourceManager, bridged_model: str
     ) -> None:
@@ -148,6 +167,16 @@ class TestResponsesBridgeChatCompletionsStreaming:
     @pytest.mark.covers(
         "llm.chat_completions.openai.tool_use.stream.bridge_streams_tool_call",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(RESPONSES_ONLY_BACKEND,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.STREAM,
+        )
     )
     def test_bridged_stream_reassembles_tool_call(
         self, client: PassthroughClient, resources: ResourceManager, bridged_model: str

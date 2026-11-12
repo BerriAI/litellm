@@ -1,10 +1,20 @@
 import re
-from collections.abc import Generator, Iterator, Mapping
+from collections.abc import Callable, Generator, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
+from types import MappingProxyType
 from typing import Any, Final
 
-from litellm.types.utils import OTEL_SPAN_SCOPES, TRUSTED_CALLBACK_VARS_FIELD, StandardCallbackDynamicParams
+from litellm.types.utils import (
+    ARIZE_OTLP_PROTOCOLS,
+    BAGGAGE_METADATA_KEYS_VAR,
+    CAPTURE_MESSAGE_CONTENT_VALUES,
+    CAPTURE_MESSAGE_CONTENT_VAR,
+    EXCLUDED_SERVICES_VAR,
+    OTEL_SPAN_SCOPES,
+    TRUSTED_CALLBACK_VARS_FIELD,
+    StandardCallbackDynamicParams,
+)
 
 _CLIENT_CALLBACK_METADATA_SLOTS: Final[tuple[str, ...]] = ("litellm_metadata", "metadata")
 _inherited_message_logging_disabled: Final[ContextVar[bool]] = ContextVar(
@@ -22,7 +32,7 @@ def inherit_message_logging_privacy(disabled: bool) -> Generator[None]:
 
 
 def iter_client_callback_metadata_dicts(
-    kwargs: dict[str, Any],
+    kwargs: Mapping[str, object],
 ) -> Iterator[tuple[str, dict[str, Any]]]:
     litellm_params: Final = kwargs.get("litellm_params")
     if isinstance(litellm_params, dict):
@@ -79,6 +89,47 @@ def validate_langfuse_environment_value(value: str) -> None:
 def validate_langfuse_span_scope_value(value: str) -> None:
     if value not in OTEL_SPAN_SCOPES:
         raise ValueError(f"Invalid langfuse_span_scope {value!r}: must be one of {sorted(OTEL_SPAN_SCOPES)}")
+
+
+def validate_arize_otlp_protocol_value(value: str) -> None:
+    if value not in ARIZE_OTLP_PROTOCOLS:
+        raise ValueError(f"Invalid arize_otlp_protocol {value!r}: must be one of {sorted(ARIZE_OTLP_PROTOCOLS)}")
+
+
+def validate_capture_message_content_value(value: str) -> None:
+    if value not in CAPTURE_MESSAGE_CONTENT_VALUES:
+        raise ValueError(
+            f"Invalid capture_message_content {value!r}: must be one of {sorted(CAPTURE_MESSAGE_CONTENT_VALUES)}"
+        )
+
+
+def validate_baggage_metadata_keys_value(value: str) -> None:
+    from litellm.integrations.otel.model.baggage import destination_metadata_keys_error
+
+    error: Final = destination_metadata_keys_error(value)
+    if error is not None:
+        raise ValueError(error)
+
+
+def validate_excluded_services_value(value: str) -> None:
+    from litellm.integrations.otel.model.config import invalid_excluded_service_names
+
+    names: Final = tuple(name.strip().lower() for name in value.split(","))
+    invalid_names: Final = invalid_excluded_service_names(value)
+    allowed: Final = "redis, postgres, postgresql, batch_write_to_db, redis_-prefixed service names, or none"
+    if invalid_names or ("none" in names and len(names) != 1):
+        raise ValueError(
+            f"Invalid excluded_services {value!r}: use {allowed}; 'none' must be used alone and names cannot be empty"
+        )
+
+
+OTEL_DESTINATION_VALIDATORS: Final[Mapping[str, Callable[[str], None]]] = MappingProxyType(
+    {
+        CAPTURE_MESSAGE_CONTENT_VAR: validate_capture_message_content_value,
+        EXCLUDED_SERVICES_VAR: validate_excluded_services_value,
+        BAGGAGE_METADATA_KEYS_VAR: validate_baggage_metadata_keys_value,
+    }
+)
 
 
 # Hardcoded list of supported callback params to avoid runtime inspection issues with TypedDict
@@ -148,7 +199,7 @@ _trusted_overlay_callback_params: Final = frozenset(
 )
 
 
-def get_trusted_callback_params(kwargs: Mapping[str, Any] | None) -> tuple[tuple[str, str], ...]:
+def get_trusted_callback_params(kwargs: Mapping[str, object] | None) -> tuple[tuple[str, str], ...]:
     """
     Read callback params the proxy itself stamped from admin-configured team/key callback settings.
 

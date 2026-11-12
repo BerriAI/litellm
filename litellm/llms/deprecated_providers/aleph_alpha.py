@@ -1,13 +1,29 @@
 import json
 import time
 import types
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sized
 from typing import Final
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import iter_items, json_contains, subscript
 from litellm.utils import Choices, Message, ModelResponse, Usage
+
+_DECODED_JSON: Final = TypeAdapter(object)
+_STR: Final = TypeAdapter(str)
+
+
+def _has_length(value: object) -> bool:
+    if isinstance(value, Sized):
+        return len(value) > 0
+    raise TypeError(f"object of type '{type(value).__name__}' has no len()")
+
+
+def _completion_message(item: object) -> Message:
+    completion: Final = subscript(item, "completion")
+    return Message(content=_STR.validate_python(completion) if _has_length(completion) else None)
 
 
 class AlephAlphaError(Exception):
@@ -140,16 +156,17 @@ class AlephAlphaConfig:
         contextual_control_threshold: int | None = None,
         control_log_additive: bool | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = types.MappingProxyType(locals().copy())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
 
     @classmethod
     def get_config(cls) -> dict[str, object]:
+        class_attributes: Final[Mapping[str, object]] = types.MappingProxyType(cls.__dict__)
         return {
             k: v
-            for k, v in cls.__dict__.items()
+            for k, v in class_attributes.items()
             if not k.startswith("__")
             and not isinstance(
                 v,
@@ -248,22 +265,19 @@ def completion(
         )
         print_verbose(f"raw model_response: {response.text}")
         ## RESPONSE OBJECT
-        completion_response: Final = response.json()
-        if "error" in completion_response:
+        completion_response: Final = _DECODED_JSON.validate_python(response.json())
+        if json_contains(completion_response, "error"):
             raise AlephAlphaError(
-                message=completion_response["error"],
+                message=subscript(completion_response, "error"),
                 status_code=response.status_code,
             )
         else:
             try:
                 choices_list: Final = []
-                for idx, item in enumerate(completion_response["completions"]):
-                    if len(item["completion"]) > 0:
-                        message_obj = Message(content=item["completion"])
-                    else:
-                        message_obj = Message(content=None)
+                for idx, item in enumerate(iter_items(subscript(completion_response, "completions"))):
+                    message_obj = _completion_message(item)
                     choice_obj = Choices(
-                        finish_reason=item["finish_reason"],
+                        finish_reason=subscript(item, "finish_reason"),
                         index=idx + 1,
                         message=message_obj,
                     )

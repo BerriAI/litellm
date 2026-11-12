@@ -19,7 +19,7 @@ class TestAreAllDeploymentsBlocked:
     def test_all_blocked_returns_true(self):
         router = _make_router("gpt-4o", blocked=True)
         deployments = router.get_model_list(model_name="gpt-4o") or []
-        assert router._are_all_deployments_blocked(deployments) is True
+        assert router.are_all_deployments_blocked(deployments) is True
 
     def test_one_not_blocked_returns_false(self):
         router = Router(
@@ -40,18 +40,8 @@ class TestAreAllDeploymentsBlocked:
             ]
         )
         deployments = router.get_model_list(model_name="gpt-4o") or []
-        assert router._are_all_deployments_blocked(deployments) is False
+        assert router.are_all_deployments_blocked(deployments) is False
 
     def test_empty_list_returns_false(self):
         router = _make_router("gpt-4o")
-        assert router._are_all_deployments_blocked([]) is False
-
-
-class TestIsModelFullyBlocked:
-    def test_all_deployments_blocked_returns_true(self):
-        router = _make_router("gpt-4o", blocked=True)
-        assert router._is_model_fully_blocked("gpt-4o") is True
-
-    def test_unblocked_deployment_returns_false(self):
-        router = _make_router("gpt-4o", blocked=False)
-        assert router._is_model_fully_blocked("gpt-4o") is False
+        assert router.are_all_deployments_blocked([]) is False

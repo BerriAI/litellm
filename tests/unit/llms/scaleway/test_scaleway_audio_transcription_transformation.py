@@ -95,7 +95,6 @@ def _open_test_audio():
         os.path.dirname(__file__),
         "../../../..",
         "tests",
-        "llm_translation",
         "gettysburg.wav",
     )
     return open(wav_path, "rb")
@@ -203,6 +202,17 @@ def test_scaleway_transform_response_raises_typed_exception_on_non_json():
         ScalewayAudioTranscriptionConfig().transform_audio_transcription_response(
             mock_response
         )
+
+
+def test_scaleway_transform_response_keeps_non_json_body_out_of_the_error():
+    raw_response = httpx.Response(
+        200, text='{"text": "sensitive', headers={"content-type": "application/json"}
+    )
+
+    with pytest.raises(ScalewayAudioTranscriptionException, match="non-JSON") as exc_info:
+        ScalewayAudioTranscriptionConfig().transform_audio_transcription_response(raw_response)
+
+    assert "sensitive" not in str(exc_info.value)
 
 
 def test_scaleway_transform_response_returns_plain_text_for_non_json_content_type():

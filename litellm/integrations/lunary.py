@@ -3,9 +3,16 @@
 import importlib
 import traceback
 from datetime import datetime, timezone
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import packaging
+
+from litellm.llms.anthropic.common_utils import tool_calls_with_server_tool_calls
+
+if TYPE_CHECKING:
+    from openai.types.chat.chat_completion_message_custom_tool_call import Custom
+
+    from litellm.types.utils import ChatCompletionCustomToolCallPayload, ChatCompletionDeltaCustomToolCallPayload
 
 
 # convert to {completion: xx, tokens: xx}
@@ -21,7 +28,9 @@ def parse_tool_calls(tool_calls):
         return None
 
     def clean_tool_call(tool_call):
-        custom: Final = getattr(tool_call, "custom", None)
+        custom: Final[
+            ChatCompletionCustomToolCallPayload | ChatCompletionDeltaCustomToolCallPayload | Custom | None
+        ] = getattr(tool_call, "custom", None)
         if custom is not None:
             name, arguments = custom.name, custom.input
         else:
@@ -60,8 +69,8 @@ def parse_messages(input):
         }
 
         # Only add tool_calls and function_call to res if they are set
-        if message.get("tool_calls"):
-            serialized["tool_calls"] = parse_tool_calls(message.get("tool_calls"))
+        if tool_calls := tool_calls_with_server_tool_calls(message):
+            serialized["tool_calls"] = parse_tool_calls(tool_calls)
 
         return serialized
 

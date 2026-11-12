@@ -254,7 +254,7 @@ class NewRelicMetricsLogger(CustomBatchLogger):
                 if not self.log_queue:
                     return
                 if _pass < NEWRELIC_METRICS_MAX_DRAIN_PASSES - 1:
-                    await asyncio.sleep(2**_pass)
+                    await asyncio.sleep(1 << _pass)
             async with self.flush_lock:
                 tried_ids: Final = frozenset(id(record) for record in attempted)
                 survivors: Final = tuple(record for record in self.log_queue if id(record) not in tried_ids)

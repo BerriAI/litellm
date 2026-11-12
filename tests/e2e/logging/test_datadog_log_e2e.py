@@ -20,10 +20,12 @@ from __future__ import annotations
 
 import math
 import time
+from typing import Final
 
 import pytest
 from datadog_reader import DdLogEvent, DdLogsReader
 from e2e_config import CHEAP_ANTHROPIC_MODEL, CHEAP_OPENAI_MODEL, unique_marker
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from logging_client import INVALID_UPSTREAM_API_KEY, LoggingClient, first_ok, readiness_details_body
 from models import ChatMessage, LiteLLMParamsBody, ReliabilityChatBody, RouterSettingsOverride
@@ -33,6 +35,7 @@ pytestmark = pytest.mark.e2e
 
 #: The active DataDog callback's name in /health/readiness/details success_callbacks.
 DD_LOGGER_NAME = "DataDogLogger"
+FAILING_BACKEND_MODEL: Final = "anthropic/claude-haiku-4-5"
 
 
 class _DdMessagePayload(BaseModel):
@@ -109,6 +112,15 @@ def _assert_exactly_one_event(
 
 class TestDataDogLogDelivery:
     @pytest.mark.covers("logging.datadog.success.exports_metric", exercised_on=["chat_completions"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(CHEAP_ANTHROPIC_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_chat_completions_emits_one_log_event(
         self, client: LoggingClient, dd_logs: DdLogsReader, resources: ResourceManager
     ) -> None:
@@ -134,6 +146,15 @@ class TestDataDogLogDelivery:
         )
 
     @pytest.mark.covers("logging.datadog.success.exports_metric", exercised_on=["messages"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.MESSAGES,
+            providers=(Provider.ANTHROPIC,),
+            models=(CHEAP_ANTHROPIC_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_messages_emits_one_log_event(
         self, client: LoggingClient, dd_logs: DdLogsReader, resources: ResourceManager
     ) -> None:
@@ -161,6 +182,15 @@ class TestDataDogLogDelivery:
         )
 
     @pytest.mark.covers("logging.datadog.success.exports_metric", exercised_on=["responses"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.RESPONSES,
+            providers=(Provider.OPENAI,),
+            models=(CHEAP_OPENAI_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_responses_emits_one_log_event(
         self, client: LoggingClient, dd_logs: DdLogsReader, resources: ResourceManager
     ) -> None:
@@ -186,6 +216,15 @@ class TestDataDogLogDelivery:
         )
 
     @pytest.mark.covers("logging.datadog.stream.exports_metric", exercised_on=["chat_completions"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(CHEAP_ANTHROPIC_MODEL,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_chat_completions_stream_emits_one_log_event(
         self, client: LoggingClient, dd_logs: DdLogsReader, resources: ResourceManager
     ) -> None:
@@ -232,6 +271,15 @@ class TestDataDogLogDelivery:
         )
 
     @pytest.mark.covers("logging.datadog.stream.exports_metric", exercised_on=["messages"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.MESSAGES,
+            providers=(Provider.ANTHROPIC,),
+            models=(CHEAP_ANTHROPIC_MODEL,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_messages_stream_emits_one_log_event(
         self, client: LoggingClient, dd_logs: DdLogsReader, resources: ResourceManager
     ) -> None:
@@ -276,6 +324,15 @@ class TestDataDogLogDelivery:
         )
 
     @pytest.mark.covers("logging.datadog.stream.exports_metric", exercised_on=["responses"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.RESPONSES,
+            providers=(Provider.OPENAI,),
+            models=(CHEAP_OPENAI_MODEL,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_responses_stream_emits_one_log_event(
         self, client: LoggingClient, dd_logs: DdLogsReader, resources: ResourceManager
     ) -> None:
@@ -347,6 +404,15 @@ def _assert_exactly_one_failure_event(events: list[DdLogEvent], *, model_group: 
 
 class TestDataDogFailureDelivery:
     @pytest.mark.covers("logging.datadog.failure.exports_metric", exercised_on=["chat_completions"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(FAILING_BACKEND_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_failed_chat_completions_emits_one_error_event(
         self, client: LoggingClient, dd_logs: DdLogsReader, resources: ResourceManager
     ) -> None:
@@ -366,7 +432,7 @@ class TestDataDogFailureDelivery:
         model_name = f"dd-err-{unique_marker()}"
         model_id = client.create_model(
             model_name,
-            LiteLLMParamsBody(model="anthropic/claude-haiku-4-5", api_key=INVALID_UPSTREAM_API_KEY),
+            LiteLLMParamsBody(model=FAILING_BACKEND_MODEL, api_key=INVALID_UPSTREAM_API_KEY),
         )
         resources.defer(lambda: client.delete_model(model_id))
         key = client.key_with_alias(f"dd-err-key-{unique_marker()}", models=[model_name])
@@ -399,6 +465,15 @@ class TestDataDogFailureDelivery:
         )
 
     @pytest.mark.covers("logging.datadog.stream_failure.exports_metric", exercised_on=["chat_completions"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(FAILING_BACKEND_MODEL,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_failed_chat_completions_stream_emits_one_error_event(
         self, client: LoggingClient, dd_logs: DdLogsReader, resources: ResourceManager
     ) -> None:
@@ -420,7 +495,7 @@ class TestDataDogFailureDelivery:
         model_id = client.create_model(
             model_name,
             LiteLLMParamsBody(
-                model="anthropic/claude-haiku-4-5",
+                model=FAILING_BACKEND_MODEL,
                 api_key=INVALID_UPSTREAM_API_KEY,
                 api_base="http://localhost:1",
             ),

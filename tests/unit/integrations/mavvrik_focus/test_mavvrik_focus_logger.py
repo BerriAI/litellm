@@ -49,11 +49,11 @@ async def test_export_window_delivers_empty_payload_for_empty_export(
     destination = MagicMock()
     destination.deliver = AsyncMock()
     engine = MagicMock()
-    engine._database = database
-    engine._transformer = transformer
-    engine._serializer = serializer
-    engine._destination = destination
-    engine._build_filename.return_value = "metrics.csv"
+    engine.database = database
+    engine.transformer = transformer
+    engine.serializer = serializer
+    engine.destination = destination
+    engine.build_filename.return_value = "metrics.csv"
     logger = MavvrikFocusLogger()
     logger._engine = engine
     window = _window()

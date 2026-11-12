@@ -3,11 +3,13 @@ import asyncio
 import json
 import os
 from collections import Counter
-from collections.abc import Mapping, MutableMapping, Sequence
+from collections.abc import ItemsView, Mapping, MutableMapping, Sequence
 from types import MappingProxyType
 from typing import (
+    TYPE_CHECKING,
     Annotated,
     Final,
+    Literal,
     NamedTuple,
     Protocol,
     cast,  # noqa: TID251  # prisma types Json columns as fields.Json but de-serializes them to plain python on read
@@ -15,7 +17,7 @@ from typing import (
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError, create_model
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError, create_model, field_validator
 from pydantic.fields import FieldInfo, PydanticUndefined
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
@@ -23,9 +25,9 @@ import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_keys
-from litellm.proxy._experimental.mcp_server.tool_search import MCP_TOOL_SEARCH_SETTINGS_KEY
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.proxy.common_utils.validation_error_body import public_validation_errors
 from litellm.proxy.config_resolvers import FieldSource, SettingsStore, source_for
 from litellm.proxy.config_resolvers.settings_store import ConfigOwnedKeyError
@@ -37,28 +39,38 @@ from litellm.proxy.config_resolvers.sso import (
 from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     SUPPORTED_TEAM_ADMIN_PERMISSIONS,
     TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING,
+    TEAM_ADMIN_RAISE_MAX_BUDGET_PERMISSION,
 )
+from litellm.proxy.mcp_server.tool_search import MCP_TOOL_SEARCH_SETTINGS_KEY
 from litellm.proxy.spend_tracking.ptu_feature_flag import (
     PTU_COST_ATTRIBUTION_ENV_VAR,
     is_ptu_cost_attribution_enabled,
 )
 from litellm.proxy.utils import CONFIG_PARAMS_TARGET, invalidate_config_param
+from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
+    AccessGroupRepository,
     SSOConfigRepository,
     UISettingsRepository,
 )
 from litellm.repositories.team_repository import TeamRepository
 from litellm.secret_managers.main import get_secret
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.mcp import MCPToolSearchSettings
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
     SSOConfig,
 )
 
+if TYPE_CHECKING:
+    from prisma.errors import PrismaError
+
 router: Final = APIRouter()
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 JsonSchemaItems: Final = TypedDict(
@@ -168,11 +180,11 @@ def _resolve_ui_theme_field(stored_values: Mapping[str, object], field_name: str
     return env_value if _is_public_http_url(env_value) else None
 
 
-class IPAddress(BaseModel):
+class IPAddress(LiteLLMBaseModel):
     ip: str
 
 
-class UIThemeConfig(BaseModel):
+class UIThemeConfig(LiteLLMBaseModel):
     """Configuration for UI theme customization"""
 
     # Logo configuration
@@ -196,7 +208,7 @@ class UIThemeConfig(BaseModel):
     )
 
 
-class SettingsResponse(BaseModel):
+class SettingsResponse(LiteLLMBaseModel):
     """Base response model for settings with values and schema information"""
 
     values: dict[str, object]
@@ -206,9 +218,23 @@ class SettingsResponse(BaseModel):
     """Schema information including descriptions and property types for UI display"""
 
 
-class _SettingsWithSchema(BaseModel):
+class _SettingsWithSchema(LiteLLMBaseModel):
     values: dict[str, object]
     field_schema: dict[str, object]
+
+
+class BackgroundChatSettings(LiteLLMBaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    enabled: bool = Field(description="Enable cache-backed background Responses for Chat and API requests.")
+
+
+class BackgroundChatSettingsResponse(BackgroundChatSettings):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    redis_configured: bool = Field(description="Whether this proxy has coordination Redis configured.")
+    managed_by_config: bool = Field(description="Whether the responses configuration is owned by the config file.")
+    can_save: bool = Field(description="Whether database-backed configuration updates are available.")
 
 
 class SSOSettingsResponse(SettingsResponse):
@@ -229,14 +255,36 @@ class DefaultTeamSettingsResponse(SettingsResponse):
 class UIThemeSettingsResponse(SettingsResponse):
     """Response model for UI theme settings"""
 
+    logo_url_via_proxy: bool = False
+    logo_url_dark_via_proxy: bool = False
+
 
 _TEAM_ADMIN_FIELD_ENUM: Final = tuple(sorted(SUPPORTED_TEAM_ADMIN_PERMISSIONS))
 
 
-class UISettings(BaseModel):
+def normalize_moyai_url(value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("moyai_url must be a string")
+    stripped: Final = value.strip()
+    if not stripped:
+        return None
+    parsed: Final = urlparse(stripped)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError("moyai_url must be an http or https URL with a host and no credentials")
+    return stripped.rstrip("/")
+
+
+class UISettings(LiteLLMBaseModel):
     """Configuration for UI-specific flags"""
 
     model_config = ConfigDict(extra="allow")
+
+    usage_default_time_range: Literal["today", "last_7_days", "last_30_days", "month_to_date", "year_to_date"] = Field(
+        default="last_7_days",
+        description="Default date range when opening Usage without an explicit URL range. Calendar ranges use the browser timezone.",
+    )
 
     disable_model_add_for_internal_users: bool = Field(
         default=False,
@@ -325,16 +373,32 @@ class UISettings(BaseModel):
     )
 
     enable_chat_ui: bool = Field(
-        default=False,
+        default=True,
         description="If true, shows the Chat page in the UI sidebar, letting users chat with an LLM and connect their own MCP server credentials via OAuth.",
     )
+
+    moyai_url: str | None = Field(
+        default=None,
+        description="URL of a connected Moyai deployment. When set, the Moyai entry in the UI navigation opens this deployment instead of the Moyai landing page.",
+    )
+
+    @field_validator("moyai_url", mode="before")
+    @classmethod
+    def _validate_moyai_url(cls, value: object) -> object:
+        return normalize_moyai_url(value)
 
     team_admin_editable_team_fields: Sequence[str] = Field(
         default=(),
         description=(
             "Team settings fields a team admin may change on the teams they administer. "
+            "With 'max_budget' alone a team admin may keep or lower the team budget; add 'raise_max_budget' to also "
+            "let them raise it. A raise is capped by the organization's max_budget when the team belongs to one, "
+            "has no ceiling for teams outside an organization or in an organization without a budget, and never "
+            "removes the cap. "
             "Include 'projects' to let team admins create and update projects for those teams. "
             "Include 'member_key_budgets' to let team admins update budget fields on keys owned by other members of those teams. "
+            "Include 'create_member_keys' to let team admins create team keys owned by other members of those teams. "
+            "Those keys can only call LLM API routes, and the member must be an internal user. "
             "Empty means team admins cannot edit team settings or manage projects at all. "
             "Proxy admins and org admins are not affected."
         ),
@@ -352,6 +416,7 @@ class UISettingsResponse(SettingsResponse):
 
 # Allowlist of UI settings that can be stored
 ALLOWED_UI_SETTINGS_FIELDS: Final = {
+    "usage_default_time_range",
     "disable_model_add_for_internal_users",
     "disable_team_admin_delete_team_user",
     "enabled_ui_pages_internal_users",
@@ -367,6 +432,7 @@ ALLOWED_UI_SETTINGS_FIELDS: Final = {
     "disable_custom_api_keys",
     "disable_key_generate_for_org_admin",
     "enable_chat_ui",
+    "moyai_url",
     TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING,
 }
 
@@ -476,7 +542,7 @@ def _get_effective_ui_settings_class() -> type[UISettings]:
     return _EFFECTIVE_UI_SETTINGS_CLASS
 
 
-class MCPSemanticFilterSettings(BaseModel):
+class MCPSemanticFilterSettings(LiteLLMBaseModel):
     """Configuration for MCP Semantic Tool Filter"""
 
     enabled: bool = Field(
@@ -512,7 +578,7 @@ class MCPToolSearchSettingsResponse(SettingsResponse):
     """Response model for native MCP tool search settings"""
 
 
-class WebSearchInterceptionSettings(BaseModel):
+class WebSearchInterceptionSettings(LiteLLMBaseModel):
     """Configuration for server-side web search interception"""
 
     enabled: bool = Field(
@@ -1108,6 +1174,33 @@ async def update_internal_user_settings(
     )
 
 
+async def _validate_default_access_groups_exist(access_group_ids: Sequence[str]) -> None:
+    if not access_group_ids:
+        return
+
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Database not connected. Please connect a database."},
+        )
+
+    existing_groups: Final = await find_many_in(
+        AccessGroupRepository(prisma_client, use_writer=True).table, "access_group_id", dict.fromkeys(access_group_ids)
+    )
+    existing_ids: Final = {group.access_group_id for group in existing_groups}
+    missing_ids: Final = tuple(dict.fromkeys(ag_id for ag_id in access_group_ids if ag_id not in existing_ids))
+    if missing_ids:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Access group(s) not found: {', '.join(missing_ids)}. "
+                "Create the access group first or remove it from the default team settings."
+            },
+        )
+
+
 @router.patch(
     "/update/default_team_settings",
     tags=["SSO Settings"],
@@ -1124,6 +1217,8 @@ async def update_default_team_settings(
     """
     if settings.organization_id is not None:
         await _validate_default_organization_exists(settings.organization_id)
+    if settings.access_group_ids is not None:
+        await _validate_default_access_groups_exist(settings.access_group_ids)
 
     return await _update_litellm_setting(
         settings=settings,
@@ -1188,6 +1283,49 @@ async def get_sso_settings():
     }
 
 
+_ENVIRONMENT_VARIABLES_PARAM: Final = TypeAdapter(dict[str, object])
+
+
+def _parse_environment_variables_param(param_value: str | Mapping[str, object] | None) -> Mapping[str, object]:
+    if isinstance(param_value, str):
+        return _ENVIRONMENT_VARIABLES_PARAM.validate_python(json.loads(param_value))
+    return param_value or {}
+
+
+async def _load_environment_variables_param(
+    repo: ConfigRepository,
+) -> "Mapping[str, object] | None | PrismaError | ValueError":
+    from prisma.errors import PrismaError
+
+    try:
+        entry: Final = await _config_param_db(repo).find_unique(where={"param_name": "environment_variables"})
+        param_value: Final = None if entry is None else _parse_environment_variables_param(entry.param_value)
+    except (PrismaError, ValueError) as e:
+        return e
+    else:
+        return param_value
+
+
+def _submitted_sso_values(submitted: Mapping[str, object]) -> ItemsView[str, object]:
+    return submitted.items()
+
+
+def _environment_value(value: object) -> str:
+    if isinstance(value, str):
+        return value
+    raise TypeError(f"str expected, not {type(value).__name__}")
+
+
+def _decrypted_sso_fields(environment_variables: Mapping[str, object]) -> Mapping[str, str | None]:
+    return MappingProxyType(
+        {
+            field_name: decrypt_value_helper(value=value, key=env_var, return_original_value=True)
+            for field_name, env_var in SSO_FIELD_ENV_VARS.items()
+            if isinstance(value := environment_variables.get(env_var), str)
+        }
+    )
+
+
 @router.patch(
     "/update/sso_settings",
     tags=["SSO Settings"],
@@ -1222,6 +1360,8 @@ async def update_sso_settings(
             detail={"error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."},
         )
 
+    from prisma.errors import PrismaError
+
     # Read the existing SSO row first so the audit log captures a real
     # before/after diff. Stored values are encrypted; decrypt them so the
     # before-snapshot has the same shape as after_value, and rely on
@@ -1234,9 +1374,11 @@ async def update_sso_settings(
     if existing_sso_record and existing_sso_record.sso_settings:
         stored = existing_sso_record.sso_settings
         if isinstance(stored, str):
-            stored = json.loads(stored)
+            stored = _DECODED_JSON.validate_python(json.loads(stored))
         if isinstance(stored, dict):
-            before_sso_data = proxy_config._decrypt_db_variables(stored)
+            before_sso_data = (  # rebind-ok: pre-existing rebinding on a rename-only line
+                proxy_config.decrypt_db_variables(stored)
+            )
 
     # Load existing config
     config: Final = await proxy_config.get_config()
@@ -1249,18 +1391,33 @@ async def update_sso_settings(
     if "general_settings" not in config:
         config["general_settings"] = {}
 
-    # Update environment variables in config and in memory
-    sso_data: Final = sso_config.model_dump()
-    for field_name, value in sso_data.items():
+    # PATCH semantics: omitted fields keep their stored value, an explicit null clears it. SSO values that
+    # still live only in the environment_variables row are carried over, since that row is stripped below
+    environment_variables_param: Final = await _load_environment_variables_param(
+        ConfigRepository(prisma_client, use_writer=True)
+    )
+    legacy_env_values: Final[Mapping[str, str | None]] = (
+        _decrypted_sso_fields(environment_variables_param)
+        if isinstance(environment_variables_param, Mapping)
+        else MappingProxyType({})
+    )
+    stored_values: Final = {k: v for k, v in (before_sso_data or {}).items() if v is not None and v != ""}
+    fallback_values: Final = {**legacy_env_values, **stored_values}
+    submitted: Final = sso_config.model_dump(include=sso_config.model_fields_set)
+    sso_data: Final = {
+        field_name: submitted[field_name] if field_name in submitted else fallback_values.get(field_name)
+        for field_name in SSOConfig.model_fields
+    }
+    for field_name, value in _submitted_sso_values(submitted):
         if field_name in SSO_FIELD_ENV_VARS:
             env_var_name = SSO_FIELD_ENV_VARS[field_name]
             if value:
-                os.environ[env_var_name] = value
+                os.environ[env_var_name] = _environment_value(value)
             else:
                 # Clear environment variable if value is null/empty
                 os.environ.pop(env_var_name, None)
 
-    encrypted_sso_data: Final = proxy_config._encrypt_env_variables(environment_variables=sso_data)
+    encrypted_sso_data: Final = proxy_config.encrypt_env_variables(environment_variables=sso_data)
 
     # Save to dedicated SSO table
     await _stored_sso_settings_db(SSOConfigRepository(prisma_client)).upsert(
@@ -1287,25 +1444,17 @@ async def update_sso_settings(
         )
     )
 
-    # Remove SSO-related env vars from config.environment_variables
-    try:
-        env_var_entry: Final = await _config_param_db(ConfigRepository(prisma_client)).find_unique(
-            where={"param_name": "environment_variables"}
+    if isinstance(environment_variables_param, (PrismaError, ValueError)):
+        raise HTTPException(
+            status_code=500,
+            detail={"error": f"Error updating environment_variables: {environment_variables_param}"},
         )
 
-        # If no environment_variables entry exists, nothing to clean up
-        if env_var_entry is not None:
-            if env_var_entry.param_value is not None:
-                if isinstance(env_var_entry.param_value, str):
-                    environment_variables: Mapping[str, object] = json.loads(env_var_entry.param_value)
-                else:
-                    environment_variables = dict(env_var_entry.param_value)
-            else:
-                environment_variables = {}
-
+    if environment_variables_param is not None:
+        try:
             env_vars_to_remove: Final = set(SSO_FIELD_ENV_VARS.values())
             filtered_env_vars: Final = {
-                key: value for key, value in environment_variables.items() if key not in env_vars_to_remove
+                key: value for key, value in environment_variables_param.items() if key not in env_vars_to_remove
             }
 
             await _config_param_db(ConfigRepository(prisma_client)).update(
@@ -1315,16 +1464,16 @@ async def update_sso_settings(
                 },
             )
             await invalidate_config_param("environment_variables")
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail={"error": f"Error updating environment_variables: {e}"},
-        )
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": f"Error updating environment_variables: {e}"},
+            )
 
     return {
         "message": "SSO settings updated successfully",
         "status": "success",
-        "settings": sso_data,
+        "settings": mask_sensitive_keys(sso_data, set(SSO_SECRET_FIELDS)),
     }
 
 
@@ -1333,7 +1482,7 @@ async def update_sso_settings(
     tags=["UI Theme Settings"],
     response_model=UIThemeSettingsResponse,
 )
-async def get_ui_theme_settings():
+async def get_ui_theme_settings() -> UIThemeSettingsResponse:
     """
     Get UI theme configuration from the litellm_settings.
     Returns current logo settings for UI customization.
@@ -1346,18 +1495,23 @@ async def get_ui_theme_settings():
     # Load existing config
     config: Final = await proxy_config.get_config()
 
-    result: Final = await _get_settings_with_schema(
-        settings_key="ui_theme_config",
-        settings_class=UIThemeConfig,
-        config=config,
+    result: Final = _SettingsWithSchema.model_validate(
+        await _get_settings_with_schema(
+            settings_key="ui_theme_config",
+            settings_class=UIThemeConfig,
+            config=config,
+        )
     )
-
-    stored_values: Final = result.get("values", {})
-    result["values"] = {
-        **stored_values,
-        **{field: _resolve_ui_theme_field(stored_values, field) for field in _UI_THEME_FIELD_ENV_VARS},
+    values: Final = {
+        **result.values,
+        **{field: _resolve_ui_theme_field(result.values, field) for field in _UI_THEME_FIELD_ENV_VARS},
     }
-    return result
+    return UIThemeSettingsResponse(
+        values=values,
+        field_schema=result.field_schema,
+        logo_url_via_proxy=values["logo_url"] is None and bool(os.getenv("UI_LOGO_PATH", "").strip()),
+        logo_url_dark_via_proxy=values["logo_url_dark"] is None and bool(os.getenv("UI_LOGO_PATH_DARK", "").strip()),
+    )
 
 
 def _validate_public_image_url(value: str | None, field_name: str) -> None:
@@ -1528,7 +1682,7 @@ async def update_mcp_semantic_filter_settings(
         from litellm.proxy.proxy_server import prisma_client, proxy_config
 
         if prisma_client is not None:
-            await proxy_config._init_semantic_filter_settings_in_db(prisma_client=prisma_client)
+            await proxy_config.init_semantic_filter_settings_in_db(prisma_client=prisma_client)
     except Exception as e:
         verbose_proxy_logger.warning("Failed to reinitialize MCP semantic filter settings immediately: %s", e)
 
@@ -1685,7 +1839,7 @@ async def get_ui_settings_cached() -> dict[str, JsonValue]:
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     # 1. Try cache
-    cached: Final = await user_api_key_cache.async_get_cache(key=UI_SETTINGS_CACHE_KEY)
+    cached: Final = _DECODED_JSON.validate_python(await user_api_key_cache.async_get_cache(key=UI_SETTINGS_CACHE_KEY))
     if cached is not None and isinstance(cached, dict):
         return cached
 
@@ -1711,6 +1865,10 @@ async def get_ui_settings_cached() -> dict[str, JsonValue]:
 
 
 _UI_SETTINGS_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+
+
+def _json_settings(settings: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    return settings
 
 
 def model_creation_disabled_for_internal_users(settings: Mapping[str, object]) -> bool:
@@ -1757,6 +1915,87 @@ async def sync_ui_settings_to_general_settings(
             raise HTTPException(status_code=503, detail="Unable to verify model creation policy. Please retry.") from e
         return MappingProxyType({})
     return apply_runtime_general_settings_flags(parsed)
+
+
+def _background_chat_settings_response(config: Mapping[str, object]) -> BackgroundChatSettingsResponse:
+    from litellm.proxy import proxy_server
+
+    settings: Final = _as_settings_section(config.get("litellm_settings"))
+    responses: Final = _as_settings_section(settings.get("responses"))
+    background: Final = _as_settings_section(responses.get("background_mode"))
+    polling: Final = background.get("polling_via_cache", False)
+    return BackgroundChatSettingsResponse(
+        enabled=bool(polling),
+        redis_configured=proxy_server.redis_usage_cache is not None,
+        managed_by_config=proxy_server.proxy_config.litellm_settings.owned_by_config("responses"),
+        can_save=proxy_server.prisma_client is not None and proxy_server.store_model_in_db is True,
+    )
+
+
+@router.get(
+    "/get/background_chat_settings",
+    tags=["Settings"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=BackgroundChatSettingsResponse,
+)
+async def get_background_chat_settings() -> BackgroundChatSettingsResponse:
+    """Get saved background-response settings and the prerequisites for changing them."""
+    from litellm.proxy.proxy_server import proxy_config
+
+    config: Final = _as_settings_section(_DECODED_JSON.validate_python(await proxy_config.get_config()))
+    return _background_chat_settings_response(config)
+
+
+@router.patch(
+    "/update/background_chat_settings",
+    tags=["Settings"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=BackgroundChatSettingsResponse,
+)
+async def update_background_chat_settings(
+    settings: BackgroundChatSettings,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> BackgroundChatSettingsResponse:
+    """Save background-response polling settings for the proxy configuration refresh."""
+    from litellm.proxy.proxy_server import (
+        create_config_audit_log,
+        prisma_client,
+        proxy_config,
+        redis_usage_cache,
+        store_model_in_db,
+    )
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(status_code=403, detail="Only proxy admins can update background chat settings.")
+    if prisma_client is None or store_model_in_db is not True:
+        raise HTTPException(status_code=400, detail="Enable database-backed configuration to save this setting.")
+    if settings.enabled and redis_usage_cache is None:
+        raise HTTPException(status_code=400, detail="Configure coordination Redis and restart the proxy first.")
+
+    raw_config: Final = await proxy_config.get_config()
+    config: Final = _as_settings_section(_DECODED_JSON.validate_python(raw_config))
+    litellm_settings: Final = _as_settings_section(config.get("litellm_settings"))
+    responses: Final = _UI_SETTINGS_OBJECT.validate_python(_as_settings_section(litellm_settings.get("responses")))
+    background: Final = _UI_SETTINGS_OBJECT.validate_python(_as_settings_section(responses.get("background_mode")))
+    updated_responses: Final[Mapping[str, JsonValue]] = {
+        **responses,
+        "background_mode": {**background, "polling_via_cache": "all" if settings.enabled else False},
+    }
+    proxy_config.reject_config_owned_writes(
+        section_name="litellm_settings", changed_keys={"responses": dict(updated_responses)}
+    )
+    raw_config["litellm_settings"] = {**litellm_settings, "responses": dict(updated_responses)}
+    await proxy_config.save_config(new_config=config)
+    asyncio.create_task(
+        create_config_audit_log(
+            param_name="responses.background_mode.polling_via_cache",
+            action="updated",
+            before_value=background.get("polling_via_cache", False),
+            after_value="all" if settings.enabled else False,
+            user_api_key_dict=user_api_key_dict,
+        )
+    )
+    return _background_chat_settings_response(config)
 
 
 @router.get(
@@ -1895,9 +2134,8 @@ async def update_ui_settings(
     except ValidationError as e:
         raise HTTPException(status_code=422, detail=public_validation_errors(e.errors()))
 
-    unsupported_team_fields: Final = sorted(
-        frozenset(settings.team_admin_editable_team_fields) - SUPPORTED_TEAM_ADMIN_PERMISSIONS
-    )
+    submitted_team_fields: Final = frozenset(settings.team_admin_editable_team_fields)
+    unsupported_team_fields: Final = sorted(submitted_team_fields - SUPPORTED_TEAM_ADMIN_PERMISSIONS)
     if unsupported_team_fields:
         raise HTTPException(
             status_code=400,
@@ -1908,9 +2146,19 @@ async def update_ui_settings(
                 )
             },
         )
+    if TEAM_ADMIN_RAISE_MAX_BUDGET_PERMISSION in submitted_team_fields and "max_budget" not in submitted_team_fields:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": (
+                    f"{TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING}: '{TEAM_ADMIN_RAISE_MAX_BUDGET_PERMISSION}' "
+                    "requires 'max_budget' to be enabled as well."
+                )
+            },
+        )
 
     # Only include fields the caller actually sent (not Pydantic defaults).
-    settings_dict: Final[Mapping[str, JsonValue]] = settings.model_dump(exclude_unset=True)
+    settings_dict: Final = _json_settings(settings.model_dump(exclude_unset=True))
 
     # Reject enterprise-only settings up front so the caller gets a clear
     # signal instead of a silent drop.

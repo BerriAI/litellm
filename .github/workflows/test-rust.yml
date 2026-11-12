@@ -3,10 +3,13 @@ name: LiteLLM Rust
 on:
   push:
     paths:
-      - "litellm-rust/**"
+      - "litellm/rust/**"
+      - "model_prices_and_context_window.json"
       - "litellm/rust_bridge/**"
-      - "scripts/generate_trace_types.py"
-      - "scripts/trace_codegen/**"
+      - "litellm/scripts/generate_trace_types.py"
+      - "litellm/scripts/trace_codegen/**"
+      - "litellm/scripts/lens_assets/**"
+      - "litellm/tracing/**"
       - "tests/test_litellm_rust/**"
       - "litellm/integrations/custom_logger.py"
       - "litellm/litellm_core_utils/litellm_logging.py"
@@ -14,14 +17,17 @@ on:
       - "litellm/proxy/guardrails/**"
       - "litellm/utils.py"
       - "litellm/ocr/**"
+      - "litellm/chat_completions/dispatch.py"
+      - "litellm/embeddings/dispatch.py"
+      - "litellm/messages/dispatch.py"
+      - "litellm/responses/dispatch.py"
       - "litellm/llms/base_llm/ocr/**"
       - "litellm/llms/custom_httpx/llm_http_handler.py"
-      - "tests/test_litellm/conftest.py"
       - "Makefile"
-      - ".cargo/**"
+      - "litellm/rust/.cargo/**"
       - "pyproject.toml"
       - "uv.lock"
-      - "rust-toolchain.toml"
+      - "litellm/rust/rust-toolchain.toml"
       - ".github/actions/setup-uv-with-retries/**"
       - ".github/scripts/smoke_test_native_wheel.py"
       - ".github/scripts/verify_linux_native_wheel.py"
@@ -32,10 +38,13 @@ on:
       - main
       - "litellm_**"
     paths:
-      - "litellm-rust/**"
+      - "litellm/rust/**"
+      - "model_prices_and_context_window.json"
       - "litellm/rust_bridge/**"
-      - "scripts/generate_trace_types.py"
-      - "scripts/trace_codegen/**"
+      - "litellm/scripts/generate_trace_types.py"
+      - "litellm/scripts/trace_codegen/**"
+      - "litellm/scripts/lens_assets/**"
+      - "litellm/tracing/**"
       - "tests/test_litellm_rust/**"
       - "litellm/integrations/custom_logger.py"
       - "litellm/litellm_core_utils/litellm_logging.py"
@@ -43,14 +52,17 @@ on:
       - "litellm/proxy/guardrails/**"
       - "litellm/utils.py"
       - "litellm/ocr/**"
+      - "litellm/chat_completions/dispatch.py"
+      - "litellm/embeddings/dispatch.py"
+      - "litellm/messages/dispatch.py"
+      - "litellm/responses/dispatch.py"
       - "litellm/llms/base_llm/ocr/**"
       - "litellm/llms/custom_httpx/llm_http_handler.py"
-      - "tests/test_litellm/conftest.py"
       - "Makefile"
-      - ".cargo/**"
+      - "litellm/rust/.cargo/**"
       - "pyproject.toml"
       - "uv.lock"
-      - "rust-toolchain.toml"
+      - "litellm/rust/rust-toolchain.toml"
       - ".github/actions/setup-uv-with-retries/**"
       - ".github/scripts/smoke_test_native_wheel.py"
       - ".github/scripts/verify_linux_native_wheel.py"
@@ -66,6 +78,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
 
 jobs:
   rust-lint:
@@ -73,30 +86,35 @@ jobs:
     timeout-minutes: 15
     defaults:
       run:
-        working-directory: litellm-rust
+        working-directory: litellm/rust
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           persist-credentials: false
 
-      - run: rustup toolchain install --no-self-update
+      - name: Configure the Rust build environment
+        working-directory: .
+        run: bash .github/scripts/setup_rust_environment.sh
 
       - run: cargo fmt --all --check
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: litellm-rust
+          workspaces: litellm/rust
           cache-on-failure: true
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - run: cargo clippy --workspace --all-targets --locked --features litellm-traces/schema,litellm-traces-clickhouse/schema -- -D warnings
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   rust-test:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Trim debuginfo to keep the job's target dir within the runner's disk
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
     defaults:
       run:
-        working-directory: litellm-rust
+        working-directory: litellm/rust
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
@@ -124,15 +142,15 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: litellm-rust
+          workspaces: litellm/rust
           cache-on-failure: true
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Check generated trace contracts
         working-directory: .
-        run: uv run scripts/generate_trace_types.py --check
+        run: uv run litellm/scripts/generate_trace_types.py --check
 
-      - run: cargo nextest run --workspace --locked --features litellm-traces/schema,litellm-traces-clickhouse/schema
+      - run: cargo nextest run --workspace --locked
 
       - run: cargo test --workspace --doc --locked
 
@@ -170,7 +188,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: litellm-rust
+          workspaces: litellm/rust
           cache-on-failure: true
           save-if: ${{ github.ref == 'refs/heads/main' }}
 

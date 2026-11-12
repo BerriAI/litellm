@@ -34,7 +34,7 @@ def test_neosantara_dynamic_config_env_vars():
             "NEOSANTARA_API_BASE": "https://custom.neosantara.example/v1",
         },
     ):
-        api_base, api_key = config._get_openai_compatible_provider_info(None, None)
+        api_base, api_key = config.get_openai_compatible_provider_info(None, None)
 
     assert api_base == "https://custom.neosantara.example/v1"
     assert api_key == "test-key"
