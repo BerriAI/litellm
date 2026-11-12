@@ -4008,7 +4008,11 @@ async def run_centralized_common_checks(
         user_api_key_auth_obj.project_metadata = project_object.metadata
         user_api_key_auth_obj.project_alias = project_object.project_alias
 
-    if end_user_id and key_end_user_budget_id is not None and prisma_client is not None:
+    if (
+        end_user_id
+        and (key_end_user_budget_id is not None or user_api_key_auth_obj.jwt_claims is not None)
+        and prisma_client is not None
+    ):
         await _apply_key_end_user_default_budget_to_token(
             valid_token=user_api_key_auth_obj,
             end_user_object=end_user_object,
@@ -4196,7 +4200,7 @@ async def _noop_none() -> None:
 async def _apply_key_end_user_default_budget_to_token(
     valid_token: UserAPIKeyAuth,
     end_user_object: LiteLLM_EndUserTable | None,
-    key_end_user_budget_id: str,
+    key_end_user_budget_id: str | None,
     prisma_client: PrismaClient,
     user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Span | None,
