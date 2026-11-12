@@ -104,10 +104,11 @@ class BudgetRepository(BaseRepository[LiteLLM_BudgetTable]):
 
         return await self.update(budget_id, data, id_field="budget_id")
 
-    async def due_tier_versions(self, budget_ids: Sequence[str], due_before: datetime) -> Mapping[str, datetime]:
-        """The last write time of each listed tier still due before ``due_before``.
-        Read on the writer, so a lagging replica cannot show a tier another
-        sweep already advanced as still due."""
+    async def due_tier_windows(self, budget_ids: Sequence[str], due_before: datetime) -> Mapping[str, str]:
+        """The name of the window each listed tier still due before ``due_before``
+        closes: the tier and how many windows it has closed before. Read on the
+        writer, so a lagging replica cannot show a tier another sweep already
+        advanced as still due."""
         rows: Final = await _BudgetTable(self._prisma_client, use_writer=True).table.find_many(
             where={
                 # bounded-ok: callers pass one get_data page of at most RESET_BUDGET_JOB_BATCH_SIZE tiers
@@ -115,7 +116,7 @@ class BudgetRepository(BaseRepository[LiteLLM_BudgetTable]):
                 "OR": [{"budget_reset_at": None}, {"budget_reset_at": {"lt": due_before}}],
             }
         )
-        return MappingProxyType({row.budget_id: row.updated_at for row in rows})
+        return MappingProxyType({row.budget_id: f"{row.budget_id}:{row.budget_reset_count}" for row in rows})
 
     async def delete_budget(self, budget_id: str) -> LiteLLM_BudgetTable | None:
         """Delete a budget record."""

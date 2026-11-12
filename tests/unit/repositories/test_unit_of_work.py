@@ -120,7 +120,11 @@ async def test_budget_cascade_dependents_and_window_advance_share_one_batch():
         ("litellm_tagtable.update_many", linked, {"spend": 0}),
         ("litellm_modelaccessgroupbudgettable.update_many", linked, {"spend": 0}),
         ("litellm_projecttable.update_many", linked, {"spend": 0}),
-        ("litellm_budgettable.update_many", {"budget_id": "budget-1"}, {"budget_reset_at": reset_at}),
+        (
+            "litellm_budgettable.update_many",
+            {"budget_id": "budget-1"},
+            {"budget_reset_at": reset_at, "budget_reset_count": {"increment": 1}},
+        ),
     ]
 
 
@@ -128,7 +132,7 @@ async def test_enduser_page_commits_on_its_own_batch():
     """One tier can gate millions of end users, so a page of them lands in its
     own transaction instead of riding the cascade's."""
     batch = FakeBatch()
-    window = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    window = "tier-1:4"
     not_reset_in_window = {"OR": [{"spend_reset_window": None}, {"spend_reset_window": {"not": window}}]}
 
     async with enduser_spend_reset_unit_of_work(lambda: batch) as writes:

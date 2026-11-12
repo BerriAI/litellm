@@ -312,7 +312,7 @@ def _queue_enduser_page_resets(
 
 
 def _queue_enduser_tier_resets(
-    writes: EndUserSpendResetWrites, user_ids: Sequence[str], cap: float | None, window: datetime | None
+    writes: EndUserSpendResetWrites, user_ids: Sequence[str], cap: float | None, window: str | None
 ) -> None:
     page: Final = {"user_id": {"in": list(user_ids)}}  # bounded-ok: one page of RESET_BUDGET_JOB_BATCH_SIZE ids
     if cap is None:
@@ -332,7 +332,7 @@ class _BudgetCascade:
     counter_resets: tuple[tuple[str, float], ...] = ()
     cache_keys: tuple[str, ...] = ()
     rollover_caps: Mapping[str, float] = field(default_factory=lambda: MappingProxyType({}))
-    windows: Mapping[str, datetime] = field(default_factory=lambda: MappingProxyType({}))
+    windows: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
 
 
 @dataclass(frozen=True, slots=True)
@@ -771,17 +771,18 @@ class ResetBudgetJob:
 
     async def _closing_windows(
         self, budgets_to_reset: Sequence[LiteLLM_BudgetTableFull], now: datetime
-    ) -> Mapping[str, datetime]:
-        """The window each tier closes, which its end-user resets stamp, named by
-        the tier's last write. A failed window advance leaves that write in
-        place, so the retry skips the end users already reset, while the advance
-        or an admin edit of the tier opens a new window. A tier another sweep
-        advanced since the read is no longer due on the writer and is left out."""
+    ) -> Mapping[str, str]:
+        """The window each tier closes, which its end-user resets stamp. A failed
+        window advance leaves the name as it was, so the retry skips the end
+        users already reset, while the advance opens a new window, and an end
+        user moved to another tier carries a name that tier never uses. A tier
+        another sweep advanced since the read is no longer due on the writer
+        and is left out."""
         budget_ids: Final = tuple(b.budget_id for b in budgets_to_reset if b.budget_id is not None)
         if not budget_ids:
             return MappingProxyType({})
         return await self._with_db_retry(
-            lambda: BudgetRepository(self.prisma_client).due_tier_versions(budget_ids, due_before=now),
+            lambda: BudgetRepository(self.prisma_client).due_tier_windows(budget_ids, due_before=now),
             reason="reset_budget_read_windows_failure",
         )
 

@@ -198,23 +198,23 @@ class EndUserSpendResetWrites:
 
     table: BatchTable
 
-    def queue_spend_zero(self, where: Mapping[str, object], window: datetime | None) -> None:
+    def queue_spend_zero(self, where: Mapping[str, object], window: str | None) -> None:
         self.table.update_many(where=_not_reset_in(window, where), data=_stamped(window, {"spend": 0}))
 
-    def queue_spend_decrement(self, where: Mapping[str, object], amount: float, window: datetime | None) -> None:
+    def queue_spend_decrement(self, where: Mapping[str, object], amount: float, window: str | None) -> None:
         self.table.update_many(
             where=_not_reset_in(window, where),
             data=_stamped(window, {"spend": {"decrement": amount}}),
         )
 
 
-def _stamped(window: datetime | None, data: Mapping[str, object]) -> Mapping[str, object]:
+def _stamped(window: str | None, data: Mapping[str, object]) -> Mapping[str, object]:
     if window is None:
         return data
     return {**data, "spend_reset_window": window}
 
 
-def _not_reset_in(window: datetime | None, where: Mapping[str, object]) -> Mapping[str, object]:
+def _not_reset_in(window: str | None, where: Mapping[str, object]) -> Mapping[str, object]:
     if window is None:
         return where
     return {
@@ -295,8 +295,12 @@ class BudgetWindowWrites:
 
     def queue_window_advance(self, budget_id: str, budget_reset_at: datetime) -> None:
         """``update_many`` so a tier deleted between the read and the commit is a
-        no-op row count instead of a P2025 that aborts the whole chunk."""
-        self.table.update_many(where={"budget_id": budget_id}, data={"budget_reset_at": budget_reset_at})
+        no-op row count instead of a P2025 that aborts the whole chunk. The
+        count names the tier's windows for the end-user reset stamps."""
+        self.table.update_many(
+            where={"budget_id": budget_id},
+            data={"budget_reset_at": budget_reset_at, "budget_reset_count": {"increment": 1}},
+        )
 
 
 @dataclass(frozen=True, slots=True)
