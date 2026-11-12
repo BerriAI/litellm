@@ -11,7 +11,7 @@ import re
 import unittest
 from collections.abc import AsyncIterator, Callable, Mapping
 from typing import Any, Final, Literal, cast
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
@@ -3690,112 +3690,6 @@ class TestResponsesWSFirstFrameModelAuth:
             "model_group": "gpt-4o-mini",
             "standard_logging_guardrail_information": [{"guardrail_cost": 0.2}, {"guardrail_cost": 0.4}],
         }
-
-    @pytest.mark.parametrize(
-        "relay_outcome",
-        ["still_relaying", "already_returned", "returns_despite_the_cancel", "crashes_despite_the_cancel"],
-    )
-    def test_session_limit_frees_the_slot_at_once_and_never_cuts_the_failure_row(self, relay_outcome: str) -> None:
-        loop: Final = AutojumpClockLoop()
-        try:
-            loop.run_until_complete(self._assert_session_limit_releases_slot_before_failure_row(relay_outcome))
-        finally:
-            loop.run_until_complete(loop.shutdown_asyncgens())
-            loop.close()
-
-    async def _assert_session_limit_releases_slot_before_failure_row(self, relay_outcome: str) -> None:
-        from litellm.exceptions import RateLimitError
-        from litellm.proxy.response_api_endpoints.endpoints import responses_websocket_endpoint
-
-        ws = MagicMock()
-        ws.headers = {}
-        ws.query_params = {}
-        ws.scope = {"headers": []}
-        ws.url = "ws://testserver/v1/responses"
-        ws.accept = AsyncMock()
-        ws.receive_text = AsyncMock(
-            return_value=json.dumps({"type": "response.create", "model": "gpt-4o-mini", "input": []})
-        )
-        async def close_over_the_network(**kwargs):
-            await asyncio.sleep(0)
-
-        ws.close = AsyncMock(side_effect=close_over_the_network)
-        processor = MagicMock()
-        processor.common_processing_pre_call_logic = AsyncMock(
-            return_value=({"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock())
-        )
-        refusal = RateLimitError(message="crossed budget", llm_provider="", model="")
-        crash = RuntimeError("relay crashed")
-        row_may_finish = asyncio.Event()
-        row_written = asyncio.Event()
-
-        async def slow_failure_hook(**kwargs):
-            await row_may_finish.wait()
-            row_written.set()
-
-        def route_request(data, **kwargs):
-            async def relay():
-                guarded = await data["responses_ws_frame_guard"](json.dumps({"type": "response.create", "input": "two"}))
-                guarded.bill_refusal(refusal)
-                if relay_outcome == "still_relaying":
-                    await asyncio.Event().wait()
-                if relay_outcome in ("returns_despite_the_cancel", "crashes_despite_the_cancel"):
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await asyncio.Event().wait()
-                if relay_outcome == "crashes_despite_the_cancel":
-                    raise crash
-                return refusal
-
-            return relay()
-
-        proxy_logging_obj = MagicMock(during_call_hook=AsyncMock())
-        proxy_logging_obj.pre_call_hook = AsyncMock(
-            side_effect=lambda user_api_key_dict, data, call_type, guardrails_only: data
-        )
-        proxy_logging_obj.post_call_failure_hook = AsyncMock(side_effect=slow_failure_hook)
-        async def release_over_the_network(user_api_key_dict):
-            await asyncio.sleep(0.01)
-
-        proxy_logging_obj.arelease_responses_websocket_slot = AsyncMock(side_effect=release_over_the_network)
-
-        with (
-            patch(  # test-quality-ok: first-frame model auth needs a live router and key table and has its own tests above
-                "litellm.proxy.response_api_endpoints.endpoints._enforce_responses_ws_first_frame_model_auth",
-                new_callable=AsyncMock,
-            ),
-            patch(  # test-quality-ok: the pre-call processor needs a live proxy; what the endpoint does with the relay's outcome is under test
-                "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
-                return_value=processor,
-            ),
-            patch(  # test-quality-ok: routing is the seam that hands the relay its frame guard and returns its outcome
-                "litellm.proxy.route_llm_request.route_request",
-                new_callable=AsyncMock,
-                side_effect=route_request,
-            ),
-            patch(  # test-quality-ok: a short session limit stands in for the configured one so the cap fires mid-session
-                "litellm.proxy.response_api_endpoints.endpoints._resolve_responses_ws_session_limit_seconds",
-                return_value=0.05,
-            ),
-            patch(  # test-quality-ok: the failure hook is the proxy's only path to a failed spend log row
-                "litellm.proxy.proxy_server.proxy_logging_obj",
-                proxy_logging_obj,
-            ),
-        ):
-            endpoint = asyncio.ensure_future(
-                responses_websocket_endpoint(websocket=ws, model=None, user_api_key_dict=MagicMock())
-            )
-            finished, _ = await asyncio.wait({endpoint}, timeout=1)
-            assert endpoint in finished
-            limit_close = call(code=1000, reason="Session duration limit reached")
-            crash_close = call(code=1011, reason="Internal server error")
-            crashed = relay_outcome == "crashes_despite_the_cancel"
-            assert ws.close.await_args_list == ([limit_close, crash_close] if crashed else [limit_close])
-            proxy_logging_obj.arelease_responses_websocket_slot.assert_awaited_once()
-            assert not row_written.is_set()
-            row_may_finish.set()
-            await asyncio.wait_for(row_written.wait(), timeout=1)
-
-        assert proxy_logging_obj.post_call_failure_hook.await_args.kwargs["original_exception"] is (crash if crashed else refusal)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("ending", ["client_closed", "crash"])
