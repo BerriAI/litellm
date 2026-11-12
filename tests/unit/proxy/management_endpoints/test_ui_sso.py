@@ -9486,7 +9486,7 @@ async def test_saml_callback_blocked_when_admin_ui_disabled() -> None:
     disabled; the ACS enforces DISABLE_ADMIN_UI like the SP-initiated login route."""
     from litellm.proxy.management_endpoints.ui_sso import saml_callback
 
-    request = Request(
+    request: Final = Request(
         {"type": "http", "headers": [(b"content-type", b"application/x-www-form-urlencoded")]},
         receive=AsyncMock(return_value={"type": "http.request", "body": b"SAMLResponse=unused", "more_body": False}),
     )
