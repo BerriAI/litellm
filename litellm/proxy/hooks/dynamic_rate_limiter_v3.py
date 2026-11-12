@@ -955,7 +955,11 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         enforced: Final = team_share.enforced(saturation >= _get_priority_settings().saturation_threshold)
         reservation: Final = (
             await self._team_token_reservation(
-                enforced, {**request_data, "model": model}, model, None, user_api_key_dict
+                enforced,
+                {**request_data, "model": model},
+                model,
+                get_or_create_request_stash().call_type,
+                user_api_key_dict,
             )
             if enforced is not None
             else 0

@@ -2284,6 +2284,19 @@ async def test_a_saturated_fallback_target_refuses_a_prompt_larger_than_the_team
 
 
 @pytest.mark.asyncio
+async def test_a_saturated_responses_fallback_holds_the_output_budget_as_well_as_the_input(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import get_or_create_request_stash
+
+    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.0)
+    get_or_create_request_stash().call_type = "aresponses"
+    prompt: Final = {"input": "hi", "max_output_tokens": 500}
+    assert await handler.async_fallback_target_allowed(_team_key(), "shared-model", prompt) is False
+    assert await _team_tokens_remaining(handler) == 100
+
+
+@pytest.mark.asyncio
 async def test_a_fallback_attempt_that_fails_gives_back_the_tokens_it_held(monkeypatch: pytest.MonkeyPatch):
     handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.0)
     assert await handler.async_fallback_target_allowed(_team_key(), "shared-model", _fallback_prompt(30)) is True

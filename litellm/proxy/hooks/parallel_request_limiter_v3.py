@@ -603,6 +603,7 @@ class RequestRateLimiterStash:
     """
 
     owner_litellm_call_id: str | None = None
+    call_type: str | None = None
     rate_limit_response: RateLimitResponse | None = None
     parallel_slot: ParallelSlotAcquisition | None = None
     parallel_slot_reused_at: datetime | None = None
@@ -4029,6 +4030,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         verbose_proxy_logger.debug("Inside Rate Limit Pre-Call Hook")
 
         stash: Final = claim_request_stash_for_data(data)
+        stash.call_type = call_type
         reuses_request_slot: Final = call_type == CallTypes.call_mcp_tool.value and stash.parallel_slot is not None
         if reuses_request_slot:
             stash.parallel_slot_reused_at = self._get_current_time()
