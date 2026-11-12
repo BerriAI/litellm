@@ -196,10 +196,10 @@ def test_deepseek_anthropic_messages_preserves_thinking_and_sanitizes_custom_too
 
 
 def _deepseek_messages_request(
-    optional_params: Mapping[str, object], drop_params: bool | None = None
+    optional_params: Mapping[str, object], drop_params: bool | None = None, model: str = "deepseek-v4-pro"
 ) -> Mapping[str, object]:
     return DeepSeekAnthropicMessagesConfig().transform_anthropic_messages_request(
-        model="deepseek-v4-pro",
+        model=model,
         messages=[{"role": "user", "content": "Hi"}],
         anthropic_messages_optional_request_params={"max_tokens": 32000, **optional_params},
         litellm_params=GenericLiteLLMParams(drop_params=drop_params),
@@ -247,7 +247,11 @@ def test_deepseek_anthropic_messages_prefers_output_config_effort_over_reasoning
 
 @pytest.mark.parametrize(
     "optional_params",
-    [{"output_config": {"effort": "turbo"}}, {"reasoning_effort": "turbo"}],
+    [
+        {"output_config": {"effort": "turbo"}},
+        {"reasoning_effort": "turbo"},
+        {"output_config": {"effort": "high"}, "reasoning_effort": "turbo"},
+    ],
 )
 def test_deepseek_anthropic_messages_rejects_unknown_effort_with_400(optional_params: Mapping[str, object]) -> None:
     with pytest.raises(AnthropicError) as error:
@@ -277,3 +281,31 @@ def test_deepseek_anthropic_messages_keeps_other_output_config_fields_when_dropp
     )
 
     assert request["output_config"] == {"format": output_format}
+
+
+def test_deepseek_anthropic_messages_drops_unknown_reasoning_effort_but_keeps_output_config_effort() -> None:
+    request: Final = _deepseek_messages_request(
+        {"output_config": {"effort": "high"}, "reasoning_effort": "turbo"}, drop_params=True
+    )
+
+    assert request["output_config"] == {"effort": "high"}
+    assert "reasoning_effort" not in request
+
+
+def test_deepseek_anthropic_messages_forwards_non_object_output_config_unchanged() -> None:
+    request: Final = _deepseek_messages_request({"output_config": "high", "reasoning_effort": "max"})
+
+    assert request["output_config"] == "high"
+    assert "reasoning_effort" not in request
+
+
+def test_deepseek_anthropic_messages_drops_adaptive_thinking_for_model_without_reasoning() -> None:
+    model: Final = "deepseek-chat"
+    assert not litellm.supports_reasoning(model=model, custom_llm_provider="deepseek")
+
+    request: Final = _deepseek_messages_request(
+        {"thinking": {"type": "adaptive"}, "output_config": {"effort": "max"}}, model=model
+    )
+
+    assert "thinking" not in request
+    assert "output_config" not in request
