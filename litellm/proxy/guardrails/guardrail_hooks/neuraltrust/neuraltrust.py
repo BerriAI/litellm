@@ -1,6 +1,6 @@
 """NeuralTrust TrustGuard native LiteLLM guardrail.
 
-Calls TrustGuard POST /v1/evaluate or /v2/evaluate on pre_call (input) and post_call (output).
+Calls TrustGuard POST /v1/evaluate on pre_call (input) and post_call (output).
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ from litellm.types.utils import ChatCompletionMessageToolCall, GenericGuardrailA
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
-EVALUATE_PATHS: Final = MappingProxyType({"v1": "/v1/evaluate", "v2": "/v2/evaluate"})
+EVALUATE_PATH: Final = "/v1/evaluate"
 CONSUMER_ID_KEYS: Final = (
     ("user_api_key_alias", "user_api_key_key_alias"),
     ("user_api_key_user_email",),
@@ -111,10 +111,6 @@ def _consumer_id(request_data: Mapping[str, object]) -> str | None:
     blocks: Final = tuple(_metadata(request_data.get(source)) for source in ("litellm_metadata", "metadata"))
     candidates: Final = (block.get(name) for name, block in product(chain.from_iterable(CONSUMER_ID_KEYS), blocks))
     return next((value for value in candidates if isinstance(value, str) and value), None)
-
-
-def _v2_user(consumer_id: str) -> Mapping[str, str]:
-    return {"email": consumer_id} if "@" in consumer_id else {"id": consumer_id}
 
 
 def _message_text(message: Mapping[str, object]) -> str:
@@ -252,7 +248,6 @@ class NeuralTrustGuardrail(CustomGuardrail):
         api_base: str | None = None,
         api_key: str | None = None,
         collector_key: str | None = None,
-        api_version: str | None = None,
         unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
         timeout: float | None = None,
         streaming_transform_mode: Literal["block_only", "incremental_diff"] | None = None,
@@ -272,12 +267,6 @@ class NeuralTrustGuardrail(CustomGuardrail):
                 "TrustGuard API key is required. Set TRUSTGUARD_API_KEY or pass api_key in litellm_params."
             )
         self.collector_key = collector_key or os.environ.get("TRUSTGUARD_COLLECTOR_KEY") or ""
-        resolved_version: Final = api_version or os.environ.get("TRUSTGUARD_API_VERSION") or "v1"
-        evaluate_path: Final = EVALUATE_PATHS.get(resolved_version)
-        if evaluate_path is None:
-            raise ValueError(f"TrustGuard api_version must be v1 or v2, got {resolved_version!r}.")
-        self.api_version = resolved_version
-        self.evaluate_path = evaluate_path
         self.unreachable_fallback: Literal["fail_closed", "fail_open"] = unreachable_fallback
         resolved_timeout: Final = DEFAULT_TIMEOUT if timeout is None else float(timeout)
         if resolved_timeout <= 0:
@@ -391,28 +380,18 @@ class NeuralTrustGuardrail(CustomGuardrail):
         logging_obj: LiteLLMLoggingObj | None,
     ) -> dict[str, object]:  # mutable-ok: outbound JSON
         session_id: Final = get_session_id_from_request_data(request_data)
-        attributes: Final[Mapping[str, object]] = {
-            "content_type": "application/json",
-            "model": {"name": _model_name(inputs, logging_obj)},
-        }
+        consumer_id: Final = _consumer_id(request_data)
         return {
             "payload": self._payload(inputs, input_type),
             "direction": "input" if input_type == "request" else "output",
             "protocol": "llm",
-            **self._caller(attributes, _consumer_id(request_data)),
+            "attributes": {
+                "content_type": "application/json",
+                "model": {"name": _model_name(inputs, logging_obj)},
+            },
+            **({"collector_key": self.collector_key} if self.collector_key else {}),
             **({"session_id": session_id} if session_id else {}),
-        }
-
-    def _caller(self, attributes: Mapping[str, object], consumer_id: str | None) -> Mapping[str, object]:
-        if self.api_version == "v1":
-            return {
-                "attributes": attributes,
-                **({"collector_key": self.collector_key} if self.collector_key else {}),
-                **({"consumer_id": consumer_id} if consumer_id is not None else {}),
-            }
-        return {
-            "attributes": {**attributes, **({"user": _v2_user(consumer_id)} if consumer_id is not None else {})},
-            **({"integration_key": self.collector_key} if self.collector_key else {}),
+            **({"consumer_id": consumer_id} if consumer_id is not None else {}),
         }
 
     @staticmethod
@@ -427,7 +406,7 @@ class NeuralTrustGuardrail(CustomGuardrail):
         return {"messages": messages}
 
     async def _call_evaluate(self, body: dict[str, object]) -> dict[str, object]:  # mutable-ok: TrustGuard JSON
-        url: Final = f"{self.api_base}{self.evaluate_path}"
+        url: Final = f"{self.api_base}{EVALUATE_PATH}"
         headers: Final = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
