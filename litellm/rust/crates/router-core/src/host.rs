@@ -34,8 +34,7 @@ pub struct RouterRequest {
     /// `user_api_key_team_id`, from the first metadata bucket that holds one
     /// (`get_request_team_id`).
     pub team_id: Option<String>,
-    /// The `metadata` bucket's `user_api_key_team_id` alone: the team a failed level lists the
-    /// group's deployments for (`async_function_with_fallbacks_common_utils`,
+    /// The team a failed level lists the group's deployments for (`async_function_with_fallbacks_common_utils`,
     /// `_stream_order_levels`). `None` lists every team's.
     pub listing_team_id: Option<String>,
     /// The caller's `user_role` is `proxy_admin`.

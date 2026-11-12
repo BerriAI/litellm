@@ -999,14 +999,6 @@ def unsupported_arguments(config: RouterConfig) -> frozenset[str]:
     return unserved
 
 
-def _listing_team_id(request: Mapping[str, object]) -> str | None:
-    """``(kwargs.get("metadata", {}) or {}).get("user_api_key_team_id")``: the team
-    ``async_function_with_fallbacks_common_utils`` lists a group for reads this bucket alone."""
-    metadata: Final = as_str_mapping(request.get("metadata"))
-    team_id: Final = metadata.get("user_api_key_team_id") if metadata is not None else None
-    return team_id if isinstance(team_id, str) else None
-
-
 # Request fallback settings, which replace the router's for the call.
 _REQUEST_FALLBACK_KEYS: Final = ("fallbacks", "context_window_fallbacks", "content_policy_fallbacks", "max_fallbacks")
 
@@ -1043,7 +1035,6 @@ def _start_fields(request: Mapping[str, object]) -> Mapping[str, object]:
     lists: Final = {key: _plain(request[key]) for key in _REQUEST_FALLBACK_KEYS if key in request}
     weights: Final = request.get("_router_weights")
     team_id: Final = get_request_team_id(request)
-    listing_team_id: Final = _listing_team_id(request)
     strategy: Final = request.get("routing_strategy")
     override: Final = normalize_strategy(strategy) if isinstance(strategy, str | RoutingStrategy) else None
     return {
@@ -1053,8 +1044,7 @@ def _start_fields(request: Mapping[str, object]) -> Mapping[str, object]:
         **disabled,
         **({"router_weights": weights} if weights is not None else {}),
         **lists,
-        **({"team_id": team_id} if team_id else {}),
-        **({"listing_team_id": listing_team_id} if listing_team_id is not None else {}),
+        **({"team_id": team_id, "listing_team_id": team_id} if team_id else {}),
         **caller_fields(request),
     }
 
