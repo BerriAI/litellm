@@ -1,4 +1,5 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { renderWithProviders as render } from "../../../tests/test-utils";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "@/lib/toast";
 import type { KeyResponse } from "../key_team_helpers/key_list";
@@ -123,6 +124,7 @@ vi.mock("../common_components/AutoRotationView", () => {
 
 // Mock Next.js router to avoid "invariant expected app router to be mounted" error
 vi.mock("next/navigation", () => ({
+  usePathname: () => "/ui/",
   useRouter: () => ({
     push: vi.fn(),
     replace: vi.fn(),
@@ -517,7 +519,7 @@ describe("KeyInfoView handleKeyUpdate budget_duration", () => {
     );
 
     fireEvent.click(screen.getByText("Settings"));
-    expect(screen.getByTestId("budget-reset-value")).toHaveTextContent("Every 30d");
+    expect(screen.getByTestId("budget-reset-value")).toHaveTextContent("Every 30d, next Sep 1, 2026 at 12:00 AM UTC");
 
     fireEvent.click(screen.getByText("Edit Settings"));
     (globalThis as any).__TEST_FORM_VALUES = {

@@ -1,3 +1,5 @@
+import type { TFunction } from "i18next";
+import { useTranslation } from "react-i18next";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { labelWithHint } from "@/components/shared/form/LabelWithHint";
@@ -36,14 +38,16 @@ const anthropicValidators = (
   ...(field.control === "integer" ? { ttl: validateIssuerTtlSeconds } : {}),
 });
 
-const selectItems = (field: FederationField, value: unknown) => [
-  ...(isMaskedSecret(value) ? [{ value: value as string, label: `Stored: ${value as string}` }] : []),
+const selectItems = (field: FederationField, value: unknown, t: TFunction) => [
+  ...(isMaskedSecret(value)
+    ? [{ value: value as string, label: t("modelAdd.federationFields.storedValue", { value: value as string }) }]
+    : []),
   ...(field.options ?? []).map((option) => ({ value: option, label: option })),
 ];
 
-const renderControl = (field: FederationField, control: MountedFieldControlProps) => {
+const renderControl = (field: FederationField, control: MountedFieldControlProps, t: TFunction) => {
   if (field.control === "select") {
-    const items = selectItems(field, control.value);
+    const items = selectItems(field, control.value, t);
     return (
       <Select
         items={items}
@@ -51,10 +55,10 @@ const renderControl = (field: FederationField, control: MountedFieldControlProps
         onValueChange={(value) => control.onChange(value ?? "")}
       >
         <SelectTrigger id={control.id} onBlur={control.onBlur} className="w-full">
-          <SelectValue placeholder="Proxy default" />
+          <SelectValue placeholder={t("modelAdd.federationFields.proxyDefault")} />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value={null}>Proxy default</SelectItem>
+          <SelectItem value={null}>{t("modelAdd.federationFields.proxyDefault")}</SelectItem>
           {items.map((item) => (
             <SelectItem key={item.value} value={item.value}>
               {item.label}
@@ -84,9 +88,10 @@ interface FederationFieldInputProps {
 }
 
 function FederationFieldInput({ field, storedValue, validators }: FederationFieldInputProps) {
+  const { t } = useTranslation();
   return (
     <MountedFormField
-      label={labelWithHint(field.label, field.tooltip)}
+      label={labelWithHint(t(field.labelKey), t(field.tooltipKey, { ...field.tooltipValues }))}
       name={field.key}
       required={field.required}
       rules={{
@@ -98,7 +103,7 @@ function FederationFieldInput({ field, storedValue, validators }: FederationFiel
       }}
       className="mb-4"
     >
-      {(control) => renderControl(field, control)}
+      {(control) => renderControl(field, control, t)}
     </MountedFormField>
   );
 }
@@ -114,7 +119,8 @@ function AnthropicFederationFields({
   onIdentitySourceChange,
   storedValues,
 }: AnthropicFederationFieldsProps) {
-  const identitySourceItems = identitySourceOptions(storedValues);
+  const { t } = useTranslation();
+  const identitySourceItems = identitySourceOptions(storedValues, t);
   const renderField = (field: FederationField) => (
     <FederationFieldInput
       key={field.key}
@@ -130,8 +136,8 @@ function AnthropicFederationFields({
       <div className="mb-4 flex flex-col gap-2">
         <label htmlFor={IDENTITY_SOURCE_SELECT_ID} className="text-sm font-medium">
           {labelWithHint(
-            "Identity Source",
-            "Where the proxy gets the identity token it exchanges with Anthropic for an access token.",
+            t("modelAdd.federationFields.identitySource"),
+            t("modelAdd.federationFields.identitySourceHint"),
           )}
         </label>
         <Select
@@ -151,15 +157,10 @@ function AnthropicFederationFields({
           </SelectContent>
         </Select>
         {identitySource === "unrecognized" && (
-          <p className="text-sm text-muted-foreground">
-            This form does not offer the stored identity source. Saving keeps it and its settings as stored. Pick
-            another source to replace it.
-          </p>
+          <p className="text-sm text-muted-foreground">{t("modelAdd.federationFields.unrecognizedSourceHint")}</p>
         )}
         {identitySource === "environment" && (
-          <p className="text-sm text-muted-foreground">
-            The proxy reads ANTHROPIC_IDENTITY_TOKEN_FILE or ANTHROPIC_IDENTITY_TOKEN from its own environment.
-          </p>
+          <p className="text-sm text-muted-foreground">{t("modelAdd.federationFields.environmentSourceHint")}</p>
         )}
       </div>
       {identitySourceById(identitySource).fields.map(renderField)}
@@ -168,12 +169,10 @@ function AnthropicFederationFields({
 }
 
 function OpenAIFederationFields({ storedValues }: { storedValues: Record<string, unknown> }) {
+  const { t } = useTranslation();
   return (
     <>
-      <p className="mb-4 text-sm text-muted-foreground">
-        The proxy exchanges the identity token for an OpenAI access token only when OPENAI_API_KEY is unset in its
-        environment. Otherwise it sends that key instead.
-      </p>
+      <p className="mb-4 text-sm text-muted-foreground">{t("modelAdd.federationFields.openaiFederationHint")}</p>
       {OPENAI_FEDERATION_FIELDS.map((field) => (
         <FederationFieldInput key={field.key} field={field} storedValue={storedValues[field.key]} />
       ))}

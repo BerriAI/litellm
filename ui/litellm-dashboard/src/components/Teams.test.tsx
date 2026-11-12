@@ -8,6 +8,7 @@ import { useTeamMetadataSchema } from "@/app/(dashboard)/hooks/teams/useTeamMeta
 import { toast } from "@/lib/toast";
 import { fetchAvailableModelsForTeamOrKey } from "./key_team_helpers/fetch_available_models_team_key";
 import { MODEL_MAX_BUDGET_PREMIUM_HINT } from "./key_team_helpers/ModelMaxBudgetEditor";
+import i18n from "@/i18n/i18n";
 import {
   fetchMCPAccessGroups,
   getDefaultTeamSettings,
@@ -492,14 +493,17 @@ describe("Teams - team detail deep link (?team=)", () => {
 
   it("selecting a team pushes ?team= to the URL", async () => {
     const onUrlUpdate = vi.fn();
-    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />, { onUrlUpdate });
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />, {
+      onUrlUpdate,
+      searchParams: "?detail_tab=activity&activity_from=2026-01-01&activity_to=2026-01-08",
+    });
 
     await waitFor(() => expect(mockTeamsTableProps).not.toBeNull());
     act(() => mockTeamsTableProps.onSelectTeam({ ...baseTableTeam, team_id: "team-deep-link" }));
 
     await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
     const lastUpdate = onUrlUpdate.mock.calls.at(-1)![0];
-    expect(lastUpdate.searchParams.get("team")).toBe("team-deep-link");
+    expect(Object.fromEntries(lastUpdate.searchParams)).toEqual({ team: "team-deep-link" });
     expect(lastUpdate.options.history).toBe("push");
 
     await waitFor(() => expect(mockTeamInfoView).toHaveBeenCalled());
@@ -518,7 +522,8 @@ describe("Teams - team detail deep link (?team=)", () => {
   it("closing the team detail view removes ?team= from the URL", async () => {
     const onUrlUpdate = vi.fn();
     renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />, {
-      searchParams: "?team=team-from-url",
+      searchParams:
+        "?team=team-from-url&detail_tab=activity&activity_from=2026-01-01&activity_to=2026-01-08&key_tab=activity&tab=teams",
       onUrlUpdate,
     });
 
@@ -526,7 +531,7 @@ describe("Teams - team detail deep link (?team=)", () => {
     act(() => mockTeamInfoView.mock.calls.at(-1)?.[0].onClose());
 
     await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
-    expect(onUrlUpdate.mock.calls.at(-1)![0].searchParams.has("team")).toBe(false);
+    expect(Object.fromEntries(onUrlUpdate.mock.calls.at(-1)![0].searchParams)).toEqual({ tab: "teams" });
     await waitFor(() => expect(screen.queryByTestId("team-info-view")).not.toBeInTheDocument());
   });
 });
@@ -1546,7 +1551,7 @@ describe("Teams - the exact bytes the create call sends", () => {
     await openCreateModal({ premiumUser: false });
 
     expect(screen.getByRole("button", { name: /Add Model Budget/i })).toBeDisabled();
-    expect(screen.getByText(MODEL_MAX_BUDGET_PREMIUM_HINT)).toBeInTheDocument();
+    expect(screen.getByText(i18n.t(MODEL_MAX_BUDGET_PREMIUM_HINT))).toBeInTheDocument();
   });
 
   it("sends the per-model budget a licensed operator fills in, keyed by model", async () => {

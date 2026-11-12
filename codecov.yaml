@@ -6,7 +6,7 @@ codecov:
 ignore:
   - "litellm-rust/**"
 
-# Uploads are flagged per workflow tier (GHA) or "circleci". carryforward makes
+# Uploads are flagged per workflow tier. carryforward makes
 # a re-upload of a flag replace its prior session instead of accumulating a
 # conflicting one, and lets a commit reuse a flag from its parent when that flag
 # was not re-uploaded. Required because the same commit can receive the
@@ -15,9 +15,10 @@ ignore:
 flag_management:
   default_rules:
     carryforward: true
-  # Dead flags no CI job uploads anymore: their carried-forward sessions were
-  # measured against old revisions, and the stale line maps mark comment lines
-  # of since-edited files as missed, sinking patch coverage on unrelated PRs.
+  # Dead flags no CI job uploads anymore, and flags whose job is path-gated on
+  # PRs: their carried-forward sessions were measured against old revisions, and
+  # the stale line maps mark comment lines of since-edited files as missed,
+  # sinking patch coverage on unrelated PRs.
   individual_flags:
     - name: proxy-mgmt-behavior
       carryforward: false
@@ -59,6 +60,12 @@ flag_management:
       carryforward: false
     - name: proxy-infra-root
       carryforward: false
+    - name: proxy-infra-root-a-p
+      carryforward: false
+    - name: proxy-infra-root-q-z
+      carryforward: false
+    - name: proxy-subprocess
+      carryforward: false
     - name: caching-local
       carryforward: false
     - name: proxy-extras
@@ -98,6 +105,10 @@ flag_management:
     - name: proxy-db-budgets
       carryforward: false
     - name: proxy-db-endpoints-and-responses
+      carryforward: false
+    - name: roi-postgres
+      carryforward: false
+    - name: redis-compat
       carryforward: false
 
 component_management:

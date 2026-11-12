@@ -19,6 +19,12 @@ from litellm.types.rerank import RerankResponse
 from litellm.types.router import *
 from litellm.utils import ProviderConfigManager, client, exception_type
 
+_PROVIDERS_RESOLVING_THEIR_OWN_RERANK_BASE: Final = (
+    litellm.LlmProviders.DASHSCOPE,
+    litellm.LlmProviders.QWENCLOUD,
+    litellm.LlmProviders.QWEN_AI_PLATFORM,
+)
+
 ####### ENVIRONMENT VARIABLES ###################
 # Initialize any necessary instances or variables here
 together_rerank: Final = TogetherAIRerank()
@@ -182,14 +188,16 @@ def rerank(
 
         model_response: Final = RerankResponse()
 
-        rerank_litellm_params: Final = {
-            "litellm_call_id": litellm_call_id,
-            "proxy_server_request": proxy_server_request,
-            "model_info": model_info,
-            "preset_cache_key": None,
-            "stream_response": {},
-            **optional_params.model_dump(exclude_unset=True),
-        }
+        rerank_litellm_params: Final = dict[str, object](
+            {
+                "litellm_call_id": litellm_call_id,
+                "proxy_server_request": proxy_server_request,
+                "model_info": model_info,
+                "preset_cache_key": None,
+                "stream_response": {},
+                **optional_params.model_dump(exclude_unset=True),
+            }
+        )
 
         litellm_logging_obj.update_from_kwargs(
             kwargs=kwargs,
@@ -543,7 +551,11 @@ def rerank(
                 logging_obj=litellm_logging_obj,
                 timeout=optional_params.timeout,
                 api_key=dynamic_api_key or optional_params.api_key,
-                api_base=dynamic_api_base or optional_params.api_base,
+                api_base=(
+                    optional_params.api_base or dynamic_api_base
+                    if _custom_llm_provider in _PROVIDERS_RESOLVING_THEIR_OWN_RERANK_BASE
+                    else dynamic_api_base or optional_params.api_base
+                ),
                 _is_async=_is_async,
                 headers=headers or litellm.headers or {},
                 client=client,

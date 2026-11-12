@@ -2,6 +2,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import moment from "moment";
+import { parseAsString, useQueryStates } from "nuqs";
 import { NuqsTestingAdapter, type UrlUpdateEvent } from "nuqs/adapters/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -20,6 +21,28 @@ vi.mock("../../networking", async (importOriginal) => {
 
 vi.mock("@/components/key_team_helpers/filter_helpers", () => ({
   fetchAllTeams: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock("../../templates/key_info_view", () => ({
+  default: function KeyInfoViewMock({ onClose }: { onClose: () => void }) {
+    const [, setActivity] = useQueryStates({
+      detail_tab: parseAsString,
+      activity_from: parseAsString,
+      activity_to: parseAsString,
+    });
+    return (
+      <div>
+        <button
+          onClick={() =>
+            void setActivity({ detail_tab: "activity", activity_from: "2026-11-01", activity_to: "2026-11-02" })
+          }
+        >
+          Select activity
+        </button>
+        <button onClick={onClose}>Back to logs</button>
+      </div>
+    );
+  },
 }));
 
 vi.mock("../detail", () => ({
@@ -144,6 +167,21 @@ describe("RequestLogsPanel", () => {
     testQueryClient.clear();
     respondWith([]);
     debounce.settled = null;
+  });
+
+  it("clears another key's tab and dates on open and clears the selected activity on close", async () => {
+    respondWith([logEntry({ metadata: { user_api_key: "key-1" } })]);
+    renderPanel("?tab=requests&detail_tab=activity&activity_from=2026-10-01&activity_to=2026-10-02");
+
+    fireEvent.click(await screen.findByRole("button", { name: "key-1" }));
+    expect(await screen.findByRole("button", { name: "Back to logs" })).toBeInTheDocument();
+    await waitFor(() => expect(urlParams().toString()).toBe("tab=requests"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Select activity" }));
+    await waitFor(() => expect(urlParams().get("activity_from")).toBe("2026-11-01"));
+    fireEvent.click(screen.getByRole("button", { name: "Back to logs" }));
+    await waitFor(() => expect(urlParams().toString()).toBe("tab=requests"));
+    expect(await screen.findByRole("button", { name: "key-1" })).toBeInTheDocument();
   });
 
   describe("server-grouped session pagination (#38060)", () => {

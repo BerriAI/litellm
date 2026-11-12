@@ -1,4 +1,6 @@
-import asyncio, base64, importlib, uuid
+import asyncio
+import base64
+import importlib
 import json
 import logging
 import os
@@ -6,8 +8,10 @@ import re
 import sys
 import time
 import types
+import uuid
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
+from datetime import datetime
 from typing import Final, List, TypeAlias, cast
 from unittest.mock import MagicMock, patch
 
@@ -16,62 +20,49 @@ import pytest
 import respx
 
 import litellm
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    get_completion_messages,
+)
 from litellm.litellm_core_utils.prompt_templates.factory import (
-    BEDROCK_DOCUMENT_PLACEHOLDER_TEXT,
     _EMPTY_TEXT_PLACEHOLDER,
+    BEDROCK_DOCUMENT_PLACEHOLDER_TEXT,
+    THOUGHT_SIGNATURE_SEPARATOR,
     BedrockConverseMessagesProcessor,
     BedrockImageProcessor,
     _bedrock_converse_messages_pt,
     _bedrock_tools_pt,
-    _rename_duplicate_bedrock_document_names,
     _convert_to_bedrock_tool_call_invoke,
-    sanitize_anthropic_tool_use_id,
     _convert_to_bedrock_tool_call_result,
+    _rename_duplicate_bedrock_document_names,
     anthropic_messages_pt,
-    convert_to_anthropic_tool_result,
-    convert_to_gemini_tool_call_result,
-    convert_to_ollama_image,
-    encode_tool_call_id_with_signature,
-    function_call_prompt,
-    get_thought_signature_from_tool,
-    get_tool_calls_from_response,
-    make_valid_bedrock_tool_name,
-    ollama_pt,
-    parse_mime_type,
-    sanitize_messages_for_tool_calling,
-    THOUGHT_SIGNATURE_SEPARATOR,
-)
-from litellm.types.llms.openai import ChatCompletionAssistantMessage, ChatCompletionToolMessage
-from litellm.types.utils import ChatCompletionMessageToolCall, Function
-from litellm.utils import (
-    _invalidate_model_cost_lowercase_map,
-    function_setup,
-    Rules,
-    validate_and_fix_openai_messages,
-)
-from datetime import datetime
-from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from litellm.litellm_core_utils.prompt_templates.factory import (
     anthropic_pt,
     claude_2_1_pt,
     convert_generic_image_chunk_to_openai_image_obj,
     convert_to_anthropic_image_obj,
     convert_to_anthropic_tool_invoke,
+    convert_to_anthropic_tool_result,
+    convert_to_gemini_tool_call_result,
+    convert_to_ollama_image,
     convert_url_to_base64,
     create_anthropic_image_param,
+    encode_tool_call_id_with_signature,
+    function_call_prompt,
+    get_thought_signature_from_tool,
+    get_tool_calls_from_response,
     has_tool_with_name,
     llama_2_chat_pt,
+    make_valid_bedrock_tool_name,
+    ollama_pt,
+    parse_mime_type,
     prompt_factory,
+    response_schema_prompt,
+    sanitize_anthropic_tool_use_id,
+    sanitize_messages_for_tool_calling,
 )
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     encrypted_reasoning_signature,
-    get_completion_messages,
 )
-from litellm.llms.vertex_ai.gemini.transformation import gemini_convert_messages_with_history
-from litellm.types.llms.bedrock import BedrockConverseReasoningContentBlock
-from litellm.types.llms.openai import AllMessageValues
-from litellm.litellm_core_utils.prompt_templates.factory import response_schema_prompt
 from litellm.llms.anthropic.completion.transformation import AnthropicTextConfig
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import AmazonInvokeConfig
 from litellm.llms.codestral.completion.handler import CodestralTextCompletion
@@ -79,10 +70,24 @@ from litellm.llms.ollama.completion.transformation import OllamaConfig
 from litellm.llms.petals.completion import handler as petals_handler
 from litellm.llms.predibase.chat.transformation import PredibaseConfig
 from litellm.llms.sagemaker.completion.transformation import SagemakerConfig
+from litellm.llms.vertex_ai.gemini.transformation import gemini_convert_messages_with_history
 from litellm.llms.vllm.completion import handler as vllm_handler
 from litellm.llms.watsonx.common_utils import _convert_watsonx_messages_core
-from litellm.types.utils import ModelResponse, TextCompletionResponse
-
+from litellm.types.llms.bedrock import BedrockConverseReasoningContentBlock
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionAssistantMessage,
+    ChatCompletionToolMessage,
+    ChatCompletionUserMessage,
+)
+from litellm.types.utils import ChatCompletionMessageToolCall, Function, ModelResponse, TextCompletionResponse
+from litellm.utils import (
+    Rules,
+    function_setup,
+    validate_and_fix_openai_messages,
+)
+from litellm.litellm_core_utils.model_cost_table import publish
+from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 READ_FILE: Final[list[object]] = [{"name": "read_file", "description": "Read the contents of a file."}]
 USER_TURN: Final[dict[str, object]] = {"role": "user", "content": "Read the file."}
@@ -432,6 +437,46 @@ def test_anthropic_messages_pt_drops_the_stream_index_from_replayed_thinking_blo
         {"type": "thinking", "thinking": "Step 1.", "signature": "sig-a"},
         {"type": "redacted_thinking", "data": "EmwKAhgB"},
         {"type": "text", "text": "Paris"},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_content"),
+    (
+        (
+            "global.anthropic.claude-haiku-5-5",
+            [
+                {"reasoningContent": {"reasoningText": {"text": "pondering", "signature": "signed-reasoning"}}},
+                {"text": "hello"},
+            ],
+        ),
+        ("global.zai.glm-5.3", [{"text": "hello"}]),
+        ("amazon.nova-pro-v1:0", [{"text": "hello"}]),
+        ("converse/us.openai.gpt-6-luna", [{"text": "hello"}]),
+    ),
+)
+def test_bedrock_converse_replays_signed_thinking_only_to_claude(
+    model: str, expected_content: Sequence[Mapping[str, object]]
+) -> None:
+    body: Final = litellm.AmazonConverseConfig().transform_request(
+        model=model,
+        messages=[
+            ChatCompletionUserMessage(role="user", content="hi"),
+            ChatCompletionAssistantMessage(
+                role="assistant",
+                content="hello",
+                thinking_blocks=[{"type": "thinking", "thinking": "pondering", "signature": "signed-reasoning"}],
+            ),
+            ChatCompletionUserMessage(role="user", content="continue"),
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    assert body["messages"] == [
+        {"role": "user", "content": [{"text": "hi"}]},
+        {"role": "assistant", "content": expected_content},
+        {"role": "user", "content": [{"text": "continue"}]},
     ]
 
 
@@ -1032,6 +1077,192 @@ async def test_bedrock_converse_keeps_dropping_redacted_thinking_for_non_claude_
     assert assistant_content == [{"text": "hello"}]
 
 
+_HIDDEN_MODEL_ARN: Final = "arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/abc123"
+
+
+async def _converse_messages(
+    messages: list[dict[str, object]],
+    model: str,
+    base_model: str | None,
+    use_async: bool,
+    assistant_continue_message: str | None = None,
+) -> list[dict[str, object]]:
+    return (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages,
+            model=model,
+            llm_provider="bedrock",
+            base_model=base_model,
+            assistant_continue_message=assistant_continue_message,
+        )
+        if use_async
+        else _bedrock_converse_messages_pt(
+            messages=messages,
+            model=model,
+            llm_provider="bedrock",
+            base_model=base_model,
+            assistant_continue_message=assistant_continue_message,
+        )
+    )
+
+
+def _assistant_with_thinking(placement: str, block: dict[str, object]) -> dict[str, object]:
+    return (
+        {"role": "assistant", "content": "hello", "thinking_blocks": [block]}
+        if placement == "thinking_blocks"
+        else {"role": "assistant", "content": [block, {"type": "text", "text": "hello"}]}
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("placement", ["thinking_blocks", "content"])
+@pytest.mark.parametrize(
+    "signature", ["claude-signature", encrypted_reasoning_signature("gAAAA_1")], ids=["claude", "encrypted"]
+)
+@pytest.mark.parametrize(
+    ("model", "base_model"),
+    [
+        ("converse/us.openai.gpt-6-luna", None),
+        ("us.amazon.nova-pro-v1:0", None),
+        ("us.amazon.nova-pro-v1:0", "anthropic.claude-sonnet-4-6"),
+        (_HIDDEN_MODEL_ARN, "openai.gpt-oss-120b-1:0"),
+    ],
+)
+async def test_bedrock_converse_drops_signed_thinking_for_a_known_non_claude_target(
+    use_async: bool, placement: str, signature: str, model: str, base_model: str | None
+):
+    block: Final = {"type": "thinking", "thinking": "private plan", "signature": signature}
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        _assistant_with_thinking(placement, block),
+        {"role": "user", "content": "again"},
+    ]
+
+    assert await _converse_messages(messages, model, base_model, use_async) == [
+        {"role": "user", "content": [{"text": "hi"}]},
+        {"role": "assistant", "content": [{"text": "hello"}]},
+        {"role": "user", "content": [{"text": "again"}]},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("placement", ["thinking_blocks", "content"])
+@pytest.mark.parametrize(
+    ("model", "base_model"),
+    [
+        ("us.anthropic.claude-sonnet-4-6", None),
+        ("ca.anthropic.claude-haiku-5-5", None),
+        ("converse/in.anthropic.claude-sonnet-5", None),
+        ("claude-sonnet-4-6", None),
+        (_HIDDEN_MODEL_ARN, None),
+        (_HIDDEN_MODEL_ARN, "anthropic.claude-sonnet-4-6"),
+    ],
+)
+async def test_bedrock_converse_keeps_signed_thinking_for_a_target_that_may_be_claude(
+    use_async: bool, placement: str, model: str, base_model: str | None
+):
+    block: Final = {"type": "thinking", "thinking": "private plan", "signature": "claude-signature"}
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        _assistant_with_thinking(placement, block),
+        {"role": "user", "content": "again"},
+    ]
+
+    result: Final = await _converse_messages(messages, model, base_model, use_async)
+
+    assistant_content: Final = next(m["content"] for m in result if m["role"] == "assistant")
+    assert assistant_content == [
+        {"reasoningContent": {"reasoningText": {"text": "private plan", "signature": "claude-signature"}}},
+        {"text": "hello"},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_keeps_the_tool_call_when_dropping_signed_thinking(use_async: bool):
+    messages: Final = [
+        {"role": "user", "content": "weather?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "thinking_blocks": [{"type": "thinking", "thinking": "private plan", "signature": "claude-signature"}],
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+    ]
+
+    result: Final = await _converse_messages(messages, "converse/us.openai.gpt-6-luna", None, use_async)
+
+    assert [m["role"] for m in result] == ["user", "assistant", "user"]
+    assert [list(part) for part in result[1]["content"]] == [["toolUse"]]
+    assert result[1]["content"][0]["toolUse"]["toolUseId"] == "call_1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize(
+    ("assistant_continue_message", "expected"),
+    [
+        (None, [{"role": "user", "content": [{"text": "hi"}, {"text": "again"}]}]),
+        (
+            "Please continue.",
+            [
+                {"role": "user", "content": [{"text": "hi"}]},
+                {"role": "assistant", "content": [{"text": "Please continue."}]},
+                {"role": "user", "content": [{"text": "again"}]},
+            ],
+        ),
+    ],
+    ids=["merged_into_one_user_turn", "split_by_the_continue_message"],
+)
+async def test_bedrock_converse_drops_a_turn_that_held_only_signed_thinking(
+    use_async: bool, assistant_continue_message: str | None, expected: list[dict[str, object]]
+):
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": None,
+            "thinking_blocks": [{"type": "thinking", "thinking": "private plan", "signature": "claude-signature"}],
+        },
+        {"role": "user", "content": "again"},
+    ]
+
+    result: Final = await _converse_messages(
+        messages, "converse/us.openai.gpt-6-luna", None, use_async, assistant_continue_message
+    )
+
+    assert result == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_drops_the_cache_point_of_a_dropped_signed_thinking_block(use_async: bool):
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "thinking",
+                    "thinking": "private plan",
+                    "signature": "claude-signature",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        {"role": "user", "content": "again"},
+    ]
+
+    result: Final = await _converse_messages(messages, "converse/us.amazon.nova-2-lite-v1:0", None, use_async)
+
+    assert result == [{"role": "user", "content": [{"text": "hi"}, {"text": "again"}]}]
+
+
 @pytest.mark.parametrize(
     "thinking_block",
     [
@@ -1244,6 +1475,145 @@ def test_anthropic_messages_pt_keeps_signed_thinking_block():
     assert len(thinking_blocks) == 1
     assert thinking_blocks[0]["signature"] == "ErcBCkgIValidSignatureBytes"
     assert thinking_blocks[0]["thinking"] == "genuine anthropic reasoning"
+
+
+@pytest.mark.parametrize("llm_provider", ("anthropic", "vertex_ai"))
+def test_anthropic_messages_pt_converts_pdf_image_url_data_uri_to_document(llm_provider: str) -> None:
+    pdf_data = "JVBERi0xLjQK"
+    result: Final = anthropic_messages_pt(
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "summarize"},
+                    {"type": "image_url", "image_url": {"url": f"data:application/pdf;base64,{pdf_data}"}},
+                ],
+            }
+        ],
+        model="claude-opus-5-5",
+        llm_provider=llm_provider,
+    )
+
+    assert result[0]["content"][1] == {
+        "type": "document",
+        "source": {"type": "base64", "media_type": "application/pdf", "data": pdf_data},
+    }
+
+
+@pytest.mark.parametrize("llm_provider", ("anthropic", "vertex_ai"))
+def test_anthropic_messages_pt_uses_pdf_format_for_generic_mime_data_uri(llm_provider: str) -> None:
+    pdf_data = "JVBERi0xLjQK"
+    result: Final = anthropic_messages_pt(
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "summarize"},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:application/octet-stream;base64,{pdf_data}",
+                            "format": "application/pdf",
+                        },
+                    },
+                ],
+            }
+        ],
+        model="claude-opus-5-5",
+        llm_provider=llm_provider,
+    )
+
+    assert result[0]["content"][1] == {
+        "type": "document",
+        "source": {"type": "base64", "media_type": "application/pdf", "data": pdf_data},
+    }
+
+
+@pytest.mark.parametrize(
+    ("image_url", "expected_type"),
+    (
+        ({"url": "https://example.com/download?id=7", "format": "application/pdf"}, "document"),
+        ({"url": "https://example.com/download?id=7", "format": "Application/PDF; charset=binary"}, "document"),
+        ({"url": "https://example.com/files/report.pdf", "format": "image/png"}, "image"),
+        ({"url": "https://example.com/pdf/photo.png"}, "image"),
+        ({"url": "https://example.com/pdf/photo.png", "format": 5}, "image"),
+        ({"url": "https://example.com/pdf/photo.png", "format": ["application/pdf"]}, "image"),
+    ),
+)
+def test_anthropic_messages_pt_picks_block_type_for_https_image_url(
+    image_url: dict[str, object], expected_type: str
+) -> None:
+    result: Final = anthropic_messages_pt(
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "summarize"},
+                    {"type": "image_url", "image_url": image_url},
+                ],
+            }
+        ],
+        model="claude-opus-5-5",
+        llm_provider="anthropic",
+    )
+
+    assert result[0]["content"][1] == {
+        "type": expected_type,
+        "source": {"type": "url", "url": image_url["url"]},
+    }
+
+
+@pytest.mark.parametrize(
+    "image_url",
+    (
+        {"url": "data:Application/PDF;base64,JVBERi0xLjQK"},
+        {"url": "data:application/x-pdf;base64,JVBERi0xLjQK"},
+        {"url": "data:application/octet-stream;base64,JVBERi0xLjQK", "format": "application/pdf; charset=binary"},
+    ),
+)
+def test_anthropic_messages_pt_normalizes_a_pdf_media_type_with_case_or_parameters(
+    image_url: dict[str, str],
+) -> None:
+    result: Final = anthropic_messages_pt(
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "summarize"},
+                    {"type": "image_url", "image_url": image_url},
+                ],
+            }
+        ],
+        model="claude-opus-5-5",
+        llm_provider="anthropic",
+    )
+
+    assert result[0]["content"][1] == {
+        "type": "document",
+        "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0xLjQK"},
+    }
+
+
+def test_anthropic_messages_pt_keeps_png_image_url_as_image() -> None:
+    image_data = "iVBORw0KGgo="
+    result: Final = anthropic_messages_pt(
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "describe"},
+                    {"type": "image_url", "image_url": f"data:image/png;base64,{image_data}"},
+                ],
+            }
+        ],
+        model="claude-opus-5-5",
+        llm_provider="anthropic",
+    )
+
+    assert result[0]["content"][1] == {
+        "type": "image",
+        "source": {"type": "base64", "media_type": "image/png", "data": image_data},
+    }
 
 
 EMPTY_USER_MESSAGES: Final = pytest.mark.parametrize(
@@ -3321,8 +3691,8 @@ def test_bedrock_tools_unpack_defs_no_oom_with_nested_refs():
     This test creates a schema with multiple nested $defs that reference each other
     to verify the fix prevents memory explosion while still correctly resolving refs.
     """
-    import sys
     import copy
+    import sys
 
     from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
 
@@ -5309,8 +5679,9 @@ def test_convert_gemini_tool_call_result_answers_tool_reference_only_result():
 def test_convert_to_anthropic_tool_invoke_degrades_unpaired_server_tool_use():
     """A replayed srvtoolu_ call whose server tool result is not available
     (e.g. the Responses bridge replays items without provider_specific_fields)
-    must become a plain client tool_use so the client's tool_result can pair
-    with it. A dangling server_tool_use makes Anthropic 400 the request with
+    and that the client answered with its own tool message must become a plain
+    client tool_use so the client's tool_result can pair with it. A dangling
+    server_tool_use makes Anthropic 400 the request with
     "unexpected `tool_use_id` found in `tool_result` blocks"."""
     from litellm.litellm_core_utils.prompt_templates.factory import convert_to_anthropic_tool_invoke
 
@@ -5324,6 +5695,7 @@ def test_convert_to_anthropic_tool_invoke_degrades_unpaired_server_tool_use():
         ],
         web_search_results=None,
         tool_results=None,
+        answered_tool_ids=frozenset({"srvtoolu_01Unpaired"}),
     )
 
     assert result == [
@@ -5818,7 +6190,7 @@ def isolate_litellm_state():
     for attr, original_value in original_state.items():
         if hasattr(litellm, attr):
             setattr(litellm, attr, original_value)
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 _SCALAR_DEFAULTS = {
@@ -7361,17 +7733,11 @@ def test_convert_to_anthropic_tool_invoke_sanitizes_invalid_ids():
 
 def test_convert_to_anthropic_tool_invoke_server_tool():
     """
-    Test that a server tool call (srvtoolu_) with no stored result is replayed
-    as a regular tool_use block.
-
-    A server_tool_use block is only valid when paired with its result block, so
-    an unpaired one must degrade to tool_use for Anthropic to accept the replay.
-    A paired call still becomes server_tool_use, covered by
-    test_convert_to_anthropic_tool_invoke_with_web_search_results.
-
-    Context: https://github.com/BerriAI/litellm/issues/17737 (original
-    server_tool_use reconstruction) and LIT-6622 / PR #39144 (unpaired calls
-    degrade instead of 400ing at Anthropic).
+    A server tool call (srvtoolu_) with no stored result and no client answer is
+    the unrun call a pause_turn response ends on, so it is replayed as a
+    server_tool_use for Anthropic to run when the client resends the turn.
+    An answered one degrades to tool_use, covered by
+    test_convert_to_anthropic_tool_invoke_degrades_unpaired_server_tool_use.
     """
     tool_calls = [
         {
@@ -7386,11 +7752,14 @@ def test_convert_to_anthropic_tool_invoke_server_tool():
 
     result = convert_to_anthropic_tool_invoke(tool_calls)
 
-    assert len(result) == 1
-    assert result[0]["type"] == "tool_use"
-    assert result[0]["id"] == "srvtoolu_01ABC123"
-    assert result[0]["name"] == "web_search"
-    assert result[0]["input"] == {"query": "elephant weight"}
+    assert result == [
+        {
+            "type": "server_tool_use",
+            "id": "srvtoolu_01ABC123",
+            "name": "web_search",
+            "input": {"query": "elephant weight"},
+        }
+    ]
 
 
 def test_convert_to_anthropic_tool_invoke_with_web_search_results():
@@ -7714,7 +8083,7 @@ def test_anthropic_messages_pt_with_bash_tool_result_in_provider_specific_fields
 
 def test_parse_tool_call_arguments_valid_json():
     """Test that valid JSON is parsed correctly."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         parse_tool_call_arguments,
     )
 
@@ -7724,7 +8093,7 @@ def test_parse_tool_call_arguments_valid_json():
 
 def test_parse_tool_call_arguments_empty_input():
     """Test that None/empty input returns empty dict."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         parse_tool_call_arguments,
     )
 
@@ -7734,7 +8103,7 @@ def test_parse_tool_call_arguments_empty_input():
 
 def test_parse_tool_call_arguments_malformed_json():
     """Test that malformed JSON raises ValueError with context."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         parse_tool_call_arguments,
     )
 
@@ -7780,7 +8149,7 @@ def test_convert_to_anthropic_tool_invoke_malformed_json():
 
 def test_attempt_json_repair_missing_closing_brace():
     """Repair JSON truncated with a missing closing brace (issue #22312)."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         _attempt_json_repair,
     )
 
@@ -7796,7 +8165,7 @@ def test_attempt_json_repair_missing_closing_brace():
 
 def test_attempt_json_repair_missing_bracket_and_brace():
     """Repair JSON truncated with both missing ] and }."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         _attempt_json_repair,
     )
 
@@ -7808,7 +8177,7 @@ def test_attempt_json_repair_missing_bracket_and_brace():
 
 def test_attempt_json_repair_trailing_comma():
     """Repair JSON with a trailing comma before missing close."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         _attempt_json_repair,
     )
 
@@ -7820,7 +8189,7 @@ def test_attempt_json_repair_trailing_comma():
 
 def test_attempt_json_repair_returns_none_for_unterminated_string():
     """Cannot repair an unterminated string — returns None."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         _attempt_json_repair,
     )
 
@@ -7829,7 +8198,7 @@ def test_attempt_json_repair_returns_none_for_unterminated_string():
 
 def test_attempt_json_repair_returns_none_for_valid_json():
     """Valid JSON has no unmatched brackets — returns None (no repair needed)."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         _attempt_json_repair,
     )
 
@@ -7838,7 +8207,7 @@ def test_attempt_json_repair_returns_none_for_valid_json():
 
 def test_attempt_json_repair_returns_none_for_empty():
     """Empty / whitespace input returns None."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         _attempt_json_repair,
     )
 
@@ -7848,7 +8217,7 @@ def test_attempt_json_repair_returns_none_for_empty():
 
 def test_attempt_json_repair_interleaved_nesting():
     """Repair JSON with interleaved {} and [] nesting."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         _attempt_json_repair,
     )
 
@@ -7860,7 +8229,7 @@ def test_attempt_json_repair_interleaved_nesting():
 
 def test_attempt_json_repair_deeply_nested():
     """Repair deeply nested truncated JSON."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         _attempt_json_repair,
     )
 
@@ -7872,7 +8241,7 @@ def test_attempt_json_repair_deeply_nested():
 
 def test_parse_tool_call_arguments_whitespace_only():
     """Whitespace-only input returns empty dict."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         parse_tool_call_arguments,
     )
 
@@ -7882,7 +8251,7 @@ def test_parse_tool_call_arguments_whitespace_only():
 
 def test_parse_tool_call_arguments_non_object_json():
     """Non-object JSON (list, string, number) is returned as-is (no wrapping)."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         parse_tool_call_arguments,
     )
 
@@ -7892,7 +8261,7 @@ def test_parse_tool_call_arguments_non_object_json():
 
 def test_parse_tool_call_arguments_repairs_truncated_json():
     """parse_tool_call_arguments should repair truncated JSON instead of raising."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         parse_tool_call_arguments,
     )
 
@@ -7903,7 +8272,7 @@ def test_parse_tool_call_arguments_repairs_truncated_json():
 
 def test_parse_tool_call_arguments_still_raises_for_unrepairable():
     """parse_tool_call_arguments raises ValueError when repair also fails."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         parse_tool_call_arguments,
     )
 
@@ -8155,6 +8524,170 @@ def test_anthropic_messages_pt_interleave_more_thinking_than_tool_groups():
         "thinking",
         "text",
     ], f"Expected order but got: {types}"
+
+
+
+def _paused_web_search_turn(
+    thinking_blocks: list[dict[str, str]] | None, content: str | list[dict[str, str]] = "Step 1 is Tokyo."
+) -> dict[str, object]:
+    assistant_message: Final[dict[str, object]] = {
+        "role": "assistant",
+        "content": content,
+        "tool_calls": [
+            {
+                "id": "srvtoolu_01Done",
+                "type": "function",
+                "function": {"name": "web_search", "arguments": '{"query": "Tokyo sister cities"}'},
+            },
+            {
+                "id": "srvtoolu_02Done",
+                "type": "function",
+                "function": {"name": "web_search", "arguments": '{"query": "Adana sister cities"}'},
+            },
+            {
+                "id": "srvtoolu_01Paused",
+                "type": "function",
+                "function": {"name": "web_search", "arguments": '{"query": "Adelaide sister cities"}'},
+            },
+        ],
+        "provider_specific_fields": {
+            "stop_reason": "pause_turn",
+            "web_search_results": [
+                {
+                    "type": "web_search_tool_result",
+                    "tool_use_id": tool_use_id,
+                    "content": [
+                        {"type": "web_search_result", "url": "https://example.com", "title": "City", "snippet": "x"}
+                    ],
+                }
+                for tool_use_id in ("srvtoolu_01Done", "srvtoolu_02Done")
+            ],
+        },
+    }
+    if thinking_blocks is None:
+        return assistant_message
+    return {**assistant_message, "thinking_blocks": thinking_blocks}
+
+
+_PAUSED_TURN_THINKING_CASES = pytest.mark.parametrize(
+    "thinking_blocks",
+    [
+        None,
+        [{"type": "thinking", "thinking": "Search first", "signature": "sig_1"}],
+        [
+            {"type": "thinking", "thinking": "Search first", "signature": "sig_1"},
+            {"type": "thinking", "thinking": "Search again", "signature": "sig_2"},
+            {"type": "thinking", "thinking": "Search once more", "signature": "sig_3"},
+            {"type": "thinking", "thinking": "Wrap up later", "signature": "sig_4"},
+        ],
+    ],
+    ids=["without_thinking", "fewer_thinking_than_searches", "more_thinking_than_searches"],
+)
+
+_PAUSED_TURN_CONTENT_CASES = pytest.mark.parametrize(
+    "content",
+    [
+        "Step 1 is Tokyo.",
+        [{"type": "text", "text": "Step 1 is Tokyo."}],
+        [
+            {"type": "thinking", "thinking": "Search first", "signature": "sig_1"},
+            {"type": "text", "text": "Step 1 is Tokyo."},
+        ],
+    ],
+    ids=["string_content", "text_parts", "text_parts_with_inline_thinking"],
+)
+
+
+@_PAUSED_TURN_THINKING_CASES
+@_PAUSED_TURN_CONTENT_CASES
+def test_anthropic_messages_pt_paused_turn_ends_on_unrun_server_tool_use(thinking_blocks, content):
+    """A pause_turn response resent as-is must end on its unrun server_tool_use:
+    Anthropic reads a turn ending on text as prefill, which newer models reject,
+    and a tool_use without a tool_result is a 400. Its thinking blocks are dropped,
+    since chat cannot say where Claude wrote them and Anthropic rejects moved ones."""
+    result = anthropic_messages_pt(
+        [
+            {"role": "user", "content": "Play the sister city chain game."},
+            _paused_web_search_turn(thinking_blocks, content),
+        ],
+        model="claude-sonnet-4-5",
+        llm_provider="anthropic",
+    )
+
+    replayed = result[-1]["content"]
+    assert replayed[-1] == {
+        "type": "server_tool_use",
+        "id": "srvtoolu_01Paused",
+        "name": "web_search",
+        "input": {"query": "Adelaide sister cities"},
+    }
+    assert [block["id"] for block in replayed if block["type"] == "server_tool_use"] == [
+        "srvtoolu_01Done",
+        "srvtoolu_02Done",
+        "srvtoolu_01Paused",
+    ]
+    assert [block["type"] for block in replayed if block["type"] in ("tool_use", "thinking")] == []
+    assert [block.get("tool_use_id") for block in replayed if block["type"] == "web_search_tool_result"] == [
+        "srvtoolu_01Done",
+        "srvtoolu_02Done",
+    ]
+
+
+@_PAUSED_TURN_THINKING_CASES
+@_PAUSED_TURN_CONTENT_CASES
+def test_anthropic_messages_pt_paused_turn_before_new_user_message_drops_unrun_search(thinking_blocks, content):
+    """A client may answer a paused turn with a new user message instead of resending it.
+    Anthropic then rejects a server_tool_use without its result, so the unrun search is dropped."""
+    result = anthropic_messages_pt(
+        [
+            {"role": "user", "content": "Play the sister city chain game."},
+            _paused_web_search_turn(thinking_blocks, content),
+            {"role": "user", "content": "Please continue."},
+        ],
+        model="claude-sonnet-4-5",
+        llm_provider="anthropic",
+    )
+
+    assert [message["role"] for message in result] == ["user", "assistant", "user"]
+    replayed = result[1]["content"]
+    assert [block["id"] for block in replayed if block["type"] == "server_tool_use"] == [
+        "srvtoolu_01Done",
+        "srvtoolu_02Done",
+    ]
+    assert [block["type"] for block in replayed if block["type"] in ("tool_use", "thinking")] == []
+    assert [block.get("tool_use_id") for block in replayed if block["type"] == "web_search_tool_result"] == [
+        "srvtoolu_01Done",
+        "srvtoolu_02Done",
+    ]
+    assert {"type": "text", "text": "Step 1 is Tokyo."} in replayed
+
+
+@_PAUSED_TURN_THINKING_CASES
+@_PAUSED_TURN_CONTENT_CASES
+def test_anthropic_messages_pt_paused_turn_resent_without_search_results_runs_only_its_last_search(
+    thinking_blocks, content
+):
+    paused_turn = _paused_web_search_turn(thinking_blocks, content)
+    result = anthropic_messages_pt(
+        [
+            {"role": "user", "content": "Play the sister city chain game."},
+            {key: value for key, value in paused_turn.items() if key != "provider_specific_fields"},
+        ],
+        model="claude-sonnet-4-5",
+        llm_provider="anthropic",
+    )
+
+    replayed = result[-1]["content"]
+    assert [block["id"] for block in replayed if block["type"] in ("server_tool_use", "tool_use")] == [
+        "srvtoolu_01Paused"
+    ]
+    assert replayed[-1] == {
+        "type": "server_tool_use",
+        "id": "srvtoolu_01Paused",
+        "name": "web_search",
+        "input": {"query": "Adelaide sister cities"},
+    }
+    assert [block["type"] for block in replayed if block["type"] == "thinking"] == []
 
 
 def test_anthropic_messages_pt_list_content_with_thinking_preserves_order():

@@ -69,7 +69,7 @@ def test_get_blog_posts_returns_every_fetched_post(client):
 
 
 def test_get_blog_posts_returns_local_backup_on_failure(client):
-    """Endpoint returns the local backup, with empty tags, when the fetcher raises."""
+    """Endpoint returns the local backup when the fetcher raises."""
     with patch(
         "litellm.proxy.public_endpoints.public_endpoints.get_blog_posts",
         side_effect=Exception("fetch failed"),
@@ -79,4 +79,3 @@ def test_get_blog_posts_returns_local_backup_on_failure(client):
     assert response.status_code == 200
     backup = [post.model_dump(mode="json") for post in GetBlogPosts.load_local_blog_posts()]
     assert response.json()["posts"] == backup
-    assert all(post["tags"] == [] for post in response.json()["posts"])

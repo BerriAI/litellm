@@ -1,6 +1,10 @@
+use crate::anthropic::messages::transformation::retry_anthropic_messages_after_http_error;
+use litellm_host::interceptors::RetriedRequest;
 use std::sync::LazyLock;
 
-use litellm_auth::{AwsParams, CredentialPlacement, ParamKind, ParamSpec, SecretValue};
+use litellm_auth::{AwsParams, CredentialPlacement, ParamKind, ParamSpec};
+use litellm_secret_value::SecretValue;
+
 use litellm_auth_aws::{AwsCredentialSource, resolve_aws_region};
 use litellm_core_utils::settings::resolve_non_empty;
 use litellm_http::request::{header_value, with_header, without_headers};
@@ -19,7 +23,10 @@ use crate::{
     },
     base_llm::{
         auth::{AuthScheme, Headers, ValidatedEnvironment},
-        messages::{context::MessagesTransformContext, transformation::BaseMessagesConfig},
+        messages::{
+            context::{MessagesShapeOptions, MessagesTransformContext},
+            transformation::BaseMessagesConfig,
+        },
     },
     bedrock::common_utils::validated_region,
 };
@@ -48,12 +55,28 @@ pub const BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG: BedrockClaudePlatformMessages
     BedrockClaudePlatformMessagesConfig;
 
 impl BaseMessagesConfig for BedrockClaudePlatformMessagesConfig {
+    fn tool_custom_field(&self, model: &str) -> crate::base_llm::messages::tools::ToolCustomField {
+        crate::base_llm::messages::tools::ToolCustomField::Rewrite {
+            hoist_defer_loading: crate::anthropic::messages::transformation::is_claude_model(model),
+        }
+    }
+
+    fn retry_after_http_error(
+        &self,
+        status: u16,
+        error_text: &str,
+        request_body: &Value,
+        context: &MessagesTransformContext,
+    ) -> Option<RetriedRequest> {
+        retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
+    }
+
     fn shape_request(
         &self,
         request: MessagesRequest,
-        reasoning_auto_summary: bool,
+        options: MessagesShapeOptions,
     ) -> Result<MessagesRequest, Error> {
-        shape_anthropic_messages_request(request, reasoning_auto_summary)
+        shape_anthropic_messages_request(request, options)
     }
 
     fn validate_environment(

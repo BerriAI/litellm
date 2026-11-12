@@ -1149,6 +1149,108 @@ async def test_converse_streaming_completion_yields_text_and_finish_reason(
         _assert_converse_stream_text_and_finish_reason(sync_chunks)
 
 
+_CONVERSE_PROSE: Final = "Let me work this out. "
+
+
+async def _stream_chunks(
+    request: Mapping[str, object], transport: httpx.MockTransport, async_mode: bool
+) -> tuple[ModelResponseStream, ...]:
+    if not async_mode:
+        return tuple(litellm.completion(**request, client=HTTPHandler(client=httpx.Client(transport=transport))))
+    async_stream: Final = await litellm.acompletion(**request, client=AsyncHTTPHandler(transport=transport))
+    return tuple([chunk async for chunk in async_stream])
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.parametrize(
+    ("tool_block", "stop_reason", "expected_content", "expected_tools", "expected_finish_reason"),
+    [
+        pytest.param(
+            {"toolUse": {"toolUseId": "tooluse_1", "name": "json_tool_call", "input": {"answer": 120}}},
+            "tool_use",
+            '{"answer": 120}',
+            (),
+            "stop",
+            id="prose_then_json_tool",
+        ),
+        pytest.param(
+            {"toolUse": {"toolUseId": "tooluse_1", "name": "get_weather", "input": {"city": "Paris"}}},
+            "tool_use",
+            _CONVERSE_PROSE,
+            (("get_weather", '{"city": "Paris"}'),),
+            "tool_calls",
+            id="prose_then_caller_tool",
+        ),
+        pytest.param(None, "end_turn", _CONVERSE_PROSE, (), "stop", id="json_tool_skipped"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_converse_json_schema_stream_sends_claude_prose_only_when_claude_skips_the_json_tool(
+    _aws_test_credentials: None,
+    async_mode: bool,
+    tool_block: Mapping[str, object] | None,
+    stop_reason: str,
+    expected_content: str,
+    expected_tools: tuple[tuple[str, str], ...],
+    expected_finish_reason: str,
+) -> None:
+    converse_reply: Final = {
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [{"text": _CONVERSE_PROSE}, *((tool_block,) if tool_block is not None else ())],
+            }
+        },
+        "stopReason": stop_reason,
+        "usage": {"inputTokens": 30, "outputTokens": 20, "totalTokens": 50},
+        "metrics": {"latencyMs": 1},
+    }
+
+    def handle_request(request: httpx.Request) -> httpx.Response:
+        body: Final = json.loads(request.content)
+        assert "toolChoice" not in body["toolConfig"]
+        assert "json_tool_call" in [tool["toolSpec"]["name"] for tool in body["toolConfig"]["tools"]]
+        return httpx.Response(200, json=converse_reply)
+
+    transport: Final = httpx.MockTransport(handle_request)
+    request: Final = {
+        "model": "bedrock/anthropic.claude-opus-5",
+        "messages": [{"role": "user", "content": "What is the LCM of 24 and 120? Reply in JSON."}],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "answer",
+                "schema": {"type": "object", "properties": {"answer": {"type": "integer"}}, "required": ["answer"]},
+            },
+        },
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+                },
+            }
+        ],
+        "stream": True,
+    }
+    chunks: Final = await _stream_chunks(request, transport, async_mode)
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == expected_content
+    tool_calls: Final = tuple(
+        itertools.chain.from_iterable(chunk.choices[0].delta.tool_calls or () for chunk in chunks)
+    )
+    named_calls: Final = tuple(
+        (call.function.name, "".join(c.function.arguments or "" for c in tool_calls))
+        for call in tool_calls
+        if call.function.name
+    )
+    assert named_calls == expected_tools
+    assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason] == [
+        expected_finish_reason
+    ]
+
+
 def test_mistral_invoke_stream_yields_text_and_finish_reason(
     _aws_test_credentials: None,
 ) -> None:

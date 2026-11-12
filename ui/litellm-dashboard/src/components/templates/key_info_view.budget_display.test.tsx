@@ -15,7 +15,10 @@ import type { Organization } from "../networking";
 // where the overview "Spend" card formatted `max_budget` with the default 0
 // decimals, truncating sub-dollar budgets (e.g. $0.10) to "$0".
 
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+vi.mock("next/navigation", () => ({
+  usePathname: () => "/ui/",
+  useRouter: () => ({ push: vi.fn() }),
+}));
 
 vi.mock("./key_edit_view", () => ({
   KeyEditView: () => <div data-testid="key-edit-view-stub" />,
@@ -424,7 +427,7 @@ describe("KeyInfoView budget reset visibility", () => {
       />,
     );
     await waitFor(() => {
-      expect(screen.getByText(/^Resets Jul 22, 2026/)).toBeInTheDocument();
+      expect(screen.getByText("Resets Jul 22, 2026 at 12:00 PM UTC")).toBeInTheDocument();
     });
   });
 

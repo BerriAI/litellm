@@ -241,6 +241,9 @@ fn retain_event(py: Python<'_>, event: PythonCallEvent<'_>) -> OwnedEvent {
         CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { raw }) => {
             CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { raw: raw.clone() })
         }
+        CallEvent::Execution(ExecutionEvent::ProviderRequestRetried { retry }) => {
+            CallEvent::Execution(ExecutionEvent::ProviderRequestRetried { retry })
+        }
         CallEvent::Succeeded { timing, response } => CallEvent::Succeeded {
             timing,
             response: response.clone_ref(py),
@@ -279,6 +282,12 @@ fn dispatch(
         CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { raw }) => hooks.on_event(
             py,
             CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { raw }),
+        ),
+        CallEvent::Execution(ExecutionEvent::ProviderRequestRetried { retry }) => hooks.on_event(
+            py,
+            CallEvent::Execution(ExecutionEvent::ProviderRequestRetried {
+                retry: retry.clone(),
+            }),
         ),
         CallEvent::Succeeded { timing, response } => hooks.on_event(
             py,

@@ -1,3 +1,5 @@
+import csv
+import io
 import uuid
 from collections.abc import Sequence
 from datetime import datetime, timedelta
@@ -12,6 +14,7 @@ from tests.integration._support.database import write_rows
 
 _URL: Final = "/user/daily/activity/aggregated"
 _RESULTS: Final = TypeAdapter(list[dict[str, JsonValue]])
+_NUMBER: Final = TypeAdapter(float)
 
 
 def _unique_day() -> str:
@@ -41,6 +44,181 @@ def _activity(gateway: Gateway, day: str, **params: str) -> dict[str, JsonValue]
 
 def _row_id() -> str:
     return f"agg-{uuid.uuid4().hex}"
+
+
+@pytest.mark.parametrize("suffix", ["/aggregated", ""])
+def test_missing_attribution_reconciles_and_filters_without_key_collisions(gateway: Gateway, suffix: str) -> None:
+    day: Final = _unique_day()
+    rows: Final = (
+        ("", None, None, 3.0),
+        ("", "", "", 0.0),
+        ("known-key", "unknown-model", None, -1.0),
+        ("unattributed", "known-model", "", 2.0),
+        ("raw:unattributed", "known-model", "named-group", 4.0),
+        ("known-key", "", "unknown-model-group", 5.0),
+    )
+    _seed(
+        day,
+        [
+            (_row_id(), "bucket-user", day, key, model, group, "", "tool", "/mcp", 10, spend, 1, 1)
+            for key, model, group, spend in rows
+        ],
+    )
+    params: Final = {"start_date": day, "end_date": day}
+    url: Final = f"/user/daily/activity{suffix}"
+    try:
+        response: Final = gateway.request("GET", url, params=params)
+        assert response.status_code == 200, response.text
+        body: Final = object_value(response.json())
+        results: Final = _RESULTS.validate_python(body["results"])
+        assert len(results) == 1
+        totals: Final = object_value(results[0]["metrics"])
+        assert totals["spend"] == 13.0
+        assert totals["api_requests"] == 6
+        breakdown: Final = object_value(results[0]["breakdown"])
+        for dimension in ("models", "model_groups", "api_keys", "providers", "mcp_servers", "endpoints"):
+            buckets: Final = _RESULTS.validate_python(list(object_value(breakdown[dimension]).values()))
+            for metric in ("spend", "api_requests", "prompt_tokens"):
+                assert (
+                    sum(_NUMBER.validate_python(object_value(bucket["metrics"])[metric]) for bucket in buckets)
+                    == totals[metric]
+                )
+        models: Final = object_value(breakdown["models"])
+        assert set(models) == {"known-model", "unknown-model"}
+        assert object_value(object_value(models["unknown-model"])["metrics"])["api_requests"] == 4
+        groups: Final = object_value(breakdown["model_groups"])
+        assert set(groups) == {"unknown-model-group", "unknown-model", "known-model", "named-group"}
+        assert object_value(object_value(groups["unknown-model-group"])["metrics"])["spend"] == 8.0
+        keys: Final = object_value(breakdown["api_keys"])
+        assert set(keys) == {"unattributed", "raw:unattributed", "raw:raw:unattributed", "known-key"}
+        unknown_key: Final = object_value(keys["unattributed"])
+        assert object_value(unknown_key["metadata"]) == {
+            "key_alias": "Unattributed",
+            "key_exists": False,
+            "team_id": None,
+            "user_id": None,
+            "user_email": None,
+        }
+        for dimension in ("models", "model_groups", "providers", "mcp_servers", "endpoints"):
+            for bucket in _RESULTS.validate_python(list(object_value(breakdown[dimension]).values())):
+                nested: Final = _RESULTS.validate_python(list(object_value(bucket["api_key_breakdown"]).values()))
+                assert (
+                    sum(_NUMBER.validate_python(object_value(key["metrics"])["spend"]) for key in nested)
+                    == object_value(bucket["metrics"])["spend"]
+                )
+        for key, spend, count in (
+            ("unattributed", 3.0, 2),
+            ("raw:unattributed", 2.0, 1),
+            ("raw:raw:unattributed", 4.0, 1),
+        ):
+            filtered: Final = gateway.request("GET", url, params={**params, "api_key": key})
+            assert filtered.status_code == 200, filtered.text
+            metadata: Final = object_value(object_value(filtered.json())["metadata"])
+            assert metadata["total_spend"] == spend
+            assert metadata["total_api_requests"] == count
+        model_response: Final = gateway.request("GET", url, params={**params, "model": "unknown-model"})
+        assert model_response.status_code == 200, model_response.text
+        model_metadata: Final = object_value(object_value(model_response.json())["metadata"])
+        assert model_metadata["total_spend"] == 7.0
+        assert model_metadata["total_api_requests"] == 4
+    finally:
+        _clean(day)
+
+
+@pytest.mark.parametrize(
+    ("route", "extra", "expected"),
+    [
+        ("keys", {}, {"unattributed": 3.0, "raw:unattributed": 2.0, "known-key": 7.0}),
+        ("search", {"search": "Unattributed"}, {"unattributed": 3.0, "raw:unattributed": 2.0}),
+        ("model_top_keys", {"model_group": "unknown-model-group"}, {"unattributed": 3.0}),
+        (
+            "model_top_keys",
+            {"model_group": "unknown-model", "by_model_group": "false"},
+            {"unattributed": 3.0, "raw:unattributed": 2.0},
+        ),
+    ],
+)
+def test_missing_attribution_key_drilldowns(
+    gateway: Gateway,
+    route: str,
+    extra: dict[str, str],
+    expected: dict[str, float],
+) -> None:
+    day: Final = _unique_day()
+    _seed(
+        day,
+        [
+            (_row_id(), "bucket-user", day, "", None, None, "", None, None, 0, 3.0, 1, 1),
+            (_row_id(), "bucket-user", day, "unattributed", "unknown-model", "", "", None, None, 0, 2.0, 1, 1),
+            (_row_id(), "bucket-user", day, "known-key", "known-model", "", "", None, None, 0, 7.0, 1, 1),
+        ],
+    )
+    try:
+        response: Final = gateway.request(
+            "GET", f"{_URL}/{route}", params={"start_date": day, "end_date": day, **extra}
+        )
+        assert response.status_code == 200, response.text
+        rows: Final = _RESULTS.validate_python(object_value(response.json())["api_keys"])
+        assert {str(row["api_key"]): object_value(row["metrics"])["spend"] for row in rows} == expected
+        unattributed: Final = next(row for row in rows if row["api_key"] == "unattributed")
+        assert object_value(unattributed["metadata"])["key_alias"] == "Unattributed"
+        assert object_value(unattributed["metadata"])["key_exists"] is False
+    finally:
+        _clean(day)
+
+
+@pytest.mark.parametrize("format", ["json", "csv"])
+@pytest.mark.parametrize(
+    ("export_type", "field", "expected"),
+    [
+        ("daily_with_keys", "api_key", {"unattributed": 3.0, "raw:unattributed": 2.0, "raw:raw:unattributed": 4.0}),
+        ("daily_with_models", "model", {"unknown-model": 5.0, "known-model": 4.0}),
+    ],
+)
+def test_export_bucket_ids_round_trip_across_streaming_batches(
+    gateway: Gateway, format: str, export_type: str, field: str, expected: dict[str, float]
+) -> None:
+    day: Final = _unique_day()
+    _seed(
+        day,
+        [
+            (_row_id(), "export-user", day, "", None, None, "", None, None, 0, 3.0, 1, 1),
+            (_row_id(), "export-user", day, "", "", "", "", None, None, 0, 0.0, 1, 1),
+            (_row_id(), "export-user", day, "unattributed", "unknown-model", "", "", None, None, 0, 2.0, 1, 1),
+            (_row_id(), "export-user", day, "raw:unattributed", "known-model", "", "", None, None, 0, 4.0, 1, 1),
+        ],
+    )
+    write_rows(
+        'INSERT INTO "LiteLLM_DailyUserSpend" (id, user_id, date, api_key, model, spend, api_requests, updated_at) '
+        "SELECT %s || i, 'export-user', %s, 'raw:a-key-' || i, 'a-model-' || i, 1, 1, now() "
+        "FROM generate_series(1, 1001) i",
+        (str(uuid.uuid4()), day),
+    )
+    params: Final = {"start_date": day, "end_date": day}
+    try:
+        response: Final = gateway.request(
+            "GET", "/user/daily/activity/export", params={**params, "export_type": export_type, "format": format}
+        )
+        assert response.status_code == 200, response.text
+        rows: Final = (
+            _RESULTS.validate_python(response.json())
+            if format == "json"
+            else _RESULTS.validate_python(list(csv.DictReader(io.StringIO(response.text))))
+        )
+        buckets: Final = {str(row[field]): _NUMBER.validate_python(row["spend"]) for row in rows}
+        filler: Final = "raw:raw:a-key-" if field == "api_key" else "a-model-"
+        assert buckets == {**{f"{filler}{i}": 1.0 for i in range(1, 1002)}, **expected}
+        assert len(rows) == len(buckets)
+        assert sum(buckets.values()) == 1010.0
+        for bucket, spend in expected.items():
+            filtered: Final = _activity(gateway, day, **{field: bucket})
+            assert object_value(filtered["metadata"])["total_spend"] == spend
+        if field == "api_key":
+            unattributed: Final = next(row for row in rows if row["api_key"] == "unattributed")
+            assert unattributed["key_alias"] == "Unattributed"
+            assert unattributed["user_id"] in (None, "")
+    finally:
+        _clean(day)
 
 
 def _ranked_key_rows(day: str, count: int) -> list[tuple[object, ...]]:

@@ -5,11 +5,13 @@ import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import type { ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
 import moment from "moment";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { DEFAULT_PAGE_SIZE_OPTIONS } from "@/components/shared/DataTable";
 import { Button } from "@/components/ui/button";
 import { AutoRouterModelGroupsProvider } from "@/components/shared/table_cells";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
+import { useResetDetailState } from "@/hooks/useUrlTab";
 import type { KeyResponse } from "../../key_team_helpers/key_list";
 import { keyInfoV1Call, uiSpendLogsCall } from "../../networking";
 import KeyInfoView from "../../templates/key_info_view";
@@ -47,6 +49,8 @@ interface RequestLogsPanelProps {
 }
 
 export default function RequestLogsPanel({ accessToken, token, userRole, userID, isActive }: RequestLogsPanelProps) {
+  const { t } = useTranslation();
+  const resetDetailState = useResetDetailState();
   const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: PAGE_SIZE });
   const [sorting, setSorting] = useState<SortingState>(DEFAULT_LOGS_SORTING);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
@@ -279,9 +283,13 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
     [selectLog, displaySessionId],
   );
 
-  const handleKeyHashClick = useCallback((keyHash: string) => {
-    setSelectedKeyIdInfoView(keyHash);
-  }, []);
+  const handleKeyHashClick = useCallback(
+    (keyHash: string) => {
+      resetDetailState();
+      setSelectedKeyIdInfoView(keyHash);
+    },
+    [resetDetailState],
+  );
 
   if (selectedKeyInfo && selectedKeyIdInfoView && selectedKeyInfo.api_key === selectedKeyIdInfoView) {
     return (
@@ -289,8 +297,11 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
         keyId={selectedKeyIdInfoView}
         keyData={selectedKeyInfo}
         teams={allTeams ?? []}
-        onClose={() => setSelectedKeyIdInfoView(null)}
-        backButtonText="Back to Logs"
+        onClose={() => {
+          resetDetailState();
+          setSelectedKeyIdInfoView(null);
+        }}
+        backButtonText={t("logs.request.panel.backToLogs")}
       />
     );
   }
@@ -321,19 +332,23 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
         toolbarChildren={
           <LogsToolbar>
             <LogsTimeRangePicker value={timeRange} onValueChange={handleTimeRangeChange} />
-            <LogsToolbarSwitch label="Live Tail" checked={isLiveTail} onCheckedChange={setIsLiveTail} />
+            <LogsToolbarSwitch
+              label={t("logs.request.panel.liveTail")}
+              checked={isLiveTail}
+              onCheckedChange={setIsLiveTail}
+            />
             {isLiveTail && pagination.pageIndex === 0 && (
               <span role="status" className="whitespace-nowrap text-xs text-muted-foreground">
-                Refreshing every 15s
+                {t("logs.request.panel.refreshingEvery15s")}
               </span>
             )}
             <LogsToolbarSwitch
-              label="Hide Health Checks"
+              label={t("logs.request.panel.hideHealthChecks")}
               checked={excludeInternalHealthChecks}
               onCheckedChange={handleExcludeInternalHealthChecksChange}
             />
             <Button variant="outline" size="sm" onClick={handleResetFilters}>
-              Reset Filters
+              {t("logs.request.panel.resetFilters")}
             </Button>
           </LogsToolbar>
         }

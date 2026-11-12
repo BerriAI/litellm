@@ -1,11 +1,11 @@
 import { useTeamMetadataSchema } from "@/app/(dashboard)/hooks/teams/useTeamMetadataSchema";
 import * as networking from "@/components/networking";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
 import { toast } from "@/lib/toast";
-import type { Team } from "../key_team_helpers/key_list";
+import type { KeyResponse, Team } from "../key_team_helpers/key_list";
 import { MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES } from "./memberBudgetReset";
 import TeamInfoView, { type TeamData } from "./TeamInfo";
 
@@ -24,11 +24,12 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   }),
 }));
 
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }), usePathname: () => "/ui/alerts" }));
 
 vi.mock("@/components/networking", () => ({
   serverRootPath: "",
   teamInfoCall: vi.fn(),
+  teamListCall: vi.fn().mockResolvedValue([]),
   teamMemberDeleteCall: vi.fn(),
   teamMemberAddCall: vi.fn(),
   teamMemberUpdateCall: vi.fn(),
@@ -429,6 +430,70 @@ describe("TeamInfoView - member budget reset prompt", () => {
     vi.clearAllMocks();
   });
 
+  it.each([
+    ["members", "Members", true],
+    ["member-permissions", "Member Permissions", true],
+    ["settings", "Settings", true],
+    ["settings", "Settings", false],
+  ])("opens %s only when loaded team permissions allow it (%s, %s)", async (tab, label, allowed) => {
+    const response = Promise.withResolvers<TeamData>();
+    vi.mocked(networking.teamInfoCall).mockReturnValue(response.promise);
+    renderWithProviders(<TeamInfoView {...props} is_team_admin={false} is_proxy_admin={false} />, {
+      searchParams: { detail_tab: tab },
+    });
+
+    expect(screen.queryByRole("tab", { name: label })).not.toBeInTheDocument();
+    await waitFor(() => expect(networking.teamInfoCall).toHaveBeenCalled());
+    response.resolve(
+      createMockTeamData({
+        caller_edit_access: allowed ? { kind: "team_admin", editable_fields: [] } : { kind: "none" },
+      }) as TeamData,
+    );
+
+    expect(await screen.findByRole("tab", { name: allowed ? label : "Overview" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    if (!allowed) expect(screen.queryByRole("tab", { name: label })).not.toBeInTheDocument();
+  });
+
+  it("keeps a team's key visible while switching its tabs and returning to the key list", async () => {
+    const user = userEvent.setup({ delay: null });
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData() as TeamData);
+    mockUseKeys.mockReturnValue({
+      data: {
+        keys: [
+          {
+            token: "example-key",
+            token_id: "example-key",
+            key_alias: "Research agent",
+            team_id: "123",
+            models: [],
+            metadata: {},
+            spend: 0,
+            max_budget: 100,
+          } as KeyResponse,
+        ],
+        total_count: 1,
+        current_page: 1,
+        total_pages: 1,
+      },
+      isPending: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as ReturnType<typeof useKeys>);
+    renderWithProviders(<TeamInfoView {...props} />, { searchParams: { detail_tab: "virtual-keys" } });
+
+    await user.click(await screen.findByRole("button", { name: "example-key" }));
+    expect(await screen.findByRole("button", { name: "Back to Keys" })).toBeInTheDocument();
+    const keyPanel = screen.getByRole("tabpanel", { name: "Virtual Keys" });
+    await user.click(within(keyPanel).getByRole("tab", { name: "Settings" }));
+    expect(screen.getByRole("tab", { name: "Virtual Keys" })).toHaveAttribute("aria-selected", "true");
+    expect(within(keyPanel).getByRole("tab", { name: "Settings" })).toHaveAttribute("aria-selected", "true");
+    await user.click(screen.getByRole("button", { name: "Back to Keys" }));
+    expect(await screen.findByRole("button", { name: "example-key" })).toBeInTheDocument();
+  });
+
   it("holds the save behind the prompt when the default changes while a member has a custom budget", async () => {
     const user = userEvent.setup({ delay: null });
     const input = await openEditorWithCustomMembers(user);
@@ -817,7 +882,7 @@ describe("TeamInfoView - member budget reset prompt", () => {
   });
 });
 
-describe("TeamInfoView - model rate limit picker", () => {
+describe("TeamInfoView - model settings", () => {
   const props = {
     teamId: "123",
     onUpdate: vi.fn(),
@@ -832,8 +897,78 @@ describe("TeamInfoView - model rate limit picker", () => {
     seedDefaultMocks();
   });
 
+  it("submits the prompt storage restriction in team metadata", async () => {
+    const user = userEvent.setup({ delay: null });
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData({ models: [] }));
+    renderWithProviders(<TeamInfoView {...props} userModels={["gpt-4"]} />);
+    await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    fireEvent.click(screen.getByRole("switch", { name: "Store prompts in spend logs" }));
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalled());
+    expect(vi.mocked(networking.teamUpdateCall).mock.calls[0][1]).toEqual(
+      expect.objectContaining({ metadata: expect.objectContaining({ store_prompts_in_spend_logs: false }) }),
+    );
+  });
+
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  it.each([
+    { name: "unrestricted", models: [], organizationId: null },
+    { name: "explicit all models", models: ["all-proxy-models"], organizationId: null },
+    { name: "access groups only", models: ["no-default-models"], organizationId: null },
+    { name: "retained explicit models", models: ["retired-model", "openai/*"], organizationId: null },
+    { name: "unrestricted within an organization", models: [], organizationId: "org-1" },
+  ])("preserves $name model grants when saving only a budget", async ({ models, organizationId }) => {
+    const user = userEvent.setup({ delay: null });
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({ models, organization_id: organizationId }),
+    );
+    mockUseTeam.mockReturnValue({
+      data: { team_id: "123", organization_models: organizationId ? ["gpt-4"] : undefined },
+      isLoading: false,
+    } as unknown as ReturnType<typeof useTeam>);
+
+    renderWithProviders(<TeamInfoView {...props} userModels={["gpt-4"]} />);
+    await user.click(await screen.findByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    if (models.length === 0) {
+      expect(await screen.findByLabelText("All Proxy Models")).toBeInTheDocument();
+    }
+    fireEvent.change(await screen.findByLabelText("Max Budget (USD)"), { target: { value: "100" } });
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalledTimes(1));
+    const payload = vi.mocked(networking.teamUpdateCall).mock.calls[0][1];
+    expect(payload).toMatchObject({ team_id: "123", max_budget: 100 });
+    expect(payload).not.toHaveProperty("models");
+  });
+
+  it("discards a cancelled model clear but saves an intentional clear of unrestricted access", async () => {
+    const user = userEvent.setup({ delay: null });
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData({ models: [] }));
+
+    renderWithProviders(<TeamInfoView {...props} userModels={["gpt-4"]} />);
+    await user.click(await screen.findByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await user.click(within(await screen.findByLabelText("All Proxy Models")).getByRole("button"));
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    expect(await screen.findByLabelText("All Proxy Models")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Max Budget (USD)"), { target: { value: "100" } });
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(networking.teamUpdateCall).mock.calls[0][1]).not.toHaveProperty("models");
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await user.click(within(await screen.findByLabelText("All Proxy Models")).getByRole("button"));
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(networking.teamUpdateCall).mock.calls[1][1].models).toEqual(["no-default-models"]);
   });
 
   it("offers access-group models, not no-default-models, in the model rate limit picker", async () => {
