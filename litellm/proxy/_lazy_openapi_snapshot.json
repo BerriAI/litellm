@@ -1150,6 +1150,13 @@
               "title": "Access Vector Store Ids",
               "type": "array"
             },
+            "access_vector_stores": {
+              "items": {
+                "$ref": "#/components/schemas/AccessGroupResource"
+              },
+              "title": "Access Vector Stores",
+              "type": "array"
+            },
             "assigned_key_ids": {
               "items": {
                 "type": "string"
@@ -1249,6 +1256,7 @@
             "assigned_key_ids",
             "access_mcp_servers",
             "access_agents",
+            "access_vector_stores",
             "assigned_teams",
             "assigned_keys",
             "created_at",

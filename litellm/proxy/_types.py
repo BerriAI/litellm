@@ -4488,6 +4488,7 @@ class TeamAccessGroupModelGrant(LiteLLMPydanticObjectBase):
     mcp_server_ids: tuple[str, ...] = ()
     agent_ids: tuple[str, ...] = ()
     skill_names: tuple[str, ...] = ()
+    vector_store_ids: tuple[str, ...] = ()
 
 
 class TeamInfoMember(Member):
@@ -4527,6 +4528,7 @@ class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
     access_group_mcp_server_ids: list[str] | None = None
     access_group_agent_ids: list[str] | None = None
     access_group_skill_names: tuple[str, ...] | None = None
+    access_group_vector_store_ids: tuple[str, ...] | None = None
     # Listed group ids with no row; skill grants are suspended while this is non-empty.
     unresolved_access_group_ids: tuple[str, ...] | None = None
     access_group_details: tuple[TeamAccessGroupModelGrant, ...] | None = None
