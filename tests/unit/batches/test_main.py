@@ -1204,3 +1204,28 @@ async def test_delete_batch_output_file(respx_mock: respx.MockRouter, monkeypatc
     assert delete_route.call_count == 1
     assert delete_response.id == "file-output123"
     assert delete_response.deleted is True
+
+
+# =========================================================================== #
+# gemini - a provider-config provider, like mistral, so it requires `model`
+# =========================================================================== #
+
+
+def test_create__gemini_routes_to_base_http_handler_with_gemini_config(seams):
+    result = bm.create_batch(**CREATE_KW, custom_llm_provider="gemini", model="gemini/gemini-3.8-flash")
+
+    assert result is seams.base_http.create_batch.return_value
+    _assert_only(seams.base_http.create_batch, seams, "create_batch")
+    forwarded = seams.base_http.create_batch.call_args.kwargs
+    assert type(forwarded["provider_config"]).__name__ == "GeminiBatchesConfig"
+    assert forwarded["model"] == "gemini-3.8-flash"
+
+
+def test_retrieve__gemini_routes_to_base_http_handler_with_gemini_config(seams):
+    result = bm.retrieve_batch(batch_id="la6", custom_llm_provider="gemini", model="gemini/gemini-3.8-flash")
+
+    assert result is seams.base_http.retrieve_batch.return_value
+    _assert_only(seams.base_http.retrieve_batch, seams, "retrieve_batch")
+    forwarded = seams.base_http.retrieve_batch.call_args.kwargs
+    assert type(forwarded["provider_config"]).__name__ == "GeminiBatchesConfig"
+    assert forwarded["batch_id"] == "la6"
