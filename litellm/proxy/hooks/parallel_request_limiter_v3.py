@@ -615,6 +615,7 @@ class RequestRateLimiterStash:
     batch_enqueued_reservation: BatchEnqueuedTokenReservation | None = None
     batch_tpd_refund_ops: tuple[ReservationOperation, ...] = ()
     borrowing_team_model_limit: RateLimitDescriptor | None = None
+    priority_class_share: RateLimitDescriptor | None = None
     reservation_released: bool = False
     io_reservation_released: bool = False
     tpm_limited_tags: frozenset[str] = field(default_factory=frozenset)
