@@ -1743,7 +1743,6 @@ def test_text_completion_pre_call_denial_returns_text_completion_without_upstrea
 def test_text_completion_pre_call_denial_streams_text_completion_without_upstream(
     gateway: Gateway, tmp_path: Path
 ) -> None:
-    pytest.skip("BUG: a streamed /v1/completions pre_call denial sends one frame with no text and no [DONE]")
     identity: Final = "guardrail" + uuid.uuid4().hex
     config: Final = _responses_denial_config(tmp_path, identity)
     with (
