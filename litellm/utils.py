@@ -5062,7 +5062,7 @@ def get_optional_params_embeddings(
     if custom_llm_provider in EMBEDDING_PROVIDERS_WITH_NATIVE_HANDLERS and "extra_body" in final_params:
         extra_body: Final = final_params["extra_body"]
         del final_params["extra_body"]
-        return {**final_params, **(extra_body if isinstance(extra_body, dict) else {})}
+        return {**(extra_body if isinstance(extra_body, dict) else {}), **final_params}
 
     if "extra_body" in final_params and not final_params["extra_body"]:
         final_params.pop("extra_body", None)

@@ -2192,7 +2192,7 @@ def test_bedrock_nova_embedding_sends_extra_body_fields_inside_single_embedding_
     assert (params["embeddingPurpose"], params["embeddingDimension"]) == ("GENERIC_RETRIEVAL", 1024)
 
 
-def test_bedrock_embedding_extra_body_wins_over_the_mapped_openai_param(respx_mock: respx.MockRouter) -> None:
+def test_bedrock_embedding_mapped_openai_param_wins_over_extra_body(respx_mock: respx.MockRouter) -> None:
     route = respx_mock.post(
         "https://bedrock-runtime.us-east-1.amazonaws.com/model/amazon.titan-embed-text-v2:0/invoke"
     ).mock(return_value=httpx.Response(200, json=titan_embedding_response))
@@ -2206,4 +2206,4 @@ def test_bedrock_embedding_extra_body_wins_over_the_mapped_openai_param(respx_mo
         extra_body={"dimensions": 512},
     )
 
-    assert json.loads(route.calls.last.request.read())["dimensions"] == 512
+    assert json.loads(route.calls.last.request.read())["dimensions"] == 256

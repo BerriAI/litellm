@@ -1,9 +1,7 @@
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any
 
 import httpx
-from pydantic import TypeAdapter
 
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
@@ -16,17 +14,6 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
-
-_STR_KEYED_PARAMS: Final = TypeAdapter(dict[str, object])
-
-
-def merge_extra_body(optional_params: Mapping[str, object]) -> dict[str, object]:
-    """Lift ``extra_body`` fields to the top level, extra_body winning, as the OpenAI SDK does with its own body."""
-    extra_body: Final = optional_params.get("extra_body")
-    if not isinstance(extra_body, Mapping):
-        return dict(optional_params)
-    top_level: Final = {k: v for k, v in optional_params.items() if k != "extra_body"}
-    return {**top_level, **_STR_KEYED_PARAMS.validate_python(extra_body)}
 
 
 class BaseEmbeddingConfig(BaseConfig, ABC):
