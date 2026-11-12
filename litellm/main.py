@@ -5527,6 +5527,39 @@ def _responses_bridge_optional_params(
     return {**optional_params, "reasoning_effort": {"effort": kept_effort, "summary": summary_alias}}
 
 
+def _chat_param_the_responses_api_lacks(optional_params: Mapping[str, object]) -> str | None:
+    n: Final = optional_params.get("n")
+    if isinstance(n, int) and n > 1:
+        return "n"
+    return "seed" if optional_params.get("seed") is not None else None
+
+
+def _raise_if_base_model_bridge_would_drop_a_param(
+    optional_params: Mapping[str, object],
+    *,
+    custom_llm_provider: str,
+    model: str,
+    base_model: str | None,
+    drop_params: bool,
+) -> None:
+    if (
+        drop_params
+        or custom_llm_provider != LlmProviders.AZURE_AI.value
+        or litellm.AzureAIStudioConfig.gpt_5_base_model(model, base_model) is None
+    ):
+        return
+    param: Final = _chat_param_the_responses_api_lacks(optional_params)
+    if param is None:
+        return
+    raise litellm.UnsupportedParamsError(
+        message=f"{custom_llm_provider}/{model} goes to the Responses API because its base_model {base_model} is a "
+        f"gpt-5 model, and the Responses API has no `{param}` field. "
+        "To drop it, set `litellm.drop_params=True` or pass `drop_params=True`.",
+        model=model,
+        llm_provider=custom_llm_provider,
+    )
+
+
 def _complete_databricks_agent(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     from litellm.llms.databricks.agent.transformation import DatabricksAgentConfig
 
@@ -6396,6 +6429,13 @@ def completion(
         if responses_api_model_info.get("mode") == "responses" and not skip_responses_api_bridge:
             from litellm.completion_extras import responses_api_bridge
 
+            _raise_if_base_model_bridge_would_drop_a_param(
+                optional_params,
+                custom_llm_provider=custom_llm_provider,
+                model=model,
+                base_model=deployment_base_model,
+                drop_params=drop_unsupported_reasoning,
+            )
             optional_params, rs_val = strip_reasoning_summary_aliases_from_optional_params(optional_params)
             bridge_optional_params: Final = _responses_bridge_optional_params(
                 optional_params,

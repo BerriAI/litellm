@@ -11869,3 +11869,85 @@ def test_per_call_custom_prices_keep_the_regional_and_speed_multipliers(
     )
 
     assert response._hidden_params["response_cost"] == pytest.approx((1000 * 2e-06 + 1000 * 4e-06) * multiplier)
+
+
+_FOUNDRY_RESPONSES_API_BASE: Final = "https://myproject.services.ai.azure.com"
+
+
+def _bridged_foundry_response_cost(base_model: str) -> float:
+    with respx.mock(assert_all_called=True) as foundry:
+        foundry.post(f"{_FOUNDRY_RESPONSES_API_BASE}/openai/v1/responses").respond(
+            json={
+                "id": "resp_foundry",
+                "object": "response",
+                "created_at": 1789852145,
+                "status": "completed",
+                "model": "qa-prod-reasoner",
+                "output": [
+                    {
+                        "id": "fc_1",
+                        "type": "function_call",
+                        "status": "completed",
+                        "arguments": '{"city":"Paris"}',
+                        "call_id": "call_1",
+                        "name": "get_weather",
+                    }
+                ],
+                "usage": {"input_tokens": 1000, "output_tokens": 500, "total_tokens": 1500},
+            }
+        )
+        response: Final = litellm.completion(
+            model="azure_ai/qa-prod-reasoner",
+            messages=[{"role": "user", "content": "What is the weather in Paris? Use the tool."}],
+            tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+            reasoning_effort="high",
+            api_base=_FOUNDRY_RESPONSES_API_BASE,
+            api_key="fake-foundry-key",
+            model_info={"base_model": base_model},
+        )
+    response_cost: Final = response._hidden_params["response_cost"]
+    assert isinstance(response_cost, float)
+    return response_cost
+
+
+def test_a_nested_base_model_prices_a_bridged_foundry_request_like_the_plain_form(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    nested_cost: Final = _bridged_foundry_response_cost("azure_ai/openai/gpt-5.6-terra")
+
+    assert nested_cost > 0
+    assert nested_cost == pytest.approx(_bridged_foundry_response_cost("azure_ai/gpt-5.6-terra"))
+
+
+def test_a_nested_base_model_with_its_own_cost_map_row_keeps_that_rows_price(monkeypatch: pytest.MonkeyPatch) -> None:
+    input_rate: Final = 1e-06
+    output_rate: Final = 2e-06
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "azure_ai/openai/lit-nested-row",
+        {
+            "litellm_provider": "azure_ai",
+            "mode": "chat",
+            "input_cost_per_token": input_rate,
+            "output_cost_per_token": output_rate,
+        },
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "lit-nested-row",
+        {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 5e-06, "output_cost_per_token": 7e-06},
+    )
+    publish(litellm.model_cost)
+
+    cost: Final = completion_cost(
+        completion_response=ModelResponse(
+            model="qa-prod-reasoner", usage=Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+        ),
+        model="azure_ai/qa-prod-reasoner",
+        custom_llm_provider="azure_ai",
+        base_model="azure_ai/openai/lit-nested-row",
+    )
+
+    assert cost == pytest.approx(1000 * input_rate + 500 * output_rate)

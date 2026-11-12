@@ -1078,7 +1078,11 @@ def select_model_name_for_cost_calc(
             return_model = model
 
     elif base_model is not None or bedrock_pricing_model is not None:
-        return_model = base_model if base_model is not None else bedrock_pricing_model
+        return_model = (
+            _base_model_without_nested_provider(base_model, custom_llm_provider)
+            if base_model is not None
+            else bedrock_pricing_model
+        )
 
     elif provider_response_model is not None:
         return _served_or_priced_requested_model(
@@ -1125,6 +1129,20 @@ def _resolves_to_rates(model: str, custom_llm_provider: str | None) -> bool:
     return key is not None and _cost_map_entry_prices_anything(
         declared_cost_map_pricing(key, model, custom_llm_provider)
     )
+
+
+def _base_model_without_nested_provider(base_model: str, custom_llm_provider: str | None) -> str:
+    provider, _, rest = base_model.partition("/")
+    nested_provider, _, name = rest.partition("/")
+    if (
+        provider not in LlmProvidersSet
+        or nested_provider not in LlmProvidersSet
+        or not name
+        or _resolves_to_rates(base_model, custom_llm_provider)
+    ):
+        return base_model
+    unnested: Final = f"{provider}/{name}"
+    return unnested if _resolves_to_rates(unnested, custom_llm_provider) else base_model
 
 
 def _served_or_priced_requested_model(
