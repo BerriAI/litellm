@@ -55,6 +55,7 @@ def app(table: MagicMock, history_query: AsyncMock) -> FastAPI:
     app.include_router(router)
     prisma: Final = MagicMock()
     prisma.writer_db.litellm_alert = table
+    prisma.writer_db.litellm_config.find_unique = AsyncMock(return_value=None)
     prisma.writer_db.tx.return_value.__aenter__.return_value.query_raw = history_query
     app.dependency_overrides[get_database] = lambda: Database(prisma, native_database())
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
@@ -125,6 +126,7 @@ def test_monitoring_only_accepts_a_boolean_opt_out(
 
 def test_config_opt_out_cannot_be_enabled_from_the_api(app: FastAPI) -> None:
     prisma: Final = MagicMock()
+    prisma.writer_db.litellm_config.find_unique = AsyncMock(return_value=None)
     transaction: Final = prisma.writer_db.tx.return_value.__aenter__.return_value
     transaction.query_raw = AsyncMock(return_value=[{"enabled": True, "alerts_used": 0}])
     transaction.execute_raw = AsyncMock()
@@ -134,7 +136,13 @@ def test_config_opt_out_cannot_be_enabled_from_the_api(app: FastAPI) -> None:
     with TestClient(app) as client:
         status: Final = client.get("/alerts/monitoring")
         response: Final = client.patch("/alerts/monitoring", json={"enabled": True})
-    assert status.json() == {"enabled": False, "alerts_used": 0, "alert_limit": 5, "disabled_by_config": True}
+    assert status.json() == {
+        "enabled": False,
+        "alerts_used": 0,
+        "alert_limit": 5,
+        "disabled_by_config": True,
+        "model_deprecations_enabled": True,
+    }
     assert response.status_code == 409, response.text
     transaction.execute_raw.assert_not_awaited()
 

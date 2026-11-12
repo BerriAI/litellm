@@ -5938,18 +5938,18 @@
           "description": "Add your SMTP settings and public gateway URL in Email Settings. Send a test email to verify delivery."
         },
         "enable": {
-          "title": "Enable model deprecation emails",
-          "description": "In Email events, turn on Model Deprecations and save. This is off by default."
+          "title": "Choose your email alerts",
+          "description": "In Email events, enable Model Deprecations, Performance Alerts, or both, then save. Both are off by default."
         },
         "reminders": {
-          "title": "Owners get two reminders",
-          "description": "Affected key owners and team admins receive a reminder 30 days before retirement, and one final reminder 1 day before. Recipients are based on actual usage in the last 30 days. Dates are checked in UTC."
+          "title": "Know what gets sent",
+          "description": "Model deprecations notify affected key owners and team admins 30 days and 1 day before retirement. Performance alerts send gateway admins one daily summary when there are new findings, with up to five alerts and a link to the rest."
         }
       },
-      "summary": "Give affected owners time to migrate. Email reminders at 30 days and 1 day.",
+      "summary": "Get model retirement reminders and daily performance summaries by email.",
       "trigger": "Set up email reminders",
-      "title": "Set up model deprecation emails",
-      "description": "Help key owners and team admins act before a provider retires a model. Only their affected usage is included.",
+      "title": "Set up alert emails",
+      "description": "Choose which alerts to send through your existing email connection.",
       "openSettings": "Open Email Settings"
     },
     "migrationDetail": {
@@ -6017,9 +6017,18 @@
       "more": "+{{hidden}} more"
     },
     "monitoring": {
+      "manage": "Manage alerts",
+      "description": "These settings apply to everyone using this gateway.",
+      "deprecations": "Model deprecations",
+      "deprecationsDescription": "Show retirement alerts and send configured email and Slack reminders.",
+      "adminOnly": "Only gateway admins can change these settings.",
+      "notifications": "Opt in to Performance Alerts in email or Slack settings to receive a daily summary of new findings. Email summaries go to gateway admins.",
+      "connections": "Manage email and Slack connections",
+      "freeNote": "Model deprecation alerts are unlimited. Performance monitoring includes 5 free alerts, then requires Enterprise.",
+      "enterpriseNote": "Unlimited model deprecation and performance alerts with Enterprise.",
       "title": "Performance monitoring",
       "loading": "Loading monitoring settings…",
-      "allowance": "{{used}} of {{limit}} free alerts used.",
+      "allowance": "{{used}} of {{limit}} free alerts generated.",
       "enterprise": "On with Enterprise.",
       "off": "Off. Saved alerts remain available.",
       "exhausted": "You’ve used all 5 free alerts. New performance alerts are paused.",
@@ -6518,7 +6527,8 @@
         "dailyReports": "Weekly/Monthly Spend Reports",
         "outageAlerts": "Outage Alerts",
         "regionOutageAlerts": "Region Outage Alerts",
-        "modelDeprecationWarnings": "Model Deprecation Warnings"
+        "modelDeprecationWarnings": "Model Deprecation Warnings",
+        "performanceAlerts": "Performance Alerts"
       },
       "enterpriseFeature": "✨ Enterprise Feature",
       "saveChanges": "Save Changes",
@@ -6625,6 +6635,7 @@
       "description": "Select which events should trigger email notifications.",
       "descriptions": {
         "modelDeprecations": "Email affected key owners and team admins 30 days and 1 day before model deprecation. Uses requests from the last 30 days. Off by default.",
+        "performanceAlerts": "Email gateway admins a daily summary when there are new performance alerts. Shows up to five alerts with a link to see all.",
         "virtualKeyCreated": "An email will be sent to the user when a new virtual key is created with their user ID",
         "newUserInvitation": "An email will be sent to the email address of the user when a new user is created",
         "generic": "Receive an email notification when {{event}}"

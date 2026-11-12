@@ -1030,7 +1030,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Read performance monitoring settings
+         * Read alert monitoring settings
          * @description Read the gateway's opt-out setting and free allowance. Requires a gateway admin or view-only admin.
          */
         get: operations["get_monitoring_alerts_monitoring_get"];
@@ -1040,7 +1040,7 @@ export interface paths {
         options?: never;
         head?: never;
         /**
-         * Enable or disable performance monitoring
+         * Enable or disable alert monitoring
          * @description Change monitoring for every worker using this database. Only gateway admins can write. Keeps saved alerts.
          */
         patch: operations["update_monitoring_alerts_monitoring_patch"];
@@ -27339,6 +27339,12 @@ export interface components {
              * @description Whether performance monitoring is enabled. Defaults to true.
              */
             enabled: boolean;
+            /**
+             * Model Deprecations Enabled
+             * @description Whether model deprecation alerts are enabled.
+             * @default true
+             */
+            model_deprecations_enabled: boolean;
         };
         /** AlertMonitoringUpdate */
         AlertMonitoringUpdate: {
@@ -27353,7 +27359,7 @@ export interface components {
          * @description Enum for alert types and management event types
          * @enum {string}
          */
-        AlertType: "llm_exceptions" | "llm_too_slow" | "llm_requests_hanging" | "budget_alerts" | "spend_reports" | "failed_tracking_spend" | "user_spend_thresholds" | "user_spend_anomalies" | "db_exceptions" | "daily_reports" | "cooldown_deployment" | "new_model_added" | "model_deprecation_warnings" | "outage_alerts" | "region_outage_alerts" | "fallback_reports" | "new_virtual_key_created" | "virtual_key_updated" | "virtual_key_deleted" | "new_team_created" | "team_updated" | "team_deleted" | "new_internal_user_created" | "internal_user_updated" | "internal_user_deleted" | "mcp_tool_description_blocked" | "mcp_pinned_tools_changed";
+        AlertType: "llm_exceptions" | "llm_too_slow" | "llm_requests_hanging" | "budget_alerts" | "spend_reports" | "failed_tracking_spend" | "user_spend_thresholds" | "user_spend_anomalies" | "db_exceptions" | "daily_reports" | "cooldown_deployment" | "new_model_added" | "model_deprecation_warnings" | "performance_alerts" | "outage_alerts" | "region_outage_alerts" | "fallback_reports" | "new_virtual_key_created" | "virtual_key_updated" | "virtual_key_deleted" | "new_team_created" | "team_updated" | "team_deleted" | "new_internal_user_created" | "internal_user_updated" | "internal_user_deleted" | "mcp_tool_description_blocked" | "mcp_pinned_tools_changed";
         /** AlertUpdate */
         AlertUpdate: {
             /**
@@ -33628,7 +33634,7 @@ export interface components {
          * EmailEvent
          * @enum {string}
          */
-        EmailEvent: "Model Deprecations" | "Virtual Key Created" | "New User Invitation" | "Virtual Key Rotated" | "Soft Budget Crossed" | "Max Budget Alert";
+        EmailEvent: "Model Deprecations" | "Performance Alerts" | "Virtual Key Created" | "New User Invitation" | "Virtual Key Rotated" | "Soft Budget Crossed" | "Max Budget Alert";
         /** EmailEventSettings */
         EmailEventSettings: {
             /** Enabled */
@@ -40206,6 +40212,14 @@ export interface components {
              * @description The model name visible to the team, when configured.
              */
             team_public_model_name?: string | null;
+        };
+        /** ModelDeprecationMonitoringUpdate */
+        ModelDeprecationMonitoringUpdate: {
+            /**
+             * Model Deprecations Enabled
+             * @description Enable or disable model deprecation alerts.
+             */
+            model_deprecations_enabled: boolean;
         };
         /** ModelDeprecationResponse */
         ModelDeprecationResponse: {
@@ -55063,7 +55077,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["AlertMonitoringUpdate"];
+                "application/json": components["schemas"]["AlertMonitoringUpdate"] | components["schemas"]["ModelDeprecationMonitoringUpdate"];
             };
         };
         responses: {
