@@ -2684,6 +2684,52 @@ async def test_a_late_failure_from_a_fallback_that_did_not_serve_is_charged_to_t
 
 
 @pytest.mark.asyncio
+async def test_a_served_fallbacks_hold_is_not_refunded_again_under_the_name_the_request_used(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(
+        monkeypatch, borrows=True, saturation_threshold=0.0, model_group_alias={"alias-model": "other-model"}
+    )
+    key: Final = _team_key(team_limits={"model_tpm_limit": {"shared-model": 100, "other-model": 100}})
+    await _check(handler, key, saturation=1.0, data=_fallback_prompt(30))
+    assert await handler.async_fallback_target_allowed(key, "alias-model", _fallback_prompt(30)) is True
+    await _settle_tokens(handler, 7, model_group="other-model")
+    assert await _team_tokens_remaining(handler, key, "other-model") == 93
+    await handler.async_log_failure_event(
+        kwargs={"litellm_params": {"metadata": {"model_group": "alias-model"}}},
+        response_obj=Exception("late"),
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    assert await _team_tokens_remaining(handler, key, "other-model") == 93
+
+
+@pytest.mark.asyncio
+async def test_a_steered_requests_images_are_counted_for_the_model_that_serves_it(monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
+
+    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.0)
+    asked: Final = []  # mutable-ok: records the models whose image cost was looked up
+
+    def resolver(model: str, team_id: str | None) -> tuple[str, ...]:
+        asked.append(model)
+        return (model,)
+
+    handler.v3_limiter = PROXY_MaxParallelRequestsHandler_v3(
+        handler.internal_usage_cache, media_model_resolver=resolver
+    )
+    key: Final = _team_key(team_limits={"model_tpm_limit": {"other-model": 10000}})
+    pixel: Final = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+    steered: Final[dict[str, object]] = {
+        "model": "shared-model",
+        "messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": pixel}}]}],
+        "max_tokens": 5,
+    }
+    await _check(handler, key, saturation=1.0, model="other-model", data=steered)
+    assert asked and set(asked) == {"other-model"}
+
+
+@pytest.mark.asyncio
 async def test_a_failed_attempt_that_recorded_usage_is_charged_that_usage_instead_of_refunded(
     monkeypatch: pytest.MonkeyPatch,
 ):

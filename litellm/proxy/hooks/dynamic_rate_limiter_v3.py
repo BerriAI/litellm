@@ -1729,10 +1729,13 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                 stash, model_group, total_tokens, self.v3_limiter.window_size
             )
             if stash is not None:
+                served: Final = (
+                    stash.borrowing_team_model_fallback_limits.get(model_group) if model_group is not None else None
+                )
                 stash.borrowing_team_model_reserved_tokens = 0
                 stash.borrowing_team_model_reserved_window = None
                 stash.borrowing_team_model_fallback_limits = MappingProxyType(
-                    {k: h for k, h in stash.borrowing_team_model_fallback_limits.items() if k != model_group}
+                    {k: h for k, h in stash.borrowing_team_model_fallback_limits.items() if h is not served}
                 )
             if not model_group:
                 if team_model_tokens:
