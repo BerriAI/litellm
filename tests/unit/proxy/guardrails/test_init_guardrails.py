@@ -489,13 +489,22 @@ def test_init_guardrails_v2_stops_boot_when_a_custom_guardrail_path_names_a_non_
         init_guardrails_v2(all_guardrails=all_guardrails, config_file_path=str(tmp_path / "config.yaml"))
 
 
-def test_initialize_guardrail_builds_a_custom_guardrail_from_a_factory_function(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "factory_source",
+    [
+        "def make_guardrail(**kwargs):\n    return MyGuardrail(**kwargs)\n",
+        "class GuardrailFactory:\n"
+        "    def __call__(self, **kwargs):\n"
+        "        return MyGuardrail(**kwargs)\n\n\n"
+        "make_guardrail = GuardrailFactory()\n",
+    ],
+    ids=["function", "callable_instance"],
+)
+def test_initialize_guardrail_builds_a_custom_guardrail_from_a_factory(tmp_path: Path, factory_source: str) -> None:
     (tmp_path / "custom_callbacks.py").write_text(
         "from litellm.integrations.custom_guardrail import CustomGuardrail\n\n\n"
         "class MyGuardrail(CustomGuardrail):\n"
-        "    pass\n\n\n"
-        "def make_guardrail(**kwargs):\n"
-        "    return MyGuardrail(**kwargs)\n"
+        "    pass\n\n\n" + factory_source
     )
     handler: Final = InMemoryGuardrailHandler()
 
