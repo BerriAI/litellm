@@ -444,6 +444,12 @@ pub enum RouterEvent {
         #[serde(serialize_with = "seconds")]
         cooldown: Duration,
     },
+    PodCooldownSet {
+        deployment_id: String,
+        pod: String,
+        #[serde(serialize_with = "seconds")]
+        cooldown: Duration,
+    },
     Retry {
         model_group: String,
         retry: u32,
@@ -808,6 +814,10 @@ mod tests {
     #[case::cooldown_set(
         RouterEvent::CooldownSet { deployment_id: "openai".to_owned(), cooldown: Duration::from_secs(30) },
         json!({"event": "CooldownSet", "deployment_id": "openai", "cooldown": 30.0})
+    )]
+    #[case::pod_cooldown_set(
+        RouterEvent::PodCooldownSet { deployment_id: "vllm".to_owned(), pod: "kubernetes_pod:vllm:8000:10.0.0.3".to_owned(), cooldown: Duration::from_secs(5) },
+        json!({"event": "PodCooldownSet", "deployment_id": "vllm", "pod": "kubernetes_pod:vllm:8000:10.0.0.3", "cooldown": 5.0})
     )]
     #[case::retry(
         RouterEvent::Retry { model_group: "gpt-4o".to_owned(), retry: 1, delay: Duration::ZERO },

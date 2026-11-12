@@ -102,7 +102,7 @@ pub fn should_retry(failure: &AttemptError, ctx: RetryContext) -> bool {
 }
 
 /// `ContentPolicyViolationError`'s classes, most specific first.
-pub(crate) fn content_policy_classes() -> Vec<std::sync::Arc<str>> {
+pub(crate) fn content_policy_classes() -> std::sync::Arc<[std::sync::Arc<str>]> {
     [
         "ContentPolicyViolationError",
         "BadRequestError",

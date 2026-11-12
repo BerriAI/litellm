@@ -293,7 +293,8 @@ impl Router {
                     Error::Attempt(failure) => {
                         if let Some(id) = failure
                             .failed_deployment_id
-                            .clone()
+                            .as_deref()
+                            .map(str::to_owned)
                             .or(failed.deployment_id)
                             && !inputs.failed_ids.contains(&id)
                         {

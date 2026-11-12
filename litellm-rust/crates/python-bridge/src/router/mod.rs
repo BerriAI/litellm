@@ -1352,7 +1352,7 @@ fn cache_outcome(op: CacheOp, outcome: Option<Bound<'_, PyAny>>) -> PyResult<Cac
 /// `{"ok": True, "total_tokens": int}` (an attempt's may add `"blocked": str`, `"deferred": bool`
 /// and `"tracks_usage": bool`) or `{"ok": False, "kind": str, "status": int | None,
 /// "retry_after": float | None, "num_retries": int | None, "detail": str | None,
-/// "outside_deployment": bool, "caller_scoped": bool, "status_absent": bool,
+/// "outside_deployment": bool, "caller_scoped": bool, "pod": str | None, "status_absent": bool,
 /// "uncounted_request": bool}`.
 pub(crate) fn attempt_outcome(outcome: &Bound<'_, PyDict>) -> PyResult<Result<u64, AttemptError>> {
     fn item<'py, T: FromPyObjectOwned<'py>>(
@@ -1383,7 +1383,7 @@ pub(crate) fn attempt_outcome(outcome: &Bound<'_, PyDict>) -> PyResult<Result<u6
     let mut failure = AttemptError::new(kind, item(outcome, "status")?);
     failure.retry_after = retry_after;
     failure.num_retries = item(outcome, "num_retries")?;
-    failure.failed_deployment_id = item(outcome, "failed_deployment_id")?;
+    failure.failed_deployment_id = item::<String>(outcome, "failed_deployment_id")?.map(Into::into);
     failure.detail = item::<String>(outcome, "detail")?.map(Into::into);
     failure.recorded = item::<bool>(outcome, "recorded")?.unwrap_or(false);
     failure.names_provider = item::<bool>(outcome, "llm_provider")?.unwrap_or(false);
@@ -1392,6 +1392,7 @@ pub(crate) fn attempt_outcome(outcome: &Bound<'_, PyDict>) -> PyResult<Result<u6
     failure.status_absent = item::<bool>(outcome, "status_absent")?.unwrap_or(false);
     failure.uncounted_request = item::<bool>(outcome, "uncounted_request")?.unwrap_or(false);
     failure.caller_scoped = item::<bool>(outcome, "caller_scoped")?.unwrap_or(false);
+    failure.pod = item::<String>(outcome, "pod")?.map(Into::into);
     failure.classes = item::<Vec<String>>(outcome, "classes")?
         .unwrap_or_default()
         .into_iter()
@@ -1658,6 +1659,16 @@ fn events_list(py: Python<'_>, events: Vec<RouterEvent>) -> PyResult<Bound<'_, P
             } => {
                 dict.set_item("kind", "cooldown_set")?;
                 dict.set_item("deployment_id", deployment_id)?;
+                dict.set_item("cooldown_time", cooldown.as_secs_f64())?;
+            }
+            RouterEvent::PodCooldownSet {
+                deployment_id,
+                pod,
+                cooldown,
+            } => {
+                dict.set_item("kind", "pod_cooldown_set")?;
+                dict.set_item("deployment_id", deployment_id)?;
+                dict.set_item("pod", pod)?;
                 dict.set_item("cooldown_time", cooldown.as_secs_f64())?;
             }
             RouterEvent::PickStarted { model } => {

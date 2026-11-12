@@ -995,6 +995,7 @@ impl Host for StepHost {
                 | RouterEvent::FallbackDone { .. }
                 | RouterEvent::Blocked { .. }
                 | RouterEvent::CooldownSet { .. }
+                | RouterEvent::PodCooldownSet { .. }
                 | RouterEvent::Selected { .. }
                 | RouterEvent::PickStarted { .. }
         ) {

@@ -1042,18 +1042,18 @@ impl Core {
             if retry == 0 {
                 self.log_retry(target, at, 0, &failed.error);
             }
-            let named = failure.failed_deployment_id.as_ref();
-            let failed_on = named.or(failed.deployment_id.as_ref());
+            let named = failure.failed_deployment_id.as_deref();
+            let failed_on = named.or(failed.deployment_id.as_deref());
             if let Some(id) = failed_on
-                && !inputs.failed_ids.contains(id)
+                && !inputs.failed_ids.iter().any(|failed_id| failed_id == id)
             {
-                inputs.failed_ids.push(id.clone());
+                inputs.failed_ids.push(id.to_owned());
             }
             if let (Some(status), Some(id)) = (failure.status, failed_on)
                 && !should_retry_status(status)
-                && !inputs.skipped_ids.contains(id)
+                && !inputs.skipped_ids.iter().any(|skipped_id| skipped_id == id)
             {
-                inputs.skipped_ids.push(id.clone());
+                inputs.skipped_ids.push(id.to_owned());
             }
             // An endpoint a deployment does not serve is retried on the others, until every
             // one refused (`_every_deployment_refused`).
@@ -1647,9 +1647,16 @@ impl Core {
             )
             .await
         {
-            Ok(Some(cooldown)) => self.host.observe(&RouterEvent::CooldownSet {
-                deployment_id: deployment.id.clone(),
-                cooldown,
+            Ok(Some(cooldown)) => self.host.observe(&match &failure.pod {
+                Some(pod) => RouterEvent::PodCooldownSet {
+                    deployment_id: deployment.id.clone(),
+                    pod: pod.to_string(),
+                    cooldown,
+                },
+                None => RouterEvent::CooldownSet {
+                    deployment_id: deployment.id.clone(),
+                    cooldown,
+                },
             }),
             Ok(None) => {}
             Err(error) => return Err(error),

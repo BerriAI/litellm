@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, TypeVar, 
 from pydantic import TypeAdapter
 
 from litellm._internal_context import service_target
-from litellm.constants import DEFAULT_COOLDOWN_TIME_SECONDS, HEALTH_CHECKS_TARGET
+from litellm.constants import DEFAULT_COOLDOWN_TIME_SECONDS, HEALTH_CHECKS_TARGET, KUBERNETES_POD_ROUTING_KEY
 from litellm.integrations.custom_guardrail import is_guardrail_intervention
 from litellm.litellm_core_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
@@ -234,6 +234,7 @@ from litellm.router_strategy.least_busy import (
 from litellm.router_utils.cooldown_handlers import get_cooldown_deployment_info, mark_deployment_selection_failure
 from litellm.router_utils.endpoint_eligibility import endpoint_for_call, selected_endpoint
 from litellm.router_utils.kubernetes_pod_discovery import (
+    KubernetesPod,
     KubernetesPodDiscovery,
     async_resolve_pods_after_bound,
     resolve_pods_after_bound,
@@ -4787,6 +4788,11 @@ class _Driver:
             if event.get("kind") == "cooldown_set":
                 self._cooldown_set(event)
                 continue
+            if event.get("kind") == "pod_cooldown_set":
+                self._core.cool_down_pod(
+                    event.get("deployment_id"), event.get("pod"), event.get("cooldown_time"), sync=self._plan.sync
+                )
+                continue
             if event.get("kind") == "selected":
                 self._selected(event)
                 self.close_route_phase(self._route_model)
@@ -5027,12 +5033,36 @@ class _Driver:
             **attempt_failure(error),
             "detail": detail,
             **exits,
+            **self._core.pod_scope(self._called_pod(deployment), sync=self._plan.sync),
             **({"outside_deployment": True} if request_scoped or _raised_before_provider(error) else {}),
             # `async_deployment_callback_on_failure` does not run for a sync call, and skips a batch retrieve.
             "uncounted_request": self._plan.sync
             or is_batch_retrieve_call_type(logged.get("call_type"))
             or _raised_before_provider(error),
         }
+
+    def _called_pod(self, deployment: Mapping[str, object]) -> KubernetesPod | None:
+        if KUBERNETES_POD_ROUTING_KEY not in deployment:
+            return None
+        return self._core.called_pod(
+            (as_str_mapping(deployment.get("model_info")) or {}).get("id"),
+            deployment.get("litellm_params"),
+            sync=self._plan.sync,
+        )
+
+    async def _count_pod_success(
+        self, served: Mapping[str, object], deployment: Mapping[str, object], call: "AttemptCall"
+    ) -> None:
+        pod: Final = None if served.get("deferred") else self._called_pod(deployment)
+        if pod is not None:
+            await self._core.count_pod_success(pod, self._core.outcome_callbacks(call.kwargs, sync=False))
+
+    def _count_pod_success_sync(
+        self, served: Mapping[str, object], deployment: Mapping[str, object], call: "AttemptCall"
+    ) -> None:
+        pod: Final = None if served.get("deferred") else self._called_pod(deployment)
+        if pod is not None:
+            self._core.count_pod_success_sync(pod, self._core.outcome_callbacks(call.kwargs, sync=True))
 
     def _records_blocked(
         self, failed: Mapping[str, object], call: "AttemptCall | None", error: BaseException, in_call: bool
@@ -5324,6 +5354,7 @@ class _Driver:
             reading_stream.report_first_chunk_failure(error)
             return {**failed, "recorded": True}
         served: Final = self._succeeded(call, response, call.host_op, stream)
+        await self._count_pod_success(served, deployment, call)
         # The session re-pin the Python core's success callback runs; a wrapped stream runs it when it ends.
         if not served.get("deferred") and self._core.outcome_callbacks(call.kwargs, sync=False).get("success", True):
             await self._core.repin_after_success(stream.logged(), response)
@@ -5375,7 +5406,9 @@ class _Driver:
         except Exception as error:  # noqa: BLE001  # see attempt
             failed: Final = self._failed(step, deployment, call, error)
             return {**failed, "recorded": not logs_failure and not self._records_blocked(failed, call, error, in_call)}
-        return self._succeeded(call, response, "", stream)
+        served: Final = self._succeeded(call, response, "", stream)
+        self._count_pod_success_sync(served, deployment, call)
+        return served
 
     async def select(self, step: Mapping[str, object]) -> object:
         request: Final = self._request

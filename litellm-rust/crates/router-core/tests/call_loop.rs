@@ -325,6 +325,35 @@ async fn a_rate_limit_cools_the_deployment_down(config: RouterConfig) {
 }
 
 #[rstest]
+#[tokio::test]
+async fn a_pod_rate_limit_cools_the_pod_and_keeps_the_deployment_up(config: RouterConfig) {
+    let pod = "kubernetes_pod:vllm:8000:10.0.0.3";
+    let mut pod_failure = AttemptError::new(FailureKind::RateLimit, Some(429));
+    pod_failure.pod = Some(pod.into());
+    let host = Arc::new(ScriptedHost::failing("primary", vec![pod_failure]));
+    let router = router(config, json!({}), host.clone());
+    let _ = router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap_err();
+    let cooled = router
+        .health()
+        .active_cooldowns(&["a1".to_owned(), "a2".to_owned()])
+        .await
+        .unwrap();
+    let pod_cooldowns: Vec<String> = host
+        .events
+        .lock()
+        .iter()
+        .filter_map(|event| match event {
+            RouterEvent::PodCooldownSet { pod, .. } => Some(pod.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!((cooled.len(), pod_cooldowns), (0, vec![pod.to_owned()]));
+}
+
+#[rstest]
 #[case::now(false, (Some(1.0), (10, 1)))]
 #[case::deferred(true, (None, (10, 1)))]
 #[tokio::test]

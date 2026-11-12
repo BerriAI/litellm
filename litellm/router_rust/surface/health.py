@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from litellm.router_rust.steps.callbacks import OptionalChecks
     from litellm.router_rust.surface.registry import HostRegistry
     from litellm.router_utils.cooldown_cache import CooldownCache
+    from litellm.router_utils.kubernetes_pod_discovery import KubernetesPod, KubernetesPodDiscovery
     from litellm.rust_bridge._native import (
         RouterCall,
         RouterCoreHandle,
@@ -154,6 +155,9 @@ class RustHealthCallbacks:
     def _sync_allowed_fails(self) -> None:
         raise NotImplementedError
 
+    def _pick_discovery(self, *, sync: bool) -> "KubernetesPodDiscovery | None":
+        raise NotImplementedError
+
     def _core_get_allowed_fails_from_policy(self, exception: Exception) -> int | None:
         """The router ``allowed_fails_policy``'s allowance for this exception, decided by router-core."""
         from litellm.router_rust.core import attempt_failure
@@ -161,14 +165,59 @@ class RustHealthCallbacks:
         return self._handle.allowed_fails_for(dict(attempt_failure(exception)))
 
     def _deployment_of(self, deployment_id: object) -> "Deployment | None":
-        # RustCore sets `_hosted` as an attribute in its constructor.
         hosted: Final[HostRegistry] = self.__dict__["_hosted"]  # pyright: ignore[reportAny]  # RustCore's own attribute
         return hosted._core_get_deployment(model_id=deployment_id) if isinstance(deployment_id, str) else None  # pyright: ignore[reportPrivateUsage]  # the host registry's id lookup
+
+    def called_pod(self, deployment_id: object, call_litellm_params: object, *, sync: bool) -> "KubernetesPod | None":
+        discovery: Final = self._pick_discovery(sync=sync)
+        if discovery is None or not isinstance(deployment_id, str):
+            return None
+        hosted: Final[HostRegistry] = self.__dict__["_hosted"]  # pyright: ignore[reportAny]  # RustCore's own attribute
+        return discovery.pod_for_call(hosted._core_get_model_info(id=deployment_id), call_litellm_params)  # pyright: ignore[reportPrivateUsage]  # the host registry's id lookup
+
+    def pod_scope(self, pod: "KubernetesPod | None", *, sync: bool) -> Mapping[str, str]:
+        discovery: Final = self._pick_discovery(sync=sync)
+        if pod is None or discovery is None or not discovery.has_other_live_pod(pod):
+            return {}
+        return {"pod": pod.counter_id}
+
+    def cool_down_pod(self, deployment_id: object, pod: object, seconds: object, *, sync: bool) -> None:
+        from litellm._logging import verbose_router_logger
+
+        discovery: Final = self._pick_discovery(sync=sync)
+        if discovery is None or not isinstance(pod, str) or not isinstance(seconds, float):
+            return
+        discovery.cool_down_pod(pod, seconds)
+        verbose_router_logger.info(
+            "Kubernetes pod %s is out of rotation for %ss, its deployment %s stays up", pod, seconds, deployment_id
+        )
+
+    def _pod_cooled(
+        self, done: Mapping[str, object], deployment_id: object, scope: Mapping[str, str], *, sync: bool
+    ) -> bool:
+        pod: Final = scope.get("pod")
+        if pod is None:
+            return False
+        if done.get("cooled"):
+            self.cool_down_pod(deployment_id, pod, done.get("cooldown_time"), sync=sync)
+        return True
+
+    async def count_pod_success(self, pod: "KubernetesPod | None", callbacks: Mapping[str, bool] | None = None) -> None:
+        if pod is not None:
+            _ = await self._drive_cache_steps(self._handle.count_success(pod.counter_id, callbacks))
+
+    def count_pod_success_sync(self, pod: "KubernetesPod | None", callbacks: Mapping[str, bool] | None = None) -> None:
+        if pod is not None:
+            _ = self._drive_sync_steps(self._handle.count_success(pod.counter_id, callbacks))
+
+    def _logged_pod_scope(self, kwargs: Mapping[str, object], *, sync: bool) -> Mapping[str, str]:
+        return self.pod_scope(
+            self.called_pod(_logged_deployment_id(kwargs), kwargs.get("litellm_params"), sync=sync), sync=sync
+        )
 
     def deployment_tracks_usage(self, deployment_id: object, model_group: object) -> bool:
         """``_cached_deployment_tracks_usage``. A deployment whose model is not mapped raises there,
         which ends Python's usage write, so it reads as not tracked."""
-        # RustCore sets `_hosted` as an attribute in its constructor.
         hosted: Final[HostRegistry] = self.__dict__["_hosted"]  # pyright: ignore[reportAny]  # RustCore's own attribute
         if not isinstance(deployment_id, str) or not isinstance(model_group, str):
             return False
@@ -342,16 +391,22 @@ class RustHealthCallbacks:
         if blocked is None or not isinstance(exception, Exception):
             return
         try:
-            call: Final = self._fallback_failure_call(kwargs, exception, blocked.model_call_details, generic)
-            if call is not None:
+            failed_deployment_id: Final[object] = getattr(exception, "failed_deployment_id", None)
+            scope: Final = self.pod_scope(
+                self.called_pod(failed_deployment_id, blocked.model_call_details.get("litellm_params"), sync=own_loop),
+                sync=own_loop,
+            )
+            call: Final = self._fallback_failure_call(kwargs, exception, blocked.model_call_details, generic, scope)
+            if call is None:
+                return
+            done: Final = self._drive_sync_steps(call)
+            if not self._pod_cooled(done, failed_deployment_id, scope, sync=own_loop):
                 _ = self.cooled_down(
-                    self._drive_sync_steps(call),
-                    getattr(exception, "failed_deployment_id", None),
+                    done,
+                    failed_deployment_id,
                     getattr(exception, "status_code", ""),
                     own_loop=own_loop,
-                    configured=_fallback_cooldown(
-                        self._deployment_of(getattr(exception, "failed_deployment_id", None))
-                    ),
+                    configured=_fallback_cooldown(self._deployment_of(failed_deployment_id)),
                     error=exception,
                 )
         except Exception as e:  # noqa: BLE001  # best effort, as the Python helper: it never breaks the fallback response
@@ -363,6 +418,7 @@ class RustHealthCallbacks:
         exception: Exception,
         model_call_details: Mapping[str, object],
         generic: bool,
+        pod_scope: Mapping[str, str],
     ) -> "RouterCall[_FailureReportSteps] | None":
         """The Rust call recording a failed hop, or None past the exits of
         ``_trigger_cooldown_for_failed_deployment``: another list than ``failure_exits``, checked per
@@ -401,6 +457,7 @@ class RustHealthCallbacks:
                 **attempt_failure(exception),
                 "status": failure_status(exception_status),
                 "caller_scoped": _is_per_user_provider_request(kwargs) or self.per_user_deployment(deployment_id),
+                **pod_scope,
             },
             deployment_cooldown=True,
             count_only=exception_status == "",
@@ -433,9 +490,10 @@ class RustHealthCallbacks:
         (``async_deployment_callback_on_failure``). No cooldown event: the stream logs its failure
         through ``dispatch_failure_handlers``, whose sync callbacks run in an executor thread, where
         ``set_cooldown_deployments`` has no loop to schedule one on."""
-        call: Final = self._failure_call(kwargs, counts_request=True, callbacks=callbacks)
+        scope: Final = self._logged_pod_scope(kwargs, sync=False)
+        call: Final = self._failure_call(kwargs, counts_request=True, callbacks=callbacks, pod_scope=scope)
         if call is not None:
-            _ = await self._drive_cache_steps(call)
+            _ = self._pod_cooled(await self._drive_cache_steps(call), _logged_deployment_id(kwargs), scope, sync=False)
 
     def report_stream_failure_sync(
         self, kwargs: Mapping[str, object], callbacks: Mapping[str, bool] | None = None
@@ -443,15 +501,17 @@ class RustHealthCallbacks:
         """``report_stream_failure`` for a sync stream: a sync call's failure callback counts no request.
         No cooldown event: the stream logs its failure in a ``threading.Thread`` of its own, which
         has no running loop whatever the consumer's thread has."""
-        call: Final = self._failure_call(kwargs, callbacks=callbacks)
+        scope: Final = self._logged_pod_scope(kwargs, sync=True)
+        call: Final = self._failure_call(kwargs, callbacks=callbacks, pod_scope=scope)
         if call is not None:
-            _ = self._drive_sync_steps(call)
+            _ = self._pod_cooled(self._drive_sync_steps(call), _logged_deployment_id(kwargs), scope, sync=True)
 
     def _failure_call(
         self,
         kwargs: Mapping[str, object],
         counts_request: bool = False,
         callbacks: Mapping[str, bool] | None = None,
+        pod_scope: Mapping[str, str] | None = None,
     ) -> "RouterCall[_FailureReportSteps] | None":
         """The Rust call recording a logged failure, or None when it records nothing: one the Python
         router does not hold against the deployment is still a request of the minute
@@ -474,7 +534,7 @@ class RustHealthCallbacks:
         described: Final[Mapping[str, object]] = (
             attempt_failure(exception) if isinstance(exception, BaseException) else {"ok": False, "kind": "APIError"}
         )
-        failure: Final = {**described, **exits, "status": failure_status(exception_status)}
+        failure: Final = {**described, **exits, "status": failure_status(exception_status), **(pod_scope or {})}
         metadata: Final[object] = core_helpers.get_litellm_metadata_from_kwargs(dict(kwargs))  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # an untyped helper's dict
         group: Final = (as_str_mapping(metadata) or {}).get("model_group")  # pyright: ignore[reportUnknownArgumentType]  # read as a mapping
         usage_model: Final = (as_str_mapping(metadata) or {}).get("deployment")  # pyright: ignore[reportUnknownArgumentType]  # see above
@@ -512,6 +572,7 @@ class RustHealthCallbacks:
         if target is None:
             return None
         key: Final = self._drive_sync_steps(self._handle.count_success(target[0], callbacks)).get("key")
+        self.count_pod_success_sync(self.called_pod(target[0], kwargs.get("litellm_params"), sync=True), callbacks)
         return key if isinstance(key, str) else None
 
     async def repin_after_success(self, kwargs: Mapping[str, object], completion_response: object) -> None:
@@ -581,6 +642,7 @@ class RustHealthCallbacks:
                 callbacks,
             )
         )
+        await self.count_pod_success(self.called_pod(target[0], kwargs.get("litellm_params"), sync=False), callbacks)
         key: Final = finished.get("key")
         return key if isinstance(key, str) else None
 

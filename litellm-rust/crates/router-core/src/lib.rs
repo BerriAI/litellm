@@ -521,7 +521,7 @@ impl Router {
         report: &FailureReport,
     ) -> Result<Option<std::time::Duration>, Error> {
         if !report.uncounted && !failure.outside_deployment {
-            self.core.health.count_failure(id).await?;
+            self.core.health.count_attempt_failure(id, failure).await?;
         }
         let snapshot = self.core.snapshot.load_full();
         let Some(deployment) = snapshot.registry.deployment(id) else {

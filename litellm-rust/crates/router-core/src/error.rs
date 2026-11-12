@@ -354,13 +354,13 @@ pub struct AttemptError {
     /// The deployment the exception itself names (`_deployment_ids_to_skip_on_retry` reads its
     /// `retry_skip_deployment_id`, then `failed_deployment_id`): an exception raised again keeps
     /// the id its first failure stamped, whichever deployment raised it now.
-    pub failed_deployment_id: Option<String>,
+    pub failed_deployment_id: Option<Arc<str>>,
     /// The provider's error text, kept only for the cooldown record Python writes
     /// (`exception_received`, masked past 50 characters).
     pub detail: Option<Arc<str>>,
     /// The exception's class names, most specific first (its `__mro__`), for the rules Python
     /// decides by `isinstance`. Empty when the host reports none; the kind then stands in.
-    pub classes: Vec<Arc<str>>,
+    pub classes: Arc<[Arc<str>]>,
     /// The host already recorded what this failure does to the deployment's health (a routing
     /// pre-call check's failure, which Python's attempt handles itself: a rate limit cools the
     /// deployment down, anything else records nothing), or no failure callback runs for it (it
@@ -381,6 +381,9 @@ pub struct AttemptError {
     /// One of `_should_run_cooldown_logic`'s per-caller exits holds (`_is_per_user_provider_request`
     /// or a per-user Copilot deployment): the failure is counted but never cools the deployment.
     pub caller_scoped: bool,
+    /// The Kubernetes pod the attempt ran on, set only while another pod of its service is in
+    /// rotation: the cooldown rules then judge and cool the pod, and the deployment stays up.
+    pub pod: Option<Arc<str>>,
     /// The exception has no `status_code` (Python's status `""`): `_is_cooldown_required` holds
     /// no cooldown for it, unlike a status the host could not read, which cools down as a 500.
     pub status_absent: bool,
@@ -399,12 +402,13 @@ impl AttemptError {
             num_retries: None,
             failed_deployment_id: None,
             detail: None,
-            classes: Vec::new(),
+            classes: Arc::default(),
             recorded: false,
             names_provider: false,
             agentic_followup: false,
             outside_deployment: false,
             caller_scoped: false,
+            pod: None,
             status_absent: false,
             uncounted_request: false,
             payload: None,

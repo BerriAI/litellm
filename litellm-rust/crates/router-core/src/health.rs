@@ -328,6 +328,18 @@ impl Health {
         Ok(())
     }
 
+    pub async fn count_attempt_failure(
+        &self,
+        id: &str,
+        failure: &AttemptError,
+    ) -> Result<(), Error> {
+        self.count_failure(id).await?;
+        match &failure.pod {
+            Some(pod) => self.count_failure(pod).await,
+            None => Ok(()),
+        }
+    }
+
     /// Cooldown duration precedence from `deployment_callback_on_failure`: the deployment's
     /// `cooldown_time`, then the provider's retry-after, then the router default.
     pub fn cooldown_duration(
@@ -393,7 +405,7 @@ impl Health {
         if failure.outside_deployment {
             return Ok(None);
         }
-        self.count_failure(&deployment.id).await?;
+        self.count_attempt_failure(&deployment.id, failure).await?;
         let cooldown = Self::cooldown_for_call(settings, deployment, call_cooldown, failure);
         self.cool_down_after(settings, deployment, shape, failure, cooldown)
             .await
@@ -418,8 +430,15 @@ impl Health {
         {
             return Ok(None);
         }
-        debug!(deployment_id = %deployment.id, cooldown_seconds = cooldown.as_secs_f64(), "cooling deployment down");
-        self.add_cooldown(&deployment.id, failure, cooldown).await?;
+        match &failure.pod {
+            Some(pod) => {
+                debug!(deployment_id = %deployment.id, pod = %pod, cooldown_seconds = cooldown.as_secs_f64(), "cooling Kubernetes pod down");
+            }
+            None => {
+                debug!(deployment_id = %deployment.id, cooldown_seconds = cooldown.as_secs_f64(), "cooling deployment down");
+                self.add_cooldown(&deployment.id, failure, cooldown).await?;
+            }
+        }
         Ok(Some(cooldown))
     }
 
@@ -457,6 +476,14 @@ impl Health {
         shape: GroupShape,
         failure: &AttemptError,
     ) -> Result<bool, Error> {
+        let counter = failure.pod.as_deref().unwrap_or(&deployment.id);
+        let shape = match failure.pod {
+            Some(_) => GroupShape {
+                single_deployment: false,
+                ..shape
+            },
+            None => shape,
+        };
         let status = failure.cooldown_status();
         let policy_fails = settings.allowed_fails_for(failure);
         let lone = shape.single_deployment && !shape.has_fallback_group;
@@ -495,11 +522,11 @@ impl Health {
             let ttl =
                 Self::configured_cooldown(deployment).unwrap_or_else(|| settings.fails_window());
             return self
-                .exceeds_allowed_fails(&deployment.id, suffix.as_deref(), allowed, ttl)
+                .exceeds_allowed_fails(counter, suffix.as_deref(), allowed, ttl)
                 .await;
         }
         if settings.allowed_fails_policy.is_none() && !settings.allowed_fails_set() {
-            let (successes, fails) = self.outcomes_this_minute(&deployment.id).await?;
+            let (successes, fails) = self.outcomes_this_minute(counter).await?;
             let total = successes + fails;
             let percent_fails = if total > 0 {
                 fails as f64 / total as f64
@@ -517,13 +544,8 @@ impl Health {
             return Ok(false);
         }
         let allowed = policy_fails.unwrap_or_else(|| settings.effective_allowed_fails());
-        self.exceeds_allowed_fails(
-            &deployment.id,
-            None,
-            f64::from(allowed),
-            settings.fails_window(),
-        )
-        .await
+        self.exceeds_allowed_fails(counter, None, f64::from(allowed), settings.fails_window())
+            .await
     }
 
     /// `should_cooldown_based_on_allowed_fails_policy`: count this failure, then compare.
@@ -919,6 +941,89 @@ mod tests {
 
         assert_eq!(cooldown.is_some(), cooled);
         assert_eq!(health.outcomes_this_minute("a").await.unwrap().1, 1);
+    }
+
+    const POD: &str = "kubernetes_pod:vllm:8000:10.0.0.3";
+
+    #[rstest]
+    #[case::a_pod_of_a_lone_deployment(Some(POD), true, (true, false))]
+    #[case::a_pod_of_a_shared_group(Some(POD), false, (true, false))]
+    #[case::a_lone_deployment(None, true, (false, false))]
+    #[case::a_deployment_of_a_shared_group(None, false, (true, true))]
+    #[tokio::test]
+    async fn a_pod_rate_limit_cools_the_pod_and_never_the_deployment(
+        #[case] pod: Option<&str>,
+        #[case] single_deployment: bool,
+        #[case] expected: (bool, bool),
+    ) {
+        let cache = InMemoryRouterCache::default();
+        let health = Health::new(Arc::new(cache.clone()), Arc::new(SystemClock));
+        let deployment = Deployment::from_spec(deployment("a", serde_json::json!({}))).unwrap();
+        let mut failure = AttemptError::new(FailureKind::RateLimit, Some(429));
+        failure.pod = pod.map(Into::into);
+
+        let cooldown = health
+            .record_failure(
+                &settings(RouterDynamicConfig::default()),
+                &deployment,
+                GroupShape {
+                    single_deployment,
+                    has_fallback_group: false,
+                },
+                None,
+                &failure,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            (cooldown.is_some(), cache.get(&cooldown_key("a")).is_some()),
+            expected
+        );
+        assert_eq!(
+            (
+                health.outcomes_this_minute("a").await.unwrap().1,
+                health.outcomes_this_minute(POD).await.unwrap().1,
+            ),
+            (1, u64::from(pod.is_some())),
+        );
+    }
+
+    #[rstest]
+    #[case::judged_by_the_pod(Some(POD), true)]
+    #[case::judged_by_the_deployment(None, false)]
+    #[tokio::test]
+    async fn a_failing_pod_cools_down_by_its_own_failure_rate(
+        #[case] pod: Option<&str>,
+        #[case] cooled: bool,
+    ) {
+        let cache = InMemoryRouterCache::default();
+        let health = Health::new(Arc::new(cache.clone()), Arc::new(SystemClock));
+        let deployment = Deployment::from_spec(deployment("a", serde_json::json!({}))).unwrap();
+        cache
+            .async_increment_local("a:successes", 20.0, Some(USAGE_TTL))
+            .await
+            .unwrap();
+        cache
+            .async_increment_local(&format!("{POD}:fails"), 4.0, Some(USAGE_TTL))
+            .await
+            .unwrap();
+        let mut failure = AttemptError::new(FailureKind::InternalServer, Some(500));
+        failure.pod = pod.map(Into::into);
+
+        let cooldown = health
+            .record_failure(
+                &settings(RouterDynamicConfig::default()),
+                &deployment,
+                GroupShape::default(),
+                None,
+                &failure,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(cooldown.is_some(), cooled);
+        assert_eq!(cache.get(&cooldown_key("a")), None);
     }
 
     #[rstest]
