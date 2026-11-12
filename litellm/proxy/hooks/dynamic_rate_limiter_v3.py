@@ -361,28 +361,28 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
         return descriptors
 
-    def _team_model_floor_tpm(self, user_api_key_dict: UserAPIKeyAuth, model: str) -> int | None:
-        if not _get_priority_settings().team_model_limit_is_floor or user_api_key_dict.team_id is None:
+    def _team_model_soft_limit_tpm(self, user_api_key_dict: UserAPIKeyAuth, model: str) -> int | None:
+        if not _get_priority_settings().team_model_limit_mode == "soft" or user_api_key_dict.team_id is None:
             return None
         if get_key_own_model_rate_limit(user_api_key_dict, "model_tpm_limit") is not None:
             return None
         team_limits: Final = get_model_rate_limit_from_metadata(user_api_key_dict, "team_metadata", "model_tpm_limit")
-        floor: Final = team_limits.get(model) if team_limits else None
-        return floor if isinstance(floor, int) else None
+        share: Final = team_limits.get(model) if team_limits else None
+        return share if isinstance(share, int) else None
 
-    def _create_team_model_floor_descriptor(
+    def _create_team_model_soft_limit_descriptor(
         self,
         model: str,
         model_group_info: ModelGroupInfo,
         user_api_key_dict: UserAPIKeyAuth,
     ) -> RateLimitDescriptor | None:
-        floor: Final = self._team_model_floor_tpm(user_api_key_dict, model)
-        if floor is None or model_group_info.tpm is None:
+        share: Final = self._team_model_soft_limit_tpm(user_api_key_dict, model)
+        if share is None or model_group_info.tpm is None:
             return None
         return RateLimitDescriptor(
-            key="team_model_floor",
+            key="team_model_soft_limit",
             value=f"{user_api_key_dict.team_id}:{model}",
-            rate_limit={"tokens_per_unit": floor, "window_size": self.v3_limiter.window_size},
+            rate_limit={"tokens_per_unit": share, "window_size": self.v3_limiter.window_size},
         )
 
     def _create_model_tracking_descriptor(
@@ -481,17 +481,17 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         # asyncio.Lock + in-memory fallback for single-process deployments.
         # All-or-nothing: if any enforced descriptor would exceed its limit,
         # no counter is modified and the response carries "OVER_LIMIT".
-        team_floor_descriptor: Final = self._create_team_model_floor_descriptor(
+        team_soft_limit_descriptor: Final = self._create_team_model_soft_limit_descriptor(
             model=model, model_group_info=model_group_info, user_api_key_dict=user_api_key_dict
         )
-        if team_floor_descriptor is not None:
-            descriptors_to_check.append(team_floor_descriptor)
+        if team_soft_limit_descriptor is not None:
+            descriptors_to_check.append(team_soft_limit_descriptor)
 
         enforced_descriptors: Final[list[RateLimitDescriptor]] = [model_wide_descriptor]
         if priority_descriptors and should_enforce_priority:
             enforced_descriptors.extend(priority_descriptors)
-        if team_floor_descriptor is not None and should_enforce_priority:
-            enforced_descriptors.append(team_floor_descriptor)
+        if team_soft_limit_descriptor is not None and should_enforce_priority:
+            enforced_descriptors.append(team_soft_limit_descriptor)
 
         per_request_increment: Final[dict[Literal["requests", "tokens"], int]] = {
             "requests": 1,
@@ -556,10 +556,10 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                         llm_provider=llm_provider,
                     )
 
-                if descriptor_key == "team_model_floor":
+                if descriptor_key == "team_model_soft_limit":
                     raise ProxyRateLimitError(
                         detail={
-                            "error": f"Team share reached for {model}. "
+                            "error": f"Team soft limit reached for {model}. "
                             f"Team: {user_api_key_dict.team_id}, "
                             f"Rate limit type: {status['rate_limit_type']}, "
                             f"Team model_tpm_limit: {status['current_limit']}, "
@@ -619,7 +619,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         # are fine because we ignore the OVER_LIMIT response.
         tracked_descriptors: Final[tuple[RateLimitDescriptor, ...]] = (
             *priority_descriptors,
-            *(() if team_floor_descriptor is None else (team_floor_descriptor,)),
+            *(() if team_soft_limit_descriptor is None else (team_soft_limit_descriptor,)),
         )
         if tracked_descriptors and not should_enforce_priority:
             priority_tracking_response: Final = await self.v3_limiter.should_rate_limit(
@@ -829,15 +829,15 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                 priority_key = f"{model_group}:default_pool"
 
             team_id: Final = settlement_metadata.user_api_key_team_id
-            team_floor_tokens: Final = (
+            team_soft_limit_tokens: Final = (
                 (
                     CounterIncrement(
-                        counter=RateLimitScope("team_model_floor", f"{team_id}:{model_group}").counter("tokens"),
+                        counter=RateLimitScope("team_model_soft_limit", f"{team_id}:{model_group}").counter("tokens"),
                         amount=total_tokens,
                         ttl=self.v3_limiter.window_size,
                     ),
                 )
-                if team_id is not None and _get_priority_settings().team_model_limit_is_floor
+                if team_id is not None and _get_priority_settings().team_model_limit_mode == "soft"
                 else ()
             )
             pipeline_operations: Final = (
@@ -847,7 +847,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                     amount=total_tokens,
                     ttl=self.v3_limiter.window_size,
                 ),
-                *team_floor_tokens,
+                *team_soft_limit_tokens,
             )
 
             # Execute token increments with TTL preservation

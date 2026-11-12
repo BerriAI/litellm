@@ -10113,18 +10113,20 @@ async def test_success_tpm_accounting_ignores_a_client_supplied_model_group_with
 
 
 @pytest.mark.parametrize(
-    "floor_on, second_request_passes",
+    "soft, second_request_passes",
     [(False, False), (True, True)],
-    ids=["default_team_model_tpm_is_a_ceiling", "floor_on_leaves_team_model_tpm_to_the_dynamic_limiter"],
+    ids=["hard_mode_keeps_team_model_tpm_a_ceiling", "soft_mode_leaves_team_model_tpm_to_the_dynamic_limiter"],
 )
 @pytest.mark.asyncio
-async def test_team_model_tpm_limit_stops_being_a_hard_cap_when_it_is_a_floor(
-    monkeypatch: pytest.MonkeyPatch, floor_on: bool, second_request_passes: bool
+async def test_team_model_tpm_limit_stops_being_a_hard_cap_in_soft_mode(
+    monkeypatch: pytest.MonkeyPatch, soft: bool, second_request_passes: bool
 ):
     from litellm.types.utils import PriorityReservationSettings
 
     monkeypatch.setattr(
-        litellm, "priority_reservation_settings", PriorityReservationSettings(team_model_limit_is_floor=floor_on)
+        litellm,
+        "priority_reservation_settings",
+        PriorityReservationSettings(team_model_limit_mode="soft" if soft else "hard"),
     )
     monkeypatch.setattr(litellm, "callbacks", ["dynamic_rate_limiter_v3"])
     monkeypatch.setattr(
@@ -10141,7 +10143,7 @@ async def test_team_model_tpm_limit_stops_being_a_hard_cap_when_it_is_a_floor(
     cache = DualCache()
     handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
     auth = UserAPIKeyAuth(
-        api_key=hash_token("sk-floor"),
+        api_key=hash_token("sk-soft"),
         team_id="t",
         team_metadata={"model_rpm_limit": {"test-model": 5}, "model_tpm_limit": {"test-model": 500}},
     )
@@ -10166,11 +10168,11 @@ async def test_team_model_tpm_limit_stops_being_a_hard_cap_when_it_is_a_floor(
 
 
 @pytest.mark.asyncio
-async def test_team_model_rpm_limit_stays_a_hard_cap_when_team_model_tpm_is_a_floor(monkeypatch: pytest.MonkeyPatch):
+async def test_team_model_rpm_limit_stays_a_hard_cap_in_soft_mode(monkeypatch: pytest.MonkeyPatch):
     from litellm.types.utils import PriorityReservationSettings
 
     monkeypatch.setattr(
-        litellm, "priority_reservation_settings", PriorityReservationSettings(team_model_limit_is_floor=True)
+        litellm, "priority_reservation_settings", PriorityReservationSettings(team_model_limit_mode="soft")
     )
     monkeypatch.setattr(litellm, "callbacks", ["dynamic_rate_limiter_v3"])
     monkeypatch.setattr(
@@ -10187,7 +10189,7 @@ async def test_team_model_rpm_limit_stays_a_hard_cap_when_team_model_tpm_is_a_fl
     cache = DualCache()
     handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
     auth = UserAPIKeyAuth(
-        api_key=hash_token("sk-floor-rpm"),
+        api_key=hash_token("sk-soft-rpm"),
         team_id="t",
         team_metadata={"model_rpm_limit": {"test-model": 2}, "model_tpm_limit": {"test-model": 500}},
     )

@@ -16,11 +16,11 @@ MODEL_TPM: Final = 1000
 TEAM_TPM: Final = 100
 UPSTREAM_REPLY: Final = json.dumps(
     {
-        "id": "chatcmpl_team_model_limit_floor",
+        "id": "chatcmpl_team_model_limit_mode",
         "object": "chat.completion",
         "created": 1700000000,
         "model": OPENAI_MODEL,
-        "choices": [{"index": 0, "message": {"role": "assistant", "content": "floor"}, "finish_reason": "stop"}],
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "soft"}, "finish_reason": "stop"}],
         "usage": {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30},
     }
 ).encode()
@@ -33,7 +33,7 @@ def _respond(request: Request) -> Reply:
 
 
 def _proxy(tmp_path_factory: pytest.TempPathFactory, saturation_threshold: float) -> Iterator[tuple[Gateway, str]]:
-    directory: Final = tmp_path_factory.mktemp(f"team-floor-{saturation_threshold}")
+    directory: Final = tmp_path_factory.mktemp(f"team-soft-{saturation_threshold}")
     configuration: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     configuration["litellm_settings"] = {
         **configuration["litellm_settings"],
@@ -42,10 +42,10 @@ def _proxy(tmp_path_factory: pytest.TempPathFactory, saturation_threshold: float
         "priority_reservation_settings": {
             "default_priority": 1.0,
             "saturation_threshold": saturation_threshold,
-            "team_model_limit_is_floor": True,
+            "team_model_limit_mode": "soft",
         },
     }
-    path: Final = directory / "team_floor.yaml"
+    path: Final = directory / "team_soft_limit.yaml"
     path.write_text(yaml.safe_dump(configuration))
     with (
         gateway_from_environment() as rig,
@@ -75,7 +75,7 @@ def _team_calls(owned: Gateway, upstream: str, calls: int) -> tuple[httpx.Respon
             owned.request(
                 "POST",
                 "/v1/chat/completions",
-                {"model": model, "messages": [{"role": "user", "content": f"team floor {uuid.uuid4().hex}"}]},
+                {"model": model, "messages": [{"role": "user", "content": f"team soft limit {uuid.uuid4().hex}"}]},
                 key=key,
             )
             for _ in range(calls)
@@ -95,5 +95,5 @@ def test_team_is_held_to_its_model_tpm_limit_once_the_model_saturates(saturated_
     assert blocked, [r.text for r in responses]
     assert responses[0].status_code == 200, responses[0].text
     first: Final = blocked[0]
-    assert first.headers.get("rate_limited_by") == "team_model_floor", dict(first.headers)
-    assert "Team share reached" in first.json()["error"]["message"], first.text
+    assert first.headers.get("rate_limited_by") == "team_model_soft_limit", dict(first.headers)
+    assert "Team soft limit reached" in first.json()["error"]["message"], first.text

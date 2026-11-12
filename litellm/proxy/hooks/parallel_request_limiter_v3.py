@@ -167,7 +167,7 @@ class RateLimitedModel:
         return requested_limit if requested_limit is not None else limits.get(self.group)
 
 
-def team_model_floor_covers(model_group: str) -> bool:
+def team_model_soft_limit_covers(model_group: str) -> bool:
     from litellm.proxy.hooks.dynamic_rate_limiter_v3 import PROXY_DynamicRateLimitHandlerV3
     from litellm.proxy.proxy_server import llm_router
 
@@ -2569,7 +2569,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             return
         model_specific_tpm_limit: Final = (
             None
-            if self._team_model_tpm_is_floor(user_api_key_dict, model)
+            if self._team_model_tpm_is_soft(user_api_key_dict, model)
             else model.limit_in(get_key_model_tpm_limit(user_api_key_dict, model_name=model.group))
         )
         model_specific_rpm_limit: Final = model.limit_in(
@@ -3146,16 +3146,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     ) -> bool:
         return model.limit_in(get_key_own_model_rate_limit(user_api_key_dict, rate_limit_key)) is not None
 
-    def _team_model_tpm_is_floor(self, user_api_key_dict: UserAPIKeyAuth, model: RateLimitedModel) -> bool:
+    def _team_model_tpm_is_soft(self, user_api_key_dict: UserAPIKeyAuth, model: RateLimitedModel) -> bool:
         settings: Final = litellm.priority_reservation_settings
-        if settings is None or not settings.team_model_limit_is_floor:
+        if settings is None or not settings.team_model_limit_mode == "soft":
             return False
         if self._key_owns_model_limit(user_api_key_dict, model, "model_tpm_limit"):
             return False
         team_limit: Final = model.limit_in(
             get_model_rate_limit_from_metadata(user_api_key_dict, "team_metadata", "model_tpm_limit")
         )
-        return team_limit is not None and team_model_floor_covers(model.group)
+        return team_limit is not None and team_model_soft_limit_covers(model.group)
 
     def _inherited_team_model_limit(
         self,
@@ -3197,7 +3197,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         team_rpm_limit: Final = self._inherited_team_model_limit(user_api_key_dict, model, "model_rpm_limit")
         team_tpm_limit: Final = (
             None
-            if self._team_model_tpm_is_floor(user_api_key_dict, model)
+            if self._team_model_tpm_is_soft(user_api_key_dict, model)
             else self._inherited_team_model_limit(user_api_key_dict, model, "model_tpm_limit")
         )
         if team_rpm_limit is None and team_tpm_limit is None:
