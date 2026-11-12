@@ -153,6 +153,7 @@ from ..common_utils import (
     requires_native_compaction_beta,
     stop_reason_provider_specific_fields,
     strip_advisor_blocks_from_messages,
+    tool_requests_strict,
     tool_search_result_renamed,
     tools_marked_for_a_tool_config_point,
     validated_object_mapping,
@@ -643,6 +644,31 @@ def tools_without_unsupported_tool_search(
         )
     litellm.verbose_logger.warning(DROP_UNSUPPORTED_TOOL_SEARCH_WARNING, model, route)
     return [_without_deferral(tool) for tool in tools if not _is_openai_tool_search_tool(tool)]
+
+
+def _anthropic_custom_tool(
+    *, name: str, input_schema: AnthropicInputSchema, eager_input_streaming: bool | None, strict: bool
+) -> AnthropicMessagesTool:
+    # `strict` and `eager_input_streaming` are ReadOnly, so each one is set when the tool is built and only when used.
+    if eager_input_streaming is None:
+        return (
+            AnthropicMessagesTool(name=name, input_schema=input_schema, type="custom", strict=True)
+            if strict
+            else AnthropicMessagesTool(name=name, input_schema=input_schema, type="custom")
+        )
+    return (
+        AnthropicMessagesTool(
+            name=name,
+            input_schema=input_schema,
+            type="custom",
+            eager_input_streaming=eager_input_streaming,
+            strict=True,
+        )
+        if strict
+        else AnthropicMessagesTool(
+            name=name, input_schema=input_schema, type="custom", eager_input_streaming=eager_input_streaming
+        )
+    )
 
 
 class AnthropicConfig(AnthropicModelInfo, BaseConfig):
@@ -1162,6 +1188,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     def _map_tool_helper(
         self,
         tool: ChatCompletionToolParam,
+        supports_strict_tools: bool = False,
     ) -> tuple[AllAnthropicToolsValues | None, AnthropicMcpServerTool | None]:
         returned_tool: AllAnthropicToolsValues | None = None
         mcp_server: AnthropicMcpServerTool | None = None
@@ -1178,19 +1205,26 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             input_anthropic_schema: Final = sanitize_input_schema_for_anthropic(_input_schema)
 
             _eager_input_streaming: Final = eager_input_streaming_flag(tool)
-            _tool: Final = (
-                AnthropicMessagesTool(
-                    name=tool["function"]["name"],
-                    input_schema=input_anthropic_schema,
-                    type="custom",
+            _strict_requested: Final = tool_requests_strict(tool)
+            _strict_input_schema: Final = (
+                self.strict_tool_input_schema(input_anthropic_schema)
+                if _strict_requested and supports_strict_tools
+                else None
+            )
+            if _strict_requested and _strict_input_schema is None:
+                litellm.verbose_logger.warning(
+                    "litellm dropped `strict` from tool %s because %s, so its input schema is not enforced by the "
+                    "provider.",
+                    tool["function"]["name"],
+                    "Anthropic cannot enforce this input schema in strict mode"
+                    if supports_strict_tools
+                    else "the model does not support Anthropic strict tool use",
                 )
-                if _eager_input_streaming is None
-                else AnthropicMessagesTool(
-                    name=tool["function"]["name"],
-                    input_schema=input_anthropic_schema,
-                    type="custom",
-                    eager_input_streaming=_eager_input_streaming,
-                )
+            _tool: Final = _anthropic_custom_tool(
+                name=tool["function"]["name"],
+                input_schema=input_anthropic_schema if _strict_input_schema is None else _strict_input_schema,
+                eager_input_streaming=_eager_input_streaming,
+                strict=_strict_input_schema is not None,
             )
 
             _description: Final = tool["function"].get("description")
@@ -1448,6 +1482,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     def _map_tools(
         self,
         tools: list,
+        supports_strict_tools: bool = False,
     ) -> tuple[list[AllAnthropicToolsValues], list[AnthropicMcpServerTool]]:
         anthropic_tools: Final = []
         mcp_servers: Final = []
@@ -1469,13 +1504,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                                 "function": {k: v for k, v in nested.items() if k != "type"},
                             },
                         )
-                        nested_tool, nested_mcp = self._map_tool_helper(wrapped)
+                        nested_tool, nested_mcp = self._map_tool_helper(wrapped, supports_strict_tools)
                         if nested_tool is not None:
                             anthropic_tools.append(nested_tool)
                         if nested_mcp is not None:
                             mcp_servers.append(nested_mcp)
                     elif "function" in nested:
-                        nested_tool, nested_mcp = self._map_tool_helper(cast(ChatCompletionToolParam, nested))
+                        nested_tool, nested_mcp = self._map_tool_helper(
+                            cast(ChatCompletionToolParam, nested), supports_strict_tools
+                        )
                         if nested_tool is not None:
                             anthropic_tools.append(nested_tool)
                         if nested_mcp is not None:
@@ -1483,7 +1520,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             elif "input_schema" in tool:  # assume in anthropic format
                 anthropic_tools.append(tool)
             else:  # assume openai tool call
-                new_tool, mcp_server_tool = self._map_tool_helper(tool)
+                new_tool, mcp_server_tool = self._map_tool_helper(tool, supports_strict_tools)
 
                 if new_tool is not None:
                     anthropic_tools.append(new_tool)
@@ -1906,6 +1943,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     def native_output_format_schema(self, json_schema: Mapping[str, object]) -> Mapping[str, object] | None:
         return self.filter_anthropic_output_schema(dict(self._defs_unpacked(json_schema)))
 
+    def strict_tool_input_schema(self, input_schema: AnthropicInputSchema) -> AnthropicInputSchema | None:
+        """The input schema to send with ``strict: true``, or None when Anthropic cannot enforce it.
+
+        Strict tool use compiles the schema into the same grammar as native structured output, so it gets the same
+        ``$defs`` inlining, keyword filtering and ``additionalProperties: false`` normalization, and the same limits.
+        """
+        native_schema: Final = self.native_output_schema(self._defs_unpacked(input_schema))
+        return sanitize_input_schema_for_anthropic(dict(native_schema)) if native_schema is not None else None
+
     def map_response_format_to_anthropic_output_format(self, value: dict | None) -> AnthropicOutputSchema | None:
         json_schema: Final = self._extract_json_schema_from_response_format(value)
         if json_schema is None:
@@ -2060,7 +2106,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 optional_params["max_tokens"] = value if isinstance(value, int) else max(1, int(round(value)))
             elif param == "tools":
                 anthropic_tools, mcp_servers = self._map_tools(
-                    list(self._tools_with_openai_tool_search_mapped(tools=value, model=model, drop_params=drop_params))
+                    list(self._tools_with_openai_tool_search_mapped(tools=value, model=model, drop_params=drop_params)),
+                    supports_strict_tools=self.uses_native_structured_output(model),
                 )
                 optional_params = self._add_tools_to_optional_params(
                     optional_params=optional_params, tools=anthropic_tools
