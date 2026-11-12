@@ -690,13 +690,11 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         )
 
         configured_route: Final = request_dispatched_to_pass_through_endpoint(request)
-        litellm_keys_in_body: Final = MappingProxyType(
-            {
-                k: _parsed_body.pop(k)
-                for k in types_utils.all_litellm_params
-                if k in _parsed_body and not (configured_route and k == "id")
-            }
-        )
+        litellm_param_names_in_body: Final = tuple(k for k in types_utils.all_litellm_params if k in _parsed_body)
+        litellm_keys_in_body: Final = MappingProxyType({k: _parsed_body[k] for k in litellm_param_names_in_body})
+        keys_dropped_from_body: Final = ("litellm_logging_obj",) if configured_route else litellm_param_names_in_body
+        for k in keys_dropped_from_body:
+            _parsed_body.pop(k, None)
         kept_out_of_litellm_params: Final = (
             _KEPT_OUT_OF_LITELLM_PARAMS
             if _key_or_team_allows_client_pricing_override(user_api_key_dict)

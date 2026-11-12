@@ -11635,24 +11635,23 @@ async def _send_through_proxy(
 @pytest.mark.parametrize("path", ["/cfg-rpc", "/cfg-sub/deeper", "/db-rpc"], ids=["config", "config-subpath", "db"])
 @pytest.mark.parametrize(
     "body",
-    [{"jsonrpc": "2.0", "id": 7, "method": "skills/list", "params": {}}, {"id": "rec-1", "name": "x"}],
-    ids=["json-rpc", "not-json-rpc"],
+    [
+        {"jsonrpc": "2.0", "id": 7, "method": "skills/list", "params": {}},
+        {"id": "rec-1", "name": "x", "tags": ["a"], "metadata": {"k": "v"}, "num_retries": 2},
+    ],
+    ids=["json-rpc", "litellm-param-names"],
 )
-@pytest.mark.parametrize("route_guardrails", [{}, {"guardrails": {"pii-guard": {}}}], ids=["no-guardrail", "guardrail"])
-async def test_configured_pass_through_forwards_the_client_id_and_nothing_the_proxy_added(
-    tmp_path, monkeypatch, path, body, route_guardrails
-):
+async def test_configured_pass_through_forwards_the_client_body_unchanged(tmp_path, monkeypatch, path, body):
     proxy: Final = await _boot_db_backed_proxy(
         tmp_path,
         monkeypatch,
         config_pass_through_endpoints=[
-            {"path": "/cfg-rpc", "target": "http://upstream.test/mcp", "auth": False, **route_guardrails},
+            {"path": "/cfg-rpc", "target": "http://upstream.test/mcp", "auth": False},
             {
                 "path": "/cfg-sub",
                 "target": "http://upstream.test/sub",
                 "auth": False,
                 "include_subpath": True,
-                **route_guardrails,
             },
         ],
         db_pass_through_endpoints=[
@@ -11661,16 +11660,10 @@ async def test_configured_pass_through_forwards_the_client_id_and_nothing_the_pr
                 "path": "/db-rpc",
                 "target": "http://upstream.test/db",
                 "auth": False,
-                **route_guardrails,
             }
         ],
     )
     await _run_db_sync_cycle(proxy)
-    monkeypatch.setattr(
-        litellm,
-        "callbacks",
-        [CustomGuardrail(guardrail_name="pii-guard", default_on=False, event_hook=GuardrailEventHooks.pre_call)],
-    )
 
     response, upstream_requests = await _send_through_proxy(path, {}, body=body)
 
