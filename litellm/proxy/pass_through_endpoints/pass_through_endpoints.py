@@ -4,6 +4,7 @@ import copy
 import json
 import posixpath
 import re
+import sys
 import traceback
 from base64 import b64encode
 from collections.abc import (
@@ -16,7 +17,7 @@ from collections.abc import (
     MutableMapping,
     Sequence,
 )
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, aclosing
 from dataclasses import dataclass
 from datetime import datetime
 from functools import reduce
@@ -1241,16 +1242,24 @@ async def _relay_reporting_failures(
     upstream_status: int,
     user_api_key_dict: UserAPIKeyAuth,
     request_payload: dict,  # mutable-ok: post_call_failure_hook lifts fields onto request_data in place
+    logging_obj: LiteLLMLoggingObj | None = None,
 ) -> AsyncGenerator[bytes, None]:
     from litellm.proxy.proxy_server import proxy_logging_obj
 
     try:
-        async for chunk in stream:
-            yield chunk
+        async with aclosing(stream):
+            async for chunk in stream:
+                yield chunk
     except Exception as e:
         if upstream_status >= 400:
             raise
         try:
+            if logging_obj is not None:
+                await logging_obj.dispatch_failure_handlers(
+                    exception=e,
+                    traceback_exception=traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG),
+                    prefer_async_handlers=True,
+                )
             await proxy_logging_obj.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
                 original_exception=e,
@@ -1292,8 +1301,10 @@ def _check_opaque_content(raw_response: bool) -> None:
     if get_policy_registry().get_all_policies():
         raise HTTPException(status_code=403, detail="Opaque passthrough cannot enforce content policies")
     capabilities: Final = ProxyLogging.callback_capabilities()
-    if capabilities.has_content_enforcer or any(
-        isinstance(callback, CustomGuardrail) for callback in capabilities.resolved_callbacks
+    if (
+        capabilities.has_content_enforcer
+        or capabilities.has_moderation_override
+        or any(isinstance(callback, CustomGuardrail) for callback in capabilities.resolved_callbacks)
     ):
         raise HTTPException(status_code=403, detail="Opaque passthrough cannot inspect content for guardrails")
 
@@ -1408,14 +1419,20 @@ async def _opaque_passthrough_response(
         )
     )
     return StreamingResponse(
-        _relay_passthrough_response_bytes(
-            response=response,
-            request_body=dict(body or {}),
-            url_route=str(response.url),
-            start_time=start_time,
+        _relay_reporting_failures(
+            stream=_relay_passthrough_response_bytes(
+                response=response,
+                request_body=dict(body or {}),
+                url_route=str(response.url),
+                start_time=start_time,
+                logging_obj=logging_obj,
+                custom_llm_provider=provider,
+                success_handler_kwargs=dict(kwargs or {}),
+            ),
+            upstream_status=response.status_code,
+            user_api_key_dict=user,
+            request_payload=dict(failure_payload or {}),
             logging_obj=logging_obj,
-            custom_llm_provider=provider,
-            success_handler_kwargs=dict(kwargs or {}),
         ),
         status_code=response.status_code,
         headers=headers,
@@ -3919,7 +3936,9 @@ async def _relay_passthrough_response_bytes(
                 bytes_relayed,
             )
         await response.aclose()
-        if response.status_code < 400:
+        if response.status_code < 400 and (
+            upstream_fully_relayed or isinstance(sys.exc_info()[1], (GeneratorExit, asyncio.CancelledError))
+        ):
             GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
                 async_coroutine=pass_through_endpoint_logging.pass_through_async_success_handler(
                     httpx_response=response,
@@ -3935,7 +3954,7 @@ async def _relay_passthrough_response_bytes(
                     **success_handler_kwargs,
                 )
             )
-        bind_budget_reservation_to_callbacks(logging_obj.litellm_params)
+            bind_budget_reservation_to_callbacks(logging_obj.litellm_params)
 
 
 def _extract_model_from_vertex_ai_setup(setup_response: Mapping[str, object]) -> str | None:

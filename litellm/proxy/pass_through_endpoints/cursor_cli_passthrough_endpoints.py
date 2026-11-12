@@ -51,9 +51,11 @@ async def cursor_response_lifetime() -> AsyncIterator[AsyncExitStack]:
         '`agent --agent-endpoint https://YOUR_PROXY/cursor-cli --header "x-litellm-api-key: Bearer YOUR_KEY"`. '
         "Leave --endpoint unchanged. Login, bootstrap and model discovery stay direct to Cursor. "
         "Use an unrestricted virtual key or master key. JWT and custom-auth credentials are unsupported. "
+        "Keys bound to LiteLLM agents are unsupported. "
         "Model restrictions, token accounting and content guardrails are unsupported. "
-        "Configured content guardrails or policy-engine rules disable this relay, "
+        "Configured moderation, content guardrails or policy-engine rules disable this relay, "
         "even when not selected by this request. "
+        "Request limits count RPCs, not agent sessions. Allow overlapping stream and append calls. "
         "Logs describe HTTP transport status, not the agent's outcome. The client owns login and token refresh."
     ),
     openapi_extra={

@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator, Iterator
 from contextlib import AsyncExitStack
 from datetime import datetime
 from typing import Final
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import jwt
@@ -18,6 +19,7 @@ from fastapi.testclient import TestClient
 
 import litellm
 from litellm.caching.dual_cache import DualCache
+from litellm.enterprise.enterprise_hooks.openai_moderation import ENTERPRISE_OpenAI_Moderation
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -30,12 +32,14 @@ from litellm.proxy._types import (
     ScopeMapping,
     UserAPIKeyAuth,
 )
+from litellm.proxy.agent_endpoints import agent_registry
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.common_utils.http_parsing_utils import safe_set_request_parsed_body
 from litellm.proxy.pass_through_endpoints.cursor_cli_passthrough_endpoints import cursor_cli_passthrough
 from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 from litellm.proxy.utils import hash_token
+from litellm.types.agents import AgentResponse
 from tests._master_key import MASTER_KEY
 
 _RUN: Final = "agent.v1.AgentService/RunSSE"
@@ -229,6 +233,36 @@ def test_unenforceable_or_disallowed_key_policies_fail_closed(
     assert not respx_mock.calls
 
 
+@pytest.mark.parametrize("agent_id,status,forwarded", [(None, 200, True), ("scoped-agent", 403, False)])
+def test_agent_bound_keys_cannot_bypass_opaque_model_scopes(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    agent_id: str | None,
+    status: int,
+    forwarded: bool,
+) -> None:
+    key: Final = "sk-cursor-agent-policy-test"
+    agent: Final = AgentResponse(
+        agent_id="scoped-agent", agent_name="scoped-agent", agent_card_params={}, access_group_ids=("no-model-grants",)
+    )
+    registry: Final = agent_registry.AgentRegistry()
+    registry.register_agent(agent)
+    monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+    database: Final = MagicMock()
+    database.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=agent)
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    proxy_server.user_api_key_cache.set_cache(
+        key=hash_token(key), value=UserAPIKeyAuth.model_validate({"token": hash_token(key), "agent_id": agent_id})
+    )
+    upstream: Final = respx_mock.post(f"{_BASE}/{_APPEND}").respond(content=b"\x08\x01")
+    response: Final = client.post(
+        f"/cursor-cli/{_APPEND}", headers={**_HEADERS, "x-litellm-api-key": key}, content=b"\xff"
+    )
+    assert response.status_code == status, response.text
+    assert upstream.called is forwarded
+
+
 @pytest.mark.parametrize("event", ["pre_call", "post_call"])
 @pytest.mark.parametrize("default_on", [False, True])
 def test_configured_content_guardrails_cannot_be_silently_bypassed(
@@ -238,6 +272,16 @@ def test_configured_content_guardrails_cannot_be_silently_bypassed(
     monkeypatch.setattr(litellm, "callbacks", [guardrail])
     response: Final = client.post(f"/cursor-cli/{_RUN}", headers=_HEADERS, content=b"\xff")
     assert response.status_code == 403
+    assert not respx_mock.calls
+
+
+def test_legacy_moderation_cannot_be_silently_bypassed(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [ENTERPRISE_OpenAI_Moderation()])
+    respx_mock.post(f"{_BASE}/{_RUN}").respond(content=b"\x08\x01")
+    response: Final = client.post(f"/cursor-cli/{_RUN}", headers=_HEADERS, content=b"\xff")
+    assert response.status_code == 403, response.text
     assert not respx_mock.calls
 
 
@@ -273,7 +317,8 @@ def test_provider_status_body_and_redirects_are_not_rewritten(
 
 
 class StagedStream(httpx.AsyncByteStream):
-    def __init__(self) -> None:
+    def __init__(self, failure: Exception | None = None) -> None:
+        self.failure: Final = failure
         self.release: Final = asyncio.Event()
         self.waiting: Final = asyncio.Event()
         self.closed: Final = asyncio.Event()
@@ -282,6 +327,8 @@ class StagedStream(httpx.AsyncByteStream):
         yield b"\x00\x00\x00"
         self.waiting.set()
         await self.release.wait()
+        if self.failure is not None:
+            raise self.failure
         yield b"\x00\x02{}\x02\x00\x00\x00\x02{}"
 
     async def aclose(self) -> None:
@@ -332,6 +379,47 @@ async def test_stream_is_incremental_and_closes_on_task_cancellation(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("limit,status,forwarded", [(1, 429, False), (2, 200, True)])
+async def test_parallel_request_limit_counts_overlapping_agent_rpcs(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    limit: int,
+    status: int,
+    forwarded: bool,
+) -> None:
+    key: Final = "sk-cursor-concurrency-test"
+    limiter: Final = proxy_server.proxy_logging_obj.max_parallel_request_limiter
+    monkeypatch.setattr(litellm, "callbacks", [limiter])
+    monkeypatch.setattr(litellm, "_async_success_callback", [limiter])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [limiter])
+    monkeypatch.setattr(proxy_server, "prisma_client", "test-database")
+    proxy_server.user_api_key_cache.set_cache(
+        key=hash_token(key),
+        value=UserAPIKeyAuth.model_validate({"token": hash_token(key), "max_parallel_requests": limit}),
+    )
+    stream: Final = StagedStream()
+    respx_mock.post(f"{_BASE}/{_RUN}").mock(return_value=httpx.Response(200, stream=stream))
+    upstream: Final = respx_mock.post(f"{_BASE}/{_APPEND}").respond(content=b"\x08\x01")
+    headers: Final = {**_HEADERS, "x-litellm-api-key": key}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=proxy_server.app), base_url="http://test") as caller:
+        running: Final = asyncio.create_task(caller.post(f"/cursor-cli/{_RUN}", headers=headers, content=b"\xff"))
+        waiting: Final = asyncio.create_task(stream.waiting.wait())
+        try:
+            completed, _ = await asyncio.wait((running, waiting), return_when=asyncio.FIRST_COMPLETED)
+            assert waiting in completed
+            response: Final = await caller.post(f"/cursor-cli/{_APPEND}", headers=headers, content=b"\xff")
+        finally:
+            stream.release.set()
+            waiting.cancel()
+            run_response: Final = await running
+        await GLOBAL_LOGGING_WORKER.flush()
+    assert run_response.status_code == 200
+    assert response.status_code == status, response.text
+    assert upstream.called is forwarded
+
+
+@pytest.mark.asyncio
 async def test_complete_fragmented_stream_preserves_terminal_frames(
     client: TestClient, respx_mock: respx.MockRouter
 ) -> None:
@@ -350,6 +438,19 @@ async def test_complete_fragmented_stream_preserves_terminal_frames(
 
 
 @pytest.mark.asyncio
+async def test_closing_response_between_chunks_closes_upstream_immediately(
+    client: TestClient, respx_mock: respx.MockRouter
+) -> None:
+    stream: Final = StagedStream()
+    respx_mock.post(f"{_BASE}/{_RUN}").mock(return_value=httpx.Response(200, stream=stream))
+    async with AsyncExitStack() as owner:
+        response: Final = await _native_stream(owner)
+        assert await anext(response.body_iterator) == b"\x00\x00\x00"
+        await response.body_iterator.aclose()
+        assert stream.closed.is_set()
+
+
+@pytest.mark.asyncio
 async def test_upstream_closes_even_when_response_iteration_never_starts(
     client: TestClient, respx_mock: respx.MockRouter
 ) -> None:
@@ -365,6 +466,16 @@ class UsageRecorder(CustomLogger):
         super().__init__()
         self.events: Final[asyncio.Queue[dict[str, object]]] = asyncio.Queue()
         self.failures: Final[asyncio.Queue[dict[str, object]]] = asyncio.Queue()
+        self.post_failures: Final[asyncio.Queue[Exception]] = asyncio.Queue()
+
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict[str, object],
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: str | None = None,
+    ) -> None:
+        await self.post_failures.put(original_exception)
 
     async def async_log_success_event(
         self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
@@ -375,6 +486,32 @@ class UsageRecorder(CustomLogger):
         self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
     ) -> None:
         await self.failures.put(kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [200, 429])
+async def test_upstream_read_failure_reports_once_without_success(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, status: int
+) -> None:
+    recorder: Final = UsageRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [recorder])
+    stream: Final = StagedStream(failure=httpx.ReadError("upstream dropped mid-stream"))
+    stream.release.set()
+    respx_mock.post(f"{_BASE}/{_RUN}").mock(return_value=httpx.Response(status, stream=stream))
+    async with AsyncExitStack() as owner:
+        response: Final = await _native_stream(owner)
+        assert response.status_code == status
+        assert await anext(response.body_iterator) == b"\x00\x00\x00"
+        with pytest.raises(httpx.ReadError, match="upstream dropped mid-stream"):
+            await anext(response.body_iterator)
+        await GLOBAL_LOGGING_WORKER.flush()
+    assert stream.closed.is_set()
+    assert recorder.events.empty()
+    assert recorder.failures.qsize() == 1
+    assert recorder.post_failures.qsize() == 1
+    assert recorder.failures.get_nowait()["standard_logging_object"]["status"] == "failure"
 
 
 @pytest.mark.asyncio

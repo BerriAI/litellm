@@ -1252,6 +1252,10 @@ async def common_checks(
     )
 
     if opaque_cursor and valid_token is not None:
+        if valid_token.agent_id is not None:
+            raise HTTPException(
+                status_code=403, detail="Opaque inference does not support keys bound to LiteLLM agents"
+            )
         if personal_key_team_model_access_applies(valid_token):
             raise HTTPException(status_code=403, detail="Opaque inference cannot enforce inherited personal-key models")
         if valid_token.user_id is not None and user_object is None:
