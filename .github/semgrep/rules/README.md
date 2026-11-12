@@ -5,13 +5,13 @@ Add custom rule YAML files here. Semgrep loads all `.yml`/`.yaml` files under th
 **Run only custom rules (CI / fail on findings):**
 
 ```bash
-semgrep scan --config .semgrep/rules . --error
+semgrep scan --config .github/semgrep/rules . --error
 ```
 
 **Run with registry + custom rules:**
 
 ```bash
-semgrep scan --config auto --config .semgrep/rules .
+semgrep scan --config auto --config .github/semgrep/rules .
 ```
 
 **Layout:**

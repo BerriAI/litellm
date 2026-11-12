@@ -1,4 +1,4 @@
-# Lint config for the test tree, which ruff.toml excludes from `ruff check`.
+# Lint config for the test tree, which pyproject.toml excludes from `ruff check`.
 #
 # Every rule here catches a test that cannot fail. Rules land one at a time, each
 # with its existing violations already fixed, so this list never needs a budget

@@ -96,7 +96,7 @@ def _default_base_branch(root_dir: Path) -> str:
         result: Final = subprocess.run(
             [
                 sys.executable,
-                str(Path(__file__).resolve().parents[1] / "scripts" / "default_branch.py"),
+                str(Path(__file__).resolve().parents[1] / "default_branch.py"),
                 "--repo-root",
                 str(root_dir),
                 "--branch",
@@ -238,7 +238,7 @@ def create_migration(
         skip_freshness_check (bool): Skip the "branch is up to date" check.
             Only for intentional migrations against an older base.
     """
-    root_dir = Path(__file__).parent.parent
+    root_dir = Path(__file__).resolve().parents[2]
 
     if skip_freshness_check:
         print(

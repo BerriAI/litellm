@@ -1,4 +1,4 @@
-extend = "ruff.toml"
+extend = "../../pyproject.toml"
 
 [lint]
 preview = true
@@ -6,7 +6,7 @@ select = ["ANN", "ASYNC230", "B004", "B006", "B008", "B009", "B010", "B018", "B0
 extend-select = []
 # Overrides the inherited list: rules this gate enforces itself must NOT be external here,
 # so this config's RUF100 flags their stale `# noqa` directives. What remains external is
-# only what other tooling enforces: every base ruff.toml rule this select list doesn't
+# only what other tooling enforces: every base pyproject.toml rule this select list doesn't
 # re-enable (all of the default E/F families plus T20/PGH004/RUF008/RUF009, minus the
 # strict-selected F401 and RUF100; F4 is split out so stale F401 noqas stay detectable),
 # plus upstream litellm's ruff config.

@@ -4,7 +4,7 @@ background, once it serves).
 
 A migration cannot build them: a plain `CREATE INDEX` blocks spend-log inserts for the
 whole build, and `CREATE INDEX CONCURRENTLY` is refused on a partitioned parent
-(db_scripts/partition_spend_logs.sql). `REQUEST_LOG_INDEXES` is the one list to extend;
+(scripts/db/partition_spend_logs.sql). `REQUEST_LOG_INDEXES` is the one list to extend;
 names match what Prisma derives from the `@@index` declarations in schema.prisma, so an
 index a database already has is recognized and never rebuilt.
 """
