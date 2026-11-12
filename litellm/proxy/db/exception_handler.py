@@ -247,12 +247,16 @@ class PrismaDBExceptionHandler:
 
     @staticmethod
     def is_rejected_row_error(e: Exception) -> bool:
-        """True iff Postgres refused the rows themselves: a base ``DataError``, or a raw query failing with a data
-        exception (SQLSTATE class 22), integrity violation (class 23) or a value too large for an index (class 54). Systemic raw failures such as a missing
-        table (42P01) or a deadlock (40P01) stay False so the batch is retried instead of dropped."""
+        """True iff the rows themselves were refused: a base ``DataError``, a ``FieldNotFoundError`` (prisma's query
+        validation rejecting a row's value, such as a number in a text column), or a raw query failing with a data
+        exception (SQLSTATE class 22), integrity violation (class 23) or a value too large for an index (class 54).
+        Systemic raw failures such as a missing table (42P01) or a deadlock (40P01) stay False so the batch is retried
+        instead of dropped."""
         import prisma
 
         if PrismaDBExceptionHandler.is_prisma_data_error(e):
+            return True
+        if isinstance(e, _exception_types(prisma.errors.FieldNotFoundError)):
             return True
         if not isinstance(e, _exception_types(prisma.errors.RawQueryError)):
             return False

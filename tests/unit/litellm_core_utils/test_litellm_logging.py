@@ -1899,6 +1899,28 @@ class TestAnthropicPassthroughCustomPricing:
 class TestUpdateFromKwargs:
     """Tests for the update_from_kwargs convenience wrapper."""
 
+    @pytest.mark.parametrize("body_call_type", [5, None, ["acompletion"], "aresponses"])
+    def test_request_param_named_call_type_never_replaces_the_logged_call_type(self, body_call_type: object):
+        batch_logging_obj: Final = LitellmLogging(
+            model="gpt-4o-mini",
+            messages=[],
+            stream=False,
+            call_type="acreate_batch",
+            start_time=time.time(),
+            litellm_call_id="batch-call",
+            function_id="batch-function",
+        )
+
+        batch_logging_obj.update_from_kwargs(
+            kwargs={"call_type": body_call_type},
+            optional_params={"call_type": body_call_type, "timeout": 600},
+            litellm_params={"litellm_call_id": "batch-call"},
+        )
+
+        assert batch_logging_obj.model_call_details["call_type"] == "acreate_batch"
+        assert batch_logging_obj.model_call_details["timeout"] == 600
+
+
     def test_extracts_metadata_from_kwargs(self, logging_obj):
         metadata = {"user_api_key": "sk-test", "model_info": {"id": "abc"}}
         kwargs = {"metadata": metadata, "other_key": "ignored"}
