@@ -1155,6 +1155,31 @@ enum JobStatus {
   INACTIVE
 }
 
+model LiteLLM_ScheduledJobRun {
+  id               String                @id @default(uuid())
+  job_name         String
+  lock_group       String
+  schedule         String
+  scheduled_for    DateTime              @client.Timestamptz(3)
+  status           ScheduledJobRunStatus @default(PENDING)
+  claimed_by       String?
+  claimed_at       DateTime?             @client.Timestamptz(3)
+  lease_expires_at DateTime?             @client.Timestamptz(3)
+  finished_at      DateTime?             @client.Timestamptz(3)
+  created_at       DateTime              @default(now()) @client.Timestamptz(3)
+
+  @@index([job_name, status])
+  @@index([lock_group, status])
+}
+
+enum ScheduledJobRunStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
 model LiteLLM_ManagedFileTable {
   id String @id @default(uuid())
   unified_file_id String @unique // The base64 encoded unified file ID

@@ -328,6 +328,7 @@ _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
         "LiteLLM_PromptTable",
         "LiteLLM_HealthCheckTable",
         "LiteLLM_SearchToolsTable",
+        "LiteLLM_ScheduledJobRun",
         "LiteLLM_SSOConfig",
         "LiteLLM_ManagedVectorStoreIndexTable",
         "LiteLLM_CacheConfig",
