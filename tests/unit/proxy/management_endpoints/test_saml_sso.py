@@ -642,17 +642,18 @@ async def test_build_login_redirect_targets_idp_and_caches_request_id(saml_env):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("user_code", "relay_override", "sign"),
+    ("user_code", "relay_override", "sign", "unsolicited"),
     [
-        (None, None, True),
-        ("ABCD-EFGH", None, True),
-        (None, "litellm-session-token:", True),
-        (None, "litellm-session-token:cli-never-issued-session-00", True),
-        (None, None, False),
+        (None, None, True, False),
+        ("ABCD-EFGH", None, True, False),
+        (None, "litellm-session-token:", True, False),
+        (None, "litellm-session-token:cli-never-issued-session-00", True, False),
+        (None, None, False, False),
+        (None, None, True, True),
     ],
 )
 async def test_saml_cli_device_login_completes_after_signed_assertion(
-    saml_env, monkeypatch, user_code, relay_override, sign
+    saml_env, monkeypatch, user_code, relay_override, sign, unsolicited
 ):
     from litellm.proxy import proxy_server
     from litellm.proxy.management_endpoints.ui_sso import (
@@ -662,6 +663,7 @@ async def test_saml_cli_device_login_completes_after_signed_assertion(
     )
 
     key_pem, cert_pem = saml_env
+    monkeypatch.setenv("SAML_ALLOW_UNSOLICITED", "true")
     login_id: Final = "cli-saml-device-login-0001"
     cli_cache: Final = DualCache()
     flow_key: Final = _get_cli_sso_flow_cache_key(login_id)
@@ -703,7 +705,7 @@ async def test_saml_cli_device_login_completes_after_signed_assertion(
     relay: Final = parse_qs(urlparse(redirect.headers["location"]).query)["RelayState"][0]
     assert relay == f"litellm-session-token:{login_id}" + (f":{user_code}" if user_code else "")
     ticket: Final = SimpleCookie(redirect.headers["set-cookie"])[_SAML_AUTHN_STATE_COOKIE].value
-    signed: Final = _build_signed_response(key_pem, cert_pem, in_response_to=ticket, sign=sign)
+    signed: Final = _build_signed_response(key_pem, cert_pem, in_response_to=None if unsolicited else ticket, sign=sign)
     body: Final = urlencode({"SAMLResponse": _b64(signed), "RelayState": relay_override or relay}).encode()
 
     async def receive():
@@ -717,15 +719,18 @@ async def test_saml_cli_device_login_completes_after_signed_assertion(
             "path": "/sso/saml/callback",
             "query_string": b"",
             "headers": [
-                (b"cookie", f"{_SAML_AUTHN_STATE_COOKIE}={ticket}".encode()),
+                (b"cookie", b"" if unsolicited else f"{_SAML_AUTHN_STATE_COOKIE}={ticket}".encode()),
                 (b"content-type", b"application/x-www-form-urlencoded"),
             ],
         },
         receive,
     )
-    if relay_override is not None or not sign:
-        with pytest.raises(HTTPException):
+    if relay_override is not None or not sign or unsolicited:
+        with pytest.raises(HTTPException) as exc:
             await saml_callback(callback)
+        if unsolicited:
+            assert exc.value.status_code == 400
+            assert exc.value.detail == "CLI/Claude Code sign-in must start from the CLI."
         assert "sso_complete" not in cli_cache.get_cache(key=flow_key)
         return
     response: Final = await saml_callback(callback)

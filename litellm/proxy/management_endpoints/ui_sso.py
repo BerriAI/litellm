@@ -2449,10 +2449,15 @@ async def saml_callback(request: Request):
     if "SAMLResponse" not in post_data:
         raise HTTPException(status_code=400, detail="Missing SAMLResponse in callback request.")
 
-    user, retained = await SAMLAuthHandler.handle_acs(request=request, cache=saml_sso_cache, post_data=post_data)
-
     cli_relay_state: Final = post_data.get("RelayState")
-    if isinstance(cli_relay_state, str) and cli_relay_state.startswith(f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:"):
+    is_cli_login: Final = isinstance(cli_relay_state, str) and cli_relay_state.startswith(
+        f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:"
+    )
+    user, retained = await SAMLAuthHandler.handle_acs(
+        request=request, cache=saml_sso_cache, post_data=post_data, require_sp_initiated=is_cli_login
+    )
+
+    if is_cli_login and isinstance(cli_relay_state, str):
         cli_state_parts: Final = cli_relay_state.split(":", 2)
         return await cli_sso_callback(
             request=request,
