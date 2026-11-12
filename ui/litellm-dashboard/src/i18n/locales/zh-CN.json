@@ -1,0 +1,267 @@
+{
+  "shell": {
+    "nav": {
+      "groups": {
+        "aiGateway": "AI 网关",
+        "observability": "运行监控",
+        "accessControl": "访问控制",
+        "developerTools": "开发工具",
+        "settings": "设置"
+      },
+      "sections": {
+        "aiGateway": "AI 网关",
+        "observability": "运行监控",
+        "accessControl": "访问控制",
+        "developerTools": "开发工具",
+        "settings": "设置"
+      },
+      "items": {
+        "home": "首页",
+        "virtualKeys": "虚拟密钥",
+        "playground": "模型试用",
+        "modelsAndEndpoints": "模型与端点",
+        "agentic": "智能体应用",
+        "agents": "智能体",
+        "workflowRuns": "工作流运行",
+        "memory": "记忆",
+        "mcpServers": "MCP 服务",
+        "skills": "技能中心",
+        "guardrails": "安全护栏",
+        "policies": "策略",
+        "tools": "工具",
+        "searchTools": "搜索工具",
+        "vectorStores": "向量存储",
+        "toolPolicies": "工具策略",
+        "usage": "用量统计",
+        "alerts": "告警",
+        "modelLeaderboard": "模型排行榜",
+        "costOptimization": "成本优化",
+        "logs": "请求日志",
+        "guardrailsMonitor": "护栏监控",
+        "teams": "团队",
+        "projects": "项目",
+        "internalUsers": "内部用户",
+        "organizations": "组织",
+        "accessGroups": "访问组",
+        "budgets": "预算",
+        "apiReference": "API 参考",
+        "aiHub": "AI 资源中心",
+        "learningResources": "学习资料",
+        "responseCache": "响应缓存",
+        "experimental": "实验功能",
+        "prompts": "提示词",
+        "apiPlayground": "API 试用",
+        "tagManagement": "标签管理",
+        "settings": "设置",
+        "routerSettings": "路由设置",
+        "loggingAndAlerts": "日志与告警",
+        "adminSettings": "管理设置",
+        "costTracking": "成本追踪",
+        "uiTheme": "界面主题",
+        "telemetry": "遥测"
+      },
+      "homeLink": "LiteLLM 首页"
+    },
+    "sidebarAccountMenu": {
+      "toggles": {
+        "newBadge": {
+          "label": "隐藏新功能提示",
+          "ariaLabel": "切换新功能提示显示"
+        },
+        "prompts": {
+          "label": "隐藏所有提示",
+          "ariaLabel": "切换所有提示显示"
+        },
+        "blogPosts": {
+          "label": "隐藏博客文章",
+          "ariaLabel": "切换博客文章显示"
+        },
+        "bouncingIcon": {
+          "label": "隐藏跳动图标",
+          "ariaLabel": "切换跳动图标显示"
+        }
+      },
+      "triggerLabel": "账户菜单：{{role}}，当前登录为 {{identity}}",
+      "unknownRole": "未知角色",
+      "unknownIdentity": "未知",
+      "thanks": "感谢使用 LiteLLM！",
+      "tier": "套餐",
+      "premium": "高级版",
+      "upgradeHint": "升级到高级版以使用更多功能",
+      "standard": "标准版",
+      "role": "角色",
+      "email": "邮箱",
+      "copyEmail": "复制邮箱",
+      "userId": "用户 ID",
+      "copyUserId": "复制用户 ID",
+      "hideAria": "隐藏 <name/>",
+      "toggleHideAria": "切换 {{name}} 的显示",
+      "language": {
+        "label": "语言",
+        "fallbackNote": "缺少翻译的内容将以英语显示。<githubLink>帮助翻译</githubLink>"
+      },
+      "changePassword": "修改密码",
+      "logout": "退出登录"
+    },
+    "navbar": {
+      "expandSidebar": "展开侧栏",
+      "collapseSidebar": "收起侧栏",
+      "logoAlt": "LiteLLM 品牌标志",
+      "thanks": "感谢使用 LiteLLM！",
+      "productDocs": "产品文档"
+    },
+    "viewSwitcher": {
+      "chat": "聊天",
+      "aiGateway": "AI 网关",
+      "chatDescription": "使用 LLM、MCP 和智能体的聊天界面",
+      "chatDisabled": "管理员可在设置中启用",
+      "moyaiDescription": "云端编程智能体",
+      "trigger": "切换工作区，当前：{{workspace}}"
+    },
+    "navDisplayName": {
+      "account": "账户"
+    },
+    "docsLink": {
+      "label": "文档"
+    },
+    "userMenu": {
+      "premium": "高级版",
+      "standard": "标准版",
+      "upgradeHint": "升级到高级版以使用更多功能",
+      "userId": "用户 ID",
+      "copyUserId": "复制用户 ID",
+      "role": "角色",
+      "hideNewBadges": "隐藏新功能提示",
+      "toggleHideNewBadges": "切换新功能提示显示",
+      "hidePrompts": "隐藏所有提示",
+      "toggleHidePrompts": "切换所有提示显示",
+      "hideBlogPosts": "隐藏博客文章",
+      "toggleHideBlogPosts": "切换博客文章显示",
+      "hideBouncingIcon": "隐藏跳动图标",
+      "toggleHideBouncingIcon": "切换跳动图标显示",
+      "hideAgent": "隐藏 {{agent}}",
+      "toggleHideAgent": "切换 {{agent}} 的显示",
+      "triggerAria": "账户菜单：{{role}}，当前登录为 {{identity}}",
+      "unknownRole": "未知角色",
+      "unknownIdentity": "未知",
+      "changePassword": "修改密码",
+      "logout": "退出登录"
+    },
+    "notifications": {
+      "autoRouter": {
+        "title": "LiteLLM Auto Router",
+        "description": "自动将每个请求分配给能够处理它的最低成本模型，无需修改提示词。",
+        "link": "查看文档"
+      },
+      "release": {
+        "newFeatures_one": "{{count}} 项新功能",
+        "newFeatures_other": "{{count}} 项新功能",
+        "fixes_one": "{{count}} 项修复",
+        "fixes_other": "{{count}} 项修复",
+        "otherUpdates_one": "以及 {{count}} 项其他更新",
+        "otherUpdates_other": "以及 {{count}} 项其他更新"
+      },
+      "upgrade": {
+        "title": "LiteLLM v{{version}} 已发布",
+        "description": "{{summary}}。当前版本为 v{{current}}",
+        "link": "查看发行说明"
+      },
+      "announcement": {
+        "markAsRead": "标记为已读"
+      },
+      "bell": {
+        "triggerDeprecations_one": "通知，{{count}} 条模型弃用告警需要处理",
+        "triggerDeprecations_other": "通知，{{count}} 条模型弃用告警需要处理",
+        "deprecationsTitle": "模型弃用",
+        "viewAllDeprecations": "查看全部 {{total}} 条",
+        "deprecationsDescription": "各密钥和团队的模型迁移情况。",
+        "announcementsHeading": "公告",
+        "viewDeprecations": "查看模型弃用信息",
+        "trigger": "通知",
+        "triggerUnread": "通知，{{unread}} 条未读",
+        "title": "最新动态"
+      }
+    },
+    "dashboardResources": {
+      "links": {
+        "docs": "文档",
+        "blog": "博客"
+      }
+    },
+    "blogDropdown": {
+      "loading": "加载中",
+      "failed": "加载文章失败",
+      "retry": "重试",
+      "empty": "暂无文章",
+      "viewAll": "查看全部文章",
+      "trigger": "博客"
+    },
+    "workerDropdown": {
+      "trigger": "切换工作节点，当前：{{worker}}",
+      "label": "工作节点",
+      "searchLabel": "搜索工作节点",
+      "searchPlaceholder": "搜索工作节点…",
+      "empty": "没有匹配的工作节点"
+    },
+    "dashboardShell": {
+      "navigation": "导航",
+      "openNavigation": "打开导航"
+    },
+    "loadingScreen": {
+      "loading": "加载中…"
+    },
+    "pageHeader": {
+      "controls": "页面控件"
+    }
+  },
+  "login": {
+    "schema": {
+      "usernameRequired": "请输入用户名",
+      "passwordRequired": "请输入密码"
+    },
+    "ssoNotice": {
+      "title": "已启用单点登录（SSO）。打开此页面时，LiteLLM 不再自动跳转到单点登录流程。若要恢复自动跳转，请在环境配置中设置 <setting/>。",
+      "close": "关闭"
+    },
+    "adminDisabled": {
+      "title": "管理界面已禁用",
+      "description": "管理员已禁用管理界面。如需重新启用，请修改以下环境变量："
+    },
+    "form": {
+      "title": "登录",
+      "subtitle": "登录 LiteLLM 管理界面。",
+      "defaultCredentials": {
+        "title": "默认登录信息",
+        "body": "默认用户名为 <username/>，密码为你设置的 LiteLLM Proxy <masterkey/>。",
+        "help": "需要设置管理界面登录凭据或单点登录？<docs>查看文档</docs>。"
+      },
+      "worker": {
+        "label": "工作节点",
+        "placeholder": "选择要连接的工作节点"
+      },
+      "username": {
+        "label": "用户名",
+        "placeholder": "请输入用户名"
+      },
+      "password": {
+        "label": "密码",
+        "placeholder": "请输入密码"
+      },
+      "loading": "加载中",
+      "submitting": "正在登录…",
+      "submit": "登录",
+      "sso": "使用单点登录",
+      "ssoUnavailable": "请先配置单点登录。"
+    }
+  },
+  "shared": {
+    "passwordInput": {
+      "hide": "隐藏密码",
+      "show": "显示密码"
+    }
+  },
+  "themeToggle": {
+    "switchToLight": "切换到浅色模式",
+    "switchToDark": "切换为深色模式"
+  }
+}

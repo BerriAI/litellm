@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { englishName, Locales, nativeName, resolveLanguage, supportedLanguages } from "./languages";
+import { englishName, Locales, LOCALES, nativeName, resolveLanguage, supportedLanguages } from "./languages";
+import zhCN from "./locales/zh-CN.json";
 
 const locales: Locales = new Map([["ja", async () => ({})]]);
 
@@ -19,6 +20,12 @@ describe("resolveLanguage", () => {
 });
 
 describe("supportedLanguages", () => {
+  it("offers Chinese and loads its translations for a saved selection", async () => {
+    expect(supportedLanguages(LOCALES)).toContain("zh-CN");
+    expect(resolveLanguage("zh-CN", LOCALES)).toBe("zh-CN");
+    expect(await LOCALES.get("zh-CN")?.()).toEqual(zhCN);
+  });
+
   it("puts English first, then every language with translations", () => {
     expect(supportedLanguages(locales)).toEqual(["en", "ja"]);
     expect(supportedLanguages(new Map())).toEqual(["en"]);

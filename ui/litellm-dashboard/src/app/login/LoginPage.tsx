@@ -3,6 +3,7 @@
 import { useLogin } from "@/app/(dashboard)/hooks/login/useLogin";
 import { useUIConfig } from "@/app/(dashboard)/hooks/uiConfig/useUIConfig";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
+import LanguageField from "@/components/SidebarAccountMenu/LanguageField";
 import {
   exchangeLoginCode,
   getProxyBaseUrl,
@@ -215,6 +216,8 @@ function LoginPageContent() {
                 <h2 className="text-3xl font-semibold text-foreground">{productNames.liteLLMWithLogo}</h2>
               </div>
 
+              <LanguageField />
+
               <Alert variant="warning">
                 <TriangleAlert />
                 <AlertTitle>{t("login.adminDisabled.title")}</AlertTitle>
@@ -241,6 +244,8 @@ function LoginPageContent() {
               <div className="text-center">
                 <h2 className="text-3xl font-semibold text-foreground">{productNames.liteLLMWithLogo}</h2>
               </div>
+
+              <LanguageField />
 
               <div className="text-center">
                 <h3 className="text-2xl font-semibold text-foreground">{t("login.form.title")}</h3>
