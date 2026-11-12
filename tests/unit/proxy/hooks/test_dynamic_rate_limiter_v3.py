@@ -2036,3 +2036,36 @@ async def test_keys_outside_a_team_keep_using_the_priority_pool(monkeypatch, tea
 
     pooled = await _rejection(handler, cache, model, loose_key)
     assert "Priority-based rate limit exceeded" in pooled.detail["error"]
+
+
+@pytest.mark.asyncio
+async def test_team_share_metrics_report_share_borrowed_and_throttle_reason(monkeypatch, team_share_settings):
+    from prometheus_client import CollectorRegistry
+
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
+    team_share_settings(saturation_threshold=0.5)
+    prometheus = PrometheusLogger(registry=CollectorRegistry())
+    monkeypatch.setattr(litellm, "callbacks", [prometheus])
+    model = "team-shares-metrics"
+    handler, cache = _team_share_handler(model, tpm=1000)
+    assistant = _team("assistant", "interactive")
+    state_generation = UserAPIKeyAuth(
+        team_id="state-generation", team_alias="state-gen", team_metadata={"priority": "batch"}
+    )
+
+    for team in (assistant, state_generation):
+        assert await _admit(handler, cache, model, team) is None
+    await _spend(handler, model, state_generation, 600)
+    held = await _rejection(handler, cache, model, state_generation)
+    assert held.detail["reason"] == "over_share_saturated"
+
+    labels = {"model_group": model, "team": "state-generation", "team_alias": "state-gen", "priority": "batch"}
+    assert prometheus.litellm_dynamic_limiter_share_tokens.labels(**labels)._value.get() == 400
+    borrowed = prometheus.litellm_dynamic_limiter_borrowed_tokens.labels(**labels)._value.get()
+    assert borrowed == pytest.approx(200, abs=1), "600 used over a 400 share, plus the pre-call tracking increment"
+    throttled = prometheus.litellm_dynamic_limiter_throttled_total.labels(
+        **labels, rate_limit_type="tokens", rate_limit_reason="over_share_saturated"
+    )
+    assert throttled._value.get() == 1

@@ -217,6 +217,8 @@ class UserAPIKeyLabelNames(Enum):
     EXCEPTION_CLASS = EXCEPTION_CLASS
     RATE_LIMIT_CATEGORY = RATE_LIMIT_CATEGORY
     RATE_LIMIT_TYPE = RATE_LIMIT_TYPE
+    RATE_LIMIT_REASON = "rate_limit_reason"
+    PRIORITY = "priority"
     STATUS_CODE = "status_code"
     FALLBACK_MODEL = "fallback_model"
     ROUTE = "route"
@@ -257,6 +259,9 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_video_duration_seconds_metric",
     "litellm_images_generated_metric",
     "litellm_deployment_successful_fallbacks",
+    "litellm_dynamic_limiter_share_tokens",
+    "litellm_dynamic_limiter_borrowed_tokens",
+    "litellm_dynamic_limiter_throttled_total",
     "litellm_deployment_failed_fallbacks",
     "litellm_remaining_team_budget_metric",
     "litellm_team_max_budget_metric",
@@ -716,6 +721,21 @@ class PrometheusMetricLabels:
 
     litellm_deployment_failed_fallbacks = litellm_deployment_successful_fallbacks
 
+    litellm_dynamic_limiter_share_tokens = [
+        UserAPIKeyLabelNames.MODEL_GROUP.value,
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.PRIORITY.value,
+    ]
+
+    litellm_dynamic_limiter_borrowed_tokens = litellm_dynamic_limiter_share_tokens
+
+    litellm_dynamic_limiter_throttled_total = [
+        *litellm_dynamic_limiter_share_tokens,
+        UserAPIKeyLabelNames.RATE_LIMIT_TYPE.value,
+        UserAPIKeyLabelNames.RATE_LIMIT_REASON.value,
+    ]
+
     litellm_remaining_team_budget_metric = [
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
@@ -1095,6 +1115,8 @@ class UserAPIKeyLabelValues:
     exception_class: str | None = None
     rate_limit_category: str | None = None
     rate_limit_type: str | None = None
+    rate_limit_reason: str | None = None
+    priority: str | None = None
     status_code: str | None = None
     fallback_model: str | None = None
     route: str | None = None

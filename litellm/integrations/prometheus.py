@@ -1067,6 +1067,25 @@ class PrometheusLogger(CustomLogger):
                 labelnames=self.get_labels_for_metric("litellm_deployment_successful_fallbacks"),
             )
 
+            self.litellm_dynamic_limiter_share_tokens = self._gauge_factory(
+                "litellm_dynamic_limiter_share_tokens",
+                "Dynamic rate limiter: a team's guaranteed share of a model's TPM in the current window",
+                labelnames=self.get_labels_for_metric("litellm_dynamic_limiter_share_tokens"),
+            )
+
+            self.litellm_dynamic_limiter_borrowed_tokens = self._gauge_factory(
+                "litellm_dynamic_limiter_borrowed_tokens",
+                "Dynamic rate limiter: tokens a team has used above its share in the current window",
+                labelnames=self.get_labels_for_metric("litellm_dynamic_limiter_borrowed_tokens"),
+            )
+
+            self.litellm_dynamic_limiter_throttled_total = self._counter_factory(
+                "litellm_dynamic_limiter_throttled_total",
+                "Dynamic rate limiter: requests refused per team, model and reason "
+                "(model_ceiling, over_share_saturated, burst_cap)",
+                labelnames=self.get_labels_for_metric("litellm_dynamic_limiter_throttled_total"),
+            )
+
             self.litellm_deployment_failed_fallbacks = self._counter_factory(
                 "litellm_deployment_failed_fallbacks",
                 "LLM Deployment Analytics - Number of failed fallback requests from primary model -> fallback model",
@@ -1724,6 +1743,47 @@ class PrometheusLogger(CustomLogger):
             max_series=max_series,
             ttl_seconds=ttl_seconds,
             cleanup_interval_seconds=litellm.prometheus_end_user_metrics_cleanup_interval_seconds,
+        )
+
+    def set_dynamic_limiter_share(
+        self,
+        model_group: str,
+        team: str,
+        team_alias: str | None,
+        priority: str,
+        share_tokens: int,
+        used_tokens: int,
+    ) -> None:
+        """A team's share of a model and how far above it the team currently sits."""
+        enum_values: Final = UserAPIKeyLabelValues(
+            model_group=model_group, team=team, team_alias=team_alias, priority=priority
+        )
+        labels: Final = prometheus_label_factory(
+            supported_enum_labels=self.get_labels_for_metric("litellm_dynamic_limiter_share_tokens"),
+            enum_values=enum_values,
+        )
+        self.litellm_dynamic_limiter_share_tokens.labels(**labels).set(share_tokens)
+        self.litellm_dynamic_limiter_borrowed_tokens.labels(**labels).set(max(0, used_tokens - share_tokens))
+
+    def increment_dynamic_limiter_throttled(
+        self,
+        model_group: str,
+        team: str,
+        team_alias: str | None,
+        priority: str,
+        rate_limit_type: str,
+        reason: str,
+    ) -> None:
+        enum_values: Final = UserAPIKeyLabelValues(
+            model_group=model_group,
+            team=team,
+            team_alias=team_alias,
+            priority=priority,
+            rate_limit_type=rate_limit_type,
+            rate_limit_reason=reason,
+        )
+        self._inc_labeled_counter(
+            self.litellm_dynamic_limiter_throttled_total, "litellm_dynamic_limiter_throttled_total", enum_values
         )
 
     def _inc_labeled_counter(

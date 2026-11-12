@@ -53,7 +53,18 @@ from litellm.types.router import ModelGroupInfo
 from litellm.types.utils import CallTypesLiteral, LLMResponseTypes
 
 if TYPE_CHECKING:
+    from litellm.integrations.prometheus import PrometheusLogger
     from litellm.types.utils import PriorityReservationSettings
+
+
+def _prometheus_loggers() -> "list[PrometheusLogger]":
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    return [
+        logger
+        for logger in litellm.logging_callback_manager.get_custom_loggers_for_type(PrometheusLogger)
+        if isinstance(logger, PrometheusLogger)
+    ]
 
 
 def _get_priority_settings() -> "PriorityReservationSettings":
@@ -93,6 +104,33 @@ class _TeamSharePlan:
     @property
     def enforced(self) -> bool:
         return self.reason is not None
+
+    def record(self, user_api_key_dict: UserAPIKeyAuth, model: str, model_tpm: int | None, used_tokens: int) -> None:
+        share_tokens: Final = self.share.tokens(model_tpm)
+        if share_tokens is None:
+            return
+        for logger in _prometheus_loggers():
+            logger.set_dynamic_limiter_share(
+                model_group=model,
+                team=self.share.team_id,
+                team_alias=user_api_key_dict.team_alias,
+                priority=self.share.priority,
+                share_tokens=share_tokens,
+                used_tokens=used_tokens,
+            )
+
+    def record_throttled(
+        self, user_api_key_dict: UserAPIKeyAuth, model: str, rate_limit_type: str, reason: ThrottleReason
+    ) -> None:
+        for logger in _prometheus_loggers():
+            logger.increment_dynamic_limiter_throttled(
+                model_group=model,
+                team=self.share.team_id,
+                team_alias=user_api_key_dict.team_alias,
+                priority=self.share.priority,
+                rate_limit_type=rate_limit_type,
+                reason=reason,
+            )
 
 
 class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
@@ -556,6 +594,17 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
         verbose_proxy_logger.debug("Atomic check+increment response: %s", atomic_response)
 
+        if team_share_plan is not None:
+            used_value: Final = await self._get_saturation_value_from_cache(
+                RateLimitScope(TEAM_SHARE_DESCRIPTOR_KEY, team_share_plan.descriptor["value"]).counter("tokens")
+            )
+            team_share_plan.record(
+                user_api_key_dict,
+                model,
+                model_group_info.tpm,
+                used_tokens=0 if used_value is None else int(float(used_value)),
+            )
+
         if atomic_response["overall_code"] == "OVER_LIMIT":
             resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(model)
             share: Final = team_share_plan.share if team_share_plan is not None else None
@@ -563,6 +612,15 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                 if status["code"] != "OVER_LIMIT":
                     continue
                 descriptor_key = status["descriptor_key"]
+                if team_share_plan is not None:
+                    team_share_plan.record_throttled(
+                        user_api_key_dict,
+                        model,
+                        str(status["rate_limit_type"]),
+                        "model_ceiling"
+                        if descriptor_key == "model_saturation_check"
+                        else team_share_plan.reason or "burst_cap",
+                    )
                 if descriptor_key == "model_saturation_check":
                     raise ProxyRateLimitError(
                         detail={
