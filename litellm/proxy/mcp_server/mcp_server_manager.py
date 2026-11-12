@@ -59,7 +59,7 @@ from mcp.types import (
 )
 from mcp.types import Tool as MCPTool
 from pydantic import AnyUrl, Field, SecretStr, TypeAdapter, ValidationError
-from typing_extensions import ReadOnly, assert_never
+from typing_extensions import ReadOnly, Self, assert_never
 
 import litellm
 from litellm._internal_context import with_service_target
@@ -1907,6 +1907,22 @@ def _is_whole_tool_listing(page: ListToolsResult) -> bool:
     return not page.next_cursor
 
 
+class _UpstreamToolListing(ListToolsResult):
+    upstream_instructions: str | None = None
+
+    @classmethod
+    def fetched_by(cls, client: MCPClient, page: ListToolsResult) -> Self:
+        declared: Final[object] = getattr(client, "_last_initialize_instructions", None)
+        return cls(
+            **{name: getattr(page, name) for name in page.model_fields_set},
+            upstream_instructions=declared if isinstance(declared, str) else None,
+        )
+
+    def without_instructions(self) -> ListToolsResult:
+        set_on_the_page: Final = self.model_fields_set & ListToolsResult.model_fields.keys()
+        return ListToolsResult(**{name: getattr(self, name) for name in set_on_the_page})
+
+
 def _tool_page_cursor(params: PaginatedRequestParams | None) -> tuple[str | None] | None:
     return None if params is None else (params.cursor,)
 
@@ -2071,10 +2087,10 @@ class MCPServerManager:
         self._template_discovery_cache = _DiscoveryCache[ListResourceTemplatesResult](
             discovery_ttl, discovery_clock, TypeAdapter(ListResourceTemplatesResult)
         )
-        self._tool_discovery_cache = _DiscoveryCache[ListToolsResult](
+        self._tool_discovery_cache = _DiscoveryCache[_UpstreamToolListing](
             discovery_ttl,
             discovery_clock,
-            TypeAdapter(ListToolsResult),
+            TypeAdapter(_UpstreamToolListing),
             max_entry_kb=_TOOL_LIST_ENTRY_LIMIT_KB,
             storable=_is_whole_tool_listing,
         )
@@ -2121,7 +2137,6 @@ class MCPServerManager:
         self._listed_tools_by_server_id: dict[str, _ListedToolsByCaller] = {}  # mutable-ok: refreshed per tools/list
         self._listed_tools_generations: dict[str, int] = {}  # mutable-ok: bumped per server save
         self._upstream_initialize_instructions_by_server_id: dict[str, str] = {}
-        self._listing_instructions_by_server_id: Mapping[str, str] = MappingProxyType({})
         # Per-server monotonic timestamp of last upstream prefetch attempt (success,
         # empty result, or failure). Used to throttle re-probes for servers that do
         # not return instructions, and to apply a short cooldown after failures.
@@ -4738,37 +4753,20 @@ class MCPServerManager:
         *,
         use_cache: bool,
     ) -> ListToolsResult:
-        fetch_upstream: Final = self._tools_fetch(client, server, params)
-        fetched: Final = asyncio.Event()
+        fetch_page: Final = self._tools_fetch(client, server, params)
 
-        async def fetch() -> ListToolsResult:
-            fetched.set()
-            return await fetch_upstream()
+        async def fetch() -> _UpstreamToolListing:
+            return _UpstreamToolListing.fetched_by(client, await fetch_page())
 
-        page: Final = await self._cached_or_upstream_tools(server, client, params, key_for_credential, fetch, use_cache)
-        if fetched.is_set():
-            self._note_listing_instructions(server, client)
-        else:
-            self._restore_listing_instructions(server)
-        return page
-
-    def _note_listing_instructions(self, server: MCPServer, client: MCPClient) -> None:
-        raw: Final[str | None] = getattr(client, "_last_initialize_instructions", None)
-        self._forget_listing_instructions(server.server_id)
-        if raw and raw.strip():
-            self._listing_instructions_by_server_id = MappingProxyType(
-                {**self._listing_instructions_by_server_id, server.server_id: raw.strip()}
-            )
-
-    def _forget_listing_instructions(self, server_id: str) -> None:
-        self._listing_instructions_by_server_id = MappingProxyType(
-            {known: text for known, text in self._listing_instructions_by_server_id.items() if known != server_id}
+        listing: Final = await self._cached_or_upstream_tools(
+            server, client, params, key_for_credential, fetch, use_cache
         )
+        self._remember_instructions_if_missing(server, listing.upstream_instructions)
+        return listing.without_instructions()
 
-    def _restore_listing_instructions(self, server: MCPServer) -> None:
-        seen: Final = self._listing_instructions_by_server_id.get(server.server_id)
-        if seen and not self._upstream_initialize_instructions_by_server_id.get(server.server_id):
-            self._upstream_initialize_instructions_by_server_id[server.server_id] = seen
+    def _remember_instructions_if_missing(self, server: MCPServer, seen_by_this_caller: str | None) -> None:
+        if seen_by_this_caller and not self._upstream_initialize_instructions_by_server_id.get(server.server_id):
+            self._upstream_initialize_instructions_by_server_id[server.server_id] = seen_by_this_caller
 
     async def _cached_or_upstream_tools(
         self,
@@ -4776,9 +4774,9 @@ class MCPServerManager:
         client: MCPClient,
         params: PaginatedRequestParams | None,
         key_for_credential: Callable[[str], _DiscoveryKey],
-        fetch: Callable[[], Awaitable[ListToolsResult]],
+        fetch: Callable[[], Awaitable[_UpstreamToolListing]],
         use_cache: bool,
-    ) -> ListToolsResult:
+    ) -> _UpstreamToolListing:
         if not use_cache or (params is not None and params.cursor is not None):
             return await fetch()
 
@@ -4789,9 +4787,9 @@ class MCPServerManager:
         if admin_ttl is None:
             return await self._list_tools_for_upstream_ttl(server, cache_key, fetch)
 
-        async def fetch_with_admin_ttl() -> ListToolsResult:
-            page: Final = await fetch()
-            return page if page.next_cursor else page.model_copy(update={"ttl_ms": admin_ttl * 1000})
+        async def fetch_with_admin_ttl() -> _UpstreamToolListing:
+            listing: Final = await fetch()
+            return listing if listing.next_cursor else listing.model_copy(update={"ttl_ms": admin_ttl * 1000})
 
         if admin_ttl <= 0:
             return await fetch_with_admin_ttl()
@@ -4801,25 +4799,24 @@ class MCPServerManager:
         self,
         server: MCPServer,
         cache_key: Callable[[], Awaitable[_DiscoveryKey]],
-        fetch: Callable[[], Awaitable[ListToolsResult]],
-    ) -> ListToolsResult:
+        fetch: Callable[[], Awaitable[_UpstreamToolListing]],
+    ) -> _UpstreamToolListing:
         if self._tool_discovery_cache.holds(server.server_id):
             return await self._tool_discovery_cache.get(await cache_key(), fetch)
         invalidations_before: Final = self._tool_discovery_cache.invalidations
-        page: Final = await fetch()
-        if not self._list_caching_enabled or page.ttl_ms <= 0 or page.next_cursor:
-            return page
+        listing: Final = await fetch()
+        if not self._list_caching_enabled or listing.ttl_ms <= 0 or listing.next_cursor:
+            return listing
         key: Final = await cache_key()
         if self._tool_discovery_cache.invalidations == invalidations_before:
-            self._tool_discovery_cache.keep(key, page)
-        return page
+            self._tool_discovery_cache.keep(key, listing)
+        return listing
 
     def clear_initialize_instructions(self) -> None:
         self._upstream_initialize_instructions_by_server_id.clear()
         self._upstream_initialize_instructions_probed_at.clear()
 
     def invalidate_discovery_lists(self, server_id: str) -> None:
-        self._forget_listing_instructions(server_id)
         self._upstream_initialize_instructions_by_server_id.pop(server_id, None)
         self._upstream_initialize_instructions_probed_at.pop(server_id, None)
         self._prompt_discovery_cache.invalidate(server_id)

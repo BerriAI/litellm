@@ -17045,6 +17045,20 @@ async def test_tools_list_page_of_a_longer_listing_is_fetched_every_time_under_a
     assert upstream.initializes == 2
 
 
+def _declaring_instructions(
+    upstream: _DiscoveryUpstream, instructions_for: Callable[[httpx2.Request], str]
+) -> Callable[[httpx2.Request], Awaitable[httpx2.Response]]:
+    async def respond(request: httpx2.Request) -> httpx2.Response:
+        response: Final = await upstream.respond(request)
+        body: Final = json.loads(response.content or b"null")
+        if not isinstance(body, dict) or "supportedVersions" not in body.get("result", {}):
+            return response
+        declared: Final = {**body["result"], "instructions": instructions_for(request)}
+        return httpx2.Response(200, json={**body, "result": declared})
+
+    return respond
+
+
 @pytest.mark.asyncio
 async def test_tools_list_cache_outlives_an_instructions_clear_and_a_hit_puts_the_instructions_back(
     monkeypatch: pytest.MonkeyPatch,
@@ -17057,14 +17071,7 @@ async def test_tools_list_cache_outlives_an_instructions_clear_and_a_hit_puts_th
     monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
     served: Final = functools.partial(operations._merge_gateway_initialize_instructions, [server])
 
-    async def respond_with_instructions(request: httpx2.Request) -> httpx2.Response:
-        response: Final = await upstream.respond(request)
-        body: Final = json.loads(response.content or b"null")
-        if not isinstance(body, dict) or "supportedVersions" not in body.get("result", {}):
-            return response
-        return httpx2.Response(200, json={**body, "result": {**body["result"], "instructions": "use with care"}})
-
-    with _mcp_upstream(respond_with_instructions):
+    with _mcp_upstream(_declaring_instructions(upstream, lambda request: "use with care")):
         await _list_discovery_tools(manager, server=server)
         remembered: Final = served()
         manager.clear_initialize_instructions()
@@ -17078,6 +17085,56 @@ async def test_tools_list_cache_outlives_an_instructions_clear_and_a_hit_puts_th
     assert (remembered, cleared, restored) == ("use with care", None, "use with care")
     assert served() == "newer text from a tool call"
     assert upstream.initializes == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("server", "cached_ttl_ms"),
+    (
+        pytest.param(_server_with_tools_list_ttl(300), 300000, id="server_ttl"),
+        pytest.param(_discovery_server(), 60000, id="upstream_ttl"),
+    ),
+)
+async def test_tools_list_cache_hit_puts_back_the_instructions_its_own_caller_received(
+    server: MCPServer, cached_ttl_ms: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.mcp_server import operations
+
+    _pin_listing_clock(monkeypatch)
+    manager: Final = MCPServerManager(discovery_clock=_DiscoveryClock())
+    upstream: Final = _DiscoveryUpstream()
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    served: Final = functools.partial(operations._merge_gateway_initialize_instructions, [server])
+
+    async def list_as(credential: str) -> ListToolsResult:
+        return await _list_discovery_tools(manager, server=server, extra_headers={"Authorization": credential})
+
+    with _mcp_upstream(
+        _declaring_instructions(upstream, lambda request: f"notes for {request.headers['authorization']}")
+    ):
+        await list_as("first-secret")
+        await list_as("second-secret")
+        manager.clear_initialize_instructions()
+        from_cache: Final = await list_as("first-secret")
+    assert served() == "notes for first-secret"
+    assert from_cache.model_dump(exclude={"tools"}) == {
+        "meta": None,
+        "ttl_ms": cached_ttl_ms,
+        "cache_scope": "private",
+        "next_cursor": None,
+        "result_type": "complete",
+    }
+    assert upstream.initializes == 2
+
+
+@pytest.mark.asyncio
+async def test_tools_list_that_is_not_cached_comes_back_with_only_the_fields_the_upstream_listing_set() -> None:
+    manager: Final = MCPServerManager(discovery_clock=_DiscoveryClock())
+    upstream: Final = _DiscoveryUpstream()
+    upstream.ttl_ms = 0
+    with _mcp_upstream(upstream.respond):
+        listed: Final = await _list_discovery_tools(manager)
+    assert listed.model_dump(exclude_unset=True, exclude={"tools"}) == {"ttl_ms": 0, "cache_scope": "private"}
 
 
 @pytest.mark.asyncio
