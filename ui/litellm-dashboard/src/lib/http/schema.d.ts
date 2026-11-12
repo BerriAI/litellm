@@ -31506,6 +31506,12 @@ export interface components {
              */
             password_policy_require_uppercase?: boolean | null;
             /**
+             * Performance Alerts Enabled
+             * @description Check yesterday's usage for the gateway, models, teams, users and keys against the week before, and save unusual spend, traffic, response time and failure rate changes as alerts. Off by default.
+             * @default false
+             */
+            performance_alerts_enabled: boolean;
+            /**
              * Plugins
              * @description external services registered as embeddable UI plugins
              */

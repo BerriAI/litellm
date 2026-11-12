@@ -1,12 +1,46 @@
 import hashlib
 import json
-from typing import TYPE_CHECKING, Final, cast  # noqa: TID251  # Prisma exposes generated table actions dynamically
+from collections.abc import Sequence
+from typing import (
+    TYPE_CHECKING,
+    Final,
+    Protocol,
+    cast,  # noqa: TID251  # Prisma exposes generated table actions dynamically
+)
 
 from litellm.models.alert import Alert, AlertDetection, AlertPage, AlertStatus
 from litellm.repositories.prisma_protocols import PrismaRecord, TableActions
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
+
+
+class AlertTransaction(Protocol):
+    async def execute_raw(self, query: str, *args: object) -> int: ...
+
+
+def _detection_key(detection: AlertDetection) -> str:
+    return hashlib.sha256(json.dumps(detection.identity()).encode()).hexdigest()
+
+
+async def record_alerts(transaction: AlertTransaction, detections: Sequence[AlertDetection]) -> None:
+    if not detections:
+        return
+    await transaction.execute_raw(
+        """INSERT INTO "LiteLLM_Alert"
+            (detection_key, type, resource_type, resource_id, window_start, window_end, evidence, created_at, updated_at)
+        SELECT detection_key, type, resource_type, resource_id, window_start, window_end, evidence,
+            now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC'
+        FROM jsonb_to_recordset($1::jsonb) AS rows(detection_key text, type text, resource_type text,
+            resource_id text, window_start timestamp, window_end timestamp, evidence jsonb)
+        ON CONFLICT (detection_key) DO NOTHING""",
+        json.dumps(
+            tuple(
+                {**detection.model_dump(mode="json"), "detection_key": _detection_key(detection)}
+                for detection in detections
+            )
+        ),
+    )
 
 
 def _alert(row: PrismaRecord) -> Alert:
@@ -26,7 +60,7 @@ class AlertRepository:
         from prisma import Json
         from prisma.errors import UniqueViolationError
 
-        key: Final = hashlib.sha256(json.dumps(detection.identity()).encode()).hexdigest()
+        key: Final = _detection_key(detection)
         try:
             row: Final = await self._table.create(
                 data={

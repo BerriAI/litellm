@@ -59,6 +59,7 @@ class RequestLogIndex:
 REQUEST_LOG_INDEXES: Final = (
     RequestLogIndex("LiteLLM_SpendLogs", "LiteLLM_SpendLogs_api_key_startTime_idx", '("api_key", "startTime")'),
     RequestLogIndex("LiteLLM_SpendLogs", "LiteLLM_SpendLogs_litellm_call_id_idx", '("litellm_call_id")'),
+    RequestLogIndex("LiteLLM_DailyUserSpend", "LiteLLM_DailyUserSpend_api_key_date_idx", '("api_key", "date")'),
 )
 
 _IDENTIFIER_MAX_BYTES: Final = 63

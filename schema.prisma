@@ -897,6 +897,7 @@ model LiteLLM_DailyUserSpend {
   @@index([date])
   @@index([user_id, date])
   @@index([api_key])
+  @@index([api_key, date])
   @@index([model])
   @@index([mcp_namespaced_tool_name])
   @@index([endpoint])
@@ -1383,6 +1384,8 @@ model LiteLLM_DailyModelUsage {
   request_count       BigInt   @default(0)
   successful_requests BigInt   @default(0)
   failed_requests     BigInt   @default(0)
+  total_response_time_ms BigInt @default(0)
+  timed_requests      BigInt   @default(0)
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
@@ -2223,4 +2226,20 @@ model LiteLLM_Alert {
   updated_by    String?  @client.VarChar(1024)
 
   @@index([status, id])
+}
+
+model LiteLLM_PerformanceAlertState {
+  id           Int       @id
+  owner        String    @client.VarChar(32)
+  next_run_at  DateTime  @client.Timestamptz(3)
+  day          String?   @client.VarChar(10)
+  scope        String?   @client.VarChar(16)
+  resume_after String    @default("") @client.VarChar(1024)
+  wrapped      Boolean   @default(false)
+  checked      Int       @default(0)
+  skipped      Int       @default(0)
+  start_scope  String?   @client.VarChar(16)
+  start_after  String    @default("") @client.VarChar(1024)
+  completed_at DateTime?
+  updated_at   DateTime  @default(now()) @updatedAt
 }
