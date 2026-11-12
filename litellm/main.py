@@ -66,6 +66,7 @@ if TYPE_CHECKING:
     from litellm.types.utils import TokenCountResponse
 
 from litellm.constants import (
+    LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
     AZURE_OPENAI_AUDIO_PROVIDERS,
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
@@ -5890,7 +5891,14 @@ def completion(
     try:
         if base_url is not None:
             api_base = base_url
-        is_router_call: Final = any("model_group" in (kwargs.get(k) or ()) for k in ("metadata", "litellm_metadata"))
+        probe_metadata: Final = kwargs.get("litellm_metadata")
+        is_health_check_probe: Final = (
+            isinstance(probe_metadata, dict)
+            and probe_metadata.get("user_api_key_hash") == LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
+        )
+        is_router_call: Final = not is_health_check_probe and any(
+            "model_group" in (kwargs.get(k) or ()) for k in ("metadata", "litellm_metadata")
+        )
         if is_router_call:
             max_retries = 0
         elif num_retries is not None:

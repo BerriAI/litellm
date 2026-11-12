@@ -824,6 +824,23 @@ MANTLE_CLAUDE_DEPLOYMENT: Final = MappingProxyType(
 
 
 @pytest.mark.asyncio
+async def test_test_model_connection_ignores_logging_identity_sent_by_the_caller():
+    with _test_connection_probe(MANTLE_CLAUDE_DEPLOYMENT) as ahealth_check:
+        _ = await health_test_model_connection(
+            request=MagicMock(),
+            mode="chat",
+            litellm_params={
+                "model": "bedrock_mantle/anthropic.claude-haiku-4-5",
+                "litellm_metadata": {"model_info": {"id": "someone-elses-deployment"}, "model_group": "spoofed"},
+            },
+            model_info={"id": "mantle-claude-id"},
+            user_api_key_dict=UserAPIKeyAuth(user_id="test-user", token="test-token"),
+        )
+
+    assert "litellm_metadata" not in ahealth_check.call_args.kwargs["model_params"]
+
+
+@pytest.mark.asyncio
 async def test_test_model_connection_without_mode_probes_mantle_claude_over_messages():
     """
     The Admin UI model page sends the row's id and no mode. The probe must then resolve

@@ -535,6 +535,46 @@ async def test_run_model_health_check_stamps_the_deployment_identity_only_in_log
     assert probed_params["model_info"] == {"mode": "chat"}
 
 
+@pytest.mark.asyncio
+async def test_a_stamped_probe_still_retries_a_transient_upstream_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_called=True) as upstream:
+        chat_route: Final = upstream.post("https://flaky-upstream.invalid/v1/chat/completions").mock(
+            side_effect=[
+                httpx.Response(503, json={"error": {"message": "overloaded"}}),
+                httpx.Response(
+                    200,
+                    json={
+                        "id": "chatcmpl-probe",
+                        "object": "chat.completion",
+                        "created": 1,
+                        "model": "provider-a-model",
+                        "choices": [
+                            {"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}
+                        ],
+                        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                    },
+                ),
+            ]
+        )
+        result: Final = await hc_module._run_model_health_check(
+            {
+                "model_name": "plain",
+                "litellm_params": {
+                    "model": "openai/provider-a-model",
+                    "api_base": "https://flaky-upstream.invalid/v1",
+                    "api_key": "sk-fake",
+                },
+                "model_info": {"id": "provider-a-primary", "mode": "chat"},
+            }
+        )
+
+    assert "error" not in result, result
+    assert chat_route.call_count == 2
+
+
 _MANTLE_CLAUDE_DEPLOYMENT_PARAMS = {
     "model": "bedrock_mantle/anthropic.claude-haiku-4-5",
     "api_key": "test-bearer",
