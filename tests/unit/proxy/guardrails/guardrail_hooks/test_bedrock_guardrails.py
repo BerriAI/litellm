@@ -2,9 +2,11 @@
 Unit tests for Bedrock Guardrails
 """
 
+import contextlib
 import json
 import asyncio
 import logging
+from collections.abc import Callable, Mapping
 from typing import Final
 from datetime import datetime, timezone
 import sys
@@ -20,6 +22,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.exceptions import ModifyResponseException
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.constants import BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
@@ -8168,3 +8171,94 @@ async def test_guardrail_secret_lookups_leave_the_event_loop_free(
     assert vault.read.is_set()
     assert not vault.read_on_loop.is_set()
     assert upstream.calls.last.request.url.host == "bedrock-runtime.us-west-2.amazonaws.com"
+
+
+_APPLY_GUARDRAIL_API: Final = {"guardrailIdentifier": "gr-1", "guardrailVersion": "1"}
+_GUARDRAIL_CHECKS_API: Final = {
+    "checks": {"contentFilter": {"categories": [{"category": "VIOLENCE"}]}},
+    "content_filter_threshold": 0.5,
+}
+_APPLY_GUARDRAIL_BLOCKED: Final = {
+    "action": "GUARDRAIL_INTERVENED",
+    "outputs": [{"text": "blocked"}],
+    "assessments": [{"contentPolicy": {"filters": [{"type": "VIOLENCE", "confidence": "HIGH", "action": "BLOCKED"}]}}],
+}
+
+
+def _answering(status_code: int, body: object) -> Callable[[httpx.Request], httpx.Response]:
+    return lambda request: httpx.Response(status_code, json=body)
+
+
+def _violence_scored(severity: float) -> Callable[[httpx.Request], httpx.Response]:
+    return _answering(
+        200, {"results": {"contentFilter": {"results": [{"category": "VIOLENCE", "severityScore": severity}]}}}
+    )
+
+
+def _unreachable(request: httpx.Request) -> httpx.Response:
+    raise httpx.ConnectError("connection refused", request=request)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("guardrail_config", "bedrock", "recorded_status"),
+    [
+        pytest.param(
+            _APPLY_GUARDRAIL_API,
+            _answering(200, {"action": "NONE", "outputs": [], "assessments": []}),
+            "success",
+            id="apply_guardrail-allowed",
+        ),
+        pytest.param(
+            _APPLY_GUARDRAIL_API,
+            _answering(200, _APPLY_GUARDRAIL_BLOCKED),
+            "guardrail_intervened",
+            id="apply_guardrail-blocked",
+        ),
+        pytest.param(
+            _APPLY_GUARDRAIL_API,
+            _answering(500, {"message": "internal failure"}),
+            "guardrail_failed_to_respond",
+            id="apply_guardrail-error",
+        ),
+        pytest.param(
+            _APPLY_GUARDRAIL_API, _unreachable, "guardrail_failed_to_respond", id="apply_guardrail-unreachable"
+        ),
+        pytest.param(_GUARDRAIL_CHECKS_API, _violence_scored(0.1), "success", id="guardrail_checks-allowed"),
+        pytest.param(
+            _GUARDRAIL_CHECKS_API, _violence_scored(0.9), "guardrail_intervened", id="guardrail_checks-blocked"
+        ),
+        pytest.param(
+            _GUARDRAIL_CHECKS_API,
+            _answering(500, {"message": "internal failure"}),
+            "guardrail_failed_to_respond",
+            id="guardrail_checks-error",
+        ),
+        pytest.param(
+            _GUARDRAIL_CHECKS_API,
+            _answering(200, ["unexpected"]),
+            "guardrail_failed_to_respond",
+            id="guardrail_checks-unparseable",
+        ),
+    ],
+)
+async def test_verdict_is_recorded_on_a_request_dict_that_starts_empty(
+    guardrail_config: Mapping[str, object],
+    bedrock: Callable[[httpx.Request], httpx.Response],
+    recorded_status: str,
+) -> None:
+    guardrail: Final = BedrockGuardrail(
+        guardrail_name="bedrock-guard",
+        aws_region_name="us-east-1",
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+        async_handler=AsyncHTTPHandler(transport=httpx.MockTransport(bedrock)),
+        **guardrail_config,
+    )
+    request_data: Final[dict[str, object]] = {}
+
+    with contextlib.suppress(Exception):
+        await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data=request_data, input_type="request")
+
+    recorded: Final = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert [record["guardrail_status"] for record in recorded] == [recorded_status]

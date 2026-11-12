@@ -1570,13 +1570,24 @@ class GuardrailResponseFormat(Enum):
 
 class ApplyGuardrailRequest(LiteLLMBaseModel):
     guardrail_name: str
-    text: str
+    text: str = ""
+    images: tuple[str, ...] | None = Field(
+        default=None,
+        max_length=1,
+        description="One image to scan, as a base64 data URI. Only Bedrock guardrails scan images.",
+    )
     language: str | None = None
     entities: list[PiiEntityType] | None = None
     input_type: str = "request"
     messages: list[dict[str, object]] | None = None
     metadata: dict[str, object] | None = None
     response_format: GuardrailResponseFormat = GuardrailResponseFormat.STANDARD
+
+    @model_validator(mode="after")
+    def _require_text_or_images(self) -> "ApplyGuardrailRequest":
+        if "text" not in self.model_fields_set and not self.images:
+            raise ValueError("Provide 'text', 'images', or both.")
+        return self
 
 
 class ApplyGuardrailResponse(LiteLLMBaseModel):

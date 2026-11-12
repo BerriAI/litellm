@@ -27,7 +27,11 @@ class StandardGuardrailResponseHandler:
     """Preserve the endpoint's existing text response and hook behavior."""
 
     def prepare_request_data(self, request: ApplyGuardrailRequest) -> Mapping[str, object]:
-        return request.model_dump(include={"messages", "metadata"}, exclude_none=True)
+        return request.model_dump(
+            include={"messages", "metadata"},
+            exclude={"metadata": {"standard_logging_guardrail_information"}},
+            exclude_none=True,
+        )
 
     def resolve_input_type(
         self, request: ApplyGuardrailRequest, guardrail: CustomGuardrail
@@ -64,13 +68,6 @@ class _NativeGuardrailMetadata(BaseModel):
 
 class NativeGuardrailResponseHandler(StandardGuardrailResponseHandler):
     """Return structured findings recorded by this guardrail invocation."""
-
-    def prepare_request_data(self, request: ApplyGuardrailRequest) -> Mapping[str, object]:
-        return request.model_dump(
-            include={"messages", "metadata"},
-            exclude={"metadata": {"standard_logging_guardrail_information"}},
-            exclude_none=True,
-        )
 
     def resolve_input_type(
         self, request: ApplyGuardrailRequest, guardrail: CustomGuardrail

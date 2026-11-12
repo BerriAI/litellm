@@ -16155,6 +16155,22 @@
               "title": "Guardrail Name",
               "type": "string"
             },
+            "images": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 1,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "One image to scan, as a base64 data URI. Only Bedrock guardrails scan images.",
+              "title": "Images"
+            },
             "input_type": {
               "default": "request",
               "title": "Input Type",
@@ -16203,13 +16219,13 @@
               "default": "standard"
             },
             "text": {
+              "default": "",
               "title": "Text",
               "type": "string"
             }
           },
           "required": [
-            "guardrail_name",
-            "text"
+            "guardrail_name"
           ],
           "title": "ApplyGuardrailRequest",
           "type": "object"
