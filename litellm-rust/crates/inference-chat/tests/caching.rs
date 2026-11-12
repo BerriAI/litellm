@@ -117,6 +117,7 @@ async fn the_same_route_entrypoint_reports_facts_with_or_without_caching(
             assert!(caching);
             assert!(!key.is_empty());
         }
+        ResultSource::Host => panic!("the host never answers a chat call"),
     }
     let summaries = traces.summaries("litellm.route");
     assert_eq!(summaries.len(), 2);

@@ -1,5 +1,5 @@
 use litellm_core_utils::get_llm_provider_logic::LlmProviders;
-use litellm_http::request::string_headers as shared_string_headers;
+use litellm_llms::ErrorDetail;
 use litellm_llms::tencent::messages::transformation::TENCENT_MESSAGES_CONFIG;
 use litellm_llms::{
     anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG,
@@ -18,8 +18,6 @@ use litellm_llms::{
 use serde_json::{Map, Value};
 
 use super::Error;
-
-const HEADER_CONTEXT: &str = "messages";
 
 #[derive(Clone, Copy)]
 pub(crate) struct MessagesProvider {
@@ -75,7 +73,52 @@ pub(crate) fn messages_provider(provider: LlmProviders, model: &str) -> Option<M
 pub(super) fn string_headers(
     extra_headers: Option<Map<String, Value>>,
 ) -> Result<Vec<(String, String)>, Error> {
-    shared_string_headers(HEADER_CONTEXT, extra_headers).map_err(Error::from)
+    extra_headers
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(name, value)| match value {
+            Value::String(value) => Ok((name, value)),
+            value => Err(Error::invalid_request(ErrorDetail::invalid(
+                "extra_headers",
+                NonStringHeader {
+                    actual: python_type_name(&value),
+                    name,
+                },
+            ))),
+        })
+        .collect()
+}
+
+/// A header value the caller set to something other than a string, named by its Python type
+/// since the caller wrote it in Python.
+#[derive(Debug)]
+struct NonStringHeader {
+    name: String,
+    actual: &'static str,
+}
+
+impl std::fmt::Display for NonStringHeader {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "header {} must be a string, got {}",
+            self.name, self.actual
+        )
+    }
+}
+
+impl std::error::Error for NonStringHeader {}
+
+fn python_type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "NoneType",
+        Value::Bool(_) => "bool",
+        Value::Number(number) if number.is_f64() => "float",
+        Value::Number(_) => "int",
+        Value::String(_) => "str",
+        Value::Array(_) => "list",
+        Value::Object(_) => "dict",
+    }
 }
 
 #[cfg(test)]
@@ -85,7 +128,6 @@ mod tests {
     use rstest::rstest;
 
     use super::{messages_provider, string_headers};
-    use crate::Error;
     use litellm_core_utils::get_llm_provider_logic::LlmProviders;
 
     #[rstest]
@@ -113,17 +155,28 @@ mod tests {
         assert!(messages_provider(provider, model).is_none());
     }
 
-    #[test]
-    fn string_headers_rejects_non_string_values() {
-        let headers = json!({"x-count": 3}).as_object().unwrap().clone();
-        let err = string_headers(Some(headers)).expect_err("non-string header rejected");
+    #[rstest]
+    #[case::int(json!(12345), "int")]
+    #[case::float(json!(1.5), "float")]
+    #[case::bool(json!(true), "bool")]
+    #[case::null(json!(null), "NoneType")]
+    #[case::list(json!([1]), "list")]
+    #[case::dict(json!({"a": 1}), "dict")]
+    fn non_string_header_is_a_bad_request_naming_the_header_and_its_type(
+        #[case] value: serde_json::Value,
+        #[case] python_type: &str,
+    ) {
+        let headers = json!({"x-kept": "v", "x-count": value})
+            .as_object()
+            .unwrap()
+            .clone();
+        let error = string_headers(Some(headers)).expect_err("non-string header refused");
+        assert!(error.is_request(), "{error:?}");
+        assert_eq!(error.upstream_response(), None);
+        let rejection = error.rejected_request().expect("a rejected request");
         assert_eq!(
-            err,
-            Error::Headers(litellm_http::request::HeaderError {
-                context: "messages",
-                name: "x-count".to_string(),
-                actual: "number",
-            })
+            litellm_error::Report::new(rejection).to_string(),
+            format!("invalid extra_headers: header x-count must be a string, got {python_type}")
         );
     }
 }

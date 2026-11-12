@@ -388,7 +388,7 @@ describe("UI config and public endpoints", () => {
     await Networking.getUiConfig();
 
     expect(Networking.serverRootPath).toBe("/litellm");
-    expect(uiHref("api-reference")).toBe("/litellm/ui/api-reference");
+    expect(uiHref("logs")).toBe("/litellm/ui/logs");
   });
 
   it("sends model group connection probes to the configured gateway", async () => {
@@ -1243,5 +1243,27 @@ describe("uploadClaudeCodeSkill", () => {
     expect(headers.get("Authorization")).toBe("Bearer upload-token");
     expect(headers.has("Content-Type")).toBe(false);
     expect(Object.fromEntries(init?.body as FormData)).toEqual({ file, metadata: JSON.stringify(metadata) });
+  });
+});
+
+describe("modelPatchUpdateCall", () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("surfaces the server's error message", async () => {
+    const rejected = {
+      ok: false,
+      status: 400,
+      headers: new Headers(),
+      text: async () => JSON.stringify({ detail: { error: "tool Read already has built-in semantics" } }),
+    };
+    global.fetch = vi.fn().mockResolvedValue(rejected) as unknown as typeof global.fetch;
+
+    await expect(Networking.modelPatchUpdateCall("token", { model_name: "router" }, "model-1")).rejects.toThrow(
+      "tool Read already has built-in semantics",
+    );
   });
 });

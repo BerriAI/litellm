@@ -15,11 +15,15 @@ import { clearStoredReturnUrl, getLoginUrl } from "@/utils/returnUrlUtils";
 
 export function DashboardHeader({
   accessToken,
+  title: pageTitle,
+  workspace = "gateway",
   navigationTrigger,
   deploymentHealth,
   deploymentHealthLink,
 }: {
   accessToken: string | null;
+  title?: string;
+  workspace?: "gateway" | "chat";
   navigationTrigger?: ReactNode;
   deploymentHealth?: ReactNode;
   deploymentHealthLink?: ReactNode;
@@ -27,7 +31,7 @@ export function DashboardHeader({
   const term = useTerminology();
   const { title } = getBreadcrumb(usePathname());
   const { isControlPlane, selectedWorker } = useWorker();
-  const showWorkerSelector = isControlPlane && selectedWorker !== null;
+  const showWorkerSelector = workspace === "gateway" && isControlPlane && selectedWorker !== null;
   const handleWorkerSwitch = (workerId: string) => {
     clearTokenCookies();
     clearStoredReturnUrl();
@@ -40,11 +44,13 @@ export function DashboardHeader({
       <div className="flex h-full items-center gap-3">
         <div className="flex min-w-0 flex-1 items-center gap-2">
           {navigationTrigger}
-          <h1 className="truncate text-sm font-medium">{term(title)}</h1>
+          <h1 className="truncate text-sm font-medium">{pageTitle ?? term(title)}</h1>
         </div>
-        <CommandPaletteTrigger className="hidden w-56 @min-[640px]:flex @min-[1000px]:w-80" />
+        {workspace === "gateway" && (
+          <CommandPaletteTrigger className="hidden w-56 @min-[640px]:flex @min-[1000px]:w-80" />
+        )}
         <div className="flex shrink-0 items-center justify-end gap-1">
-          <CommandPaletteTrigger mobile className="size-9 @min-[640px]:hidden" />
+          {workspace === "gateway" && <CommandPaletteTrigger mobile className="size-9 @min-[640px]:hidden" />}
           {showWorkerSelector && (
             <>
               <div className="@min-[840px]:hidden">

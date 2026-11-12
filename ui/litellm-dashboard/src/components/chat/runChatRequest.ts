@@ -31,8 +31,8 @@ function requestErrorMessage(
   error: unknown,
   messages: ChatRequestOptions["messages"],
   mode: ChatRequestOptions["mode"],
-  t: TFunction = i18n.t.bind(i18n),
 ): string {
+  const t = i18n.getFixedT("en");
   const message = error instanceof Error ? error.message : t("chat.runChatRequest.genericError");
   const hasFile =
     mode === "chat" && messages.some((item) => item.attachments?.some((attachment) => attachment.kind === "file"));
@@ -67,7 +67,7 @@ export async function runChatRequest(
   try {
     signal.throwIfAborted();
     if (research && !background) {
-      onUpdate({ content: t("chat.runChatRequest.researchNeedsBackground") });
+      onUpdate({ content: i18n.getFixedT("en")("chat.runChatRequest.researchNeedsBackground") });
       return;
     }
     if (mode === "image") {
@@ -125,7 +125,7 @@ export async function runChatRequest(
   } catch (error: unknown) {
     onResponseId(null);
     const stopped = signal.aborted || (error instanceof Error && error.name === "AbortError");
-    const errorMessage = requestErrorMessage(error, messages, mode, t);
+    const errorMessage = requestErrorMessage(error, messages, mode);
     onUpdate({ content: stopped ? content + " [stopped]" : content || errorMessage });
   } finally {
     if (mcpEvents.length) onUpdate({ mcpEvents });

@@ -6,7 +6,7 @@ import { useState } from "react";
 import type { ResourceListPage } from "@/app/(dashboard)/hooks/common/useResourceList";
 import type { Plugin } from "@/components/claude_code_plugins/types";
 import { apiClient, getPublicModelHubInfo, getUiConfig } from "@/components/networking";
-import type { AgentCard, MCPServerData, ModelGroupInfo } from "@/components/PublicModelHubTableColumns";
+import type { ModelGroupInfo } from "@/components/PublicModelHubTableColumns";
 
 import { usePublicModelHubFacets } from "./usePublicModelHubFacets";
 import { PUBLIC_MODEL_HUB_PAGE_SIZE, PUBLIC_MODEL_HUB_PATH, usePublicModelHubList } from "./usePublicModelHubList";
@@ -17,8 +17,6 @@ export interface HubInfo {
   litellm_version: string;
   useful_links: Record<string, string | { url: string; index?: number }>;
 }
-
-const asArray = <T>(data: unknown): T[] => (Array.isArray(data) ? (data as T[]) : []);
 
 const UI_CONFIG_QUERY = {
   queryKey: ["publicAiHub", "uiConfig"],
@@ -36,16 +34,6 @@ export function useHubData() {
     queryFn: () => getPublicModelHubInfo(),
     enabled: ready,
   });
-  const agents = useQuery<AgentCard[]>({
-    queryKey: ["publicAiHub", "agents"],
-    queryFn: async ({ signal }) => asArray<AgentCard>(await apiClient.get("/public/agent_hub", { signal })),
-    enabled: ready,
-  });
-  const mcp = useQuery<MCPServerData[]>({
-    queryKey: ["publicAiHub", "mcp"],
-    queryFn: async ({ signal }) => asArray<MCPServerData>(await apiClient.get("/public/mcp_hub", { signal })),
-    enabled: ready,
-  });
   const skills = useQuery<Plugin[]>({
     queryKey: ["publicAiHub", "skills"],
     queryFn: async ({ signal }) =>
@@ -61,7 +49,7 @@ export function useHubData() {
   const settledTotal = !listLoading && !models.hasActiveQuery && !models.error ? models.rowCount : modelTotal;
   if (settledTotal !== modelTotal) setModelTotal(settledTotal);
 
-  return { info, agents, mcp, skills, models, facets, modelTotal: settledTotal };
+  return { info, skills, models, facets, modelTotal: settledTotal };
 }
 
 export type HubData = ReturnType<typeof useHubData>;

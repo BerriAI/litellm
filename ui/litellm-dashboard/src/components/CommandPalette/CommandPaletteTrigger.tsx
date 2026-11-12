@@ -3,6 +3,7 @@
 import { cn } from "@/lib/cva.config";
 import { Search } from "lucide-react";
 import { usePathname } from "next/navigation";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { routeSegmentForPathname } from "@/utils/uiHref";
@@ -11,11 +12,12 @@ import { useCommandPalette } from "./CommandPaletteProvider";
 import { useShortcutLabel } from "./useShortcutLabel";
 
 export function CommandPaletteTrigger({ mobile = false, className }: { mobile?: boolean; className?: string }) {
+  const { t } = useTranslation();
   const pathname = usePathname();
   const { open, setOpen } = useCommandPalette();
   const shortcut = useShortcutLabel();
   const isKeysRoute = paletteScopeForRoute(routeSegmentForPathname(pathname)) === "keys";
-  const label = isKeysRoute ? "Search keys…" : "Search or jump to…";
+  const label = isKeysRoute ? t("shell.commandPaletteTrigger.keys") : t("shell.commandPaletteTrigger.global");
 
   if (mobile) {
     return (
@@ -23,7 +25,7 @@ export function CommandPaletteTrigger({ mobile = false, className }: { mobile?: 
         variant="ghost"
         size="icon"
         className={cn("text-muted-foreground", className ?? "size-11 md:hidden")}
-        aria-label="Search"
+        aria-label={t("shell.commandPaletteTrigger.search")}
         aria-expanded={open}
         onClick={() => setOpen(true)}
       >

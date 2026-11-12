@@ -8,11 +8,11 @@ This module handles transforming between:
 
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Final, cast
+from typing import Final, Protocol, cast
 
 from pydantic import BaseModel
 
-from litellm.litellm_core_utils.core_helpers import billed_usage_cost
+from litellm.litellm_core_utils.core_helpers import attribute_or_none, billed_usage_cost, has_attributes
 from litellm.types.interactions import (
     InteractionInput,
     InteractionsAPIOptionalRequestParams,
@@ -25,6 +25,10 @@ from litellm.types.llms.openai import (
 )
 
 _STEP_TYPE_ROLES: Final = MappingProxyType({"user_input": "user", "model_output": "assistant"})
+
+
+class _IsoFormattable(Protocol):
+    def isoformat(self) -> object: ...
 
 
 class LiteLLMResponsesInteractionsConfig:
@@ -232,12 +236,12 @@ class LiteLLMResponsesInteractionsConfig:
                         )
 
         # Convert created_at to ISO string
-        created_at: Final = getattr(responses_response, "created_at", None)
+        created_at: Final = attribute_or_none(responses_response, "created_at")
         if isinstance(created_at, int):
             from datetime import datetime
 
             created = datetime.fromtimestamp(created_at).isoformat()
-        elif created_at is not None and hasattr(created_at, "isoformat"):
+        elif created_at is not None and has_attributes(created_at, _IsoFormattable, "isoformat"):
             created = created_at.isoformat()
         else:
             created = None

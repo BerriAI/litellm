@@ -26,6 +26,7 @@ export const AUDIT_TABLE_NAME_DISPLAY: Record<string, ParseKeys> = {
   LiteLLM_OrganizationTable: "logs.audit.tableNames.organizations",
   LiteLLM_ProxyModelTable: "logs.audit.tableNames.models",
   LiteLLM_AgentsTable: "logs.audit.tableNames.agents",
+  LiteLLM_GuardrailsTable: "logs.audit.tableNames.guardrails",
 };
 
 const ACTION_TONE: Record<string, StatusTone> = {

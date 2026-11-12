@@ -114,3 +114,67 @@ def test_empiriolabs_chat_models_still_route_through_the_json_provider(
         "max_tokens": 16,
     }
     assert response.choices[0].message.content == "Hello from EmpirioLabs AI"
+
+
+EMBEDDING_RESPONSE: Final = {
+    "object": "list",
+    "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2, 0.3]}],
+    "model": "text-embedding-v4",
+    "usage": {"prompt_tokens": 2, "total_tokens": 2},
+}
+
+
+def test_empiriolabs_embeddings_post_to_v1_embeddings_with_the_bearer_key():
+    with respx.mock() as upstream:
+        route: Final = upstream.post(f"{EMPIRIOLABS_BASE_URL}/embeddings").respond(200, json=EMBEDDING_RESPONSE)
+        response: Final = litellm.embedding(
+            model="empiriolabs/text-embedding-v4",
+            input=["Say hello"],
+            api_key="empiriolabs-test-key",
+        )
+
+    request: Final = route.calls.last.request
+    body: Final = json.loads(request.content)
+    assert route.call_count == 1
+    assert request.headers["authorization"] == "Bearer empiriolabs-test-key"
+    assert body["model"] == "text-embedding-v4"
+    assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
+
+
+SEARCHED_CHAT_RESPONSE: Final = {
+    "id": "chatcmpl_empiriolabs_search",
+    "object": "chat.completion",
+    "created": 1_789_550_000,
+    "model": "qwen3-7-plus",
+    "choices": [
+        {
+            "index": 0,
+            "message": {"role": "assistant", "content": "Two searched answers"},
+            "finish_reason": "stop",
+        }
+    ],
+    "usage": {
+        "prompt_tokens": 4,
+        "completion_tokens": 5,
+        "total_tokens": 9,
+        "tool_usage": {"web_search": 2, "code_interpreter": 1},
+    },
+}
+
+
+def test_empiriolabs_web_search_calls_in_tool_usage_are_billed_per_call(local_model_cost_map: None) -> None:
+    with respx.mock() as upstream:
+        upstream.post(f"{EMPIRIOLABS_BASE_URL}/chat/completions").respond(200, json=SEARCHED_CHAT_RESPONSE)
+        response: Final = litellm.completion(
+            model="empiriolabs/qwen3-7-plus",
+            messages=[{"role": "user", "content": "Search twice"}],
+            api_key="empiriolabs-test-key",
+        )
+
+    row: Final = litellm.model_cost["empiriolabs/qwen3-7-plus"]
+    token_cost: Final = 4 * row["input_cost_per_token"] + 5 * row["output_cost_per_token"]
+    per_search: Final = row["search_context_cost_per_query"]["search_context_size_medium"]
+    assert response.usage.server_tool_use.web_search_requests == 2
+    assert litellm.completion_cost(
+        completion_response=response, model="empiriolabs/qwen3-7-plus", custom_llm_provider="empiriolabs"
+    ) == pytest.approx(token_cost + 2 * per_search)

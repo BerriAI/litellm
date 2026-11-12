@@ -11,7 +11,7 @@
 //! | Id | Applied to | Decoded plaintext |
 //! |---|---|---|
 //! | `resp_<b64>` | the response `id` | `litellm:custom_llm_provider:{provider};model_id:{model_id};response_id:{id}` |
-//! | `encitem_<b64>` | the `id` of an output item with `encrypted_content` | `litellm:model_id:{model_id};item_id:{id}` |
+//! | `encitem_<b64>` | the `id` of a reasoning or compaction output item, or of any item with `encrypted_content` | `litellm:model_id:{model_id};item_id:{id}` |
 //! | `litellm_enc:<b64>;{content}` | that item's `encrypted_content` | `<b64>` is `model_id:{model_id}`, and the original content follows the `;` unencoded |
 //! | `cntr_<b64>` | `container_id` on output items, `code_interpreter_call`, and message annotations | `litellm:custom_llm_provider:{provider};model_id:{model_id};container_id:{id}` |
 //!
@@ -25,8 +25,9 @@
 //! - `encitem_` and `litellm_enc:` carry encrypted-content affinity: encrypted reasoning only
 //!   decrypts under the API key that produced it, so the router pins replays to that deployment.
 //!   They are stamped only when the router sets `encrypted_content_affinity_enabled` and a
-//!   deployment `model_id` is known (see [`IdScope`]). Items without an `id`, such as Codex's,
-//!   carry the deployment in the wrapped content alone.
+//!   deployment `model_id` is known (see [`IdScope`]). Reasoning and compaction items get an
+//!   `encitem_` id by type, so it matches the one Python streams before their content arrives.
+//!   Items without an `id`, such as Codex's, carry the deployment in the wrapped content alone.
 //! - `cntr_` lets container calls find the provider and deployment that own a container. A
 //!   container id that already names a provider is left as it is.
 //! - On the way in, [`restore_input`] turns `encitem_` ids and `litellm_enc:` content in the
@@ -51,6 +52,7 @@ const RESPONSE_PREFIX: &str = "resp_";
 const ITEM_PREFIX: &str = "encitem_";
 const CONTAINER_PREFIX: &str = "cntr_";
 const WRAPPED_CONTENT_PREFIX: &str = "litellm_enc:";
+const ENCRYPTED_ITEM_TYPES: [&str; 2] = ["reasoning", "compaction"];
 
 /// Python's non-strict `base64.b64decode`: characters outside the alphabet are skipped and
 /// non-zero trailing bits are accepted
@@ -211,15 +213,23 @@ pub fn decode_container_id(id: &str) -> DecodedContainerId {
 }
 
 fn encode_encrypted_item(item: &mut Map<String, Value>, model_id: &str) {
-    let Some(Value::String(content)) = item.get_mut("encrypted_content") else {
-        return;
+    let wrapped = match item.get_mut("encrypted_content") {
+        Some(Value::String(content)) if !content.is_empty() => {
+            *content = wrap_encrypted_content(content, model_id);
+            true
+        }
+        _ => false,
     };
-    if content.is_empty() {
+    let encrypted_type = item
+        .get("type")
+        .and_then(Value::as_str)
+        .is_some_and(|item_type| ENCRYPTED_ITEM_TYPES.contains(&item_type));
+    if !wrapped && !encrypted_type {
         return;
     }
-    *content = wrap_encrypted_content(content, model_id);
     if let Some(Value::String(id)) = item.get_mut("id")
         && !id.is_empty()
+        && decode_encrypted_item_id(id).is_none()
     {
         *id = encrypted_item_id(model_id, id);
     }
@@ -454,6 +464,33 @@ mod tests {
                 ]}]}
             ])
         );
+    }
+
+    #[rstest]
+    #[case::reasoning_without_ciphertext(
+        json!({"type": "reasoning", "id": "rs_0a1b", "summary": []}),
+        json!({"type": "reasoning", "id": "encitem_bGl0ZWxsbTptb2RlbF9pZDpkZXBsb3ktMTtpdGVtX2lkOnJzXzBhMWI=", "summary": []})
+    )]
+    #[case::compaction(
+        json!({"type": "compaction", "id": "cmp_0a1b", "encrypted_content": "gAAAA"}),
+        json!({
+            "type": "compaction",
+            "id": "encitem_bGl0ZWxsbTptb2RlbF9pZDpkZXBsb3ktMTtpdGVtX2lkOmNtcF8wYTFi",
+            "encrypted_content": "litellm_enc:bW9kZWxfaWQ6ZGVwbG95LTE=;gAAAA"
+        })
+    )]
+    #[case::already_encoded(
+        json!({"type": "reasoning", "id": "encitem_bGl0ZWxsbTptb2RlbF9pZDpkZXBsb3ktMTtpdGVtX2lkOnJzXzBhMWI=", "summary": []}),
+        json!({"type": "reasoning", "id": "encitem_bGl0ZWxsbTptb2RlbF9pZDpkZXBsb3ktMTtpdGVtX2lkOnJzXzBhMWI=", "summary": []})
+    )]
+    #[case::message(
+        json!({"type": "message", "id": "msg_1", "content": []}),
+        json!({"type": "message", "id": "msg_1", "content": []})
+    )]
+    fn encodes_item_ids_by_type_under_affinity(#[case] item: Value, #[case] expected: Value) {
+        let mut encoded = response("resp_1", json!([item]));
+        encode_response(&mut encoded, &scope(Some("openai"), Some("deploy-1"), true));
+        assert_eq!(Value::Array(encoded.output), json!([expected]));
     }
 
     #[rstest]

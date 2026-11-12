@@ -210,7 +210,7 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
         <Button
           onClick={handleSaveChanges}
           disabled={routerSettingsSource === null}
-          title={routerSettingsSource === null ? SOURCE_UNKNOWN_HINT : undefined}
+          title={routerSettingsSource === null ? t(SOURCE_UNKNOWN_HINT) : undefined}
         >
           {t("routerSettingsForm.page.save")}
         </Button>

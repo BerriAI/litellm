@@ -9,6 +9,7 @@ from types import TracebackType
 from typing import TYPE_CHECKING, Final, Protocol
 
 from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.models.verification_token import (
     LiteLLM_VerificationToken,
 )
@@ -76,8 +77,7 @@ class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
 
     @property
     def _db(self) -> _PrismaVerificationTokenDb:
-        client: Final[_PrismaClientView] = self.prisma_client
-        return client.db
+        return require_attributes(self._connected_client(), _PrismaClientView, "db").db
 
     @property
     def table(self) -> TableActions["PrismaVerificationToken"]:
