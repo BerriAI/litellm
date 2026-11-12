@@ -574,6 +574,10 @@ class RequestRateLimiterStash:
     batch_enqueued_reservation: BatchEnqueuedTokenReservation | None = None
     batch_tpd_refund_ops: tuple[ReservationOperation, ...] = ()
     borrowing_team_model_limit: RateLimitDescriptor | None = None
+    borrowing_team_model_reserved_tokens: int = 0
+    borrowing_team_model_fallback_limits: Mapping[str, RateLimitDescriptor] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
     reservation_released: bool = False
     io_reservation_released: bool = False
     tpm_limited_tags: frozenset[str] = field(default_factory=frozenset)
@@ -719,6 +723,23 @@ def _is_socket_turn(kwargs: Mapping[str, object]) -> bool:
         and connection_call_id is not None
         and connection_call_id == connection_stash.owner_litellm_call_id
     )
+
+
+def callback_kwargs_mapping(kwargs: object) -> Mapping[str, object]:
+    """A logging callback's kwargs as a typed mapping, empty when they are not a mapping."""
+    return _callback_kwargs_mapping(kwargs)
+
+
+def request_stash_for_callback(kwargs: Mapping[str, object]) -> RequestRateLimiterStash | None:
+    """The stash of the request a logging callback settles, or the connection's for a Responses WebSocket turn.
+
+    A nested call (an LLM judge, a silent experiment) mints its own call id and gets None.
+    """
+    call_id: Final = kwargs.get("litellm_call_id")
+    call_stash: Final = get_request_stash_for_call(call_id if isinstance(call_id, str) else None)
+    if call_stash is not None:
+        return call_stash
+    return get_request_stash() if _is_socket_turn(kwargs) else None
 
 
 _AGENT_DESCRIPTOR_KEYS: Final = frozenset({"agent", "agent_session"})
@@ -1017,6 +1038,18 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         existing_cap: Final = data.get(cap_field)
         if existing_cap is None or effective_cap < existing_cap:
             data[cap_field] = effective_cap  # rebind-ok: downstream routing requires the bounded output cap
+
+    def estimate_request_tokens(
+        self, data: object, model: str, min_configured_tpm_limit: int, call_type: str | None, team_id: str | None
+    ) -> int:
+        """The reservation this limiter would hold for the request, for another limiter settling the same call."""
+        return self._estimate_tokens_for_request(
+            data=data,
+            model=model,
+            min_configured_tpm_limit=min_configured_tpm_limit,
+            call_type=call_type,
+            team_id=team_id,
+        )
 
     def _estimate_tokens_for_request(
         self,
