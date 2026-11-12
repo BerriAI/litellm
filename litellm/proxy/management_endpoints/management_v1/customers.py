@@ -134,6 +134,7 @@ router: Final = APIRouter(
 
 @router.post(
     "/customer_organizations",
+    status_code=201,
     response_model=Organization,
     description="Create a customer organization with resolved budgets. Proxy admins only.",
 )
@@ -208,6 +209,7 @@ async def list_customer_organizations(
 
 @router.post(
     "/customer_teams",
+    status_code=201,
     response_model=Team,
     description="Create a customer team with resolved budgets. Proxy admins only.",
 )
@@ -283,6 +285,7 @@ async def list_customer_teams(
 
 @router.post(
     "/customer_members",
+    status_code=201,
     response_model=CustomerMember,
     description="Create a customer member with resolved budgets. Proxy admins only.",
 )

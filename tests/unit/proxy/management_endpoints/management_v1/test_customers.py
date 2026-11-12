@@ -54,14 +54,14 @@ def test_admin_http_flow_preserves_member_copy_after_org_patch() -> None:
         "/management/v1/customer_organizations",
         json={"customer_org_id": "org", "default_budgets": [{"max_budget": 100, "rpm_limit": 10}]},
     )
-    assert org.status_code == 200, org.text
+    assert org.status_code == 201, org.text
     team: Final = http.post("/management/v1/customer_teams", json={"customer_team_id": "team", "parent_org_id": "org"})
-    assert team.status_code == 200, team.text
+    assert team.status_code == 201, team.text
     member: Final = http.post(
         "/management/v1/customer_members",
         json={"customer_member_id": "member", "parent_team_id": "team", "budget": {"rpm_limit": 3}},
     )
-    assert member.status_code == 200, member.text
+    assert member.status_code == 201, member.text
     assert member.json()["budget_id"] != org.json()["default_budget_id"]
     assert member.json()["budget"] == {
         "max_budget": 100,
@@ -113,7 +113,7 @@ def test_invalid_default_selection_returns_422_without_replacing_org(
         "/management/v1/customer_organizations",
         json={"customer_org_id": "org", "default_budgets": [{"max_budget": 10}]},
     )
-    assert original.status_code == 200, original.text
+    assert original.status_code == 201, original.text
     path: Final = "/management/v1/customer_organizations" + ("/org" if method == "PATCH" else "")
     response: Final = http.request(method, path, json={"default_budgets": templates})
     assert response.status_code == 422, response.text
@@ -125,7 +125,7 @@ def test_invalid_default_selection_returns_422_without_replacing_org(
 @pytest.mark.parametrize("templates", ([], [{}], [{"is_default": True}], [{}, {"is_default": True}]))
 def test_org_response_reports_exactly_one_default_for_nonempty_set(templates: list[dict[str, bool]]) -> None:
     response: Final = client().post("/management/v1/customer_organizations", json={"default_budgets": templates})
-    assert response.status_code == 200, response.text
+    assert response.status_code == 201, response.text
     body: Final = response.json()
     assert len(body["default_budgets"]) == len(templates)
     defaults: Final = tuple(budget for budget in body["default_budgets"] if budget["is_default"])
@@ -143,15 +143,15 @@ def test_org_response_reports_exactly_one_default_for_nonempty_set(templates: li
 )
 def test_duplicate_caller_supplied_id_returns_409(entity: str, id_field: str, body: dict[str, str]) -> None:
     http: Final = client()
-    assert http.post("/management/v1/customer_organizations", json={"customer_org_id": "org"}).status_code == 200
+    assert http.post("/management/v1/customer_organizations", json={"customer_org_id": "org"}).status_code == 201
     assert (
         http.post(
             "/management/v1/customer_teams", json={"customer_team_id": "team", "parent_org_id": "org"}
         ).status_code
-        == 200
+        == 201
     )
     created: Final = http.post(f"/management/v1/{entity}", json={**body, id_field: "duplicate"})
-    assert created.status_code == 200, created.text
+    assert created.status_code == 201, created.text
     duplicate: Final = http.post(f"/management/v1/{entity}", json={**body, id_field: "duplicate"})
     assert duplicate.status_code == 409, duplicate.text
     assert duplicate.json()["status"] == 409
@@ -159,15 +159,15 @@ def test_duplicate_caller_supplied_id_returns_409(entity: str, id_field: str, bo
 
 def test_paginated_lists_resolve_budgets_and_preserve_parent_in_links() -> None:
     http: Final = client()
-    assert http.post("/management/v1/customer_organizations", json={"customer_org_id": "org"}).status_code == 200
-    assert http.post("/management/v1/customer_organizations", json={"customer_org_id": "other"}).status_code == 200
+    assert http.post("/management/v1/customer_organizations", json={"customer_org_id": "org"}).status_code == 201
+    assert http.post("/management/v1/customer_organizations", json={"customer_org_id": "other"}).status_code == 201
     for team_id in ("a", "b"):
         response: Final = http.post(
             "/management/v1/customer_teams",
             json={"customer_team_id": team_id, "parent_org_id": "org", "budget": {"max_budget": 10}},
         )
-        assert response.status_code == 200, response.text
-    assert http.post("/management/v1/customer_teams", json={"parent_org_id": "other"}).status_code == 200
+        assert response.status_code == 201, response.text
+    assert http.post("/management/v1/customer_teams", json={"parent_org_id": "other"}).status_code == 201
     listed: Final = http.get("/management/v1/customer_teams?parent_org_id=org&page_size=1")
     assert listed.status_code == 200, listed.text
     body: Final = listed.json()
@@ -187,18 +187,18 @@ def test_paginated_lists_resolve_budgets_and_preserve_parent_in_links() -> None:
 
 def test_delete_parent_conflicts_then_deletes_in_dependency_order() -> None:
     http: Final = client()
-    assert http.post("/management/v1/customer_organizations", json={"customer_org_id": "org"}).status_code == 200
+    assert http.post("/management/v1/customer_organizations", json={"customer_org_id": "org"}).status_code == 201
     assert (
         http.post(
             "/management/v1/customer_teams", json={"customer_team_id": "team", "parent_org_id": "org"}
         ).status_code
-        == 200
+        == 201
     )
     assert (
         http.post(
             "/management/v1/customer_members", json={"customer_member_id": "member", "parent_team_id": "team"}
         ).status_code
-        == 200
+        == 201
     )
     for path in ("customer_organizations/org", "customer_teams/team"):
         conflict: Final = http.delete(f"/management/v1/{path}")
@@ -219,12 +219,12 @@ def test_invalid_default_and_wrong_template_have_distinct_problem_types() -> Non
     assert invalid.status_code == 422, invalid.text
     assert invalid.json()["title"] == "Invalid default budget"
     assert invalid.json()["type"].endswith("invalid-default-budget")
-    assert http.post("/management/v1/customer_organizations", json={"customer_org_id": "org"}).status_code == 200
+    assert http.post("/management/v1/customer_organizations", json={"customer_org_id": "org"}).status_code == 201
     assert (
         http.post(
             "/management/v1/customer_teams", json={"customer_team_id": "team", "parent_org_id": "org"}
         ).status_code
-        == 200
+        == 201
     )
     wrong: Final = http.post(
         "/management/v1/customer_members", json={"parent_team_id": "team", "budget_template_id": "unknown"}
