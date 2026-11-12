@@ -8165,8 +8165,7 @@
         "costTracking": "Cost Tracking",
         "uiTheme": "UI Theme",
         "telemetry": "Telemetry",
-        "customers": "Customers",
-        "chargebacks": "Chargebacks"
+        "customers": "Customers"
       },
       "homeLink": "LiteLLM home"
     },
@@ -20585,7 +20584,7 @@
   "customerPortal": {
     "switcher": {
       "label": "Customer Portal",
-      "description": "End customers, budgets and chargebacks"
+      "description": "End customers and budgets"
     },
     "status": {
       "active": "Active",
@@ -20671,28 +20670,6 @@
       "maxBudget": "Max budget (USD)",
       "maxBudgetPlaceholder": "Leave empty for no budget",
       "sharedBudgetWarning": "This customer is on budget {{budgetId}}. Changing the budget here changes it for every customer on that budget."
-    },
-    "chargebacks": {
-      "title": "Chargebacks",
-      "subtitle": "Spend per customer for a month, from the daily spend rollup.",
-      "groupBy": {
-        "customer": "Group by customer",
-        "key": "Customer and key",
-        "model": "Customer and model"
-      },
-      "dimension": {
-        "key": "Key",
-        "model": "Model"
-      },
-      "exportCsv": "Export CSV",
-      "columns": {
-        "customer": "Customer",
-        "requests": "Requests",
-        "inputTokens": "Input tokens",
-        "outputTokens": "Output tokens",
-        "spend": "Spend"
-      },
-      "empty": "No customer traffic in {{month}}."
     }
   }
 }

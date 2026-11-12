@@ -191,7 +191,12 @@ def fal_ai_passthrough_cost(model: str, request_body: Mapping[str, object]) -> f
     if entry is None or "output_cost_per_billable_unit" in entry:
         return None
     if entry.get("output_cost_per_video_clip") is not None:
-        return video_clip_cost(entry, request_body.get("duration"), request_body.get("resolution"))
+        clip_cost: Final = video_clip_cost(entry, request_body.get("duration"), request_body.get("resolution"))
+        if clip_cost is not None:
+            return clip_cost
+    cost_per_video: Final = entry.get("output_cost_per_video")
+    if isinstance(cost_per_video, (int, float)):
+        return float(cost_per_video)
     cost_per_image: Final = _passthrough_cost_per_image(entry, request_body)
     if cost_per_image is None:
         return None

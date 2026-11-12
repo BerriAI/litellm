@@ -17,7 +17,6 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.get_blog_posts import (
     BlogPostsResponse,
     GetBlogPosts,
-    get_blog_posts,
 )
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.offline_mode import is_offline_mode
@@ -561,7 +560,9 @@ async def get_litellm_blog_posts() -> BlogPostsResponse:
     Falls back to the bundled local backup on any failure.
     """
     try:
-        return BlogPostsResponse(posts=get_blog_posts(url=litellm.blog_posts_url))
+        return BlogPostsResponse(
+            posts=await GetBlogPosts.aget_blog_posts(url=litellm.blog_posts_url, fetch=_fetch_remote_bytes)
+        )
     except Exception as e:
         verbose_logger.warning("LiteLLM: get_litellm_blog_posts endpoint fallback triggered: %s", str(e))
         return BlogPostsResponse(posts=GetBlogPosts.load_local_blog_posts())

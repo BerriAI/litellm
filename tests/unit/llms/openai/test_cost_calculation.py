@@ -25,7 +25,10 @@ from litellm.types.videos.main import VideoObject
     ],
 )
 def test_video_clip_price_precedes_per_second(
-    calculator: Callable[..., float], duration: float, resolution: str, expected: float,
+    calculator: Callable[..., float],
+    duration: float,
+    resolution: str,
+    expected: float,
 ) -> None:
     info: Final[ModelInfo] = {
         "output_cost_per_video_clip": {"8s": {"720p": 0.6}, "5s": {"720p": 0.3, "540p": 0.1}},
@@ -35,8 +38,11 @@ def test_video_clip_price_precedes_per_second(
 
 
 @pytest.mark.parametrize("duration", [5.0, None])
+@pytest.mark.parametrize("flat_price", [None, 0.0, 0.37])
 def test_completion_cost_multiplies_clip_price_without_duration(
-    duration: float | None, local_model_cost_map: None,
+    duration: float | None,
+    flat_price: float | None,
+    local_model_cost_map: None,
 ) -> None:
     litellm.register_model(
         {
@@ -44,6 +50,7 @@ def test_completion_cost_multiplies_clip_price_without_duration(
                 "litellm_provider": "fal_ai",
                 "mode": "video_generation",
                 "output_cost_per_video_clip": {"5s": {"720p": 0.3}},
+                "output_cost_per_video": flat_price,
             }
         },
         persist_across_reloads=False,

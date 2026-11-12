@@ -168,6 +168,9 @@ def video_generation_output_cost(
     clip_cost: Final = video_clip_cost(model_info, duration_seconds, video_resolution)
     if clip_cost is not None:
         return clip_cost
+    flat_cost: Final = model_info.get("output_cost_per_video")
+    if flat_cost is not None:
+        return _native_float(flat_cost)
     video_rate: Final = model_info.get("output_cost_per_video_per_second")
     if video_rate is not None:
         return _native_float(video_rate) * duration_seconds

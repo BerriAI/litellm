@@ -463,6 +463,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_reasoning_token: float | None
     output_cost_per_reasoning_token_flex: float | None
     output_cost_per_reasoning_token_priority: float | None
+    output_cost_per_video: ReadOnly[float | None]
     output_cost_per_video_per_second: float | None  # only for vertex ai models
     output_cost_per_video_clip: ReadOnly[Mapping[str, Mapping[str, float]] | None]
     output_cost_per_audio_per_second: float | None  # only for vertex ai models
@@ -4273,6 +4274,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_reasoning_token: float | None = None
     output_cost_per_reasoning_token_flex: float | None = None
     output_cost_per_reasoning_token_priority: float | None = None
+    output_cost_per_video: float | None = None
     output_cost_per_video_per_second: float | None = None
     output_cost_per_audio_per_second: float | None = None
     search_context_cost_per_query: dict[str, Any] | None = None

@@ -1,10 +1,13 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import LoginPage from "./LoginPage";
 
 const mockPush = vi.fn();
 const mockReplace = vi.fn();
+const mockAssignDocument = vi.fn();
+const mockReplaceDocument = vi.fn();
+const mockMutate = vi.fn();
 
 vi.mock("next/navigation", () => ({
   useRouter: vi.fn(() => ({
@@ -31,12 +34,13 @@ vi.mock("@/components/networking", async (importOriginal) => {
   return {
     ...actual,
     getProxyBaseUrl: vi.fn().mockReturnValue("http://localhost:4000"),
+    exchangeLoginCode: vi.fn(),
   };
 });
 
 vi.mock("@/app/(dashboard)/hooks/login/useLogin", () => ({
   useLogin: vi.fn(() => ({
-    mutate: vi.fn(),
+    mutate: mockMutate,
     isPending: false,
     error: null,
   })),
@@ -56,6 +60,7 @@ vi.mock("@/hooks/useWorker", () => ({
 import { useUIConfig } from "@/app/(dashboard)/hooks/uiConfig/useUIConfig";
 import { getCookieFromDocument } from "@/utils/cookieUtils";
 import { isJwtExpired } from "@/utils/jwtUtils";
+import { exchangeLoginCode } from "@/components/networking";
 
 const createQueryClient = () =>
   new QueryClient({
@@ -68,10 +73,23 @@ const createQueryClient = () =>
   });
 
 describe("LoginPage", () => {
+  const originalLocation = window.location;
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockPush.mockClear();
     mockReplace.mockClear();
+    mockMutate.mockReset();
+    Object.defineProperty(window, "location", {
+      value: { ...originalLocation, assign: mockAssignDocument, replace: mockReplaceDocument },
+      writable: true,
+    });
+    document.cookie = "litellm_return_url=; Max-Age=0; Path=/";
+  });
+
+  afterEach(() => {
+    Object.defineProperty(window, "location", { value: originalLocation, writable: true });
+    document.cookie = "litellm_return_url=; Max-Age=0; Path=/";
   });
 
   it("should render", async () => {
@@ -98,7 +116,7 @@ describe("LoginPage", () => {
     });
   });
 
-  it("should call router.replace to dashboard when jwt is valid", async () => {
+  it("loads a fresh dashboard document when jwt is valid", async () => {
     const validToken = "valid-token";
     (useUIConfig as ReturnType<typeof vi.fn>).mockReturnValue({
       data: {
@@ -120,7 +138,7 @@ describe("LoginPage", () => {
     );
 
     await waitFor(() => {
-      expect(mockReplace).toHaveBeenCalledWith("/ui");
+      expect(mockReplaceDocument).toHaveBeenCalledWith(new URL("/ui", window.location.origin).href);
     });
   });
 
@@ -201,7 +219,7 @@ describe("LoginPage", () => {
     );
 
     await waitFor(() => {
-      expect(mockReplace).toHaveBeenCalledWith("/ui");
+      expect(mockReplaceDocument).toHaveBeenCalledWith(new URL("/ui", window.location.origin).href);
     });
 
     expect(mockPush).not.toHaveBeenCalled();
@@ -291,13 +309,104 @@ describe("LoginPage", () => {
     expect(ssoButton).toBeDisabled();
   });
 
+  describe("post-login document navigation", () => {
+    beforeEach(() => {
+      vi.mocked(useUIConfig).mockReturnValue({
+        data: { auto_redirect_to_sso: false, server_root_path: "/", proxy_base_url: null, sso_configured: false },
+        isLoading: false,
+      } as ReturnType<typeof useUIConfig>);
+      vi.mocked(getCookieFromDocument).mockReturnValue(null);
+      vi.mocked(isJwtExpired).mockReturnValue(true);
+    });
+
+    function renderLogin() {
+      return render(
+        <QueryClientProvider client={createQueryClient()}>
+          <LoginPage />
+        </QueryClientProvider>,
+      );
+    }
+
+    it.each([
+      [null, "/ui/?login=success"],
+      ["/ui/teams/?tab=all", "/ui/teams/?tab=all"],
+      ["https://untrusted.example/ui/", "/ui/?login=success"],
+      ["/\\attacker.example/ui/", "/ui/?login=success"],
+      ["/\t/attacker.example/ui/", "/ui/?login=success"],
+      ["javascript://localhost/%0Aalert(1)", "/ui/?login=success"],
+    ])("loads the dashboard document after password login with return URL %s", async (returnUrl, expectedUrl) => {
+      if (returnUrl) document.cookie = `litellm_return_url=${encodeURIComponent(returnUrl)}; Path=/`;
+      mockMutate.mockImplementation((_input, options) => options.onSuccess({ redirect_url: "/ui/?login=success" }));
+      renderLogin();
+      await screen.findByRole("heading", { name: "Login" });
+      fireEvent.change(screen.getByLabelText("Username"), { target: { value: "admin" } });
+      fireEvent.change(screen.getByLabelText("Password"), { target: { value: "test-password" } });
+      fireEvent.click(screen.getByRole("button", { name: "Login", exact: true }));
+
+      await waitFor(() =>
+        expect(mockAssignDocument).toHaveBeenCalledWith(new URL(expectedUrl, window.location.origin).href),
+      );
+      expect(mockPush).not.toHaveBeenCalled();
+    });
+
+    it("replaces the login document after SSO code exchange succeeds", async () => {
+      window.location.search = "?code=single-use-code";
+      vi.mocked(exchangeLoginCode).mockResolvedValue("session-jwt");
+      renderLogin();
+
+      await waitFor(() => expect(mockReplaceDocument).toHaveBeenCalledWith("/ui/?login=success"));
+      expect(exchangeLoginCode).toHaveBeenCalledWith("single-use-code", null);
+      expect(mockReplace).not.toHaveBeenCalled();
+    });
+
+    it.each(["https://untrusted.example/ui/", "javascript://localhost/%0Aalert(1)"])(
+      "rejects an unsafe server-provided login redirect %j",
+      async (redirectUrl) => {
+        mockMutate.mockImplementation((_input, options) => options.onSuccess({ redirect_url: redirectUrl }));
+        renderLogin();
+        await screen.findByRole("heading", { name: "Login" });
+        fireEvent.change(screen.getByLabelText("Username"), { target: { value: "admin" } });
+        fireEvent.change(screen.getByLabelText("Password"), { target: { value: "test-password" } });
+        fireEvent.click(screen.getByRole("button", { name: "Login", exact: true }));
+
+        await waitFor(() => expect(mockAssignDocument).toHaveBeenCalledWith("/ui"));
+      },
+    );
+
+    it("replaces the login document with a valid return URL for an existing session", async () => {
+      document.cookie = `litellm_return_url=${encodeURIComponent("/ui/teams/")}; Path=/`;
+      vi.mocked(getCookieFromDocument).mockReturnValue("valid-session");
+      vi.mocked(isJwtExpired).mockReturnValue(false);
+      renderLogin();
+
+      await waitFor(() =>
+        expect(mockReplaceDocument).toHaveBeenCalledWith(new URL("/ui/teams/", window.location.origin).href),
+      );
+      expect(mockReplace).not.toHaveBeenCalled();
+    });
+
+    it.each(["/\\attacker.example/ui/", "javascript://localhost/%0Aalert(1)"])(
+      "keeps an existing session on the dashboard for unsafe return URL %j",
+      async (returnUrl) => {
+        window.location.search = `?redirect_to=${encodeURIComponent(returnUrl)}`;
+        vi.mocked(getCookieFromDocument).mockReturnValue("valid-session");
+        vi.mocked(isJwtExpired).mockReturnValue(false);
+        renderLogin();
+
+        await waitFor(() =>
+          expect(mockReplaceDocument).toHaveBeenCalledWith(new URL("/ui", window.location.origin).href),
+        );
+      },
+    );
+  });
+
   describe("URL ?token= legacy path is rejected (security regression test)", () => {
     const originalLocation = window.location;
 
     beforeEach(() => {
       Object.defineProperty(window, "location", {
         value: {
-          ...originalLocation,
+          ...window.location,
           href: "http://localhost:3000/ui/login?token=attacker.jwt.value",
           pathname: "/ui/login",
           search: "?token=attacker.jwt.value",
@@ -339,7 +448,7 @@ describe("LoginPage", () => {
       });
 
       expect(document.cookie).not.toContain("token=attacker.jwt.value");
-      expect(mockReplace).not.toHaveBeenCalledWith("/ui/?login=success");
+      expect(mockReplaceDocument).not.toHaveBeenCalledWith("/ui/?login=success");
     });
 
     it("must not overwrite an existing valid session cookie when ?token= is in the URL", async () => {
@@ -363,11 +472,11 @@ describe("LoginPage", () => {
       );
 
       await waitFor(() => {
-        expect(mockReplace).toHaveBeenCalledWith("/ui");
+        expect(mockReplaceDocument).toHaveBeenCalledWith(new URL("/ui", window.location.origin).href);
       });
 
       expect(document.cookie).not.toContain("token=attacker.jwt.value");
-      expect(mockReplace).not.toHaveBeenCalledWith("/ui/?login=success");
+      expect(mockReplaceDocument).not.toHaveBeenCalledWith("/ui/?login=success");
     });
   });
 });
