@@ -1,7 +1,7 @@
 import copy
 import enum
 import re
-from collections.abc import AsyncIterator, Collection, Iterator, Mapping
+from collections.abc import AsyncIterator, Collection, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, cast
 
 import httpx
@@ -10,11 +10,13 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import WarningLogger, verbose_logger
+from litellm.exceptions import UnsupportedParamsError
 from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
     declared_prompt_cache_breakpoint,
     routed_model_info,
 )
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     content_parts,
     convert_content_list_to_str,
@@ -26,13 +28,16 @@ from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils i
     prompt_cache_breakpoint_for_wire,
     with_prompt_cache_breakpoint,
 )
-from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning_params
+from litellm.litellm_core_utils.reasoning_effort_capability import declared_reasoning_efforts_for_model
+from litellm.litellm_core_utils.reasoning_effort_strength import nearest_declared_reasoning_effort
+from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning, warn_dropped_reasoning_params
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.azure_ai.common_utils import (
     api_key_header_for_base,
     is_foundry_model_inference_base,
 )
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
+from litellm.llms.fireworks_ai.common_utils import AZURE_FOUNDRY_FIREWORKS_MODEL_ID_PREFIX
 from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
 from litellm.llms.openai.common_utils import drop_params_from_unprocessable_entity_error
 from litellm.llms.openai.openai import OpenAIChatCompletionResponseIterator, OpenAIConfig
@@ -143,6 +148,51 @@ def _deployment_reads_breakpoints(model: str, litellm_params: Mapping[str, objec
     )
 
 
+def _declares_reasoning_effort(model: str) -> bool:
+    return bool(declared_reasoning_efforts_for_model(model, "azure_ai"))
+
+
+def _reasoning_effort_level(
+    requested: object, model: str, declared: Sequence[str], drop_params: bool
+) -> Mapping[str, str]:
+    fields: Final = as_str_mapping(requested)
+    level: Final = fields.get("effort") if fields is not None else requested
+    if isinstance(level, str):
+        return {"reasoning_effort": nearest_declared_reasoning_effort(level, declared)}
+    if not drop_params and litellm.drop_params is not True:
+        raise UnsupportedParamsError(
+            message=f"azure_ai takes reasoning_effort only as a level such as 'high', got {requested!r}. To drop "
+            "unsupported openai params from the call, set `litellm.drop_params = True`",
+            llm_provider="azure_ai",
+            model=model,
+            status_code=400,
+        )
+    warn_dropped_reasoning(
+        "reasoning_effort", requested, model, "Azure AI Foundry takes only a level name.", drop_params_gated=True
+    )
+    return {}
+
+
+def _declared_reasoning_effort_param(
+    non_default_params: Mapping[str, object],
+    model: str,
+    deployment_levels: Collection[str] | None,
+    drop_params: bool,
+) -> Mapping[str, str]:
+    model_levels: Final = declared_reasoning_efforts_for_model(model, "azure_ai")
+    if "reasoning_effort" not in non_default_params or not model_levels:
+        return {}
+    return _reasoning_effort_level(
+        non_default_params["reasoning_effort"], model, tuple(deployment_levels or ()) or model_levels, drop_params
+    )
+
+
+def _message_fields_to_strip(model: str) -> tuple[str, ...]:
+    if not model.upper().startswith(AZURE_FOUNDRY_FIREWORKS_MODEL_ID_PREFIX):
+        return NON_OPENAI_SPEC_MESSAGE_FIELDS
+    return tuple(field for field in NON_OPENAI_SPEC_MESSAGE_FIELDS if field != "reasoning_content")
+
+
 class AzureAIChatCompletionResponseIterator(OpenAIChatCompletionResponseIterator):
     def chunk_parser(self, chunk: dict[str, object]) -> ModelResponseStream:  # mutable-ok: mirrors override contract
         usage: Final = chunk.get("usage")
@@ -173,7 +223,7 @@ azureAIGPT5Config: Final = AzureAIGPT5Config()
 
 
 class AzureAIStudioConfig(OpenAIConfig):
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         model_supports_tool_choice = True  # azure ai supports this by default
         if not supports_tool_choice(model=f"azure_ai/{model}"):
             model_supports_tool_choice = False
@@ -193,7 +243,12 @@ class AzureAIStudioConfig(OpenAIConfig):
         if not self._supports_stop_reason(model):
             supported_params = [param for param in supported_params if param != "stop"]
 
-        return supported_params
+        declared_extra: Final = (
+            ("reasoning_effort",)
+            if "reasoning_effort" not in supported_params and _declares_reasoning_effort(model)
+            else ()
+        )
+        return [*supported_params, *declared_extra]
 
     def map_openai_params(
         self,
@@ -208,7 +263,12 @@ class AzureAIStudioConfig(OpenAIConfig):
         if not azureAIGPT5Config.is_model_gpt_5_model(model):
             return super().map_openai_params(
                 non_default_params=non_default_params,
-                optional_params=optional_params,
+                optional_params={
+                    **optional_params,
+                    **_declared_reasoning_effort_param(
+                        non_default_params, model, declared_reasoning_efforts, drop_params
+                    ),
+                },
                 model=model,
                 drop_params=drop_params,
             )
@@ -345,6 +405,8 @@ class AzureAIStudioConfig(OpenAIConfig):
                Azure AI Foundry backends set additionalProperties=false and reject
                these with "Extra inputs are not permitted", which breaks multi-turn
                Anthropic-format clients that echo thinking blocks back as history.
+               Fireworks-hosted FW- models accept reasoning_content and Kimi reads its
+               earlier reasoning back from it, so those models keep it.
             2. Transforms list content to a string, except on deployments that read OpenAI explicit
                prompt cache breakpoints (the deployment's own model_info opt-in, else the cost-map entry
                of its base_model or name, as loaded and without a sibling deployment's opt-in): only a
@@ -372,7 +434,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         )
         for message in stripped_messages:
             message_dict = cast(dict, message)  # cast-ok: TypedDict is a runtime dict stripped on our copy
-            for field in NON_OPENAI_SPEC_MESSAGE_FIELDS:
+            for field in _message_fields_to_strip(model):
                 filter_value_from_dict(message_dict, field)
 
             if _has_list_only_content_part(message):
