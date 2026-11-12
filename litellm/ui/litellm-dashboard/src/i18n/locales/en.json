@@ -17514,7 +17514,9 @@
       },
       "githubApp": {
         "label": "GitHub App",
-        "description": "Authenticate a service with a GitHub App installation. Usage is billed to the organization. LiteLLM refreshes installation tokens automatically. Use a private-key secret reference, not the PEM contents."
+        "description": "Authenticate a service with a GitHub App installation. Usage is billed to the organization. LiteLLM refreshes installation tokens automatically.",
+        "keySetup": "First store the PEM in your configured secret manager or mount it read-only on every proxy worker. Enter its secret name or oidc/file/ reference above. The path is on the proxy server, not your computer. The browser saves only this reference.",
+        "keySetupLink": "Private-key setup instructions"
       }
     },
     "classificationMethodConfig": {

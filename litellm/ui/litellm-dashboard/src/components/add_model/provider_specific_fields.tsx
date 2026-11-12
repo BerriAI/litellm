@@ -402,7 +402,11 @@ const ProviderSpecificFieldsContent: React.FC<ProviderSpecificFieldsProps> = ({
       {allFields.map((field) => (
         <React.Fragment key={`${selectedProvider}:${field.key}`}>
           <MountedFormField
-            label={field.tooltip ? labelWithHint(field.label, field.tooltip) : field.label}
+            label={
+              field.tooltip
+                ? labelWithHint(field.label, field.tooltip, selectedAuthType?.id === "github_app" ? "info" : "help")
+                : field.label
+            }
             name={field.key}
             required={field.required}
             rules={{
@@ -415,6 +419,20 @@ const ProviderSpecificFieldsContent: React.FC<ProviderSpecificFieldsProps> = ({
           >
             {(control) => renderFieldControl(field, control)}
           </MountedFormField>
+
+          {field.key === "github_copilot_app_private_key_ref" && (
+            <p className="mb-4 text-sm text-muted-foreground">
+              {t("addModel.providerAuthTypes.githubApp.keySetup")}{" "}
+              <a
+                href="https://docs.litellm.ai/docs/providers/github_copilot#github-app-authentication"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline"
+              >
+                {t("addModel.providerAuthTypes.githubApp.keySetupLink")}
+              </a>
+            </p>
+          )}
 
           {/* Special case for Vertex Credentials help text */}
           {field.key === "vertex_credentials" && (
