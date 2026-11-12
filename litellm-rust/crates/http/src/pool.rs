@@ -16,6 +16,7 @@ use crate::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ClientVariant {
     Provider,
+    Undecoded,
     NoRedirect,
     Media,
     UnpinnedMedia,
@@ -55,36 +56,13 @@ impl HttpClientPool {
         config: &HttpClientConfig,
         variant: ClientVariant,
     ) -> Result<Client, Error> {
-        let effective = match variant {
-            ClientVariant::Media => HttpClientConfig {
-                client_certificate: None,
-                proxies: EnvironmentProxies::default(),
-                ..config.clone()
-            },
-            ClientVariant::UnpinnedMedia => HttpClientConfig {
-                client_certificate: None,
-                ..config.clone()
-            },
-            ClientVariant::WebSocket => HttpClientConfig {
-                http2: false,
-                verify: match &config.verify {
-                    Verify::BuiltInRoots => Verify::NativeRoots,
-                    verify => verify.clone(),
-                },
-                ..config.clone()
-            },
-            ClientVariant::Provider | ClientVariant::NoRedirect => config.clone(),
-        };
-        let key = (effective, variant);
+        let key = (effective(config, variant), variant);
         if let Some(pooled) = self.lock().get(&key)
             && pooled.built_at.elapsed() < self.ttl
         {
             return Ok(Client::new(pooled.client.clone()));
         }
-        let client = self
-            .apply(variant, reqwest::ClientBuilder::try_from(&key.0)?)
-            .build()
-            .map_err(Repr::Client)?;
+        let client = self.build(&key.0, variant)?;
         self.lock().insert(
             key,
             PooledClient {
@@ -93,6 +71,26 @@ impl HttpClientPool {
             },
         );
         Ok(Client::new(client))
+    }
+
+    /// A client nobody else holds, for a caller that drives it on a runtime of its own and drops both together
+    pub fn unpooled(
+        &self,
+        config: &HttpClientConfig,
+        variant: ClientVariant,
+    ) -> Result<Client, Error> {
+        self.build(&effective(config, variant), variant)
+            .map(Client::new)
+    }
+
+    fn build(
+        &self,
+        config: &HttpClientConfig,
+        variant: ClientVariant,
+    ) -> Result<reqwest::Client, Error> {
+        self.apply(variant, reqwest::ClientBuilder::try_from(config)?)
+            .build()
+            .map_err(|error| Error::from(Repr::Client(error)))
     }
 
     fn lock(&self) -> MutexGuard<'_, Clients> {
@@ -106,12 +104,38 @@ impl HttpClientPool {
     ) -> reqwest::ClientBuilder {
         match variant {
             ClientVariant::Provider => builder,
+            ClientVariant::Undecoded => builder.no_gzip().no_deflate().no_brotli().no_zstd(),
             ClientVariant::NoRedirect | ClientVariant::UnpinnedMedia | ClientVariant::WebSocket => {
                 builder.redirect(reqwest::redirect::Policy::none())
             }
             ClientVariant::Media => builder
                 .redirect(reqwest::redirect::Policy::none())
                 .dns_resolver(Arc::clone(&self.media_resolver)),
+        }
+    }
+}
+
+fn effective(config: &HttpClientConfig, variant: ClientVariant) -> HttpClientConfig {
+    match variant {
+        ClientVariant::Media => HttpClientConfig {
+            client_certificate: None,
+            proxies: EnvironmentProxies::default(),
+            ..config.clone()
+        },
+        ClientVariant::UnpinnedMedia => HttpClientConfig {
+            client_certificate: None,
+            ..config.clone()
+        },
+        ClientVariant::WebSocket => HttpClientConfig {
+            http2: false,
+            verify: match &config.verify {
+                Verify::BuiltInRoots => Verify::NativeRoots,
+                verify => verify.clone(),
+            },
+            ..config.clone()
+        },
+        ClientVariant::Provider | ClientVariant::Undecoded | ClientVariant::NoRedirect => {
+            config.clone()
         }
     }
 }
@@ -345,6 +369,28 @@ mod tests {
         assert_eq!(response.version(), reqwest::Version::HTTP_11);
         let request = requests.lock().unwrap()[0].clone();
         assert!(request.contains("user-agent: litellm-test/9"), "{request}");
+    }
+
+    #[tokio::test]
+    async fn provider_client_follows_twenty_redirects_without_a_referer() {
+        let (address, _, requests) = serve("HTTP/1.1 307 Temporary Redirect").await;
+        let followed = pool()
+            .client(&config("a"), ClientVariant::Provider)
+            .unwrap()
+            .get(format!("http://{address}/start"))
+            .timeout(Duration::from_secs(5))
+            .send()
+            .await;
+        assert!(followed.is_err());
+        let requests = requests.lock().unwrap().clone();
+        assert_eq!(requests.len(), 21, "{requests:?}");
+        assert!(requests[1].starts_with("GET /elsewhere "), "{requests:?}");
+        assert!(
+            requests
+                .iter()
+                .all(|request| !request.to_ascii_lowercase().contains("referer:")),
+            "{requests:?}"
+        );
     }
 
     #[tokio::test]

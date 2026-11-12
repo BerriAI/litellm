@@ -1,4 +1,6 @@
 import React, { useEffect, useState } from "react";
+import type { ParseKeys } from "i18next";
+import { useTranslation } from "react-i18next";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { getAutoRouterAssembledPromptCall } from "@/components/networking";
 import { Button } from "@/components/ui/button";
@@ -11,6 +13,7 @@ import {
   ClassificationRubric,
   ComplexityTierLabels,
 } from "./ComplexityRouterConfig";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 export type OpeningPromptTierSource =
   | { kind: "custom"; tierRows: readonly TierRow[] }
@@ -40,31 +43,21 @@ interface OpeningPromptEditorProps {
   contextWindowSize: number;
 }
 
-const CUSTOM_PLACEHOLDER = `Classify the request into exactly one tier for a payments engineering team.
+const CUSTOM_PLACEHOLDER: ParseKeys = "addModel.openingPromptEditor.placeholders.custom";
 
-Weigh what the request actually asks for, not how it is worded.`;
-
-const BUILT_IN_PLACEHOLDER = `Classify the complexity of a user request into exactly one tier.
-
-Judge the intellectual difficulty of answering correctly, not how short, long, or technical-sounding the request is.`;
+const BUILT_IN_PLACEHOLDER: ParseKeys = "addModel.openingPromptEditor.placeholders.builtIn";
 
 const COPY = {
   custom: {
-    overridden:
-      "This router opens with your own instructions and calibration examples. Your tier definitions and the injection guard are still appended below them.",
-    default:
-      "Write the opening instructions and your own calibration examples. Your tier definitions and the injection guard are always appended below them.",
-    explainer:
-      "Your text is the opening of the classifier prompt, so it is where calibration examples of your own belong. The router appends your tier definitions and its injection guard underneath, and neither can be edited or removed from here. Edit the definitions themselves with Edit tiers above.",
+    overridden: "addModel.openingPromptEditor.copy.custom.overridden",
+    default: "addModel.openingPromptEditor.copy.custom.default",
+    explainer: "addModel.openingPromptEditor.copy.custom.explainer",
     placeholder: CUSTOM_PLACEHOLDER,
   },
   builtIn: {
-    overridden:
-      "This router opens with your own instructions and calibration examples in place of the base rubric's. Its tier criteria and the injection guard are still appended below them.",
-    default:
-      "The base rubric supplies the opening instructions and calibration examples. Customize them to write your own; the tier criteria and the injection guard are always appended below them.",
-    explainer:
-      "The base rubric decides the tier criteria and, until you write your own, the opening instructions and calibration examples. Your text replaces that opening and those examples. The router appends the four tier criteria and its injection guard underneath, and neither can be edited or removed from here. Rename the tiers with the display names above.",
+    overridden: "addModel.openingPromptEditor.copy.builtIn.overridden",
+    default: "addModel.openingPromptEditor.copy.builtIn.default",
+    explainer: "addModel.openingPromptEditor.copy.builtIn.explainer",
     placeholder: BUILT_IN_PLACEHOLDER,
   },
 } as const;
@@ -76,6 +69,7 @@ const OpeningPromptEditor: React.FC<OpeningPromptEditorProps> = ({
   tierSource,
   contextWindowSize,
 }) => {
+  const { t } = useTranslation();
   const { accessToken } = useAuthorized();
   const [isOpen, setIsOpen] = useState(false);
   const [instructionDraft, setInstructionDraft] = useState("");
@@ -153,12 +147,16 @@ const OpeningPromptEditor: React.FC<OpeningPromptEditorProps> = ({
     <div>
       {rubricSummary && (
         <p className="mb-1 text-xs text-muted-foreground">
-          {isOverridden ? `Custom opening on the ${rubricSummary.label} rubric` : `${rubricSummary.label} rubric`}
+          {isOverridden
+            ? t("addModel.openingPromptEditor.customOpeningOnRubric", { rubric: t(rubricSummary.labelKey) })
+            : t("addModel.openingPromptEditor.rubricName", { rubric: t(rubricSummary.labelKey) })}
         </p>
       )}
       <div className="flex items-center gap-2">
         <Button type="button" size="sm" variant="outline" onClick={openEditor}>
-          {isOverridden ? "Edit custom prompt" : "Customize prompt"}
+          {isOverridden
+            ? t("addModel.openingPromptEditor.editCustomPrompt")
+            : t("addModel.openingPromptEditor.customizePrompt")}
         </Button>
         {isOverridden && (
           <Button
@@ -173,33 +171,37 @@ const OpeningPromptEditor: React.FC<OpeningPromptEditorProps> = ({
               })
             }
           >
-            Reset to default
+            {t("addModel.openingPromptEditor.resetToDefault")}
           </Button>
         )}
       </div>
-      <p className="mt-1 text-xs text-muted-foreground">{isOverridden ? copy.overridden : copy.default}</p>
+      <p className="mt-1 text-xs text-muted-foreground">{isOverridden ? t(copy.overridden) : t(copy.default)}</p>
 
       <Dialog open={isOpen} onOpenChange={setIsOpen}>
         <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-4xl">
           <DialogHeader>
-            <DialogTitle>Classifier prompt</DialogTitle>
+            <DialogTitle>{t("addModel.openingPromptEditor.dialogTitle")}</DialogTitle>
           </DialogHeader>
 
           {tierSource.kind === "builtIn" && (
             <div>
               <label className="text-sm font-medium" htmlFor="base-classification-rubric">
-                Base rubric
+                {t("addModel.openingPromptEditor.baseRubric")}
               </label>
               <Select
                 items={Object.entries(CLASSIFICATION_RUBRIC_DESCRIPTIONS).map(([rubric, description]) => ({
                   value: rubric,
-                  label: description.label,
+                  label: t(description.labelKey),
                 }))}
                 value={classificationRubric ?? tierSource.classificationRubric}
                 onValueChange={(rubric: ClassificationRubric | null) => rubric && setRubricDraft(rubric)}
                 disabled={Boolean(tierSource.rubricRestriction)}
               >
-                <SelectTrigger id="base-classification-rubric" aria-label="Base rubric" className="mt-1 w-full">
+                <SelectTrigger
+                  id="base-classification-rubric"
+                  aria-label={t("addModel.openingPromptEditor.baseRubric")}
+                  className="mt-1 w-full"
+                >
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent
@@ -209,71 +211,66 @@ const OpeningPromptEditor: React.FC<OpeningPromptEditorProps> = ({
                 >
                   {Object.entries(CLASSIFICATION_RUBRIC_DESCRIPTIONS).map(([rubric, description]) => (
                     <SelectItem key={rubric} value={rubric}>
-                      {description.label}
+                      {t(description.labelKey)}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
               <p className="mt-1 text-xs text-muted-foreground">
-                {tierSource.rubricRestriction ?? draftRubricSummary?.description}
+                {tierSource.rubricRestriction ?? (draftRubricSummary && t(draftRubricSummary.descriptionKey))}
               </p>
             </div>
           )}
 
-          <p className="text-sm text-muted-foreground">{copy.explainer}</p>
+          <p className="text-sm text-muted-foreground">{t(copy.explainer)}</p>
 
           <div className="mt-3 space-y-4">
             <div>
               <label className="text-sm font-medium" htmlFor="classification-instructions">
-                Classification instructions
+                {t("addModel.openingPromptEditor.instructions.label")}
               </label>
               <p className="mt-1 text-xs text-muted-foreground">
-                Explain what the classifier should judge. Tier definitions are managed separately below.
+                {t("addModel.openingPromptEditor.instructions.help")}
               </p>
               <Textarea
                 id="classification-instructions"
                 value={instructionDraft}
                 onChange={(e) => setInstructionDraft(e.target.value)}
                 rows={5}
-                placeholder={copy.placeholder}
-                aria-label="Classification instructions"
+                placeholder={t(copy.placeholder)}
+                aria-label={t("addModel.openingPromptEditor.instructions.label")}
                 className="mt-2 font-mono text-xs"
               />
             </div>
 
             <div>
               <label className="text-sm font-medium" htmlFor="calibration-examples">
-                Calibration examples
+                {t("addModel.openingPromptEditor.examples.label")}
               </label>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Show representative requests and the tier they should receive. The router adds these after its tier
-                definitions.
-              </p>
+              <p className="mt-1 text-xs text-muted-foreground">{t("addModel.openingPromptEditor.examples.help")}</p>
               <Textarea
                 id="calibration-examples"
                 value={exampleDraft}
                 onChange={(e) => setExampleDraft(e.target.value)}
                 rows={6}
-                placeholder={'- "what is the capital of France?" -> SIMPLE'}
-                aria-label="Calibration examples"
+                placeholder={codeSamples.models.openingPromptExample}
+                aria-label={t("addModel.openingPromptEditor.examples.label")}
                 className="mt-2 font-mono text-xs"
               />
             </div>
           </div>
 
           <div className="mt-3">
-            <p className="text-xs font-medium">What this router sends</p>
+            <p className="text-xs font-medium">{t("addModel.openingPromptEditor.preview.title")}</p>
             {preview.status === "loading" && (
-              <p className="mt-1 text-xs text-muted-foreground">Loading the assembled prompt…</p>
+              <p className="mt-1 text-xs text-muted-foreground">{t("addModel.openingPromptEditor.preview.loading")}</p>
             )}
             {preview.status === "error" && (
-              <p className="mt-1 text-xs text-muted-foreground">
-                Could not load the assembled prompt. Your text is still saved as written.
-              </p>
+              <p className="mt-1 text-xs text-muted-foreground">{t("addModel.openingPromptEditor.preview.error")}</p>
             )}
             {preview.status === "ready" && (
               <pre
-                aria-label="Assembled classifier prompt"
+                aria-label={t("addModel.openingPromptEditor.preview.ariaLabel")}
                 className="mt-1 overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs whitespace-pre-wrap text-muted-foreground"
               >
                 {preview.text}
@@ -283,10 +280,10 @@ const OpeningPromptEditor: React.FC<OpeningPromptEditorProps> = ({
 
           <DialogFooter className="mt-4">
             <Button type="button" variant="outline" onClick={() => setIsOpen(false)}>
-              Cancel
+              {t("addModel.openingPromptEditor.cancel")}
             </Button>
             <Button type="button" onClick={handleSave}>
-              Save prompt
+              {t("addModel.openingPromptEditor.save")}
             </Button>
           </DialogFooter>
         </DialogContent>

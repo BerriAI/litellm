@@ -7,9 +7,11 @@
 //! |---|---|
 //! | [`literal`] | `ast.literal_eval(text)` |
 //! | [`repr`] | `repr(value)` and `str(value)` |
-//! | [`json`] | `json.dumps(value)`, and `json.loads(json.dumps(value))` as a JSON value |
+//! | [`reprlib`] | `reprlib.repr(value)` |
+//! | [`json`] | `json.dumps(value)` and `json.loads(text)` |
 //! | [`pickle`] | `pickle.loads(data)` and `pickle.dumps(value)` for plain data |
 //! | [`truthy`] | `bool(value)` |
+//! | [`number`] | `int(text)`, `float(text)`, and `int(seconds)` as a `Duration` |
 //!
 //! [`Value`] is the closed data model these formats share. Live Python objects
 //! (descriptors, `__bool__`, `__str__`, callbacks) are out of scope: those belong to the
@@ -20,12 +22,15 @@
 //!   (string hashes are randomized per process). Sets keep their literal order.
 //! - `str` values are Rust `String`s, so lone surrogates cannot be represented.
 //! - [`pickle::loads`] decodes `tuple`, `set`, and `frozenset` as lists.
+//! - [`number`] reads ASCII digits only, while Python's `int` and `float` accept any Unicode decimal digit.
 
 mod error;
 pub mod json;
 pub mod literal;
+pub mod number;
 pub mod pickle;
 pub mod repr;
+pub mod reprlib;
 pub mod truthy;
 mod value;
 

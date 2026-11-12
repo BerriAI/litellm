@@ -13,7 +13,9 @@ use futures_util::future::BoxFuture;
 use litellm_gateway_inference::{Deployment, Gateway, router};
 use litellm_http::{HttpClientPool, HttpSettings, Resolution, media::PublicDnsResolver};
 use litellm_inference::resources::CoreResources;
-use litellm_secrets::{SecretValue, source::SecretSource};
+use litellm_secret_value::SecretValue;
+use litellm_secrets::source::SecretSource;
+
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tower::ServiceExt;

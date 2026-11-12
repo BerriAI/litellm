@@ -1,6 +1,6 @@
 use litellm_cache_response::CachePolicy;
 use litellm_host::{
-    interceptors::{ExecutionFacts, Interceptors, RawResponse, ResultSource},
+    interceptors::{ExecutionFacts, Interceptors, RawResponse, ResultSource, RetriedRequest},
     lifecycle::{CallEvent, ExecutionEvent},
     observation::ObservationSender,
 };
@@ -42,9 +42,11 @@ impl<'a, I: Interceptors<Error>> CallContext<'a, I> {
     }
 
     pub async fn response_received(&self, body: &str) -> Result<(), Error> {
-        let raw = RawResponse {
-            body: body.to_owned(),
-        };
+        self.raw_response_received(RawResponse::new(body.to_owned()))
+            .await
+    }
+
+    pub async fn raw_response_received(&self, raw: RawResponse) -> Result<(), Error> {
         if let Some(observers) = &self.observers {
             observers.emit(CallEvent::Execution(
                 ExecutionEvent::ProviderResponseReceived { raw: raw.clone() },
@@ -54,5 +56,16 @@ impl<'a, I: Interceptors<Error>> CallContext<'a, I> {
             .after_provider_response(raw)
             .await
             .map_err(Error::post_call)
+    }
+
+    pub async fn provider_request_retried(&self, retry: RetriedRequest) -> Result<(), Error> {
+        if let Some(observers) = &self.observers {
+            observers.emit(CallEvent::Execution(
+                ExecutionEvent::ProviderRequestRetried {
+                    retry: retry.clone(),
+                },
+            ));
+        }
+        self.interceptors.provider_request_retried(retry).await
     }
 }

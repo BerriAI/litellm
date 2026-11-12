@@ -1,10 +1,13 @@
-use litellm_auth::SecretValue;
+use crate::anthropic::messages::transformation::retry_anthropic_messages_after_http_error;
+use litellm_host::interceptors::RetriedRequest;
 use litellm_http::request::{has_bearer_auth, has_header};
 use litellm_llms_types::{
     formats::messages::{MessagesOptionalParams, MessagesRequest},
     providers::anthropic::{BetaProvider, DEFAULT_HEADERS, MESSAGES_PATH},
 };
 use litellm_router_types::LitellmParams;
+use litellm_secret_value::SecretValue;
+use serde_json::Value;
 
 use crate::{
     Error,
@@ -21,7 +24,7 @@ use crate::{
     base_llm::{
         auth::{AuthScheme, Headers, ValidatedEnvironment},
         messages::{
-            context::MessagesTransformContext,
+            context::{MessagesShapeOptions, MessagesTransformContext},
             normalization::{normalize_system_role_messages, strip_cache_control_scope},
             transformation::BaseMessagesConfig,
         },
@@ -36,12 +39,28 @@ pub const AZURE_ANTHROPIC_MESSAGES_CONFIG: AzureAnthropicMessagesConfig =
     AzureAnthropicMessagesConfig;
 
 impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
+    fn tool_custom_field(&self, model: &str) -> crate::base_llm::messages::tools::ToolCustomField {
+        crate::base_llm::messages::tools::ToolCustomField::Rewrite {
+            hoist_defer_loading: crate::anthropic::messages::transformation::is_claude_model(model),
+        }
+    }
+
+    fn retry_after_http_error(
+        &self,
+        status: u16,
+        error_text: &str,
+        request_body: &Value,
+        context: &MessagesTransformContext,
+    ) -> Option<RetriedRequest> {
+        retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
+    }
+
     fn shape_request(
         &self,
         request: MessagesRequest,
-        reasoning_auto_summary: bool,
+        options: MessagesShapeOptions,
     ) -> Result<MessagesRequest, Error> {
-        shape_anthropic_messages_request(request, reasoning_auto_summary)
+        shape_anthropic_messages_request(request, options)
     }
 
     fn get_complete_url(
@@ -68,7 +87,7 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
                     .capabilities
                     .supports_mid_conversation_system,
             )),
-            context,
+            &context.keeping_display_updates(),
         )
     }
 
@@ -544,6 +563,11 @@ mod tests {
         json!({"output_config": {"format": {"type": "json_schema"}}}),
         &[("anthropic-beta", "web-search-2025-03-05")],
         &[("x-api-key", "k"), ("anthropic-beta", "structured-outputs-2025-11-13,web-search-2025-03-05")]
+    )]
+    #[case::compaction_needs_the_compact_2026_09_04_beta(
+        json!({"compaction": {"type": "summarize"}}),
+        &[],
+        &[("x-api-key", "k"), ("anthropic-beta", "compact-2026-09-04")]
     )]
     #[case::no_feature_needs_a_beta(json!({}), &[], &[("x-api-key", "k")])]
     #[case::safeguards_need_the_dangerous_tool_use_beta(
