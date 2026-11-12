@@ -1369,12 +1369,28 @@ def _tiktoken_o200k_model_name(model: str) -> str | None:
 
 
 def _listed_openai_model_name(model: str) -> str | None:
-    segments: Final = model.split("/")
-    suffixes: Final = ("/".join(segments[start:]) for start in range(len(segments)))
-    listed: Final = any(
-        _is_openai_cost_map_model(suffix) or _is_openai_cost_map_model(f"azure/{suffix}") for suffix in suffixes
-    )
-    return segments[-1] if listed else None
+    # The candidates are the name with its leading segments dropped, and building one copies whatever is left of the
+    # name, so a name made of thousands of slash-separated bits costs a copy per segment for no reason. `model` comes
+    # straight off the request, so that is free work for whoever wants it.
+    #
+    # A candidate longer than the longest listed name cannot match anything, so the walk only looks one up while it is
+    # short enough. Skipping is just moving to the next slash, which keeps the whole thing linear in the name length.
+    #
+    # The bound is read per call rather than frozen at import: `register_model` keeps adding names, and a name longer
+    # than anything in the shipped catalog is exactly the sort of thing it is used for.
+    limit: Final = _longest_listed_openai_model()
+    tail: Final = model.rsplit("/", 1)[-1]
+    length: Final = len(model)
+    start: Final = 0
+    while True:
+        if length - start <= limit:
+            rest: Final = model[start:]
+            if _is_openai_cost_map_model(rest) or _is_openai_cost_map_model(f"azure/{rest}"):
+                return tail
+        next_separator: Final = model.find("/", start)
+        if next_separator < 0:
+            return None
+        start = next_separator + 1
 
 
 def _is_openai_cost_map_model(model: str) -> bool:
@@ -1386,6 +1402,33 @@ def _is_openai_cost_map_model(model: str) -> bool:
 
 
 _TEXT_MODEL_MODES: Final = frozenset({"chat", "completion", "responses", "realtime"})
+
+
+def _is_azure_text_cost_info(cost_info: object) -> bool:
+    return (
+        isinstance(cost_info, Mapping)
+        and cost_info.get("litellm_provider") == "azure"
+        and cost_info.get("mode") in _TEXT_MODEL_MODES
+    )
+
+
+_longest_bound: Final = {"key": (-1, -1, -1), "length": 0}
+
+
+def _longest_listed_openai_model() -> int:
+    """Longest name `_is_openai_cost_map_model` can match, re-read when the lists change.
+
+    Started out as a module constant, which missed everything registered after import. The
+    three sizes are enough to notice a change; otherwise this would walk the whole catalog on
+    every call, which is what the constant was there to avoid."""
+    key: Final = (len(litellm.azure_llms), len(litellm.open_ai_chat_completion_models), len(litellm.model_cost))
+    if _longest_bound["key"] != key:
+        _longest_bound["key"] = key
+        # ask `_is_openai_cost_map_model` itself so this stays right if it learns new sources
+        _longest_bound["length"] = max(
+            (len(name) for name in litellm.model_cost if _is_openai_cost_map_model(name)), default=0
+        )
+    return _longest_bound["length"]
 
 
 def _is_azure_openai_text_model(model: str) -> bool:
