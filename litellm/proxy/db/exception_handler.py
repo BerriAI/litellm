@@ -3,7 +3,7 @@ from collections.abc import Awaitable, Callable, Iterator
 from http import HTTPStatus
 from typing import Final, Protocol, TypeVar
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
@@ -106,6 +106,22 @@ def _prisma_error_code(e: Exception) -> str | None:
         return None
     engine_code: Final = body.get("error_code")
     return engine_code if isinstance(engine_code, str) else None
+
+
+class _PrismaValidationIssue(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    kind: str
+    errors: tuple["_PrismaValidationIssue", ...] = ()
+
+
+def _only_refuses_value_types(e: Exception) -> bool:
+    try:
+        issue: Final = _PrismaValidationIssue.model_validate(getattr(e, "meta", None))
+    except ValidationError:
+        return False
+    leaves: Final = issue.errors if issue.kind == "Union" else (issue,)
+    return len(leaves) > 0 and all(leaf.kind == "InvalidArgumentType" for leaf in leaves)
 
 
 class PrismaDBExceptionHandler:
@@ -223,11 +239,12 @@ class PrismaDBExceptionHandler:
 
     @staticmethod
     def is_prisma_query_validation_error(e: Exception) -> bool:
-        """True iff prisma's query validation refused a row's value, such as a number in a text column, which fails
-        the same way on every retry."""
+        """True iff prisma's query validation refused only values of the wrong type (a number in a text column),
+        which fails the same way on every retry. An unknown field from a stale generated client stays False so the
+        batch is retried instead of dropped."""
         import prisma
 
-        return isinstance(e, _exception_types(prisma.errors.FieldNotFoundError))
+        return isinstance(e, _exception_types(prisma.errors.FieldNotFoundError)) and _only_refuses_value_types(e)
 
     @staticmethod
     def is_database_transport_error(e: Exception) -> bool:

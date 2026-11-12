@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch, AsyncMock
 
 import httpx
 import math
+from prisma.errors import FieldNotFoundError
 from litellm.constants import SPEND_LOG_WRITE_BATCH_MAX_ROWS
 from litellm.proxy.utils import update_spend
 
@@ -353,10 +354,35 @@ async def test_update_spend_logs_drops_row_prisma_cannot_encode_and_keeps_the_re
     proxy_logging_obj.failure_handler.assert_not_called()
 
 
-@pytest.mark.asyncio
-async def test_update_spend_logs_drops_row_prisma_validation_rejects_and_keeps_the_rest():
-    from prisma.errors import FieldNotFoundError
+def _query_validation_error(issue_kind: str) -> FieldNotFoundError:
+    # Shape prisma-client-py 0.11.0 raised for create_many on LiteLLM_SpendLogs against Postgres, captured 2026-11-12
+    return FieldNotFoundError(
+        {
+            "user_facing_error": {
+                "error_code": "P2009",
+                "message": "Unable to match input value to any allowed input type for the field.",
+                "meta": {
+                    "kind": "Union",
+                    "errors": [
+                        {
+                            "kind": "InvalidArgumentType",
+                            "argumentPath": ["data"],
+                            "selectionPath": ["createManyLiteLLM_SpendLogs"],
+                        },
+                        {
+                            "kind": issue_kind,
+                            "argumentPath": ["data", "call_type"],
+                            "selectionPath": ["createManyLiteLLM_SpendLogs"],
+                        },
+                    ],
+                },
+            }
+        }
+    )
 
+
+@pytest.mark.asyncio
+async def test_update_spend_logs_drops_row_prisma_validation_rejects_and_keeps_the_rest() -> None:
     prisma_client = MockPrismaClient()
     proxy_logging_obj = create_mock_proxy_logging()
     prisma_client.spend_log_transactions = [
@@ -364,19 +390,12 @@ async def test_update_spend_logs_drops_row_prisma_validation_rejects_and_keeps_t
         {"request_id": "poison", "call_type": 5},
         {"request_id": "good-2", "call_type": "acompletion"},
     ]
-    written = []
+    written: list[str] = []
 
-    async def create_many(data, skip_duplicates):
+    async def create_many(data: list[dict[str, object]], skip_duplicates: bool) -> None:
         if any(not isinstance(row["call_type"], str) for row in data):
-            raise FieldNotFoundError(
-                {
-                    "user_facing_error": {
-                        "error_code": "P2009",
-                        "message": "Could not find field at `createManyLiteLLM_SpendLogs.data.call_type`",
-                    }
-                }
-            )
-        written.extend(row["request_id"] for row in data)
+            raise _query_validation_error("InvalidArgumentType")
+        written.extend(str(row["request_id"]) for row in data)
 
     prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=create_many)
 
@@ -384,3 +403,32 @@ async def test_update_spend_logs_drops_row_prisma_validation_rejects_and_keeps_t
 
     assert sorted(written) == ["good-1", "good-2"]
     assert prisma_client.spend_log_transactions == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "refusal",
+    [
+        _query_validation_error("UnknownInputField"),
+        FieldNotFoundError({"user_facing_error": {"error_code": "P2009", "message": "Unknown argument"}}),
+    ],
+    ids=["unknown_field", "no_issue_detail"],
+)
+async def test_update_spend_logs_keeps_every_row_prisma_refuses_for_a_reason_other_than_a_value_type(
+    refusal: FieldNotFoundError,
+) -> None:
+    prisma_client = MockPrismaClient()
+    proxy_logging_obj = create_mock_proxy_logging()
+    proxy_logging_obj.db_spend_update_writer.redis_update_buffer.store_spend_logs_in_redis = AsyncMock(
+        return_value=False
+    )
+    prisma_client.spend_log_transactions = [
+        {"request_id": "row-1", "call_type": "acompletion"},
+        {"request_id": "row-2", "call_type": "acompletion"},
+    ]
+    prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=refusal)
+
+    with pytest.raises(FieldNotFoundError):
+        await update_spend(prisma_client, None, proxy_logging_obj)
+
+    assert [row["request_id"] for row in prisma_client.spend_log_transactions] == ["row-1", "row-2"]
