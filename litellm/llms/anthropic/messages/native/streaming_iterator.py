@@ -244,7 +244,11 @@ def _try_claim_detached_drain_slot() -> bool:
 
 
 def _exception_left_unconsumed(queue: "asyncio.Queue[bytes | None | BaseException]", exc: BaseException) -> bool:
+    """Drop ``exc`` from ``queue`` if the client never consumed it, keeping the chunks queued ahead of it."""
     remaining: Final = tuple(queue.get_nowait() for _ in range(queue.qsize()))
+    for item in remaining:
+        if item is not exc:
+            queue.put_nowait(item)
     return any(item is exc for item in remaining)
 
 
