@@ -14,15 +14,14 @@ from litellm.llms.gemini.common_utils import (
     get_gemini_image_web_search_requests,
     map_gemini_image_tools_params,
 )
-from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
+from litellm.llms.gemini.image_usage_transformation import transform_gemini_image_usage
+from litellm.llms.vertex_ai.common_utils import get_vertex_base_url, map_vertex_image_size
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
     ImageObject,
     ImageResponse,
-    ImageUsage,
-    ImageUsageInputTokensDetails,
 )
 
 if TYPE_CHECKING:
@@ -89,8 +88,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
                     if k == "n":
                         mapped_params["candidate_count"] = v
                     elif k == "size":
-                        # Map OpenAI size format to Gemini aspectRatio
-                        mapped_params["aspectRatio"] = self._map_size_to_aspect_ratio(v)
+                        continue
                     elif k in ("aspectRatio", "aspect_ratio"):
                         mapped_params["aspectRatio"] = v
                     elif k in ("imageSize", "image_size"):
@@ -103,21 +101,22 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
                     elif k not in ("tools", "web_search_options", "imageConfig"):
                         mapped_params[k] = v
 
+        if "size" in non_default_params and "size" not in optional_params:
+            image_params: Final = _JSON_OBJECT.validate_python(mapped_params)
+            image_config: Final = _JSON_OBJECT.validate_python(image_params.get("imageConfig", {}))
+            size_params: Final = {
+                key: value
+                for key, value in (
+                    map_vertex_image_size(non_default_params["size"], model) or {"aspectRatio": "1:1"}
+                ).items()
+                if key not in image_config
+            }
+            return map_gemini_image_tools_params(
+                _JSON_OBJECT.validate_python(non_default_params), {**size_params, **image_params}
+            )
+
         mapped_params = map_gemini_image_tools_params(non_default_params, mapped_params)
         return mapped_params
-
-    def _map_size_to_aspect_ratio(self, size: str) -> str:
-        """
-        Map OpenAI size format to Gemini aspect ratio format
-        """
-        aspect_ratio_map: Final = {
-            "1024x1024": "1:1",
-            "1792x1024": "16:9",
-            "1024x1792": "9:16",
-            "1280x896": "4:3",
-            "896x1280": "3:4",
-        }
-        return aspect_ratio_map.get(size, "1:1")
 
     def _resolve_vertex_project(self) -> str | None:
         return (
@@ -262,27 +261,6 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
 
         return request_body
 
-    def _transform_image_usage(self, usage: dict) -> ImageUsage:
-        input_tokens_details: Final = ImageUsageInputTokensDetails(
-            image_tokens=0,
-            text_tokens=0,
-        )
-        tokens_details: Final = usage.get("promptTokensDetails", [])
-        for details in tokens_details:
-            if isinstance(details, dict) and (modality := details.get("modality")):
-                token_count = details.get("tokenCount", 0)
-                if modality == "TEXT":
-                    input_tokens_details.text_tokens += token_count
-                elif modality == "IMAGE":
-                    input_tokens_details.image_tokens += token_count
-
-        return ImageUsage(
-            input_tokens=usage.get("promptTokenCount", 0),
-            input_tokens_details=input_tokens_details,
-            output_tokens=usage.get("candidatesTokenCount", 0),
-            total_tokens=usage.get("totalTokenCount", 0),
-        )
-
     def transform_image_generation_response(
         self,
         model: str,
@@ -334,7 +312,23 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
                         )
 
         if usage_metadata := response_object.get("usageMetadata", None):
-            model_response.usage = self._transform_image_usage(_JSON_DICT.validate_python(usage_metadata))
+            normalized_usage_metadata: Final = _JSON_DICT.validate_python(usage_metadata)
+            model_response.usage = transform_gemini_image_usage(normalized_usage_metadata)
+            traffic_type: Final = normalized_usage_metadata.get("trafficType")
+            if isinstance(traffic_type, str) and traffic_type:
+                hidden_params: Final = model_response.hidden_params
+                provider_specific_fields: Final[dict[str, object]] = (
+                    _JSON_DICT.validate_python(hidden_params.get("provider_specific_fields"))
+                    if isinstance(hidden_params.get("provider_specific_fields"), Mapping)
+                    else {}
+                )
+                model_response.hidden_params = {  # rebind-ok: transformation fills the caller-owned response metadata
+                    **hidden_params,
+                    "provider_specific_fields": {
+                        **provider_specific_fields,
+                        "traffic_type": traffic_type,
+                    },
+                }
 
         web_search_requests: Final = get_gemini_image_web_search_requests(response_object)
         if web_search_requests and model_response.usage is not None:

@@ -20,6 +20,8 @@ class CloudflareDecisionsConfig(BaseDecisionsConfig):
     inlines_remote_images = True
 
     def get_default_api_base(self) -> str | None:
+        # Decision models (Clef) require native /ai/run/{model} requests with
+        # state and questions; /ai/v1/chat/completions only accepts chat requests.
         return workers_ai_default_api_base()
 
     def missing_api_base_message(self, custom_llm_provider: str) -> str:

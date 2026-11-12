@@ -12,14 +12,13 @@ import pytest
 import litellm
 from litellm.integrations.custom_secret_manager import CustomSecretManager
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
+from litellm.rust_bridge import _native as native
 from litellm.rust_bridge.host import settings
 from litellm.rust_bridge.ocr.entrypoints import NATIVE_AOCR, NATIVE_OCR
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 from tests.test_litellm_rust.ocr.data import OCR_DOCUMENT, OCR_MODEL, OCR_RESPONSE
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec, recording_service
-
-native: Final = pytest.importorskip("litellm.rust_bridge._native")
 
 AccessMode: TypeAlias = Literal["read_only", "write_only", "read_and_write"]
 

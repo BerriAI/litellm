@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from contextlib import ExitStack
 from hashlib import sha256
 from pathlib import Path
+from threading import Event
 from typing import Final, cast
 
 import httpx
@@ -24,6 +25,7 @@ from integration._support.generation import LIFECYCLE_SETTINGS, bounded_http_req
 from integration._support.mcp import (
     JsonRpc,
     McpCaller,
+    McpPeer,
     Outcome,
     ScriptedTool,
     call_tool,
@@ -44,6 +46,34 @@ _SPEND_NONCES: Final = (
 )
 _OBJECTS: Final = TypeAdapter(Mapping[str, object])
 _STRINGS: Final = TypeAdapter(Mapping[str, str])
+
+
+@pytest.mark.timeout(30)
+def test_owned_http_peer_cleans_up_a_disconnected_tool_call() -> None:
+    started: Final = Event()
+
+    async def hang_up(peer: McpPeer) -> None:
+        async with (
+            streamable_http_client(peer.url, terminate_on_close=False) as streams,
+            ClientSession(streams[0], streams[1]) as session,
+        ):
+            await session.initialize()
+            peer.drain()
+            async with asyncio.TaskGroup() as tasks:
+                running: Final = tasks.create_task(session.call_tool("slow", {"seconds": 60}))
+                received: Final = await asyncio.to_thread(
+                    eventually, lambda: tool_calls(peer.drain()), bool, seconds=30
+                )
+                assert len(received) == 1, received
+                params: Final = _OBJECTS.validate_python(_OBJECTS.validate_python(received[0]["body"])["params"])
+                assert (params["name"], params["arguments"]) == ("slow", {"seconds": 60}), received
+                assert await asyncio.to_thread(started.wait, 5), "The MCP tool handler never started"
+                assert not running.done(), running.result().model_dump_json()
+                running.cancel()
+            assert running.cancelled()
+
+    with mcp_peer(rich=True, on_slow=started.set) as peer:
+        asyncio.run(hang_up(peer))
 
 
 @pytest.mark.covers("mcp.call_tool.saved_headers.reach_actual_transport")

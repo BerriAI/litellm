@@ -21,6 +21,7 @@ from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
 )
+from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.passthrough_endpoints.tinyfish import (
@@ -81,7 +82,7 @@ def sse_poller_spawned(logging_obj: LiteLLMLoggingObj) -> bool:
 
 
 def run_id_from_sse_frames(frames: bytes) -> str | None:
-    return _run_id_from_sse_chunks(frames.decode("utf-8", errors="replace").splitlines())
+    return _run_id_from_sse_chunks(split_sse_lines(frames.decode("utf-8", errors="replace")))
 
 
 def resolve_tinyfish_agent_api_base() -> str:

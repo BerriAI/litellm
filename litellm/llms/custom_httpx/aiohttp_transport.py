@@ -6,6 +6,7 @@ import ssl
 import sys
 import typing
 import urllib.request
+import weakref
 from collections.abc import Callable, Generator
 from typing import ClassVar, Final
 
@@ -109,6 +110,33 @@ def map_aiohttp_exceptions() -> Generator[None, None, None]:
         raise mapped_exc(message) from exc
 
 
+def _unread_payload(content: object) -> bytes:
+    """Bytes the upstream sent before the connection dropped that aiohttp buffered but never handed out, since its
+    reads raise the stored payload error ahead of the buffer."""
+    if not isinstance(content, aiohttp.StreamReader):
+        return b""
+    buffered: Final = b"".join(content._buffer)  # pyright: ignore[reportPrivateUsage]  # no public read drains it
+    return buffered[content._buffer_offset :]  # pyright: ignore[reportPrivateUsage]  # see above
+
+
+def _release_transport_anchor(_transport: object) -> None:
+    """Release a transport anchored to a response stream. See ``_anchor_transport_to``."""
+
+
+def _anchor_transport_to(stream: "AiohttpResponseStream", transport: object) -> None:
+    """Keep the transport alive for as long as the stream can still read.
+
+    The transport finalizer closes the session it owns, and nothing on the path from a
+    live response back to that session references the transport, so a client dropped
+    mid-stream would close the session under the body. ``weakref.finalize`` holds the
+    transport in its own registry rather than on the stream, which keeps the transport
+    out of the response's reference cycle (an exception carrying the response, for one)
+    so it is finalized by refcount once the anchor drops and can still schedule an async
+    close, instead of being collected in the same cyclic pass as the session it closes.
+    """
+    weakref.finalize(stream, _release_transport_anchor, transport)
+
+
 class AiohttpResponseStream(httpx.AsyncByteStream):
     CHUNK_SIZE = 1024 * 16
 
@@ -125,6 +153,12 @@ class AiohttpResponseStream(httpx.AsyncByteStream):
             raise httpx.ReadError(str(e)) from e
         except aiohttp.http_exceptions.TransferEncodingError as e:
             raise httpx.ReadError(str(e)) from e
+        except aiohttp.ClientPayloadError:
+            unread: Final = _unread_payload(self._aiohttp_response.content)
+            if unread:
+                yield unread
+            with map_aiohttp_exceptions():
+                raise
         except Exception:
             # For other exceptions, use the normal mapping
             with map_aiohttp_exceptions():
@@ -288,6 +322,13 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         cls: Final = type(self)
         cls._background_close_tasks.add(task)
         task.add_done_callback(cls._on_close_task_done)
+
+    def __del__(self) -> None:
+        session: Final = getattr(self, "client", None)
+        if not getattr(self, "_owns_session", False) or not isinstance(session, ClientSession):
+            return
+        with contextlib.suppress(Exception):
+            self._close_recycled_session(session)
 
     def get_valid_client_session(self) -> ClientSession:
         """
@@ -456,10 +497,12 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                 # Re-raise if it's a different RuntimeError
                 raise
 
+        stream: Final = AiohttpResponseStream(response)
+        _anchor_transport_to(stream, self)
         return httpx.Response(
             status_code=response.status,
             headers=response.headers,
-            stream=AiohttpResponseStream(response),
+            stream=stream,
             request=request,
         )
 

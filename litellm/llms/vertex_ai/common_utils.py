@@ -1,3 +1,4 @@
+import math
 import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from copy import deepcopy
@@ -6,7 +7,7 @@ from enum import Enum
 from functools import lru_cache
 from itertools import accumulate, chain, repeat, takewhile
 from types import MappingProxyType
-from typing import Any, Final, Literal, TypeVar, cast, get_type_hints
+from typing import Final, Literal, TypeVar, cast, get_type_hints
 
 import httpx
 from pydantic import JsonValue, TypeAdapter, ValidationError
@@ -18,6 +19,11 @@ from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.gemini.common_utils import (
+    GEMINI_IMAGE_ASPECT_RATIOS,
+    GEMINI_IMAGE_SIZE_TO_ASPECT_RATIO,
+    map_openai_size_to_gemini_image_config,
+)
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import (
     VERTEX_AI_PROVIDER_METADATA_FIELDS,
@@ -33,6 +39,31 @@ GEMINI_VIDEO_METADATA_KEYS: Final = MappingProxyType(
 
 
 GEMINI_FILES_API_URI_PREFIX: Final = "https://generativelanguage.googleapis.com/v1beta/files/"
+
+
+# https://cloud.google.com/vertex-ai/generative-ai/docs/image/configure-aspect-ratio
+_IMAGEN_ASPECT_RATIOS: Final = MappingProxyType(
+    {"1:1": 1.0, "3:4": 3 / 4, "4:3": 4 / 3, "9:16": 9 / 16, "16:9": 16 / 9}
+)
+
+
+def map_vertex_image_size(size: object, model: str, *, imagen: bool = False) -> Mapping[str, str] | None:
+    if not isinstance(size, str) or (image_config := map_openai_size_to_gemini_image_config(size, model)) is None:
+        return None
+
+    width, height = map(int, size.lower().split("x"))
+    requested_ratio: Final = width / height
+    aspect_ratio: Final = (
+        min(_IMAGEN_ASPECT_RATIOS, key=lambda ratio: abs(math.log(_IMAGEN_ASPECT_RATIOS[ratio] / requested_ratio)))
+        if imagen
+        else image_config["aspectRatio"]
+    )
+    if (
+        not math.isclose(GEMINI_IMAGE_ASPECT_RATIOS[aspect_ratio], requested_ratio)
+        and GEMINI_IMAGE_SIZE_TO_ASPECT_RATIO.get((width, height)) != aspect_ratio
+    ):
+        verbose_logger.warning("Vertex AI size %s is approximated with aspectRatio %s", size, aspect_ratio)
+    return MappingProxyType({"aspectRatio": aspect_ratio} if imagen else image_config)
 
 
 def gemini_video_metadata_from_openai(video_metadata: Mapping[str, object]) -> dict[str, object]:
@@ -1226,7 +1257,7 @@ def get_vertex_model_id_from_url(url: str) -> str | None:
 
     `https://${LOCATION}-aiplatform.googleapis.com/v1/projects/${PROJECT_ID}/locations/${LOCATION}/publishers/google/models/${MODEL_ID}:streamGenerateContent`
     """
-    match: Final = re.search(r"/models/([^:]+)", url)
+    match: Final = re.search(r"/models/([^:?#]+)", url)
     return match.group(1) if match else None
 
 
@@ -1353,6 +1384,13 @@ class VertexAIModelInfo(BaseLLMModelInfo):
         raise NotImplementedError("Vertex AI models are not supported yet")
 
 
+_COUNT_TOKENS_REQUEST_FIELDS: Final = frozenset({"model", "contents", "system_instruction", "tools"})
+
+
+class _ForwardedCountTokensParams(TypedDict, total=False, extra_items=object):
+    pass
+
+
 class VertexAITokenCounter(BaseTokenCounter):
     """Token counter implementation for Google AI Studio provider."""
 
@@ -1413,9 +1451,9 @@ class VertexAITokenCounter(BaseTokenCounter):
     async def count_tokens(
         self,
         model_to_use: str,
-        messages: list[dict[str, Any]] | None,
+        messages: list[dict[str, object]] | None,
         contents: list[dict[str, object]] | None,
-        deployment: dict[str, Any] | None = None,
+        deployment: dict[str, object] | None = None,
         request_model: str = "",
         tools: list[dict[str, object]] | None = None,
         system: object | None = None,
@@ -1427,6 +1465,8 @@ class VertexAITokenCounter(BaseTokenCounter):
     ) -> TokenCountResponse | None:
         import copy
 
+        from litellm.litellm_core_utils.core_helpers import decoded_json_object
+        from litellm.llms.anthropic.common_utils import context_management_with_edits
         from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import count_tokens_publisher
         from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
             VertexAIError as PartnerVertexAIError,
@@ -1435,19 +1475,19 @@ class VertexAITokenCounter(BaseTokenCounter):
             VertexAIPartnerModels,
         )
 
-        deployment = deployment or {}
-        count_tokens_params_request: Final = copy.deepcopy(deployment.get("litellm_params", {}))
+        resolved_deployment: Final = deployment or {}
+        raw_litellm_params: Final = copy.deepcopy(resolved_deployment.get("litellm_params", {}))
 
         if not VertexAIPartnerModels.is_vertex_partner_model(model_to_use) and not uses_vertex_gemini_api(
-            model_to_use, count_tokens_params_request
+            model_to_use, decoded_json_object(raw_litellm_params) if raw_litellm_params else None
         ):
             return None
 
         without_count_route: Final = (
             VertexAIPartnerModels.is_vertex_partner_model(model_to_use) and count_tokens_publisher(model_to_use) is None
         )
-        model_info: Final[Mapping[str, object]] = deployment.get("model_info") or {}
-        if without_count_route and messages and model_info.get("custom_tokenizer") is not None:
+        model_info: Final[object] = resolved_deployment.get("model_info") or {}
+        if without_count_route and messages and decoded_json_object(model_info).get("custom_tokenizer") is not None:
             return None
         if without_count_route:
             return TokenCountResponse(
@@ -1465,7 +1505,7 @@ class VertexAITokenCounter(BaseTokenCounter):
             translated_count: Final = await self._count_translated_claude_request(
                 model_to_use=model_to_use,
                 messages=messages,
-                deployment=deployment,
+                deployment=resolved_deployment,
                 request_model=request_model,
                 tools=tools,
                 system=system,
@@ -1481,7 +1521,7 @@ class VertexAITokenCounter(BaseTokenCounter):
             partner_models_handler: Final = VertexAIPartnerModels()
 
             # Extract vertex-specific params from litellm_params
-            partner_litellm_params: Final[dict[str, object]] = count_tokens_params_request
+            partner_litellm_params: Final = dict(decoded_json_object(raw_litellm_params))
             vertex_project = partner_litellm_params.get("vertex_project") or partner_litellm_params.get(
                 "vertex_ai_project"
             )
@@ -1508,6 +1548,9 @@ class VertexAITokenCounter(BaseTokenCounter):
                     system=system,
                     tools=tools,
                     count_options=count_options,
+                    context_management=(
+                        None if context_management is None else context_management_with_edits(context_management.spec)
+                    ),
                 )
             except (PartnerVertexAIError, httpx.HTTPStatusError) as e:
                 status_code: Final = e.response.status_code
@@ -1534,12 +1577,15 @@ class VertexAITokenCounter(BaseTokenCounter):
                     original_response=result,
                 )
         else:
+            from litellm.llms.anthropic.messages.context_management.inference_view import (
+                InferenceRequestViewError,
+                count_context_edits,
+                inference_request_view,
+            )
             from litellm.llms.vertex_ai.count_tokens.context import (
                 VertexGeminiCountContextError,
-                count_context_edits,
                 count_context_error_response,
                 gemini_count_contents,
-                inference_request_view,
                 malformed_tool_result_text_count_error,
                 provider_error_response,
                 unconvertible_messages_error,
@@ -1547,13 +1593,14 @@ class VertexAITokenCounter(BaseTokenCounter):
             )
             from litellm.llms.vertex_ai.count_tokens.handler import VertexAITokenCounter
 
+            gemini_litellm_params: Final = decoded_json_object(raw_litellm_params)
             request_view: Final = await inference_request_view(
                 messages or [],
                 system,
                 messages_format,
-                count_context_edits(context_management, tools, count_tokens_params_request, model_to_use),
+                count_context_edits(context_management, tools, gemini_litellm_params, model_to_use),
             )
-            if isinstance(request_view, VertexGeminiCountContextError):
+            if isinstance(request_view, InferenceRequestViewError):
                 return count_context_error_response(request_view, request_model, model_to_use)
             count_context: Final = vertex_gemini_count_context(
                 system=request_view.system, tools=tools, model=model_to_use
@@ -1562,7 +1609,7 @@ class VertexAITokenCounter(BaseTokenCounter):
                 return count_context_error_response(count_context, request_model, model_to_use)
             blocks_error: Final = unconvertible_messages_error(
                 request_view.messages, messages_format
-            ) or malformed_tool_result_text_count_error(messages, messages_format, deployment)
+            ) or malformed_tool_result_text_count_error(messages, messages_format, resolved_deployment)
             if blocks_error is not None:
                 return count_context_error_response(blocks_error, request_model, model_to_use)
 
@@ -1570,22 +1617,21 @@ class VertexAITokenCounter(BaseTokenCounter):
                 contents
                 if contents is not None
                 else await gemini_count_contents(
-                    request_view.messages, messages_format, model_to_use, "vertex_ai", count_tokens_params_request
+                    request_view.messages, messages_format, model_to_use, "vertex_ai", gemini_litellm_params
                 )
             )
             if isinstance(resolved_contents, VertexGeminiCountContextError):
                 return count_context_error_response(resolved_contents, request_model, model_to_use)
 
-            count_tokens_params: Final = {
-                "model": model_to_use,
-                "contents": resolved_contents,
-                "system_instruction": count_context.system_instruction,
-                "tools": count_context.tools,
-            }
-            count_tokens_params_request.update(count_tokens_params)
             try:
                 result = await VertexAITokenCounter().acount_tokens(
-                    **count_tokens_params_request,
+                    **_ForwardedCountTokensParams(
+                        **{k: v for k, v in gemini_litellm_params.items() if k not in _COUNT_TOKENS_REQUEST_FIELDS}
+                    ),
+                    model=model_to_use,
+                    contents=resolved_contents,
+                    system_instruction=count_context.system_instruction,
+                    tools=count_context.tools,
                 )
             except litellm.APIError as error:
                 return provider_error_response(error, request_model, model_to_use)

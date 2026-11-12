@@ -23,6 +23,7 @@ from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
     StreamTransformSink,
 )
+from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -121,7 +122,7 @@ def _parse_json_dict_or_none(payload: str) -> Mapping[str, object] | None:
 def _sse_payload_texts(sse_text: str) -> tuple[str, ...]:
     return tuple(
         text
-        for line in sse_text.splitlines()
+        for line in split_sse_lines(sse_text)
         if line.startswith("data:")
         for payload in (line[len("data:") :].strip(),)
         if payload and payload != "[DONE]"

@@ -20,17 +20,17 @@ import secrets
 import traceback
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
-from types import MappingProxyType
+from types import MappingProxyType, TracebackType
 from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeVar, cast
 
 import fastapi
 import yaml
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
-from pydantic import TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
-from litellm._internal_context import service_target, with_service_target
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.caching.dual_cache import DualCache
@@ -40,24 +40,18 @@ from litellm.constants import (
     MINIMUM_CUSTOM_KEY_LENGTH,
     UI_SESSION_TOKEN_TEAM_ID,
 )
+from litellm.litellm_core_utils.core_helpers import as_object_list
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.models.credentials import CredentialItem
 from litellm.models.project import LiteLLM_ProjectTable
-from litellm.proxy._experimental.mcp_server.db import (
-    rotate_mcp_server_credentials_master_key,
-    rotate_mcp_user_credentials_master_key,
-    rotate_mcp_user_env_vars_master_key,
-)
-from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
-    rotate_sso_identity_assertions_master_key,
-)
 from litellm.proxy._types import *
 from litellm.proxy._types import Litellm_EntityType, LiteLLM_VerificationToken, hash_token
 from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
     _delete_cache_key_object,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     can_team_access_model,
     delete_cache_key_object,
+    delete_cache_key_objects,
     get_jwt_key_mapping_cache_keys_for_token,
     get_key_end_user_budget_id,
     get_org_object,
@@ -68,24 +62,31 @@ from litellm.proxy.auth.auth_utils import (
     abbreviate_api_key,
     enforce_batch_limits_are_admin_only,
     enforce_output_token_estimates_are_admin_only,
+    enforce_vector_store_index_grants_are_admin_only,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     evict_and_broadcast,
-    publish_auth_cache_invalidation,
 )
-from litellm.proxy.common_utils.callback_config_validation import logging_metadata_config_error
+from litellm.proxy.common_utils.callback_config_validation import (
+    credential_reference_rejection,
+    logging_metadata_config_error,
+)
 from litellm.proxy.common_utils.callback_utils import (
     decrypt_callback_vars,
+    decrypted_callback_metadata,
+    decrypted_logging_entries,
     encrypt_callback_vars,
 )
 from litellm.proxy.common_utils.config_sync_pubsub import (
     coordination_redis_cache,
     publish_config_change,
 )
+from litellm.proxy.common_utils.openai_error_payload import openai_error_param, proxy_exception_for
 from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_keys
-from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time, keeps_due_budget_reset
+from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache, is_user_key_cache_key
+from litellm.proxy.guardrails.guardrail_helpers import validate_guardrail_names
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import build_model_max_budget_usage
 from litellm.proxy.management.teams.authz import TEAM_ADMIN_ONLY, TEAM_OR_ORG_ADMIN, is_team_admin
@@ -153,20 +154,33 @@ from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
 )
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
+from litellm.proxy.mcp_server.db import (
+    rotate_mcp_server_credentials_master_key,
+    rotate_mcp_user_credentials_master_key,
+    rotate_mcp_user_env_vars_master_key,
+)
+from litellm.proxy.mcp_server.outbound_credentials.sso_assertion_store import (
+    rotate_sso_identity_assertions_master_key,
+)
 from litellm.proxy.search_endpoints.search_tool_registry import rotate_search_tools_master_key
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
-from litellm.proxy.spend_tracking.spend_counter_batch import SPEND_COUNTERS_TARGET
+from litellm.proxy.spend_tracking.committed_spend import committed_spend_key
 from litellm.proxy.spend_tracking.spend_tracking_utils import (  # noqa: F401  # legacy module exports
     _is_master_key,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     is_master_key,
 )
-from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
+from litellm.proxy.utils import (
     PrismaClient,
     ProxyLogging,
     _hash_token_if_needed,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     handle_exception_on_proxy,
     hash_token_if_needed,
     is_valid_api_key,
+    require_enterprise_license,
+)
+from litellm.redis.stores.spend_counters import (
+    key_counter,
+    key_window_counter,
 )
 from litellm.repositories.base_repository import BaseRepository, record_to_dict
 from litellm.repositories.budget_repository import BudgetRepository
@@ -232,13 +246,20 @@ class _UserRowLike(Protocol):
 
 
 class _TxTables(Protocol):
-    litellm_proxymodeltable: TableActions[object]
+    @property
+    def litellm_proxymodeltable(self) -> TableActions[object]: ...
 
 
 class _ModelReencryptTransaction(Protocol):
     async def __aenter__(self) -> _TxTables: ...
 
-    async def __aexit__(self, *exc_info: object) -> None: ...
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+        /,
+    ) -> None: ...
 
 
 class _ModelParamsUpdate(TypedDict):
@@ -256,6 +277,12 @@ class _KeyUpdateResult(TypedDict):
 
 class _StoredKeyRouterSettings(LiteLLMBaseModel):
     router_settings: Mapping[str, object] | None = None
+
+
+class _StoredKeyMetadata(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    metadata: object = None
 
 
 class _KeyRowWhere(TypedDict):
@@ -277,12 +304,19 @@ class _BudgetRowSoftBudgetCreate(TypedDict):
     updated_by: ReadOnly[str]
 
 
+class _KeyRowDumpable(Protocol):
+    def model_dump(self) -> Mapping[str, object]: ...
+
+
 class _KeyUpdateTx(Protocol):
     @property
     def litellm_verificationtoken(self) -> "TableActions[prisma_models.LiteLLM_VerificationToken]": ...
 
     @property
     def litellm_budgettable(self) -> "TableActions[prisma_models.LiteLLM_BudgetTable]": ...
+
+    @property
+    def litellm_objectpermissiontable(self) -> "TableActions[prisma_models.LiteLLM_ObjectPermissionTable]": ...
 
 
 class _ConfigTableActions(Protocol):
@@ -919,6 +953,23 @@ def raise_on_invalid_key_logging_config(metadata: Mapping[str, object] | None) -
         raise HTTPException(status_code=400, detail={"error": error})
 
 
+def raise_on_logging_credential_change(
+    requested_metadata: object, existing_key_row: LiteLLM_VerificationToken | None, user_api_key_dict: UserAPIKeyAuth
+) -> None:
+    stored_metadata: Final = (
+        None
+        if existing_key_row is None
+        else _StoredKeyMetadata.model_validate(existing_key_row, from_attributes=True).metadata
+    )
+    rejection: Final = credential_reference_rejection(
+        decrypted_callback_metadata(requested_metadata),
+        decrypted_logging_entries(stored_metadata),
+        is_proxy_admin=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
+    )
+    if rejection is not None:
+        raise HTTPException(status_code=rejection.status_code, detail={"error": rejection.message})
+
+
 def common_key_access_checks(
     user_api_key_dict: UserAPIKeyAuth,
     data: GenerateKeyRequest | UpdateKeyRequest,
@@ -1470,6 +1521,7 @@ async def _common_key_generation_helper(
 
     validate_budget_duration(data.budget_duration)
     raise_on_invalid_key_logging_config(data.metadata)
+    raise_on_logging_credential_change(data.metadata, None, user_api_key_dict)
 
     if data.throttle_on_budget_exceeded is True and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
         raise HTTPException(
@@ -1492,6 +1544,13 @@ async def _common_key_generation_helper(
     )
     enforce_batch_limits_are_admin_only(
         data=data,
+        existing_metadata=None,
+        user_api_key_dict=user_api_key_dict,
+        entity="key",
+    )
+    enforce_vector_store_index_grants_are_admin_only(
+        data=data,
+        top_level_grants=data.allowed_vector_store_indexes,
         existing_metadata=None,
         user_api_key_dict=user_api_key_dict,
         entity="key",
@@ -1557,6 +1616,7 @@ async def _common_key_generation_helper(
         _requested_metadata,
         user_api_key_dict,
     )
+    await validate_guardrail_names(data.guardrails, _requested_metadata, None, prisma_client, license_first=True)
 
     # APPLY ENTERPRISE KEY MANAGEMENT PARAMS
     try:
@@ -2046,7 +2106,7 @@ async def _check_project_key_limits(
 
     # Validate key models are a subset of project models
     if data.models and len(project_obj.models) > 0:
-        for m in data.models:
+        for m in as_object_list(data.models) or ():
             if m not in project_obj.models and m not in _INHERITED_MODEL_SENTINELS:
                 raise HTTPException(
                     status_code=400,
@@ -2067,6 +2127,56 @@ async def _check_project_key_limits(
                 "error": f"Key max_budget ({data.max_budget}) exceeds project's max_budget ({project_max_budget}). Project: {project_id}"
             },
         )
+
+
+async def _validate_project_assignment(
+    data: UpdateKeyRequest,
+    existing_key_row: LiteLLM_VerificationToken,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+) -> None:
+    """Validate assigning a project to a key that does not have one yet."""
+    if data.project_id is None or data.project_id == existing_key_row.project_id:
+        return
+    if existing_key_row.project_id is not None:
+        raise HTTPException(
+            status_code=400, detail="Project reassignment is not supported. Use null to detach the key."
+        )
+    project_obj: Final = await get_project_object(
+        project_id=data.project_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+    if project_obj is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Project not found, project_id={data.project_id}"},
+        )
+    team: Final = data.team_id if "team_id" in data.model_fields_set else existing_key_row.team_id
+    if team is None or team != project_obj.team_id:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Project {data.project_id} belongs to team {project_obj.team_id}. Keys can only be assigned to a project owned by their own team (key team: {team})"
+            },
+        )
+    await _check_project_key_limits(
+        project_id=data.project_id,
+        data=data.model_copy(
+            update={
+                "models": (
+                    data.models
+                    if "models" in data.model_fields_set
+                    else cast(  # cast-ok: LiteLLM_VerificationToken.models is a bare list
+                        "list[str] | None", existing_key_row.models
+                    )
+                ),
+                "max_budget": data.max_budget if "max_budget" in data.model_fields_set else existing_key_row.max_budget,
+            }
+        ),
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
 
 
 async def _check_key_project_team(
@@ -2327,7 +2437,7 @@ async def generate_key_fn(
     - throttle_on_budget_exceeded: Optional[bool] - When the key exceeds its max_budget, throttle its tpm/rpm to the global budget_exceeded_throttle_percentage instead of blocking the key entirely.
     - enable_prompt_caching: Optional[bool] - Auto-inject prompt caching breakpoints (Anthropic cache_control markers) on requests made with this key. Supported Claude models on Anthropic, Bedrock, Vertex AI, and Azure AI only.
     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
-    - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
+    - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets keyed by model name, `*` pattern like "claude-opus*", or model access group, e.g. {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
     - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
     - model_tpm_limit: Optional[dict] - key-specific model tpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific tpm limit.
@@ -2345,7 +2455,7 @@ async def generate_key_fn(
     - soft_budget: Optional[float] - Specify soft budget for a given key. Will trigger a slack alert when this soft budget is reached.
     - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
-    - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
+    - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/enterprise#governance-and-cost)
     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
     - allowed_passthrough_routes: Optional[list] - List of allowed pass through endpoints for the key. Store the actual endpoint or store a wildcard pattern for a set of endpoints. Example - ["/my-custom-endpoint"]. Use this instead of allowed_routes, if you just want to specify which pass through endpoints the key can access, without specifying the routes. If allowed_routes is specified, allowed_pass_through_endpoints is ignored.
@@ -2355,7 +2465,7 @@ async def generate_key_fn(
     - prompts: Optional[List[str]] - List of allowed prompts for the key. If specified, the key will only be able to use these specific prompts.
     - auto_rotate: Optional[bool] - Whether this key should be automatically rotated (regenerated)
     - rotation_interval: Optional[str] - How often to auto-rotate this key (e.g., '30s', '30m', '30h', '30d'). Required if auto_rotate=True.
-    - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
+    - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Only a proxy admin can set or change it. Create index, using `/v1/indexes` endpoint.
     - router_settings: Optional[UpdateRouterConfig] - key-specific router settings. Example - {"model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}}}. IF null or {} then no router settings.
     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the key. Access groups define which models a key can access. Example - ["access_group_1", "access_group_2"].
     - budget_limits: Optional[list] - List of concurrent budget windows for the key. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
@@ -2537,7 +2647,7 @@ async def generate_service_account_key_fn(
     - metadata: Optional[dict] - Metadata for key, store information for key. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
     - guardrails: Optional[List[str]] - List of active guardrails for the key
     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
-    - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
+    - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets keyed by model name, `*` pattern like "claude-opus*", or model access group, e.g. {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
     - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
     - model_tpm_limit: Optional[dict] - key-specific model tpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific tpm limit.
@@ -2553,11 +2663,11 @@ async def generate_service_account_key_fn(
     - tpd_limit: Optional[int] - Specify tpd limit for a given key (Tokens per day). Charged by batch submissions instead of tpm_limit/rpm_limit.
     - soft_budget: Optional[float] - Specify soft budget for a given key. Will trigger a slack alert when this soft budget is reached.
     - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
-    - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
+    - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/enterprise#governance-and-cost)
     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
     Examples:
-    - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
+    - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Only a proxy admin can set or change it. Create index, using `/v1/indexes` endpoint.
 
 
     1. Allow users to turn on/off pii masking
@@ -2768,6 +2878,115 @@ async def _apply_soft_budget_update(
     return remaining
 
 
+async def _apply_object_permission_update(
+    data_json: Mapping[str, object],
+    existing_object_permission_id: str | None,
+    prisma_client: PrismaClient,
+    table: "TableActions[prisma_models.LiteLLM_ObjectPermissionTable]",
+) -> Mapping[str, object]:
+    """Upsert the requested object permission row inside the caller's writer transaction."""
+    new_object_permission: Final = data_json.get("object_permission")
+    if new_object_permission is None:
+        return MappingProxyType({k: v for k, v in data_json.items() if k != "object_permission"})
+    loaded: Final[object] = (
+        json.loads(new_object_permission) if isinstance(new_object_permission, str) else new_object_permission
+    )
+    grants: Final[Mapping[str, object]] = (
+        cast(  # cast-ok: object_permission payloads are grant-name to grant-list mappings
+            "Mapping[str, object]", loaded
+        )
+        if isinstance(loaded, dict)
+        else MappingProxyType({})
+    )
+    upsert: Final = await prepare_object_permission_upsert(
+        new_object_permission=grants,
+        existing_object_permission_id=existing_object_permission_id,
+        prisma_client=prisma_client,
+    )
+    row: Final = await table.upsert(
+        where={"object_permission_id": upsert.object_permission_id},
+        data={"create": upsert.record, "update": upsert.record},
+    )
+    return MappingProxyType(
+        {
+            **{k: v for k, v in data_json.items() if k != "object_permission"},
+            "object_permission_id": row.object_permission_id,
+        }
+    )
+
+
+async def _write_guarded_project_assignment(
+    table: "TableActions[_KeyRowDumpable]",
+    hashed_token: str,
+    existing_key_row: LiteLLM_VerificationToken,
+    data: Mapping[str, object],
+) -> "_KeyRowDumpable | None":
+    validated_models: Final[Sequence[str]] = (
+        cast(  # cast-ok: LiteLLM_VerificationToken.models is a bare list
+            "Sequence[str] | None", existing_key_row.models
+        )
+        or []
+    )
+    models_guard: Final[Mapping[str, object]] = (
+        {"OR": [{"models": {"equals": list[str]()}}, {"models": {"equals": None}}]}
+        if not validated_models
+        else {"models": {"equals": validated_models}}
+    )
+    updated_count: Final = await table.update_many(
+        where={
+            "token": hashed_token,
+            "project_id": None,
+            "team_id": existing_key_row.team_id,
+            **models_guard,
+            "max_budget": existing_key_row.max_budget,
+            "object_permission_id": existing_key_row.object_permission_id,
+        },
+        data=data,
+    )
+    if updated_count == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Project assignment failed because the key was updated concurrently. Retry the request.",
+        )
+    return await table.find_unique(
+        where={"token": hashed_token},
+        include={"object_permission": True},
+    )
+
+
+async def _update_key_row_assigning_project(
+    prisma_client: PrismaClient,
+    key: str,
+    non_default_values: Mapping[str, object],
+    existing_key_row: LiteLLM_VerificationToken,
+) -> _KeyUpdateResult:
+    """Assign a project in one writer transaction, guarded on the key's validated state."""
+    hashed_token: Final = _hash_token_if_needed(key)
+    async with prisma_client.tx() as tx_ctx:
+        tx: Final[_KeyUpdateTx] = cast(  # cast-ok: the transaction object exposes the same table actions
+            "_KeyUpdateTx", tx_ctx
+        )
+        update_values: Final[Mapping[str, object]] = await _apply_object_permission_update(
+            data_json=non_default_values,
+            existing_object_permission_id=existing_key_row.object_permission_id,
+            prisma_client=prisma_client,
+            table=tx.litellm_objectpermissiontable,
+        )
+        updated_row: Final = await _write_guarded_project_assignment(
+            table=tx.litellm_verificationtoken,
+            hashed_token=hashed_token,
+            existing_key_row=existing_key_row,
+            data=with_settings_updated_at(
+                prisma_client.jsonify_object(MappingProxyType({**update_values, "token": hashed_token}))
+            ),
+        )
+    updated_data: Final[Mapping[str, object]] = (
+        updated_row.model_dump() if updated_row is not None else MappingProxyType({})
+    )
+    result: Final[_KeyUpdateResult] = {"token": hashed_token, "data": updated_data}
+    return result
+
+
 async def _update_key_row_with_soft_budget(
     prisma_client: PrismaClient,
     key: str,
@@ -2775,25 +2994,48 @@ async def _update_key_row_with_soft_budget(
     non_default_values: Mapping[str, object],
     existing_key_row: LiteLLM_VerificationToken,
     changed_by: str,
+    expect_unassigned_project: bool = False,
 ) -> _KeyUpdateResult:
     hashed_token: Final = hash_token_if_needed(key)
     key_where: Final[_KeyRowWhere] = {"token": hashed_token}
-    tx: _KeyUpdateTx
-    async with prisma_client.tx() as tx:
+    async with prisma_client.tx() as tx_ctx:
+        tx: Final[_KeyUpdateTx] = cast(  # cast-ok: the transaction object exposes the same table actions
+            "_KeyUpdateTx", tx_ctx
+        )
+        update_input: Final[Mapping[str, object]] = (
+            await _apply_object_permission_update(
+                data_json=non_default_values,
+                existing_object_permission_id=existing_key_row.object_permission_id,
+                prisma_client=prisma_client,
+                table=tx.litellm_objectpermissiontable,
+            )
+            if expect_unassigned_project
+            else non_default_values
+        )
         update_values: Final = await _apply_soft_budget_update(
             data=data,
-            non_default_values=non_default_values,
+            non_default_values=update_input,
             db=tx,
             existing_key_row=existing_key_row,
             changed_by=changed_by,
         )
         include_object_permission: Final[prisma.types.LiteLLM_VerificationTokenInclude] = {"object_permission": True}
-        updated_row: Final = await tx.litellm_verificationtoken.update(
-            where=key_where,
-            data=with_settings_updated_at(
-                prisma_client.jsonify_object(MappingProxyType({**update_values, "token": hashed_token}))
-            ),
-            include=include_object_permission,
+        update_payload: Final = with_settings_updated_at(
+            prisma_client.jsonify_object(MappingProxyType({**update_values, "token": hashed_token}))
+        )
+        updated_row: Final = (
+            await _write_guarded_project_assignment(
+                table=tx.litellm_verificationtoken,
+                hashed_token=hashed_token,
+                existing_key_row=existing_key_row,
+                data=update_payload,
+            )
+            if expect_unassigned_project
+            else await tx.litellm_verificationtoken.update(
+                where=key_where,
+                data=update_payload,
+                include=include_object_permission,
+            )
         )
     updated_data: Final[Mapping[str, object]] = (
         updated_row.model_dump() if updated_row is not None else MappingProxyType({})
@@ -2883,11 +3125,11 @@ async def prepare_key_update_data(
             non_default_values["budget_duration"] = None
             non_default_values["budget_reset_at"] = None
         elif isinstance(budget_duration, str) and len(budget_duration) > 0:
-            from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-
-            key_reset_at: Final = get_budget_reset_time(budget_duration=budget_duration)
-            non_default_values["budget_reset_at"] = key_reset_at
             non_default_values["budget_duration"] = budget_duration
+            if not keeps_due_budget_reset(
+                budget_duration, existing_key_row.budget_duration, existing_key_row.budget_reset_at
+            ):
+                non_default_values["budget_reset_at"] = get_budget_reset_time(budget_duration=budget_duration)
 
     if "budget_limits" in non_default_values:
         requested_windows: Final = _budget_limit_windows(data.budget_limits)
@@ -3144,6 +3386,13 @@ async def _process_single_key_update(
         user_api_key_dict=user_api_key_dict,
         entity="key",
     )
+    enforce_vector_store_index_grants_are_admin_only(
+        data=update_key_request,
+        top_level_grants=update_key_request.allowed_vector_store_indexes,
+        existing_metadata=existing_key_row.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
+        user_api_key_dict=user_api_key_dict,
+        entity="key",
+    )
 
     await _check_single_key_update_team_permissions(
         user_api_key_dict=user_api_key_dict,
@@ -3155,6 +3404,13 @@ async def _process_single_key_update(
         update_key_request,
         user_api_key_dict,
         existing_metadata=existing_key_row.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
+    )
+    await validate_guardrail_names(
+        update_key_request.guardrails,
+        update_key_request.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+        existing_key_row.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
+        prisma_client,
+        license_first=True,
     )
 
     # Custom key update hook
@@ -3219,6 +3475,7 @@ async def _process_single_key_update(
     )
 
     # Prepare update data
+    raise_on_logging_credential_change(key_request.metadata, existing_key_row, user_api_key_dict)
     non_default_values = await prepare_key_update_data(
         data=key_request, existing_key_row=existing_key_row, prisma_client=prisma_client, llm_router=llm_router
     )
@@ -3560,10 +3817,6 @@ async def _validate_update_key_data(
         user_api_key_dict=user_api_key_dict,
     )
 
-    if data.project_id is not None and data.project_id != existing_key_row.project_id:
-        raise HTTPException(
-            status_code=400, detail="Project reassignment is not supported. Use null to detach the key."
-        )
     is_project_change: Final = "project_id" in data.model_fields_set and data.project_id != existing_key_row.project_id
 
     acting_as_team_admin: Final = await _acting_as_team_admin_for_key_update(
@@ -3656,6 +3909,13 @@ async def _validate_update_key_data(
         user_api_key_dict=user_api_key_dict,
         entity="key",
     )
+    enforce_vector_store_index_grants_are_admin_only(
+        data=data,
+        top_level_grants=data.allowed_vector_store_indexes,
+        existing_metadata=_existing_metadata if isinstance(_existing_metadata, dict) else None,  # pyright: ignore[reportUnknownArgumentType]  # stored metadata is a bare dict
+        user_api_key_dict=user_api_key_dict,
+        entity="key",
+    )
 
     # Personal-key bypass: the caller both created the key AND still owns it
     # (user_id == caller).  Checking only created_by would let a demoted admin
@@ -3695,10 +3955,23 @@ async def _validate_update_key_data(
             user_api_key_cache=user_api_key_cache,
             route=("/key/update (max_budget/spend)" if _is_budget_change else "/key/update"),
         )
+    await _validate_project_assignment(
+        data=data,
+        existing_key_row=existing_key_row,
+        prisma_client=checked_prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
     check_denied_passthrough_routes_caller_permission(
         data,
         user_api_key_dict,
         existing_metadata=existing_key_row.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
+    )
+    await validate_guardrail_names(
+        data.guardrails,
+        data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+        existing_key_row.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
+        checked_prisma_client,
+        license_first=True,
     )
 
     # Check team limits if key has a team_id (from request or existing key)
@@ -3844,17 +4117,17 @@ async def update_key_fn(
     - user_id: Optional[str] - User ID associated with key
     - team_id: Optional[str] - Team ID associated with key
     - agent_id: Optional[str] - The agent id associated with the key.
-    - project_id: Optional[str] - Omit to retain the project, or send null to detach. A different project ID is rejected.
+    - project_id: Optional[str] - Omit to retain the project, send null to detach, or send a project id to assign an unassigned key to a project on the key's team. Moving a key between projects is rejected.
     - organization_id: Optional[str] - The organization id of the key.
     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
     - end_user_budget_id: Optional[str] - Proxy admin only. Budget id applied to end users first seen through this key that carry no budget of their own. Omit to keep the current value, pass an empty string to clear it.
     - models: Optional[list] - Model_name's a user is allowed to call
     - tags: Optional[List[str]] - Tags for organizing keys (Enterprise only)
     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
-    - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
+    - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/enterprise#governance-and-cost)
     - spend: Optional[float] - Amount spent by key
     - max_budget: Optional[float] - Max budget for key
-    - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
+    - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets keyed by model name, `*` pattern like "claude-opus*", or model access group, e.g. {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
     - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
     - soft_budget: Optional[float] - Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached. Set to null to remove the soft budget.
@@ -3893,7 +4166,7 @@ async def update_key_fn(
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
     - auto_rotate: Optional[bool] - Whether this key should be automatically rotated
     - rotation_interval: Optional[str] - How often to rotate this key (e.g., '30d', '90d'). Required if auto_rotate=True
-    - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
+    - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Only a proxy admin can set or change it. Create index, using `/v1/indexes` endpoint.
     - router_settings: Optional[UpdateRouterConfig] - key-specific router settings. Example - {"model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}}}. IF null or {} then no router settings.
     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the key. Access groups define which models a key can access. Example - ["access_group_1", "access_group_2"].
     - budget_limits: Optional[list] - List of concurrent budget windows for the key. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
@@ -3956,6 +4229,7 @@ async def update_key_fn(
 
         # Enforce upperbound key params on update (don't fill defaults)
         _enforce_upperbound_key_params(data, fill_defaults=False)
+        raise_on_logging_credential_change(data.metadata, existing_key_row, user_api_key_dict)
         non_default_values: Final = await prepare_key_update_data(
             data=data, existing_key_row=existing_key_row, prisma_client=prisma_client, llm_router=llm_router
         )
@@ -3992,23 +4266,31 @@ async def update_key_fn(
         if prisma_client is None:
             raise Exception("Not connected to DB!")
 
+        is_project_assignment: Final = data.project_id is not None and existing_key_row.project_id is None
+        update_fields: Final[Mapping[str, object]] = cast(  # cast-ok: prepare_key_update_data returns a bare dict
+            "Mapping[str, object]", non_default_values
+        )
         object_permission_upsert: Final = await _prepare_key_update_object_permission(
-            object_permission_data=non_default_values.get("object_permission"),
+            object_permission_data=update_fields.get("object_permission"),
             existing_key_row=existing_key_row,
             prisma_client=prisma_client,
         )
         key_update_values: Final = MappingProxyType(
-            {field: value for field, value in non_default_values.items() if field != "object_permission"}
+            {field: value for field, value in update_fields.items() if field != "object_permission"}
         )
         await _check_key_project_team_on_mutation(
             data=data,
             existing_key_row=existing_key_row,
             prisma_client=prisma_client,
         )
-        update_values: Final = await _write_prepared_key_update_object_permission(
-            data_json=key_update_values,
-            upsert=object_permission_upsert,
-            prisma_client=prisma_client,
+        update_values: Final = (
+            update_fields
+            if is_project_assignment
+            else await _write_prepared_key_update_object_permission(
+                data_json=key_update_values,
+                upsert=object_permission_upsert,
+                prisma_client=prisma_client,
+            )
         )
         changed_by: Final = user_api_key_dict.user_id or litellm_proxy_admin_name
         response: Final = (
@@ -4019,8 +4301,16 @@ async def update_key_fn(
                 non_default_values=update_values,
                 existing_key_row=existing_key_row,
                 changed_by=changed_by,
+                expect_unassigned_project=is_project_assignment,
             )
             if "soft_budget" in data.model_fields_set
+            else await _update_key_row_assigning_project(
+                prisma_client=prisma_client,
+                key=key,
+                non_default_values=update_fields,
+                existing_key_row=existing_key_row,
+            )
+            if is_project_assignment
             else await _update_key_row(
                 prisma_client=prisma_client,
                 key=key,
@@ -4053,21 +4343,19 @@ async def update_key_fn(
         )
 
         if data.spend is not None:
-            from litellm.proxy.proxy_server import spend_counter_cache
+            from litellm.proxy.proxy_server import invalidate_spend_counter, spend_counter_store
 
-            counter_key: Final = f"spend:key:{hash_token_if_needed(key)}"
-            spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=data.spend, ttl=60)
-            if spend_counter_cache.redis_cache is not None:
-                try:
-                    with service_target(SPEND_COUNTERS_TARGET):
-                        await spend_counter_cache.redis_cache.async_set_cache(key=counter_key, value=data.spend, ttl=60)
-                except Exception as redis_err:
-                    verbose_proxy_logger.warning(
-                        "Failed to update spend counter %s in Redis after key spend update: %s. "
-                        "Budget checks may use stale value until counter expires.",
-                        counter_key,
-                        redis_err,
-                    )
+            counter_key: Final = key_counter(hash_token_if_needed(key))
+            try:
+                await spend_counter_store.set(counter_key, data.spend, ttl=60)
+            except Exception as redis_err:
+                verbose_proxy_logger.warning(
+                    "Failed to update spend counter %s in Redis after key spend update: %s. "
+                    "Budget checks may use stale value until counter expires.",
+                    counter_key,
+                    redis_err,
+                )
+            await invalidate_spend_counter(counter_key=committed_spend_key(counter_key))
 
         asyncio.create_task(
             KeyManagementEventHooks.async_key_updated_hook(
@@ -4086,21 +4374,9 @@ async def update_key_fn(
         # update based on remaining passed in values
     except Exception as e:
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.update_key_fn(): Exception occured - %s", e)
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({e})"),
-                type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
-            code=status.HTTP_400_BAD_REQUEST,
-        )
+        if isinstance(e, ProxyException):
+            raise
+        raise proxy_exception_for(e, default_status_code=status.HTTP_400_BAD_REQUEST) from e
 
 
 @router.post(
@@ -4703,7 +4979,7 @@ async def _budget_window_usage(
     if not isinstance(duration, str) or not duration:
         return None
     spend: Final = await get_current_spend(
-        counter_key=f"spend:key:{api_key_hash}:window:{duration}",
+        counter_key=key_window_counter(api_key_hash, duration),
         fallback_spend=0.0,
         max_budget=_window_max_budget(window),
         window_entity_type="Key",
@@ -4906,9 +5182,14 @@ async def info_key_fn(
 
         # default to using Auth token if no key is passed in
         key = key or user_api_key_dict.api_key
-        hashed_key: str | None = key
-        if key is not None:
-            hashed_key = hash_token_if_needed(token=key)  # rebind-ok: pre-existing rebinding on a rename-only line
+        if not key:
+            raise ProxyException(
+                message="No key passed in. Pass ?key= or authenticate with a virtual key.",
+                type=ProxyErrorTypes.bad_request_error,
+                param="key",
+                code=status.HTTP_400_BAD_REQUEST,
+            )
+        hashed_key: str | None = hash_token_if_needed(token=key)
         live_key_info: Final = await _prisma_table(VerificationTokenRepository(prisma_client)).find_unique(
             where={"token": hashed_key},
             include={"litellm_budget_table": True},
@@ -4969,7 +5250,7 @@ async def info_key_fn(
         raise ProxyException(
             message="Internal server error from /key/info. Details are in the proxy server logs.",
             type="internal_error",
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -4996,7 +5277,7 @@ def _check_model_access_group(models: list[str] | None, llm_router: Router | Non
         return True
 
     for model in models:
-        if llm_router.is_model_access_group_for_wildcard_route(model_access_group=model):
+        if llm_router.registry().resolve(model, kind="wildcard_access_group"):
             if not premium_user:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
@@ -5259,10 +5540,13 @@ async def generate_key_helper_fn(
         if isinstance(saved_token["metadata"], str):
             saved_token["metadata"] = json.loads(saved_token["metadata"])
         if isinstance(saved_token["permissions"], str):
-            if "get_spend_routes" in saved_token["permissions"] and premium_user is not True:
-                raise ValueError("get_spend_routes permission is only available for LiteLLM Enterprise users")
-
             saved_token["permissions"] = json.loads(saved_token["permissions"])
+        if (
+            isinstance(saved_token["permissions"], dict)
+            and "get_spend_routes" in saved_token["permissions"]
+            and premium_user is not True
+        ):
+            require_enterprise_license("get_spend_routes")
         if isinstance(saved_token["model_max_budget"], str):
             saved_token["model_max_budget"] = json.loads(saved_token["model_max_budget"])
         router_settings = cast(dict | None, saved_token.get("router_settings"))
@@ -5281,7 +5565,9 @@ async def generate_key_helper_fn(
                 if query_type == "insert_data":
                     user_row = cast(  # cast-ok: table_name="user" is the insert_data branch returning the user row
                         "prisma_models.LiteLLM_UserTable | None",
-                        await prisma_client.insert_data(data=user_data, table_name="user"),
+                        await prisma_client.insert_data(
+                            data=user_data, table_name="user", allow_existing_user=request_type != "user"
+                        ),
                     )
 
                     if user_row is None:
@@ -5490,7 +5776,7 @@ async def delete_verification_tokens(
                 - List of keys being deleted, this contains information about the key_alias, token, and user_id being deleted,
                 this is passed down to the KeyManagementEventHooks to delete the keys from the secret manager and handle audit logs
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj
 
     failed_tokens: list = []
     try:
@@ -5574,11 +5860,11 @@ async def delete_verification_tokens(
         verbose_proxy_logger.debug(traceback.format_exc())
         raise e
 
-    for key in tokens:
-        user_api_key_cache.delete_cache(key)
-        # remove hash token from cache
-        hashed_token = hash_token(cast(str, key))
-        user_api_key_cache.delete_cache(hashed_token)
+    await delete_cache_key_objects(
+        hashed_tokens=tuple(token for token in hashed_tokens if is_user_key_cache_key(token)),
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
 
     # After credential invalidation, so a failure here can never keep a deleted key alive.
     for deleted_key in authorized_keys:
@@ -6104,6 +6390,13 @@ async def _execute_virtual_key_regeneration(
             user_api_key_dict=user_api_key_dict,
             entity="key",
         )
+        enforce_vector_store_index_grants_are_admin_only(
+            data=data,
+            top_level_grants=data.allowed_vector_store_indexes,
+            existing_metadata=_existing_key_metadata if isinstance(_existing_key_metadata, dict) else None,  # pyright: ignore[reportUnknownArgumentType]  # stored metadata is a bare dict
+            user_api_key_dict=user_api_key_dict,
+            entity="key",
+        )
         await _validate_end_user_budget_id_change(
             requested_budget_id=_requested_end_user_budget_id(data),
             existing_budget_id=get_key_end_user_budget_id(
@@ -6124,6 +6417,7 @@ async def _execute_virtual_key_regeneration(
             await _enforce_custom_key_update_policy(hook=_custom_key_update_hook(proxy_server), data=update_request)
         # Enforce upperbound key params on regenerate (don't fill defaults)
         _enforce_upperbound_key_params(data, fill_defaults=False)
+        raise_on_logging_credential_change(data.metadata, key_in_db, user_api_key_dict)
         non_default_values = await prepare_key_update_data(
             data=data, existing_key_row=key_in_db, prisma_client=prisma_client, llm_router=llm_router
         )
@@ -6299,7 +6593,7 @@ async def regenerate_key_fn(
         - tags: Optional[List[str]] - Tags for organizing keys (Enterprise only)
         - spend: Optional[float] - Amount spent by key
         - max_budget: Optional[float] - Max budget for key
-        - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
+        - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets keyed by model name, `*` pattern like "claude-opus*", or model access group, e.g. {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
         - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
         - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
         - soft_budget: Optional[float] - Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached.
@@ -6474,6 +6768,13 @@ async def regenerate_key_fn(
             user_api_key_dict,
             existing_metadata=_key_in_db.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
         )
+        await validate_guardrail_names(
+            data.guardrails if data is not None else None,
+            data.metadata if data is not None else None,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+            _key_in_db.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
+            prisma_client,
+            license_first=True,
+        )
 
         if data is not None and (data.access_group_ids or data.object_permission is not None):
             regenerate_team_table: LiteLLM_TeamTableCachedObj | None = None
@@ -6605,41 +6906,6 @@ def _validate_reset_spend_value(reset_to: object, key_in_db: LiteLLM_Verificatio
     return reset_to
 
 
-@with_service_target(SPEND_COUNTERS_TARGET)
-async def _set_spend_counter_with_floor_and_broadcast(counter_key: str, value: float) -> None:
-    """
-    Set a Redis-backed spend counter to `value`, mirror it into the short-lived
-    spend_db_floor marker `_authoritative_floor_spend` reads, and broadcast both
-    to every worker (LIT-3803 pattern: setting, not deleting, means a worker's
-    own self-delivered broadcast still carries the reset value forward).
-
-    Without the floor marker, `_authoritative_floor_spend` can re-derive a
-    stale, pre-reset value from a marker another worker cached moments earlier
-    and raise the just-reset counter right back up via `_repair_stale_spend_counter`.
-    Without the broadcast, a worker that already cached the pre-reset key object
-    or floor marker keeps enforcing against it until its own TTL expires.
-    """
-    from litellm.proxy.proxy_server import SPEND_DB_FLOOR_CACHE_TTL_SECONDS, spend_counter_cache
-
-    spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=value, ttl=60)
-    if spend_counter_cache.redis_cache is not None:
-        try:
-            await spend_counter_cache.redis_cache.async_set_cache(key=counter_key, value=value, ttl=60)
-        except Exception as redis_err:
-            verbose_proxy_logger.warning(
-                "Failed to update spend counter %s in Redis: %s. "
-                "Budget checks may use stale value until counter expires.",
-                counter_key,
-                redis_err,
-            )
-
-    floor_key: Final = f"spend_db_floor:{counter_key}"
-    spend_counter_cache.in_memory_cache.set_cache(key=floor_key, value=value, ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS)
-
-    await publish_auth_cache_invalidation(cache_key=counter_key, new_value=value, ttl=60)
-    await publish_auth_cache_invalidation(cache_key=floor_key, new_value=value, ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS)
-
-
 def _budget_limit_windows(budget_limits: Sequence[object] | str | None) -> tuple[Mapping[str, object], ...]:
     """Coerce a key's stored `budget_limits` into a tuple of plain window dicts.
 
@@ -6724,6 +6990,8 @@ async def _reset_key_budget_windows(
     pre-reset boundary, re-sum the unchanged historical spend, and put the
     counter right back where it was before the write ever landed.
     """
+    from litellm.proxy.proxy_server import set_spend_counter_with_floor_and_broadcast
+
     windows: Final = _budget_limit_windows(budget_limits)
     if not windows:
         return
@@ -6741,8 +7009,8 @@ async def _reset_key_budget_windows(
     for window in reset_windows:
         duration = window.get("budget_duration")
         if isinstance(duration, str) and duration:
-            counter_key = f"spend:key:{hashed_api_key}:window:{duration}"
-            await _set_spend_counter_with_floor_and_broadcast(counter_key=counter_key, value=0.0)
+            counter_key = key_window_counter(hashed_api_key, duration)
+            await set_spend_counter_with_floor_and_broadcast(counter_key=counter_key, value=0.0)
 
 
 @router.post(
@@ -6763,8 +7031,10 @@ async def reset_key_spend_fn(
     try:
         from litellm.proxy.proxy_server import (
             hash_token,
+            invalidate_spend_counter,
             prisma_client,
             proxy_logging_obj,
+            set_spend_counter_with_floor_and_broadcast,
             user_api_key_cache,
         )
 
@@ -6815,8 +7085,9 @@ async def reset_key_spend_fn(
         # budget_limits windows, so get_current_spend() returns the correct
         # amount for every enforcement check immediately instead of the stale
         # pre-reset value.
-        _counter_key: Final = f"spend:key:{hashed_api_key}"
-        await _set_spend_counter_with_floor_and_broadcast(counter_key=_counter_key, value=reset_to)
+        _counter_key: Final = key_counter(hashed_api_key)
+        await set_spend_counter_with_floor_and_broadcast(counter_key=_counter_key, value=reset_to)
+        await invalidate_spend_counter(counter_key=committed_spend_key(_counter_key))
         await _reset_key_budget_windows(
             prisma_client=prisma_client,
             hashed_api_key=hashed_api_key,
@@ -7240,21 +7511,9 @@ async def list_keys(
 
     except Exception as e:
         verbose_proxy_logger.exception("Error in list_keys: %s", e)
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"error({e})"),
-                type=ProxyErrorTypes.internal_server_error,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.internal_server_error,
-            param=getattr(e, "param", "None"),
-            code=fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+        if isinstance(e, ProxyException):
+            raise
+        raise proxy_exception_for(e, default_status_code=fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR) from e
 
 
 async def _apply_non_admin_alias_scope(
@@ -7398,21 +7657,9 @@ async def key_aliases(
 
     except Exception as e:
         verbose_proxy_logger.exception("Error in key_aliases: %s", e)
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"error({e})"),
-                type=ProxyErrorTypes.internal_server_error,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.internal_server_error,
-            param=getattr(e, "param", "None"),
-            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+        if isinstance(e, ProxyException):
+            raise
+        raise proxy_exception_for(e, default_status_code=status.HTTP_500_INTERNAL_SERVER_ERROR) from e
 
 
 def _validate_sort_params(
@@ -8187,7 +8434,7 @@ async def key_health(
         raise ProxyException(
             message=f"Key health check failed: {e}",
             type=ProxyErrorTypes.internal_server_error,
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 

@@ -58,7 +58,7 @@ class CloudflareChatConfig(OpenAIGPTConfig):
         trimmed: Final = api_base.rstrip("/")
         if trimmed.endswith("/ai/run"):
             verbose_logger.warning(
-                "Cloudflare api_base ending in '/ai/run' is the legacy Workers AI path and no longer serves OpenAI-compatible requests; rewriting to the '/ai/v1' endpoint"
+                "Cloudflare chat completions require the OpenAI-compatible '/ai/v1' endpoint; rewriting api_base ending in '/ai/run' to '/ai/v1'. Decision models continue to use the native Workers AI '/ai/run/{model}' endpoint."
             )
             return join_api_base(trimmed[: -len("/ai/run")], "ai/v1")
         return api_base

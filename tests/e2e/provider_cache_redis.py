@@ -14,8 +14,8 @@ from typing import Final, Protocol, cast
 
 from provider_cache import LIFETIME_SECONDS, CacheBusy, CacheEdge, CacheHit, CacheLookup, CacheUnavailable, CaptureLease
 from pydantic import TypeAdapter, ValidationError
-from redis import Redis
-from redis.exceptions import RedisError
+from redis import Redis, RedisCluster
+from redis.exceptions import RedisClusterException, RedisError
 
 REDIS_ARRAY: Final[TypeAdapter[list[bytes]]] = TypeAdapter(list[bytes])
 
@@ -83,7 +83,7 @@ class RedisResponseStore:
         started: Final = time.monotonic()
         try:
             result: Final = self.client.eval(LOOKUP, 2, *self.keys(key), token, self.lifetime_ms, self.lease_ms)
-        except (RedisError, OSError):
+        except (RedisError, RedisClusterException, OSError):
             return CacheUnavailable()
         try:
             parts: Final = tuple(REDIS_ARRAY.validate_python(result, strict=True))
@@ -102,28 +102,46 @@ class RedisResponseStore:
             result: Final = self.client.eval(
                 PUBLISH, 2, *self.keys(key), lease.token, lease.captured_at_ms, lease.expires_at_ms, payload, self.lifetime_ms,
             )
-        except (RedisError, OSError):
+        except (RedisError, RedisClusterException, OSError):
             return False
         return result == 1
 
     def release(self, key: str, lease: CaptureLease) -> bool:
         try:
             result: Final = self.client.eval(RELEASE, 1, self.keys(key)[1], lease.token)
-        except (RedisError, OSError):
+        except (RedisError, RedisClusterException, OSError):
             return False
         return result == 1
 
     def discard(self, key: str, payload: bytes) -> bool:
         try:
             result: Final = self.client.eval(DISCARD, 1, self.keys(key)[0], payload)
-        except (RedisError, OSError):
+        except (RedisError, RedisClusterException, OSError):
             return False
         return result == 1
 
 
+@functools.lru_cache(maxsize=16)
+def _redis_commands(url: str, cluster: bool) -> RedisCommands:
+    if cluster:
+        return cast(
+            RedisCommands, RedisCluster(url=url, socket_timeout=0.25, socket_connect_timeout=0.25, decode_responses=False)
+        )
+    return cast(RedisCommands, Redis.from_url(url, socket_timeout=0.25, socket_connect_timeout=0.25, decode_responses=False))
+
+
+@dataclass(frozen=True, slots=True)
+class LazyRedisCommands:
+    url: str
+    cluster: bool
+
+    def eval(self, script: str, numkeys: int, *args: str | bytes | int) -> object:
+        return _redis_commands(self.url, self.cluster).eval(script, numkeys, *args)
+
+
 def redis_store(url: str, namespace: str) -> RedisResponseStore:
-    client: Final = Redis.from_url(url, socket_timeout=0.25, socket_connect_timeout=0.25, decode_responses=False)
-    return RedisResponseStore(cast(RedisCommands, client), namespace)
+    client: Final = LazyRedisCommands(url, os.environ.get("E2E_PROVIDER_CACHE_REDIS_CLUSTER") == "1")
+    return RedisResponseStore(client, namespace)
 
 
 def write_metrics(cache: CacheEdge) -> None:

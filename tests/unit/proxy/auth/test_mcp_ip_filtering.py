@@ -36,7 +36,7 @@ def _make_server(server_id, available_on_public_internet=False):
 
 
 def _make_manager(servers):
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+    from litellm.proxy.mcp_server.mcp_server_manager import (
         MCPServerManager,
     )
 

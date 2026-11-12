@@ -70,6 +70,6 @@ async def call(server: RecordingServer, *, asynchronous: bool = True, **kwargs: 
 
 SYNC_DEPLOYMENT_HOOK: Final = gap("native sync calls skip the async pre-call deployment hook")
 STREAMING: Final = gap(
-    "native Responses streaming is unsupported, the catalog keeps it on Python", raises=litellm.APIConnectionError
+    "native Responses streaming is unsupported, the catalog keeps it on Python", raises=RuntimeError
 )
 BODY_HOOKS: Final = gap("native Responses does not run the handler body hooks")

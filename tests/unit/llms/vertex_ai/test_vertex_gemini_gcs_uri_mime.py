@@ -375,6 +375,34 @@ def test_async_transform_request_body_offloads_extensionless_gs_not_plain_text()
     "messages,expected",
     [
         ([{"role": "user", "content": "hello"}], False),
+        ([{"role": "user", "content": [{"type": "input_file", "file_data": "https://media.example/no-ext"}]}], True),
+        ([{"role": "user", "content": [{"type": "file", "file": {"file_url": "https://media.example/no-ext"}}]}], True),
+        ([{"role": "user", "content": [{"type": "input_file", "file_data": "https://media.example/clip.mp4"}]}], False),
+        ([{"role": "tool", "content": [{"type": "input_file", "file_id": "gs://bucket/no-ext"}]}], True),
+        ([{"role": "tool", "content": [{"type": "input_file", "file_data": "gs://bucket/no-ext"}]}], True),
+        (
+            [
+                {
+                    "role": "tool",
+                    "content": [{"type": "input_file", "file_id": "gs://bucket/no-ext", "format": "audio/wav"}],
+                }
+            ],
+            False,
+        ),
+        (
+            [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "file",
+                            "file": {"file_id": "gs://bucket/no-ext", "file_data": "data:audio/wav;base64,AAAA"},
+                        }
+                    ],
+                }
+            ],
+            False,
+        ),
         (
             [
                 {

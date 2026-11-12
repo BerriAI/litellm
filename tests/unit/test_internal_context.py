@@ -25,13 +25,14 @@ _REPO: Final = Path(__file__).resolve().parents[2]
 
 _REDIS_PRODUCER_ROOTS: Final = ("litellm", "enterprise")
 # The cache implementations and facades: they emit the service events, their callers declare the family.
-_CACHE_LAYER_DIRS: Final = ("litellm/caching", "litellm/_v2/cache")
+_CACHE_LAYER_DIRS: Final = ("litellm/caching",)
 # Helpers that act on a cache handed in by the declaring caller, or forward to the response-cache facade.
 _CACHE_PARAMETER_HELPERS: Final = frozenset(
     {
         "litellm/llms/anthropic/prompt_cache_prediction.py",
         "litellm/proxy/common_utils/cache_coordinator.py",
         "litellm/proxy/common_utils/user_api_key_cache.py",
+        "litellm/router_utils/routing_prefetch.py",
         "litellm/utils.py",
     }
 )
@@ -54,30 +55,33 @@ _IN_MEMORY_ONLY_CALLERS: Final = frozenset(
         "litellm/llms/azure/common_utils.py",
         "litellm/llms/bedrock/base_aws_llm.py",
         "litellm/llms/custom_httpx/http_handler.py",
-        "litellm/llms/databricks/agent/transformation.py",
+        "litellm/llms/databricks/common_utils.py",
         "litellm/llms/gigachat/authenticator.py",
         "litellm/llms/github_copilot/per_user_auth.py",
+        "litellm/llms/github_copilot/authenticator.py",
         "litellm/llms/litellm_proxy/skills/handler.py",
         "litellm/llms/openai/common_utils.py",
         "litellm/llms/openai_like/model_info.py",
         "litellm/llms/vertex_ai/vertex_ai_non_gemini.py",
         "litellm/llms/watsonx/common_utils.py",
-        "litellm/proxy/_experimental/mcp_server/byok_credential_cache.py",
-        "litellm/proxy/_experimental/mcp_server/catalog.py",
-        "litellm/proxy/_experimental/mcp_server/discoverable_endpoints.py",
-        "litellm/proxy/_experimental/mcp_server/oauth_identity_binding.py",
-        "litellm/proxy/_experimental/mcp_server/operations.py",
-        "litellm/proxy/_experimental/mcp_server/outbound_credentials/sso_assertion_store.py",
-        "litellm/proxy/_experimental/mcp_server/outbound_credentials/token_endpoint.py",
+        "litellm/proxy/mcp_server/byok_credential_cache.py",
+        "litellm/proxy/mcp_server/catalog.py",
+        "litellm/proxy/mcp_server/discoverable_endpoints.py",
+        "litellm/proxy/mcp_server/oauth_identity_binding.py",
+        "litellm/proxy/mcp_server/operations.py",
+        "litellm/proxy/mcp_server/outbound_credentials/sso_assertion_store.py",
+        "litellm/proxy/mcp_server/outbound_credentials/token_endpoint.py",
         "litellm/proxy/agent_endpoints/databricks_oauth.py",
         "litellm/proxy/common_utils/registry_read_through.py",
         "litellm/proxy/container_endpoints/ownership.py",
         "litellm/proxy/discovery_endpoints/agent_skills_endpoints.py",
         "litellm/proxy/guardrails/guardrail_hooks/straiker/straiker.py",
+        "litellm/proxy/hooks/model_budget_shared_windows.py",
         "litellm/proxy/spend_tracking/key_metadata_recovery.py",
         "litellm/proxy/ui_crud_endpoints/latest_release_endpoints.py",
         "litellm/responses/litellm_completion_transformation/transformation.py",
         "litellm/router_utils/client_initalization_utils.py",
+        "litellm/router_utils/pre_call_checks/prompt_caching_deployment_check.py",
         "litellm/router_utils/router_callbacks/track_deployment_metrics.py",
         "litellm/secret_managers/cyberark_secret_manager.py",
         "litellm/secret_managers/google_secret_manager.py",
