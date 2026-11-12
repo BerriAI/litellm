@@ -26,6 +26,7 @@ import { MultiSelect } from "./shared/MultiSelect";
 import { featureLabel } from "./publicModelHub/publicModelHubFilters";
 import { usePublicModelHubFacets } from "./publicModelHub/usePublicModelHubFacets";
 import { usePublicModelHubList } from "./publicModelHub/usePublicModelHubList";
+import { passThroughSnippet } from "./publicModelHub/hubSnippets";
 import { DataTable } from "./shared/DataTable";
 import { toast } from "@/lib/toast";
 import Navbar from "./navbar";
@@ -95,13 +96,6 @@ function PublicHubEmptyState({ title, body }: { title: string; body: string }) {
     </div>
   );
 }
-
-const BODY_METHODS: ReadonlySet<string> = new Set(["POST", "PUT", "PATCH"]);
-
-const passThroughExampleMethod = (methods: string[] | null | undefined): string =>
-  !methods?.length || methods.includes("POST") ? "POST" : methods[0];
-
-const shellDoubleQuoted = (value: string): string => value.replace(/[\\"$`]/g, "\\$&");
 
 const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded = false, variant = "dashboard" }) => {
   const { t } = useTranslation();
@@ -306,22 +300,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
     return `$${(cost * 1_000_000).toFixed(4)}`;
   };
 
-  const usageSnippet = (model: ModelGroupInfo): string => {
-    if (model.pass_through_path) {
-      const method = passThroughExampleMethod(model.pass_through_methods);
-      const quotedMethod = shellDoubleQuoted(method);
-      const url = shellDoubleQuoted(`${getProxyBaseUrl()}${model.pass_through_path}`);
-      return BODY_METHODS.has(method)
-        ? [
-            `curl -X "${quotedMethod}" "${url}" \\`,
-            `  -H "Authorization: Bearer your_api_key" \\`,
-            `  -H "Content-Type: application/json" \\`,
-            `  -d '{"input": "Hello, how are you?"}'`,
-          ].join("\n")
-        : [`curl -X "${quotedMethod}" "${url}" \\`, `  -H "Authorization: Bearer your_api_key"`].join("\n");
-    }
-    return usageExample(model);
-  };
+  const usageSnippet = (model: ModelGroupInfo): string => passThroughSnippet(model) ?? usageExample(model);
 
   const models = usePublicModelHubList(proxyConfigured);
   const modelFacets = usePublicModelHubFacets(proxyConfigured);
