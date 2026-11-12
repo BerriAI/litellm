@@ -1,6 +1,7 @@
 """Tests for litellm/llms/azure/azure.py AzureChatCompletion handler behaviour."""
 
 import asyncio
+import base64
 import json
 import os
 import time
@@ -791,3 +792,48 @@ def test_azure_chat_stream_reassembles_tool_call_arguments():
     assert tool_call.function.name == "get_current_weather"
     assert json.loads(tool_call.function.arguments) == {"city": "Boston"}
     assert response.choices[0].finish_reason == "tool_calls"
+
+
+@pytest.mark.parametrize("mode", ("sync", "async"))
+async def test_cloudflare_gateway_azure_call_sends_a_pdf_link_as_the_pdf_itself(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    pdf_body: Final = b"%PDF-1.7\n" + b"0" * 64
+    pdf_link: Final = "https://docs.example/reports/q3.pdf"
+    respx_mock.get(pdf_link).mock(
+        return_value=httpx.Response(200, content=pdf_body, headers={"Content-Type": "application/pdf"})
+    )
+    gateway: Final = respx_mock.post(url__startswith="https://gateway.ai.cloudflare.com/").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-cf",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-4.1",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "read"}, "finish_reason": "stop"}],
+            },
+        )
+    )
+    request: Final = {
+        "model": "azure/gpt-4.1",
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "summarize"}, {"type": "file", "file": {"file_id": pdf_link}}]}
+        ],
+        "api_base": "https://gateway.ai.cloudflare.com/v1/account/gateway/azure-openai/resource",
+        "api_key": "fake-key",
+        "api_version": "2025-04-01-preview",
+        "max_retries": 0,
+    }
+
+    if mode == "sync":
+        litellm.completion(**request)
+    else:
+        await litellm.acompletion(**request)
+
+    sent_file: Final = json.loads(gateway.calls.last.request.content)["messages"][0]["content"][1]["file"]
+    assert "file_id" not in sent_file
+    assert sent_file["file_data"] == f"data:application/pdf;base64,{base64.b64encode(pdf_body).decode()}"
+    assert sent_file["filename"] == "q3.pdf"

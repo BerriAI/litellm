@@ -1042,11 +1042,19 @@ async def _until_requested(probe_server: _ProbeServer, path: str) -> None:
 @pytest.mark.parametrize(
     ("model", "provider_kwargs"),
     [
-        ("azure/gpt-4.1", {"api_key": "fake-key", "api_version": "2025-04-01-preview"}),
-        ("azure_ai/gpt-4.1", {"api_key": "fake-key"}),
-        ("gigachat/GigaChat-2", {}),
+        ("azure/gpt-4.1", {"api_key": "fake-key", "api_version": "2025-04-01-preview", "api_base": "http://127.0.0.1:1"}),
+        (
+            "azure/gpt-4.1",
+            {
+                "api_key": "fake-key",
+                "api_version": "2025-04-01-preview",
+                "api_base": "https://gateway.ai.cloudflare.com/v1/account/gateway/azure-openai/resource",
+            },
+        ),
+        ("azure_ai/gpt-4.1", {"api_key": "fake-key", "api_base": "http://127.0.0.1:1"}),
+        ("gigachat/GigaChat-2", {"api_base": "http://127.0.0.1:1"}),
     ],
-    ids=["azure", "azure_ai", "gigachat"],
+    ids=["azure", "azure_cloudflare_gateway", "azure_ai", "gigachat"],
 )
 async def test_a_stalled_pdf_link_leaves_the_shared_executor_free_for_other_requests(
     probe_server: _ProbeServer, monkeypatch: pytest.MonkeyPatch, model: str, provider_kwargs: dict[str, str]
@@ -1061,7 +1069,6 @@ async def test_a_stalled_pdf_link_leaves_the_shared_executor_free_for_other_requ
         litellm.acompletion(
             model=model,
             messages=[{"role": "user", "content": [{"type": "text", "text": "summarize"}, {"type": "file", "file": {"file_id": pdf_link}}]}],
-            api_base="http://127.0.0.1:1",
             max_retries=0,
             **provider_kwargs,
         )

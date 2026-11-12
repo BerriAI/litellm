@@ -1,7 +1,7 @@
 import asyncio
 import json
 import time
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from functools import partial
 from typing import Final, Protocol
 
@@ -14,6 +14,7 @@ from openai import (
     BadRequestError,
     OpenAI,
 )
+from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
 
 import litellm
@@ -21,6 +22,11 @@ from litellm.constants import DEFAULT_MAX_RETRIES
 from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_utils import speech_request_body, track_llm_api_timing
+from litellm.litellm_core_utils.prompt_templates.image_handling import (
+    async_inline_remote_media,
+    inline_remote_media,
+    inline_remote_pdf_files,
+)
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -38,7 +44,7 @@ from litellm.utils import (
     get_base_model_from_metadata,
 )
 
-from ...types.llms.openai import HttpxBinaryResponseContent
+from ...types.llms.openai import AllMessageValues, HttpxBinaryResponseContent
 from ..base import BaseLLM
 from ..openai.common_utils import (
     build_output_token_limit_response,
@@ -160,6 +166,28 @@ async def _send_transformed_request(
     return await send(data=await request)
 
 
+def _cloudflare_gateway_request(
+    messages: list[AllMessageValues],  # mutable-ok: inline_remote_media takes list[AllMessageValues]
+    optional_params: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: acompletion and async_streaming take the request dict
+    return {
+        "model": None,
+        "messages": inline_remote_media(messages, should_inline=inline_remote_pdf_files),
+        **optional_params,
+    }
+
+
+async def _async_cloudflare_gateway_request(
+    messages: list[AllMessageValues],  # mutable-ok: async_inline_remote_media takes list[AllMessageValues]
+    optional_params: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: acompletion and async_streaming take the request dict
+    return {
+        "model": None,
+        "messages": await async_inline_remote_media(messages, should_inline=inline_remote_pdf_files),
+        **optional_params,
+    }
+
+
 class AzureChatCompletion(BaseAzureLLM, BaseLLM):
     def __init__(self) -> None:
         super().__init__()
@@ -234,7 +262,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
     def completion(
         self,
         model: str,
-        messages: list,
+        messages: list[AllMessageValues],
         model_response: ModelResponse,
         api_key: str | None,
         api_base: str,
@@ -322,9 +350,11 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     litellm_params=litellm_params,
                 )
             )
-            if acompletion is True and not is_cloudflare_gateway:
+            if acompletion is True:
                 return _send_transformed_request(
-                    request_config.async_transform_request(
+                    _async_cloudflare_gateway_request(messages, optional_params)
+                    if is_cloudflare_gateway
+                    else request_config.async_transform_request(
                         model=model,
                         messages=messages,
                         optional_params=optional_params,
@@ -334,7 +364,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     send_async,
                 )
             data: Final[dict[str, object]] = (
-                {"model": None, "messages": messages, **optional_params}
+                _cloudflare_gateway_request(messages, optional_params)
                 if is_cloudflare_gateway
                 else request_config.transform_request(
                     model=model,
@@ -345,9 +375,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 )
             )
 
-            if acompletion is True:
-                return send_async(data=data)
-            elif "stream" in optional_params and optional_params["stream"] is True:
+            if "stream" in optional_params and optional_params["stream"] is True:
                 return self.streaming(
                     logging_obj=logging_obj,
                     api_base=api_base,
@@ -1356,7 +1384,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         api_version: str,
         timeout: float,
         mode: str,
-        messages: list | None = None,
+        messages: list[ChatCompletionMessageParam] | None = None,
         input: list | None = None,
         prompt: str | None = None,
     ) -> dict:
