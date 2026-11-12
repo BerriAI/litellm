@@ -18,6 +18,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (  # noqa: F401  # 
     encrypt_value_helper,
     get_salt_key,
 )
+from litellm.proxy.common_utils.fips import fips_mode_active
 from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.table_repositories import SearchToolsRepository
@@ -76,7 +77,9 @@ def _encrypted_search_tool_value(value: object) -> object:
         return value
     try:
         return encrypt_value_helper(value=value)
-    except Exception:  # noqa: BLE001  # no salt key or master key configured: store the value as written
+    except Exception:  # no salt key or master key configured: store the value as written
+        if fips_mode_active():
+            raise
         return value
 
 

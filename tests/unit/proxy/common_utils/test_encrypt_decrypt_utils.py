@@ -10,12 +10,14 @@ import _hashlib
 import base64
 import hmac
 import re
+from collections.abc import Callable
 from typing import Final
 
 import pytest
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from litellm.proxy import proxy_server
+from litellm.proxy.common_utils import encrypt_decrypt_utils
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     V2_GCM_PREFIX,
     decrypt_bearer_token,
@@ -348,6 +350,47 @@ def test_fips_mode_encrypts_under_an_explicit_new_key(monkeypatch: pytest.Monkey
 
 @pytest.mark.usefixtures("fips_mode")
 def test_fips_mode_refuses_to_encrypt_under_a_salt_key_that_is_not_hex(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-1234")
+    monkeypatch.setenv("LITELLM_SALT_KEY", "a-salt-key-that-is-not-hex")
     with pytest.raises(ValueError, match="LITELLM_SALT_KEY must be at least 32 bytes of hex"):
         encrypt_value_helper("sk-secret-value")
+
+
+def _store_callback_var(secret: str) -> object:
+    from litellm.proxy.common_utils.callback_utils import _encrypt_if_plaintext
+
+    return _encrypt_if_plaintext("gcs_path_service_account", secret)
+
+
+def _store_guardrail_param(secret: str) -> object:
+    from litellm.proxy.guardrails.guardrail_registry import _encrypted_param
+
+    return _encrypted_param("api_key", secret, None)
+
+
+def _store_search_tool_value(secret: str) -> object:
+    from litellm.proxy.search_endpoints.search_tool_registry import _encrypted_search_tool_value
+
+    return _encrypted_search_tool_value(secret)
+
+
+@pytest.mark.parametrize("store", [_store_callback_var, _store_guardrail_param, _store_search_tool_value])
+def test_fips_mode_never_stores_a_secret_as_written_when_it_cannot_be_encrypted(
+    monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest, store: Callable[[str], object]
+) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", "a-salt-key-that-is-not-hex")
+    monkeypatch.setattr("litellm.proxy.common_utils.encrypt_decrypt_utils.encrypt_value", _raise_no_key)
+    assert store("my-secret") == "my-secret"
+    request.getfixturevalue("fips_mode")
+    with pytest.raises(ValueError, match="LITELLM_SALT_KEY must be at least 32 bytes of hex"):
+        store("my-secret")
+
+
+def _raise_no_key(value: str, signing_key: str | None) -> bytes:
+    raise ValueError("no salt key or master key configured")
+
+
+@_needs_shared_openssl
+@pytest.mark.skipif(_hashlib.get_fips_mode() == 1, reason="this OpenSSL runs a FIPS provider")
+def test_fips_seal_refuses_an_openssl_without_a_fips_provider() -> None:
+    with pytest.raises(ValueError, match="OpenSSL could not run AES-256-GCM"):
+        encrypt_decrypt_utils._fips_seal_aes_gcm(bytes(32), b"sk-secret-value")
