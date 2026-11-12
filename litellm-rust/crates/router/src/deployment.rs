@@ -15,8 +15,24 @@ pub struct Deployment {
     pub custom_llm_provider: Option<String>,
     pub litellm_params: LitellmParams,
     pub timeout: Option<Duration>,
+    pub messages_timeouts: MessagesTimeouts,
     pub drops_params_globally: bool,
     pub shaping: MessagesShaping,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct MessagesTimeouts {
+    pub timeout: Option<Duration>,
+    pub stream_timeout: Option<Duration>,
+}
+
+impl MessagesTimeouts {
+    pub fn for_call(&self, stream: bool, request_timeout: Option<Duration>) -> Option<Duration> {
+        if stream {
+            return self.stream_timeout.or(request_timeout).or(self.timeout);
+        }
+        self.timeout.or(request_timeout)
+    }
 }
 
 impl Deployment {

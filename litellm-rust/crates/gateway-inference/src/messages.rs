@@ -12,7 +12,10 @@ use axum::{
 };
 use litellm_host_http::Sse;
 use litellm_inference_messages::{MessagesCall, messages_body, route::Messages};
-use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};
+use litellm_llms_types::{
+    headers::{ProviderSpecificHeader, ProviderSpecificHeaders},
+    recognized::python_truthy,
+};
 use litellm_router::REQUEST_SETTINGS;
 use serde_json::{Map, Value};
 
@@ -74,6 +77,10 @@ fn project(
     headers: &HeaderMap,
 ) -> Result<MessagesCall, Error> {
     let shaping = deployment.shaping_for(&body);
+    let timeout = deployment.timeout.or(deployment.messages_timeouts.for_call(
+        body.get("stream").is_some_and(python_truthy),
+        shaping.settings.request_timeout(),
+    ));
     let body = body
         .into_iter()
         .filter(|(name, _)| !REQUEST_SETTINGS.contains(&name.as_str()))
@@ -90,7 +97,7 @@ fn project(
         litellm_params: deployment.litellm_params.clone(),
         extra_headers: None,
         provider_specific_header: anthropic_api_headers(headers),
-        timeout: deployment.timeout,
+        timeout,
         shaping,
     })
 }

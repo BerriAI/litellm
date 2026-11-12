@@ -1,12 +1,12 @@
 mod deployment;
 
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Duration};
 
 use litellm_config::{Config, Spelled};
 use litellm_core_utils::{serde_compat::parse_pydantic_bool, settings::Lookup};
 use litellm_inference_messages::{MessagesSettings, MessagesShaping};
 
-pub use deployment::{Deployment, REQUEST_SETTINGS};
+pub use deployment::{Deployment, MessagesTimeouts, REQUEST_SETTINGS};
 
 #[derive(Clone, Debug, Default)]
 pub struct Router(HashMap<String, Deployment>);
@@ -32,6 +32,12 @@ fn seconds(timeout: &Spelled<f64>, env: &impl Lookup) -> Option<f64> {
         Spelled::Value(seconds) => Some(*seconds),
         Spelled::Text(text) => resolve(text, env)?.trim().parse().ok(),
     }
+}
+
+fn duration(timeout: Option<&Spelled<f64>>, env: &impl Lookup) -> Option<Duration> {
+    Duration::try_from_secs_f64(seconds(timeout?, env)?)
+        .ok()
+        .filter(|duration| !duration.is_zero())
 }
 
 fn drops_params_globally(config: &Config, env: &impl Lookup) -> bool {
@@ -89,6 +95,13 @@ impl Router {
                         api_base: model.litellm_params.api_base.clone(),
                         custom_llm_provider: model.litellm_params.custom_llm_provider.clone(),
                         litellm_params: model.litellm_params.clone(),
+                        messages_timeouts: MessagesTimeouts {
+                            timeout: duration(model.litellm_params.timeout.as_ref(), env),
+                            stream_timeout: duration(
+                                model.litellm_params.stream_timeout.as_ref(),
+                                env,
+                            ),
+                        },
                         drops_params_globally,
                         shaping: MessagesShaping {
                             settings: MessagesSettings {
@@ -173,6 +186,8 @@ mod tests {
     #[case::global_flag("litellm_settings:\n  drop_params: true\n", "", true)]
     #[case::global_word("litellm_settings:\n  drop_params: \"true\"\n", "", true)]
     #[case::global_off("litellm_settings:\n  drop_params: false\n", "", false)]
+    #[case::global_one("litellm_settings:\n  drop_params: 1\n", "", true)]
+    #[case::global_zero("litellm_settings:\n  drop_params: 0\n", "", false)]
     #[case::global_over_deployment_off(
         "litellm_settings:\n  drop_params: true\n",
         "\n      drop_params: false",
@@ -201,6 +216,11 @@ mod tests {
     #[case::unknown_word_is_on("", Some("maybe"), true)]
     #[case::settings_off_over_env_on(
         "litellm_settings:\n  drop_params: false\n",
+        Some("true"),
+        false
+    )]
+    #[case::settings_null_over_env_on(
+        "litellm_settings:\n  drop_params: null\n",
         Some("true"),
         false
     )]
@@ -243,6 +263,14 @@ mod tests {
         true
     )]
     #[case::settings_off("litellm_settings:\n  reasoning_auto_summary: false\n", None, false)]
+    #[case::settings_one("litellm_settings:\n  reasoning_auto_summary: 1\n", None, true)]
+    #[case::settings_zero("litellm_settings:\n  reasoning_auto_summary: 0\n", None, false)]
+    #[case::settings_null("litellm_settings:\n  reasoning_auto_summary: null\n", None, false)]
+    #[case::env_on_over_settings_null(
+        "litellm_settings:\n  reasoning_auto_summary: null\n",
+        Some("true"),
+        true
+    )]
     #[case::env_flag("", Some("TRUE"), true)]
     #[case::env_off("", Some("false"), false)]
     #[case::env_on_over_settings_off(
@@ -297,6 +325,64 @@ mod tests {
                 .settings
                 .request_timeout,
             expected
+        );
+    }
+
+    #[rstest]
+    #[case::nothing_set("", "", false, None)]
+    #[case::global_only("litellm_settings:\n  request_timeout: 2\n", "", false, Some(2.0))]
+    #[case::deployment_over_global(
+        "litellm_settings:\n  request_timeout: 2\n",
+        "\n      timeout: 120",
+        false,
+        Some(120.0)
+    )]
+    #[case::deployment_text("", "\n      timeout: \" 2.5 \"", false, Some(2.5))]
+    #[case::deployment_env_reference(
+        "",
+        "\n      timeout: os.environ/TIMEOUT_SECONDS",
+        false,
+        Some(45.0)
+    )]
+    #[case::deployment_zero_is_unset(
+        "litellm_settings:\n  request_timeout: 2\n",
+        "\n      timeout: 0",
+        false,
+        Some(2.0)
+    )]
+    #[case::deployment_negative_is_unset("", "\n      timeout: -1", false, None)]
+    #[case::stream_timeout_ignored_without_stream("", "\n      stream_timeout: 30", false, None)]
+    #[case::stream_timeout_over_global(
+        "litellm_settings:\n  request_timeout: 2\n",
+        "\n      timeout: 120\n      stream_timeout: 30",
+        true,
+        Some(30.0)
+    )]
+    #[case::global_over_deployment_timeout_when_streaming(
+        "litellm_settings:\n  request_timeout: 2\n",
+        "\n      timeout: 120",
+        true,
+        Some(2.0)
+    )]
+    #[case::deployment_timeout_when_streaming_with_nothing_else(
+        "",
+        "\n      timeout: 120",
+        true,
+        Some(120.0)
+    )]
+    fn messages_timeout_prefers_the_deployment_like_the_python_router(
+        #[case] settings: &str,
+        #[case] params: &str,
+        #[case] stream: bool,
+        #[case] expected: Option<f64>,
+    ) {
+        let deployment = configured(settings, params, &[("TIMEOUT_SECONDS", "45")]);
+
+        assert_eq!(
+            deployment
+                .messages_timeouts
+                .for_call(stream, deployment.shaping.settings.request_timeout()),
+            expected.map(std::time::Duration::from_secs_f64)
         );
     }
 

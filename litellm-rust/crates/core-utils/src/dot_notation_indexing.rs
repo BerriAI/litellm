@@ -30,50 +30,38 @@ fn parse_segments(path: &str) -> Option<Vec<Segment>> {
     Some(segments)
 }
 
-fn without_path(value: Value, segments: &[Segment]) -> Value {
+fn remove_path(value: &mut Value, segments: &[Segment]) {
     let Some((segment, tail)) = segments.split_first() else {
-        return value;
+        return;
     };
     match (segment, value) {
-        (Segment::Field(name), Value::Object(object)) => Value::Object(
-            object
-                .into_iter()
-                .filter_map(|(key, item)| {
-                    if key != *name {
-                        return Some((key, item));
-                    }
-                    (!tail.is_empty()).then(|| (key, without_path(item, tail)))
-                })
-                .collect(),
-        ),
-        (Segment::Every, Value::Array(items)) => Value::Array(
-            items
-                .into_iter()
-                .map(|item| without_path(item, tail))
-                .collect(),
-        ),
-        (Segment::Index(index), Value::Array(items)) => Value::Array(
-            items
-                .into_iter()
-                .enumerate()
-                .map(|(position, item)| {
-                    if position == *index {
-                        without_path(item, tail)
-                    } else {
-                        item
-                    }
-                })
-                .collect(),
-        ),
-        (_, value) => value,
+        (Segment::Field(name), Value::Object(object)) if tail.is_empty() => {
+            if object.contains_key(name) {
+                object.retain(|key, _| key != name);
+            }
+        }
+        (Segment::Field(name), Value::Object(object)) => {
+            if let Some(item) = object.get_mut(name) {
+                remove_path(item, tail);
+            }
+        }
+        (Segment::Every, Value::Array(items)) if !tail.is_empty() => {
+            items.iter_mut().for_each(|item| remove_path(item, tail));
+        }
+        (Segment::Index(index), Value::Array(items)) => {
+            if let Some(item) = items.get_mut(*index) {
+                remove_path(item, tail);
+            }
+        }
+        _ => {}
     }
 }
 
-pub fn delete_nested_value(value: Value, path: &str) -> Value {
-    match parse_segments(path) {
-        Some(segments) => without_path(value, &segments),
-        None => value,
+pub fn delete_nested_value(mut value: Value, path: &str) -> Value {
+    if let Some(segments) = parse_segments(path) {
+        remove_path(&mut value, &segments);
     }
+    value
 }
 
 #[cfg(test)]
@@ -221,6 +209,34 @@ mod tests {
     #[case::unclosed_bracket("top[0")]
     fn leaves_the_value_untouched(body: Value, #[case] path: &str) {
         assert_eq!(delete_nested_value(body.clone(), path), body);
+    }
+
+    #[test]
+    fn keeps_the_remaining_keys_in_their_original_order() {
+        let schema = json!({"properties": {"a": 1, "b": 2, "c": 3, "d": 4}});
+        let trimmed = delete_nested_value(schema, "properties.b");
+        assert_eq!(
+            serde_json::to_string(&trimmed).ok(),
+            Some(r#"{"properties":{"a":1,"c":3,"d":4}}"#.to_string())
+        );
+    }
+
+    #[test]
+    fn many_absent_paths_over_a_wide_schema_finish_well_inside_one_request() {
+        let width = 10_000;
+        let properties: serde_json::Map<String, Value> = (0..width)
+            .map(|n| (format!("p{n}"), json!({"type": "string"})))
+            .collect();
+        let body = json!({"tools": [{"name": "t", "input_schema": {"properties": properties}}]});
+        let paths: Vec<String> = (0..width)
+            .map(|n| format!("tools[*].input_schema.properties.absent{n}"))
+            .collect();
+        let started = std::time::Instant::now();
+        let trimmed = paths
+            .iter()
+            .fold(body.clone(), |value, path| delete_nested_value(value, path));
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        assert_eq!(trimmed, body);
     }
 
     #[rstest]

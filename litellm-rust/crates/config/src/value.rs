@@ -1,5 +1,6 @@
 use std::{collections::BTreeMap, fmt, ops::Deref};
 
+use litellm_router_types::Spelled;
 use serde::{Deserialize, Deserializer};
 
 pub type Value = serde_yaml_ng::Value;
@@ -54,4 +55,21 @@ pub(crate) fn one_or_many<'de, D: Deserializer<'de>>(
             one => vec![one],
         }),
     )
+}
+
+pub(crate) fn truthy_flag<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Spelled<bool>>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Flag {
+        Spelled(Spelled<bool>),
+        Number(f64),
+        Null,
+    }
+    Ok(Some(match Flag::deserialize(deserializer)? {
+        Flag::Spelled(spelled) => spelled,
+        Flag::Number(number) => Spelled::Value(number != 0.0),
+        Flag::Null => Spelled::Value(false),
+    }))
 }

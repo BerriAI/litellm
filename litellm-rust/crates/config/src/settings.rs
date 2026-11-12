@@ -4,7 +4,8 @@ use litellm_secret_value::SecretValue;
 use serde::Deserialize;
 
 use crate::{
-    AdditionalFields, CacheSettings, Object, RedisSettings, Spelled, Value, value::one_or_many,
+    AdditionalFields, CacheSettings, Object, RedisSettings, Spelled, Value,
+    value::{one_or_many, truthy_flag},
 };
 
 #[derive(Clone, Debug, Deserialize)]
@@ -218,7 +219,9 @@ pub struct LiteLlmSettings {
     pub aiohttp_trust_env: Option<bool>,
     pub disable_aiohttp_trust_env: Option<bool>,
     pub disable_aiohttp_transport: Option<bool>,
+    #[serde(deserialize_with = "truthy_flag")]
     pub drop_params: Option<Spelled<bool>>,
+    #[serde(deserialize_with = "truthy_flag")]
     pub reasoning_auto_summary: Option<Spelled<bool>>,
     pub request_timeout: Option<Spelled<f64>>,
     pub num_retries: Option<u64>,

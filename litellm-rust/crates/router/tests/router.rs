@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use litellm_config::Config;
 use litellm_inference_messages::{MessagesSettings, MessagesShaping};
-use litellm_router::{Deployment, Router};
+use litellm_router::{Deployment, MessagesTimeouts, Router};
 use rstest::rstest;
 
 #[rstest]
@@ -100,6 +100,10 @@ fn programmatic_deployments_preserve_overrides_and_last_entry_wins() {
         custom_llm_provider: Some("test-provider".into()),
         litellm_params: Default::default(),
         timeout: Some(Duration::from_secs(7)),
+        messages_timeouts: MessagesTimeouts {
+            timeout: Some(Duration::from_secs(120)),
+            stream_timeout: Some(Duration::from_secs(30)),
+        },
         drops_params_globally: false,
         shaping: MessagesShaping {
             settings: MessagesSettings {
@@ -121,5 +125,6 @@ fn programmatic_deployments_preserve_overrides_and_last_entry_wins() {
     assert_eq!(selected.api_base, deployment.api_base);
     assert_eq!(selected.custom_llm_provider, deployment.custom_llm_provider);
     assert_eq!(selected.timeout, deployment.timeout);
+    assert_eq!(selected.messages_timeouts, deployment.messages_timeouts);
     assert_eq!(selected.shaping, deployment.shaping);
 }

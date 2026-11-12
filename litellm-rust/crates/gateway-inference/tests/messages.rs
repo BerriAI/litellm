@@ -4,8 +4,12 @@ use axum::{
     body::{Body, to_bytes},
     http::Request,
 };
+use litellm_gateway_inference::Deployment;
+use litellm_inference_messages::{MessagesSettings, MessagesShaping};
+use litellm_router::MessagesTimeouts;
 use rstest::rstest;
 use serde_json::{Map, Value, json};
+use std::time::Duration;
 use tower::ServiceExt;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
@@ -113,6 +117,63 @@ async fn request_drop_settings_apply_and_never_reach_the_provider(#[case] settin
     .await;
 
     assert_eq!(response.status(), 200);
+}
+
+#[rstest]
+#[case::deployment_timeout_without_stream(false, Some(5), None, true)]
+#[case::stream_timeout_with_stream(true, None, Some(5), true)]
+#[case::stream_timeout_ignored_without_stream(false, None, Some(5), false)]
+#[case::request_timeout_alone(false, None, None, false)]
+#[tokio::test]
+async fn a_deployment_timeout_outlasts_the_global_request_timeout(
+    #[case] stream: bool,
+    #[case] timeout: Option<u64>,
+    #[case] stream_timeout: Option<u64>,
+    #[case] answered: bool,
+) {
+    let upstream = MockServer::start().await;
+    let template = if stream {
+        ResponseTemplate::new(200).set_body_raw(
+            "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+            "text/event-stream",
+        )
+    } else {
+        ResponseTemplate::new(200).set_body_json(json!({"id": "msg_test", "type": "message",
+            "role": "assistant", "model": "test-model", "content": [], "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1}}))
+    };
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(template.set_delay(Duration::from_millis(400)))
+        .mount(&upstream)
+        .await;
+    let deployment = Deployment {
+        model: "anthropic/test-model".into(),
+        api_base: Some(upstream.uri()),
+        api_key: Some("test-key".into()),
+        messages_timeouts: MessagesTimeouts {
+            timeout: timeout.map(Duration::from_secs),
+            stream_timeout: stream_timeout.map(Duration::from_secs),
+        },
+        shaping: MessagesShaping {
+            settings: MessagesSettings {
+                request_timeout: Some(0.05),
+                ..MessagesSettings::default()
+            },
+            ..MessagesShaping::default()
+        },
+        ..Deployment::default()
+    };
+
+    let response = support::post(
+        support::app_for(deployment),
+        "/v1/messages",
+        json!({"model": "public/model", "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 16, "stream": stream}),
+    )
+    .await;
+
+    assert_eq!(response.status() == 200, answered);
 }
 
 #[tokio::test]
