@@ -554,6 +554,11 @@ _OPAQUE_VALUE_ADAPTER: Final = TypeAdapter(object)
 _DEPLOYMENT_SELECTED_EVENT: Final = "litellm.request.deployment_selected"
 
 
+def _decisions_api_base_override(request: Mapping[str, object]) -> Mapping[str, object]:
+    api_base: Final = request.get("api_base") or request.get("base_url")
+    return {"api_base": api_base} if isinstance(api_base, str) and api_base else {}
+
+
 def _is_fallback_hop(request_kwargs: Mapping[str, object]) -> bool:
     fallback_depth: Final = request_kwargs.get("fallback_depth")
     return isinstance(fallback_depth, int) and fallback_depth > 0
@@ -5765,6 +5770,11 @@ class Router:
                     return await original_generic_function(model=model, **kwargs)
                 raise e
 
+            connection_overrides: Final = (
+                _decisions_api_base_override(_FALLBACK_HOP_ADAPTER.validate_python(kwargs))
+                if handler_name in {"decisions", "adecisions", "systemone", "asystemone"}
+                else {}
+            )
             if handler_name in {"decisions", "adecisions", "systemone", "asystemone"}:
                 connection_params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(deployment["litellm_params"])
                 validate_router_connection(
@@ -5792,6 +5802,7 @@ class Router:
                 ),
                 "caching": self.cache_responses,
                 **kwargs,
+                **connection_overrides,
                 "model": model_name,
                 **_with_router_resolved_session_model(kwargs.get("session"), model_name),
             }
@@ -6521,6 +6532,11 @@ class Router:
                     specific_deployment=kwargs.pop("specific_deployment", None),
                     request_kwargs=kwargs,
                 )
+            connection_overrides: Final = (
+                _decisions_api_base_override(_FALLBACK_HOP_ADAPTER.validate_python(kwargs))
+                if handler_name in {"decisions", "adecisions", "systemone", "asystemone"}
+                else {}
+            )
             if handler_name in {"decisions", "adecisions", "systemone", "asystemone"}:
                 connection_params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(deployment["litellm_params"])
                 validate_router_connection(
@@ -6556,6 +6572,7 @@ class Router:
                     "custom_llm_provider": custom_llm_provider,
                     "caching": self.cache_responses,
                     **kwargs,
+                    **connection_overrides,
                 }
             )
 

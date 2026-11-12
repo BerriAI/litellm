@@ -331,8 +331,10 @@ async def test_router_gemini_custom_base_cannot_receive_deployment_key(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("systemone", (False, True))
 @pytest.mark.parametrize("overrides", (False, True))
+@pytest.mark.parametrize("sync", (False, True))
+@pytest.mark.parametrize("base_parameter", ("api_base", "base_url"))
 async def test_router_gemini_keeps_keys_with_their_configured_or_explicit_destination(
-    systemone: bool, overrides: bool, respx_mock: respx.MockRouter
+    systemone: bool, overrides: bool, sync: bool, base_parameter: str, respx_mock: respx.MockRouter
 ) -> None:
     router: Final = litellm.Router(
         model_list=[
@@ -351,21 +353,23 @@ async def test_router_gemini_keeps_keys_with_their_configured_or_explicit_destin
     destination: Final = respx_mock.post(f"{target}/v1beta/decisions").respond(
         json={"answers": {"ok": {"type": "noul", "noul": 0.5}}}
     )
-    options: Final = {"api_base": target, "api_key": "caller-key"} if overrides else {}
+    options: Final = {base_parameter: target, "api_key": "caller-key"} if overrides else {}
+    payload: Final = (
+        {"state": "Inspect", "questions": {"ok": {"type": "noul", "instructions": "Is it damaged?"}}}
+        if systemone
+        else {"input": "Inspect", "questions": [{"name": "ok", "type": "predicate", "instructions": "Is it damaged?"}]}
+    )
+    request: Final = router.systemone if systemone else router.decisions
+    async_request: Final = router.asystemone if systemone else router.adecisions
+    response: Final = (
+        request(model="gemini-decisions", **payload, **options)
+        if sync
+        else await async_request(model="gemini-decisions", **payload, **options)
+    )
     if systemone:
-        await router.asystemone(
-            model="gemini-decisions",
-            state="Inspect",
-            questions={"ok": {"type": "noul", "instructions": "Is it damaged?"}},
-            **options,
-        )
+        assert response.answers["ok"].noul == 0.5
     else:
-        await router.adecisions(
-            model="gemini-decisions",
-            input="Inspect",
-            questions=[{"name": "ok", "type": "predicate", "instructions": "Is it damaged?"}],
-            **options,
-        )
+        assert response.answers[0].probability == 0.5
     assert destination.call_count == 1
     assert destination.calls[0].request.headers["x-goog-api-key"] == ("caller-key" if overrides else "deployment-key")
 
