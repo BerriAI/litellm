@@ -1754,7 +1754,7 @@ async def _ladder(
     counter: _ScriptedCounter,
     settings: TokenCountSettings,
     local_estimate_allowed: bool = True,
-    forwarded_edits: bool = False,
+    forwards_request_fields: bool = False,
 ) -> TokenCountResponse | None:
     return await _provider_token_count(
         count_with=partial(
@@ -1772,7 +1772,7 @@ async def _ladder(
         request_model=_COUNT_REQUEST.model,
         settings=settings,
         local_estimate_allowed=local_estimate_allowed,
-        forwarded_edits=forwarded_edits,
+        forwards_request_fields=forwards_request_fields,
     )
 
 
@@ -2030,7 +2030,7 @@ async def test_a_pinned_token_count_model_rejecting_forwarded_edits_answers_with
         await _ladder(
             counter,
             TokenCountSettings(framing=None, count_model=replace(_OPUS_IN_US_EAST_1, configured=True)),
-            forwarded_edits=True,
+            forwards_request_fields=True,
         )
 
     assert raised.value.code == str(status_code)
@@ -4342,13 +4342,14 @@ async def test_messages_count_tokens_on_a_responses_api_bridge_rejects_an_invali
 
 
 class _CountTokensPeer:
-    def __init__(self, reply: Mapping[str, JsonValue]) -> None:
+    def __init__(self, reply: Mapping[str, JsonValue], status_code: int = 200) -> None:
         self._reply: Final = reply
+        self._status_code: Final = status_code
         self.requests: tuple[httpx.Request, ...] = ()
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.requests = (*self.requests, request)
-        return httpx.Response(200, json=dict(self._reply), request=request)
+        return httpx.Response(self._status_code, json=dict(self._reply), request=request)
 
 
 class _BedrockInvokeModel(BaseModel):
@@ -4377,12 +4378,13 @@ async def _count_on_a_bridged_provider_count_api(
     bedrock_model: str = "bedrock/us.amazon.nova-2-lite-v1:0",
     peer_reply: Mapping[str, JsonValue] = MappingProxyType({"inputTokens": 57}),
     model_info: Mapping[str, JsonValue] = MappingProxyType({}),
+    peer_status: int = 200,
 ) -> tuple[object, tuple[httpx.Request, ...]]:
     from litellm.llms.bedrock.count_tokens import handler as bedrock_count_tokens_handler
     from litellm.llms.bedrock.count_tokens import mantle_handler as bedrock_mantle_count_tokens_handler
 
     monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
-    peer: Final = _CountTokensPeer(peer_reply)
+    peer: Final = _CountTokensPeer(peer_reply, peer_status)
     router: Final = Router(
         model_list=[
             {
@@ -4494,6 +4496,42 @@ async def test_messages_count_tokens_forwards_bedrock_supported_edits_and_their_
         _CLEAR_TOOL_USES,
         [ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value],
     )
+
+
+@pytest.mark.parametrize(
+    ("count_options", "region_hints"),
+    [({"thinking": {"type": "enabled", "budget_tokens": 1024}}, 0), ({}, 1)],
+    ids=["count_options_forwarded", "no_count_options"],
+)
+@pytest.mark.asyncio
+async def test_a_mantle_count_rejecting_the_forwarded_count_options_answers_without_the_region_hint(
+    count_options: Mapping[str, JsonValue], region_hints: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    response, sent = await _count_on_a_bridged_provider_count_api(
+        {"messages": [{"role": "user", "content": "Read the README"}], **count_options},
+        monkeypatch,
+        _BEDROCK_CLAUDE_MODEL,
+        MappingProxyType(
+            {"type": "error", "error": {"type": "invalid_request_error", "message": "thinking: invalid value"}}
+        ),
+        MappingProxyType(
+            {
+                "token_count_model": {
+                    "model": "us.anthropic.claude-sonnet-5-5",
+                    "litellm_provider": "bedrock_mantle",
+                    "region": "us-west-2",
+                }
+            }
+        ),
+        peer_status=400,
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 400
+    assert len(sent) == 1
+    assert ("thinking" in json.loads(sent[0].content)) == bool(count_options)
+    message: Final = json.loads(bytes(response.body))["error"]["message"]
+    assert message.count("counts tokens with us.anthropic.claude-sonnet-5-5 in us-west-2") == region_hints
 
 
 @pytest.mark.asyncio

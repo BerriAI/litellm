@@ -15535,7 +15535,7 @@ async def _provider_token_count(
     request_model: str,
     settings: TokenCountSettings,
     local_estimate_allowed: bool,
-    forwarded_edits: bool = False,
+    forwards_request_fields: bool = False,
 ) -> Union["TokenCountResponse", ProviderCountFailure, None]:
     """Count with the provider, using the token_count_model in its region when one is set.
 
@@ -15559,7 +15559,7 @@ async def _provider_token_count(
     pinned_count_model: Final = None if count_model is None or count_model.region is None else count_model
     region_hint: Final = (
         None
-        if pinned_count_model is None or (forwarded_edits and counted.status_code == 400)
+        if pinned_count_model is None or (forwards_request_fields and counted.status_code == 400)
         else f"This model counts tokens with {pinned_count_model.model} in {pinned_count_model.region}. "
         "If that region is not enabled for the AWS account, enable it or set token_count_model in model_info"
     )
@@ -16349,6 +16349,9 @@ async def _count_request_tokens(
         if messages_format == "openai"
         else MappingProxyType({})
     )
+    forwarded_count_options: Final = _count_options_with_defaults(
+        count_options, deployment_defaults, count_litellm_params.get("additional_drop_params")
+    )
     ladder: Final = (
         None
         if provider_counter is None
@@ -16380,17 +16383,14 @@ async def _count_request_tokens(
                 output_format=output_format,
                 context_management=None if edited_request is not None else context_edits,
                 chat_params=chat_params,
-                count_options=_count_options_with_defaults(
-                    count_options,
-                    deployment_defaults,
-                    count_litellm_params.get("additional_drop_params"),
-                ),
+                count_options=forwarded_count_options,
             ),
             model_to_use=model_to_use,
             request_model=request.model,
             settings=settings,
             local_estimate_allowed=litellm.disable_token_counter is not True and contents_estimable,
-            forwarded_edits=context_edits is not None and edited_request is None,
+            forwards_request_fields=(context_edits is not None and edited_request is None)
+            or bool(forwarded_count_options),
         )
     )
     if isinstance(ladder, TokenCountResponse):
