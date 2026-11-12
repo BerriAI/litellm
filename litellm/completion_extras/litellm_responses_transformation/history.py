@@ -359,30 +359,40 @@ def _message_texts(entries: Sequence[_MessageEntry], content: str) -> tuple[tupl
 
 def _replay_message_texts(entries: Sequence[_MessageEntry], message: _ChatMessage) -> tuple[tuple[str, ...], ...]:
     commentary: Final = message.provider_specific_fields.commentary if message.provider_specific_fields else None
+    if commentary is None:
+        bounds: Final = tuple(
+            accumulate(
+                (
+                    sum(entry.parts) + (2 if index and entry.phase == "commentary" else 0)
+                    for index, entry in enumerate(entries)
+                ),
+                initial=0,
+            )
+        )
+        return tuple(
+            _entry_texts(
+                entry, message.content or "", bounds[index] + (2 if index and entry.phase == "commentary" else 0)
+            )
+            for index, entry in enumerate(entries)
+        )
+    content_offsets: Final = tuple(
+        accumulate((sum(entry.parts) if entry.phase != "commentary" else 0 for entry in entries), initial=0)
+    )
+    commentary_offsets: Final = tuple(
+        accumulate((sum(entry.parts) + 2 if entry.phase == "commentary" else 0 for entry in entries), initial=0)
+    )
     return tuple(
-        _entry_texts(entries, index, entry, message.content or "", commentary) for index, entry in enumerate(entries)
+        _entry_texts(
+            entry,
+            commentary if entry.phase == "commentary" else message.content or "",
+            commentary_offsets[index] if entry.phase == "commentary" else content_offsets[index],
+        )
+        for index, entry in enumerate(entries)
     )
 
 
-def _entry_texts(
-    entries: Sequence[_MessageEntry], index: int, entry: _MessageEntry, content: str, commentary: str | None
-) -> tuple[str, ...]:
-    separate: Final = commentary is not None
-    source: Final = commentary if separate and entry.phase == "commentary" else content
-    earlier: Final = tuple(
-        previous
-        for previous in entries[:index]
-        if not separate or (previous.phase == "commentary") == (entry.phase == "commentary")
-    )
-    separators: Final = (
-        len(earlier)
-        if separate and entry.phase == "commentary"
-        else 0
-        if separate
-        else sum(previous.phase == "commentary" for previous in entries[1 : index + 1])
-    )
-    offset: Final = sum(sum(previous.parts) for previous in earlier) + len("\n\n") * separators
-    return _message_texts((entry,), (source or "")[offset : offset + sum(entry.parts)])[0]
+def _entry_texts(entry: _MessageEntry, source: str, offset: int) -> tuple[str, ...]:
+    return _message_texts((entry,), source[offset : offset + sum(entry.parts)])[0]
 
 
 def _message_item(texts: Sequence[str], phase: Phase | None) -> Mapping[str, object]:

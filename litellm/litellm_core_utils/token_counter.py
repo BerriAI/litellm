@@ -1061,7 +1061,7 @@ def _count_messages(
                     params.pdf_pricing,
                 )
             elif key == "provider_specific_fields":
-                num_tokens += sum(map(params.count_function, _compaction_summaries(value)))
+                num_tokens += sum(map(params.count_function, _provider_texts(value)))
             elif key == "search_results" and isinstance(value, list):
                 from litellm.litellm_core_utils.prompt_templates.common_utils import (
                     extract_search_results_text,
@@ -1079,13 +1079,14 @@ def _count_messages(
 _OBJECT_LIST: Final = TypeAdapter(list[object])
 
 
-def _compaction_summaries(provider_specific_fields: object) -> tuple[str, ...]:
+def _provider_texts(provider_specific_fields: object) -> tuple[str, ...]:
     fields: Final = as_str_mapping(provider_specific_fields)
+    commentary: Final = fields.get("commentary") if fields is not None else None
     blocks: Final = fields.get("compaction_blocks") if fields is not None else None
     block_fields: Final = (
         tuple(map(as_str_mapping, _OBJECT_LIST.validate_python(blocks))) if isinstance(blocks, list) else ()
     )
-    return tuple(
+    summaries: Final = tuple(
         content
         for block in block_fields
         if block is not None
@@ -1093,6 +1094,7 @@ def _compaction_summaries(provider_specific_fields: object) -> tuple[str, ...]:
         and isinstance(content := block.get("content"), str)
         and content
     )
+    return ((commentary,) if isinstance(commentary, str) and commentary else ()) + summaries
 
 
 def _count_extra(

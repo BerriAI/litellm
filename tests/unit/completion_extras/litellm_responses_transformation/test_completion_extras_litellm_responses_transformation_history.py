@@ -377,6 +377,39 @@ def test_an_unphased_answer_after_commentary_is_never_labeled_commentary(stream:
     assert "phase" not in sent[1]
 
 
+@pytest.mark.parametrize("separate", [False, True])
+def test_replay_preserves_empty_and_multipart_message_boundaries(separate: bool) -> None:
+    commentary: Final = {
+        "type": "message",
+        "role": "assistant",
+        "phase": "commentary",
+        "content": [{"type": "output_text", "text": ""}, {"type": "output_text", "text": "note"}],
+    }
+    empty: Final = {**commentary, "content": []}
+    answer: Final = {
+        "type": "message",
+        "role": "assistant",
+        "phase": "final_answer",
+        "content": [{"type": "output_text", "text": "Paris"}, {"type": "output_text", "text": "!"}],
+    }
+    items: Final = (
+        (empty, commentary, answer, empty, commentary) if separate else (empty, commentary, empty, commentary)
+    )
+    provider_fields: Final = {"commentary": "\n\nnote\n\n\n\nnote"} if separate else {}
+    message: Final = {
+        "role": "assistant",
+        "content": "Paris!" if separate else "\n\nnote\n\n\n\nnote",
+        "provider_specific_fields": provider_fields,
+    }
+    fields: Final = history.replay_fields(items, message, completed=True, first_message_only=False)
+    replayed: Final = history.replay_items(
+        {**message, "provider_specific_fields": {**provider_fields, **fields}},
+        replay_tool_search=True,
+    )
+    assert replayed is not None
+    assert replayed.items == items
+
+
 def _with_text(item: Mapping[str, object], text: str) -> Mapping[str, object]:
     return {**item, "content": [{"type": "output_text", "text": text, "annotations": []}]}
 

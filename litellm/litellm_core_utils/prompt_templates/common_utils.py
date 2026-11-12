@@ -469,14 +469,22 @@ def convert_content_list_to_str(
     return texts
 
 
+def _replayed_commentary(message: object) -> str:
+    match message:
+        case {"provider_specific_fields": {"commentary": str() as commentary}}:
+            return commentary
+        case _:
+            return ""
+
+
 def get_str_from_messages(messages: list[AllMessageValues]) -> str:
     """
     Converts a list of messages to a string
     """
-    text = ""
-    for message in messages:
-        text += convert_content_list_to_str(message=message)
-    return text
+    return "".join(
+        convert_content_list_to_str(message=message) + _replayed_commentary(message)
+        for message in messages
+    )
 
 
 def get_semantic_cache_prompt_from_messages(messages: Sequence[Mapping[str, object]]) -> str:
