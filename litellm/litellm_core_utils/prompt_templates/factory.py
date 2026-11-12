@@ -82,7 +82,7 @@ from .common_utils import (
     parse_tool_call_arguments,
     salvage_concatenated_tool_arguments,
 )
-from .image_handling import convert_url_to_base64, is_pdf_media_type
+from .image_handling import convert_url_to_base64, is_pdf_media_type, parse_data_uri
 
 
 def default_pt(messages):
@@ -895,18 +895,14 @@ def convert_to_anthropic_image_obj(openai_image_url: str, format: str | None) ->
     try:
         if openai_image_url.startswith("http"):
             openai_image_url = convert_url_to_base64(url=openai_image_url)
-        # Extract the media type and base64 data
-        media_type, base64_data = openai_image_url.split("data:")[1].split(";base64,")
-
-        if format:
-            media_type = format
-        else:
-            media_type = media_type.replace("\\/", "/")
+        parsed: Final = parse_data_uri(openai_image_url)
+        if parsed is None or not parsed.is_base64:
+            raise ValueError("expected a base64 data URI")
 
         return GenericImageParsingChunk(
             type="base64",
-            media_type=media_type,
-            data=base64_data,
+            media_type=format or parsed.media_type,
+            data=parsed.data,
         )
     except litellm.ImageFetchError:
         raise
@@ -1691,16 +1687,10 @@ def convert_to_gemini_tool_call_result(
             # Detect data-URL images (e.g. from Anthropic tool_result with a single image block
             # that was serialised as a plain string by translate_anthropic_messages_to_openai)
             # and promote them to inline_data so Gemini receives actual image bytes.
-            if content_str[:5].lower() == "data:" and ";base64," in content_str:
-                try:
-                    mime_rest: Final = content_str[5:].split(";base64,", 1)
-                    if len(mime_rest) == 2 and mime_rest[0].startswith("image/"):
-                        # Strip any extra parameters (e.g. ";charset=UTF-8") from the MIME segment
-                        clean_mime: Final = mime_rest[0].split(";")[0].strip()
-                        media_parts.append({"inline_data": BlobType(data=mime_rest[1], mime_type=clean_mime)})
-                        content_str = ""
-                except Exception as e:
-                    verbose_logger.warning("Failed to parse data URL in tool response: %s", e)
+            data_uri: Final = parse_data_uri(content_str)
+            if data_uri is not None and data_uri.is_base64 and data_uri.media_type.startswith("image/"):
+                media_parts.append({"inline_data": BlobType(data=data_uri.data, mime_type=data_uri.media_type)})
+                content_str = ""
         elif isinstance(message["content"], list):
             content_list: Final = message["content"]
             for content in content_list:
@@ -1821,10 +1811,8 @@ def _is_anthropic_document_data_uri(url: str) -> bool:
     # text/plain (see select_anthropic_content_block_type_for_file). Routing
     # other mimes here would produce a document block the API rejects, so we
     # leave them on the image code path.
-    match: Final = re.match(r"data:([^;,]+)", url)
-    if not match:
-        return False
-    return match.group(1) in _ANTHROPIC_DOCUMENT_BASE64_MEDIA_TYPES
+    parsed: Final = parse_data_uri(url)
+    return parsed is not None and parsed.media_type in _ANTHROPIC_DOCUMENT_BASE64_MEDIA_TYPES
 
 
 def convert_to_anthropic_tool_result(
@@ -4112,20 +4100,10 @@ class BedrockImageProcessor:
     @staticmethod
     def _parse_base64_image(image_url: str) -> tuple[str, str, str]:
         """Parse base64 encoded image data."""
-        image_metadata, img_without_base_64 = image_url.split(",")
-
-        # Extract MIME type using regular expression
-        mime_type_match: Final = re.match(r"data:(.*?);base64", image_metadata)
-
-        if mime_type_match:
-            mime_type = mime_type_match.group(1)
-            mime_type = mime_type.split(";")[0]
-            image_format = mime_type.split("/")[1]
-        else:
-            mime_type = "image/jpeg"
-            image_format = "jpeg"
-
-        return img_without_base_64, mime_type, image_format
+        parsed: Final = parse_data_uri(image_url)
+        if parsed is None or not parsed.media_type:
+            return image_url.rpartition(",")[2], "image/jpeg", "jpeg"
+        return parsed.data, parsed.media_type, parsed.media_type.rpartition("/")[2]
 
     @staticmethod
     def validate_format(mime_type: str, image_format: str) -> str:

@@ -18,6 +18,7 @@ from litellm.litellm_core_utils import url_utils
 from litellm.litellm_core_utils.prompt_templates import image_handling
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     MAX_CONCURRENT_REMOTE_MEDIA_FETCHES,
+    DataUri,
     RemoteMedia,
     async_convert_url_to_base64,
     async_format_pdf_links,
@@ -27,6 +28,7 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     format_pdf_links,
     inline_remote_media,
     is_unformatted_pdf_link_image,
+    parse_data_uri,
     serves_pdf,
 )
 from litellm.litellm_core_utils.url_utils import SSRFError
@@ -234,6 +236,23 @@ def test_streaming_download_handles_petabyte_file(monkeypatch):
 
     # Should fail fast without downloading anywhere near 1 petabyte
     assert "exceeds maximum allowed size" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    "url, expected",
+    [
+        ("data:image/png;base64,iVBORw0KGgo=", DataUri("image/png", "iVBORw0KGgo=", True)),
+        ("data:image/png;charset=utf-8;base64,iVBORw0KGgo=", DataUri("image/png", "iVBORw0KGgo=", True)),
+        ("DATA:Image/PNG;BASE64,iVBORw0KGgo=", DataUri("image/png", "iVBORw0KGgo=", True)),
+        (r"data:image\/jpeg;base64,/9j/", DataUri("image/jpeg", "/9j/", True)),
+        ("data:text/plain,a,b", DataUri("text/plain", "a,b", False)),
+        ("data:;base64,AAAA", DataUri("", "AAAA", True)),
+        ("data:image/png;base64", None),
+        ("https://example.com/a.png", None),
+    ],
+)
+def test_parse_data_uri(url, expected):
+    assert parse_data_uri(url) == expected
 
 
 def test_data_url_is_returned_unchanged_without_fetch(monkeypatch):

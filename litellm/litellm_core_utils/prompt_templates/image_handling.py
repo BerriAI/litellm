@@ -263,6 +263,28 @@ def _bare_media_type(media_type: str) -> str:
     return media_type.split(";", 1)[0].strip().lower()
 
 
+@dataclass(frozen=True, slots=True)
+class DataUri:
+    media_type: str
+    data: str
+    is_base64: bool
+
+
+def parse_data_uri(url: str) -> DataUri | None:
+    """Split a `data:` URI into its bare media type (parameters such as `;charset=` dropped) and payload."""
+    if url[:5].lower() != "data:":
+        return None
+    header, comma, data = url[5:].partition(",")
+    if not comma:
+        return None
+    unescaped_header: Final = header.replace("\\/", "/")
+    return DataUri(
+        media_type=_bare_media_type(unescaped_header),
+        data=data,
+        is_base64=unescaped_header.rpartition(";")[2].strip().lower() == "base64",
+    )
+
+
 def is_pdf_media_type(media_type: str) -> bool:
     return _bare_media_type(media_type) in _PDF_MEDIA_TYPES
 
@@ -493,9 +515,11 @@ def _inlined_file(file: Mapping[str, object], url: str, data_url: str) -> Mappin
 
 
 def _base64_source(url: str, data_url: str) -> Mapping[str, str]:
-    fetched_media_type, data = data_url.removeprefix("data:").split(";base64,", 1)
-    media_type: Final = "application/pdf" if url.lower().endswith(".pdf") else fetched_media_type
-    return {"type": "base64", "media_type": media_type, "data": data}
+    fetched: Final = parse_data_uri(data_url)
+    if fetched is None:
+        raise litellm.ImageFetchError(f"Error: Fetched media is not a base64 data URI. url={url}")
+    media_type: Final = "application/pdf" if url.lower().endswith(".pdf") else fetched.media_type
+    return {"type": "base64", "media_type": media_type, "data": fetched.data}
 
 
 def _inline(remote: _RemoteImage | _RemoteFile | _RemoteSource, data_url: str) -> Mapping[str, object]:
