@@ -1,153 +1,151 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { parseAsString, useQueryState } from "nuqs";
 import { Plus } from "lucide-react";
-import { toast } from "sonner";
+import { parseAsString, useQueryState } from "nuqs";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { useCustomers, type EndUser } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import { $api } from "@/lib/http/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import CustomerDetail from "./_components/CustomerDetail";
+import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
+import { DataTablePagination, useUrlTableState } from "@/components/shared/DataTable";
+import { ErrorState } from "@/components/shared/ErrorState";
 import CreateCustomerDialog from "./_components/CreateCustomerDialog";
-import StatusBadge from "./_components/StatusBadge";
-import { rankBySpend, useCustomerUsage } from "./_components/customerPortalData";
+import CustomerDetail from "./_components/CustomerDetail";
+import { calendarDate, customerUsagePresets, useCustomerUsageRange } from "./_components/customerUsageRange";
+
+const TABLE_OPTIONS = {
+  sortFields: ["spend"],
+  defaultSort: { id: "spend", desc: true },
+  defaultPageSize: 25,
+  filterColumns: [],
+};
 
 export default function CustomersPage() {
+  const [selectedId, setSelectedId] = useQueryState("id", parseAsString);
+  if (selectedId) return <CustomerDetail customerId={selectedId} onBack={() => void setSelectedId(null)} />;
+  return <CustomerOrganizations />;
+}
+
+function CustomerOrganizations() {
   const { t } = useTranslation();
   const { accessToken } = useAuthorized();
-  const [selectedId, setSelectedId] = useQueryState("id", parseAsString);
-  const [search, setSearch] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
-  const customersQuery = useCustomers(100, search || undefined);
-  const usageQuery = useCustomerUsage(accessToken);
-  const customers: EndUser[] = useMemo(() => customersQuery.data?.pages.flat() ?? [], [customersQuery.data]);
-  const rows = useMemo(() => rankBySpend(customers, usageQuery.data), [customers, usageQuery.data]);
-  const block = $api.useMutation("post", "/customer/block", {
-    onSuccess: () => {
-      toast.success(t("customerPortal.toasts.blocked"));
-      customersQuery.refetch();
+  const { dateValue, onDateChange, preset } = useCustomerUsageRange();
+  const { search, setSearch, pagination, onPaginationChange } = useUrlTableState(TABLE_OPTIONS);
+  const usage = $api.useQuery(
+    "get",
+    "/management/v1/customer_organization_usage",
+    {
+      params: {
+        query: {
+          start_date: calendarDate(dateValue.from),
+          end_date: calendarDate(dateValue.to),
+          q: search,
+          page: pagination.pageIndex + 1,
+          page_size: pagination.pageSize,
+        },
+      },
     },
-  });
-  const unblock = $api.useMutation("post", "/customer/update", {
-    onSuccess: () => {
-      toast.success(t("customerPortal.toasts.unblocked"));
-      customersQuery.refetch();
-    },
-  });
-
-  if (selectedId) return <CustomerDetail customerId={selectedId} onBack={() => setSelectedId(null)} />;
+    { enabled: Boolean(accessToken) },
+  );
+  const rows = usage.data?.data ?? [];
 
   return (
     <div className="w-full space-y-4 px-6 py-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex min-w-0 items-baseline gap-3">
+        <div className="min-w-0 space-y-1">
           <h1 className="text-lg font-semibold tracking-tight">{t("customerPortal.list.title")}</h1>
-          <p className="truncate text-sm text-muted-foreground">{t("customerPortal.list.subtitle")}</p>
+          <p className="text-sm text-muted-foreground">{t("customerPortal.list.subtitle")}</p>
         </div>
         <Button onClick={() => setCreateOpen(true)}>
           <Plus className="size-4" /> {t("customerPortal.list.create")}
         </Button>
       </div>
-      <p className="text-xs text-muted-foreground">{t("customerPortal.common.blockHint")}</p>
       <div className="rounded-lg border bg-card">
-        <div className="border-b p-3">
+        <div className="flex flex-wrap items-end justify-between gap-3 border-b p-3">
           <Input
             className="max-w-xs"
+            aria-label={t("customerPortal.list.searchPlaceholder")}
             placeholder={t("customerPortal.list.searchPlaceholder")}
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(event) => setSearch(event.target.value)}
+          />
+          <AdvancedDatePicker
+            value={dateValue}
+            onValueChange={(value, selectedPreset) => {
+              onDateChange(value, selectedPreset);
+              onPaginationChange({ ...pagination, pageIndex: 0 });
+            }}
+            presetShortLabel={preset}
+            presets={customerUsagePresets}
+            label={t("customerPortal.range.label")}
+            showTimeRange={false}
+            compact
+            className="max-w-sm"
           />
         </div>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className="pl-4">{t("customerPortal.list.columns.customer")}</TableHead>
-              <TableHead className="text-right">{t("customerPortal.list.columns.spend")}</TableHead>
-              <TableHead className="text-right">{t("customerPortal.list.columns.budget")}</TableHead>
-              <TableHead className="text-right">{t("customerPortal.list.columns.keys")}</TableHead>
-              <TableHead>{t("customerPortal.list.columns.status")}</TableHead>
-              <TableHead className="w-28" />
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {customersQuery.isLoading && (
+        {usage.isError ? (
+          <ErrorState message={t("customerPortal.list.error")} onRetry={() => void usage.refetch()} />
+        ) : (
+          <Table aria-label={t("customerPortal.list.title")}>
+            <TableHeader>
               <TableRow>
-                <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
-                  {t("customerPortal.list.loading")}
-                </TableCell>
+                <TableHead className="pl-4">{t("customerPortal.list.columns.customer")}</TableHead>
+                <TableHead className="text-right">{t("customerPortal.list.columns.spend")}</TableHead>
+                <TableHead className="text-right">{t("customerPortal.list.columns.requests")}</TableHead>
+                <TableHead className="pr-4 text-right">{t("customerPortal.list.columns.tokens")}</TableHead>
               </TableRow>
-            )}
-            {!customersQuery.isLoading && rows.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
-                  {t("customerPortal.list.empty")}
-                </TableCell>
-              </TableRow>
-            )}
-            {rows.map(({ c, spend, keys, status }) => {
-              const max = c.litellm_budget_table?.max_budget ?? null;
-              return (
-                <TableRow
-                  key={c.user_id}
-                  className="cursor-pointer"
-                  onClick={() => setSelectedId(c.user_id, { history: "push" })}
-                >
-                  <TableCell className="pl-4">
-                    <p className="font-medium">{c.alias || c.user_id}</p>
-                    <p className="font-mono text-[11px] text-muted-foreground">{c.user_id}</p>
-                  </TableCell>
-                  <TableCell className="text-right font-medium tabular-nums">
-                    {t("format.usd", { val: spend })}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums text-muted-foreground">
-                    {max === null
-                      ? t("customerPortal.common.noBudget")
-                      : t("customerPortal.list.budgetUsage", {
-                          spend: t("format.usd", { val: spend }),
-                          max: t("format.usd", { val: max }),
-                        })}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums">{keys}</TableCell>
-                  <TableCell>
-                    <StatusBadge status={status} />
-                  </TableCell>
-                  <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
-                    {c.blocked ? (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => unblock.mutate({ body: { user_id: c.user_id, blocked: false } })}
-                      >
-                        {t("customerPortal.common.unblock")}
-                      </Button>
-                    ) : (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => block.mutate({ body: { user_ids: [c.user_id] } })}
-                      >
-                        {t("customerPortal.common.block")}
-                      </Button>
-                    )}
+            </TableHeader>
+            <TableBody>
+              {usage.isPending && (
+                <TableRow>
+                  <TableCell colSpan={4} className="py-8 text-center text-muted-foreground">
+                    {t("customerPortal.list.loading")}
                   </TableCell>
                 </TableRow>
-              );
-            })}
-          </TableBody>
-        </Table>
+              )}
+              {!usage.isPending && rows.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={4} className="py-8 text-center text-muted-foreground">
+                    {t(search ? "customerPortal.list.noMatches" : "customerPortal.list.empty")}
+                  </TableCell>
+                </TableRow>
+              )}
+              {!usage.isPending &&
+                rows.map((customer) => (
+                  <TableRow key={customer.customer_org_id}>
+                    <TableCell className="pl-4">
+                      <p className="font-medium">{customer.alias || customer.customer_org_id}</p>
+                      <p className="font-mono text-[11px] text-muted-foreground">{customer.customer_org_id}</p>
+                    </TableCell>
+                    <TableCell className="text-right font-medium tabular-nums">
+                      {t("format.usd", { val: customer.spend })}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {t("format.number", { val: customer.requests })}
+                    </TableCell>
+                    <TableCell className="pr-4 text-right tabular-nums">
+                      {t("format.number", { val: customer.tokens })}
+                    </TableCell>
+                  </TableRow>
+                ))}
+            </TableBody>
+          </Table>
+        )}
+        <DataTablePagination
+          page={pagination.pageIndex}
+          pageSize={pagination.pageSize}
+          rowCount={usage.data?.meta.total_count ?? 0}
+          onPageChange={(pageIndex) => onPaginationChange({ ...pagination, pageIndex })}
+          onPageSizeChange={(pageSize) => onPaginationChange({ pageSize, pageIndex: 0 })}
+          isLoading={usage.isFetching}
+        />
       </div>
-      <CreateCustomerDialog
-        open={createOpen}
-        onOpenChange={setCreateOpen}
-        onCreated={(id) => {
-          customersQuery.refetch();
-          setSelectedId(id, { history: "push" });
-        }}
-      />
+      <p className="text-xs text-muted-foreground">{t("customerPortal.list.attribution")}</p>
+      <CreateCustomerDialog open={createOpen} onOpenChange={setCreateOpen} onCreated={() => void usage.refetch()} />
     </div>
   );
 }

@@ -20584,7 +20584,7 @@
   "customerPortal": {
     "switcher": {
       "label": "Customer Portal",
-      "description": "End customers and budgets"
+      "description": "Customer organizations and usage"
     },
     "status": {
       "active": "Active",
@@ -20612,18 +20612,23 @@
     },
     "list": {
       "title": "Customers",
-      "subtitle": "End users of your product, identified by customer id on every request.",
+      "subtitle": "Usage across each customer organization's teams and members.",
       "create": "Create Customer",
       "searchPlaceholder": "Search by customer id or alias",
       "columns": {
         "customer": "Customer",
-        "spend": "Spend this month",
+        "spend": "Spend",
+        "requests": "Requests",
+        "tokens": "Tokens",
         "budget": "Budget",
         "keys": "Keys",
         "status": "Status"
       },
       "loading": "Loading customers...",
-      "empty": "No customers yet. Create one to start tracking spend.",
+      "empty": "No customer organizations yet. Create one to get started.",
+      "noMatches": "No customer organizations match your search.",
+      "error": "Could not load customer organization usage.",
+      "attribution": "Usage matches request user IDs to registered customer members. Dates are inclusive UTC calendar days. Tokens include input and output tokens.",
       "budgetUsage": "{{spend}} / {{max}}"
     },
     "detail": {
@@ -20651,9 +20656,9 @@
     },
     "createDialog": {
       "title": "Create customer",
-      "description": "A customer is an end user of your product. Pass its id as `user` on every request to track spend and apply its limits.",
-      "customerId": "Customer id",
-      "customerIdPlaceholder": "e.g. acme-corp",
+      "description": "Create a customer organization. Usage from its registered team members is included in the customer totals.",
+      "customerId": "Customer organization id",
+      "customerIdPlaceholder": "e.g. customer-001",
       "alias": "Alias",
       "aliasPlaceholder": "Optional display name",
       "maxBudget": "Monthly budget (USD)",
@@ -20670,6 +20675,11 @@
       "maxBudget": "Max budget (USD)",
       "maxBudgetPlaceholder": "Leave empty for no budget",
       "sharedBudgetWarning": "This customer is on budget {{budgetId}}. Changing the budget here changes it for every customer on that budget."
+    },
+    "range": {
+      "label": "Date range (UTC)",
+      "thisMonth": "This month",
+      "previousMonth": "Previous month"
     }
   }
 }

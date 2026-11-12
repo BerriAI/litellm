@@ -9636,6 +9636,26 @@ export interface paths {
         patch: operations["update_customer_member_management_v1_customer_members__customer_member_id__patch"];
         trace?: never;
     };
+    "/management/v1/customer_organization_usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Customer Organization Usage
+         * @description List customer organizations with spend, requests and total input plus output tokens for an inclusive UTC date range. Usage matches the request user (end-user ID) to customer_member_id and rolls up through the member's current team and organization. Organizations without usage return zero totals. Only retained daily usage for currently registered members is included. Proxy admins only.
+         */
+        get: operations["list_customer_organization_usage_management_v1_customer_organization_usage_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/customer_organizations": {
         parameters: {
             query?: never;
@@ -33086,6 +33106,19 @@ export interface components {
             /** Updated By */
             updated_by: string;
         };
+        /** CustomerOrganizationUsage */
+        CustomerOrganizationUsage: {
+            /** Alias */
+            alias?: string | null;
+            /** Customer Org Id */
+            customer_org_id: string;
+            /** Requests */
+            requests: number;
+            /** Spend */
+            spend: number;
+            /** Tokens */
+            tokens: number;
+        };
         /**
          * CustomerResponse
          * @description Customer object returned by the /customer read+write endpoints.
@@ -36119,6 +36152,13 @@ export interface components {
         ListResponse_CustomerMember_: {
             /** Data */
             data: components["schemas"]["CustomerMember"][];
+            links: components["schemas"]["ListLinks"];
+            meta: components["schemas"]["ListMeta"];
+        };
+        /** ListResponse[CustomerOrganizationUsage] */
+        ListResponse_CustomerOrganizationUsage_: {
+            /** Data */
+            data: components["schemas"]["CustomerOrganizationUsage"][];
             links: components["schemas"]["ListLinks"];
             meta: components["schemas"]["ListMeta"];
         };
@@ -68150,6 +68190,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CustomerMember"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_customer_organization_usage_management_v1_customer_organization_usage_get: {
+        parameters: {
+            query: {
+                /** @description First UTC calendar day, inclusive */
+                start_date: string;
+                /** @description Last UTC calendar day, inclusive */
+                end_date: string;
+                /** @description Case-insensitive substring of customer organization ID or alias */
+                q?: string;
+                /** @description Page number */
+                page?: number;
+                /** @description Page size */
+                page_size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListResponse_CustomerOrganizationUsage_"];
                 };
             };
             /** @description Validation Error */
