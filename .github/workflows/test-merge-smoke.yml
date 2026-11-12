@@ -3,6 +3,8 @@ name: smoke
 on:
   pull_request:
     branches: [main, litellm_internal_staging, litellm_oss_staging, "litellm_**"]
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -24,7 +26,7 @@ jobs:
           persist-credentials: false
 
       - name: Build the dashboard stage
-        run: docker build --target ui-builder -f Dockerfile .
+        run: docker build --target ui-builder -f litellm/deploy/docker/Dockerfile .
 
   core-checks:
     name: py${{ matrix.python-version }}
@@ -52,8 +54,26 @@ jobs:
         with:
           version: "0.10.9"
 
+      - name: Restore the Rust bridge
+        id: rust-bridge
+        uses: ./.github/actions/restore-rust-bridge
+
+      - name: Restore the Cargo build cache
+        if: steps.rust-bridge.outputs.cache-hit != 'true'
+        uses: ./.github/actions/cache-cargo-build
+
       - name: Install dependencies
-        run: .github/scripts/uv_sync_with_retries.sh --frozen --extra proxy --extra cli --group dev --group proxy-dev --python ${{ matrix.python-version }}
+        env:
+          RUST_BRIDGE_RESTORED: ${{ steps.rust-bridge.outputs.cache-hit }}
+          PYTHON_VERSION: ${{ matrix.python-version }}
+        run: |
+          if [ "$RUST_BRIDGE_RESTORED" != "true" ]; then
+            .github/scripts/uv_sync_with_retries.sh --frozen --extra proxy --extra cli --group dev --group proxy-dev --python "$PYTHON_VERSION"
+            exit 0
+          fi
+          .github/scripts/uv_sync_with_retries.sh --frozen --extra proxy --extra cli --group dev --group proxy-dev --python "$PYTHON_VERSION" --no-install-project
+          uv pip install --no-deps --python .venv/bin/python rust-bridge-dist/litellm-*.whl
+          cp rust-bridge-dist/litellm/rust_bridge/_native.abi3.so litellm/rust_bridge/_native.abi3.so
 
       - name: Create the loopback-only network namespace
         run: |
@@ -87,6 +107,7 @@ jobs:
 
       - name: Upload smoke diagnostics
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
         with:
           name: merge-smoke-diagnostics-py${{ matrix.python-version }}
@@ -96,6 +117,10 @@ jobs:
       - name: Remove the network namespace
         if: always()
         run: sudo ip netns delete smoke
+
+      - name: Keep only source-built wheels in the uv cache
+        if: always() && github.ref == 'refs/heads/main'
+        run: uv cache prune --ci
 
   all-extras:
     name: all-extras-py${{ matrix.python-version }}
@@ -123,11 +148,33 @@ jobs:
         with:
           version: "0.10.9"
 
+      - name: Restore the Rust bridge
+        id: rust-bridge
+        uses: ./.github/actions/restore-rust-bridge
+
+      - name: Restore the Cargo build cache
+        if: steps.rust-bridge.outputs.cache-hit != 'true'
+        uses: ./.github/actions/cache-cargo-build
+
       - name: Install every extra and dependency group
-        run: .github/scripts/uv_sync_with_retries.sh --frozen --all-groups --all-extras --python ${{ matrix.python-version }}
+        env:
+          RUST_BRIDGE_RESTORED: ${{ steps.rust-bridge.outputs.cache-hit }}
+          PYTHON_VERSION: ${{ matrix.python-version }}
+        run: |
+          if [ "$RUST_BRIDGE_RESTORED" != "true" ]; then
+            .github/scripts/uv_sync_with_retries.sh --frozen --all-groups --all-extras --python "$PYTHON_VERSION"
+            exit 0
+          fi
+          .github/scripts/uv_sync_with_retries.sh --frozen --all-groups --all-extras --python "$PYTHON_VERSION" --no-install-project --no-install-package litellm-proxy
+          uv pip install --no-deps --python .venv/bin/python rust-bridge-dist/*.whl
+          cp rust-bridge-dist/litellm/rust_bridge/_native.abi3.so litellm/rust_bridge/_native.abi3.so
 
       - name: Import the SDK, the proxy server and the enterprise package
         run: .venv/bin/python -c "import litellm, litellm.proxy.proxy_server, litellm_enterprise"
+
+      - name: Keep only source-built wheels in the uv cache
+        if: always() && github.ref == 'refs/heads/main'
+        run: uv cache prune --ci
 
   windows-sdk:
     name: windows-sdk
@@ -154,14 +201,15 @@ jobs:
         with:
           version: "0.10.9"
 
-      - name: Set up the Rust bridge
-        uses: ./.github/actions/rust-bridge
-
       - name: Install dependencies
         run: .github/scripts/uv_sync_with_retries.sh --frozen --group dev --python 3.11
 
       - name: Run the Windows tests
         run: uv run --no-sync python -m pytest --tb=short -v tests/windows_tests
+
+      - name: Keep only source-built wheels in the uv cache
+        if: always() && github.ref == 'refs/heads/main'
+        run: uv cache prune --ci
 
   proxy-build-from-pip:
     name: proxy-build-from-pip
@@ -200,8 +248,36 @@ jobs:
       - name: Install the test client dependencies
         run: .github/scripts/uv_sync_with_retries.sh --frozen --no-install-workspace --extra proxy --group dev --python 3.12
 
-      - name: Build the image from the published package
-        run: docker build -t litellm-build-from-pip:smoke -f docker/build_from_pip/Dockerfile.build_from_pip .
+      - name: Cache Prisma binaries
+        timeout-minutes: 3
+        uses: ./.github/actions/cache-prisma-binaries
+
+      - name: Install the published proxy into its own venv
+        run: |
+          uv --no-config venv --python 3.13 /tmp/litellm-pip
+          uv --no-config pip install --python /tmp/litellm-pip/bin/python \
+            "litellm[proxy,proxy-runtime]==1.83.0" \
+            "google-cloud-aiplatform==1.133.0" \
+            "google-genai==1.37.0" \
+            "anthropic[vertex]==0.84.0" \
+            "grpcio==1.78.0" \
+            "prometheus-client==0.20.0" \
+            "langfuse==2.59.7" \
+            "opentelemetry-api==1.28.0" \
+            "opentelemetry-sdk==1.28.0" \
+            "opentelemetry-exporter-otlp==1.28.0" \
+            "ddtrace==4.11.0" \
+            "sentry-sdk==2.21.0" \
+            "mangum==0.17.0" \
+            "azure-ai-contentsafety==1.0.0" \
+            "azure-storage-file-datalake==12.20.0" \
+            "pypdf==6.7.5" \
+            "llm-sandbox==0.3.31" \
+            "detect-secrets==1.5.0" \
+            "prisma==0.11.0" \
+            "openai==2.24.0"
+          export PATH="/tmp/litellm-pip/bin:$PATH"
+          /tmp/litellm-pip/bin/prisma generate --schema=litellm/schema.prisma
 
       - name: Start the fake OpenAI endpoint
         run: |
@@ -219,23 +295,21 @@ jobs:
           echo "::add-mask::${key}"
           echo "LITELLM_MASTER_KEY=${key}" >> "${GITHUB_ENV}"
 
-      - name: Start the proxy container
+      - name: Start the published proxy
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/circle_test
+          LITELLM_LICENSE: bad-license
+          FAKE_OPENAI_API_BASE: http://localhost:8190
+          OTEL_EXPORTER: in_memory
+          USE_DDTRACE: "True"
+          DD_TRACE_OPENAI_ENABLED: "False"
+          GCS_FLUSH_INTERVAL: "1"
+          LITELLM_LOG: ERROR
         run: |
-          docker run -d \
-            -p 4000:4000 \
-            -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
-            -e LITELLM_MASTER_KEY \
-            -e FAKE_OPENAI_API_BASE=http://host.docker.internal:8190 \
-            -e OTEL_EXPORTER=in_memory \
-            -e USE_DDTRACE=True \
-            -e GCS_FLUSH_INTERVAL=1 \
-            -e LITELLM_LOG=ERROR \
-            --add-host host.docker.internal:host-gateway \
-            --name litellm-build-from-pip \
-            -v "${GITHUB_WORKSPACE}/docker/build_from_pip/litellm_config.yaml:/app/config.yaml" \
-            litellm-build-from-pip:smoke \
-            --config /app/config.yaml \
-            --port 4000
+          cd /tmp/litellm-pip
+          nohup /tmp/litellm-pip/bin/ddtrace-run /tmp/litellm-pip/bin/litellm \
+            --config "${GITHUB_WORKSPACE}/tests/basic_proxy_startup_tests/build_from_pip_config.yaml" \
+            --port 4000 > /tmp/litellm-pip.log 2>&1 &
           for _ in $(seq 1 150); do
             curl -sf --max-time 5 -o /dev/null http://localhost:4000 && exit 0
             sleep 2
@@ -270,7 +344,11 @@ jobs:
 
       - name: Show the proxy logs
         if: always()
-        run: docker logs litellm-build-from-pip || true
+        run: cat /tmp/litellm-pip.log || true
+
+      - name: Keep only source-built wheels in the uv cache
+        if: always() && github.ref == 'refs/heads/main'
+        run: uv cache prune --ci
 
   smoke-passed:
     name: smoke passed

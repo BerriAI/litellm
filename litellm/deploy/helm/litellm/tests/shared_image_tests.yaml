@@ -1,0 +1,264 @@
+suite: test the shared image and the entrypoint dispatcher args
+templates:
+  - gateway/deployment.yaml
+  - gateway/configmap.yaml
+  - backend/deployment.yaml
+  - ui/deployment.yaml
+  - monolith/deployment.yaml
+  - migrations-job.yaml
+  - templates/tests/test-connection.yaml
+values:
+  - ./values/required.yaml
+tests:
+  - it: every componentized container runs the shared image at the chart appVersion
+    templates:
+      - gateway/deployment.yaml
+      - backend/deployment.yaml
+      - ui/deployment.yaml
+      - migrations-job.yaml
+      - templates/tests/test-connection.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/berriai/litellm:1.104.0
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/berriai/litellm:1.104.0
+        template: backend/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/berriai/litellm:1.104.0
+        template: ui/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/berriai/litellm:1.104.0
+        template: migrations-job.yaml
+      - equal:
+          path: spec.containers[0].image
+          value: ghcr.io/berriai/litellm:1.104.0
+        template: templates/tests/test-connection.yaml
+
+  - it: image.repository and image.tag are applied to every container, sidecars included
+    set:
+      image.repository: registry.example.com/litellm
+      image.tag: v9.9.9
+      image.pullPolicy: Always
+      gateway.metricsServer.enabled: true
+      gateway.collector.enabled: true
+    templates:
+      - gateway/deployment.yaml
+      - backend/deployment.yaml
+      - ui/deployment.yaml
+      - migrations-job.yaml
+      - templates/tests/test-connection.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: registry.example.com/litellm:v9.9.9
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[1].image
+          value: registry.example.com/litellm:v9.9.9
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[2].image
+          value: registry.example.com/litellm:v9.9.9
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[0].imagePullPolicy
+          value: Always
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: registry.example.com/litellm:v9.9.9
+        template: backend/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[0].imagePullPolicy
+          value: Always
+        template: backend/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: registry.example.com/litellm:v9.9.9
+        template: ui/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[0].imagePullPolicy
+          value: Always
+        template: ui/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: registry.example.com/litellm:v9.9.9
+        template: migrations-job.yaml
+      - equal:
+          path: spec.template.spec.containers[0].imagePullPolicy
+          value: Always
+        template: migrations-job.yaml
+      - equal:
+          path: spec.containers[0].image
+          value: registry.example.com/litellm:v9.9.9
+        template: templates/tests/test-connection.yaml
+
+  - it: the monolith and its sidecars run the shared image
+    set:
+      monolith.enabled: true
+      image.tag: v9.9.9
+      gateway.metricsServer.enabled: true
+      gateway.collector.enabled: true
+    template: monolith/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/berriai/litellm:v9.9.9
+      - equal:
+          path: spec.template.spec.containers[1].image
+          value: ghcr.io/berriai/litellm:v9.9.9
+      - equal:
+          path: spec.template.spec.containers[2].image
+          value: ghcr.io/berriai/litellm:v9.9.9
+
+  - it: image.digest renders as repository:tag@digest everywhere
+    set:
+      image.tag: v9.9.9
+      image.digest: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+    templates:
+      - gateway/deployment.yaml
+      - backend/deployment.yaml
+      - ui/deployment.yaml
+      - migrations-job.yaml
+      - templates/tests/test-connection.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/berriai/litellm:v9.9.9@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/berriai/litellm:v9.9.9@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+        template: backend/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/berriai/litellm:v9.9.9@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+        template: ui/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/berriai/litellm:v9.9.9@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+        template: migrations-job.yaml
+      - equal:
+          path: spec.containers[0].image
+          value: ghcr.io/berriai/litellm:v9.9.9@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+        template: templates/tests/test-connection.yaml
+
+  - it: image.digest with an empty tag falls back to the appVersion tag
+    set:
+      image.digest: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      monolith.enabled: true
+    template: monolith/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/berriai/litellm:1.104.0@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+
+  - it: componentized containers select their component through args and never set command
+    set:
+      gateway.metricsServer.enabled: true
+      gateway.collector.enabled: true
+    templates:
+      - gateway/deployment.yaml
+      - backend/deployment.yaml
+      - ui/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value:
+            - gateway
+            - --host
+            - 0.0.0.0
+            - --port
+            - "4000"
+        template: gateway/deployment.yaml
+      - notExists:
+          path: spec.template.spec.containers[0].command
+        template: gateway/deployment.yaml
+      - notExists:
+          path: spec.template.spec.containers[1].command
+        template: gateway/deployment.yaml
+      - notExists:
+          path: spec.template.spec.containers[2].command
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value:
+            - backend
+            - --host
+            - 0.0.0.0
+            - --port
+            - "4001"
+        template: backend/deployment.yaml
+      - notExists:
+          path: spec.template.spec.containers[0].command
+        template: backend/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value:
+            - ui
+        template: ui/deployment.yaml
+      - notExists:
+          path: spec.template.spec.containers[0].command
+        template: ui/deployment.yaml
+
+  - it: the migrations Job runs the migrations dispatcher and nothing else
+    template: migrations-job.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value:
+            - migrations
+      - notExists:
+          path: spec.template.spec.containers[0].command
+
+  - it: the Helm test pod polls the workload Service readiness endpoint through the image entrypoint
+    template: templates/tests/test-connection.yaml
+    asserts:
+      - isKind:
+          of: Pod
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: test
+      - equal:
+          path: spec.containers[0].env[0]
+          value:
+            name: LITELLM_READINESS_URL
+            value: http://RELEASE-NAME-litellm-gateway:4000/health/readiness
+      - equal:
+          path: spec.containers[0].args[0]
+          value: python
+      - equal:
+          path: spec.containers[0].args[1]
+          value: -c
+      - matchRegex:
+          path: spec.containers[0].args[2]
+          pattern: LITELLM_READINESS_URL
+      - matchRegex:
+          path: spec.containers[0].args[2]
+          pattern: 'db != "connected"'
+      - matchRegex:
+          path: spec.containers[0].args[2]
+          pattern: sys\.exit\(1\)
+      - notExists:
+          path: spec.containers[0].command
+
+  - it: the Helm test pod targets the monolith Service in monolith mode
+    set:
+      monolith.enabled: true
+    template: templates/tests/test-connection.yaml
+    asserts:
+      - equal:
+          path: spec.containers[0].env[0].value
+          value: http://RELEASE-NAME-litellm:4000/health/readiness
+
+  - it: the removed per-component image blocks are rejected by the values schema
+    set:
+      gateway.image.tag: v1
+    template: gateway/deployment.yaml
+    asserts:
+      - failedTemplate: {}

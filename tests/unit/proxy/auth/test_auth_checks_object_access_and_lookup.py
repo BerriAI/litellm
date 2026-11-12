@@ -7286,6 +7286,45 @@ async def test_model_discovery_route_bypasses_user_budget():
     assert result is True
 
 
+@pytest.mark.parametrize(
+    "method, route, expect_blocked",
+    [
+        ("GET", "/v1/videos/video_abc", False),
+        ("GET", "/videos/video_abc/content", False),
+        ("POST", "/v1/videos", True),
+        ("POST", "/v1/videos/video_abc/remix", True),
+        ("GET", "/v1/videos", True),
+    ],
+)
+@pytest.mark.asyncio
+async def test_exhausted_team_budget_spares_only_video_retrieval(method: str, route: str, expect_blocked: bool) -> None:
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    request: Final = MagicMock()
+    request.method = method
+
+    async def run() -> bool:
+        return await common_checks(
+            request_body={},
+            team_object=LiteLLM_TeamTable(team_id="test-team", spend=0.4, max_budget=0.3),
+            user_object=None,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route=route,
+            llm_router=None,
+            proxy_logging_obj=AsyncMock(),
+            valid_token=UserAPIKeyAuth(token="test-token", team_id="test-team"),
+            request=request,
+        )
+
+    if expect_blocked:
+        with pytest.raises(litellm.BudgetExceededError):
+            await run()
+    else:
+        assert await run() is True
+
+
 @pytest.mark.parametrize("route", ["/health/services", "/auto_router/test_routing"])
 @pytest.mark.asyncio
 async def test_side_effectful_info_route_still_enforces_budget(route: str) -> None:
@@ -11199,6 +11238,34 @@ def test_request_skips_budget_checks_for_non_spending_requests(
     )
     assert (
         request_skips_budget_checks(route=route, model=model, llm_router=router, request_body=request_body) is expected
+    )
+
+
+@pytest.mark.parametrize(
+    "route, http_method, expected",
+    [
+        ("/v1/videos/video_abc", "GET", True),
+        ("/videos/video_abc", "GET", True),
+        ("/v1/videos/video_abc/content", "GET", True),
+        ("/videos/video_abc/content", "GET", True),
+        ("/v1/videos/video_abc", "POST", False),
+        ("/v1/videos/video_abc/content", None, False),
+        ("/v1/videos", "GET", False),
+        ("/v1/videos", "POST", False),
+        ("/v1/videos/video_abc/remix", "POST", False),
+        ("/v1/videos/edits", "POST", False),
+        ("/v1/videos/video_abc/remix", "GET", False),
+        ("/v1/chat/completions", "GET", False),
+    ],
+)
+def test_request_skips_budget_checks_only_for_paid_video_retrieval(
+    route: str, http_method: str | None, expected: bool, free_and_paid_router: litellm.Router
+) -> None:
+    assert (
+        request_skips_budget_checks(
+            route=route, model="paid-model", llm_router=free_and_paid_router, http_method=http_method
+        )
+        is expected
     )
 
 

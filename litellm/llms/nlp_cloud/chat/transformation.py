@@ -1,9 +1,10 @@
 import json
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sized
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
@@ -21,6 +22,15 @@ if TYPE_CHECKING:
     LoggingClass = LiteLLMLoggingObj
 else:
     LoggingClass = Any
+
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+def _json_len(value: object) -> int:
+    if isinstance(value, Sized):
+        return len(value)
+    raise TypeError(f"object of type '{type(value).__name__}' has no len()")
 
 
 class NLPCloudConfig(BaseConfig):
@@ -199,7 +209,7 @@ class NLPCloudConfig(BaseConfig):
             )
         else:
             try:
-                if len(completion_response["generated_text"]) > 0:
+                if _json_len(_DECODED_JSON.validate_python(completion_response["generated_text"])) > 0:
                     model_response.choices[0].message.content = completion_response["generated_text"]
             except Exception:
                 raise NLPCloudError(

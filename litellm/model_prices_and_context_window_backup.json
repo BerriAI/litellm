@@ -14379,12 +14379,14 @@
     "bedrock/moonshotai.kimi-k2.5": {
         "input_cost_per_token": 6e-07,
         "input_cost_per_token_flex": 3e-07,
+        "input_cost_per_token_priority": 1.05e-06,
         "litellm_provider": "bedrock",
         "max_input_tokens": 262144,
         "max_output_tokens": 16000,
         "mode": "chat",
         "output_cost_per_token": 3e-06,
         "output_cost_per_token_flex": 1.5e-06,
+        "output_cost_per_token_priority": 5.25e-06,
         "source": "https://b0.p.awsstatic.com/pricing/2.0/meteredUnitMaps/bedrock/USD/current/bedrock.json",
         "supports_function_calling": true,
         "supports_reasoning": true,
@@ -15776,8 +15778,8 @@
         "cache_creation_input_token_cost": 4.5e-06,
         "cache_creation_input_token_cost_above_1hr": 7.2e-06,
         "cache_read_input_token_cost": 3.6e-07,
-        "deprecation_date": "2027-04-08",
-        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-4-5.md",
+        "deprecation_date": "2027-04-27",
+        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
         "successor_model": "bedrock/us-gov-east-1/anthropic.claude-sonnet-5-5",
         "input_cost_per_token": 3.6e-06,
         "litellm_provider": "bedrock",
@@ -15808,8 +15810,8 @@
         "cache_creation_input_token_cost": 4.5e-06,
         "cache_creation_input_token_cost_above_1hr": 7.2e-06,
         "cache_read_input_token_cost": 3.6e-07,
-        "deprecation_date": "2027-04-08",
-        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-4-5.md",
+        "deprecation_date": "2027-04-27",
+        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
         "input_cost_per_token": 3.6e-06,
         "litellm_provider": "bedrock",
         "supports_tool_search": true,
@@ -15969,8 +15971,8 @@
         "cache_creation_input_token_cost": 4.5e-06,
         "cache_creation_input_token_cost_above_1hr": 7.2e-06,
         "cache_read_input_token_cost": 3.6e-07,
-        "deprecation_date": "2027-04-08",
-        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-4-5.md",
+        "deprecation_date": "2027-04-27",
+        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
         "successor_model": "bedrock/us-gov-west-1/anthropic.claude-sonnet-5-5",
         "input_cost_per_token": 3.6e-06,
         "litellm_provider": "bedrock",
@@ -16001,8 +16003,8 @@
         "cache_creation_input_token_cost": 4.5e-06,
         "cache_creation_input_token_cost_above_1hr": 7.2e-06,
         "cache_read_input_token_cost": 3.6e-07,
-        "deprecation_date": "2027-04-08",
-        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-4-5.md",
+        "deprecation_date": "2027-04-27",
+        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
         "input_cost_per_token": 3.6e-06,
         "litellm_provider": "bedrock",
         "supports_tool_search": true,
@@ -16026,8 +16028,8 @@
         "token_count_model": {"model":"anthropic.claude-sonnet-4-5-20250929-v1:0","litellm_provider":"bedrock"}
     },
     "bedrock/us-gov-west-1/meta.llama3-70b-instruct-v1:0": {
-        "deprecation_date": "2027-03-30",
-        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-70b-instruct.md",
+        "deprecation_date": "2027-05-09",
+        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
         "input_cost_per_token": 2.65e-06,
         "litellm_provider": "bedrock",
         "max_input_tokens": 8000,
@@ -16038,8 +16040,8 @@
         "supports_pdf_input": true
     },
     "bedrock/us-gov-west-1/meta.llama3-8b-instruct-v1:0": {
-        "deprecation_date": "2027-03-30",
-        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-8b-instruct.md",
+        "deprecation_date": "2027-05-09",
+        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
         "input_cost_per_token": 3e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 8000,
@@ -21878,7 +21880,7 @@
         "thinking_always_on": true
     },
     "databricks/claude-fable-latest": {
-        "alias_of": "databricks/databricks-claude-fable-5-1"
+        "alias_of": "databricks/databricks-claude-fable-5-2"
     },
     "databricks/databricks-claude-haiku-4-5": {
         "cache_creation_input_token_cost": 1.24999e-06,
@@ -22804,7 +22806,10 @@
         "input_cost_per_token_priority": 2.45e-06,
         "output_cost_per_token_priority": 7.7e-06,
         "cache_read_input_token_cost_priority": 4.55e-07,
-        "cache_creation_input_token_cost_priority": 2.45e-06
+        "cache_creation_input_token_cost_priority": 2.45e-06,
+        "deprecation_date": "2027-02-04",
+        "deprecation_source": "https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models",
+        "successor_model": "databricks/databricks-glm-5-3"
     },
     "databricks/databricks-glm-5-3": {
         "cache_creation_input_token_cost": 1.4e-06,
@@ -23471,7 +23476,7 @@
         "input_cost_per_token": 1.5001e-07,
         "input_dbu_cost_per_token": 2.1429999999999996e-06,
         "litellm_provider": "databricks",
-        "max_input_tokens": 200000,
+        "max_input_tokens": 128000,
         "max_output_tokens": 128000,
         "metadata": {
             "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
@@ -24825,7 +24830,7 @@
     "deepinfra/mistralai/Mistral-Nemo-Instruct-2407": {
         "max_input_tokens": 131072,
         "max_output_tokens": 131072,
-        "input_cost_per_token": 1.9e-08,
+        "input_cost_per_token": 2.9e-08,
         "output_cost_per_token": 3e-08,
         "litellm_provider": "deepinfra",
         "mode": "chat",
@@ -24906,8 +24911,8 @@
     },
     "deepinfra/nvidia/NVIDIA-Nemotron-3.5-Lightning": {
         "max_input_tokens": 262144,
-        "input_cost_per_token": 8e-08,
-        "output_cost_per_token": 2e-07,
+        "input_cost_per_token": 6e-08,
+        "output_cost_per_token": 1.6e-07,
         "litellm_provider": "deepinfra",
         "mode": "chat",
         "source": "https://deepinfra.com/pricing",
@@ -28588,6 +28593,7 @@
     "fireworks_ai/accounts/fireworks/models/deepseek-v4-flash": {
         "cache_read_input_token_cost": 2.8e-08,
         "deprecation_date": "2026-08-14",
+        "deprecation_source": "https://docs.fireworks.ai/api-reference/list-models.md",
         "input_cost_per_token": 1.4e-07,
         "litellm_provider": "fireworks_ai",
         "max_input_tokens": 1048576,
@@ -28595,6 +28601,7 @@
         "mode": "chat",
         "output_cost_per_token": 2.8e-07,
         "source": "https://docs.fireworks.ai/serverless/pricing",
+        "successor_model": "fireworks_ai/accounts/fireworks/models/deepseek-v4-flash-0731",
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -29060,6 +29067,7 @@
     "fireworks_ai/deepseek-v4-flash": {
         "cache_read_input_token_cost": 2.8e-08,
         "deprecation_date": "2026-08-14",
+        "deprecation_source": "https://docs.fireworks.ai/api-reference/list-models.md",
         "input_cost_per_token": 1.4e-07,
         "litellm_provider": "fireworks_ai",
         "max_input_tokens": 1048576,
@@ -29067,6 +29075,7 @@
         "mode": "chat",
         "output_cost_per_token": 2.8e-07,
         "source": "https://docs.fireworks.ai/serverless/pricing",
+        "successor_model": "fireworks_ai/deepseek-v4-flash-0731",
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -29729,12 +29738,12 @@
     },
     "gemini-2.5-flash": {
         "cache_read_input_audio_token_cost": 1e-07,
-        "deprecation_source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions",
         "cache_read_input_audio_token_cost_priority": 1.8e-07,
         "cache_read_input_token_cost": 3e-08,
         "cache_read_input_token_cost_flex": 3e-08,
         "cache_read_input_token_cost_priority": 5.4e-08,
         "deprecation_date": "2026-10-20",
+        "deprecation_source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions",
         "google_maps_grounding_cost_per_query": 0.025,
         "input_cost_per_audio_token": 1e-06,
         "input_cost_per_audio_token_above_200k_tokens": 3e-07,
@@ -29750,7 +29759,7 @@
         "input_cost_per_token_priority": 5.4e-07,
         "litellm_provider": "vertex_ai-language-models",
         "max_input_tokens": 1048576,
-        "max_output_tokens": 65535,
+        "max_output_tokens": 65536,
         "mode": "chat",
         "output_cost_per_reasoning_token": 2.5e-06,
         "output_cost_per_token": 2.5e-06,
@@ -29842,13 +29851,11 @@
     },
     "gemini-3-pro-image": {
         "cache_read_input_token_cost": 2e-07,
-        "cache_read_input_token_cost_batches": 1e-07,
         "cache_read_input_token_cost_above_200k_tokens": 4e-07,
         "cache_read_input_token_cost_above_200k_tokens_priority": 7.2e-07,
+        "cache_read_input_token_cost_batches": 1e-07,
         "cache_read_input_token_cost_flex": 1e-07,
         "cache_read_input_token_cost_priority": 3.6e-07,
-        "deprecation_date": "2027-05-28",
-        "deprecation_source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions",
         "input_cost_per_image": 0.0011,
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_above_200k_tokens": 4e-06,
@@ -29870,6 +29877,8 @@
         "output_cost_per_token_batches": 6e-06,
         "output_cost_per_token_flex": 6e-06,
         "output_cost_per_token_priority": 2.16e-05,
+        "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
+        "search_free_requests": {"count":5000,"period":"month","shared_group":"gemini-3"},
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -29891,12 +29900,6 @@
         "supports_system_messages": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "search_context_cost_per_query": {
-            "search_context_size_low": 0.014,
-            "search_context_size_medium": 0.014,
-            "search_context_size_high": 0.014
-        },
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "web_search_billing_unit": "per_query"
     },
     "gemini-3-pro-image-preview": {
@@ -29958,15 +29961,13 @@
         "cache_read_input_token_cost_batches": 2.5e-08,
         "cache_read_input_token_cost_flex": 2.5e-08,
         "cache_read_input_token_cost_priority": 9e-08,
-        "deprecation_date": "2027-05-28",
-        "deprecation_source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions",
         "input_cost_per_image": 0.00056,
         "input_cost_per_token": 5e-07,
         "input_cost_per_token_batches": 2.5e-07,
         "input_cost_per_token_flex": 2.5e-07,
         "input_cost_per_token_priority": 9e-07,
         "litellm_provider": "vertex_ai-language-models",
-        "max_input_tokens": 65536,
+        "max_input_tokens": 131072,
         "max_output_tokens": 32768,
         "mode": "image_generation",
         "output_cost_per_image": 0.0672,
@@ -29977,6 +29978,8 @@
         "output_cost_per_token_batches": 1.5e-06,
         "output_cost_per_token_flex": 1.5e-06,
         "output_cost_per_token_priority": 5.4e-06,
+        "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
+        "search_free_requests": {"count":5000,"period":"month","shared_group":"gemini-3"},
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -29998,12 +30001,6 @@
         "supports_system_messages": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "search_context_cost_per_query": {
-            "search_context_size_low": 0.014,
-            "search_context_size_medium": 0.014,
-            "search_context_size_high": 0.014
-        },
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "web_search_billing_unit": "per_query"
     },
     "gemini-3.1-flash-image-preview": {
@@ -30149,7 +30146,6 @@
     },
     "gemini-3.1-flash-lite": {
         "cache_read_input_audio_token_cost": 5e-08,
-        "deprecation_source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions",
         "cache_read_input_audio_token_cost_batches": 2.5e-08,
         "cache_read_input_audio_token_cost_flex": 2.5e-08,
         "cache_read_input_audio_token_cost_priority": 9e-08,
@@ -30157,7 +30153,6 @@
         "cache_read_input_token_cost_batches": 1.25e-08,
         "cache_read_input_token_cost_flex": 1.25e-08,
         "cache_read_input_token_cost_priority": 4.5e-08,
-        "deprecation_date": "2027-05-07",
         "google_maps_grounding_cost_per_query": 0.014,
         "input_cost_per_audio_token": 5e-07,
         "input_cost_per_audio_token_above_200k_tokens": 5e-07,
@@ -30216,12 +30211,11 @@
         "web_search_billing_unit": "per_query"
     },
     "gemini-3.5-flash-lite": {
-        "deprecation_date": "2027-07-21",
-        "deprecation_source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions",
         "cache_read_input_token_cost": 3e-08,
         "cache_read_input_token_cost_batches": 1.5e-08,
         "cache_read_input_token_cost_flex": 1.5e-08,
         "cache_read_input_token_cost_priority": 5.4e-08,
+        "google_maps_grounding_cost_per_query": 0.014,
         "input_cost_per_token": 3e-07,
         "input_cost_per_token_batches": 1.5e-07,
         "input_cost_per_token_flex": 1.5e-07,
@@ -30235,6 +30229,8 @@
         "output_cost_per_token_batches": 1.25e-06,
         "output_cost_per_token_flex": 1.25e-06,
         "output_cost_per_token_priority": 4.5e-06,
+        "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
+        "search_free_requests": {"count":5000,"period":"month","shared_group":"gemini-3"},
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -30254,6 +30250,7 @@
         "supports_audio_output": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
+        "supports_native_streaming": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
@@ -30266,15 +30263,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "supports_native_streaming": true,
-        "search_context_cost_per_query": {
-            "search_context_size_low": 0.014,
-            "search_context_size_medium": 0.014,
-            "search_context_size_high": 0.014
-        },
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
-        "web_search_billing_unit": "per_query",
-        "google_maps_grounding_cost_per_query": 0.014
+        "web_search_billing_unit": "per_query"
     },
     "deep-research-pro-preview-12-2025": {
         "cache_read_input_token_cost": 2e-07,
@@ -30313,12 +30302,12 @@
     },
     "gemini-2.5-flash-lite": {
         "cache_read_input_audio_token_cost": 3e-08,
-        "deprecation_source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions",
         "cache_read_input_audio_token_cost_priority": 5.4e-08,
         "cache_read_input_token_cost": 1e-08,
         "cache_read_input_token_cost_flex": 1e-08,
         "cache_read_input_token_cost_priority": 1.8e-08,
         "deprecation_date": "2026-10-20",
+        "deprecation_source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions",
         "google_maps_grounding_cost_per_query": 0.025,
         "input_cost_per_audio_token": 3e-07,
         "input_cost_per_audio_token_above_200k_tokens": 3e-07,
@@ -30334,7 +30323,7 @@
         "input_cost_per_token_priority": 1.8e-07,
         "litellm_provider": "vertex_ai-language-models",
         "max_input_tokens": 1048576,
-        "max_output_tokens": 65535,
+        "max_output_tokens": 65536,
         "mode": "chat",
         "output_cost_per_reasoning_token": 4e-07,
         "output_cost_per_token": 4e-07,
@@ -30601,23 +30590,39 @@
         "gemini_native_audio": true
     },
     "gemini-2.5-pro": {
-        "deprecation_date": "2026-10-20",
-        "deprecation_source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions",
-        "successor_model": "gemini-3.8-flash",
         "cache_read_input_token_cost": 1.25e-07,
         "cache_read_input_token_cost_above_200k_tokens": 2.5e-07,
         "cache_read_input_token_cost_above_200k_tokens_priority": 4.5e-07,
         "cache_read_input_token_cost_flex": 1.25e-07,
         "cache_read_input_token_cost_priority": 2.25e-07,
+        "deprecation_date": "2026-10-20",
+        "deprecation_source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions",
+        "google_maps_grounding_cost_per_query": 0.025,
         "input_cost_per_token": 1.25e-06,
         "input_cost_per_token_above_200k_tokens": 2.5e-06,
+        "input_cost_per_token_above_200k_tokens_batches": 1.25e-06,
+        "input_cost_per_token_above_200k_tokens_flex": 1.25e-06,
+        "input_cost_per_token_above_200k_tokens_priority": 4.5e-06,
+        "input_cost_per_token_batches": 6.25e-07,
+        "input_cost_per_token_flex": 6.25e-07,
+        "input_cost_per_token_priority": 2.25e-06,
         "litellm_provider": "vertex_ai-language-models",
         "max_input_tokens": 1048576,
-        "max_output_tokens": 65535,
+        "max_output_tokens": 65536,
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "output_cost_per_token_above_200k_tokens": 1.5e-05,
+        "output_cost_per_token_above_200k_tokens_batches": 7.5e-06,
+        "output_cost_per_token_above_200k_tokens_flex": 7.5e-06,
+        "output_cost_per_token_above_200k_tokens_priority": 2.7e-05,
+        "output_cost_per_token_batches": 5e-06,
+        "output_cost_per_token_flex": 5e-06,
+        "output_cost_per_token_priority": 1.8e-05,
+        "prompt_cache_min_tokens": 2048.0,
+        "search_context_cost_per_query": {"search_context_size_low":0.035,"search_context_size_medium":0.035,"search_context_size_high":0.035},
+        "search_free_requests": {"count":10000,"period":"day","shared_group":"gemini-2.5-pro"},
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+        "successor_model": "gemini-3.8-flash",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/completions"
@@ -30635,33 +30640,13 @@
         "supports_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
-        "prompt_cache_min_tokens": 2048,
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_video_input": true,
         "supports_vision": true,
-        "supports_web_search": true,
-        "search_context_cost_per_query": {
-            "search_context_size_low": 0.035,
-            "search_context_size_medium": 0.035,
-            "search_context_size_high": 0.035
-        },
-        "search_free_requests": {"count": 10000, "period": "day", "shared_group": "gemini-2.5-pro"},
-        "google_maps_grounding_cost_per_query": 0.025,
-        "input_cost_per_token_above_200k_tokens_batches": 1.25e-06,
-        "input_cost_per_token_above_200k_tokens_flex": 1.25e-06,
-        "input_cost_per_token_above_200k_tokens_priority": 4.5e-06,
-        "input_cost_per_token_batches": 6.25e-07,
-        "input_cost_per_token_flex": 6.25e-07,
-        "input_cost_per_token_priority": 2.25e-06,
-        "output_cost_per_token_above_200k_tokens_batches": 7.5e-06,
-        "output_cost_per_token_above_200k_tokens_flex": 7.5e-06,
-        "output_cost_per_token_above_200k_tokens_priority": 2.7e-05,
-        "output_cost_per_token_batches": 5e-06,
-        "output_cost_per_token_flex": 5e-06,
-        "output_cost_per_token_priority": 1.8e-05
+        "supports_web_search": true
     },
     "gemini-3.1-pro-preview": {
         "cache_read_input_token_cost": 2e-07,
@@ -30849,7 +30834,7 @@
         "input_cost_per_token_priority": 9e-07,
         "litellm_provider": "vertex_ai",
         "max_input_tokens": 1048576,
-        "max_output_tokens": 65535,
+        "max_output_tokens": 65536,
         "mode": "chat",
         "output_cost_per_token": 3e-06,
         "output_cost_per_token_batches": 1.5e-06,
@@ -30888,22 +30873,32 @@
         "web_search_billing_unit": "per_query"
     },
     "vertex_ai/gemini-3.5-flash": {
-        "prompt_cache_min_tokens": 4096,
-        "deprecation_date": "2027-05-19",
-        "deprecation_source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions",
-        "successor_model": "vertex_ai/gemini-3.8-flash",
         "cache_read_input_token_cost": 1.5e-07,
         "cache_read_input_token_cost_batches": 7.5e-08,
-        "input_cost_per_token": 1.5e-06,
+        "cache_read_input_token_cost_flex": 7.5e-08,
+        "cache_read_input_token_cost_priority": 2.7e-07,
+        "google_maps_grounding_cost_per_query": 0.014,
         "input_cost_per_audio_token": 1.5e-06,
+        "input_cost_per_audio_token_priority": 2.7e-06,
+        "input_cost_per_token": 1.5e-06,
+        "input_cost_per_token_batches": 7.5e-07,
+        "input_cost_per_token_flex": 7.5e-07,
+        "input_cost_per_token_priority": 2.7e-06,
         "litellm_provider": "vertex_ai",
         "max_input_tokens": 1048576,
-        "max_output_tokens": 65535,
+        "max_output_tokens": 65536,
         "mode": "chat",
         "output_cost_per_reasoning_token": 9e-06,
         "output_cost_per_token": 9e-06,
+        "output_cost_per_token_batches": 4.5e-06,
+        "output_cost_per_token_flex": 4.5e-06,
+        "output_cost_per_token_priority": 1.62e-05,
+        "prompt_cache_min_tokens": 4096.0,
         "regional_endpoint_uplift_multiplier": 1.1,
+        "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
+        "search_free_requests": {"count":5000,"period":"month","shared_group":"gemini-3"},
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+        "successor_model": "vertex_ai/gemini-3.8-flash",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/completions",
@@ -30921,6 +30916,7 @@
         "supports_audio_input": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
+        "supports_native_streaming": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
@@ -30932,24 +30928,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "supports_native_streaming": true,
-        "input_cost_per_token_priority": 2.7e-06,
-        "input_cost_per_audio_token_priority": 2.7e-06,
-        "output_cost_per_token_priority": 1.62e-05,
-        "cache_read_input_token_cost_priority": 2.7e-07,
-        "search_context_cost_per_query": {
-            "search_context_size_low": 0.014,
-            "search_context_size_medium": 0.014,
-            "search_context_size_high": 0.014
-        },
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
-        "web_search_billing_unit": "per_query",
-        "google_maps_grounding_cost_per_query": 0.014,
-        "input_cost_per_token_batches": 7.5e-07,
-        "output_cost_per_token_batches": 4.5e-06,
-        "input_cost_per_token_flex": 7.5e-07,
-        "output_cost_per_token_flex": 4.5e-06,
-        "cache_read_input_token_cost_flex": 7.5e-08
+        "web_search_billing_unit": "per_query"
     },
     "vertex_ai/gemini-3.6-flash": {
         "prompt_cache_min_tokens": 4096,
@@ -31957,6 +31936,8 @@
         "mode": "image_generation",
         "output_cost_per_image": 0.039,
         "output_cost_per_image_token": 3e-05,
+        "output_cost_per_image_token_batches": 1.5e-05,
+        "output_cost_per_image_token_priority": 5.4e-05,
         "output_cost_per_reasoning_token": 2.5e-06,
         "output_cost_per_token": 2.5e-06,
         "output_cost_per_token_batches": 1.25e-06,
@@ -32277,6 +32258,7 @@
     },
     "gemini/gemini-flash-latest": {
         "cache_read_input_token_cost": 7.5e-08,
+        "cache_read_input_token_cost_batches": 3.75e-08,
         "input_cost_per_token": 7.5e-07,
         "litellm_provider": "gemini",
         "max_input_tokens": 1048576,
@@ -32335,6 +32317,7 @@
     },
     "gemini/gemini-flash-lite-latest": {
         "cache_read_input_token_cost": 3e-08,
+        "cache_read_input_token_cost_batches": 1.5e-08,
         "input_cost_per_token": 3e-07,
         "litellm_provider": "gemini",
         "max_input_tokens": 1048576,
@@ -33157,7 +33140,7 @@
         "input_cost_per_token_priority": 9e-07,
         "litellm_provider": "vertex_ai-language-models",
         "max_input_tokens": 1048576,
-        "max_output_tokens": 65535,
+        "max_output_tokens": 65536,
         "mode": "chat",
         "output_cost_per_reasoning_token": 3e-06,
         "output_cost_per_token": 3e-06,
@@ -33229,21 +33212,31 @@
         "deprecation_date": "2026-11-06"
     },
     "gemini-3.5-flash": {
-        "prompt_cache_min_tokens": 4096,
-        "deprecation_date": "2027-05-19",
-        "deprecation_source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions",
-        "successor_model": "gemini-3.8-flash",
         "cache_read_input_token_cost": 1.5e-07,
         "cache_read_input_token_cost_batches": 7.5e-08,
+        "cache_read_input_token_cost_flex": 7.5e-08,
+        "cache_read_input_token_cost_priority": 2.7e-07,
+        "google_maps_grounding_cost_per_query": 0.014,
         "input_cost_per_audio_token": 1.5e-06,
+        "input_cost_per_audio_token_priority": 2.7e-06,
         "input_cost_per_token": 1.5e-06,
+        "input_cost_per_token_batches": 7.5e-07,
+        "input_cost_per_token_flex": 7.5e-07,
+        "input_cost_per_token_priority": 2.7e-06,
         "litellm_provider": "vertex_ai-language-models",
         "max_input_tokens": 1048576,
-        "max_output_tokens": 65535,
+        "max_output_tokens": 65536,
         "mode": "chat",
         "output_cost_per_reasoning_token": 9e-06,
         "output_cost_per_token": 9e-06,
+        "output_cost_per_token_batches": 4.5e-06,
+        "output_cost_per_token_flex": 4.5e-06,
+        "output_cost_per_token_priority": 1.62e-05,
+        "prompt_cache_min_tokens": 4096.0,
+        "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
+        "search_free_requests": {"count":5000,"period":"month","shared_group":"gemini-3"},
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+        "successor_model": "gemini-3.8-flash",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/completions",
@@ -33258,10 +33251,11 @@
         "supported_output_modalities": [
             "text"
         ],
-        "supports_audio_output": false,
         "supports_audio_input": true,
+        "supports_audio_output": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
+        "supports_native_streaming": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
@@ -33273,24 +33267,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "supports_native_streaming": true,
-        "input_cost_per_token_priority": 2.7e-06,
-        "input_cost_per_audio_token_priority": 2.7e-06,
-        "output_cost_per_token_priority": 1.62e-05,
-        "cache_read_input_token_cost_priority": 2.7e-07,
-        "search_context_cost_per_query": {
-            "search_context_size_low": 0.014,
-            "search_context_size_medium": 0.014,
-            "search_context_size_high": 0.014
-        },
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
-        "web_search_billing_unit": "per_query",
-        "google_maps_grounding_cost_per_query": 0.014,
-        "input_cost_per_token_batches": 7.5e-07,
-        "output_cost_per_token_batches": 4.5e-06,
-        "input_cost_per_token_flex": 7.5e-07,
-        "output_cost_per_token_flex": 4.5e-06,
-        "cache_read_input_token_cost_flex": 7.5e-08
+        "web_search_billing_unit": "per_query"
     },
     "gemini-3.6-flash": {
         "prompt_cache_min_tokens": 4096,
@@ -48622,6 +48599,7 @@
         "max_output_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 5e-07,
+        "source": "https://replicate.com/meta/llama-2-13b",
         "supports_tool_choice": true
     },
     "replicate/meta/llama-2-13b-chat": {
@@ -48631,6 +48609,8 @@
         "max_output_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 5e-07,
+        "source": "https://replicate.com/meta/llama-2-13b-chat",
+        "supports_system_messages": true,
         "supports_tool_choice": true
     },
     "replicate/meta/llama-2-70b": {
@@ -48640,6 +48620,7 @@
         "max_output_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 2.75e-06,
+        "source": "https://replicate.com/meta/llama-2-70b",
         "supports_tool_choice": true
     },
     "replicate/meta/llama-2-70b-chat": {
@@ -48649,6 +48630,8 @@
         "max_output_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 2.75e-06,
+        "source": "https://replicate.com/meta/llama-2-70b-chat",
+        "supports_system_messages": true,
         "supports_tool_choice": true
     },
     "replicate/meta/llama-2-7b": {
@@ -48658,6 +48641,7 @@
         "max_output_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/meta/llama-2-7b",
         "supports_tool_choice": true
     },
     "replicate/meta/llama-2-7b-chat": {
@@ -48667,6 +48651,8 @@
         "max_output_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/meta/llama-2-7b-chat",
+        "supports_system_messages": true,
         "supports_tool_choice": true
     },
     "replicate/meta/llama-3-70b": {
@@ -48721,6 +48707,7 @@
         "max_output_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/mistralai/mistral-7b-v0.1",
         "supports_tool_choice": true
     },
     "replicate/mistralai/mixtral-8x7b-instruct-v0.1": {
@@ -48737,8 +48724,10 @@
         "output_cost_per_token": 1e-05,
         "litellm_provider": "replicate",
         "mode": "chat",
+        "source": "https://replicate.com/openai/gpt-5",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
         "supports_vision": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -48749,6 +48738,7 @@
         "output_cost_per_token": 3.6e-07,
         "litellm_provider": "replicate",
         "mode": "chat",
+        "source": "https://replicate.com/openai/gpt-oss-20b",
         "supports_function_calling": true,
         "supports_system_messages": true
     },
@@ -48764,13 +48754,15 @@
         "supports_tool_choice": true,
         "supports_response_schema": true,
         "supports_prompt_caching": true,
-        "prompt_cache_min_tokens": 4096
+        "prompt_cache_min_tokens": 4096,
+        "source": "https://replicate.com/anthropic/claude-4.5-haiku"
     },
     "replicate/ibm-granite/granite-3.3-8b-instruct": {
         "input_cost_per_token": 3e-08,
         "output_cost_per_token": 2.5e-07,
         "litellm_provider": "replicate",
         "mode": "chat",
+        "source": "https://replicate.com/ibm-granite/granite-3.3-8b-instruct",
         "supports_function_calling": true,
         "supports_system_messages": true
     },
@@ -48779,6 +48771,7 @@
         "output_cost_per_token": 1e-05,
         "litellm_provider": "replicate",
         "mode": "chat",
+        "source": "https://replicate.com/openai/gpt-4o",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_vision": true,
@@ -48820,6 +48813,7 @@
         "output_cost_per_token": 6e-07,
         "litellm_provider": "replicate",
         "mode": "chat",
+        "source": "https://replicate.com/openai/gpt-4o-mini",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_vision": true,
@@ -48832,6 +48826,7 @@
         "output_cost_per_token": 1.06e-06,
         "litellm_provider": "replicate",
         "mode": "chat",
+        "source": "https://replicate.com/qwen/qwen3-235b-a22b-instruct-2507",
         "supports_function_calling": true,
         "supports_system_messages": true
     },
@@ -48856,6 +48851,7 @@
         "mode": "chat",
         "max_input_tokens": 65536,
         "max_output_tokens": 8192,
+        "source": "https://replicate.com/deepseek-ai/deepseek-v3",
         "supports_function_calling": true,
         "supports_system_messages": true
     },
@@ -48911,7 +48907,9 @@
         "supports_response_schema": false,
         "input_cost_per_token_above_200k_tokens": 4e-06,
         "output_cost_per_token_above_200k_tokens": 1.8e-05,
+        "source": "https://replicate.com/google/gemini-3-pro",
         "supports_audio_input": true,
+        "supports_reasoning": true,
         "supports_video_input": true
     },
     "replicate/anthropic/claude-4.5-sonnet": {
@@ -48926,13 +48924,15 @@
         "supports_tool_choice": true,
         "supports_response_schema": true,
         "supports_prompt_caching": true,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 1024,
+        "source": "https://replicate.com/anthropic/claude-4.5-sonnet"
     },
     "replicate/openai/gpt-4.1": {
         "input_cost_per_token": 2e-06,
         "output_cost_per_token": 8e-06,
         "litellm_provider": "replicate",
         "mode": "chat",
+        "source": "https://replicate.com/openai/gpt-4.1",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_vision": true,
@@ -48953,6 +48953,7 @@
         "output_cost_per_token": 1.6e-06,
         "litellm_provider": "replicate",
         "mode": "chat",
+        "source": "https://replicate.com/openai/gpt-4.1-mini",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_vision": true,
@@ -48965,16 +48966,21 @@
         "output_cost_per_token": 4e-07,
         "litellm_provider": "replicate",
         "mode": "chat",
+        "source": "https://replicate.com/openai/gpt-5-nano",
         "supports_function_calling": true,
-        "supports_system_messages": true
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_vision": true
     },
     "replicate/openai/gpt-5-mini": {
         "input_cost_per_token": 2.5e-07,
         "output_cost_per_token": 2e-06,
         "litellm_provider": "replicate",
         "mode": "chat",
+        "source": "https://replicate.com/openai/gpt-5-mini",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
         "supports_vision": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -48985,6 +48991,7 @@
         "output_cost_per_token": 2.5e-06,
         "litellm_provider": "replicate",
         "mode": "chat",
+        "source": "https://replicate.com/google/gemini-2.5-flash",
         "supports_function_calling": false,
         "supports_parallel_function_calling": false,
         "supports_vision": true,
@@ -49000,6 +49007,7 @@
         "output_cost_per_token": 7.2e-07,
         "litellm_provider": "replicate",
         "mode": "chat",
+        "source": "https://replicate.com/openai/gpt-oss-120b",
         "supports_function_calling": true,
         "supports_system_messages": true
     },
@@ -49010,6 +49018,7 @@
         "mode": "chat",
         "max_input_tokens": 163840,
         "max_output_tokens": 163840,
+        "source": "https://replicate.com/deepseek-ai/deepseek-v3.1",
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_system_messages": true
@@ -49030,6 +49039,7 @@
         "mode": "chat",
         "max_input_tokens": 65536,
         "max_output_tokens": 8192,
+        "source": "https://replicate.com/deepseek-ai/deepseek-r1",
         "supports_reasoning": true,
         "supports_system_messages": true
     },
@@ -50825,8 +50835,8 @@
         "cache_creation_input_token_cost_above_200k_tokens": 9e-06,
         "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 1.44e-05,
         "cache_read_input_token_cost_above_200k_tokens": 7.2e-07,
-        "deprecation_date": "2027-04-08",
-        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-4-5.md",
+        "deprecation_date": "2027-04-27",
+        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
         "successor_model": "us-gov.anthropic.claude-sonnet-5-5",
         "litellm_provider": "bedrock_converse",
         "supports_tool_search": true,
@@ -54094,13 +54104,11 @@
     },
     "vertex_ai/gemini-3-pro-image": {
         "cache_read_input_token_cost": 2e-07,
-        "cache_read_input_token_cost_batches": 1e-07,
         "cache_read_input_token_cost_above_200k_tokens": 4e-07,
         "cache_read_input_token_cost_above_200k_tokens_priority": 7.2e-07,
+        "cache_read_input_token_cost_batches": 1e-07,
         "cache_read_input_token_cost_flex": 1e-07,
         "cache_read_input_token_cost_priority": 3.6e-07,
-        "deprecation_date": "2027-05-28",
-        "deprecation_source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions",
         "input_cost_per_image": 0.0011,
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_above_200k_tokens": 4e-06,
@@ -54122,15 +54130,14 @@
         "output_cost_per_token_batches": 6e-06,
         "output_cost_per_token_flex": 6e-06,
         "output_cost_per_token_priority": 2.16e-05,
-        "supports_reasoning": false,
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/images/generations",
             "/v1/images/edits",
             "/v1/batch"
-        ]
-
+        ],
+        "supports_reasoning": false
     },
     "vertex_ai/gemini-3-pro-image-preview": {
         "input_cost_per_image": 0.0011,
@@ -54172,15 +54179,13 @@
         "cache_read_input_token_cost_batches": 2.5e-08,
         "cache_read_input_token_cost_flex": 2.5e-08,
         "cache_read_input_token_cost_priority": 9e-08,
-        "deprecation_date": "2027-05-28",
-        "deprecation_source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions",
         "input_cost_per_image": 0.00056,
         "input_cost_per_token": 5e-07,
         "input_cost_per_token_batches": 2.5e-07,
         "input_cost_per_token_flex": 2.5e-07,
         "input_cost_per_token_priority": 9e-07,
         "litellm_provider": "vertex_ai-language-models",
-        "max_input_tokens": 65536,
+        "max_input_tokens": 131072,
         "max_output_tokens": 32768,
         "mode": "image_generation",
         "output_cost_per_image": 0.0672,
@@ -54192,15 +54197,14 @@
         "output_cost_per_token_flex": 1.5e-06,
         "output_cost_per_token_priority": 5.4e-06,
         "regional_endpoint_uplift_multiplier": 1.1,
-        "supports_reasoning": false,
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/images/generations",
             "/v1/images/edits",
             "/v1/batch"
-        ]
-
+        ],
+        "supports_reasoning": false
     },
     "vertex_ai/gemini-3.1-flash-image-preview": {
         "input_cost_per_image": 0.00056,
@@ -54326,7 +54330,6 @@
     },
     "vertex_ai/gemini-3.1-flash-lite": {
         "cache_read_input_audio_token_cost": 5e-08,
-        "deprecation_source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions",
         "cache_read_input_audio_token_cost_batches": 2.5e-08,
         "cache_read_input_audio_token_cost_flex": 2.5e-08,
         "cache_read_input_audio_token_cost_priority": 9e-08,
@@ -54334,7 +54337,6 @@
         "cache_read_input_token_cost_batches": 1.25e-08,
         "cache_read_input_token_cost_flex": 1.25e-08,
         "cache_read_input_token_cost_priority": 4.5e-08,
-        "deprecation_date": "2027-05-07",
         "google_maps_grounding_cost_per_query": 0.014,
         "input_cost_per_audio_token": 5e-07,
         "input_cost_per_audio_token_above_200k_tokens": 5e-07,
@@ -54394,12 +54396,11 @@
         "web_search_billing_unit": "per_query"
     },
     "vertex_ai/gemini-3.5-flash-lite": {
-        "deprecation_date": "2027-07-21",
-        "deprecation_source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions",
         "cache_read_input_token_cost": 3e-08,
         "cache_read_input_token_cost_batches": 1.5e-08,
         "cache_read_input_token_cost_flex": 1.5e-08,
         "cache_read_input_token_cost_priority": 5.4e-08,
+        "google_maps_grounding_cost_per_query": 0.014,
         "input_cost_per_token": 3e-07,
         "input_cost_per_token_batches": 1.5e-07,
         "input_cost_per_token_flex": 1.5e-07,
@@ -54414,6 +54415,8 @@
         "output_cost_per_token_flex": 1.25e-06,
         "output_cost_per_token_priority": 4.5e-06,
         "regional_endpoint_uplift_multiplier": 1.1,
+        "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
+        "search_free_requests": {"count":5000,"period":"month","shared_group":"gemini-3"},
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -54433,6 +54436,7 @@
         "supports_audio_output": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
+        "supports_native_streaming": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
@@ -54445,15 +54449,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "supports_native_streaming": true,
-        "search_context_cost_per_query": {
-            "search_context_size_low": 0.014,
-            "search_context_size_medium": 0.014,
-            "search_context_size_high": 0.014
-        },
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
-        "web_search_billing_unit": "per_query",
-        "google_maps_grounding_cost_per_query": 0.014
+        "web_search_billing_unit": "per_query"
     },
     "vertex_ai/deep-research-pro-preview-12-2025": {
         "cache_read_input_token_cost": 2e-07,
@@ -55249,14 +55245,13 @@
         ]
     },
     "vertex_ai/veo-3.1-generate-001": {
-        "deprecation_date": "2026-11-17",
-        "deprecation_source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions",
         "litellm_provider": "vertex_ai-video-models",
         "max_input_tokens": 1024,
         "mode": "video_generation",
         "output_cost_per_second": 0.4,
         "output_cost_per_second_4k": 0.6,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
+        "successor_model": "vertex_ai/gemini-omni-1.2-flash",
         "supported_modalities": [
             "text"
         ],
@@ -55265,8 +55260,6 @@
         ]
     },
     "vertex_ai/veo-3.1-fast-generate-001": {
-        "deprecation_date": "2026-11-17",
-        "deprecation_source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions",
         "litellm_provider": "vertex_ai-video-models",
         "max_input_tokens": 1024,
         "mode": "video_generation",
@@ -55274,6 +55267,7 @@
         "output_cost_per_second_1080p": 0.12,
         "output_cost_per_second_4k": 0.3,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
+        "successor_model": "vertex_ai/gemini-omni-1.2-flash",
         "supported_modalities": [
             "text"
         ],
@@ -56214,6 +56208,7 @@
     "zai.glm-5": {
         "input_cost_per_token": 1e-06,
         "input_cost_per_token_batches": 5e-07,
+        "input_cost_per_token_flex": 5e-07,
         "input_cost_per_token_priority": 1.75e-06,
         "output_cost_per_token": 3.2e-06,
         "litellm_provider": "bedrock_converse",
@@ -56221,6 +56216,7 @@
         "max_output_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token_batches": 1.6e-06,
+        "output_cost_per_token_flex": 1.6e-06,
         "output_cost_per_token_priority": 5.6e-06,
         "supports_function_calling": true,
         "supports_reasoning": true,
@@ -56685,7 +56681,7 @@
     "runwayml/seedance2": {
         "litellm_provider": "runwayml",
         "mode": "video_generation",
-        "output_cost_per_second": 0.36,
+        "output_cost_per_second": 0.3,
         "output_cost_per_second_1080p": 0.4,
         "output_cost_per_second_4k": 1.5,
         "source": "https://docs.dev.runwayml.com/guides/pricing/",
@@ -56697,14 +56693,13 @@
         "supported_output_modalities": [
             "video"
         ],
-        "metadata": {
-            "comment": "36 credits per second at 480p/720p, 40 at 1080p, 150 at 4K @ $0.01 per credit"
-        }
+        "metadata": {"comment":"14/30/40/150 credits per second at 480p/720p/1080p/4K @ $0.01 per credit; 56 credit minimum per generation not modeled"},
+        "output_cost_per_second_480p": 0.14
     },
     "runwayml/seedance2_fast": {
         "litellm_provider": "runwayml",
         "mode": "video_generation",
-        "output_cost_per_second": 0.29,
+        "output_cost_per_second": 0.24,
         "source": "https://docs.dev.runwayml.com/guides/pricing/",
         "supported_modalities": [
             "text",
@@ -56714,14 +56709,13 @@
         "supported_output_modalities": [
             "video"
         ],
-        "metadata": {
-            "comment": "29 credits per second at 480p/720p @ $0.01 per credit = $0.29 per second"
-        }
+        "metadata": {"comment":"11 credits per second at 480p, 24 at 720p @ $0.01 per credit; 44 credit minimum per generation not modeled"},
+        "output_cost_per_second_480p": 0.11
     },
     "runwayml/seedance2_mini": {
         "litellm_provider": "runwayml",
         "mode": "video_generation",
-        "output_cost_per_second": 0.16,
+        "output_cost_per_second": 0.15,
         "source": "https://docs.dev.runwayml.com/guides/pricing/",
         "supported_modalities": [
             "text",
@@ -56731,9 +56725,8 @@
         "supported_output_modalities": [
             "video"
         ],
-        "metadata": {
-            "comment": "16 credits per second @ $0.01 per credit = $0.16 per second; 64 credit minimum per task not modeled"
-        }
+        "metadata": {"comment":"7 credits per second at 480p, 15 at 720p @ $0.01 per credit; 28 credit minimum per generation not modeled"},
+        "output_cost_per_second_480p": 0.07
     },
     "runwayml/seedance2_5": {
         "litellm_provider": "runwayml",
@@ -56858,11 +56851,9 @@
     "runwayml/eleven_multilingual_v2": {
         "litellm_provider": "runwayml",
         "mode": "audio_speech",
-        "input_cost_per_character": 3e-07,
+        "input_cost_per_character": 0.0002,
         "source": "https://docs.dev.runwayml.com/guides/pricing/",
-        "metadata": {
-            "comment": "Estimated cost based on standard TTS pricing. RunwayML uses ElevenLabs models."
-        }
+        "metadata": {"comment":"1 credit per 50 characters @ $0.01 per credit = $0.0002 per character"}
     },
     "fireworks_ai/accounts/fireworks/models/qwen3-coder-480b-a35b-instruct": {
         "max_input_tokens": 262144,
@@ -60903,6 +60894,7 @@
     },
     "gemini-flash-latest": {
         "cache_read_input_token_cost": 7.5e-08,
+        "cache_read_input_token_cost_batches": 3.75e-08,
         "input_cost_per_token": 7.5e-07,
         "litellm_provider": "gemini",
         "max_input_tokens": 1048576,
@@ -60961,6 +60953,7 @@
     },
     "gemini-flash-lite-latest": {
         "cache_read_input_token_cost": 3e-08,
+        "cache_read_input_token_cost_batches": 1.5e-08,
         "input_cost_per_token": 3e-07,
         "litellm_provider": "gemini",
         "max_input_tokens": 1048576,
@@ -61019,6 +61012,8 @@
     "gemini-pro-latest": {
         "cache_read_input_token_cost": 2e-07,
         "cache_read_input_token_cost_above_200k_tokens": 4e-07,
+        "cache_read_input_token_cost_above_200k_tokens_batches": 4e-07,
+        "cache_read_input_token_cost_above_200k_tokens_flex": 4e-07,
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_above_200k_tokens": 4e-06,
         "litellm_provider": "gemini",
@@ -61062,6 +61057,7 @@
         },
         "google_maps_grounding_cost_per_query": 0.014,
         "cache_read_input_token_cost_above_200k_tokens_priority": 7.2e-07,
+        "cache_read_input_token_cost_batches": 2e-07,
         "cache_read_input_token_cost_priority": 3.6e-07,
         "input_cost_per_token_above_200k_tokens_priority": 7.2e-06,
         "input_cost_per_token_batches": 1e-06,
@@ -61074,12 +61070,18 @@
         "supports_url_context": true,
         "web_search_billing_unit": "per_query",
         "cache_read_input_token_cost_flex": 2e-07,
+        "input_cost_per_token_above_200k_tokens_batches": 2e-06,
+        "input_cost_per_token_above_200k_tokens_flex": 2e-06,
         "input_cost_per_token_flex": 1e-06,
+        "output_cost_per_token_above_200k_tokens_batches": 9e-06,
+        "output_cost_per_token_above_200k_tokens_flex": 9e-06,
         "output_cost_per_token_flex": 6e-06
     },
     "gemini/gemini-pro-latest": {
         "cache_read_input_token_cost": 2e-07,
         "cache_read_input_token_cost_above_200k_tokens": 4e-07,
+        "cache_read_input_token_cost_above_200k_tokens_batches": 4e-07,
+        "cache_read_input_token_cost_above_200k_tokens_flex": 4e-07,
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_above_200k_tokens": 4e-06,
         "litellm_provider": "gemini",
@@ -61123,6 +61125,7 @@
         },
         "google_maps_grounding_cost_per_query": 0.014,
         "cache_read_input_token_cost_above_200k_tokens_priority": 7.2e-07,
+        "cache_read_input_token_cost_batches": 2e-07,
         "cache_read_input_token_cost_priority": 3.6e-07,
         "input_cost_per_token_above_200k_tokens_priority": 7.2e-06,
         "input_cost_per_token_batches": 1e-06,
@@ -61135,7 +61138,11 @@
         "supports_url_context": true,
         "web_search_billing_unit": "per_query",
         "cache_read_input_token_cost_flex": 2e-07,
+        "input_cost_per_token_above_200k_tokens_batches": 2e-06,
+        "input_cost_per_token_above_200k_tokens_flex": 2e-06,
         "input_cost_per_token_flex": 1e-06,
+        "output_cost_per_token_above_200k_tokens_batches": 9e-06,
+        "output_cost_per_token_above_200k_tokens_flex": 9e-06,
         "output_cost_per_token_flex": 6e-06
     },
     "gemini-exp-1206": {
@@ -61490,7 +61497,7 @@
         "output_cost_per_token": 2.2e-05,
         "output_cost_per_token_above_272k_tokens": 3.3e-05,
         "litellm_provider": "bedrock_mantle",
-        "max_input_tokens": 1050000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "responses",
         "search_context_cost_per_query": {"search_context_size_high":0.012,"search_context_size_low":0.012,"search_context_size_medium":0.012},
@@ -67979,12 +67986,12 @@
         "source": "https://deepinfra.com/pricing"
     },
     "deepinfra/anthropic/claude-sonnet-5": {
-        "input_cost_per_token": 2e-06,
+        "input_cost_per_token": 3e-06,
         "litellm_provider": "deepinfra",
         "max_input_tokens": 1000000,
         "max_output_tokens": 1000000,
         "mode": "chat",
-        "output_cost_per_token": 1e-05,
+        "output_cost_per_token": 1.5e-05,
         "prompt_cache_min_tokens": 1024,
         "source": "https://deepinfra.com/pricing",
         "supports_adaptive_thinking": true,
@@ -72032,18 +72039,20 @@
         "output_cost_per_reasoning_token": 9e-06,
         "output_cost_per_token": 9e-06,
         "output_cost_per_video_token": 1.75e-05,
-        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+        "successor_model": "vertex_ai/gemini-omni-1.2-flash"
     },
     "vertex_ai/gemini-omni-1.1-flash-preview": {
         "input_cost_per_token": 1.5e-06,
         "litellm_provider": "vertex_ai",
-        "max_output_tokens": 57920,
         "max_input_tokens": 131072,
+        "max_output_tokens": 57920,
         "mode": "chat",
         "output_cost_per_reasoning_token": 9e-06,
         "output_cost_per_token": 9e-06,
         "output_cost_per_video_token": 1.75e-05,
         "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/omni-1-1-flash",
+        "successor_model": "vertex_ai/gemini-omni-1.2-flash",
         "supported_endpoints": [
             "/v1beta/interactions"
         ],
@@ -83586,6 +83595,7 @@
     "fireworks_ai/accounts/fireworks/routers/spot-deepseek-v4-flash": {
         "cache_read_input_token_cost": 2.1e-08,
         "deprecation_date": "2026-08-14",
+        "deprecation_source": "https://docs.fireworks.ai/api-reference/list-models.md",
         "input_cost_per_token": 1.05e-07,
         "litellm_provider": "fireworks_ai",
         "max_input_tokens": 1048576,
@@ -83593,6 +83603,7 @@
         "mode": "chat",
         "output_cost_per_token": 2.1e-07,
         "source": "https://api.fireworks.ai/v1/serverless/models",
+        "successor_model": "fireworks_ai/accounts/fireworks/models/deepseek-v4-flash-0731",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -97062,6 +97073,1918 @@
             "video"
         ]
     },
+    "replicate/alibaba/happyhorse-1.0": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.28,
+        "output_cost_per_second_1080p": 0.28,
+        "output_cost_per_second_720p": 0.14,
+        "source": "https://replicate.com/alibaba/happyhorse-1.0"
+    },
+    "replicate/alibaba/happyhorse-1.1": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.18,
+        "output_cost_per_second_1080p": 0.18,
+        "output_cost_per_second_720p": 0.14,
+        "source": "https://replicate.com/alibaba/happyhorse-1.1"
+    },
+    "replicate/alibaba/qwen-image-3": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/alibaba/qwen-image-3"
+    },
+    "replicate/alibaba/qwen-image-3-pro": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/alibaba/qwen-image-3-pro"
+    },
+    "replicate/alibaba/wan-3": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.14,
+        "output_cost_per_second_1080p": 0.14,
+        "output_cost_per_second_480p": 0.035,
+        "output_cost_per_second_720p": 0.07,
+        "source": "https://replicate.com/alibaba/wan-3"
+    },
+    "replicate/alibaba/wan-3-prime": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.28,
+        "output_cost_per_second_1080p": 0.28,
+        "output_cost_per_second_480p": 0.068,
+        "output_cost_per_second_720p": 0.14,
+        "source": "https://replicate.com/alibaba/wan-3-prime"
+    },
+    "replicate/anthropic/claude-fable-5": {
+        "input_cost_per_token": 1e-05,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 5e-05,
+        "source": "https://replicate.com/anthropic/claude-fable-5",
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/anthropic/claude-fable-5.2": {
+        "input_cost_per_token": 8e-06,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 4e-05,
+        "source": "https://replicate.com/anthropic/claude-fable-5.2",
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/anthropic/claude-opus-4.6": {
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-05,
+        "source": "https://replicate.com/anthropic/claude-opus-4.6",
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/anthropic/claude-opus-4.7": {
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-05,
+        "source": "https://replicate.com/anthropic/claude-opus-4.7",
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/anthropic/claude-opus-5.5": {
+        "input_cost_per_token": 4e-06,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2e-05,
+        "source": "https://replicate.com/anthropic/claude-opus-5.5",
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/anthropic/claude-sonnet-4.6": {
+        "input_cost_per_token": 3e-06,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-05,
+        "source": "https://replicate.com/anthropic/claude-sonnet-4.6",
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/anthropic/claude-sonnet-5": {
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "source": "https://replicate.com/anthropic/claude-sonnet-5",
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/black-forest-labs/flux-1.1-pro": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/black-forest-labs/flux-1.1-pro"
+    },
+    "replicate/black-forest-labs/flux-1.1-pro-ultra": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.06,
+        "source": "https://replicate.com/black-forest-labs/flux-1.1-pro-ultra"
+    },
+    "replicate/black-forest-labs/flux-1.1-pro-ultra-finetuned": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.07,
+        "source": "https://replicate.com/black-forest-labs/flux-1.1-pro-ultra-finetuned"
+    },
+    "replicate/black-forest-labs/flux-2-flex": {
+        "input_cost_per_pixel": 6e-08,
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_pixel": 6e-08,
+        "source": "https://replicate.com/black-forest-labs/flux-2-flex"
+    },
+    "replicate/black-forest-labs/flux-2-klein-4b": {
+        "input_cost_per_pixel": 1e-09,
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_pixel": 1e-09,
+        "source": "https://replicate.com/black-forest-labs/flux-2-klein-4b"
+    },
+    "replicate/black-forest-labs/flux-2-klein-4b-base": {
+        "input_cost_per_pixel": 9e-09,
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_pixel": 9e-09,
+        "source": "https://replicate.com/black-forest-labs/flux-2-klein-4b-base"
+    },
+    "replicate/black-forest-labs/flux-2-klein-4b-base-lora": {
+        "input_cost_per_pixel": 9e-09,
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_pixel": 1.9e-08,
+        "source": "https://replicate.com/black-forest-labs/flux-2-klein-4b-base-lora"
+    },
+    "replicate/black-forest-labs/flux-2-klein-9b": {
+        "input_cost_per_pixel": 2e-09,
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_pixel": 1.5e-08,
+        "source": "https://replicate.com/black-forest-labs/flux-2-klein-9b"
+    },
+    "replicate/black-forest-labs/flux-2-klein-9b-base": {
+        "input_cost_per_pixel": 1.1e-08,
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_pixel": 1.1e-08,
+        "source": "https://replicate.com/black-forest-labs/flux-2-klein-9b-base"
+    },
+    "replicate/black-forest-labs/flux-2-klein-9b-base-lora": {
+        "input_cost_per_pixel": 1.1e-08,
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_pixel": 2.1e-08,
+        "source": "https://replicate.com/black-forest-labs/flux-2-klein-9b-base-lora"
+    },
+    "replicate/black-forest-labs/flux-canny-dev": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.025,
+        "source": "https://replicate.com/black-forest-labs/flux-canny-dev"
+    },
+    "replicate/black-forest-labs/flux-canny-pro": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.05,
+        "source": "https://replicate.com/black-forest-labs/flux-canny-pro"
+    },
+    "replicate/black-forest-labs/flux-depth-dev": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.025,
+        "source": "https://replicate.com/black-forest-labs/flux-depth-dev"
+    },
+    "replicate/black-forest-labs/flux-depth-pro": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.05,
+        "source": "https://replicate.com/black-forest-labs/flux-depth-pro"
+    },
+    "replicate/black-forest-labs/flux-dev": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.025,
+        "source": "https://replicate.com/black-forest-labs/flux-dev"
+    },
+    "replicate/black-forest-labs/flux-dev-lora": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.032,
+        "source": "https://replicate.com/black-forest-labs/flux-dev-lora"
+    },
+    "replicate/black-forest-labs/flux-fill-dev": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/black-forest-labs/flux-fill-dev"
+    },
+    "replicate/black-forest-labs/flux-fill-pro": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.05,
+        "source": "https://replicate.com/black-forest-labs/flux-fill-pro"
+    },
+    "replicate/black-forest-labs/flux-kontext-dev": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.025,
+        "source": "https://replicate.com/black-forest-labs/flux-kontext-dev"
+    },
+    "replicate/black-forest-labs/flux-kontext-dev-lora": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.032,
+        "source": "https://replicate.com/black-forest-labs/flux-kontext-dev-lora"
+    },
+    "replicate/black-forest-labs/flux-kontext-max": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.08,
+        "source": "https://replicate.com/black-forest-labs/flux-kontext-max"
+    },
+    "replicate/black-forest-labs/flux-kontext-pro": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/black-forest-labs/flux-kontext-pro"
+    },
+    "replicate/black-forest-labs/flux-krea-dev": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.025,
+        "source": "https://replicate.com/black-forest-labs/flux-krea-dev"
+    },
+    "replicate/black-forest-labs/flux-pro": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.055,
+        "source": "https://replicate.com/black-forest-labs/flux-pro"
+    },
+    "replicate/black-forest-labs/flux-pro-finetuned": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.06,
+        "source": "https://replicate.com/black-forest-labs/flux-pro-finetuned"
+    },
+    "replicate/black-forest-labs/flux-redux-dev": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.025,
+        "source": "https://replicate.com/black-forest-labs/flux-redux-dev"
+    },
+    "replicate/black-forest-labs/flux-redux-schnell": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.003,
+        "source": "https://replicate.com/black-forest-labs/flux-redux-schnell"
+    },
+    "replicate/black-forest-labs/flux-schnell": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.003,
+        "source": "https://replicate.com/black-forest-labs/flux-schnell"
+    },
+    "replicate/black-forest-labs/flux-schnell-lora": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.02,
+        "source": "https://replicate.com/black-forest-labs/flux-schnell-lora"
+    },
+    "replicate/bria/eraser": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/bria/eraser"
+    },
+    "replicate/bria/expand-image": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/bria/expand-image"
+    },
+    "replicate/bria/fibo": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/bria/fibo"
+    },
+    "replicate/bria/fibo-edit": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/bria/fibo-edit"
+    },
+    "replicate/bria/generate-background": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/bria/generate-background"
+    },
+    "replicate/bria/genfill": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/bria/genfill"
+    },
+    "replicate/bria/image-3.2": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/bria/image-3.2"
+    },
+    "replicate/bria/increase-resolution": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/bria/increase-resolution"
+    },
+    "replicate/bria/product-cutout": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/bria/product-cutout"
+    },
+    "replicate/bria/product-packshot": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/bria/product-packshot"
+    },
+    "replicate/bria/product-shadow": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/bria/product-shadow"
+    },
+    "replicate/bria/remove-background": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.018,
+        "source": "https://replicate.com/bria/remove-background"
+    },
+    "replicate/bria/video-erase-object": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "source": "https://replicate.com/bria/video-erase-object"
+    },
+    "replicate/bria/video-increase-resolution": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "source": "https://replicate.com/bria/video-increase-resolution"
+    },
+    "replicate/bria/video-remove-background": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "source": "https://replicate.com/bria/video-remove-background"
+    },
+    "replicate/bytedance/dreamactor-m2.0": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "source": "https://replicate.com/bytedance/dreamactor-m2.0"
+    },
+    "replicate/bytedance/dreamina-3.1": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/bytedance/dreamina-3.1"
+    },
+    "replicate/bytedance/omni-human": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.14,
+        "source": "https://replicate.com/bytedance/omni-human"
+    },
+    "replicate/bytedance/omni-human-1.5": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.16,
+        "source": "https://replicate.com/bytedance/omni-human-1.5"
+    },
+    "replicate/bytedance/seedance-1-lite": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.036,
+        "output_cost_per_second_1080p": 0.072,
+        "output_cost_per_second_480p": 0.018,
+        "output_cost_per_second_720p": 0.036,
+        "source": "https://replicate.com/bytedance/seedance-1-lite"
+    },
+    "replicate/bytedance/seedance-1-pro": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.15,
+        "output_cost_per_second_1080p": 0.15,
+        "output_cost_per_second_480p": 0.03,
+        "output_cost_per_second_720p": 0.06,
+        "source": "https://replicate.com/bytedance/seedance-1-pro"
+    },
+    "replicate/bytedance/seedance-1-pro-fast": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.06,
+        "output_cost_per_second_1080p": 0.06,
+        "output_cost_per_second_480p": 0.015,
+        "output_cost_per_second_720p": 0.025,
+        "source": "https://replicate.com/bytedance/seedance-1-pro-fast"
+    },
+    "replicate/bytedance/seedream-3": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/bytedance/seedream-3"
+    },
+    "replicate/bytedance/seedream-4": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/bytedance/seedream-4"
+    },
+    "replicate/bytedance/seedream-4.5": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/bytedance/seedream-4.5"
+    },
+    "replicate/bytedance/seedream-5-lite": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.035,
+        "source": "https://replicate.com/bytedance/seedream-5-lite"
+    },
+    "replicate/datalab-to/ocr": {
+        "litellm_provider": "replicate",
+        "mode": "ocr",
+        "ocr_cost_per_page": 0.002,
+        "source": "https://replicate.com/datalab-to/ocr"
+    },
+    "replicate/decart/lucy-edit-2": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.04,
+        "source": "https://replicate.com/decart/lucy-edit-2"
+    },
+    "replicate/easel/ai-avatars": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.05,
+        "source": "https://replicate.com/easel/ai-avatars"
+    },
+    "replicate/elevenlabs/dubbing": {
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "output_cost_per_second": 0.0366667,
+        "source": "https://replicate.com/elevenlabs/dubbing"
+    },
+    "replicate/elevenlabs/flash-v2.5": {
+        "input_cost_per_character": 5e-05,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/elevenlabs/flash-v2.5"
+    },
+    "replicate/elevenlabs/turbo-v2.5": {
+        "input_cost_per_character": 5e-05,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/elevenlabs/turbo-v2.5"
+    },
+    "replicate/elevenlabs/v2-multilingual": {
+        "input_cost_per_character": 0.0001,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/elevenlabs/v2-multilingual"
+    },
+    "replicate/elevenlabs/v3": {
+        "input_cost_per_character": 0.0001,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/elevenlabs/v3"
+    },
+    "replicate/flux-kontext-apps/cartoonify": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/flux-kontext-apps/cartoonify"
+    },
+    "replicate/flux-kontext-apps/change-haircut": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/flux-kontext-apps/change-haircut"
+    },
+    "replicate/flux-kontext-apps/depth-of-field": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/flux-kontext-apps/depth-of-field"
+    },
+    "replicate/flux-kontext-apps/face-to-many-kontext": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/flux-kontext-apps/face-to-many-kontext"
+    },
+    "replicate/flux-kontext-apps/filters": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/flux-kontext-apps/filters"
+    },
+    "replicate/flux-kontext-apps/iconic-locations": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/flux-kontext-apps/iconic-locations"
+    },
+    "replicate/flux-kontext-apps/impossible-scenarios": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/flux-kontext-apps/impossible-scenarios"
+    },
+    "replicate/flux-kontext-apps/multi-image-kontext-max": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.08,
+        "source": "https://replicate.com/flux-kontext-apps/multi-image-kontext-max"
+    },
+    "replicate/flux-kontext-apps/multi-image-kontext-pro": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/flux-kontext-apps/multi-image-kontext-pro"
+    },
+    "replicate/flux-kontext-apps/multi-image-list": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.08,
+        "source": "https://replicate.com/flux-kontext-apps/multi-image-list"
+    },
+    "replicate/flux-kontext-apps/portrait-series": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/flux-kontext-apps/portrait-series"
+    },
+    "replicate/flux-kontext-apps/professional-headshot": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/flux-kontext-apps/professional-headshot"
+    },
+    "replicate/flux-kontext-apps/restore-image": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/flux-kontext-apps/restore-image"
+    },
+    "replicate/flux-kontext-apps/restyle-video-frame": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/flux-kontext-apps/restyle-video-frame"
+    },
+    "replicate/flux-kontext-apps/text-removal": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/flux-kontext-apps/text-removal"
+    },
+    "replicate/google/gemini-2.5-flash-image": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.039,
+        "source": "https://replicate.com/google/gemini-2.5-flash-image"
+    },
+    "replicate/google/gemini-3-flash": {
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 3e-06,
+        "source": "https://replicate.com/google/gemini-3-flash",
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/google/gemini-3.1-flash-tts": {
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "output_cost_per_token": 4e-05,
+        "source": "https://replicate.com/google/gemini-3.1-flash-tts"
+    },
+    "replicate/google/gemini-3.1-pro": {
+        "input_cost_per_token": 2e-06,
+        "input_cost_per_token_above_200k_tokens": 4e-06,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-05,
+        "output_cost_per_token_above_200k_tokens": 1.8e-05,
+        "source": "https://replicate.com/google/gemini-3.1-pro",
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/google/gemini-3.5-flash": {
+        "input_cost_per_token": 1.5e-06,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 9e-06,
+        "source": "https://replicate.com/google/gemini-3.5-flash",
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/google/gemini-3.8-flash-lite-tts": {
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "output_cost_per_token": 6e-06,
+        "source": "https://replicate.com/google/gemini-3.8-flash-lite-tts"
+    },
+    "replicate/google/gemini-3.8-flash-tts": {
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "output_cost_per_token": 9e-06,
+        "source": "https://replicate.com/google/gemini-3.8-flash-tts"
+    },
+    "replicate/google/nano-banana": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.039,
+        "source": "https://replicate.com/google/nano-banana"
+    },
+    "replicate/google/nano-banana-2": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.067,
+        "output_cost_per_image_1K": 0.067,
+        "output_cost_per_image_2K": 0.101,
+        "output_cost_per_image_4K": 0.151,
+        "source": "https://replicate.com/google/nano-banana-2"
+    },
+    "replicate/google/nano-banana-2-lite": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.034,
+        "source": "https://replicate.com/google/nano-banana-2-lite"
+    },
+    "replicate/google/nano-banana-2.1": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.0336,
+        "output_cost_per_image_1K": 0.0336,
+        "output_cost_per_image_2K": 0.0504,
+        "output_cost_per_image_4K": 0.1134,
+        "source": "https://replicate.com/google/nano-banana-2.1"
+    },
+    "replicate/heygen/avatar-iv": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.075,
+        "source": "https://replicate.com/heygen/avatar-iv"
+    },
+    "replicate/heygen/avatar-v": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.075,
+        "source": "https://replicate.com/heygen/avatar-v"
+    },
+    "replicate/heygen/lipsync-precision": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.0667,
+        "source": "https://replicate.com/heygen/lipsync-precision"
+    },
+    "replicate/heygen/lipsync-speed": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.0333,
+        "source": "https://replicate.com/heygen/lipsync-speed"
+    },
+    "replicate/heygen/video-agent": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.0333,
+        "source": "https://replicate.com/heygen/video-agent"
+    },
+    "replicate/ibm-granite/granite-20b-code-instruct-8k": {
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 5e-07,
+        "source": "https://replicate.com/ibm-granite/granite-20b-code-instruct-8k",
+        "supports_system_messages": true
+    },
+    "replicate/ibm-granite/granite-3.0-2b-instruct": {
+        "input_cost_per_token": 3e-08,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/ibm-granite/granite-3.0-2b-instruct",
+        "supports_system_messages": true
+    },
+    "replicate/ibm-granite/granite-3.0-8b-instruct": {
+        "input_cost_per_token": 5e-08,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/ibm-granite/granite-3.0-8b-instruct",
+        "supports_system_messages": true
+    },
+    "replicate/ibm-granite/granite-3.1-2b-instruct": {
+        "input_cost_per_token": 3e-08,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/ibm-granite/granite-3.1-2b-instruct",
+        "supports_system_messages": true
+    },
+    "replicate/ibm-granite/granite-3.1-8b-instruct": {
+        "input_cost_per_token": 3e-08,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/ibm-granite/granite-3.1-8b-instruct",
+        "supports_system_messages": true
+    },
+    "replicate/ibm-granite/granite-3.2-8b-instruct": {
+        "input_cost_per_token": 3e-08,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/ibm-granite/granite-3.2-8b-instruct",
+        "supports_system_messages": true
+    },
+    "replicate/ibm-granite/granite-4.0-h-small": {
+        "input_cost_per_token": 6e-08,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/ibm-granite/granite-4.0-h-small",
+        "supports_function_calling": true,
+        "supports_system_messages": true
+    },
+    "replicate/ibm-granite/granite-4.1-8b": {
+        "input_cost_per_token": 6e-08,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/ibm-granite/granite-4.1-8b",
+        "supports_function_calling": true,
+        "supports_system_messages": true
+    },
+    "replicate/ibm-granite/granite-4.2-8b": {
+        "input_cost_per_token": 6e-08,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/ibm-granite/granite-4.2-8b",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true
+    },
+    "replicate/ibm-granite/granite-8b-code-instruct-128k": {
+        "input_cost_per_token": 5e-08,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/ibm-granite/granite-8b-code-instruct-128k",
+        "supports_system_messages": true
+    },
+    "replicate/ibm-granite/granite-speech-3.3-8b": {
+        "litellm_provider": "replicate",
+        "mode": "audio_transcription",
+        "output_cost_per_token": 4.9e-06,
+        "source": "https://replicate.com/ibm-granite/granite-speech-3.3-8b"
+    },
+    "replicate/ibm-granite/granite-speech-4.1-2b": {
+        "input_cost_per_token": 3e-08,
+        "litellm_provider": "replicate",
+        "mode": "audio_transcription",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/ibm-granite/granite-speech-4.1-2b"
+    },
+    "replicate/ibm-granite/granite-vision-3.3-2b": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/ibm-granite/granite-vision-3.3-2b",
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/ibm-granite/granite-vision-4.1-4b": {
+        "input_cost_per_token": 6e-08,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/ibm-granite/granite-vision-4.1-4b",
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/ideogram-ai/ideogram-v2": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.08,
+        "source": "https://replicate.com/ideogram-ai/ideogram-v2"
+    },
+    "replicate/ideogram-ai/ideogram-v2-turbo": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.05,
+        "source": "https://replicate.com/ideogram-ai/ideogram-v2-turbo"
+    },
+    "replicate/ideogram-ai/ideogram-v2a": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/ideogram-ai/ideogram-v2a"
+    },
+    "replicate/ideogram-ai/ideogram-v2a-turbo": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.025,
+        "source": "https://replicate.com/ideogram-ai/ideogram-v2a-turbo"
+    },
+    "replicate/ideogram-ai/ideogram-v3-balanced": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.06,
+        "source": "https://replicate.com/ideogram-ai/ideogram-v3-balanced"
+    },
+    "replicate/ideogram-ai/ideogram-v3-quality": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.09,
+        "source": "https://replicate.com/ideogram-ai/ideogram-v3-quality"
+    },
+    "replicate/ideogram-ai/ideogram-v3-turbo": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/ideogram-ai/ideogram-v3-turbo"
+    },
+    "replicate/ideogram-ai/ideogram-v4-balanced": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.06,
+        "source": "https://replicate.com/ideogram-ai/ideogram-v4-balanced"
+    },
+    "replicate/ideogram-ai/ideogram-v4-quality": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.1,
+        "source": "https://replicate.com/ideogram-ai/ideogram-v4-quality"
+    },
+    "replicate/ideogram-ai/layerize": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.09,
+        "source": "https://replicate.com/ideogram-ai/layerize"
+    },
+    "replicate/intelligent-utilities/html-to-image": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.001,
+        "source": "https://replicate.com/intelligent-utilities/html-to-image"
+    },
+    "replicate/inworld/realtime-tts-1.5-max": {
+        "input_cost_per_character": 3.5e-05,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/inworld/realtime-tts-1.5-max"
+    },
+    "replicate/inworld/realtime-tts-1.5-mini": {
+        "input_cost_per_character": 1.5e-05,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/inworld/realtime-tts-1.5-mini"
+    },
+    "replicate/inworld/realtime-tts-2": {
+        "input_cost_per_character": 2.5e-05,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/inworld/realtime-tts-2"
+    },
+    "replicate/kwaivgi/kling-lip-sync": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.014,
+        "source": "https://replicate.com/kwaivgi/kling-lip-sync"
+    },
+    "replicate/kwaivgi/kling-v2.1-master": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.28,
+        "source": "https://replicate.com/kwaivgi/kling-v2.1-master"
+    },
+    "replicate/kwaivgi/kling-v2.5-turbo-pro": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.07,
+        "source": "https://replicate.com/kwaivgi/kling-v2.5-turbo-pro"
+    },
+    "replicate/lightricks/audio-to-video": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1,
+        "source": "https://replicate.com/lightricks/audio-to-video"
+    },
+    "replicate/lightricks/ltx-2-distilled": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.02,
+        "source": "https://replicate.com/lightricks/ltx-2-distilled"
+    },
+    "replicate/lightricks/ltx-2-fast": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.04,
+        "output_cost_per_second_1080p": 0.04,
+        "output_cost_per_second_2k": 0.08,
+        "output_cost_per_second_4k": 0.16,
+        "source": "https://replicate.com/lightricks/ltx-2-fast"
+    },
+    "replicate/lightricks/ltx-2-pro": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.06,
+        "output_cost_per_second_1080p": 0.06,
+        "output_cost_per_second_2k": 0.12,
+        "output_cost_per_second_4k": 0.24,
+        "source": "https://replicate.com/lightricks/ltx-2-pro"
+    },
+    "replicate/lightricks/ltx-2-retake": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1,
+        "source": "https://replicate.com/lightricks/ltx-2-retake"
+    },
+    "replicate/lightricks/ltx-2.3-fast": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.06,
+        "output_cost_per_second_1080p": 0.06,
+        "output_cost_per_second_2k": 0.12,
+        "output_cost_per_second_4k": 0.24,
+        "source": "https://replicate.com/lightricks/ltx-2.3-fast"
+    },
+    "replicate/lightricks/ltx-2.3-pro": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.08,
+        "output_cost_per_second_1080p": 0.08,
+        "output_cost_per_second_2k": 0.16,
+        "output_cost_per_second_4k": 0.32,
+        "source": "https://replicate.com/lightricks/ltx-2.3-pro"
+    },
+    "replicate/lightricks/ltx-2.5-fast": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.06,
+        "output_cost_per_second_1080p": 0.06,
+        "output_cost_per_second_2k": 0.12,
+        "output_cost_per_second_4k": 0.24,
+        "output_cost_per_second_720p": 0.03,
+        "source": "https://replicate.com/lightricks/ltx-2.5-fast"
+    },
+    "replicate/luma/photon": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/luma/photon"
+    },
+    "replicate/luma/photon-flash": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01,
+        "source": "https://replicate.com/luma/photon-flash"
+    },
+    "replicate/luma/reframe-video": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.06,
+        "source": "https://replicate.com/luma/reframe-video"
+    },
+    "replicate/meta/llama-4-maverick-instruct": {
+        "input_cost_per_token": 2.5e-07,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 9.5e-07,
+        "source": "https://replicate.com/meta/llama-4-maverick-instruct",
+        "supports_system_messages": true
+    },
+    "replicate/meta/llama-4-scout-instruct": {
+        "input_cost_per_token": 1.7e-07,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 6.5e-07,
+        "source": "https://replicate.com/meta/llama-4-scout-instruct",
+        "supports_system_messages": true
+    },
+    "replicate/meta/llama-guard-4-12b": {
+        "input_cost_per_token": 2e-07,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2e-07,
+        "source": "https://replicate.com/meta/llama-guard-4-12b",
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/meta/meta-llama-3-70b": {
+        "input_cost_per_token": 6.5e-07,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.75e-06,
+        "source": "https://replicate.com/meta/meta-llama-3-70b"
+    },
+    "replicate/meta/meta-llama-3-70b-instruct": {
+        "input_cost_per_token": 6.5e-07,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.75e-06,
+        "source": "https://replicate.com/meta/meta-llama-3-70b-instruct",
+        "supports_system_messages": true
+    },
+    "replicate/meta/meta-llama-3-8b": {
+        "input_cost_per_token": 5e-08,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/meta/meta-llama-3-8b"
+    },
+    "replicate/meta/meta-llama-3-8b-instruct": {
+        "input_cost_per_token": 5e-08,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/meta/meta-llama-3-8b-instruct",
+        "supports_system_messages": true
+    },
+    "replicate/minimax/h3": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.13,
+        "output_cost_per_second_2k": 0.13,
+        "output_cost_per_second_768p": 0.08,
+        "source": "https://replicate.com/minimax/h3"
+    },
+    "replicate/minimax/h3-highspeed": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.03,
+        "source": "https://replicate.com/minimax/h3-highspeed"
+    },
+    "replicate/minimax/h3-lite": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.02,
+        "output_cost_per_second_480p": 0.0125,
+        "output_cost_per_second_768p": 0.02,
+        "source": "https://replicate.com/minimax/h3-lite"
+    },
+    "replicate/minimax/image-01": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01,
+        "source": "https://replicate.com/minimax/image-01"
+    },
+    "replicate/minimax/speech-02-hd": {
+        "input_cost_per_token": 0.0001,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/minimax/speech-02-hd"
+    },
+    "replicate/minimax/speech-02-turbo": {
+        "input_cost_per_token": 6e-05,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/minimax/speech-02-turbo"
+    },
+    "replicate/minimax/speech-2.6-hd": {
+        "input_cost_per_token": 0.0001,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/minimax/speech-2.6-hd"
+    },
+    "replicate/minimax/speech-2.6-turbo": {
+        "input_cost_per_token": 6e-05,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/minimax/speech-2.6-turbo"
+    },
+    "replicate/minimax/speech-2.8-hd": {
+        "input_cost_per_token": 0.0001,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/minimax/speech-2.8-hd"
+    },
+    "replicate/minimax/speech-2.8-turbo": {
+        "input_cost_per_token": 6e-05,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/minimax/speech-2.8-turbo"
+    },
+    "replicate/moonshotai/kimi-k2-thinking": {
+        "input_cost_per_token": 6.6e-07,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.7e-06,
+        "source": "https://replicate.com/moonshotai/kimi-k2-thinking"
+    },
+    "replicate/moonshotai/kimi-k2.5": {
+        "input_cost_per_token": 7.2e-07,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 3.6e-06,
+        "source": "https://replicate.com/moonshotai/kimi-k2.5",
+        "supports_vision": true
+    },
+    "replicate/moonshotai/kimi-k2.6": {
+        "input_cost_per_token": 9.5e-07,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 4e-06,
+        "source": "https://replicate.com/moonshotai/kimi-k2.6",
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/nightmareai/real-esrgan": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.002,
+        "source": "https://replicate.com/nightmareai/real-esrgan"
+    },
+    "replicate/openai/gpt-4o-mini-transcribe": {
+        "input_cost_per_token": 3e-06,
+        "litellm_provider": "replicate",
+        "mode": "audio_transcription",
+        "output_cost_per_token": 5e-06,
+        "source": "https://replicate.com/openai/gpt-4o-mini-transcribe"
+    },
+    "replicate/openai/gpt-4o-transcribe": {
+        "input_cost_per_token": 6e-06,
+        "litellm_provider": "replicate",
+        "mode": "audio_transcription",
+        "output_cost_per_token": 1e-05,
+        "source": "https://replicate.com/openai/gpt-4o-transcribe"
+    },
+    "replicate/openai/gpt-5-pro": {
+        "input_cost_per_token": 1.5e-05,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 0.00012,
+        "source": "https://replicate.com/openai/gpt-5-pro",
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/openai/gpt-5.1": {
+        "input_cost_per_token": 1.25e-06,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "source": "https://replicate.com/openai/gpt-5.1",
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/openai/gpt-5.2": {
+        "input_cost_per_token": 1.75e-06,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 1.4e-05,
+        "source": "https://replicate.com/openai/gpt-5.2",
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/openai/gpt-5.4": {
+        "input_cost_per_token": 2.5e-06,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-05,
+        "source": "https://replicate.com/openai/gpt-5.4",
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/openai/gpt-5.6-luna": {
+        "input_cost_per_token": 1e-06,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 6e-06,
+        "source": "https://replicate.com/openai/gpt-5.6-luna",
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/openai/gpt-5.6-sol": {
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "source": "https://replicate.com/openai/gpt-5.6-sol",
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/openai/gpt-5.6-terra": {
+        "input_cost_per_token": 2.5e-06,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-05,
+        "source": "https://replicate.com/openai/gpt-5.6-terra",
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/perceptron-ai-inc/isaac-0.1": {
+        "input_cost_per_token": 2.6e-07,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.17e-06,
+        "source": "https://replicate.com/perceptron-ai-inc/isaac-0.1",
+        "supports_vision": true
+    },
+    "replicate/philz1337x/clarity-pro-upscaler": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_pixel": 3e-08,
+        "source": "https://replicate.com/philz1337x/clarity-pro-upscaler"
+    },
+    "replicate/pixverse/lipsync": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.04,
+        "source": "https://replicate.com/pixverse/lipsync"
+    },
+    "replicate/playht/play-dialog": {
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "output_cost_per_second": 0.001,
+        "source": "https://replicate.com/playht/play-dialog"
+    },
+    "replicate/prunaai/flux-fast": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.005,
+        "source": "https://replicate.com/prunaai/flux-fast"
+    },
+    "replicate/prunaai/flux-kontext-fast": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01,
+        "source": "https://replicate.com/prunaai/flux-kontext-fast"
+    },
+    "replicate/prunaai/hidream-l1-fast": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.005,
+        "source": "https://replicate.com/prunaai/hidream-l1-fast"
+    },
+    "replicate/prunaai/p-image": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.005,
+        "source": "https://replicate.com/prunaai/p-image"
+    },
+    "replicate/prunaai/p-image-edit": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01,
+        "source": "https://replicate.com/prunaai/p-image-edit"
+    },
+    "replicate/prunaai/p-image-edit-lora": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01,
+        "source": "https://replicate.com/prunaai/p-image-edit-lora"
+    },
+    "replicate/prunaai/p-image-lora": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.005,
+        "source": "https://replicate.com/prunaai/p-image-lora"
+    },
+    "replicate/prunaai/p-video-2-pro-avatar": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.04,
+        "output_cost_per_second_1080p": 0.06,
+        "output_cost_per_second_2k": 0.08,
+        "output_cost_per_second_480p": 0.02,
+        "output_cost_per_second_4k": 0.12,
+        "output_cost_per_second_768p": 0.04,
+        "source": "https://replicate.com/prunaai/p-video-2-pro-avatar"
+    },
+    "replicate/prunaai/p-video-2-pro-replace": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "output_cost_per_second_1080p": 0.06,
+        "output_cost_per_second_2k": 0.07,
+        "output_cost_per_second_480p": 0.025,
+        "output_cost_per_second_4k": 0.09,
+        "output_cost_per_second_768p": 0.05,
+        "source": "https://replicate.com/prunaai/p-video-2-pro-replace"
+    },
+    "replicate/prunaai/p-video-animate": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.03,
+        "output_cost_per_second_1080p": 0.06,
+        "output_cost_per_second_720p": 0.03,
+        "source": "https://replicate.com/prunaai/p-video-animate"
+    },
+    "replicate/prunaai/p-video-avatar": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.025,
+        "output_cost_per_second_1080p": 0.045,
+        "output_cost_per_second_720p": 0.025,
+        "source": "https://replicate.com/prunaai/p-video-avatar"
+    },
+    "replicate/prunaai/p-video-replace": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.03,
+        "output_cost_per_second_1080p": 0.06,
+        "output_cost_per_second_720p": 0.03,
+        "source": "https://replicate.com/prunaai/p-video-replace"
+    },
+    "replicate/prunaai/wan-2.2-image": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.02,
+        "source": "https://replicate.com/prunaai/wan-2.2-image"
+    },
+    "replicate/quiverai/arrow-1.1": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.2,
+        "source": "https://replicate.com/quiverai/arrow-1.1"
+    },
+    "replicate/quiverai/arrow-1.1-max": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.25,
+        "source": "https://replicate.com/quiverai/arrow-1.1-max"
+    },
+    "replicate/quiverai/arrow-1.1-max-vectorize": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.2,
+        "source": "https://replicate.com/quiverai/arrow-1.1-max-vectorize"
+    },
+    "replicate/quiverai/arrow-1.1-vectorize": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.15,
+        "source": "https://replicate.com/quiverai/arrow-1.1-vectorize"
+    },
+    "replicate/qwen-edit-apps/qwen-image-edit-plus-lora-fusion": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/qwen-edit-apps/qwen-image-edit-plus-lora-fusion"
+    },
+    "replicate/qwen-edit-apps/qwen-image-edit-plus-lora-next-scene": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/qwen-edit-apps/qwen-image-edit-plus-lora-next-scene"
+    },
+    "replicate/qwen-edit-apps/qwen-image-edit-plus-lora-photo-to-anime": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/qwen-edit-apps/qwen-image-edit-plus-lora-photo-to-anime"
+    },
+    "replicate/qwen-edit-apps/qwen-image-edit-plus-lora-relight": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/qwen-edit-apps/qwen-image-edit-plus-lora-relight"
+    },
+    "replicate/qwen-edit-apps/qwen-image-edit-plus-lora-skin": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/qwen-edit-apps/qwen-image-edit-plus-lora-skin"
+    },
+    "replicate/qwen-edit-apps/qwen-image-edit-plus-lora-upscale": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/qwen-edit-apps/qwen-image-edit-plus-lora-upscale"
+    },
+    "replicate/qwen/qwen-edit-multiangle": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/qwen/qwen-edit-multiangle"
+    },
+    "replicate/qwen/qwen-image": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.025,
+        "source": "https://replicate.com/qwen/qwen-image"
+    },
+    "replicate/qwen/qwen-image-2": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.035,
+        "source": "https://replicate.com/qwen/qwen-image-2"
+    },
+    "replicate/qwen/qwen-image-2-pro": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.075,
+        "source": "https://replicate.com/qwen/qwen-image-2-pro"
+    },
+    "replicate/qwen/qwen-image-2512": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.02,
+        "source": "https://replicate.com/qwen/qwen-image-2512"
+    },
+    "replicate/qwen/qwen-image-edit": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/qwen/qwen-image-edit"
+    },
+    "replicate/qwen/qwen-image-edit-2511": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/qwen/qwen-image-edit-2511"
+    },
+    "replicate/qwen/qwen-image-edit-plus": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/qwen/qwen-image-edit-plus"
+    },
+    "replicate/qwen/qwen-image-edit-plus-lora": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/qwen/qwen-image-edit-plus-lora"
+    },
+    "replicate/qwen/qwen3-7-plus": {
+        "input_cost_per_token": 2.76e-07,
+        "input_cost_per_token_above_256k_tokens": 8.26e-07,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 1.101e-06,
+        "output_cost_per_token_above_256k_tokens": 3.301e-06,
+        "source": "https://replicate.com/qwen/qwen3-7-plus",
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/qwen/qwen3-tts": {
+        "input_cost_per_character": 2e-05,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/qwen/qwen3-tts"
+    },
+    "replicate/recraft-ai/recraft-20b": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.022,
+        "source": "https://replicate.com/recraft-ai/recraft-20b"
+    },
+    "replicate/recraft-ai/recraft-20b-svg": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.044,
+        "source": "https://replicate.com/recraft-ai/recraft-20b-svg"
+    },
+    "replicate/recraft-ai/recraft-creative-upscale": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.3,
+        "source": "https://replicate.com/recraft-ai/recraft-creative-upscale"
+    },
+    "replicate/recraft-ai/recraft-crisp-upscale": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.006,
+        "source": "https://replicate.com/recraft-ai/recraft-crisp-upscale"
+    },
+    "replicate/recraft-ai/recraft-remove-background": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01,
+        "source": "https://replicate.com/recraft-ai/recraft-remove-background"
+    },
+    "replicate/recraft-ai/recraft-v3": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/recraft-ai/recraft-v3"
+    },
+    "replicate/recraft-ai/recraft-v3-svg": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.08,
+        "source": "https://replicate.com/recraft-ai/recraft-v3-svg"
+    },
+    "replicate/recraft-ai/recraft-v4": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/recraft-ai/recraft-v4"
+    },
+    "replicate/recraft-ai/recraft-v4-pro": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.25,
+        "source": "https://replicate.com/recraft-ai/recraft-v4-pro"
+    },
+    "replicate/recraft-ai/recraft-v4-pro-svg": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.3,
+        "source": "https://replicate.com/recraft-ai/recraft-v4-pro-svg"
+    },
+    "replicate/recraft-ai/recraft-v4-styles-pro": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.1,
+        "source": "https://replicate.com/recraft-ai/recraft-v4-styles-pro"
+    },
+    "replicate/recraft-ai/recraft-v4-styles-pro-svg": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.12,
+        "source": "https://replicate.com/recraft-ai/recraft-v4-styles-pro-svg"
+    },
+    "replicate/recraft-ai/recraft-v4-svg": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.08,
+        "source": "https://replicate.com/recraft-ai/recraft-v4-svg"
+    },
+    "replicate/recraft-ai/recraft-v4.1": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/recraft-ai/recraft-v4.1"
+    },
+    "replicate/recraft-ai/recraft-v4.1-pro": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.25,
+        "source": "https://replicate.com/recraft-ai/recraft-v4.1-pro"
+    },
+    "replicate/recraft-ai/recraft-v4.1-pro-svg": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.25,
+        "source": "https://replicate.com/recraft-ai/recraft-v4.1-pro-svg"
+    },
+    "replicate/recraft-ai/recraft-v4.1-svg": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/recraft-ai/recraft-v4.1-svg"
+    },
+    "replicate/recraft-ai/recraft-v4.1-utility": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/recraft-ai/recraft-v4.1-utility"
+    },
+    "replicate/recraft-ai/recraft-v4.1-utility-pro": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.25,
+        "source": "https://replicate.com/recraft-ai/recraft-v4.1-utility-pro"
+    },
+    "replicate/recraft-ai/recraft-vectorize": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01,
+        "source": "https://replicate.com/recraft-ai/recraft-vectorize"
+    },
+    "replicate/resemble-ai/chatterbox": {
+        "input_cost_per_character": 2.5e-05,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/resemble-ai/chatterbox"
+    },
+    "replicate/resemble-ai/chatterbox-pro": {
+        "input_cost_per_character": 4e-05,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/resemble-ai/chatterbox-pro"
+    },
+    "replicate/resemble-ai/chatterbox-turbo": {
+        "input_cost_per_character": 2.5e-05,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/resemble-ai/chatterbox-turbo"
+    },
+    "replicate/retro-diffusion/rd-animation": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.07,
+        "source": "https://replicate.com/retro-diffusion/rd-animation"
+    },
+    "replicate/runwayml/aleph-2": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.336,
+        "source": "https://replicate.com/runwayml/aleph-2"
+    },
+    "replicate/runwayml/gen-4.5": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.12,
+        "source": "https://replicate.com/runwayml/gen-4.5"
+    },
+    "replicate/runwayml/gen4-image-turbo": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/runwayml/gen4-image-turbo"
+    },
+    "replicate/runwayml/gen4-turbo": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "source": "https://replicate.com/runwayml/gen4-turbo"
+    },
+    "replicate/snowflake/snowflake-arctic-instruct": {
+        "input_cost_per_token": 2e-05,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2e-05,
+        "source": "https://replicate.com/snowflake/snowflake-arctic-instruct",
+        "supports_system_messages": true
+    },
+    "replicate/stability-ai/stable-diffusion-3": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.035,
+        "source": "https://replicate.com/stability-ai/stable-diffusion-3"
+    },
+    "replicate/stability-ai/stable-diffusion-3.5-large": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.065,
+        "source": "https://replicate.com/stability-ai/stable-diffusion-3.5-large"
+    },
+    "replicate/stability-ai/stable-diffusion-3.5-large-turbo": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/stability-ai/stable-diffusion-3.5-large-turbo"
+    },
+    "replicate/stability-ai/stable-diffusion-3.5-medium": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.035,
+        "source": "https://replicate.com/stability-ai/stable-diffusion-3.5-medium"
+    },
+    "replicate/sync/lipsync-2": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "source": "https://replicate.com/sync/lipsync-2"
+    },
+    "replicate/sync/lipsync-2-pro": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.08325,
+        "source": "https://replicate.com/sync/lipsync-2-pro"
+    },
+    "replicate/sync/react-1": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.167,
+        "source": "https://replicate.com/sync/react-1"
+    },
+    "replicate/tencent/hunyuan-image-2.1": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.02,
+        "source": "https://replicate.com/tencent/hunyuan-image-2.1"
+    },
+    "replicate/tencent/hunyuan-image-3": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.08,
+        "source": "https://replicate.com/tencent/hunyuan-image-3"
+    },
+    "replicate/veed/fabric-1.0": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.15,
+        "output_cost_per_second_480p": 0.08,
+        "output_cost_per_second_720p": 0.15,
+        "source": "https://replicate.com/veed/fabric-1.0"
+    },
+    "replicate/wan-video/wan-2.2-s2v": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.02,
+        "source": "https://replicate.com/wan-video/wan-2.2-s2v"
+    },
+    "replicate/wan-video/wan-2.5-i2v": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1,
+        "output_cost_per_second_1080p": 0.15,
+        "output_cost_per_second_480p": 0.05,
+        "output_cost_per_second_720p": 0.1,
+        "source": "https://replicate.com/wan-video/wan-2.5-i2v"
+    },
+    "replicate/wan-video/wan-2.5-i2v-fast": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.068,
+        "output_cost_per_second_1080p": 0.102,
+        "output_cost_per_second_720p": 0.068,
+        "source": "https://replicate.com/wan-video/wan-2.5-i2v-fast"
+    },
+    "replicate/wan-video/wan-2.5-t2v": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "output_cost_per_second_1080p": 0.15,
+        "output_cost_per_second_480p": 0.05,
+        "output_cost_per_second_720p": 0.1,
+        "source": "https://replicate.com/wan-video/wan-2.5-t2v"
+    },
+    "replicate/wan-video/wan-2.5-t2v-fast": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.068,
+        "output_cost_per_second_1080p": 0.102,
+        "output_cost_per_second_720p": 0.068,
+        "source": "https://replicate.com/wan-video/wan-2.5-t2v-fast"
+    },
+    "replicate/wan-video/wan-2.6-i2v": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1,
+        "output_cost_per_second_1080p": 0.15,
+        "output_cost_per_second_720p": 0.1,
+        "source": "https://replicate.com/wan-video/wan-2.6-i2v"
+    },
+    "replicate/wan-video/wan-2.6-t2v": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1,
+        "output_cost_per_second_1080p": 0.15,
+        "output_cost_per_second_720p": 0.1,
+        "source": "https://replicate.com/wan-video/wan-2.6-t2v"
+    },
+    "replicate/wan-video/wan-2.7-i2v": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.15,
+        "output_cost_per_second_1080p": 0.15,
+        "output_cost_per_second_720p": 0.1,
+        "source": "https://replicate.com/wan-video/wan-2.7-i2v"
+    },
+    "replicate/wan-video/wan-2.7-image": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/wan-video/wan-2.7-image"
+    },
+    "replicate/wan-video/wan-2.7-image-pro": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/wan-video/wan-2.7-image-pro"
+    },
+    "replicate/wan-video/wan-2.7-r2v": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1,
+        "source": "https://replicate.com/wan-video/wan-2.7-r2v"
+    },
+    "replicate/wan-video/wan-2.7-t2v": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1,
+        "source": "https://replicate.com/wan-video/wan-2.7-t2v"
+    },
+    "replicate/wan-video/wan-2.7-videoedit": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1,
+        "source": "https://replicate.com/wan-video/wan-2.7-videoedit"
+    },
+    "replicate/wan-video/wan2.6-i2v-flash": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "output_cost_per_second_1080p": 0.075,
+        "output_cost_per_second_720p": 0.05,
+        "source": "https://replicate.com/wan-video/wan2.6-i2v-flash"
+    },
+    "replicate/wavespeedai/qwen-image": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.025,
+        "source": "https://replicate.com/wavespeedai/qwen-image"
+    },
+    "replicate/wavespeedai/wan-2.1-i2v-480p": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.09,
+        "source": "https://replicate.com/wavespeedai/wan-2.1-i2v-480p"
+    },
+    "replicate/wavespeedai/wan-2.1-i2v-720p": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.25,
+        "source": "https://replicate.com/wavespeedai/wan-2.1-i2v-720p"
+    },
+    "replicate/wavespeedai/wan-2.1-t2v-480p": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.07,
+        "source": "https://replicate.com/wavespeedai/wan-2.1-t2v-480p"
+    },
+    "replicate/wavespeedai/wan-2.1-t2v-720p": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.24,
+        "source": "https://replicate.com/wavespeedai/wan-2.1-t2v-720p"
+    },
+    "replicate/xai/grok-imagine-image": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.02,
+        "source": "https://replicate.com/xai/grok-imagine-image"
+    },
+    "replicate/xai/grok-imagine-image-quality": {
+        "input_cost_per_pixel": 1e-08,
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.06,
+        "output_cost_per_image_1K": 0.04,
+        "output_cost_per_image_2K": 0.06,
+        "source": "https://replicate.com/xai/grok-imagine-image-quality"
+    },
+    "replicate/xai/grok-imagine-r2v": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "source": "https://replicate.com/xai/grok-imagine-r2v"
+    },
+    "replicate/xai/grok-imagine-video": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.07,
+        "output_cost_per_second_480p": 0.05,
+        "output_cost_per_second_720p": 0.07,
+        "source": "https://replicate.com/xai/grok-imagine-video"
+    },
+    "replicate/xai/grok-imagine-video-1.5": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.08,
+        "source": "https://replicate.com/xai/grok-imagine-video-1.5"
+    },
+    "replicate/xai/grok-imagine-video-extension": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "source": "https://replicate.com/xai/grok-imagine-video-extension"
+    },
+    "replicate/xai/grok-text-to-speech": {
+        "input_cost_per_character": 1.5e-05,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/xai/grok-text-to-speech"
+    },
     "fal_ai/blackforestlabs/flux-3/edit-image": {
         "litellm_provider": "fal_ai",
         "metadata": {"notes":"the page states only the 1K (1 MP) price of $0.048 and the pricing API bills in megapixels at $0.048, so the per-pixel rate is $0.048 per megapixel and the per-image price is the default 1k output; 768sq, 1.5k, 2k and 4k outputs are priced by the per-pixel rate"},
@@ -98032,5 +99955,877 @@
         "supported_output_modalities": [
             "video"
         ]
+    },
+    "databricks/databricks-claude-fable-5-2": {
+        "cache_creation_input_token_cost": 9.99999e-06,
+        "cache_creation_input_token_cost_above_1hr": 1.599997e-05,
+        "cache_read_input_token_cost": 1.9999e-07,
+        "input_cost_per_token": 8.00002e-06,
+        "input_dbu_cost_per_token": 0.000114286,
+        "litellm_provider": "databricks",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "metadata": {"notes":"Costs per token are the published Global DBU rates times $0.070 per DBU. The '*_dbu_cost_per_token' fields are provided for reference; cost calculation reads the dollar '*_cost_per_token' fields."},
+        "mode": "chat",
+        "output_cost_per_token": 4.000003e-05,
+        "output_dbu_cost_per_token": 0.000571429,
+        "prompt_cache_min_tokens": 512.0,
+        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
+        "supports_adaptive_thinking": true,
+        "supports_anthropic_thinking_payload": true,
+        "supports_assistant_prefill": false,
+        "supports_forced_tool_use": false,
+        "supports_function_calling": true,
+        "supports_mid_conversation_system": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_sampling_params": false,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "thinking_always_on": true
+    },
+    "databricks/system.ai.claude-fable-5-2": {
+        "cache_creation_input_token_cost": 9.99999e-06,
+        "cache_creation_input_token_cost_above_1hr": 1.599997e-05,
+        "cache_read_input_token_cost": 1.9999e-07,
+        "input_cost_per_token": 8.00002e-06,
+        "input_dbu_cost_per_token": 0.000114286,
+        "litellm_provider": "databricks",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "metadata": {"notes":"Claude Fable 5.2 on Databricks is served through Unity Gateway with the model service name system.ai.claude-fable-5-2, hosted through Amazon Bedrock. Costs per token are the published Global DBU rates times $0.070 per DBU. The '*_dbu_cost_per_token' fields are provided for reference; cost calculation reads the dollar '*_cost_per_token' fields."},
+        "mode": "chat",
+        "output_cost_per_token": 4.000003e-05,
+        "output_dbu_cost_per_token": 0.000571429,
+        "prompt_cache_min_tokens": 512.0,
+        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
+        "supports_adaptive_thinking": true,
+        "supports_anthropic_thinking_payload": true,
+        "supports_assistant_prefill": false,
+        "supports_forced_tool_use": false,
+        "supports_function_calling": true,
+        "supports_mid_conversation_system": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_sampling_params": false,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "thinking_always_on": true
+    },
+    "replicate/google/gemini-4-carbon": {
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "replicate",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65535,
+        "mode": "chat",
+        "output_cost_per_reasoning_token": 1e-05,
+        "output_cost_per_token": 1e-05,
+        "source": "https://replicate.com/google/gemini-4-carbon",
+        "supports_audio_input": true,
+        "supports_function_calling": false,
+        "supports_parallel_function_calling": false,
+        "supports_reasoning": true,
+        "supports_response_schema": false,
+        "supports_system_messages": true,
+        "supports_tool_choice": false,
+        "supports_video_input": true,
+        "supports_vision": true
+    },
+    "azure_ai/mistral-large-4-latest": {
+        "deprecation_date": "2027-10-27",
+        "deprecation_source": "https://management.azure.com/subscriptions/{subscriptionId}/providers/Microsoft.CognitiveServices/locations/eastus/models?api-version=2024-10-01",
+        "input_cost_per_token": 7e-07,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 2.1e-06,
+        "source": "https://docs.mistral.ai/models/mistral-large-4-0",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "fal_ai/fal-ai/recraft-20b": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"per image at the default realistic_image style, from the fal pricing API; vector styles cost 2x and have no catalog field; the fal.ai page for this id redirects to fal-ai/recraft/v2/text-to-image, which rounds the rate to $0.022"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.0219,
+        "source": "https://api.fal.ai/v1/models/pricing?endpoint_id=fal-ai/recraft-20b",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/fal-ai/stable-diffusion-v3-medium/image-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.035,
+        "source": "https://api.fal.ai/v1/models/pricing?endpoint_id=fal-ai/stable-diffusion-v3-medium/image-to-image",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/fal-ai/pixverse/lipsync": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of output video; when audio_url is not provided the text is spoken with TTS at $0.24 per 100 characters, which is not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.04,
+        "source": "https://fal.ai/models/fal-ai/pixverse/lipsync",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "bedrock_mantle/us-gov-east-1/openai.gpt-5.6-cyber": {
+        "cache_creation_input_token_cost": 2.109375e-05,
+        "cache_read_input_token_cost": 1.6875e-06,
+        "input_cost_per_token": 1.6875e-05,
+        "litellm_provider": "bedrock_mantle",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "mode": "responses",
+        "output_cost_per_token": 0.00010125,
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-cyber.html",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_prompt_cache_breakpoint": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": false,
+        "supports_xhigh_reasoning_effort": true,
+        "use_openai_responses_path": true
+    },
+    "fal_ai/fal-ai/kling-video/v2.6/pro/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video with the default generate_audio=true ($0.14); videos without audio are $0.07 per second and videos with audio and voice control are $0.168 per second, which have no catalog field"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.14,
+        "source": "https://fal.ai/models/fal-ai/kling-video/v2.6/pro/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/vidu/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second derived from the fixed 4s clip price of $0.20 per video"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "source": "https://fal.ai/models/fal-ai/vidu/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/vidu/start-end-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second derived from the fixed 4s clip price of $0.20 per video"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "source": "https://fal.ai/models/fal-ai/vidu/start-end-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/vidu/reference-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second derived from the fixed 4s clip price of $0.40 per video"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1,
+        "source": "https://fal.ai/models/fal-ai/vidu/reference-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/luma/agent/ray/v3.2/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second derived from the 5s clip prices by resolution ($0.15 at 540p, $0.30 at 720p, $1.20 at 1080p); output_cost_per_second is the default resolution 540p rate, which has no tier field; HDR ($0.60 at 720p, $2.40 at 1080p per 5s) and HDR+EXR ($0.90, $3.60) are not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.03,
+        "output_cost_per_second_1080p": 0.24,
+        "output_cost_per_second_720p": 0.06,
+        "source": "https://fal.ai/models/luma/agent/ray/v3.2/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/luma/agent/ray/v3.2/text-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second derived from the 5s and 10s clip prices by resolution ($0.50/$1.00 at 540p, $1.00/$2.00 at 720p, $2.00/$4.00 at 1080p); output_cost_per_second is the default resolution 540p rate, which has no tier field"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1,
+        "output_cost_per_second_1080p": 0.4,
+        "output_cost_per_second_720p": 0.2,
+        "source": "https://fal.ai/models/luma/agent/ray/v3.2/text-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/luma/agent/ray/v3.2/video-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second derived from the 5s and 10s clip prices by resolution ($0.72/$1.44 at 540p, $1.08/$2.16 at 720p, $2.16/$4.32 at 1080p); output_cost_per_second is the default resolution 540p rate, which has no tier field; HDR and HDR+EXR prices are not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.144,
+        "output_cost_per_second_1080p": 0.432,
+        "output_cost_per_second_720p": 0.216,
+        "source": "https://fal.ai/models/luma/agent/ray/v3.2/video-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/pixverse/v6/max/text-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video by resolution without audio (the default generate_audio_switch=false); output_cost_per_second is the default resolution 720p rate; 360p $0.054 and 540p $0.081 have no catalog field; with audio the rates are $0.081/$0.099/$0.135/$0.252 per second, which is not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.099,
+        "output_cost_per_second_1080p": 0.198,
+        "output_cost_per_second_720p": 0.099,
+        "source": "https://fal.ai/models/pixverse/v6/max/text-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/pixverse/v6/max/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video by resolution without audio (the default generate_audio_switch=false); output_cost_per_second is the default resolution 720p rate; 360p $0.054 and 540p $0.081 have no catalog field; with audio the rates are $0.081/$0.099/$0.135/$0.252 per second, which is not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.099,
+        "output_cost_per_second_1080p": 0.198,
+        "output_cost_per_second_720p": 0.099,
+        "source": "https://fal.ai/models/pixverse/v6/max/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/flux-2-pro": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per image for the default 1 MP output; fal bills $0.03 for the first output megapixel plus $0.015 per additional input or output megapixel, rounded up, which is not modeled"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://fal.ai/models/fal-ai/flux-2-pro",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/fal-ai/flux-2-pro/edit": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per image for the default 1 MP output; fal bills $0.03 for the first output megapixel plus $0.015 per additional input or output megapixel, rounded up, which is not modeled"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://fal.ai/models/fal-ai/flux-2-pro/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/fal-ai/flux-2-pro/outpaint": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per image for the default 1 MP output; fal bills $0.03 for the first output megapixel plus $0.015 per additional input or output megapixel, rounded up, which is not modeled"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://fal.ai/models/fal-ai/flux-2-pro/outpaint",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/fal-ai/flux-2-max": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per image for the default 1 MP output; fal bills $0.07 for the first processed megapixel plus $0.03 per additional megapixel, which is not modeled"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.07,
+        "source": "https://fal.ai/models/fal-ai/flux-2-max",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/fal-ai/flux-2-max/edit": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per image for the default 1 MP output; fal bills $0.07 for the first processed megapixel plus $0.03 per additional megapixel, which is not modeled"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.07,
+        "source": "https://fal.ai/models/fal-ai/flux-2-max/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/fal-ai/flux-pro/v1/erase": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per image for the first generated megapixel; fal bills $0.004 for each subsequent generated megapixel and $0.004 per reference megapixel with a 3 MP minimum, which is not modeled"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://fal.ai/models/fal-ai/flux-pro/v1/erase",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/fal-ai/smart-resize": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per single-image request at standard resolution: $0.15 per output image plus the $0.05 minimum vision analysis fee per request; additional output images in one request ($0.15 each) and 4K outputs (charged double) are not modeled"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.2,
+        "source": "https://fal.ai/models/fal-ai/smart-resize",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/bytedance/seedream/v5/pro/layerize": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per generated layer for total pixel area under 1536x1536; layers for a base image over 1536x1536 are $0.0675 each, which has no catalog field"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03375,
+        "source": "https://fal.ai/models/bytedance/seedream/v5/pro/layerize",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/luma/agent/uni-1/v1/edit": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per edit with one source image ($0.042 per edit plus $0.003 per reference or source image); each additional reference image adds $0.003, which is not modeled"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.045,
+        "source": "https://fal.ai/models/luma/agent/uni-1/v1/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/luma/agent/uni-1/v1/max/edit": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per edit with one source image ($0.102 per edit plus $0.003 per reference or source image); each additional reference image adds $0.003, which is not modeled"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.105,
+        "source": "https://fal.ai/models/luma/agent/uni-1/v1/max/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "databricks/databricks-gemini-4-carbon": {
+        "cache_creation_input_token_cost": 2e-06,
+        "cache_read_input_token_cost": 2e-06,
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "databricks",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "metadata": {"notes":"Gemini 4 Carbon on Databricks is available only through Unity Gateway with the model service name system.ai.gemini-4-carbon on a global endpoint. The Databricks pricing pages list no row for it yet, so input and output are the Global rates on the Vertex AI pricing page for Gemini 4 Carbon (listed there through November 30, 2026), no '*_dbu_cost_per_token' fields are published, and cache tokens bill at the input rate until Databricks publishes cache DBU rates."},
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "source": "https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models",
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true,
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_video_input": true,
+        "supports_vision": true
+    },
+    "databricks/system.ai.gemini-4-carbon": {
+        "cache_creation_input_token_cost": 2e-06,
+        "cache_read_input_token_cost": 2e-06,
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "databricks",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "metadata": {"notes":"Gemini 4 Carbon on Databricks is available only through Unity Gateway with the model service name system.ai.gemini-4-carbon on a global endpoint. The Databricks pricing pages list no row for it yet, so input and output are the Global rates on the Vertex AI pricing page for Gemini 4 Carbon (listed there through November 30, 2026), no '*_dbu_cost_per_token' fields are published, and cache tokens bill at the input rate until Databricks publishes cache DBU rates."},
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "source": "https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models",
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true,
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_video_input": true,
+        "supports_vision": true
+    },
+    "runwayml/kling2.5_turbo_pro": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"12 credits per second @ $0.01 per credit = $0.12 per second"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.12,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "runwayml/kling3.0_standard": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"13 credits per second with audio, 9 without @ $0.01 per credit; priced at the with-audio rate (audio defaults to true)"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.13,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "runwayml/kling3.0_pro": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"17 credits per second with audio, 12 without @ $0.01 per credit; priced at the with-audio rate (audio defaults to true)"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.17,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "runwayml/kling3.0_4k": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"43 credits per second @ $0.01 per credit = $0.43 per second, with or without audio"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.43,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "runwayml/klingO3_standard": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"13 credits per second @ $0.01 per credit = $0.13 per second; video-to-video is billed per second of the input video, not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.13,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "runwayml/klingO3_pro": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"17 credits per second @ $0.01 per credit = $0.17 per second; video-to-video is billed per second of the input video, not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.17,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "runwayml/klingO3_4k": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"43 credits per second @ $0.01 per credit = $0.43 per second; video-to-video is billed per second of the input video, not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.43,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "runwayml/kling_4_flash": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"9.4 credits per second (720p) without input video @ $0.01 per credit = $0.094 per second; the with-input-video rate (6.3 credits per output second plus 6.3 per second of the greater of input and output duration), rounding up to the next credit and the 29 credit minimum are not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.094,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "runwayml/wan3": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"5/10/20 credits per second at 480p/720p/1080p @ $0.01 per credit"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1,
+        "output_cost_per_second_1080p": 0.2,
+        "output_cost_per_second_480p": 0.05,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "runwayml/wan3_prime": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"6.8/14/28 credits per second at 480p/720p/1080p @ $0.01 per credit"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.14,
+        "output_cost_per_second_1080p": 0.28,
+        "output_cost_per_second_480p": 0.068,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "runwayml/grok_imagine_1_5": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"10/16/29 credits per second at 480p/720p/1080p @ $0.01 per credit; 1 credit per image or audio reference not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.16,
+        "output_cost_per_second_1080p": 0.29,
+        "output_cost_per_second_480p": 0.1,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "runwayml/grok_imagine_1_5_lite": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"2/3/14 credits per second at 480p/720p/1080p @ $0.01 per credit; 1 credit for an image-to-video start frame not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.03,
+        "output_cost_per_second_1080p": 0.14,
+        "output_cost_per_second_480p": 0.02,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "runwayml/h3_max": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"8 credits per second at 768p, 5 at 480p @ $0.01 per credit"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.08,
+        "output_cost_per_second_480p": 0.05,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "runwayml/happyhorse_1_0": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"15 credits per second at 720p, 30 at 1080p @ $0.01 per credit"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.15,
+        "output_cost_per_second_1080p": 0.3,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "runwayml/gemini_omni_flash_1.2": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"7/10/21 credits per second at 720p/1080p/4K @ $0.01 per credit; the 360p rate (2 credits per second), 1 credit per reference image or keyframe, 1 credit per second of input video and the 6 credit minimum per request are not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.07,
+        "output_cost_per_second_1080p": 0.1,
+        "output_cost_per_second_4k": 0.21,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "runwayml/gemini_omni_flash_1.1": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"10/15/30 credits per second at 720p/1080p/4K @ $0.01 per credit; the 360p rate (3.4 credits per second), 1 credit per reference image and 1 credit per second of input video are not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1,
+        "output_cost_per_second_1080p": 0.15,
+        "output_cost_per_second_4k": 0.3,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "runwayml/muse_image": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"1 credit per image (any resolution) @ $0.01 per credit = $0.01 per image"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "image"
+        ]
+    },
+    "runwayml/seedream5_lite": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"4 credits per image (any resolution) @ $0.01 per credit = $0.04 per image"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "image"
+        ]
+    },
+    "runwayml/seedream5_flash": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"2 credits per image (any resolution) @ $0.01 per credit = $0.02 per image"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.02,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "image"
+        ]
+    },
+    "runwayml/gemini_image3.1_flash_lite": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"4 credits per 1K image @ $0.01 per credit = $0.04 per image"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "image"
+        ]
+    },
+    "runwayml/bria_fibo_edit_1_5": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"5 credits per image @ $0.01 per credit = $0.05 per image"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.05,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "image"
+        ]
+    },
+    "runwayml/gemini_2.5_flash": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"5 credits per image (any resolution) @ $0.01 per credit = $0.05 per image"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.05,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "image"
+        ]
+    },
+    "runwayml/eleven_v3": {
+        "input_cost_per_character": 0.0002,
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"1 credit per 50 characters @ $0.01 per credit = $0.0002 per character; 1 credit minimum not modeled"},
+        "mode": "audio_speech",
+        "source": "https://docs.dev.runwayml.com/guides/pricing/"
+    },
+    "runwayml/eleven_v4": {
+        "input_cost_per_character": 5e-05,
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"5 credits per 1,000 characters @ $0.01 per credit = $0.00005 per character; 1 credit minimum not modeled"},
+        "mode": "audio_speech",
+        "source": "https://docs.dev.runwayml.com/guides/pricing/"
+    },
+    "gemini/gemini-decision-1": {
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "gemini",
+        "max_input_tokens": 262144,
+        "mode": "decisions",
+        "output_cost_per_token": 0.0,
+        "rpm": 1500,
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
+        "supported_endpoints": [
+            "/v1/decisions"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": false,
+        "supports_computer_use": false,
+        "supports_function_calling": false,
+        "supports_parallel_function_calling": false,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": false,
+        "supports_reasoning": false,
+        "supports_response_schema": false,
+        "supports_tool_choice": false,
+        "supports_url_context": false,
+        "supports_video_input": true,
+        "supports_vision": true,
+        "supports_web_search": false,
+        "tpm": 1000000
     }
 }
