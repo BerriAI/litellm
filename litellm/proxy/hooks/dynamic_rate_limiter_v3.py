@@ -45,7 +45,7 @@ from litellm.proxy.hooks.rate_limiter_utils import (
     convert_priority_to_percent,
     resolve_llm_provider_for_rate_limit,
 )
-from litellm.proxy.utils import InternalUsageCache
+from litellm.proxy.utils import InternalUsageCache, check_and_merge_model_level_guardrails
 from litellm.redis.stores.rate_limits import RATE_LIMITS_TARGET, CounterIncrement, RateLimitCounter, RateLimitScope
 from litellm.types.router import ModelGroupInfo
 from litellm.types.utils import CallTypesLiteral, LLMResponseTypes, Usage
@@ -75,10 +75,11 @@ class SteeredModel:
 
 
 async def caller_may_use_model(user_api_key_dict: UserAPIKeyAuth, model: str) -> bool:
-    """The key, team, team member and project allowlists plus the key's per-model budget, as a budget fallback passes."""
+    """The key, team, member and project allowlists plus every model budget layer, as a budget fallback passes."""
     from litellm.proxy.auth.auth_checks import get_project_object, get_team_membership
     from litellm.proxy.auth.user_api_key_auth import (
         _is_fallback_model_authorized,  # pyright: ignore[reportPrivateUsage]  # steering shares the fallback contract
+        _is_within_every_model_budget,  # pyright: ignore[reportPrivateUsage]  # steering shares the fallback contract
     )
     from litellm.proxy.proxy_server import (
         llm_model_list,  # pyright: ignore[reportUnknownVariableType]  # proxy global has untyped deployment entries
@@ -126,11 +127,9 @@ async def caller_may_use_model(user_api_key_dict: UserAPIKeyAuth, model: str) ->
         project_object=project_object,
     ):
         return False
-    try:
-        await model_max_budget_limiter.is_key_within_model_budget(user_api_key_dict=user_api_key_dict, model=model)
-    except litellm.BudgetExceededError:
-        return False
-    return True
+    return await _is_within_every_model_budget(
+        valid_token=user_api_key_dict, model_max_budget_limiter=model_max_budget_limiter, model=model
+    )
 
 
 def alternates_for(user_api_key_dict: UserAPIKeyAuth, model: str) -> tuple[str, ...]:
@@ -853,7 +852,6 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         model: Final = data["model"]
         if not isinstance(model, str):
             return None
-        priority: Final = self._get_priority_from_user_api_key_dict(user_api_key_dict=user_api_key_dict)
 
         # Get model configuration
         requested_group_info: Final[ModelGroupInfo | None] = self.llm_router.registry().group(model)
@@ -862,33 +860,10 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             return None
 
         steered: Final = await self._steer_to_alternate(model, requested_group_info, user_api_key_dict)
-        served_model: Final = model if steered is None else steered.model
-        model_group_info: Final = requested_group_info if steered is None else steered.group_info
-
         try:
-            # STEP 1: Check current saturation level
-            saturation: Final = await self._check_model_saturation(served_model, model_group_info)
-
-            saturation_threshold: Final = _get_priority_settings().saturation_threshold
-
-            verbose_proxy_logger.debug(
-                f"[Dynamic Rate Limiter] Model={model}, Saturation={saturation:.1%}, "
-                f"Threshold={saturation_threshold:.1%}, Priority={priority}"
+            admitted: Final = await self._admit_steered_or_preferred(
+                model, requested_group_info, steered, user_api_key_dict
             )
-
-            # STEP 2: Check rate limits in THREE phases
-            # Phase 1: Read-only check of ALL limits (no increments)
-            # Phase 2: Decide which limits to enforce (based on saturation)
-            # Phase 3: Increment ALL counters only if request will be allowed
-            # This prevents partial increments and ensures accurate tracking
-            await self._check_rate_limits(
-                model=served_model,
-                model_group_info=model_group_info,
-                user_api_key_dict=user_api_key_dict,
-                priority=priority,
-                saturation=saturation,
-            )
-
         except HTTPException:
             raise
         except Exception as e:
@@ -896,10 +871,49 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             # Fail open on unexpected errors
             return None
 
-        if steered is None:
+        if admitted is None:
             return None
         get_or_create_request_stash().steered_from_model = model
-        return dict(data, model=served_model)
+        return check_and_merge_model_level_guardrails(
+            data=dict(data, model=admitted), llm_router=self.llm_router, trust_client_model_info=False
+        )
+
+    async def _admit_steered_or_preferred(
+        self,
+        model: str,
+        requested_group_info: ModelGroupInfo,
+        steered: "SteeredModel | None",
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> str | None:
+        """The alternate's name once it admits the request, else None after the preferred model's own check."""
+        if steered is not None:
+            try:
+                await self._admit(steered.model, steered.group_info, user_api_key_dict)
+            except HTTPException:
+                verbose_proxy_logger.info(
+                    "Alternate %s refused team %s, staying on %s", steered.model, user_api_key_dict.team_id, model
+                )
+            else:
+                return steered.model
+        await self._admit(model, requested_group_info, user_api_key_dict)
+        return None
+
+    async def _admit(self, model: str, model_group_info: ModelGroupInfo, user_api_key_dict: UserAPIKeyAuth) -> None:
+        """Read saturation, then the three-phase rate limit check, raising the 429 when ``model`` is out of capacity."""
+        priority: Final = self._get_priority_from_user_api_key_dict(user_api_key_dict=user_api_key_dict)
+        saturation: Final = await self._check_model_saturation(model, model_group_info)
+        saturation_threshold: Final = _get_priority_settings().saturation_threshold
+        verbose_proxy_logger.debug(
+            f"[Dynamic Rate Limiter] Model={model}, Saturation={saturation:.1%}, "
+            f"Threshold={saturation_threshold:.1%}, Priority={priority}"
+        )
+        await self._check_rate_limits(
+            model=model,
+            model_group_info=model_group_info,
+            user_api_key_dict=user_api_key_dict,
+            priority=priority,
+            saturation=saturation,
+        )
 
     async def _steer_to_alternate(
         self, model: str, model_group_info: ModelGroupInfo, user_api_key_dict: UserAPIKeyAuth
