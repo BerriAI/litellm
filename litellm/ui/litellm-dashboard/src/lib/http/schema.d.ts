@@ -9584,6 +9584,206 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/customer_members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Customer Members
+         * @description List customer members with page-number pagination and resolved budgets. Proxy admins only.
+         */
+        get: operations["list_customer_members_management_v1_customer_members_get"];
+        put?: never;
+        /**
+         * Create Customer Member
+         * @description Create a customer member with resolved budgets. Proxy admins only.
+         */
+        post: operations["create_customer_member_management_v1_customer_members_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/customer_members/{customer_member_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Customer Member
+         * @description Get a customer member with resolved budgets. Proxy admins only.
+         */
+        get: operations["get_customer_member_management_v1_customer_members__customer_member_id__get"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete Customer Member
+         * @description Delete a customer member and its owned budgets. Parents with children return 409. Proxy admins only.
+         */
+        delete: operations["delete_customer_member_management_v1_customer_members__customer_member_id__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Update Customer Member
+         * @description Update a customer member and its budgets. Proxy admins only.
+         */
+        patch: operations["update_customer_member_management_v1_customer_members__customer_member_id__patch"];
+        trace?: never;
+    };
+    "/management/v1/customer_organizations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Customer Organizations
+         * @description List customer organizations with page-number pagination and resolved budgets. Proxy admins only.
+         */
+        get: operations["list_customer_organizations_management_v1_customer_organizations_get"];
+        put?: never;
+        /**
+         * Create Customer Organization
+         * @description Create a customer organization with resolved budgets. Proxy admins only.
+         */
+        post: operations["create_customer_organization_management_v1_customer_organizations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/customer_organizations/{customer_org_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Customer Organization
+         * @description Get a customer organization with resolved budgets. Proxy admins only.
+         */
+        get: operations["get_customer_organization_management_v1_customer_organizations__customer_org_id__get"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete Customer Organization
+         * @description Delete a customer organization and its owned budgets. Parents with children return 409. Proxy admins only.
+         */
+        delete: operations["delete_customer_organization_management_v1_customer_organizations__customer_org_id__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Update Customer Organization
+         * @description Update a customer organization alias or overall budget. Proxy admins only.
+         */
+        patch: operations["update_customer_organization_management_v1_customer_organizations__customer_org_id__patch"];
+        trace?: never;
+    };
+    "/management/v1/customer_organizations/{customer_org_id}/default_budgets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add Customer Budget Template
+         * @description Add a named budget template to a customer organization. Proxy admins only.
+         */
+        post: operations["add_customer_budget_template_management_v1_customer_organizations__customer_org_id__default_budgets_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/customer_organizations/{customer_org_id}/default_budgets/{budget_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Customer Budget Template
+         * @description Delete an unreferenced, non-default customer budget template. Proxy admins only.
+         */
+        delete: operations["delete_customer_budget_template_management_v1_customer_organizations__customer_org_id__default_budgets__budget_id__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Update Customer Budget Template
+         * @description Edit a budget template in place. Members inherit the updated values. Proxy admins only.
+         */
+        patch: operations["update_customer_budget_template_management_v1_customer_organizations__customer_org_id__default_budgets__budget_id__patch"];
+        trace?: never;
+    };
+    "/management/v1/customer_teams": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Customer Teams
+         * @description List customer teams with page-number pagination and resolved budgets. Proxy admins only.
+         */
+        get: operations["list_customer_teams_management_v1_customer_teams_get"];
+        put?: never;
+        /**
+         * Create Customer Team
+         * @description Create a customer team with resolved budgets. Proxy admins only.
+         */
+        post: operations["create_customer_team_management_v1_customer_teams_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/customer_teams/{customer_team_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Customer Team
+         * @description Get a customer team with resolved budgets. Proxy admins only.
+         */
+        get: operations["get_customer_team_management_v1_customer_teams__customer_team_id__get"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete Customer Team
+         * @description Delete a customer team and its owned budgets. Parents with children return 409. Proxy admins only.
+         */
+        delete: operations["delete_customer_team_management_v1_customer_teams__customer_team_id__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Update Customer Team
+         * @description Update a customer team and its budgets. Proxy admins only.
+         */
+        patch: operations["update_customer_team_management_v1_customer_teams__customer_team_id__patch"];
+        trace?: never;
+    };
     "/management/v1/spend_logs/end_users": {
         parameters: {
             query?: never;
@@ -29158,6 +29358,21 @@ export interface components {
                 [key: string]: components["schemas"]["MetricWithMetadata"];
             } | null;
         };
+        /** Budget */
+        Budget: {
+            /** Allowed Models */
+            allowed_models?: string[] | null;
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /** Soft Budget */
+            soft_budget?: number | null;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
+        };
         /** BudgetConfig */
         BudgetConfig: {
             /** Budget Duration */
@@ -29295,6 +29510,28 @@ export interface components {
         BudgetRequest: {
             /** Budgets */
             budgets: string[];
+        };
+        /** BudgetTemplate */
+        BudgetTemplate: {
+            /** Allowed Models */
+            allowed_models?: string[] | null;
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /**
+             * Is Default
+             * @default false
+             */
+            is_default: boolean;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Name */
+            name: string;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /** Soft Budget */
+            soft_budget?: number | null;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
         };
         /**
          * BulkDeleteUserRequest
@@ -32811,6 +33048,44 @@ export interface components {
              */
             type: "custom";
         };
+        /** CustomerMember */
+        CustomerMember: {
+            /** Alias */
+            alias?: string | null;
+            /** Budget Id */
+            budget_id?: string | null;
+            budget_override?: components["schemas"]["Budget"] | null;
+            /** Budget Override Expires At */
+            budget_override_expires_at?: string | null;
+            /** Budget Reset At */
+            budget_reset_at?: string | null;
+            /** Budget Template Id */
+            budget_template_id?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /** Customer Member Id */
+            customer_member_id: string;
+            effective_budget: components["schemas"]["Budget"];
+            /** Parent Team Id */
+            parent_team_id: string;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Updated By */
+            updated_by: string;
+        };
         /**
          * CustomerResponse
          * @description Customer object returned by the /customer read+write endpoints.
@@ -35840,10 +36115,31 @@ export interface components {
             links: components["schemas"]["ListLinks"];
             meta: components["schemas"]["ListMeta"];
         };
+        /** ListResponse[CustomerMember] */
+        ListResponse_CustomerMember_: {
+            /** Data */
+            data: components["schemas"]["CustomerMember"][];
+            links: components["schemas"]["ListLinks"];
+            meta: components["schemas"]["ListMeta"];
+        };
         /** ListResponse[ModelGroupInfoProxy] */
         ListResponse_ModelGroupInfoProxy_: {
             /** Data */
             data: components["schemas"]["ModelGroupInfoProxy"][];
+            links: components["schemas"]["ListLinks"];
+            meta: components["schemas"]["ListMeta"];
+        };
+        /** ListResponse[Organization] */
+        ListResponse_Organization_: {
+            /** Data */
+            data: components["schemas"]["Organization"][];
+            links: components["schemas"]["ListLinks"];
+            meta: components["schemas"]["ListMeta"];
+        };
+        /** ListResponse[Team] */
+        ListResponse_Team_: {
+            /** Data */
+            data: components["schemas"]["Team"][];
             links: components["schemas"]["ListLinks"];
             meta: components["schemas"]["ListMeta"];
         };
@@ -40023,6 +40319,30 @@ export interface components {
              */
             user_id?: string | null;
         };
+        /** MemberCreate */
+        MemberCreate: {
+            /** Alias */
+            alias?: string | null;
+            budget_override?: components["schemas"]["Budget"] | null;
+            /** Budget Override Expires At */
+            budget_override_expires_at?: string | null;
+            /** Budget Template Id */
+            budget_template_id?: string | null;
+            /** Customer Member Id */
+            customer_member_id?: string | null;
+            /** Parent Team Id */
+            parent_team_id: string;
+        };
+        /** MemberPatch */
+        MemberPatch: {
+            /** Alias */
+            alias?: string | null;
+            budget_override?: components["schemas"]["Budget"] | null;
+            /** Budget Override Expires At */
+            budget_override_expires_at?: string | null;
+            /** Budget Template Id */
+            budget_template_id?: string | null;
+        };
         /** MemoryCreateRequest */
         MemoryCreateRequest: {
             /**
@@ -41885,6 +42205,44 @@ export interface components {
              */
             user_id?: string | null;
         };
+        /** Organization */
+        Organization: {
+            /** Alias */
+            alias?: string | null;
+            budget?: components["schemas"]["Budget"] | null;
+            /** Budget Id */
+            budget_id?: string | null;
+            /** Budget Reset At */
+            budget_reset_at?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /** Customer Org Id */
+            customer_org_id: string;
+            /** Default Budget Id */
+            default_budget_id?: string | null;
+            /**
+             * Default Budgets
+             * @default []
+             */
+            default_budgets: components["schemas"]["OrganizationBudget"][];
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Updated By */
+            updated_by: string;
+        };
         /** OrganizationAddMemberResponse */
         OrganizationAddMemberResponse: {
             /** Organization Id */
@@ -41893,6 +42251,43 @@ export interface components {
             updated_organization_memberships: components["schemas"]["LiteLLM_OrganizationMembershipTable"][];
             /** Updated Users */
             updated_users: components["schemas"]["LiteLLM_UserTable"][];
+        };
+        /** OrganizationBudget */
+        OrganizationBudget: {
+            /** Allowed Models */
+            allowed_models?: string[] | null;
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Budget Id */
+            budget_id: string;
+            /**
+             * Is Default
+             * @default false
+             */
+            is_default: boolean;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Name */
+            name: string;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /** Soft Budget */
+            soft_budget?: number | null;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
+        };
+        /** OrganizationCreate */
+        OrganizationCreate: {
+            /** Alias */
+            alias?: string | null;
+            budget?: components["schemas"]["Budget"] | null;
+            /** Customer Org Id */
+            customer_org_id?: string | null;
+            /**
+             * Default Budgets
+             * @default []
+             */
+            default_budgets: components["schemas"]["BudgetTemplate"][];
         };
         /** OrganizationMemberAddRequest */
         OrganizationMemberAddRequest: {
@@ -41923,6 +42318,12 @@ export interface components {
             user_email?: string | null;
             /** User Id */
             user_id?: string | null;
+        };
+        /** OrganizationPatch */
+        OrganizationPatch: {
+            /** Alias */
+            alias?: string | null;
+            budget?: components["schemas"]["Budget"] | null;
         };
         /** OrganizationRequest */
         OrganizationRequest: {
@@ -48731,6 +49132,39 @@ export interface components {
             /** Tpm Limit */
             tpm_limit?: number | null;
         };
+        /** Team */
+        Team: {
+            /** Alias */
+            alias?: string | null;
+            budget?: components["schemas"]["Budget"] | null;
+            /** Budget Id */
+            budget_id?: string | null;
+            /** Budget Reset At */
+            budget_reset_at?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /** Customer Team Id */
+            customer_team_id: string;
+            /** Parent Org Id */
+            parent_org_id: string;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Updated By */
+            updated_by: string;
+        };
         /** TeamAddMemberResponse */
         TeamAddMemberResponse: {
             /** Access Group Ids */
@@ -48853,6 +49287,16 @@ export interface components {
             success_callbacks: string[];
             /** Team Id */
             team_id: string;
+        };
+        /** TeamCreate */
+        TeamCreate: {
+            /** Alias */
+            alias?: string | null;
+            budget?: components["schemas"]["Budget"] | null;
+            /** Customer Team Id */
+            customer_team_id?: string | null;
+            /** Parent Org Id */
+            parent_org_id: string;
         };
         /**
          * TeamListCallerMembership
@@ -49333,6 +49777,12 @@ export interface components {
             /** Team Id */
             team_id: string;
         };
+        /** TeamPatch */
+        TeamPatch: {
+            /** Alias */
+            alias?: string | null;
+            budget?: components["schemas"]["Budget"] | null;
+        };
         /** TeamUserSpendResponse */
         TeamUserSpendResponse: {
             /** End Date */
@@ -49454,6 +49904,25 @@ export interface components {
             destination?: components["schemas"]["TelemetryDestination"] | null;
             /** Groups */
             groups: string[];
+        };
+        /** TemplatePatch */
+        TemplatePatch: {
+            /** Allowed Models */
+            allowed_models?: string[] | null;
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Is Default */
+            is_default?: boolean | null;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Name */
+            name?: string | null;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /** Soft Budget */
+            soft_budget?: number | null;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
         };
         /**
          * TestCustomCodeGuardrailRequest
@@ -67529,6 +67998,589 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ListResponse_BudgetListItem_"];
+                };
+            };
+        };
+    };
+    list_customer_members_management_v1_customer_members_get: {
+        parameters: {
+            query?: {
+                page?: number;
+                page_size?: number;
+                parent_team_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListResponse_CustomerMember_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_customer_member_management_v1_customer_members_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MemberCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomerMember"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_customer_member_management_v1_customer_members__customer_member_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                customer_member_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomerMember"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_customer_member_management_v1_customer_members__customer_member_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                customer_member_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_customer_member_management_v1_customer_members__customer_member_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                customer_member_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MemberPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomerMember"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_customer_organizations_management_v1_customer_organizations_get: {
+        parameters: {
+            query?: {
+                page?: number;
+                page_size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListResponse_Organization_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_customer_organization_management_v1_customer_organizations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrganizationCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Organization"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_customer_organization_management_v1_customer_organizations__customer_org_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                customer_org_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Organization"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_customer_organization_management_v1_customer_organizations__customer_org_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                customer_org_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_customer_organization_management_v1_customer_organizations__customer_org_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                customer_org_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrganizationPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Organization"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    add_customer_budget_template_management_v1_customer_organizations__customer_org_id__default_budgets_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                customer_org_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetTemplate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Organization"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_customer_budget_template_management_v1_customer_organizations__customer_org_id__default_budgets__budget_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                customer_org_id: string;
+                budget_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_customer_budget_template_management_v1_customer_organizations__customer_org_id__default_budgets__budget_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                customer_org_id: string;
+                budget_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TemplatePatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Organization"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_customer_teams_management_v1_customer_teams_get: {
+        parameters: {
+            query?: {
+                page?: number;
+                page_size?: number;
+                parent_org_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListResponse_Team_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_customer_team_management_v1_customer_teams_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TeamCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Team"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_customer_team_management_v1_customer_teams__customer_team_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                customer_team_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Team"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_customer_team_management_v1_customer_teams__customer_team_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                customer_team_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_customer_team_management_v1_customer_teams__customer_team_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                customer_team_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TeamPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Team"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
