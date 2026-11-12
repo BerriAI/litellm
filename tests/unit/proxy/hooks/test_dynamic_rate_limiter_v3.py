@@ -1858,6 +1858,14 @@ def _borrowing_handler(
                 "model_name": "other-model",
                 "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "k", "api_base": "b", "tpm": 1000, "rpm": 100},
             },
+            {
+                "model_name": "chat",
+                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "k", "api_base": "b", "tpm": 1000, "rpm": 100},
+            },
+            {
+                "model_name": "chat:prod",
+                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "k", "api_base": "b", "tpm": 1000, "rpm": 100},
+            },
         ],
         model_group_alias=model_group_alias or {},
     )
@@ -2102,11 +2110,17 @@ def _class_team(team_id: str, priority: str | None = "interactive") -> UserAPIKe
     return UserAPIKeyAuth(api_key="sk-class", team_id=team_id, team_metadata={}, metadata={"priority": priority})
 
 
-async def _burn(handler: _PROXY_DynamicRateLimitHandlerV3, auth: UserAPIKeyAuth, priority: str | None, tokens: int):
-    await _check(handler, auth, saturation=0.0, priority=priority)
+async def _burn(
+    handler: _PROXY_DynamicRateLimitHandlerV3,
+    auth: UserAPIKeyAuth,
+    priority: str | None,
+    tokens: int,
+    model: str = "shared-model",
+):
+    await _check(handler, auth, saturation=0.0, priority=priority, model=model)
     await handler.async_log_success_event(
         kwargs={
-            "litellm_params": {"metadata": {"model_group": "shared-model"}},
+            "litellm_params": {"metadata": {"model_group": model}},
             "standard_logging_object": {
                 "metadata": {
                     "user_api_key_team_id": auth.team_id,
@@ -2328,3 +2342,32 @@ async def test_a_team_id_containing_the_registry_separator_is_still_held_to_its_
     with pytest.raises(ProxyRateLimitError) as exc:
         await _check(handler, _class_team("owned\x1fextra", "batch"), saturation=0.6, priority="batch")
     _held_to_class_share(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_a_team_share_is_not_shrunk_by_teamless_traffic_in_its_class(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=False, splits=True)
+    no_team: Final = UserAPIKeyAuth(api_key="sk-plain", metadata={"priority": "interactive"})
+    await _burn(handler, no_team, "interactive", 20)
+    await _burn(handler, _class_team("team-a"), "interactive", 900)
+    await _check(handler, _class_team("team-a"), saturation=0.92, priority="interactive")
+
+
+@pytest.mark.asyncio
+async def test_teamless_traffic_in_two_classes_keeps_both_classes_present(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=False, splits=True)
+    await _burn(handler, UserAPIKeyAuth(api_key="sk-i", metadata={"priority": "interactive"}), "interactive", 20)
+    await _burn(handler, UserAPIKeyAuth(api_key="sk-b", metadata={"priority": "batch"}), "batch", 20)
+    await _burn(handler, _class_team("team-c", "batch"), "batch", 450)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _class_team("team-c", "batch"), saturation=0.6, priority="batch")
+    _held_to_class_share(exc.value)
+    assert "Team share: 400, Remaining: 0," in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_team_counters_do_not_collide_across_models_whose_names_share_a_colon(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=False, splits=True)
+    await _burn(handler, _class_team("prod:victim"), "interactive", 600, model="chat")
+    await _burn(handler, _class_team("team-x"), "interactive", 20, model="chat:prod")
+    await _check(handler, _class_team("victim"), saturation=0.6, priority="interactive", model="chat:prod")

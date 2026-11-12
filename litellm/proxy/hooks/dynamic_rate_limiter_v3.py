@@ -43,9 +43,10 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (  # noqa: F401  # l
 )
 from litellm.proxy.hooks.priority_class_share import (
     DEFAULT_CLASS,
-    POOL_MEMBER,
     ActiveTeamRegistry,
     TeamShare,
+    counter_value,
+    pool_member,
     team_share,
 )
 from litellm.proxy.hooks.rate_limiter_utils import (
@@ -371,7 +372,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         ):
             return None
         priority_class: Final = self._priority_class(priority)
-        member: Final = POOL_MEMBER if user_api_key_dict.team_id is None else user_api_key_dict.team_id
+        member: Final = pool_member(priority_class) if user_api_key_dict.team_id is None else user_api_key_dict.team_id
         try:
             members: Final = await self.active_teams.touch(model, member, priority_class, self.v3_limiter.window_size)
         except (RedisError, RedisCircuitBreakerOpenError, ValidationError) as e:
@@ -439,7 +440,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             descriptors.append(
                 RateLimitDescriptor(
                     key="priority_model" if share is None else PRIORITY_CLASS_SHARE_AT_SATURATION,
-                    value=priority_key if share is None else f"{model}:{user_api_key_dict.team_id}",
+                    value=priority_key if share is None else counter_value(model, str(user_api_key_dict.team_id)),
                     rate_limit=rate_limit_config,
                 )
             )

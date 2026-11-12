@@ -6,7 +6,7 @@ from typing import Final
 import pytest
 
 from litellm.caching.caching import DualCache
-from litellm.proxy.hooks.priority_class_share import ActiveTeamRegistry, team_share
+from litellm.proxy.hooks.priority_class_share import ActiveTeamRegistry, pool_member, team_share
 
 WEIGHTS: Final = {"interactive": 0.6, "batch": 0.4}
 
@@ -116,3 +116,30 @@ async def test_registry_keeps_a_team_id_that_contains_the_separator_whole():
     members: Final = await registry.touch("m", "owned\x1fextra", "batch", window=60)
     assert dict(members) == {"owned\x1fextra": "batch"}
     assert team_share("batch", members, {"interactive": 0.6, "batch": 0.4}, 1.0).fraction == 1.0
+
+
+def test_a_pool_member_keeps_its_class_present_without_taking_a_team_slice():
+    members: Final = {pool_member("interactive"): "interactive", "a": "interactive", "c": "batch"}
+    share: Final = team_share("interactive", members, {"interactive": 0.6, "batch": 0.4}, 1.0)
+    assert share.fraction == 0.6
+    assert share.active_teams_in_class == 1
+    assert share.active_classes == 2
+
+
+@pytest.mark.asyncio
+async def test_registry_keeps_pool_markers_of_different_classes_apart():
+    registry: Final = ActiveTeamRegistry(DualCache(), time_provider=_Clock())
+    await registry.touch("m", pool_member("interactive"), "interactive", window=60)
+    members: Final = await registry.touch("m", pool_member("batch"), "batch", window=60)
+    assert set(members.values()) == {"interactive", "batch"}
+
+
+@pytest.mark.asyncio
+async def test_registry_keeps_a_team_that_was_refreshed_after_the_first_window_opened():
+    clock: Final = _Clock()
+    registry: Final = ActiveTeamRegistry(DualCache(), time_provider=clock)
+    await registry.touch("m", "a", "interactive", window=60)
+    clock.now += 50
+    await registry.touch("m", "a", "interactive", window=60)
+    clock.now += 50
+    assert dict(await registry.touch("m", "b", "batch", window=60)) == {"a": "interactive", "b": "batch"}
