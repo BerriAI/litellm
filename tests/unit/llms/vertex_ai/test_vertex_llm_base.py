@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from functools import partial
 from threading import Event, Semaphore
-from typing import Final, Literal
+from typing import Final, Literal, NoReturn
 from unittest.mock import MagicMock, call, patch
 
 import google.auth.exceptions
@@ -2749,6 +2749,11 @@ def _rewrite_longer(key_file: pathlib.Path, contents: str) -> None:
     _rewrite_keeping_its_version(key_file, contents.replace("new-key", "new-key-v2"))
 
 
+def _old_or_new_token_response(request: requests.PreparedRequest) -> tuple[int, dict[str, str], str]:
+    form: Final = request.body.decode() if isinstance(request.body, bytes) else str(request.body)
+    return 200, {}, json.dumps({"access_token": "old-token" if "old-key" in form else "new-token", "expires_in": 3600})
+
+
 @pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize("from_adc_env", [False, True], ids=["vertex_credentials", "GOOGLE_APPLICATION_CREDENTIALS"])
 @pytest.mark.parametrize(
@@ -2771,17 +2776,9 @@ async def test_a_swapped_key_file_is_used_on_the_next_call_while_the_old_key_sti
         monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(key_file))
     credentials: Final = None if from_adc_env else str(key_file)
 
-    def token_response(request: requests.PreparedRequest) -> tuple[int, dict[str, str], str]:
-        form: Final = request.body.decode() if isinstance(request.body, bytes) else str(request.body)
-        return (
-            200,
-            {},
-            json.dumps({"access_token": "old-token" if "old-key" in form else "new-token", "expires_in": 3600}),
-        )
-
     fetch: Final = vertex.get_access_token_async if is_async else partial(asyncio.to_thread, vertex.get_access_token)
     with responses.RequestsMock() as oauth:
-        oauth.add_callback(responses.POST, "https://oauth2.googleapis.com/token", callback=token_response)
+        oauth.add_callback(responses.POST, "https://oauth2.googleapis.com/token", callback=_old_or_new_token_response)
         assert await fetch(credentials, "unit-project") == ("old-token", "unit-project")
         swap_key_file(key_file, _authorized_user_cache_credentials("new-key", quota_project="unit-project"))
         assert await fetch(credentials, "unit-project") == ("new-token", "unit-project")
@@ -2798,23 +2795,53 @@ async def test_a_key_file_replaced_by_one_that_does_not_load_keeps_the_earlier_k
     key_file: Final = tmp_path / "vertex-key.json"
     key_file.write_text(_authorized_user_cache_credentials("old-key", quota_project="unit-project"))
 
-    def token_response(request: requests.PreparedRequest) -> tuple[int, dict[str, str], str]:
-        form: Final = request.body.decode() if isinstance(request.body, bytes) else str(request.body)
-        return (
-            200,
-            {},
-            json.dumps({"access_token": "old-token" if "old-key" in form else "new-token", "expires_in": 3600}),
-        )
-
     fetch: Final = vertex.get_access_token_async if is_async else partial(asyncio.to_thread, vertex.get_access_token)
     with responses.RequestsMock() as oauth:
-        oauth.add_callback(responses.POST, "https://oauth2.googleapis.com/token", callback=token_response)
+        oauth.add_callback(responses.POST, "https://oauth2.googleapis.com/token", callback=_old_or_new_token_response)
         assert await fetch(str(key_file), "unit-project") == ("old-token", "unit-project")
         _move_into_place(key_file, '{"type": "authorized_user", "client_id": "half-wri')
         assert await fetch(str(key_file), "unit-project") == ("old-token", "unit-project")
         _move_into_place(key_file, _authorized_user_cache_credentials("repaired-key", quota_project="unit-project"))
         assert await fetch(str(key_file), "unit-project") == ("new-token", "unit-project")
         assert len(oauth.calls) == 2
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    "google_unavailable",
+    [
+        lambda: (503, {}, json.dumps({"error": "server_error", "error_description": "Service unavailable."})),
+        lambda: _raise(requests.exceptions.ConnectionError("oauth2.googleapis.com is unreachable")),
+    ],
+    ids=["503", "unreachable"],
+)
+@pytest.mark.asyncio
+async def test_a_swapped_key_file_whose_first_token_fetch_fails_is_tried_again_on_the_next_call(
+    tmp_path: pathlib.Path, is_async: bool, google_unavailable: Callable[[], tuple[int, dict[str, str], str]]
+) -> None:
+    vertex: Final = VertexBase()
+    key_file: Final = tmp_path / "vertex-key.json"
+    key_file.write_text(_authorized_user_cache_credentials("old-key", quota_project="unit-project"))
+    google_down: Final = Event()
+
+    def token_response(request: requests.PreparedRequest) -> tuple[int, dict[str, str], str]:
+        return google_unavailable() if google_down.is_set() else _old_or_new_token_response(request)
+
+    fetch: Final = vertex.get_access_token_async if is_async else partial(asyncio.to_thread, vertex.get_access_token)
+    with patch("google.auth._exponential_backoff.time"), responses.RequestsMock() as oauth:
+        oauth.add_callback(responses.POST, "https://oauth2.googleapis.com/token", callback=token_response)
+        assert await fetch(str(key_file), "unit-project") == ("old-token", "unit-project")
+        _move_into_place(key_file, _authorized_user_cache_credentials("new-key", quota_project="unit-project"))
+        google_down.set()
+        with pytest.raises((google.auth.exceptions.RefreshError, google.auth.exceptions.TransportError)):
+            await fetch(str(key_file), "unit-project")
+        google_down.clear()
+        assert await fetch(str(key_file), "unit-project") == ("new-token", "unit-project")
+        assert await fetch(str(key_file), "unit-project") == ("new-token", "unit-project")
+
+
+def _raise(error: Exception) -> NoReturn:
+    raise error
 
 
 def _authorized_user_cache_credentials(identity: str, quota_project: str | None = None) -> str:

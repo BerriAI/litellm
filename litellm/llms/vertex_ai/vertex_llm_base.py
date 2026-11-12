@@ -483,6 +483,12 @@ class VertexBase:
             case _:
                 return "Reauthentication is needed" in str(error)
 
+    @staticmethod
+    def _token_fetch_failed(error: Exception) -> bool:
+        from google.auth.exceptions import RefreshError, TransportError
+
+        return isinstance(error, (RefreshError, TransportError))
+
     def _acquire_async_refresh_lock(self, credential_cache_key: _VertexCredentialCacheKey) -> asyncio.Lock:
         """Increment the refcount and return the lock for ``credential_cache_key``.
 
@@ -587,7 +593,11 @@ class VertexBase:
         try:
             return self.load_auth(credentials=credentials, project_id=project_id)
         except Exception as e:
-            earlier: Final = self._credentials_from_an_earlier_key_file(credential_cache_key, e)
+            earlier: Final = (
+                None
+                if self._token_fetch_failed(e)
+                else self._credentials_from_an_earlier_key_file(credential_cache_key, e)
+            )
             if earlier is None:
                 verbose_logger.exception(
                     "Failed to load vertex credentials. Check to see if credentials containing partial/invalid information. Error: %s",
