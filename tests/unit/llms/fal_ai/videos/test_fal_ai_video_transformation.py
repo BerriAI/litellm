@@ -219,9 +219,7 @@ class TestFalAIVideoTransformation:
 
         assert video.usage == {"duration_seconds": 5.0, "video_resolution": "2K"}
 
-    def test_transform_video_create_response_h3_max_leaves_default_resolution_to_cost_map(
-        self, local_model_cost_map
-    ):
+    def test_transform_video_create_response_h3_max_leaves_default_resolution_to_cost_map(self, local_model_cost_map):
         response = Mock(spec=httpx.Response)
         response.json.return_value = {"request_id": "abc"}
 
