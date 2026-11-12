@@ -5147,6 +5147,18 @@
               }
             },
             {
+              "description": "Include per-entity usage and key counts.",
+              "in": "query",
+              "name": "include_entity_breakdown",
+              "required": false,
+              "schema": {
+                "default": true,
+                "description": "Include per-entity usage and key counts.",
+                "title": "Include Entity Breakdown",
+                "type": "boolean"
+              }
+            },
+            {
               "in": "query",
               "name": "agent_ids",
               "required": false,
@@ -60297,6 +60309,47 @@
           "title": "SkillHubRejection",
           "type": "object"
         },
+        "SkillHubRestore": {
+          "additionalProperties": false,
+          "properties": {
+            "expected_skill_id": {
+              "description": "Current skill ID read by the editor",
+              "title": "Expected Skill Id",
+              "type": "string"
+            },
+            "expected_updated_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Current updated_at read by the editor, including null",
+              "title": "Expected Updated At"
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Higher semantic version, or omit/null for an automatic patch bump",
+              "title": "Version"
+            }
+          },
+          "required": [
+            "expected_skill_id",
+            "expected_updated_at"
+          ],
+          "title": "SkillHubRestore",
+          "type": "object"
+        },
         "SkillHubReviewResponse": {
           "properties": {
             "action": {
@@ -61963,6 +62016,73 @@
             }
           ],
           "summary": "Download Skill Version",
+          "tags": [
+            "skill_hub"
+          ]
+        }
+      },
+      "/skill-hub/skills/{name}/versions/{version_id}/restore": {
+        "post": {
+          "description": "Proxy admins may republish retained bytes and metadata as a new version, preserving visibility and grants.",
+          "operationId": "restore_skill_version_skill_hub_skills__name__versions__version_id__restore_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "name",
+              "required": true,
+              "schema": {
+                "title": "Name",
+                "type": "string"
+              }
+            },
+            {
+              "in": "path",
+              "name": "version_id",
+              "required": true,
+              "schema": {
+                "title": "Version Id",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillHubRestore"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/SkillHubSkill"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Restore Skill Version",
           "tags": [
             "skill_hub"
           ]

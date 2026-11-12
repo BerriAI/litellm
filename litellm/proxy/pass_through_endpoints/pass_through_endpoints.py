@@ -6,7 +6,16 @@ import posixpath
 import re
 import traceback
 from base64 import b64encode
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping, MutableMapping, Sequence
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Callable,
+    Coroutine,
+    Iterable,
+    Mapping,
+    MutableMapping,
+    Sequence,
+)
 from dataclasses import dataclass
 from datetime import datetime
 from functools import reduce
@@ -158,8 +167,10 @@ from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
+    LITELLM_PASS_THROUGH_DEPLOYMENT_PRICING_STATE_KEY,
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
+    DeploymentPricingResolver,
     EndpointType,
     PassthroughStandardLoggingPayload,
     WebSocketSessionMeter,
@@ -278,6 +289,11 @@ async def set_env_variables_in_header(custom_headers: dict | None) -> dict | Non
     return headers
 
 
+class _AdapterCompletionRouter(Protocol):
+    @property
+    def aadapter_completion(self) -> Callable[..., Coroutine[object, object, object]]: ...
+
+
 async def chat_completion_pass_through_endpoint(
     fastapi_response: Response,
     request: Request,
@@ -368,7 +384,8 @@ async def chat_completion_pass_through_endpoint(
             and data["model"] is not None
             and llm_router.registry().resolve(data["model"], kind="recognized")
         ):
-            llm_response = asyncio.create_task(llm_router.aadapter_completion(**data))
+            adapter_router = require_attributes(llm_router, _AdapterCompletionRouter, "aadapter_completion")
+            llm_response = asyncio.create_task(adapter_router.aadapter_completion(**data))
         elif (
             llm_router is not None
             and data["model"] not in router_model_names
@@ -377,11 +394,13 @@ async def chat_completion_pass_through_endpoint(
                 or len(llm_router.registry().patterns().patterns) > 0
             )
         ):  # check for wildcard routes or default deployment before checking deployment_names
-            llm_response = asyncio.create_task(llm_router.aadapter_completion(**data))
+            adapter_router = require_attributes(llm_router, _AdapterCompletionRouter, "aadapter_completion")
+            llm_response = asyncio.create_task(adapter_router.aadapter_completion(**data))
         elif llm_router is not None and data["model"] in llm_router.registry().names(
             kind="deployment_names"
         ):  # model in router deployments, calling a specific deployment on the router (lowest priority)
-            llm_response = asyncio.create_task(llm_router.aadapter_completion(**data, specific_deployment=True))
+            adapter_router = require_attributes(llm_router, _AdapterCompletionRouter, "aadapter_completion")
+            llm_response = asyncio.create_task(adapter_router.aadapter_completion(**data, specific_deployment=True))
         elif user_model is not None:  # `litellm --model <your-model-name>`
             llm_response = asyncio.create_task(litellm.aadapter_completion(**data))
         else:
@@ -429,6 +448,20 @@ async def chat_completion_pass_through_endpoint(
             headers=litellm_call_id_headers(litellm_call_id),
             code=error_status_code(e, 500),
         )
+
+
+_PASS_THROUGH_REQUEST_STATE_KEYS: Final = (
+    LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
+    LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
+    LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
+    LITELLM_PASS_THROUGH_DEPLOYMENT_PRICING_STATE_KEY,
+)
+
+
+def _clear_pass_through_request_state(state: object) -> None:
+    for key in _PASS_THROUGH_REQUEST_STATE_KEYS:
+        if hasattr(state, key):
+            delattr(state, key)
 
 
 def _is_provider_payload(request: Request) -> bool:
@@ -781,6 +814,14 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         )
         if isinstance(deployment_model_info, Mapping):
             _metadata["model_info"] = dict(deployment_model_info)
+        deployment_pricing: Final = getattr(_request_state, LITELLM_PASS_THROUGH_DEPLOYMENT_PRICING_STATE_KEY, None)
+        priced_model_info: Final = (
+            deployment_pricing.resolve(server_marker_free_body)
+            if isinstance(deployment_pricing, DeploymentPricingResolver)
+            else None
+        )
+        if priced_model_info is not None:
+            _metadata["model_info"] = dict(priced_model_info)
 
         kwargs: Final = {
             "litellm_params": {
@@ -2519,12 +2560,7 @@ def create_pass_through_route(
                         keep_target_query=keep_target_query,
                     )
                 finally:
-                    if hasattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY):
-                        delattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY)
-                    if hasattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY):
-                        delattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY)
-                    if hasattr(request.state, LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY):
-                        delattr(request.state, LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY)
+                    _clear_pass_through_request_state(request.state)
 
             # The upstream withholds its response headers until its first token, so
             # the whole time-to-first-token is spent inside _relay with nothing on

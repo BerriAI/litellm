@@ -20104,11 +20104,13 @@ def test_router_sends_an_image_to_the_text_only_leg_when_the_vision_leg_is_cooli
 async def test_anthropic_caller_rate_limit_does_not_block_other_credentials(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, surface: str, credential_kind: str
 ) -> None:
+    from litellm.llms.anthropic.messages.native import handler as python_messages
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
     from litellm.types.router import AllowedFailsPolicy
 
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr("time.time", lambda: 1767225600.0)
+    monkeypatch.setattr(litellm, "anthropic_messages", python_messages.anthropic_messages)
 
     def upstream(request: httpx.Request) -> httpx.Response:
         credential: Final = request.headers.get("authorization", request.headers.get("x-api-key", ""))

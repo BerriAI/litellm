@@ -3,7 +3,7 @@ Tests for encrypted_content_affinity pre-call check.
 
 The mechanism works without any cache and supports two encoding strategies:
 
-1. **Items with IDs**: item IDs for output items with `encrypted_content` are rewritten to
+1. **Items with IDs**: IDs of reasoning, compaction and other `encrypted_content` output items are rewritten to
    `encitem_{base64("litellm:model_id:{model_id};item_id:{original_id}")}`.
 
 2. **Items without IDs** (Codex): encrypted_content itself is wrapped with model_id metadata:
@@ -18,10 +18,12 @@ The mechanism works without any cache and supports two encoding strategies:
 import datetime
 import time
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.integrations.custom_secret_manager import CustomSecretManager
@@ -132,6 +134,13 @@ class TestEncryptedItemIdCodec:
         assert decoded["item_id"] == original_item_id
 
 
+@dataclass(frozen=True, slots=True)
+class _ReadOnlyReasoningItem:
+    id: str
+    type: str
+    encrypted_content: str
+
+
 class TestUpdateEncryptedContentItemIds:
     def test_rewrites_encrypted_items_in_dict_response(self):
         model_id = "deployment-1"
@@ -156,6 +165,52 @@ class TestUpdateEncryptedContentItemIds:
         response = {"output": [{"id": "rs_xyz", "type": "reasoning", "encrypted_content": "secret"}]}
         result = ResponsesAPIRequestUtils._update_encrypted_content_item_ids_in_response(response, None)
         assert result["output"][0]["id"] == "rs_xyz"
+
+    @pytest.mark.parametrize(
+        "response",
+        [
+            {"id": "resp_failed", "status": "failed", "error": {"code": "server_error", "message": "boom"}},
+            {
+                "id": "resp_failed",
+                "status": "failed",
+                "error": {"code": "server_error", "message": "boom"},
+                "output": None,
+            },
+        ],
+        ids=["output-absent", "output-none"],
+    )
+    def test_passes_a_response_without_output_through_unchanged(self, response: dict[str, object]):
+        expected: Final = {**response}
+        result: Final = ResponsesAPIRequestUtils._update_encrypted_content_item_ids_in_response(
+            response, "deployment-1"
+        )
+        assert result == expected
+
+    def test_leaves_read_only_output_items_as_returned(self):
+        result: Final = ResponsesAPIRequestUtils._update_encrypted_content_item_ids_in_response(
+            {"id": "resp_123", "output": [_ReadOnlyReasoningItem("rs_xyz", "reasoning", "secret")]}, "deployment-1"
+        )
+        assert result["output"] == [_ReadOnlyReasoningItem("rs_xyz", "reasoning", "secret")]
+
+    @pytest.mark.parametrize(
+        "item, encoded",
+        [
+            ({"id": "rs_xyz", "type": "reasoning", "summary": []}, True),
+            ({"id": "cmp_xyz", "type": "compaction", "encrypted_content": "secret"}, True),
+            ({"id": "ws_xyz", "type": "web_search_call"}, False),
+            ({"id": ResponsesAPIRequestUtils._build_encrypted_item_id("dep-0", "rs_xyz"), "type": "reasoning"}, False),
+        ],
+        ids=["reasoning-before-ciphertext", "compaction", "non-reasoning", "already-encoded"],
+    )
+    def test_encodes_reasoning_and_compaction_ids_by_type(self, item: dict[str, object], encoded: bool):
+        result: Final = ResponsesAPIRequestUtils._update_encrypted_content_item_ids_in_response(
+            {"id": "resp_123", "output": [dict(item)]}, "deployment-1"
+        )
+        assert result["output"][0]["id"] == (
+            ResponsesAPIRequestUtils._build_encrypted_item_id("deployment-1", str(item["id"]))
+            if encoded
+            else item["id"]
+        )
 
 
 class TestEncryptedContentWrapping:
@@ -219,10 +274,10 @@ class TestRestoreEncryptedContentItemIds:
         request_input = [
             {"type": "message", "id": "msg_abc123", "role": "assistant"},
             {"type": "reasoning", "id": encoded_id, "encrypted_content": "secret"},
+            {"type": "item_reference", "id": encoded_id},
         ]
         restored = ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(request_input)
-        assert restored[0]["id"] == "msg_abc123"
-        assert restored[1]["id"] == original_id
+        assert [item["id"] for item in restored] == ["msg_abc123", original_id, original_id]
 
     def test_unwraps_encrypted_content(self):
         """Test that wrapped encrypted_content is unwrapped before forwarding."""
@@ -713,6 +768,32 @@ async def test_encrypted_content_affinity_does_not_create_litellm_metadata_for_c
     assert request_kwargs["metadata"]["tags"] == ["prod"]
     # All deployments returned (no pinning)
     assert len(result) == 1
+
+
+@pytest.mark.asyncio
+async def test_item_reference_to_a_reasoning_item_returned_without_ciphertext_pins_its_deployment():
+    returned: Final = ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
+        {"id": "resp_stored", "output": [{"type": "reasoning", "id": "rs_stored", "summary": []}]},
+        "openai",
+        {"model_info": {"id": "dep-2"}, "encrypted_content_affinity_enabled": True},
+    )
+    returned_output: Final = TypeAdapter(list[dict[str, object]]).validate_python(returned["output"])
+    deployments: Final = [
+        {"model_info": {"id": "dep-1"}, "litellm_params": {"model": "openai/gpt-5.1-codex"}},
+        {"model_info": {"id": "dep-2"}, "litellm_params": {"model": "openai/gpt-5.1-codex"}},
+    ]
+
+    pinned: Final = await EncryptedContentAffinityCheck().async_filter_deployments(
+        model="gpt-5.1-codex",
+        healthy_deployments=deployments,
+        messages=None,
+        request_kwargs={
+            "input": [{"type": "item_reference", "id": returned_output[0]["id"]}],
+            "litellm_metadata": {},
+        },
+    )
+
+    assert pinned == [deployments[1]]
 
 
 @pytest.mark.asyncio

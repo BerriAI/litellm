@@ -41,7 +41,6 @@ from litellm._internal_context import internal_sub_call
 from litellm._logging import redact_string, verbose_logger
 from litellm.anthropic_beta_headers_manager import (
     aload_beta_headers_config,
-    resolve_beta_provider,
     update_headers_with_filtered_beta,
 )
 from litellm.constants import MAX_FILE_LIST_LIMIT, REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
@@ -82,7 +81,7 @@ from litellm.litellm_core_utils.realtime_errors import (
 )
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
-from litellm.llms.anthropic.common_utils import AnthropicModelInfo, merge_anthropic_beta_headers
+from litellm.llms.anthropic.common_utils import merge_anthropic_beta_headers
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -632,6 +631,7 @@ _OPTIONAL_PARAMS: Final = TypeAdapter(Mapping[str, object])
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 _JSON_OBJECTS: Final = TypeAdapter(list[dict[str, object]])
 _DECODED_JSON: Final = TypeAdapter(object)
+_AGENTIC_HOOK_RESULT: Final = TypeAdapter(object)
 
 
 def _decoded_body_headers(response: httpx.Response) -> httpx.Headers:
@@ -906,7 +906,7 @@ class BaseLLMHTTPHandler:
         stream: bool | None = False,
         fake_stream: bool = False,
         api_key: str | None = None,
-        headers: dict[str, Any] | None = None,
+        headers: dict[str, object] | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         provider_config: BaseConfig | None = None,
         shared_session: Optional["ClientSession"] = None,
@@ -1407,7 +1407,7 @@ class BaseLLMHTTPHandler:
         api_key: str | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         aembedding: bool | None = False,
-        headers: dict[str, Any] | None = None,
+        headers: dict[str, object] | None = None,
     ) -> EmbeddingResponse:
         provider_config: Final = ProviderConfigManager.get_provider_embedding_config(
             model=model, provider=litellm.LlmProviders(custom_llm_provider)
@@ -1588,7 +1588,7 @@ class BaseLLMHTTPHandler:
         api_key: str | None = None,
         api_base: str | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
-        litellm_params: dict[str, Any] | None = None,
+        litellm_params: dict[str, object] | None = None,
     ) -> RerankResponse:
         # get config from model, custom llm provider
         headers = provider_config.validate_environment(
@@ -2632,17 +2632,10 @@ class BaseLLMHTTPHandler:
             litellm_params.get("additional_drop_params") or (),
             anthropic_messages_optional_request_params,
         )
-        affinity_api_base: Final = (
-            AnthropicModelInfo.get_api_base(api_base) if custom_llm_provider == "anthropic" else api_base
-        )
-        takes_another_beta_row: Final = (
-            resolve_beta_provider(custom_llm_provider, affinity_api_base) != custom_llm_provider
-        )
-        provider_filters_betas: Final = anthropic_messages_provider_config.should_filter_anthropic_beta_headers()
-        filters_beta_headers: Final = provider_filters_betas or takes_another_beta_row
+        filters_beta_headers: Final = anthropic_messages_provider_config.should_filter_anthropic_beta_headers()
         if request_params.get("safeguards") is not None and filters_beta_headers:
             await aload_beta_headers_config()
-        default_affinity_header: Final = get_provider_affinity_header(affinity_api_base)
+        default_affinity_header: Final = get_provider_affinity_header(api_base)
         (
             headers,
             api_base,
@@ -2665,8 +2658,6 @@ class BaseLLMHTTPHandler:
             headers = update_headers_with_filtered_beta(
                 headers=headers,
                 provider=custom_llm_provider,
-                api_base=affinity_api_base,
-                unlisted="drop" if provider_filters_betas else "forward",
                 keep=anthropic_messages_provider_config.model_specific_anthropic_betas(model, litellm_params),
             )
 
@@ -6146,7 +6137,7 @@ class BaseLLMHTTPHandler:
         fingerprint: str,
         stream: bool = False,
         callback: Optional["CustomLogger"] = None,
-    ) -> AnthropicMessagesResponse | AsyncIterator[object]:
+    ) -> object:
         from litellm.anthropic_interface import messages as anthropic_messages
 
         patch: Final = plan.request_patch or AgenticLoopRequestPatch()
@@ -6187,7 +6178,7 @@ class BaseLLMHTTPHandler:
         kwargs_for_followup["max_agentic_loops"] = max_loops
         kwargs_for_followup["_agentic_loop_fingerprints"] = [*fingerprints, fingerprint]
 
-        response: AnthropicMessagesResponse | AsyncIterator[object] = await anthropic_messages.acreate(
+        response: Final[AnthropicMessagesResponse | AsyncIterator[object]] = await anthropic_messages.acreate(
             **{
                 "max_tokens": max_tokens,
                 "messages": patch.messages,
@@ -6200,9 +6191,7 @@ class BaseLLMHTTPHandler:
 
         if callback is not None:
             try:
-                response = await callback.async_post_agentic_loop_response_hook(
-                    response=response, plan=plan, kwargs=kwargs
-                )
+                return await callback.async_post_agentic_loop_response_hook(response=response, plan=plan, kwargs=kwargs)
             except Exception as e:
                 _call_id: Final = getattr(logging_obj, "litellm_call_id", "unknown")
                 verbose_logger.exception(
@@ -6227,7 +6216,7 @@ class BaseLLMHTTPHandler:
         fingerprints: Sequence[str],
         fingerprint: str,
         callback: Optional["CustomLogger"] = None,
-    ) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
+    ) -> object:
         patch: Final = plan.request_patch or AgenticLoopRequestPatch()
         if patch.messages is None:
             raise ValueError("Agentic loop plan missing patched responses input")
@@ -6263,7 +6252,7 @@ class BaseLLMHTTPHandler:
 
         try:
             with internal_sub_call(logging_obj.litellm_call_id):
-                response: ResponsesAPIResponse | BaseResponsesAPIStreamingIterator = await litellm.aresponses(
+                response: Final[ResponsesAPIResponse | BaseResponsesAPIStreamingIterator] = await litellm.aresponses(
                     model=patch.model or model,
                     input=patch.messages,  # pyright: ignore[reportArgumentType]  # pre-existing mismatch surfaced by the Router import; patch messages are valid response input at runtime
                     **optional_params,
@@ -6272,7 +6261,7 @@ class BaseLLMHTTPHandler:
 
             if callback is not None:
                 try:
-                    response = await callback.async_post_agentic_loop_response_hook(
+                    return await callback.async_post_agentic_loop_response_hook(
                         response=response, plan=plan, kwargs=kwargs
                     )
                 except Exception as e:
@@ -6501,21 +6490,23 @@ class BaseLLMHTTPHandler:
                 callback.__class__.async_build_agentic_loop_plan is not CustomLogger.async_build_agentic_loop_plan
             )
             if not build_plan_overridden:
-                agentic_result: object = await bill_first_round_on_failure(
-                    callback.async_run_agentic_loop(
-                        tools=tool_calls,
-                        model=model,
-                        messages=messages,
-                        response=response,
-                        anthropic_messages_provider_config=anthropic_messages_provider_config,
-                        anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+                agentic_result: object = _AGENTIC_HOOK_RESULT.validate_python(
+                    await bill_first_round_on_failure(
+                        callback.async_run_agentic_loop(
+                            tools=tool_calls,
+                            model=model,
+                            messages=messages,
+                            response=response,
+                            anthropic_messages_provider_config=anthropic_messages_provider_config,
+                            anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+                            logging_obj=logging_obj,
+                            stream=stream,
+                            kwargs=kwargs_with_provider,
+                        ),
                         logging_obj=logging_obj,
+                        response=response,
                         stream=stream,
-                        kwargs=kwargs_with_provider,
-                    ),
-                    logging_obj=logging_obj,
-                    response=response,
-                    stream=stream,
+                    )
                 )
                 return self._maybe_wrap_in_fake_stream(agentic_result, logging_obj, api_surface)
 
@@ -6536,8 +6527,9 @@ class BaseLLMHTTPHandler:
                 stream=stream,
             )
 
-            if plan.response_override is not None:
-                return self._maybe_wrap_in_fake_stream(plan.response_override, logging_obj, api_surface)
+            response_override: object = plan.response_override
+            if response_override is not None:
+                return self._maybe_wrap_in_fake_stream(response_override, logging_obj, api_surface)
             if plan.terminate:
                 verbose_logger.debug(
                     "Agentic loop terminated by callback=%s reason=%s",
@@ -6545,10 +6537,12 @@ class BaseLLMHTTPHandler:
                     plan.stop_reason,
                 )
                 return self._maybe_wrap_in_fake_stream(
-                    await callback.async_post_agentic_loop_response_hook(
-                        response=self._finalize_refused_agentic_response(response=response, tool_calls=tool_calls),
-                        plan=plan,
-                        kwargs=kwargs_with_provider,
+                    _AGENTIC_HOOK_RESULT.validate_python(
+                        await callback.async_post_agentic_loop_response_hook(
+                            response=self._finalize_refused_agentic_response(response=response, tool_calls=tool_calls),
+                            plan=plan,
+                            kwargs=kwargs_with_provider,
+                        )
                     ),
                     logging_obj,
                     api_surface,
@@ -12396,10 +12390,10 @@ class BaseLLMHTTPHandler:
     def generate_content_handler(
         self,
         model: str,
-        contents: Any,
+        contents: object,
         generate_content_provider_config: BaseGoogleGenAIGenerateContentConfig,
         generate_content_config_dict: dict,
-        tools: Any,
+        tools: object,
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
@@ -12517,10 +12511,10 @@ class BaseLLMHTTPHandler:
     async def async_generate_content_handler(
         self,
         model: str,
-        contents: Any,
+        contents: object,
         generate_content_provider_config: BaseGoogleGenAIGenerateContentConfig,
         generate_content_config_dict: dict,
-        tools: Any,
+        tools: object,
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
