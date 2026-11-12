@@ -1743,6 +1743,7 @@ LITELLM_TRUNCATION_STDOUT_SAFEGUARD_NOTE: Final = (
 
 # Standard headers that are always checked for customer/end-user ID (no configuration required)
 # These headers work out-of-the-box for tools like Claude Code that support custom headers
+STANDARD_CUSTOMER_MEMBER_ID_HEADER: Final = "x-litellm-customer-member-id"
 STANDARD_CUSTOMER_ID_HEADERS: Final = [
     "x-litellm-customer-id",
     "x-litellm-end-user-id",

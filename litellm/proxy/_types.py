@@ -2564,6 +2564,11 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     def validate_access_group_rules(cls, value: object) -> tuple[AccessGroupRule, ...] | None:
         return _validate_rules(value) if value is not None else None
 
+    reject_unknown_customer_member: bool = Field(
+        True,
+        description="Reject unknown x-litellm-customer-member-id values with 401. Set false for best-effort tracking without creating members.",
+    )
+
     use_spend_logs_ledger: bool = Field(
         True,
         description="Apply request accounting from stored SpendLogs deliveries. Set to false to roll back to the previous in-memory and Redis spend queues.",

@@ -1,7 +1,7 @@
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -337,8 +337,19 @@ async def test_get_all_transactions_from_redis_buffer_pipeline(redis_update_buff
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "entity_type, transaction_field, member_key",
+    [
+        ("organization_member", "org_member_list_transactions", "organization_id::org-1::user_id::user-1"),
+        ("customer_member", "customer_member_list_transactions", "customer-member-1"),
+    ],
+)
 async def test_org_member_spend_is_summed_across_pods_and_restored_on_rpush_failure(
-    redis_update_buffer: RedisUpdateBuffer, mock_redis_cache: AsyncMock
+    redis_update_buffer: RedisUpdateBuffer,
+    mock_redis_cache: AsyncMock,
+    entity_type: str,
+    transaction_field: Literal["org_member_list_transactions", "customer_member_list_transactions"],
+    member_key: str,
 ):
     from litellm.proxy._types import Litellm_EntityType
     from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import (
@@ -348,8 +359,7 @@ async def test_org_member_spend_is_summed_across_pods_and_restored_on_rpush_fail
         SpendUpdateQueue,
     )
 
-    member_key: Final = "organization_id::org-1::user_id::user-1"
-    pod_json: Final = json.dumps({"org_member_list_transactions": {member_key: 0.25}})
+    pod_json: Final = json.dumps({transaction_field: {member_key: 0.25}})
     mock_redis_cache.async_lpop_pipeline = AsyncMock(
         return_value=[[pod_json, pod_json], None, None, None, None, None, None]
     )
@@ -357,13 +367,13 @@ async def test_org_member_spend_is_summed_across_pods_and_restored_on_rpush_fail
     (db_spend, *_rest) = await redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline()
 
     assert db_spend is not None
-    assert db_spend["org_member_list_transactions"] == {member_key: 0.5}
+    assert db_spend[transaction_field] == {member_key: 0.5}
 
     mock_redis_cache.async_rpush_pipeline = AsyncMock(side_effect=ConnectionError("redis went away"))
     spend_queue: Final = SpendUpdateQueue()
     await spend_queue.add_update(
         {
-            "entity_type": Litellm_EntityType.ORGANIZATION_MEMBER,
+            "entity_type": Litellm_EntityType(entity_type),
             "entity_id": member_key,
             "response_cost": 1.5,
         }
@@ -378,7 +388,7 @@ async def test_org_member_spend_is_summed_across_pods_and_restored_on_rpush_fail
     )
 
     restored_spend: Final = await spend_queue.flush_and_get_aggregated_db_spend_update_transactions()
-    assert restored_spend["org_member_list_transactions"] == {member_key: 1.5}
+    assert restored_spend[transaction_field] == {member_key: 1.5}
 
 
 @pytest.mark.asyncio

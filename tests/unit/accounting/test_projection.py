@@ -6,6 +6,7 @@ from typing import Final
 import pytest
 from pydantic import TypeAdapter
 
+from litellm.accounting.delivery_projection import entity_transactions
 from litellm.accounting.projection import project
 from litellm.accounting.snapshot import build_accounting_payload
 from litellm.constants import BILLED_RETRY_ATTEMPT_METADATA_KEY, INTERNAL_CALL_ORIGIN_METADATA_KEY
@@ -18,6 +19,63 @@ from litellm.types.utils import ModelResponse, Usage
 
 _NOW: Final = datetime(2026, 11, 2, tzinfo=timezone.utc)
 _FIELDS: Final = TypeAdapter(dict[str, object])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_ledger", [False, True])
+@pytest.mark.parametrize("metadata_bucket", ["metadata", "litellm_metadata", "standard_logging_object"])
+@pytest.mark.parametrize("member_id", [None, "customer-member"])
+async def test_customer_member_and_end_user_are_charged_independently(
+    monkeypatch: pytest.MonkeyPatch, use_ledger: bool, metadata_bucket: str, member_id: str | None
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.responses.streaming_iterator import drain_logging_tasks
+
+    client: Final = PrismaClient(database_url="postgresql://unused", proxy_logging_obj=proxy_logging_obj)
+    monkeypatch.setattr(proxy_server, "prisma_client", client)
+    monkeypatch.setattr(proxy_server, "disable_spend_logs", False)
+    monkeypatch.setitem(proxy_server.general_settings, "use_spend_logs_ledger", use_ledger)
+    monkeypatch.setattr(client, "spend_log_transactions", [])
+    monkeypatch.setattr(client, "model_usage_transactions", [])
+    metadata: Final = {
+        "user_api_key_customer_member_id": member_id,
+        "user_api_key_end_user_id": "end-user",
+    }
+    kwargs: Final = {
+        "model": "projection-test",
+        "custom_llm_provider": "openai",
+        "call_type": "acompletion",
+        "litellm_call_id": "member-charge",
+        "litellm_params": {metadata_bucket: metadata} if metadata_bucket != "standard_logging_object" else {},
+        **(
+            {"standard_logging_object": {"metadata": metadata, "model_map_information": {}}}
+            if metadata_bucket == "standard_logging_object"
+            else {}
+        ),
+    }
+    writer: Final = DBSpendUpdateWriter()
+    assert await writer.update_database(
+        token=None,
+        user_id=None,
+        end_user_id="end-user",
+        team_id=None,
+        org_id=None,
+        kwargs=kwargs,
+        completion_response=ModelResponse(
+            id="member-charge", model="projection-test", usage=Usage(prompt_tokens=10, completion_tokens=5)
+        ),
+        start_time=_NOW,
+        end_time=_NOW,
+        response_cost=0.25,
+    )
+    await drain_logging_tasks()
+    if use_ledger:
+        logged: Final = client.spend_log_transactions[0]
+        transactions = entity_transactions(project(_FIELDS.validate_python(logged["accounting_payload"])))
+    else:
+        transactions = await writer.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
+    assert transactions["end_user_list_transactions"] == {"end-user": 0.25}
+    assert transactions.get("customer_member_list_transactions") == ({member_id: 0.25} if member_id else {})
 
 
 @pytest.mark.parametrize("status", ["success", "failure"])

@@ -8702,7 +8702,13 @@ async def test_user_api_key_auth_authenticates_before_raising_malformed_body_err
         assert "Invalid JSON payload" in str(exc_info.value.message)
         assert exc_info.value.code == str(status.HTTP_400_BAD_REQUEST)
         mock_builder.assert_awaited_once()
-        assert mock_seed.call_args.args[0] is builder_token
+        seeded_identity: Final[UserAPIKeyAuth] = mock_seed.call_args.args[0]
+        assert (seeded_identity.api_key, seeded_identity.user_id, seeded_identity.team_id) == (
+            builder_token.api_key,
+            builder_token.user_id,
+            builder_token.team_id,
+        )
+        assert seeded_identity.customer_member_id is None
         # authorization must not run for a request that is about to be rejected:
         # ``common_checks`` reserves budget against live spend counters that only the
         # endpoint's post-call path releases, and the endpoint never runs here
@@ -14349,3 +14355,154 @@ async def test_blocked_cached_key_is_refused_before_the_body_is_read() -> None:
 
     assert refusal.code == "401", refusal.message
     assert "Key is blocked" in refusal.message
+
+
+def _customer_member_auth_request(
+    monkeypatch: pytest.MonkeyPatch,
+    key: UserAPIKeyAuth,
+    *,
+    member_exists: bool = True,
+    reject_unknown: bool = True,
+    database_unavailable: bool = False,
+    member_header: bool = True,
+    body: bytes = b"{}",
+) -> tuple[Request, MagicMock, MagicMock]:
+    async def custom_auth(request: Request, api_key: str) -> UserAPIKeyAuth:
+        return key
+
+    client: Final = MagicMock()
+    client.db.litellm_customermembertable.find_unique = AsyncMock(
+        return_value=(
+            SimpleNamespace(customer_member_id="member-a", parent_team=SimpleNamespace(parent_org_id="org-a"))
+            if member_exists
+            else None
+        ),
+        side_effect=ConnectionError("connection refused") if database_unavailable else None,
+    )
+    logging_obj: Final = MagicMock()
+    logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    attrs: Final = {
+        **_proxy_server_attrs_for_custom_auth(user_custom_auth=custom_auth),
+        "prisma_client": client,
+        "proxy_logging_obj": logging_obj,
+        "general_settings": {
+            "auto_create_end_users": True,
+            "allow_requests_on_db_unavailable": True,
+            "reject_unknown_customer_member": reject_unknown,
+        },
+    }
+    for name, value in attrs.items():
+        monkeypatch.setattr(litellm.proxy.proxy_server, name, value)
+    monkeypatch.setattr(litellm, "enable_post_custom_auth_checks", False, raising=False)
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "query_string": b"",
+            "headers": [(b"x-litellm-customer-member-id", b"member-a")] if member_header else [],
+        },
+        receive=AsyncMock(return_value={"type": "http.request", "more_body": False, "body": body}),
+    )
+    return request, client, logging_obj
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("member_exists", "scoped_org", "reject_unknown", "database_unavailable", "expected_status"),
+    [
+        (False, None, True, False, 401),
+        (False, None, False, False, None),
+        (True, None, True, False, None),
+        (True, "org-a", True, False, None),
+        (True, "org-b", True, False, 403),
+        (True, "org-b", False, False, 403),
+        (True, "org-b", True, True, 503),
+        (True, "org-b", False, True, 503),
+    ],
+)
+async def test_customer_member_header_is_checked_on_custom_auth_requests(
+    monkeypatch: pytest.MonkeyPatch,
+    member_exists: bool,
+    scoped_org: str | None,
+    reject_unknown: bool,
+    database_unavailable: bool,
+    expected_status: int | None,
+) -> None:
+    key: Final = UserAPIKeyAuth(metadata={"customer_org_id": scoped_org}, customer_member_id="previous-member")
+    request, client, logging_obj = _customer_member_auth_request(
+        monkeypatch,
+        key,
+        member_exists=member_exists,
+        reject_unknown=reject_unknown,
+        database_unavailable=database_unavailable,
+    )
+    if expected_status is not None:
+        with pytest.raises(ProxyException) as error:
+            await user_api_key_auth(request=request, api_key="Bearer external-token")
+        assert int(error.value.code) == expected_status
+        assert (
+            error.value.type
+            == {
+                401: "customer_member_not_found",
+                403: "customer_member_org_mismatch",
+                503: "customer_member_lookup_failed",
+            }[expected_status]
+        )
+        failed_identity: Final = logging_obj.post_call_failure_hook.call_args.kwargs["user_api_key_dict"]
+        assert failed_identity.customer_member_id is None
+    else:
+        admitted: Final = await user_api_key_auth(request=request, api_key="Bearer external-token")
+        assert admitted.customer_member_id == ("member-a" if member_exists else None)
+    assert key.customer_member_id == "previous-member"
+    client.db.litellm_customermembertable.create.assert_not_called()
+    client.db.litellm_customermembertable.upsert.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("malformed_body", [True, False])
+async def test_cached_customer_member_cannot_leak_to_a_request_without_the_header(
+    monkeypatch: pytest.MonkeyPatch, malformed_body: bool
+) -> None:
+    key: Final = UserAPIKeyAuth(customer_member_id="previous-member")
+    request, _, logging_obj = _customer_member_auth_request(
+        monkeypatch, key, member_header=False, body=b"{" if malformed_body else b"{}"
+    )
+    if malformed_body:
+        with pytest.raises(ProxyException) as error:
+            await user_api_key_auth(request=request, api_key="Bearer external-token")
+        assert int(error.value.code) == 400
+        failed_identity: Final = logging_obj.post_call_failure_hook.call_args.kwargs["user_api_key_dict"]
+        assert failed_identity.customer_member_id is None
+    else:
+        admitted: Final = await user_api_key_auth(request=request, api_key="Bearer external-token")
+        assert admitted.customer_member_id is None
+    assert key.customer_member_id == "previous-member"
+
+
+@pytest.mark.asyncio
+async def test_customer_member_lookup_failure_clears_an_earlier_identity_before_failure_logging(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    key: Final = UserAPIKeyAuth(customer_member_id="previous-member")
+    request, _, logging_obj = _customer_member_auth_request(monkeypatch, key, database_unavailable=True)
+    with pytest.raises(ProxyException) as error:
+        await _authorize_authenticated_request(key, request, {}, "/v1/chat/completions", "external-token")
+    assert int(error.value.code) == 503
+    failed_identity: Final = logging_obj.post_call_failure_hook.call_args.kwargs["user_api_key_dict"]
+    assert failed_identity.customer_member_id is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reject_unknown", [True, False])
+async def test_database_fallback_identity_cannot_bypass_a_customer_members_org_scope(
+    monkeypatch: pytest.MonkeyPatch, reject_unknown: bool
+) -> None:
+    from litellm.proxy.auth.auth_exception_handler import DB_UNAVAILABLE_FALLBACK_USER_ID
+
+    key: Final = UserAPIKeyAuth(user_id=DB_UNAVAILABLE_FALLBACK_USER_ID)
+    request, _, _ = _customer_member_auth_request(monkeypatch, key, reject_unknown=reject_unknown)
+    with pytest.raises(ProxyException) as error:
+        await user_api_key_auth(request=request, api_key="Bearer external-token")
+    assert int(error.value.code) == 503
+    assert error.value.type == "customer_member_lookup_failed"

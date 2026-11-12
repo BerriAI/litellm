@@ -8,7 +8,7 @@ import time
 from collections.abc import Callable, Mapping
 from types import SimpleNamespace
 from typing import Final, Optional
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException, Request
@@ -23,6 +23,7 @@ from litellm.proxy.auth.auth_utils import (
     check_if_request_size_is_safe,
     custom_auth_common_checks_warning,
     get_customer_user_header_from_mapping,
+    get_customer_member_id_from_request_headers,
     log_once_if_budget_reservation_disabled,
     warn_once_if_custom_auth_skips_common_checks,
     get_end_user_id_from_request_body,
@@ -38,6 +39,7 @@ from litellm.proxy.auth.auth_utils import (
     enforce_team_s3_bucket_allowlist,
     is_request_body_safe,
     pre_db_read_auth_checks,
+    resolve_customer_member,
 )
 from litellm.router import Router
 from litellm.types.utils import oauth_token_exchange_litellm_params, server_owned_wif_litellm_params
@@ -6650,3 +6652,116 @@ def test_chatgpt_model_configuration_reaches_role_authorization(
                 model="",
                 route=inference_route,
             )
+
+
+@pytest.mark.parametrize(
+    ("headers", "expected"),
+    [
+        (None, None),
+        ({}, None),
+        ({"x-litellm-customer-member-id": "member-a"}, "member-a"),
+        ({"X-LiteLLM-Customer-Member-ID": "  member-a  "}, "member-a"),
+        ({"x-litellm-customer-member-id": " \t "}, None),
+        ({"x-litellm-end-user-id": "end-user-a"}, None),
+    ],
+)
+def test_customer_member_header_is_parsed_independently(
+    headers: Mapping[str, object] | None, expected: str | None
+) -> None:
+    assert get_customer_member_id_from_request_headers(headers) == expected
+
+
+@pytest.mark.parametrize(
+    ("headers", "body", "end_user_id"),
+    [
+        ({"x-litellm-customer-member-id": "member-a"}, {}, None),
+        (
+            {"x-litellm-customer-member-id": "member-a", "x-litellm-end-user-id": "end-user-a"},
+            {"user": "body-user"},
+            "end-user-a",
+        ),
+        (
+            {"x-litellm-customer-member-id": "member-a", "x-litellm-customer-id": "end-user-a"},
+            {},
+            "end-user-a",
+        ),
+        ({"x-litellm-customer-member-id": "member-a"}, {"user": "body-user"}, "body-user"),
+    ],
+)
+def test_customer_member_and_end_user_ids_both_apply(
+    headers: Mapping[str, object], body: Mapping[str, object], end_user_id: str | None
+) -> None:
+    with patch("litellm.proxy.proxy_server.general_settings", {}):
+        assert get_customer_member_id_from_request_headers(headers) == "member-a"
+        assert get_end_user_id_from_request_body(body, headers) == end_user_id
+
+
+def _customer_member_database(*, found: bool, org_id: str = "org-a") -> MagicMock:
+    member: Final = (
+        SimpleNamespace(customer_member_id="member-a", parent_team=SimpleNamespace(parent_org_id=org_id))
+        if found
+        else None
+    )
+    client: Final = MagicMock()
+    client.db.litellm_customermembertable.find_unique = AsyncMock(return_value=member)
+    return client
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auto_create_end_users", [True, False])
+async def test_unknown_customer_member_is_rejected_without_being_created(auto_create_end_users: bool) -> None:
+    client: Final = _customer_member_database(found=False)
+    with (
+        patch("litellm.proxy.proxy_server.general_settings", {"auto_create_end_users": auto_create_end_users}),
+        pytest.raises(ProxyException) as error,
+    ):
+        await resolve_customer_member("missing-member", client, None)
+
+    assert int(error.value.code) == 401
+    assert error.value.type == "customer_member_not_found"
+    assert error.value.openai_code == "customer_member_not_found"
+    client.db.litellm_customermembertable.create.assert_not_called()
+    client.db.litellm_customermembertable.upsert.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_unknown_customer_member_can_use_best_effort_tracking() -> None:
+    client: Final = _customer_member_database(found=False)
+    assert await resolve_customer_member("missing-member", client, None, reject_unknown_customer_member=False) is None
+    client.db.litellm_customermembertable.create.assert_not_called()
+    client.db.litellm_customermembertable.upsert.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("metadata", [None, {}, {"customer_org_id": None}, {"customer_org_id": "org-a"}])
+async def test_existing_customer_member_is_allowed_for_matching_or_unscoped_key(
+    metadata: Mapping[str, object] | None,
+) -> None:
+    client: Final = _customer_member_database(found=True)
+    assert await resolve_customer_member("member-a", client, metadata) == "member-a"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reject_unknown", [True, False])
+async def test_customer_member_from_another_org_is_forbidden_even_in_best_effort_mode(reject_unknown: bool) -> None:
+    client: Final = _customer_member_database(found=True, org_id="org-b")
+    with pytest.raises(ProxyException) as error:
+        await resolve_customer_member(
+            "member-a", client, {"customer_org_id": "org-a"}, reject_unknown_customer_member=reject_unknown
+        )
+    assert int(error.value.code) == 403
+    assert error.value.type == "customer_member_org_mismatch"
+    assert error.value.openai_code == "customer_member_org_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_customer_member_cannot_be_accepted_without_a_database() -> None:
+    with pytest.raises(ProxyException) as error:
+        await resolve_customer_member("member-a", None, None)
+    assert int(error.value.code) == 401
+    assert error.value.type == "customer_member_not_found"
+
+
+@pytest.mark.asyncio
+async def test_missing_customer_member_header_does_not_require_a_database() -> None:
+    assert await resolve_customer_member(None, None, {"customer_org_id": "org-a"}) is None
