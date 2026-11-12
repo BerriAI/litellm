@@ -35,6 +35,11 @@ def pool_member(priority: str) -> str:
     return f"{_POOL_PREFIX}{priority}"
 
 
+def team_member(team_id: str) -> str:
+    """The registry id of a real team. It never starts with the separator, so it cannot spell a pool marker."""
+    return f"team{MEMBER_SEPARATOR}{team_id}"
+
+
 def is_pool_member(member: str) -> bool:
     return member.startswith(_POOL_PREFIX)
 

@@ -27,6 +27,7 @@ from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROXY_MaxParallelRequestsHandler_v3,
 )
+from litellm.proxy.hooks.priority_class_share import pool_member
 from litellm.redis.stores.rate_limits import RateLimitScope
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from tests.unit.redis.stores.fake_rate_limits import FakeRateLimits
@@ -2545,3 +2546,27 @@ async def test_tokens_from_a_nested_call_do_not_land_on_the_outer_requests_team_
         end_time=datetime.now(),
     )
     await _check(handler, _class_team("team-a"), saturation=0.62, priority="interactive")
+
+
+@pytest.mark.asyncio
+async def test_a_team_id_spelled_like_a_pool_marker_still_counts_as_a_team(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=False, splits=True)
+    await _burn(handler, _class_team(pool_member("interactive")), "interactive", 20)
+    await _burn(handler, _class_team("team-a"), "interactive", 600)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _class_team("team-a"), saturation=0.62, priority="interactive")
+    assert "Active teams in class: 2, Active classes: 1, " in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_requests_sent_while_the_share_was_not_enforced_all_count_once_the_share_grows(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=False, splits=True)
+    await _check(handler, _class_team("team-b"), saturation=0.0, priority="interactive")
+    for _ in range(70):
+        await _check(handler, _class_team("team-a"), saturation=0.0, priority="interactive")
+    await _check(handler, _class_team("team-b", "batch"), saturation=0.0, priority="batch")
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _class_team("team-a"), saturation=0.6, priority="interactive")
+    assert "Active teams in class: 1, Active classes: 2, " in str(exc.value.detail)

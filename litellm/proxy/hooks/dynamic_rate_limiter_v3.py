@@ -53,6 +53,7 @@ from litellm.proxy.hooks.priority_class_share import (
     TeamShare,
     counter_value,
     pool_member,
+    team_member,
     team_share,
 )
 from litellm.proxy.hooks.rate_limiter_utils import (
@@ -391,7 +392,9 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         ):
             return None
         priority_class: Final = self._priority_class(priority)
-        member: Final = pool_member(priority_class) if user_api_key_dict.team_id is None else user_api_key_dict.team_id
+        member: Final = (
+            pool_member(priority_class) if user_api_key_dict.team_id is None else team_member(user_api_key_dict.team_id)
+        )
         try:
             members: Final = await self.active_teams.touch(model, member, priority_class, self.v3_limiter.window_size)
         except (RedisError, RedisCircuitBreakerOpenError, ValidationError) as e:
@@ -883,7 +886,22 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                 increments=[per_request_increment],
                 parent_otel_span=user_api_key_dict.parent_otel_span,
             )
-        if priority_descriptors and not should_enforce_priority:
+        if priority_descriptors and share is not None and not should_enforce_priority:
+            tracking_only: Final = tuple(
+                RateLimitDescriptor(
+                    key=descriptor["key"],
+                    value=descriptor["value"],
+                    rate_limit=model_wide_descriptor["rate_limit"],
+                )
+                for descriptor in priority_descriptors
+            )
+            await self.v3_limiter.atomic_check_and_increment_by_n(
+                descriptors=list(tracking_only),
+                increments=[per_request_increment for _ in tracking_only],
+                parent_otel_span=user_api_key_dict.parent_otel_span,
+            )
+            get_or_create_request_stash().rate_limit_response = atomic_response
+        elif priority_descriptors and not should_enforce_priority:
             priority_tracking_response: Final = await self.v3_limiter.should_rate_limit(
                 descriptors=priority_descriptors,
                 parent_otel_span=user_api_key_dict.parent_otel_span,
