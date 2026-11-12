@@ -1,7 +1,7 @@
 import re
 from collections.abc import Mapping
 from copy import deepcopy
-from itertools import product
+from itertools import chain, product
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast, runtime_checkable
 from urllib.parse import urlparse
@@ -81,28 +81,46 @@ _REASON_END_CHARS: Final = _MAX_REASON_CHARS // 2
 def _aws_retrieval_filter(openai_filter: OpenAIComparisonFilter | OpenAICompoundFilter) -> Mapping[str, object]:
     match openai_filter:
         case OpenAICompoundFilter():
-            return _aws_logical_filter(
-                openai_filter.type, tuple(_aws_retrieval_filter(member) for member in openai_filter.filters)
-            )
-        case OpenAIMembershipFilter() if all(isinstance(item, str) for item in openai_filter.value):
-            return _aws_comparison(openai_filter.type, openai_filter.key, list(openai_filter.value))
+            return _aws_logical_filter(openai_filter.type, openai_filter.filters)
+        case OpenAIMembershipFilter() if _expands_to_logical_filter(openai_filter):
+            return _aws_logical_filter(_NUMERIC_MEMBERSHIP[openai_filter.type][0], (openai_filter,))
         case OpenAIMembershipFilter():
-            logical, comparison = _NUMERIC_MEMBERSHIP[openai_filter.type]
-            return _aws_logical_filter(
-                logical, tuple(_aws_comparison(comparison, openai_filter.key, item) for item in openai_filter.value)
-            )
+            return _aws_comparison(openai_filter.type, openai_filter.key, list(openai_filter.value))
         case OpenAIEqualityFilter() | OpenAIRangeFilter():
             return _aws_comparison(openai_filter.type, openai_filter.key, openai_filter.value)
 
 
+def _aws_logical_filter(
+    operator: str, members: tuple[OpenAIComparisonFilter | OpenAICompoundFilter, ...]
+) -> Mapping[str, object]:
+    aws_members: Final = tuple(chain.from_iterable(_aws_group_members(operator, member) for member in members))
+    if len(aws_members) == 1:
+        return aws_members[0]
+    return {_AWS_LOGICAL_OPERATORS[operator]: list(aws_members)}
+
+
+def _aws_group_members(
+    operator: str, member: OpenAIComparisonFilter | OpenAICompoundFilter
+) -> tuple[Mapping[str, object], ...]:
+    match member:
+        case OpenAICompoundFilter() if member.type == operator:
+            return tuple(chain.from_iterable(_aws_group_members(operator, nested) for nested in member.filters))
+        case OpenAIMembershipFilter() if (
+            _expands_to_logical_filter(member) and _NUMERIC_MEMBERSHIP[member.type][0] == operator
+        ):
+            return tuple(
+                _aws_comparison(_NUMERIC_MEMBERSHIP[member.type][1], member.key, item) for item in member.value
+            )
+        case _:
+            return (_aws_retrieval_filter(member),)
+
+
+def _expands_to_logical_filter(membership: OpenAIMembershipFilter) -> bool:
+    return not all(isinstance(item, str) for item in membership.value)
+
+
 def _aws_comparison(operator: str, key: str, value: str | float | list[str | float]) -> Mapping[str, object]:
     return {_AWS_COMPARISON_OPERATORS[operator]: {"key": key, "value": value}}
-
-
-def _aws_logical_filter(operator: str, members: tuple[Mapping[str, object], ...]) -> Mapping[str, object]:
-    if len(members) == 1:
-        return members[0]
-    return {_AWS_LOGICAL_OPERATORS[operator]: list(members)}
 
 
 def _validation_reason(error: ValidationError) -> str:

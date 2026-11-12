@@ -518,6 +518,74 @@ def _sent_filter(retrieve_route: respx.Route) -> object:
             id="one-member-compound-unwrapped",
         ),
         pytest.param(
+            {
+                "type": "and",
+                "filters": [
+                    {"type": "eq", "key": "department", "value": "hr"},
+                    {
+                        "type": "and",
+                        "filters": [
+                            {"type": "gte", "key": "year", "value": 2023},
+                            {"type": "lt", "key": "year", "value": 2025},
+                        ],
+                    },
+                ],
+            },
+            {
+                "andAll": [
+                    {"equals": {"key": "department", "value": "hr"}},
+                    {"greaterThanOrEquals": {"key": "year", "value": 2023}},
+                    {"lessThan": {"key": "year", "value": 2025}},
+                ]
+            },
+            id="and-inside-and-joins-the-group",
+        ),
+        pytest.param(
+            {
+                "type": "and",
+                "filters": [
+                    {"type": "eq", "key": "department", "value": "hr"},
+                    {"type": "nin", "key": "year", "value": [2022, 2023]},
+                ],
+            },
+            {
+                "andAll": [
+                    {"equals": {"key": "department", "value": "hr"}},
+                    {"notEquals": {"key": "year", "value": 2022}},
+                    {"notEquals": {"key": "year", "value": 2023}},
+                ]
+            },
+            id="nin-numbers-inside-and-joins-the-group",
+        ),
+        pytest.param(
+            {
+                "type": "and",
+                "filters": [
+                    {"type": "eq", "key": "department", "value": "hr"},
+                    {
+                        "type": "or",
+                        "filters": [
+                            {"type": "in", "key": "year", "value": [2023, 2024]},
+                            {"type": "eq", "key": "department", "value": "sales"},
+                        ],
+                    },
+                ],
+            },
+            {
+                "andAll": [
+                    {"equals": {"key": "department", "value": "hr"}},
+                    {
+                        "orAll": [
+                            {"equals": {"key": "year", "value": 2023}},
+                            {"equals": {"key": "year", "value": 2024}},
+                            {"equals": {"key": "department", "value": "sales"}},
+                        ]
+                    },
+                ]
+            },
+            id="in-numbers-inside-or-joins-the-group",
+        ),
+        pytest.param(
             {"andAll": [{"equals": {"key": "a", "value": 1}}, {"startsWith": {"key": "b", "value": "x"}}]},
             {"andAll": [{"equals": {"key": "a", "value": 1}}, {"startsWith": {"key": "b", "value": "x"}}]},
             id="aws-native-unchanged",
