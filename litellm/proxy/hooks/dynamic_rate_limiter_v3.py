@@ -911,7 +911,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                     rate_limit_type=str(status["rate_limit_type"]),
                     reason=reason,
                 )
-            except Exception as metrics_error:
+            except Exception as metrics_error:  # noqa: BLE001  # a failing metrics sink must not change the 429
                 verbose_proxy_logger.warning("Dynamic rate limiter throttle metric failed: %s", metrics_error)
         return error
 
@@ -936,7 +936,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                     share_tokens=share_tokens,
                     borrowed_tokens=max(0, used_tokens - share_tokens),
                 )
-        except Exception as metrics_error:
+        except Exception as metrics_error:  # noqa: BLE001  # a failing metrics sink must not change settlement
             verbose_proxy_logger.warning("Dynamic rate limiter share metrics failed: %s", metrics_error)
 
     def _team_borrow_ceiling_error(
