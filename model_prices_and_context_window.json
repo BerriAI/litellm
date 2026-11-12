@@ -26230,6 +26230,9 @@
             "video"
         ]
     },
+    "fal_ai/bytedance/seedance-latest/text-to-video": {
+        "alias_of": "fal_ai/bytedance/seedance-2.5/text-to-video"
+    },
     "fal_ai/bytedance/seedance-2.5/image-to-video": {
         "litellm_provider": "fal_ai",
         "mode": "video_generation",
@@ -26248,6 +26251,9 @@
             "video"
         ]
     },
+    "fal_ai/bytedance/seedance-latest/image-to-video": {
+        "alias_of": "fal_ai/bytedance/seedance-2.5/image-to-video"
+    },
     "fal_ai/bytedance/seedance-2.5/reference-to-video": {
         "litellm_provider": "fal_ai",
         "mode": "video_generation",
@@ -26265,6 +26271,9 @@
         "supported_output_modalities": [
             "video"
         ]
+    },
+    "fal_ai/bytedance/seedance-latest/reference-to-video": {
+        "alias_of": "fal_ai/bytedance/seedance-2.5/reference-to-video"
     },
     "fal_ai/minimax/h3/text-to-video": {
         "litellm_provider": "fal_ai",
@@ -56745,6 +56754,9 @@
             "comment": "Output: 20/30/68 credits per second at 480p/720p/1080p @ $0.01 per credit; input video billed additionally at 10/15/34 credits per input second and the 80 credit minimum per task are not modeled"
         }
     },
+    "runwayml/seedance-latest": {
+        "alias_of": "runwayml/seedance2_5"
+    },
     "runwayml/hailuo3": {
         "litellm_provider": "runwayml",
         "mode": "video_generation",
@@ -77926,6 +77938,9 @@
         "tpm": 4000000.0,
         "web_search_billing_unit": "per_query"
     },
+    "gemini/nano-banana-latest": {
+        "alias_of": "gemini/gemini-nano-banana-2.1"
+    },
     "gemini-nano-banana-2.1": {
         "cache_read_input_token_cost": 1.5e-07,
         "cache_read_input_token_cost_batches": 7.5e-08,
@@ -78019,6 +78034,9 @@
         "supports_vision": true,
         "supports_web_search": true,
         "web_search_billing_unit": "per_query"
+    },
+    "vertex_ai/nano-banana-latest": {
+        "alias_of": "vertex_ai/gemini-nano-banana-2.1"
     },
     "azure_ai/grok-4.7": {
         "cache_read_input_token_cost": 5e-07,
@@ -97752,6 +97770,9 @@
         "output_cost_per_image_2K": 0.0504,
         "output_cost_per_image_4K": 0.1134,
         "source": "https://replicate.com/google/nano-banana-2.1"
+    },
+    "replicate/google/nano-banana-latest": {
+        "alias_of": "replicate/google/nano-banana-2.1"
     },
     "replicate/heygen/avatar-iv": {
         "litellm_provider": "replicate",
