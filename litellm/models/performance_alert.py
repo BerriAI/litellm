@@ -17,8 +17,6 @@ SPEND_MULTIPLIER: Final = 3
 SPEND_MIN_INCREASE_USD: Final = 50
 TRAFFIC_SPIKE_MULTIPLIER: Final = 10
 TRAFFIC_SPIKE_MIN_INCREASE: Final = 1000
-TRAFFIC_DROP_RATIO: Final = 0.2
-TRAFFIC_DROP_MIN_BASELINE: Final = 500
 LATENCY_MULTIPLIER: Final = 3
 LATENCY_MIN_INCREASE_MS: Final = 500
 LATENCY_MIN_TIMED_REQUESTS: Final = 100
@@ -45,7 +43,6 @@ class ResourceWindow(BaseModel):
     base_timed: int = Field(ge=0, le=MAX_ALERT_ID)
     active_days: int = Field(ge=0, le=BASELINE_DAYS)
     timed_days: int = Field(ge=0, le=BASELINE_DAYS)
-    exists: bool
 
 
 class SweepState(BaseModel):
@@ -187,20 +184,14 @@ def _spend_spike(window: ResourceWindow) -> tuple[float, float] | None:
     return (window.spend, baseline) if triggered else None
 
 
-def _traffic_change(window: ResourceWindow) -> tuple[float, float] | None:
+def _traffic_spike(window: ResourceWindow) -> tuple[float, float] | None:
     baseline: Final = window.base_requests / BASELINE_DAYS
     spike: Final = (
         window.active_days >= MIN_ACTIVE_DAYS
         and window.requests >= TRAFFIC_SPIKE_MULTIPLIER * baseline
         and window.requests - baseline >= TRAFFIC_SPIKE_MIN_INCREASE
     )
-    drop: Final = (
-        window.exists
-        and window.active_days == BASELINE_DAYS
-        and baseline >= TRAFFIC_DROP_MIN_BASELINE
-        and window.requests < TRAFFIC_DROP_RATIO * baseline
-    )
-    return (window.requests, baseline) if spike or drop else None
+    return (window.requests, baseline) if spike else None
 
 
 def _slower_responses(window: ResourceWindow) -> tuple[float, float] | None:
@@ -231,7 +222,7 @@ def _more_failures(window: ResourceWindow) -> tuple[float, float] | None:
 def detect(scope: PerformanceScope, window: ResourceWindow, day: date) -> tuple[AlertDetection, ...]:
     checks: Final[tuple[tuple[AlertType, tuple[float, float] | None, int], ...]] = (
         ("spend", _spend_spike(window), window.requests),
-        ("traffic", _traffic_change(window), window.requests),
+        ("traffic", _traffic_spike(window), window.requests),
         ("latency", _slower_responses(window), window.timed),
         ("reliability", _more_failures(window), window.requests),
     )
