@@ -67,11 +67,12 @@ class TeamShare:
     active_teams_in_class: int
     active_classes: int
 
-    def tokens(self, model_tpm: int | None) -> int | None:
-        return None if model_tpm is None else int(model_tpm * self.fraction)
+    def tokens(self, model_tpm: int | None, scale: float = 1.0) -> int | None:
+        """The share in tokens, scaled by a burst multiplier before truncation and never above the model."""
+        return None if model_tpm is None else min(int(model_tpm * self.fraction * scale), model_tpm)
 
-    def requests(self, model_rpm: int | None) -> int | None:
-        return None if model_rpm is None else int(model_rpm * self.fraction)
+    def requests(self, model_rpm: int | None, scale: float = 1.0) -> int | None:
+        return None if model_rpm is None else min(int(model_rpm * self.fraction * scale), model_rpm)
 
 
 def compute_team_share(

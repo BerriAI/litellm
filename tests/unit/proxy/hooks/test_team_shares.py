@@ -64,6 +64,14 @@ def test_share_in_tokens_scales_model_tpm_and_reports_active_counts():
     assert (share.active_teams_in_class, share.active_classes) == (2, 2)
 
 
+def test_small_share_scaled_by_a_burst_multiplier_keeps_the_fractional_request_and_stops_at_the_model():
+    members = {"assistant": "interactive", "state": "batch", "dec": "batch", "paa": "batch"}
+    share = compute_team_share(team_id="paa", members=members, class_weights=WEIGHTS, default_weight=0.25)
+    assert share.requests(10) == 1, "0.4 / 3 of 10 requests truncates to 1 before any multiplier"
+    assert share.requests(5, 2.0) == 1, "0.666 requests alone truncates to 0, doubled first it is 1.33 -> 1"
+    assert share.tokens(5000, 20.0) == 5000, "a multiplier never lifts a team above the model"
+
+
 def test_unknown_class_uses_default_weight():
     members = {"assistant": "interactive", "mystery": "default"}
     share = compute_team_share(team_id="mystery", members=members, class_weights=WEIGHTS, default_weight=0.2)

@@ -179,18 +179,12 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         multiplier: Final = team_burst_multiplier(user_api_key_dict, settings.default_max_borrow_multiplier)
         scale: Final = 1.0 if saturated or multiplier is None else multiplier
         reason: ThrottleReason | None = "over_share_saturated" if saturated else "burst_cap" if multiplier else None
-        share_tpm: Final = share.tokens(model_group_info.tpm)
-        share_rpm: Final = share.requests(model_group_info.rpm)
         descriptor: Final = RateLimitDescriptor(
             key=TEAM_SHARE_DESCRIPTOR_KEY,
             value=f"{model}:{team_id}",
             rate_limit={
-                "tokens_per_unit": None
-                if share_tpm is None
-                else int(min(share_tpm * scale, model_group_info.tpm or 0)),
-                "requests_per_unit": None
-                if share_rpm is None
-                else int(min(share_rpm * scale, model_group_info.rpm or 0)),
+                "tokens_per_unit": share.tokens(model_group_info.tpm, scale),
+                "requests_per_unit": share.requests(model_group_info.rpm, scale),
                 "window_size": self.v3_limiter.window_size,
             },
         )
