@@ -62,12 +62,7 @@ _MANAGED_MODEL_PATHS: Final = (
     "/openai/deployments/{model:path}/embeddings",
     "/openai/deployments/{model:path}/images/generations",
     "/openai/deployments/{model:path}/images/edits",
-    "/v1beta/models/{model_name:path}:countTokens",
-    "/v1beta/models/{model_name:path}:generateContent",
-    "/v1beta/models/{model_name:path}:streamGenerateContent",
-    "/models/{model_name:path}:countTokens",
-    "/models/{model_name:path}:generateContent",
-    "/models/{model_name:path}:streamGenerateContent",
+    *(route for route in LiteLLMRoutes.google_routes.value if "/models/{model_name:path}:" in route),
 )
 _MANAGED_MCP_ROUTES: Final = tuple(
     route for route in LiteLLMRoutes.mcp_inference_routes.value if route not in ("/token", "/introspect")

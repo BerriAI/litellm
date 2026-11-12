@@ -1679,6 +1679,8 @@ _URL_SELECTED_MODEL_ROUTES: Final = (
     ("/v1beta/models/premium-model:generateContent", "premium-model"),
     ("/models/premium-model:generateContent", "premium-model"),
     ("/v1beta/models/premium-model:streamGenerateContent", "premium-model"),
+    ("/v1/models/premium-model:generateContent", "premium-model"),
+    ("/v1/models/provider/premium-model:streamGenerateContent", "provider/premium-model"),
     ("/models/provider/premium-model:7b:streamGenerateContent", "provider/premium-model:7b"),
     ("/openai/deployments/premium-model/images/generations", "premium-model"),
     ("/openai/deployments/provider/premium-model/images/edits", "provider/premium-model"),
@@ -5860,6 +5862,7 @@ class TestIsRequestBodySafeBlocksVertexTargetOverrides:
         [
             "/openai/deployments/gemini-pinned/chat/completions",
             "/v1beta/models/gemini-pinned:generateContent",
+            "/v1/models/gemini-pinned:generateContent",
         ],
     )
     def test_model_named_in_the_route_needs_the_opt_in_too(self, route: str) -> None:

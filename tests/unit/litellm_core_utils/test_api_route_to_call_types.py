@@ -10,6 +10,8 @@ Regression coverage for the guardrail route table bugs:
 
 from typing import Final
 
+import pytest
+
 from litellm.litellm_core_utils.api_route_to_call_types import (
     get_call_types_for_route,
 )
@@ -42,6 +44,19 @@ class TestGenerateContentRouteResolution:
             CallTypes.agenerate_content_stream,
             CallTypes.generate_content_stream,
         ]
+
+    @pytest.mark.parametrize(
+        "route, expected",
+        [
+            ("/v1/models/gemini-2.5-flash:generateContent", [CallTypes.agenerate_content, CallTypes.generate_content]),
+            (
+                "/v1/models/gemini/gemini-2.5-flash:streamGenerateContent",
+                [CallTypes.agenerate_content_stream, CallTypes.generate_content_stream],
+            ),
+        ],
+    )
+    def test_v1_generate_content_routes_resolve_like_v1beta(self, route, expected):
+        assert list(get_call_types_for_route(route) or ()) == expected
 
     def test_slash_containing_model_name_resolves(self):
         call_types = get_call_types_for_route("/v1beta/models/gemini/gemini-2.5-flash:generateContent")

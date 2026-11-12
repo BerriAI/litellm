@@ -362,6 +362,8 @@ async def test_unknown_invocation_target_leaves_billing_unset(monkeypatch: pytes
         ("/openai/deployments/openai/model/images/generations", "POST", True),
         ("/openai/deployments/openai/model/images/edits", "POST", True),
         ("/v1beta/models/gemini-model:generateContent", "POST", True),
+        ("/v1/models/gemini-model:streamGenerateContent", "POST", True),
+        ("/v1/models/gemini-model:generateContent", "GET", False),
         ("/v1/realtime", "GET", True),
         ("/v1/realtime", "POST", False),
         ("/v1/realtime/translations", "GET", True),
@@ -404,6 +406,7 @@ def test_managed_route_scope_excludes_provider_resources(route: str, method: str
         ("/v1/images/edits", {}, {"image_generation_model": "image"}, None, None, "image"),
         ("/v1/rerank", {"model": "reranker"}, {"completion_model": "text"}, "cli", None, "reranker"),
         ("/v1beta/models/path:countTokens", {"model": "body"}, {"completion_model": "text"}, "cli", "path", "path"),
+        ("/v1/models/path:countTokens", {"model": "body"}, {"completion_model": "text"}, "cli", "path", "path"),
     ],
 )
 def test_managed_inference_resolves_dispatch_precedence(

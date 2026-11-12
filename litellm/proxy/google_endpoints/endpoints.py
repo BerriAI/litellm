@@ -17,6 +17,7 @@ from litellm.proxy.common_request_processing import (
     proxy_exception_from_http_exception,
     resolve_litellm_call_id,
 )
+from litellm.proxy.common_utils.custom_openapi_spec import inline_request_body
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     read_request_body,
@@ -24,7 +25,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
 from litellm.proxy.common_utils.openai_error_payload import LITELLM_CALL_ID_HEADER
 from litellm.proxy.common_utils.token_count_log import answered_with_litellm_call_id, rejected_token_count
 from litellm.proxy.common_utils.token_count_settings import count_source_fields
-from litellm.types.llms.vertex_ai import TokenCountDetailsResponse
+from litellm.types.llms.vertex_ai import GenerateContentResponseBody, TokenCountDetailsResponse
 
 
 def _google_repeated_field(value: JsonValue) -> JsonValue:
@@ -112,6 +113,17 @@ class _GoogleCountTokensRequest(BaseModel):
     tools: Annotated[tuple[_GoogleCountTokensTool, ...], _GOOGLE_REPEATED_FIELD] = ()
 
 
+class _GoogleGenerateContentRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+    contents: tuple[Mapping[str, JsonValue], ...]
+    system_instruction: Mapping[str, JsonValue] | None = Field(default=None, alias="systemInstruction")
+    tools: tuple[Mapping[str, JsonValue], ...] = ()
+    tool_config: Mapping[str, JsonValue] | None = Field(default=None, alias="toolConfig")
+    safety_settings: tuple[Mapping[str, JsonValue], ...] = Field(default=(), alias="safetySettings")
+    generation_config: Mapping[str, JsonValue] | None = Field(default=None, alias="generationConfig")
+    cached_content: str | None = Field(default=None, alias="cachedContent")
+
+
 router: Final = APIRouter(
     tags=["google genai endpoints"],
 )
@@ -191,13 +203,32 @@ def _google_count_tokens_request(model_name: str, data: object) -> TokenCountReq
     )
 
 
+_GOOGLE_EXAMPLE_CONTENTS: Final = ({"role": "user", "parts": [{"text": "Say hi in three words"}]},)
+_GENERATE_CONTENT_REQUEST_BODY: Final = inline_request_body(
+    _GoogleGenerateContentRequest, {"contents": _GOOGLE_EXAMPLE_CONTENTS}
+)
+_COUNT_TOKENS_REQUEST_BODY: Final = inline_request_body(
+    _GoogleCountTokensRequest, {"contents": _GOOGLE_EXAMPLE_CONTENTS}
+)
+
+
 @router.post(
     "/v1beta/models/{model_name:path}:generateContent",
     dependencies=[Depends(user_api_key_auth)],
+    openapi_extra={"requestBody": _GENERATE_CONTENT_REQUEST_BODY},
+    responses={200: {"model": GenerateContentResponseBody}},
+)
+@router.post(
+    "/v1/models/{model_name:path}:generateContent",
+    dependencies=[Depends(user_api_key_auth)],
+    openapi_extra={"requestBody": _GENERATE_CONTENT_REQUEST_BODY},
+    responses={200: {"model": GenerateContentResponseBody}},
 )
 @router.post(
     "/models/{model_name:path}:generateContent",
     dependencies=[Depends(user_api_key_auth)],
+    openapi_extra={"requestBody": _GENERATE_CONTENT_REQUEST_BODY},
+    responses={200: {"model": GenerateContentResponseBody}},
 )
 async def google_generate_content(
     request: Request,
@@ -205,6 +236,7 @@ async def google_generate_content(
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    """Run one Gemini API generateContent request against any proxy model and return a GenerateContentResponse"""
     from litellm.proxy.proxy_server import (
         general_settings,
         llm_router,
@@ -255,10 +287,20 @@ async def google_generate_content(
 @router.post(
     "/v1beta/models/{model_name:path}:streamGenerateContent",
     dependencies=[Depends(user_api_key_auth)],
+    openapi_extra={"requestBody": _GENERATE_CONTENT_REQUEST_BODY},
+    responses={200: {"model": GenerateContentResponseBody}},
+)
+@router.post(
+    "/v1/models/{model_name:path}:streamGenerateContent",
+    dependencies=[Depends(user_api_key_auth)],
+    openapi_extra={"requestBody": _GENERATE_CONTENT_REQUEST_BODY},
+    responses={200: {"model": GenerateContentResponseBody}},
 )
 @router.post(
     "/models/{model_name:path}:streamGenerateContent",
     dependencies=[Depends(user_api_key_auth)],
+    openapi_extra={"requestBody": _GENERATE_CONTENT_REQUEST_BODY},
+    responses={200: {"model": GenerateContentResponseBody}},
 )
 async def google_stream_generate_content(
     request: Request,
@@ -266,6 +308,7 @@ async def google_stream_generate_content(
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    """Stream a Gemini API generateContent request as server-sent events, one GenerateContentResponse per event"""
     from litellm.proxy.proxy_server import (
         general_settings,
         llm_router,
@@ -321,11 +364,19 @@ async def google_stream_generate_content(
     "/v1beta/models/{model_name:path}:countTokens",
     dependencies=[Depends(user_api_key_auth)],
     response_model=TokenCountDetailsResponse,
+    openapi_extra={"requestBody": _COUNT_TOKENS_REQUEST_BODY},
+)
+@router.post(
+    "/v1/models/{model_name:path}:countTokens",
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=TokenCountDetailsResponse,
+    openapi_extra={"requestBody": _COUNT_TOKENS_REQUEST_BODY},
 )
 @router.post(
     "/models/{model_name:path}:countTokens",
     dependencies=[Depends(user_api_key_auth)],
     response_model=TokenCountDetailsResponse,
+    openapi_extra={"requestBody": _COUNT_TOKENS_REQUEST_BODY},
 )
 async def google_count_tokens(request: Request, model_name: str, fastapi_response: Response):
     """

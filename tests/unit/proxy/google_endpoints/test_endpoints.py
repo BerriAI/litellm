@@ -9,8 +9,14 @@ from dotenv import load_dotenv
 from pydantic import JsonValue, ValidationError
 from starlette.requests import Request
 from starlette.responses import Response
+from starlette.routing import Match
 
-from litellm.proxy.google_endpoints.endpoints import _google_count_tokens_request, google_count_tokens
+from litellm.proxy.google_endpoints.endpoints import (
+    _google_count_tokens_request,
+    google_count_tokens,
+    google_generate_content,
+    google_stream_generate_content,
+)
 from litellm.types.llms.vertex_ai import TokenCountDetailsResponse
 
 
@@ -195,3 +201,24 @@ def test_google_count_tokens_keeps_counting_system_text_that_sits_beside_media()
     assert _google_count_tokens_request(
         "counted", {**_CONTENTS, "systemInstruction": {"parts": [text_with_media]}}
     ) == _google_count_tokens_request("counted", {**_CONTENTS, **_SYSTEM})
+
+
+@pytest.mark.parametrize("version", ["/v1beta", "/v1", ""])
+@pytest.mark.parametrize("model", ["gemini-text", "gemini/gemini-3.8-flash"])
+@pytest.mark.parametrize(
+    ("action", "handler"),
+    [
+        ("generateContent", google_generate_content),
+        ("streamGenerateContent", google_stream_generate_content),
+        ("countTokens", google_count_tokens),
+    ],
+)
+def test_proxy_app_sends_a_google_model_action_post_to_its_handler_under_every_api_version(
+    version: str, model: str, action: str, handler: object
+) -> None:
+    from litellm.proxy.proxy_server import app
+
+    scope: Final = {"type": "http", "method": "POST", "path": f"{version}/models/{model}:{action}", "root_path": ""}
+    matched: Final = next(route for route in app.router.routes if route.matches(scope)[0] is Match.FULL)
+
+    assert getattr(matched, "endpoint", None) is handler

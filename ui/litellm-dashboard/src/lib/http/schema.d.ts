@@ -10878,7 +10878,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Google Generate Content */
+        /**
+         * Google Generate Content
+         * @description Run one Gemini API generateContent request against any proxy model and return a GenerateContentResponse
+         */
         post: operations["google_generate_content_models__model_name__generateContent_post"];
         delete?: never;
         options?: never;
@@ -10895,7 +10898,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Google Stream Generate Content */
+        /**
+         * Google Stream Generate Content
+         * @description Stream a Gemini API generateContent request as server-sent events, one GenerateContentResponse per event
+         */
         post: operations["google_stream_generate_content_models__model_name__streamGenerateContent_post"];
         delete?: never;
         options?: never;
@@ -22434,6 +22440,77 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/models/{model_name}:countTokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Google Count Tokens
+         * @description ```json
+         *     return {
+         *         "totalTokens": 31,
+         *         "totalBillableCharacters": 96,
+         *         "promptTokensDetails": [
+         *             {
+         *             "modality": "TEXT",
+         *             "tokenCount": 31
+         *             }
+         *         ]
+         *     }
+         *     ```
+         */
+        post: operations["google_count_tokens_v1_models__model_name__countTokens_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/models/{model_name}:generateContent": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Google Generate Content
+         * @description Run one Gemini API generateContent request against any proxy model and return a GenerateContentResponse
+         */
+        post: operations["google_generate_content_v1_models__model_name__generateContent_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/models/{model_name}:streamGenerateContent": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Google Stream Generate Content
+         * @description Stream a Gemini API generateContent request as server-sent events, one GenerateContentResponse per event
+         */
+        post: operations["google_stream_generate_content_v1_models__model_name__streamGenerateContent_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/moderations": {
         parameters: {
             query?: never;
@@ -24599,7 +24676,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Google Generate Content */
+        /**
+         * Google Generate Content
+         * @description Run one Gemini API generateContent request against any proxy model and return a GenerateContentResponse
+         */
         post: operations["google_generate_content_v1beta_models__model_name__generateContent_post"];
         delete?: never;
         options?: never;
@@ -24616,7 +24696,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Google Stream Generate Content */
+        /**
+         * Google Stream Generate Content
+         * @description Stream a Gemini API generateContent request as server-sent events, one GenerateContentResponse per event
+         */
         post: operations["google_stream_generate_content_v1beta_models__model_name__streamGenerateContent_post"];
         delete?: never;
         options?: never;
@@ -28650,6 +28733,13 @@ export interface components {
              */
             start: string;
         };
+        /** BlobType */
+        BlobType: {
+            /** Data */
+            data: string;
+            /** Mime Type */
+            mime_type: string;
+        };
         /** BlockKeyRequest */
         BlockKeyRequest: {
             /** Key */
@@ -29950,6 +30040,30 @@ export interface components {
              */
             status: "cancelled";
         };
+        /** Candidates */
+        Candidates: {
+            /** Citationmetadata */
+            citationMetadata?: components["schemas"]["CitationMetadata"] | components["schemas"]["CitationMetadata"][];
+            content?: components["schemas"]["HttpxContentType"];
+            /** Continuationtoken */
+            continuationToken?: string;
+            /** Finishmessage */
+            finishMessage?: string;
+            /**
+             * Finishreason
+             * @enum {string}
+             */
+            finishReason?: "FINISH_REASON_UNSPECIFIED" | "STOP" | "MAX_TOKENS" | "CONTINUATION" | "SAFETY" | "RECITATION" | "LANGUAGE" | "OTHER" | "BLOCKLIST" | "PROHIBITED_CONTENT" | "SPII" | "MALFORMED_FUNCTION_CALL" | "IMAGE_SAFETY" | "IMAGE_PROHIBITED_CONTENT" | "TOO_MANY_TOOL_CALLS" | "MALFORMED_RESPONSE" | "NO_IMAGE" | "IMAGE_RECITATION" | "IMAGE_OTHER" | "ESCALATION" | "UNEXPECTED_TOOL_CALL" | "MISSING_THOUGHT_SIGNATURE";
+            /** Groundingmetadata */
+            groundingMetadata?: components["schemas"]["GroundingMetadata"] | components["schemas"]["GroundingMetadata"][];
+            /** Index */
+            index?: number;
+            logprobsResult?: components["schemas"]["LogprobsResult"];
+            /** Safetyratings */
+            safetyRatings?: components["schemas"]["SafetyRatings"][];
+            /** Urlcontextmetadata */
+            urlContextMetadata?: components["schemas"]["UrlContextMetadata"] | components["schemas"]["UrlContextMetadata"][];
+        };
         /** CapabilityCalibrationConfig */
         CapabilityCalibrationConfig: {
             /** Intercept */
@@ -30607,6 +30721,27 @@ export interface components {
              * @enum {string}
              */
             rule_name: "Code Detection" | "Harassment" | "Hate Speech" | "PCI" | "PHI" | "PII" | "Prompt Injection" | "Profanity" | "Sexual Content & Exploitation" | "Social Division & Polarization" | "Violence & Public Safety Threats";
+        };
+        /** Citation */
+        Citation: {
+            /** Endindex */
+            endIndex: number;
+            /** License */
+            license: string;
+            publicationDate: components["schemas"]["Date"];
+            /** Startindex */
+            startIndex: number;
+            /** Title */
+            title: string;
+            /** Uri */
+            uri: string;
+        };
+        /** CitationMetadata */
+        CitationMetadata: {
+            /** Citationsources */
+            citationSources?: components["schemas"]["Citation"][];
+            /** Citations */
+            citations?: components["schemas"]["Citation"][];
         };
         /** CitationsObject */
         CitationsObject: {
@@ -32975,6 +33110,15 @@ export interface components {
              */
             total_tokens: number;
         };
+        /** Date */
+        Date: {
+            /** Date */
+            date: number;
+            /** Month */
+            month: number;
+            /** Year */
+            year: number;
+        };
         /**
          * DecisionModelCheck
          * @description One predicate the decision model scores the request or response against.
@@ -34029,6 +34173,13 @@ export interface components {
             /** Stored In Db */
             stored_in_db: boolean | null;
         };
+        /** FileDataType */
+        FileDataType: {
+            /** File Uri */
+            file_uri: string;
+            /** Mime Type */
+            mime_type: string;
+        };
         /**
          * FileSearchTool
          * @description A tool that searches for relevant content from uploaded files.
@@ -34108,6 +34259,24 @@ export interface components {
              * @constant
              */
             type: "function_call_output";
+        };
+        /** FunctionResponse */
+        FunctionResponse: {
+            /** Id */
+            id?: string;
+            /** Name */
+            name: string;
+            /** Parts */
+            parts?: components["schemas"]["FunctionResponsePartType"][];
+            /** Response */
+            response?: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /** FunctionResponsePartType */
+        FunctionResponsePartType: {
+            file_data?: components["schemas"]["FileDataType"];
+            inline_data?: components["schemas"]["BlobType"];
         };
         /**
          * FunctionShellTool
@@ -34299,6 +34468,15 @@ export interface components {
             failed_requests: number;
             /** Status Code */
             status_code: number;
+        };
+        /** GenerateContentResponseBody */
+        GenerateContentResponseBody: {
+            /** Candidates */
+            candidates?: components["schemas"]["Candidates"][];
+            promptFeedback?: components["schemas"]["PromptFeedback"];
+            /** Responseid */
+            responseId?: string;
+            usageMetadata: components["schemas"]["UsageMetadata"];
         };
         /** GenerateKeyRequest */
         GenerateKeyRequest: {
@@ -34739,6 +34917,37 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** GroundingMetadata */
+        GroundingMetadata: {
+            /** Groundingattributions */
+            groundingAttributions?: {
+                [key: string]: unknown;
+            }[];
+            /** Groundingsupports */
+            groundingSupports?: components["schemas"]["GroundingSupport"][];
+            searchEntryPoint?: components["schemas"]["SearchEntryPoint"];
+            /** Websearchqueries */
+            webSearchQueries?: string[];
+        };
+        /** GroundingSegment */
+        GroundingSegment: {
+            /** Endindex */
+            endIndex?: number;
+            /** Partindex */
+            partIndex?: number;
+            /** Startindex */
+            startIndex?: number;
+            /** Text */
+            text?: string;
+        };
+        /** GroundingSupport */
+        GroundingSupport: {
+            /** Confidencescores */
+            confidenceScores?: number[];
+            /** Groundingchunkindices */
+            groundingChunkIndices?: number[];
+            segment?: components["schemas"]["GroundingSegment"];
+        };
         /** Guardrail */
         Guardrail: {
             /** Created At */
@@ -34997,6 +35206,92 @@ export interface components {
              * @description Token for Vault token-based authentication
              */
             vault_token?: string | null;
+        };
+        /** HttpxBlobType */
+        HttpxBlobType: {
+            /** Data */
+            data?: string;
+            /** Mimetype */
+            mimeType?: string;
+        };
+        /** HttpxCodeExecutionResult */
+        HttpxCodeExecutionResult: {
+            /** Outcome */
+            outcome: string;
+            /** Output */
+            output: string;
+        };
+        /** HttpxContentType */
+        HttpxContentType: {
+            /** Parts */
+            parts?: components["schemas"]["HttpxPartType"][];
+            /**
+             * Role
+             * @enum {string}
+             */
+            role?: "user" | "model";
+        };
+        /** HttpxExecutableCode */
+        HttpxExecutableCode: {
+            /** Code */
+            code: string;
+            /** Language */
+            language: string;
+        };
+        /** HttpxFunctionCall */
+        HttpxFunctionCall: {
+            /** Args */
+            args?: {
+                [key: string]: unknown;
+            };
+            /** Id */
+            id?: string;
+            /** Name */
+            name: string;
+        };
+        /** HttpxPartType */
+        HttpxPartType: {
+            codeExecutionResult?: components["schemas"]["HttpxCodeExecutionResult"];
+            executableCode?: components["schemas"]["HttpxExecutableCode"];
+            fileData?: components["schemas"]["FileDataType"];
+            functionCall?: components["schemas"]["HttpxFunctionCall"];
+            functionResponse?: components["schemas"]["FunctionResponse"];
+            inlineData?: components["schemas"]["HttpxBlobType"];
+            /**
+             * Mediaresolution
+             * @enum {string}
+             */
+            mediaResolution?: "low" | "medium" | "high";
+            /** Text */
+            text?: string;
+            /** Thought */
+            thought?: boolean;
+            /** Thoughtsignature */
+            thoughtSignature?: string;
+            toolCall?: components["schemas"]["HttpxServerSideToolCall"];
+            toolResponse?: components["schemas"]["HttpxServerSideToolResponse"];
+        };
+        /** HttpxServerSideToolCall */
+        HttpxServerSideToolCall: {
+            /** Args */
+            args?: {
+                [key: string]: unknown;
+            };
+            /** Id */
+            id?: string;
+            /** Tooltype */
+            toolType?: string;
+        };
+        /** HttpxServerSideToolResponse */
+        HttpxServerSideToolResponse: {
+            /** Id */
+            id?: string;
+            /** Response */
+            response?: string | {
+                [key: string]: unknown;
+            };
+            /** Tooltype */
+            toolType?: string;
         };
         /** Hyperparameters */
         Hyperparameters: {
@@ -39194,6 +39489,27 @@ export interface components {
             token: string;
         } & {
             [key: string]: unknown;
+        };
+        /** LogprobsCandidate */
+        LogprobsCandidate: {
+            /** Logprobability */
+            logProbability: number;
+            /** Token */
+            token: string;
+            /** Tokenid */
+            tokenId: number;
+        };
+        /** LogprobsResult */
+        LogprobsResult: {
+            /** Chosencandidates */
+            chosenCandidates?: components["schemas"]["LogprobsCandidate"][];
+            /** Topcandidates */
+            topCandidates?: components["schemas"]["LogprobsTopCandidate"][];
+        };
+        /** LogprobsTopCandidate */
+        LogprobsTopCandidate: {
+            /** Candidates */
+            candidates: components["schemas"]["LogprobsCandidate"][];
         };
         /**
          * MCPAllowedClient
@@ -43518,6 +43834,15 @@ export interface components {
             /** Requests */
             requests: components["schemas"]["PromptCachingRequest"][];
         };
+        /** PromptFeedback */
+        PromptFeedback: {
+            /** Blockreason */
+            blockReason: string;
+            /** Blockreasonmessage */
+            blockReasonMessage: string;
+            /** Safetyratings */
+            safetyRatings: components["schemas"]["SafetyRatings"][];
+        };
         /** PromptInfo */
         PromptInfo: {
             /**
@@ -46935,6 +47260,28 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** SafetyRatings */
+        SafetyRatings: {
+            /** Blocked */
+            blocked: boolean;
+            /**
+             * Category
+             * @enum {string}
+             */
+            category: "HARM_CATEGORY_UNSPECIFIED" | "HARM_CATEGORY_HATE_SPEECH" | "HARM_CATEGORY_DANGEROUS_CONTENT" | "HARM_CATEGORY_HARASSMENT" | "HARM_CATEGORY_SEXUALLY_EXPLICIT";
+            /**
+             * Probability
+             * @enum {string}
+             */
+            probability: "HARM_PROBABILITY_UNSPECIFIED" | "NEGLIGIBLE" | "LOW" | "MEDIUM" | "HIGH";
+            /** Probabilityscore */
+            probabilityScore: number;
+            /**
+             * Severity
+             * @enum {string}
+             */
+            severity: "HARM_SEVERITY_UNSPECIFIED" | "HARM_SEVERITY_NEGLIGIBLE" | "HARM_SEVERITY_LOW" | "HARM_SEVERITY_MEDIUM" | "HARM_SEVERITY_HIGH";
+        };
         /**
          * ScheduledJobStaggerSettings
          * @description Spreads the proxy's scheduled background jobs across a window instead of firing them
@@ -47036,6 +47383,13 @@ export interface components {
             search_context_size_medium?: number;
         } & {
             [key: string]: unknown;
+        };
+        /** SearchEntryPoint */
+        SearchEntryPoint: {
+            /** Renderedcontent */
+            renderedContent?: string;
+            /** Sdkblob */
+            sdkBlob?: string;
         };
         /**
          * SearchTool
@@ -51561,6 +51915,18 @@ export interface components {
              */
             version: string | null;
         };
+        /** UrlContextMetadata */
+        UrlContextMetadata: {
+            /** Urlmetadata */
+            urlMetadata?: components["schemas"]["UrlMetadata"][];
+        };
+        /** UrlMetadata */
+        UrlMetadata: {
+            /** Retrievedurl */
+            retrievedUrl?: string;
+            /** Urlretrievalstatus */
+            urlRetrievalStatus?: string;
+        };
         /** UsageChartPoint */
         UsageChartPoint: {
             /** Blocked */
@@ -51678,6 +52044,33 @@ export interface components {
             page_size: number;
             /** Total */
             total: number;
+        };
+        /** UsageMetadata */
+        UsageMetadata: {
+            /** Cachetokensdetails */
+            cacheTokensDetails?: components["schemas"]["PromptTokensDetails"][];
+            /** Cachedcontenttokencount */
+            cachedContentTokenCount?: number;
+            /** Candidatestokencount */
+            candidatesTokenCount?: number;
+            /** Candidatestokensdetails */
+            candidatesTokensDetails?: components["schemas"]["PromptTokensDetails"][];
+            /** Prompttokencount */
+            promptTokenCount?: number;
+            /** Prompttokensdetails */
+            promptTokensDetails?: components["schemas"]["PromptTokensDetails"][];
+            /** Responsetokencount */
+            responseTokenCount?: number;
+            /** Responsetokensdetails */
+            responseTokensDetails?: components["schemas"]["PromptTokensDetails"][];
+            /** Thoughtstokencount */
+            thoughtsTokenCount?: number;
+            /** Tooluseprompttokencount */
+            toolUsePromptTokenCount?: number;
+            /** Tooluseprompttokensdetails */
+            toolUsePromptTokensDetails?: components["schemas"]["PromptTokensDetails"][];
+            /** Totaltokencount */
+            totalTokenCount?: number;
         };
         /** UsageOverviewResponse */
         UsageOverviewResponse: {
@@ -69112,7 +69505,61 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "contents": [
+                 *         {
+                 *           "parts": [
+                 *             {
+                 *               "text": "Say hi in three words"
+                 *             }
+                 *           ],
+                 *           "role": "user"
+                 *         }
+                 *       ]
+                 *     }
+                 */
+                "application/json": {
+                    /**
+                     * Contents
+                     * @default []
+                     */
+                    contents?: {
+                        [key: string]: unknown;
+                    }[];
+                    systemInstruction?: {
+                        /**
+                         * Parts
+                         * @default []
+                         */
+                        parts?: {
+                            /** Text */
+                            text: string | null;
+                        }[];
+                    } | null;
+                    /**
+                     * Tools
+                     * @default []
+                     */
+                    tools?: {
+                        /**
+                         * Functiondeclarations
+                         * @default []
+                         */
+                        functionDeclarations?: {
+                            /** Description */
+                            description?: string | null;
+                            /** Name */
+                            name: string;
+                            parameters?: unknown | null;
+                            parametersJsonSchema?: unknown | null;
+                        }[];
+                    }[];
+                };
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -69143,7 +69590,58 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "contents": [
+                 *         {
+                 *           "parts": [
+                 *             {
+                 *               "text": "Say hi in three words"
+                 *             }
+                 *           ],
+                 *           "role": "user"
+                 *         }
+                 *       ]
+                 *     }
+                 */
+                "application/json": {
+                    /** Cachedcontent */
+                    cachedContent?: string | null;
+                    /** Contents */
+                    contents: {
+                        [key: string]: unknown;
+                    }[];
+                    /** Generationconfig */
+                    generationConfig?: {
+                        [key: string]: unknown;
+                    } | null;
+                    /**
+                     * Safetysettings
+                     * @default []
+                     */
+                    safetySettings?: {
+                        [key: string]: unknown;
+                    }[];
+                    /** Systeminstruction */
+                    systemInstruction?: {
+                        [key: string]: unknown;
+                    } | null;
+                    /** Toolconfig */
+                    toolConfig?: {
+                        [key: string]: unknown;
+                    } | null;
+                    /**
+                     * Tools
+                     * @default []
+                     */
+                    tools?: {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -69151,7 +69649,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["GenerateContentResponseBody"];
                 };
             };
             /** @description Validation Error */
@@ -69174,7 +69672,58 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "contents": [
+                 *         {
+                 *           "parts": [
+                 *             {
+                 *               "text": "Say hi in three words"
+                 *             }
+                 *           ],
+                 *           "role": "user"
+                 *         }
+                 *       ]
+                 *     }
+                 */
+                "application/json": {
+                    /** Cachedcontent */
+                    cachedContent?: string | null;
+                    /** Contents */
+                    contents: {
+                        [key: string]: unknown;
+                    }[];
+                    /** Generationconfig */
+                    generationConfig?: {
+                        [key: string]: unknown;
+                    } | null;
+                    /**
+                     * Safetysettings
+                     * @default []
+                     */
+                    safetySettings?: {
+                        [key: string]: unknown;
+                    }[];
+                    /** Systeminstruction */
+                    systemInstruction?: {
+                        [key: string]: unknown;
+                    } | null;
+                    /** Toolconfig */
+                    toolConfig?: {
+                        [key: string]: unknown;
+                    } | null;
+                    /**
+                     * Tools
+                     * @default []
+                     */
+                    tools?: {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -69182,7 +69731,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["GenerateContentResponseBody"];
                 };
             };
             /** @description Validation Error */
@@ -85614,6 +86163,255 @@ export interface operations {
             };
         };
     };
+    google_count_tokens_v1_models__model_name__countTokens_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                model_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "contents": [
+                 *         {
+                 *           "parts": [
+                 *             {
+                 *               "text": "Say hi in three words"
+                 *             }
+                 *           ],
+                 *           "role": "user"
+                 *         }
+                 *       ]
+                 *     }
+                 */
+                "application/json": {
+                    /**
+                     * Contents
+                     * @default []
+                     */
+                    contents?: {
+                        [key: string]: unknown;
+                    }[];
+                    systemInstruction?: {
+                        /**
+                         * Parts
+                         * @default []
+                         */
+                        parts?: {
+                            /** Text */
+                            text: string | null;
+                        }[];
+                    } | null;
+                    /**
+                     * Tools
+                     * @default []
+                     */
+                    tools?: {
+                        /**
+                         * Functiondeclarations
+                         * @default []
+                         */
+                        functionDeclarations?: {
+                            /** Description */
+                            description?: string | null;
+                            /** Name */
+                            name: string;
+                            parameters?: unknown | null;
+                            parametersJsonSchema?: unknown | null;
+                        }[];
+                    }[];
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TokenCountDetailsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    google_generate_content_v1_models__model_name__generateContent_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                model_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "contents": [
+                 *         {
+                 *           "parts": [
+                 *             {
+                 *               "text": "Say hi in three words"
+                 *             }
+                 *           ],
+                 *           "role": "user"
+                 *         }
+                 *       ]
+                 *     }
+                 */
+                "application/json": {
+                    /** Cachedcontent */
+                    cachedContent?: string | null;
+                    /** Contents */
+                    contents: {
+                        [key: string]: unknown;
+                    }[];
+                    /** Generationconfig */
+                    generationConfig?: {
+                        [key: string]: unknown;
+                    } | null;
+                    /**
+                     * Safetysettings
+                     * @default []
+                     */
+                    safetySettings?: {
+                        [key: string]: unknown;
+                    }[];
+                    /** Systeminstruction */
+                    systemInstruction?: {
+                        [key: string]: unknown;
+                    } | null;
+                    /** Toolconfig */
+                    toolConfig?: {
+                        [key: string]: unknown;
+                    } | null;
+                    /**
+                     * Tools
+                     * @default []
+                     */
+                    tools?: {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GenerateContentResponseBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    google_stream_generate_content_v1_models__model_name__streamGenerateContent_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                model_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "contents": [
+                 *         {
+                 *           "parts": [
+                 *             {
+                 *               "text": "Say hi in three words"
+                 *             }
+                 *           ],
+                 *           "role": "user"
+                 *         }
+                 *       ]
+                 *     }
+                 */
+                "application/json": {
+                    /** Cachedcontent */
+                    cachedContent?: string | null;
+                    /** Contents */
+                    contents: {
+                        [key: string]: unknown;
+                    }[];
+                    /** Generationconfig */
+                    generationConfig?: {
+                        [key: string]: unknown;
+                    } | null;
+                    /**
+                     * Safetysettings
+                     * @default []
+                     */
+                    safetySettings?: {
+                        [key: string]: unknown;
+                    }[];
+                    /** Systeminstruction */
+                    systemInstruction?: {
+                        [key: string]: unknown;
+                    } | null;
+                    /** Toolconfig */
+                    toolConfig?: {
+                        [key: string]: unknown;
+                    } | null;
+                    /**
+                     * Tools
+                     * @default []
+                     */
+                    tools?: {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GenerateContentResponseBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     moderations_v1_moderations_post: {
         parameters: {
             query?: never;
@@ -88708,7 +89506,61 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "contents": [
+                 *         {
+                 *           "parts": [
+                 *             {
+                 *               "text": "Say hi in three words"
+                 *             }
+                 *           ],
+                 *           "role": "user"
+                 *         }
+                 *       ]
+                 *     }
+                 */
+                "application/json": {
+                    /**
+                     * Contents
+                     * @default []
+                     */
+                    contents?: {
+                        [key: string]: unknown;
+                    }[];
+                    systemInstruction?: {
+                        /**
+                         * Parts
+                         * @default []
+                         */
+                        parts?: {
+                            /** Text */
+                            text: string | null;
+                        }[];
+                    } | null;
+                    /**
+                     * Tools
+                     * @default []
+                     */
+                    tools?: {
+                        /**
+                         * Functiondeclarations
+                         * @default []
+                         */
+                        functionDeclarations?: {
+                            /** Description */
+                            description?: string | null;
+                            /** Name */
+                            name: string;
+                            parameters?: unknown | null;
+                            parametersJsonSchema?: unknown | null;
+                        }[];
+                    }[];
+                };
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -88739,7 +89591,58 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "contents": [
+                 *         {
+                 *           "parts": [
+                 *             {
+                 *               "text": "Say hi in three words"
+                 *             }
+                 *           ],
+                 *           "role": "user"
+                 *         }
+                 *       ]
+                 *     }
+                 */
+                "application/json": {
+                    /** Cachedcontent */
+                    cachedContent?: string | null;
+                    /** Contents */
+                    contents: {
+                        [key: string]: unknown;
+                    }[];
+                    /** Generationconfig */
+                    generationConfig?: {
+                        [key: string]: unknown;
+                    } | null;
+                    /**
+                     * Safetysettings
+                     * @default []
+                     */
+                    safetySettings?: {
+                        [key: string]: unknown;
+                    }[];
+                    /** Systeminstruction */
+                    systemInstruction?: {
+                        [key: string]: unknown;
+                    } | null;
+                    /** Toolconfig */
+                    toolConfig?: {
+                        [key: string]: unknown;
+                    } | null;
+                    /**
+                     * Tools
+                     * @default []
+                     */
+                    tools?: {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -88747,7 +89650,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["GenerateContentResponseBody"];
                 };
             };
             /** @description Validation Error */
@@ -88770,7 +89673,58 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "contents": [
+                 *         {
+                 *           "parts": [
+                 *             {
+                 *               "text": "Say hi in three words"
+                 *             }
+                 *           ],
+                 *           "role": "user"
+                 *         }
+                 *       ]
+                 *     }
+                 */
+                "application/json": {
+                    /** Cachedcontent */
+                    cachedContent?: string | null;
+                    /** Contents */
+                    contents: {
+                        [key: string]: unknown;
+                    }[];
+                    /** Generationconfig */
+                    generationConfig?: {
+                        [key: string]: unknown;
+                    } | null;
+                    /**
+                     * Safetysettings
+                     * @default []
+                     */
+                    safetySettings?: {
+                        [key: string]: unknown;
+                    }[];
+                    /** Systeminstruction */
+                    systemInstruction?: {
+                        [key: string]: unknown;
+                    } | null;
+                    /** Toolconfig */
+                    toolConfig?: {
+                        [key: string]: unknown;
+                    } | null;
+                    /**
+                     * Tools
+                     * @default []
+                     */
+                    tools?: {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -88778,7 +89732,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["GenerateContentResponseBody"];
                 };
             };
             /** @description Validation Error */
