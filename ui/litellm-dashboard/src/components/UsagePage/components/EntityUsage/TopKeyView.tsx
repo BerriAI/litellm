@@ -14,6 +14,7 @@ import { keyInfoV1Call } from "../../../networking";
 import KeyInfoView from "../../../templates/key_info_view";
 import { TagUsage } from "../../types";
 import { storedKeyId } from "../../keyActivityData";
+import { useResetDetailState } from "@/hooks/useUrlTab";
 
 const TOP_KEYS_LIMITS = [5, 10, 25, 50] as const;
 const LIMIT_OPTIONS = TOP_KEYS_LIMITS.map((limit) => ({ value: String(limit), label: String(limit) }));
@@ -51,6 +52,7 @@ interface TopKeyViewProps {
 const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = false, topKeysLimit, setTopKeysLimit }) => {
   const { t } = useTranslation();
   const { accessToken } = useAuthorized();
+  const resetDetailState = useResetDetailState();
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [keyData, setKeyData] = useState<any | undefined>(undefined);
@@ -77,6 +79,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
       const keyInfo = await keyInfoV1Call(accessToken, keyId);
       const transformedKeyData = transformKeyInfo(keyInfo);
 
+      resetDetailState();
       setKeyData(transformedKeyData);
       setSelectedKey(keyId);
       setIsModalOpen(true); // Open modal when key is clicked
@@ -85,11 +88,12 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
     }
   };
 
-  const handleClose = () => {
+  const handleClose = React.useCallback(() => {
+    resetDetailState();
     setIsModalOpen(false);
     setSelectedKey(null);
     setKeyData(undefined);
-  };
+  }, [resetDetailState]);
 
   // Handle clicking outside the modal
   const handleOutsideClick = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -108,7 +112,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
 
     document.addEventListener("keydown", handleEscapeKey);
     return () => document.removeEventListener("keydown", handleEscapeKey);
-  }, [isModalOpen]);
+  }, [isModalOpen, handleClose]);
 
   // Define columns for the table view
   const baseColumns = [

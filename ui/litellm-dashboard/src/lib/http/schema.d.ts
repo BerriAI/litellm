@@ -1002,6 +1002,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/alerts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List saved alerts
+         * @description Read saved alerts with current resource names and eight days of Usage history. Requires a gateway admin.
+         */
+        get: operations["list_alerts_alerts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/alerts/monitoring": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read performance monitoring settings
+         * @description Read the gateway's opt-out setting and free allowance. Requires a gateway admin or view-only admin.
+         */
+        get: operations["get_monitoring_alerts_monitoring_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Enable or disable performance monitoring
+         * @description Change monitoring for every worker using this database. Only gateway admins can write. Keeps saved alerts.
+         */
+        patch: operations["update_monitoring_alerts_monitoring_patch"];
+        trace?: never;
+    };
+    "/alerts/{alert_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read an alert
+         * @description Return the saved evidence and status. Requires a gateway admin or view-only admin.
+         */
+        get: operations["get_alert_alerts__alert_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change an alert's status
+         * @description Resolve, dismiss, or reopen an alert. Only gateway admins can write. Returns the updated alert.
+         */
+        patch: operations["update_alert_alerts__alert_id__patch"];
+        trace?: never;
+    };
     "/anthropic/{endpoint}": {
         parameters: {
             query?: never;
@@ -16012,6 +16080,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/skill-hub/skills/{name}/versions/{version_id}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restore Skill Version
+         * @description Proxy admins may republish retained bytes and metadata as a new version, preserving visibility and grants.
+         */
+        post: operations["restore_skill_version_skill_hub_skills__name__versions__version_id__restore_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/skill-hub/skills/{plugin_name}/downloads": {
         parameters: {
             query?: never;
@@ -27106,12 +27194,219 @@ export interface components {
             /** Url */
             url: string;
         };
+        /** Alert */
+        Alert: {
+            /**
+             * Created At
+             * Format: date-time
+             * @description When the alert was first saved.
+             */
+            created_at: string;
+            /**
+             * Evidence
+             * @description Small saved snapshot explaining the alert.
+             */
+            evidence: components["schemas"]["MetricEvidence"] | components["schemas"]["DeprecationEvidence"];
+            /**
+             * Id
+             * @description Opaque alert ID, also used as a pagination cursor.
+             */
+            id: string;
+            /**
+             * Resource Id
+             * @description Resource ID. Whole-gateway alerts use 'gateway'. Keys use their SHA-256 hash, never a secret.
+             */
+            resource_id: string;
+            /**
+             * Resource Type
+             * @description Kind of affected resource.
+             * @enum {string}
+             */
+            resource_type: "gateway" | "key" | "team" | "user" | "model";
+            /**
+             * Status
+             * @description Current review status.
+             * @enum {string}
+             */
+            status: "open" | "resolved" | "dismissed";
+            /**
+             * Type
+             * @description Built-in alert category.
+             * @enum {string}
+             */
+            type: "spend" | "traffic" | "latency" | "reliability" | "model_deprecation";
+            /**
+             * Updated At
+             * Format: date-time
+             * @description When its status last changed.
+             */
+            updated_at: string;
+            /**
+             * Updated By
+             * @description User who last changed the status.
+             */
+            updated_by?: string | null;
+            /**
+             * Window End
+             * Format: date-time
+             * @description Exclusive end of the observed window, normalized to UTC milliseconds.
+             */
+            window_end: string;
+            /**
+             * Window Start
+             * Format: date-time
+             * @description Inclusive start of the observed window, normalized to UTC milliseconds.
+             */
+            window_start: string;
+        };
+        /** AlertHistoryPoint */
+        AlertHistoryPoint: {
+            /**
+             * Date
+             * Format: date
+             * @description UTC day represented by this value.
+             */
+            date: string;
+            /**
+             * Value
+             * @description Recorded daily value in the alert metric's unit.
+             */
+            value: number;
+        };
+        /** AlertMonitoring */
+        AlertMonitoring: {
+            /**
+             * Alert Limit
+             * @description Free allowance, or null for Enterprise.
+             */
+            alert_limit: number | null;
+            /**
+             * Alerts Used
+             * @description Lifetime free allowance consumed, capped at five.
+             */
+            alerts_used: number;
+            /**
+             * Disabled By Config
+             * @description Whether performance_alerts_enabled is false in proxy settings.
+             */
+            disabled_by_config: boolean;
+            /**
+             * Enabled
+             * @description Whether performance monitoring is enabled. Defaults to true.
+             */
+            enabled: boolean;
+        };
+        /** AlertMonitoringUpdate */
+        AlertMonitoringUpdate: {
+            /**
+             * Enabled
+             * @description Enable or disable performance monitoring for this gateway.
+             */
+            enabled: boolean;
+        };
         /**
          * AlertType
          * @description Enum for alert types and management event types
          * @enum {string}
          */
         AlertType: "llm_exceptions" | "llm_too_slow" | "llm_requests_hanging" | "budget_alerts" | "spend_reports" | "failed_tracking_spend" | "user_spend_thresholds" | "user_spend_anomalies" | "db_exceptions" | "daily_reports" | "cooldown_deployment" | "new_model_added" | "model_deprecation_warnings" | "outage_alerts" | "region_outage_alerts" | "fallback_reports" | "new_virtual_key_created" | "virtual_key_updated" | "virtual_key_deleted" | "new_team_created" | "team_updated" | "team_deleted" | "new_internal_user_created" | "internal_user_updated" | "internal_user_deleted" | "mcp_tool_description_blocked" | "mcp_pinned_tools_changed";
+        /** AlertUpdate */
+        AlertUpdate: {
+            /**
+             * Status
+             * @description Mark resolved, dismiss, or reopen the alert.
+             * @enum {string}
+             */
+            status: "open" | "resolved" | "dismissed";
+        };
+        /** AlertView */
+        AlertView: {
+            /**
+             * Created At
+             * Format: date-time
+             * @description When the alert was first saved.
+             */
+            created_at: string;
+            /**
+             * Evidence
+             * @description Small saved snapshot explaining the alert.
+             */
+            evidence: components["schemas"]["MetricEvidence"] | components["schemas"]["DeprecationEvidence"];
+            /**
+             * History
+             * @description Current Usage values for the seven baseline days and observed day. Null if unavailable.
+             */
+            history?: components["schemas"]["AlertHistoryPoint"][] | null;
+            /**
+             * Id
+             * @description Opaque alert ID, also used as a pagination cursor.
+             */
+            id: string;
+            /**
+             * Resource Id
+             * @description Resource ID. Whole-gateway alerts use 'gateway'. Keys use their SHA-256 hash, never a secret.
+             */
+            resource_id: string;
+            /**
+             * Resource Name
+             * @description Current resource display name.
+             */
+            resource_name?: string | null;
+            /**
+             * Resource Type
+             * @description Kind of affected resource.
+             * @enum {string}
+             */
+            resource_type: "gateway" | "key" | "team" | "user" | "model";
+            /**
+             * Status
+             * @description Current review status.
+             * @enum {string}
+             */
+            status: "open" | "resolved" | "dismissed";
+            /**
+             * Type
+             * @description Built-in alert category.
+             * @enum {string}
+             */
+            type: "spend" | "traffic" | "latency" | "reliability" | "model_deprecation";
+            /**
+             * Updated At
+             * Format: date-time
+             * @description When its status last changed.
+             */
+            updated_at: string;
+            /**
+             * Updated By
+             * @description User who last changed the status.
+             */
+            updated_by?: string | null;
+            /**
+             * Window End
+             * Format: date-time
+             * @description Exclusive end of the observed window, normalized to UTC milliseconds.
+             */
+            window_end: string;
+            /**
+             * Window Start
+             * Format: date-time
+             * @description Inclusive start of the observed window, normalized to UTC milliseconds.
+             */
+            window_start: string;
+        };
+        /** AlertViewPage */
+        AlertViewPage: {
+            /**
+             * Data
+             * @description Alerts ordered newest first, with current Usage history.
+             */
+            data: components["schemas"]["AlertView"][];
+            /**
+             * Next Cursor
+             * @description Cursor for the next page, or null at the end.
+             */
+            next_cursor?: string | null;
+        };
         /** AllowedVectorStoreIndexItem */
         AllowedVectorStoreIndexItem: {
             /** Index Name */
@@ -31375,6 +31670,12 @@ export interface components {
              */
             password_policy_require_uppercase?: boolean | null;
             /**
+             * Performance Alerts Enabled
+             * @description Check yesterday's usage for the gateway, models, teams, users and keys against the week before, and save unusual spend, traffic, response time and failure rate changes as alerts. On by default. Set false to disable monitoring. Free gateways stop after five saved performance alerts.
+             * @default true
+             */
+            performance_alerts_enabled: boolean;
+            /**
              * Plugins
              * @description external services registered as embeddable UI plugins
              */
@@ -31484,7 +31785,7 @@ export interface components {
             use_spend_logs_ledger: boolean;
             /**
              * Use Spend Logs Partitioning
-             * @description If True and LiteLLM_SpendLogs has been converted to a range-partitioned table (db_scripts/partition_spend_logs.sql), retention cleanup drops expired partitions instead of deleting rows, and pre-creates upcoming partitions. Default is False.
+             * @description If True and LiteLLM_SpendLogs has been converted to a range-partitioned table (scripts/db/partition_spend_logs.sql), retention cleanup drops expired partitions instead of deleting rows, and pre-creates upcoming partitions. Default is False.
              */
             use_spend_logs_partitioning?: boolean | null;
             /**
@@ -33054,6 +33355,20 @@ export interface components {
             /** Model */
             model: string;
             status: components["schemas"]["DeprecationAlertStatus"];
+        };
+        /** DeprecationEvidence */
+        DeprecationEvidence: {
+            /**
+             * Deprecation Date
+             * Format: date
+             * @description Date the affected model retires.
+             */
+            deprecation_date: string;
+            /**
+             * Replacement Model
+             * @description Suggested replacement.
+             */
+            replacement_model?: string | null;
         };
         /** DeprecationTagUsage */
         DeprecationTagUsage: {
@@ -39713,6 +40028,30 @@ export interface components {
             tool_calls: (components["schemas"]["ChatCompletionMessageToolCall"] | components["schemas"]["ChatCompletionMessageCustomToolCall"])[] | null;
         } & {
             [key: string]: unknown;
+        };
+        /** MetricEvidence */
+        MetricEvidence: {
+            /**
+             * Baseline
+             * @description Comparison value in the same unit.
+             */
+            baseline: number;
+            /**
+             * Sample Size
+             * @description Number of requests in the alert window.
+             */
+            sample_size: number;
+            /**
+             * Unit
+             * @description Unit for both values.
+             * @enum {string}
+             */
+            unit: "usd" | "requests" | "milliseconds" | "ratio";
+            /**
+             * Value
+             * @description Observed metric value in the alert window.
+             */
+            value: number;
         };
         /** MetricWithMetadata */
         MetricWithMetadata: {
@@ -47252,6 +47591,24 @@ export interface components {
             /** Reason */
             reason?: string | null;
         };
+        /** SkillHubRestore */
+        SkillHubRestore: {
+            /**
+             * Expected Skill Id
+             * @description Current skill ID read by the editor
+             */
+            expected_skill_id: string;
+            /**
+             * Expected Updated At
+             * @description Current updated_at read by the editor, including null
+             */
+            expected_updated_at: string | null;
+            /**
+             * Version
+             * @description Higher semantic version, or omit/null for an automatic patch bump
+             */
+            version?: string | null;
+        };
         /** SkillHubReviewResponse */
         SkillHubReviewResponse: {
             /**
@@ -54218,6 +54575,8 @@ export interface operations {
         parameters: {
             query?: {
                 api_key_limit?: number;
+                /** @description Include per-entity usage and key counts. */
+                include_entity_breakdown?: boolean;
                 agent_ids?: string | null;
                 start_date?: string | null;
                 end_date?: string | null;
@@ -54525,6 +54884,165 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    list_alerts_alerts_get: {
+        parameters: {
+            query?: {
+                /** @description Status to list. */
+                status?: "open" | "resolved" | "dismissed";
+                /** @description Maximum alerts per page. */
+                limit?: number;
+                /** @description next_cursor from the preceding page. */
+                cursor?: string | null;
+                /** @description Alert category, or all performance alerts. */
+                type?: ("spend" | "traffic" | "latency" | "reliability" | "model_deprecation") | "performance" | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertViewPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_monitoring_alerts_monitoring_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertMonitoring"];
+                };
+            };
+        };
+    };
+    update_monitoring_alerts_monitoring_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AlertMonitoringUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertMonitoring"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_alert_alerts__alert_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Alert ID returned by GET /alerts. */
+                alert_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_alert_alerts__alert_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Alert ID returned by GET /alerts. */
+                alert_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AlertUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Alert"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -59906,6 +60424,8 @@ export interface operations {
         parameters: {
             query?: {
                 api_key_limit?: number;
+                /** @description Include per-entity usage and key counts. */
+                include_entity_breakdown?: boolean;
                 end_user_ids?: string | null;
                 start_date?: string | null;
                 end_date?: string | null;
@@ -60963,6 +61483,8 @@ export interface operations {
         parameters: {
             query?: {
                 api_key_limit?: number;
+                /** @description Include per-entity usage and key counts. */
+                include_entity_breakdown?: boolean;
                 end_user_ids?: string | null;
                 start_date?: string | null;
                 end_date?: string | null;
@@ -70582,6 +71104,8 @@ export interface operations {
         parameters: {
             query?: {
                 api_key_limit?: number;
+                /** @description Include per-entity usage and key counts. */
+                include_entity_breakdown?: boolean;
                 organization_ids?: string | null;
                 start_date?: string | null;
                 end_date?: string | null;
@@ -75430,6 +75954,42 @@ export interface operations {
             };
         };
     };
+    restore_skill_version_skill_hub_skills__name__versions__version_id__restore_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+                version_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SkillHubRestore"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillHubSkill"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_plugin_downloads_skill_hub_skills__plugin_name__downloads_get: {
         parameters: {
             query?: {
@@ -76854,6 +77414,8 @@ export interface operations {
         parameters: {
             query?: {
                 api_key_limit?: number;
+                /** @description Include per-entity usage and key counts. */
+                include_entity_breakdown?: boolean;
                 start_date?: string | null;
                 end_date?: string | null;
                 model?: string | null;
@@ -77544,6 +78106,8 @@ export interface operations {
         parameters: {
             query?: {
                 api_key_limit?: number;
+                /** @description Include per-entity usage and key counts. */
+                include_entity_breakdown?: boolean;
                 team_ids?: string | null;
                 start_date?: string | null;
                 end_date?: string | null;
@@ -79967,6 +80531,8 @@ export interface operations {
         parameters: {
             query?: {
                 api_key_limit?: number;
+                /** @description Include per-entity usage and key counts. */
+                include_entity_breakdown?: boolean;
                 /** @description Start date in YYYY-MM-DD format */
                 start_date?: string | null;
                 /** @description End date in YYYY-MM-DD format */

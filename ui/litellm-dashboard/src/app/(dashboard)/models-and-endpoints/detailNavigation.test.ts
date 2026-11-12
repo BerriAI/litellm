@@ -46,6 +46,29 @@ describe("useModelDetailRouting", () => {
     expect(event?.searchParams.has("team")).toBe(false);
   });
 
+  it.each(["openModel", "openTeam", "close"] as const)(
+    "%s clears the previous resource's tab and dates",
+    async (action) => {
+      const onUrlUpdate = vi.fn<(event: UrlUpdateEvent) => void>();
+      const { result } = renderHook(() => useModelDetailRouting(), {
+        wrapper: withNuqsTestingAdapter({
+          searchParams:
+            "?model=old&detail_tab=activity&key_tab=activity&activity_from=2026-01-01&activity_to=2026-01-08&tab=all-models",
+          onUrlUpdate,
+        }),
+      });
+      await act(async () => {
+        result.current[action]("next");
+      });
+      await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+      const identity = action === "close" ? {} : { [action === "openModel" ? "model" : "team"]: "next" };
+      expect(Object.fromEntries(onUrlUpdate.mock.calls.at(-1)![0].searchParams)).toEqual({
+        ...identity,
+        tab: "all-models",
+      });
+    },
+  );
+
   it("reads modelId and teamId from the query string", () => {
     const { result } = renderHook(() => useModelDetailRouting(), {
       wrapper: withNuqsTestingAdapter({ searchParams: "?model=xyz" }),

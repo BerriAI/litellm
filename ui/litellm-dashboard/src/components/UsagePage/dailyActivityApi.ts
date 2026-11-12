@@ -26,6 +26,7 @@ export interface DailyActivityRequest {
   model?: string | null;
   includeCurrentUtcDay?: boolean;
   apiKeyLimit?: number;
+  includeEntityBreakdown?: boolean;
 }
 
 export const EMPTY_DAILY_ACTIVITY_METADATA: DailyActivityMetadata = {
