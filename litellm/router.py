@@ -9658,18 +9658,19 @@ class Router:
 
     @staticmethod
     def _inherit_builtin_base_rates_for_off_peak(
-        model_info: dict,  # mutable-ok: cost-map entry filled in place
+        model_info: dict[str, object],  # mutable-ok: cost-map entry filled in place
         backend_model: str,
         custom_llm_provider: str | None,
     ) -> None:
         """Fill missing pricing fields on a deployment entry that only sets
-        ``off_peak_pricing``, from the backend model's built-in cost map entry.
+        ``off_peak_pricing`` or ``min_billed_input_tokens``, from the backend
+        model's built-in cost map entry.
 
         Cost lookup selects the deployment-scoped entry over the shared backend
         entry only when the deployment entry carries a base pricing field, and
-        ``off_peak_pricing`` is deliberately kept off the shared entry, so a
-        deployment spelling out only its off-peak schedule would otherwise
-        never receive the discount. The backend model's entire canonical cost
+        both fields are deliberately kept off the shared entry, so a deployment
+        spelling out only its off-peak schedule or its input minimum would
+        otherwise never have it applied. The backend model's entire canonical cost
         map entry is copied, field by field, so threshold, tiered,
         service-tier, cache, character, and per-second rates as well as
         companion billing fields like ``web_search_billing_unit`` and the
@@ -9683,7 +9684,7 @@ class Router:
         no-op when any base pricing field is already set or the backend model
         has no canonical entry.
         """
-        if not model_info.get("off_peak_pricing"):
+        if not model_info.get("off_peak_pricing") and model_info.get("min_billed_input_tokens") is None:
             return
         if any(
             model_info.get(field) is not None
@@ -9734,6 +9735,25 @@ class Router:
         backend_rate: Final = backend_info.get("output_cost_per_token")
         if backend_rate:
             model_info["output_cost_per_token"] = backend_rate
+
+    @staticmethod
+    def _inherit_builtin_billing_minimum(
+        model_info: dict[str, object],  # mutable-ok: deployment cost-map entry filled in place
+        backend_model: str,
+        custom_llm_provider: str | None,
+    ) -> None:
+        if model_info.get("min_billed_input_tokens") is not None:
+            return
+        if model_info.get("input_cost_per_token") is None and model_info.get("tiered_pricing") is None:
+            return
+        backend_info: Final = lookup_model_info_for_registration(
+            model=backend_model, custom_llm_provider=custom_llm_provider
+        )
+        if isinstance(backend_info, ModelInfoLookupMiss):
+            return
+        minimum: Final = backend_info.get("min_billed_input_tokens")
+        if minimum is not None:
+            model_info["min_billed_input_tokens"] = minimum
 
     def _create_deployment(
         self,
@@ -10885,6 +10905,11 @@ class Router:
             custom_llm_provider=deployment.litellm_params.custom_llm_provider,
         )
         Router._inherit_builtin_tiered_output_rate(
+            model_info=model_info,
+            backend_model=backend_model,
+            custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+        )
+        Router._inherit_builtin_billing_minimum(
             model_info=model_info,
             backend_model=backend_model,
             custom_llm_provider=deployment.litellm_params.custom_llm_provider,

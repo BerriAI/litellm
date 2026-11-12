@@ -502,7 +502,7 @@ def test_vispark_explicit_custom_cost_per_token_bills_no_minimum_without_a_count
     assert completion_cost == pytest.approx(3 * 5e-6)
 
 
-def test_vispark_models_are_listed_for_the_provider():
+def test_vispark_models_are_listed_for_the_provider(local_model_cost_map: None):
     from litellm.utils import get_valid_models
 
     expected: Final = {name for name, entry in litellm.model_cost.items() if entry.get("litellm_provider") == "vispark"}
