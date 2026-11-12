@@ -10,6 +10,7 @@ from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
 from typing import TYPE_CHECKING, Final, Literal, cast, get_type_hints, overload
 
 import httpx
+from typing_extensions import assert_never  # noqa: TID251  # assert_never is absent from typing on Python 3.10
 
 import litellm
 from litellm._logging import verbose_logger
@@ -71,7 +72,19 @@ def _reasoning_level_and_summary(reasoning_effort: object) -> tuple[object, obje
     return (reasoning_effort, None) if requested is None else (requested.get("effort"), requested.get("summary"))
 
 
-def _sendable_reasoning_level(reasoning_effort: object, *, model: str, provider: str, drop_params: bool) -> str | None:
+def _public_reasoning_level(result: str | UnsupportedParamsError | None) -> str | None:
+    match result:
+        case UnsupportedParamsError():
+            raise result
+        case str() | None:
+            return result
+        case _:
+            assert_never(result)
+
+
+def _sendable_reasoning_level(
+    reasoning_effort: object, *, model: str, provider: str, drop_params: bool
+) -> str | UnsupportedParamsError | None:
     level, summary = _reasoning_level_and_summary(reasoning_effort)
     leaves_level_to_mistral: Final = level == "default"
     sendable: Final = (
@@ -85,7 +98,7 @@ def _sendable_reasoning_level(reasoning_effort: object, *, model: str, provider:
         if sendable is None and level is not None and not leaves_level_to_mistral:
             warn_dropped_reasoning("reasoning_effort", reasoning_effort, model, _NON_LEVEL_EFFORT_REASON)
         return sendable
-    raise UnsupportedParamsError(
+    return UnsupportedParamsError(
         message=(
             f"{provider} does not support parameters: ['reasoning_effort'], for model={model}, "
             "since the Mistral API takes it only as a level such as 'high', with no reasoning summary. "
@@ -96,7 +109,9 @@ def _sendable_reasoning_level(reasoning_effort: object, *, model: str, provider:
     )
 
 
-def _thinking_as_reasoning_effort(thinking: object, *, model: str, drop_params: bool) -> str | None:
+def _thinking_as_reasoning_effort(
+    thinking: object, *, model: str, drop_params: bool
+) -> str | UnsupportedParamsError | None:
     match thinking:
         case {"type": "disabled"}:
             return "none"
@@ -204,8 +219,10 @@ class MistralConfig(OpenAIGPTConfig):
     ) -> dict:
         requested_effort: Final = OPAQUE_VALUE.validate_python(non_default_params.get("reasoning_effort"))
         reasoning_level: Final = (
-            _sendable_reasoning_level(
-                requested_effort, model=model, provider=self.custom_llm_provider, drop_params=drop_params
+            _public_reasoning_level(
+                _sendable_reasoning_level(
+                    requested_effort, model=model, provider=self.custom_llm_provider, drop_params=drop_params
+                )
             )
             if "reasoning_effort" in non_default_params
             else None
@@ -240,8 +257,10 @@ class MistralConfig(OpenAIGPTConfig):
                 and reasoning_level is None
                 and not leaves_level_to_mistral
                 and (
-                    thinking_effort := _thinking_as_reasoning_effort(
-                        OPAQUE_VALUE.validate_python(value), model=model, drop_params=drop_params
+                    thinking_effort := _public_reasoning_level(
+                        _thinking_as_reasoning_effort(
+                            OPAQUE_VALUE.validate_python(value), model=model, drop_params=drop_params
+                        )
                     )
                 )
                 is not None

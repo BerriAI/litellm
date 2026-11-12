@@ -43,7 +43,7 @@ def reasoning_effort_from_thinking_budget(
 
 def reasoning_effort_from_thinking(
     thinking: object, *, model: str, drop_params: bool
-) -> OpenAIStyleReasoningEffort | None:
+) -> OpenAIStyleReasoningEffort | UnsupportedParamsError | None:
     fields: Final = as_str_mapping(thinking)
     if fields is None or fields.get("type") != "enabled":
         return None
@@ -53,7 +53,7 @@ def reasoning_effort_from_thinking(
     if drop_params or litellm.drop_params is True:
         warn_dropped_reasoning("thinking.budget_tokens", budget, model, _NON_NUMERIC_BUDGET_REASON)
         return None
-    raise UnsupportedParamsError(
+    return UnsupportedParamsError(
         message=(
             f"thinking.budget_tokens must be a number, got {type(budget).__name__}. To drop it, set "
             "`litellm.drop_params=True`, or `drop_params: true` under `litellm_settings` on the proxy"
