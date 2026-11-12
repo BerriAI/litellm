@@ -3456,3 +3456,70 @@ class TestCredentialWritesHoldTheReconcileLock:
 
         assert response["success"] is True
         assert litellm.credential_list == []
+
+
+def _github_app_values() -> dict[str, str]:
+    return {
+        "github_copilot_auth_type": "github_app",
+        "github_copilot_app_id": "test-client",
+        "github_copilot_app_installation_id": "123",
+        "github_copilot_app_private_key_ref": "oidc/file//run/secrets/copilot-app.pem",
+    }
+
+
+@pytest.mark.parametrize("invalid", ["-----BEGIN PRIVATE KEY-----", "oidc/https://attacker.example", ""])
+def test_create_github_app_rejects_invalid_key_reference_before_storage(credential_store, invalid):
+    create: Final = AsyncMock()
+    credential_store(create=create)
+    response: Final = _create_credential(
+        {
+            "credential_name": "copilot-app",
+            "credential_values": {**_github_app_values(), "github_copilot_app_private_key_ref": invalid},
+            "credential_info": {"custom_llm_provider": "GITHUB_COPILOT"},
+        }
+    )
+    assert response.status_code == 400
+    create.assert_not_awaited()
+
+
+def test_create_github_app_preserves_the_secret_reference(credential_store):
+    create: Final = AsyncMock()
+    credential_store(create=create)
+    response: Final = _create_credential(
+        {
+            "credential_name": "copilot-app",
+            "credential_values": _github_app_values(),
+            "credential_info": {"custom_llm_provider": "GITHUB_COPILOT"},
+        }
+    )
+    assert response.status_code == 200, response.text
+    assert CredentialAccessor.find_credential("copilot-app").credential_values == _github_app_values()
+    create.assert_awaited_once()
+
+
+def test_update_github_app_validates_merged_values_before_storage(credential_store):
+    stored: Final = CredentialItem(
+        credential_name="copilot-app",
+        credential_values=_github_app_values(),
+        credential_info={"custom_llm_provider": "github_copilot"},
+    )
+    update: Final = AsyncMock()
+    credential_store(find_by_name=AsyncMock(return_value=stored), update_by_name=update)
+    response: Final = _patch_credential(
+        "copilot-app",
+        {
+            "credential_info": {},
+            "credential_values": {"github_copilot_app_private_key_ref": "-----BEGIN PRIVATE KEY-----"},
+        },
+    )
+    assert response.status_code == 400
+    update.assert_not_awaited()
+    rotated: Final = _patch_credential(
+        "copilot-app",
+        {
+            "credential_info": {},
+            "credential_values": {"github_copilot_app_private_key_ref": "oidc/file//run/secrets/rotated.pem"},
+        },
+    )
+    assert rotated.status_code == 200, rotated.text
+    update.assert_awaited_once()

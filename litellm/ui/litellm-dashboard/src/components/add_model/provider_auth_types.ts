@@ -35,6 +35,25 @@ export const PROVIDER_AUTH_TYPES: Partial<Record<keyof typeof Providers, readonl
       requiredFieldKeys: [GITHUB_COPILOT_AUTH_TYPE_KEY],
       fixedValues: { [GITHUB_COPILOT_AUTH_TYPE_KEY]: GITHUB_COPILOT_PER_USER_AUTH_TYPE },
     },
+    {
+      id: "github_app",
+      labelKey: "addModel.providerAuthTypes.githubApp.label",
+      descriptionKey: "addModel.providerAuthTypes.githubApp.description",
+      credentialOnly: true,
+      fieldKeys: [
+        GITHUB_COPILOT_AUTH_TYPE_KEY,
+        GITHUB_COPILOT_HOST_KEY,
+        "github_copilot_app_id",
+        "github_copilot_app_installation_id",
+        "github_copilot_app_private_key_ref",
+      ],
+      requiredFieldKeys: [
+        "github_copilot_app_id",
+        "github_copilot_app_installation_id",
+        "github_copilot_app_private_key_ref",
+      ],
+      fixedValues: { [GITHUB_COPILOT_AUTH_TYPE_KEY]: "github_app" },
+    },
   ],
   MICROSOFT_365_COPILOT: [
     {
@@ -78,6 +97,9 @@ export const authTypeFieldKeys = (provider: string | null): readonly string[] =>
     .filter((fieldKey, index, fieldKeys) => fieldKeys.indexOf(fieldKey) === index);
 
 export const inferAuthTypeId = (authTypes: readonly ProviderAuthType[], values: Record<string, unknown>): string =>
+  authTypes.find(
+    ({ fixedValues }) => fixedValues && Object.entries(fixedValues).every(([key, value]) => values[key] === value),
+  )?.id ??
   authTypes.find(({ requiredFieldKeys }) =>
     requiredFieldKeys.some(
       (fieldKey) => values[fieldKey] !== undefined && values[fieldKey] !== null && values[fieldKey] !== "",

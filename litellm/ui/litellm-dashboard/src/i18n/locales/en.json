@@ -17511,6 +17511,10 @@
       "staticToken": {
         "label": "Static delegated access token",
         "description": "Sends one pre-acquired delegated Microsoft Graph token for every caller."
+      },
+      "githubApp": {
+        "label": "GitHub App",
+        "description": "Authenticate a service with a GitHub App installation. Usage is billed to the organization. LiteLLM refreshes installation tokens automatically. Use a private-key secret reference, not the PEM contents."
       }
     },
     "classificationMethodConfig": {

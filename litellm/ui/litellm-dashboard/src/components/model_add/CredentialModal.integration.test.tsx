@@ -71,6 +71,10 @@ vi.mock("../networking", async () => {
         provider_display_name: Providers.GITHUB_COPILOT,
         litellm_provider: "github_copilot",
         credential_fields: [
+          { key: "github_copilot_app_id", label: "App client ID", field_type: "text" },
+          { key: "github_copilot_app_installation_id", label: "Installation ID", field_type: "text" },
+          { key: "github_copilot_app_private_key_ref", label: "Private key secret reference", field_type: "text" },
+
           { key: "api_base", label: "API Base", field_type: "text" },
           { key: "api_key", label: "API Key", field_type: "password" },
           {
@@ -601,6 +605,65 @@ describe("CredentialModal with GitHub Copilot auth types", () => {
         credential_values: { github_copilot_auth_type: "per_user_oauth" },
       },
       [],
+    );
+  });
+
+  it("saves a GitHub App secret reference and changes the shared auth discriminator", async () => {
+    const user = userEvent.setup();
+    const onSubmit = renderModal({ initialProvider: "GITHUB_COPILOT" });
+    await screen.findByRole("combobox", { name: "Auth Type:" });
+    await chooseOption(user, /^Auth Type:/, "Per-user GitHub OAuth");
+    await chooseOption(user, /^Auth Type:/, "GitHub App");
+    fill("Credential Name:", "copilot-service");
+    await user.click(screen.getByRole("button", { name: "Add Credential" }));
+    expect(onSubmit).not.toHaveBeenCalled();
+    fill("App client ID", "test-client");
+    fill("Installation ID", "123");
+    fill("Private key secret reference", "oidc/file//run/secrets/copilot-app.pem");
+    expect(screen.queryByLabelText("API Key")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("API Base")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Add Credential" }));
+    expect(onSubmit).toHaveBeenCalledWith(
+      {
+        credential_name: "copilot-service",
+        custom_llm_provider: "GITHUB_COPILOT",
+        credential_values: {
+          github_copilot_auth_type: "github_app",
+          github_copilot_app_id: "test-client",
+          github_copilot_app_installation_id: "123",
+          github_copilot_app_private_key_ref: "oidc/file//run/secrets/copilot-app.pem",
+        },
+      },
+      [],
+    );
+  });
+
+  it("reopens an App credential and removes App fields when switching to per-user OAuth", async () => {
+    const user = userEvent.setup();
+    const onSubmit = renderModal({
+      mode: "edit",
+      existingCredential: {
+        credential_name: "copilot-service",
+        credential_values: {
+          github_copilot_auth_type: "github_app",
+          github_copilot_app_id: "test-client",
+          github_copilot_app_installation_id: "123",
+          github_copilot_app_private_key_ref: "oidc/file//run/secrets/copilot-app.pem",
+        },
+        credential_info: { custom_llm_provider: "GITHUB_COPILOT" },
+      },
+    });
+    expect(await screen.findByRole("combobox", { name: "Auth Type:" })).toHaveTextContent("GitHub App");
+    expect(screen.getByLabelText("App client ID")).toHaveValue("test-client");
+    await chooseOption(user, /^Auth Type:/, "Per-user GitHub OAuth");
+    await user.click(screen.getByRole("button", { name: "Update Credential" }));
+    expect(onSubmit).toHaveBeenCalledWith(
+      {
+        credential_name: "copilot-service",
+        custom_llm_provider: "GITHUB_COPILOT",
+        credential_values: { github_copilot_auth_type: "per_user_oauth" },
+      },
+      ["github_copilot_app_id", "github_copilot_app_installation_id", "github_copilot_app_private_key_ref"],
     );
   });
 

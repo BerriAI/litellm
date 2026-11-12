@@ -84,11 +84,22 @@ describe("provider auth types", () => {
     const authTypes = authTypesFor("GITHUB_COPILOT");
 
     expect(inferAuthTypeId(authTypes, { api_key: "" })).toBe("shared_device_login");
+    expect(inferAuthTypeId(authTypes, { github_copilot_auth_type: "github_app" })).toBe("github_app");
+    expect(hiddenAuthFieldKeys(authTypes, "github_app")).toEqual(["api_base", "api_key"]);
     expect(inferAuthTypeId(authTypes, { github_copilot_auth_type: "per_user_oauth" })).toBe("per_user_oauth");
-    expect(hiddenAuthFieldKeys(authTypes, "per_user_oauth")).toEqual(["api_base", "api_key"]);
+    expect(hiddenAuthFieldKeys(authTypes, "per_user_oauth")).toEqual([
+      "api_base",
+      "api_key",
+      "github_copilot_app_id",
+      "github_copilot_app_installation_id",
+      "github_copilot_app_private_key_ref",
+    ]);
     expect(hiddenAuthFieldKeys(authTypes, "shared_device_login")).toEqual([
       "github_copilot_auth_type",
       "github_copilot_host",
+      "github_copilot_app_id",
+      "github_copilot_app_installation_id",
+      "github_copilot_app_private_key_ref",
     ]);
   });
 });

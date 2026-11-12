@@ -124,6 +124,12 @@ const ProviderSpecificFieldsContent: React.FC<ProviderSpecificFieldsProps> = ({
       onAuthTypeChange?.(selectedAuthType.id);
     }
   }, [onAuthTypeChange, selectedAuthType]);
+  React.useEffect(() => {
+    if (!credentialOnlySelected) {
+      Object.entries(selectedAuthType?.fixedValues ?? {}).forEach(([key, value]) => form.setValue(key, value));
+    }
+  }, [credentialOnlySelected, selectedAuthType, form]);
+
   const pickCredentialsFile =
     (onLoaded: (contents: string) => void) => (event: React.ChangeEvent<HTMLInputElement>) => {
       const file = event.target.files?.[0];
