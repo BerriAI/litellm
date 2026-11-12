@@ -13,14 +13,16 @@ from functools import partial
 from io import BytesIO
 from pathlib import Path
 from textwrap import dedent
-from types import SimpleNamespace
-from typing import Final
+from types import MappingProxyType, SimpleNamespace
+from typing import Final, Literal
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 
 import fastapi
+import jwt
 import orjson
 import pytest
+from cryptography.hazmat.primitives.asymmetric import rsa
 from starlette.routing import Route
 
 from litellm.redis.stores.connection import connect
@@ -39,6 +41,7 @@ from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.proxy.common_utils.user_api_key_cache import (
     NO_TEAM_MEMBERSHIP_SENTINEL,
     UserApiKeyCache,
+    end_user_cache_key,
     team_membership_reservation_cache_key,
 )
 from litellm.proxy.hooks.model_max_budget_limiter import (
@@ -98,6 +101,7 @@ from litellm.proxy.auth.user_api_key_auth import (
 )
 from litellm.proxy.pass_through_endpoints import pass_through_endpoints as pass_through
 from litellm.proxy.spend_tracking.carried_budget_state import carried_budget_metadata
+from litellm.types.videos.utils import encode_video_id_with_provider
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
 from tests._master_key import MASTER_KEY
 
@@ -1995,6 +1999,76 @@ def test_proxy_admin_jwt_auth_handles_no_team_object():
     assert result.team_metadata is None
     assert result.org_id is None
     assert result.end_user_id is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["claim", "body"])
+@pytest.mark.parametrize("limits", [(1, 7), (0, 0), (None, None)])
+async def test_jwt_customer_budget_rate_limits_reach_enforcement(
+    monkeypatch: pytest.MonkeyPatch,
+    source: str,
+    limits: tuple[int | None, int | None],
+) -> None:
+    cache: Final = UserApiKeyCache()
+    database: Final = MagicMock()
+    handler: Final = JWTHandler()
+    handler.update_environment(
+        prisma_client=database,
+        user_api_key_cache=cache,
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            team_id_jwt_field="team_id",
+            end_user_id_jwt_field="customer_id" if source == "claim" else None,
+        ),
+    )
+    private_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    jwks_url: Final = "https://identity.invalid/rate-limits/jwks"
+    cache.set_cache(
+        f"litellm_jwt_auth_keys_{jwks_url}",
+        [json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(private_key.public_key()))],
+    )
+    cache.set_cache(
+        "team_id:rate-limit-team",
+        LiteLLM_TeamTable(team_id="rate-limit-team", models=[]),
+        model_type=LiteLLM_TeamTable,
+    )
+    cache.set_cache(
+        end_user_cache_key("rate-limit-customer"),
+        LiteLLM_EndUserTable(
+            user_id="rate-limit-customer",
+            blocked=False,
+            litellm_budget_table=LiteLLM_BudgetTable(rpm_limit=limits[0], tpm_limit=limits[1]),
+        ),
+        model_type=LiteLLM_EndUserTable,
+    )
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", jwks_url)
+    monkeypatch.delenv("JWT_ISSUER", raising=False)
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "jwt_handler", handler)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", database)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "premium_user", True)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", "rate-limit-master")
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_custom_auth", None)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", None)
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server, "general_settings", {"enable_jwt_auth": True, "disable_budget_reservation": True}
+    )
+    token: Final = jwt.encode(
+        {"team_id": "rate-limit-team", **({"customer_id": "rate-limit-customer"} if source == "claim" else {})},
+        private_key,
+        algorithm="RS256",
+    )
+    request: Final = Request(
+        {"type": "http", "method": "POST", "path": "/chat/completions", "headers": [], "query_string": b""}
+    )
+    request._body = json.dumps(
+        {"model": "rate-limit-model", **({"user": "rate-limit-customer"} if source == "body" else {})}
+    ).encode()
+    try:
+        auth: Final = await user_api_key_auth(request=request, api_key=f"Bearer {token}")
+        assert (auth.end_user_id, auth.end_user_rpm_limit, auth.end_user_tpm_limit) == ("rate-limit-customer", *limits)
+    finally:
+        await handler.close()
 
 
 @pytest.mark.asyncio
@@ -10953,6 +11027,42 @@ class TestCheckTeamMemberModelBudgetWithFallback:
         assert request_data["model"] == "gpt-4o-mini"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("operation", ["generations", "edits"])
+    async def test_image_deployment_key_fallback_is_the_model_later_checks_and_reservation_see(
+        self, monkeypatch: pytest.MonkeyPatch, operation: str
+    ) -> None:
+        from litellm.proxy import proxy_server
+        from litellm.proxy.auth.auth_utils import get_model_from_request
+
+        monkeypatch.setattr(proxy_server, "general_settings", {})
+        monkeypatch.setattr(proxy_server, "user_model", None)
+        route: Final = f"/openai/deployments/gpt-4o/images/{operation}"
+        valid_token: Final = UserAPIKeyAuth(
+            token="test-key",
+            models=["gpt-4o", "gpt-4o-mini"],
+            budget_fallbacks={"gpt-4o": ["gpt-4o-mini"]},
+            model_max_budget={
+                "gpt-4o": {"max_budget": 5.0, "budget_duration": "1d"},
+                "gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d"},
+            },
+        )
+        limiter, _ = await _real_model_budget_limiter(key_spend={"gpt-4o": 10.0})
+        request_data: Final[dict[str, object]] = {"model": "gpt-4o"}
+        request: Final = self._request("gpt-4o")
+        assert get_model_from_request(request_data, route, request=request) == "gpt-4o"
+
+        await _check_key_model_budget_with_fallback(
+            valid_token=valid_token,
+            model_max_budget_limiter=limiter,
+            model_name="gpt-4o",
+            request_data=request_data,
+            request=request,
+        )
+
+        assert get_model_from_request(request_data, route, request=request) == "gpt-4o-mini"
+        assert get_model_from_request(request_data, route, path_params=request.path_params) == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
     async def test_fallback_outside_member_allowed_models_is_rejected(self):
         valid_token: Final = UserAPIKeyAuth(
             token="test-key",
@@ -13440,6 +13550,10 @@ async def test_managed_actor_cannot_access_provider_resource_routes(monkeypatch,
         ("/v1/chat/completions", {}, "forbidden-model"),
         ("/v1/images/generations", {"image_generation_model": "forbidden-model"}, None),
         ("/v1/images/edits", {"image_generation_model": "forbidden-model"}, None),
+        ("/v1beta/models/test-model:generateContent", {"completion_model": "forbidden-model"}, None),
+        ("/models/test-model:streamGenerateContent", {}, "forbidden-model"),
+        ("/openai/deployments/test-model/images/generations", {}, "forbidden-model"),
+        ("/openai/deployments/test-model/images/edits", {"completion_model": "forbidden-model"}, None),
     ],
 )
 async def test_managed_agent_cannot_bypass_grants_with_server_default(
@@ -13914,6 +14028,143 @@ async def test_exhausted_key_budget_spares_only_zero_spend_mcp_discovery(
             result: Final = await authenticate()
             assert result.token == hashed_token
             assert result.spend == 5.0
+
+
+_VIDEO_ID: Final = encode_video_id_with_provider(video_id="video_raw", provider="openai", model_id="sora-2")
+_VIDEO_RETRIEVAL_ROUTES: Final = (
+    f"/v1/videos/{_VIDEO_ID}",
+    f"/videos/{_VIDEO_ID}",
+    f"/v1/videos/{_VIDEO_ID}/content",
+    f"/videos/{_VIDEO_ID}/content",
+)
+_EXPIRED_BEFORE_ANY_TEST_RUN: Final = datetime(2000, 1, 1, tzinfo=timezone.utc)
+_VIDEO_SPENDING_REQUESTS: Final = (
+    ("POST", "/v1/videos", MappingProxyType({"model": "sora-2"})),
+    ("POST", f"/v1/videos/{_VIDEO_ID}/remix", MappingProxyType({"video_id": _VIDEO_ID})),
+    ("POST", "/v1/videos/edits", MappingProxyType({"model": "sora-2"})),
+    ("POST", f"/v1/videos/{_VIDEO_ID}", MappingProxyType({"video_id": _VIDEO_ID})),
+    ("GET", "/v1/videos", MappingProxyType({"model": "sora-2"})),
+)
+
+
+async def _authenticate_video_request(
+    key: UserAPIKeyAuth, api_key: str, method: str, route: str, request_data: dict[str, object]
+) -> UserAPIKeyAuth:
+    user_api_key_cache: Final = DualCache()
+    await cache_key_object(
+        hashed_token=key.token or "",
+        user_api_key_obj=key,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=None,
+    )
+    model_budget_limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+    await model_budget_limiter.dual_cache.async_set_cache(
+        key=model_budget_spend_cache_key(
+            entity_type=Litellm_EntityType.KEY, entity_id=key.token, budget_model="sora-2", budget_duration="1d"
+        ),
+        value=0.4,
+    )
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": method,
+            "path": route,
+            "headers": [(b"authorization", f"Bearer {api_key}".encode())],
+            "query_string": b"",
+        }
+    )
+    proxy_logging_obj: Final = MagicMock()
+    proxy_logging_obj.budget_alerts = AsyncMock()
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    with (
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.master_key", "sk-master"),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.proxy_server.llm_model_list", []),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj),
+        patch("litellm.proxy.proxy_server.model_max_budget_limiter", model_budget_limiter),
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.virtual_key_max_budget_alert_check",
+            new_callable=AsyncMock,
+        ),
+    ):
+        resolved: Final = await user_api_key_auth_builder(
+            request=request,
+            api_key=f"Bearer {api_key}",
+            azure_api_key_header="",
+            anthropic_api_key_header=None,
+            google_ai_studio_api_key_header=None,
+            azure_apim_header=None,
+            request_data=request_data,
+        )
+        await _authorize_authenticated_request(resolved, request, request_data, route, api_key)
+        return resolved
+
+
+def _exhausted_video_key(budget: Literal["max_budget", "model_max_budget"]) -> tuple[UserAPIKeyAuth, str]:
+    from litellm.proxy.utils import hash_token
+
+    api_key: Final = f"sk-exhausted-video-{budget}"
+    if budget == "max_budget":
+        return UserAPIKeyAuth(token=hash_token(api_key), max_budget=0.3, spend=0.4), api_key
+    return (
+        UserAPIKeyAuth(
+            token=hash_token(api_key), model_max_budget={"sora-2": {"max_budget": 0.3, "budget_duration": "1d"}}
+        ),
+        api_key,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("budget", ["max_budget", "model_max_budget"])
+@pytest.mark.parametrize("route", _VIDEO_RETRIEVAL_ROUTES)
+async def test_exhausted_key_budget_still_retrieves_an_already_paid_video(
+    budget: Literal["max_budget", "model_max_budget"], route: str
+) -> None:
+    key, api_key = _exhausted_video_key(budget)
+
+    result: Final = await _authenticate_video_request(key, api_key, "GET", route, {"video_id": _VIDEO_ID})
+
+    assert result.token == key.token
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("budget", ["max_budget", "model_max_budget"])
+@pytest.mark.parametrize("method, route, request_data", _VIDEO_SPENDING_REQUESTS)
+async def test_exhausted_key_budget_still_blocks_video_requests_other_than_retrieval(
+    budget: Literal["max_budget", "model_max_budget"], method: str, route: str, request_data: Mapping[str, object]
+) -> None:
+    key, api_key = _exhausted_video_key(budget)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _authenticate_video_request(key, api_key, method, route, dict(request_data))
+
+    assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "overrides, expected_type",
+    [
+        ({"expires": _EXPIRED_BEFORE_ANY_TEST_RUN}, ProxyErrorTypes.expired_key),
+        ({"blocked": True}, ProxyErrorTypes.auth_error),
+        ({"models": ["other-model"]}, ProxyErrorTypes.key_model_access_denied),
+    ],
+)
+@pytest.mark.parametrize("route", (_VIDEO_RETRIEVAL_ROUTES[0], _VIDEO_RETRIEVAL_ROUTES[2]))
+async def test_video_retrieval_on_exhausted_key_keeps_key_access_controls(
+    overrides: dict[str, object], expected_type: ProxyErrorTypes, route: str
+) -> None:
+    exhausted_key, api_key = _exhausted_video_key("max_budget")
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _authenticate_video_request(
+            exhausted_key.model_copy(update=overrides), api_key, "GET", route, {"video_id": _VIDEO_ID}
+        )
+
+    assert exc_info.value.type == expected_type
 
 
 @pytest.mark.asyncio

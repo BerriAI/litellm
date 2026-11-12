@@ -257,7 +257,7 @@ def ledger_schema() -> str:
             "diff",
             "--from-empty",
             "--to-schema-datamodel",
-            str(_ROOT / "schema.prisma"),
+            str(_ROOT / "litellm/schema.prisma"),
             "--script",
         ],
         check=True,

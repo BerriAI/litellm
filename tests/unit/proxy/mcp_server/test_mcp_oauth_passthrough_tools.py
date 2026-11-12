@@ -10,6 +10,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
+from mcp.types import ListToolsResult
+from mcp.types import Tool as MCPTool
 
 if sys.version_info < (3, 11):
     from exceptiongroup import ExceptionGroup
@@ -115,7 +117,7 @@ async def test_fetch_tools_from_passthrough_raises_on_upstream_401():
     )
 
     mock_client = MagicMock()
-    mock_client.list_tools = AsyncMock(side_effect=upstream_error)
+    mock_client.list_tools_result = AsyncMock(side_effect=upstream_error)
 
     with pytest.raises(MCPUpstreamAuthError) as exc_info:
         await manager._fetch_tools_with_timeout(mock_client, passthrough_server.name)
@@ -125,7 +127,7 @@ async def test_fetch_tools_from_passthrough_raises_on_upstream_401():
         'Bearer resource_metadata="https://upstream"'
     )
     assert exc_info.value.server_name == "sample_docs"
-    mock_client.list_tools.assert_awaited_with(raise_on_error=True)
+    mock_client.list_tools_result.assert_awaited_with(raise_on_error=True)
 
 
 @pytest.mark.asyncio
@@ -150,7 +152,7 @@ async def test_fetch_tools_from_delegated_oauth2_raises_on_upstream_401():
     )
 
     mock_client = MagicMock()
-    mock_client.list_tools = AsyncMock(side_effect=upstream_error)
+    mock_client.list_tools_result = AsyncMock(side_effect=upstream_error)
 
     with pytest.raises(MCPUpstreamAuthError) as exc_info:
         await manager._fetch_tools_with_timeout(mock_client, delegated_server.name)
@@ -160,7 +162,7 @@ async def test_fetch_tools_from_delegated_oauth2_raises_on_upstream_401():
         'Bearer resource_metadata="https://upstream"'
     )
     assert exc_info.value.server_name == "delegated_docs"
-    mock_client.list_tools.assert_awaited_with(raise_on_error=True)
+    mock_client.list_tools_result.assert_awaited_with(raise_on_error=True)
 
 
 @pytest.mark.asyncio
@@ -189,14 +191,14 @@ async def test_fetch_tools_from_client_credentials_oauth2_surfaces_upstream_401(
     )
 
     mock_client = MagicMock()
-    mock_client.list_tools = AsyncMock(side_effect=upstream_error)
+    mock_client.list_tools_result = AsyncMock(side_effect=upstream_error)
 
     with pytest.raises(MCPUpstreamAuthError) as exc_info:
         await manager._fetch_tools_with_timeout(mock_client, m2m_server.name)
 
     assert exc_info.value.status_code == 401
     assert exc_info.value.server_name == "m2m_docs"
-    mock_client.list_tools.assert_awaited_with(raise_on_error=True)
+    mock_client.list_tools_result.assert_awaited_with(raise_on_error=True)
 
 
 @pytest.mark.asyncio
@@ -212,13 +214,12 @@ async def test_fetch_tools_from_passthrough_returns_tools_on_success():
         oauth_passthrough=True,
     )
 
-    tool = MagicMock()
-    tool.name = "list_documents"
+    tool: Final = MCPTool(name="list_documents", inputSchema={"type": "object"})
     mock_client = MagicMock()
-    mock_client.list_tools = AsyncMock(return_value=[tool])
+    mock_client.list_tools_result = AsyncMock(return_value=ListToolsResult(tools=[tool]))
 
-    tools = await manager._fetch_tools_with_timeout(mock_client, passthrough_server.name)
-    assert tools == [tool]
+    listing: Final = await manager._fetch_tools_with_timeout(mock_client, passthrough_server.name)
+    assert listing.tools == [tool]
 
 
 @pytest.mark.parametrize("status_code", [401, 403])
@@ -308,7 +309,7 @@ async def test_fetch_tools_from_gateway_managed_surfaces_upstream_401():
         "401", request=response.request, response=response
     )
     mock_client = MagicMock()
-    mock_client.list_tools = AsyncMock(side_effect=upstream_error)
+    mock_client.list_tools_result = AsyncMock(side_effect=upstream_error)
 
     with pytest.raises(MCPUpstreamAuthError) as exc_info:
         await manager._fetch_tools_with_timeout(mock_client, oauth2_server.name)
@@ -316,7 +317,7 @@ async def test_fetch_tools_from_gateway_managed_surfaces_upstream_401():
     assert exc_info.value.status_code == 401
     assert exc_info.value.www_authenticate is None
     assert exc_info.value.server_name == "keycloak_whoami"
-    mock_client.list_tools.assert_awaited_with(raise_on_error=True)
+    mock_client.list_tools_result.assert_awaited_with(raise_on_error=True)
 
 
 def _http_server(server_id: str, name: str, **kwargs) -> MCPServer:
@@ -462,7 +463,7 @@ async def test_fetch_tools_logs_upstream_request_details_on_500(caplog):
     )
     response = httpx.Response(500, request=request)
     mock_client = MagicMock()
-    mock_client.list_tools = AsyncMock(
+    mock_client.list_tools_result = AsyncMock(
         side_effect=httpx.HTTPStatusError("500", request=request, response=response)
     )
 

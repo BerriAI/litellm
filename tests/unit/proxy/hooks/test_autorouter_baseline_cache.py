@@ -1150,3 +1150,10 @@ async def test_a_turn_routed_to_a_non_anthropic_tier_says_its_provider_is_unsupp
         captured: Final = _observation(await rig.capture.payload())
     assert captured.observation.outcome == "uncertain"
     assert captured.observation.reason == "unsupported_selected_provider"
+
+
+@pytest.fixture(autouse=True)
+def _python_messages(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.llms.anthropic.messages.native import handler as python_messages
+
+    monkeypatch.setattr(litellm, "anthropic_messages", python_messages.anthropic_messages)

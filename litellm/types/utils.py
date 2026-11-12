@@ -479,6 +479,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_image_1536: ReadOnly[float | None]
     output_cost_per_image_1K: ReadOnly[float | None]
     output_cost_per_image_2K: ReadOnly[float | None]
+    output_cost_per_billable_unit: ReadOnly[float | None]
     ocr_cost_per_page: float | None  # for OCR models
     ocr_cost_per_page_batches: ReadOnly[float | None]
     ocr_cost_per_credit: float | None  # for OCR models priced by credit
@@ -4029,6 +4030,13 @@ ARIZE_OTLP_PROTOCOLS: Final[frozenset[str]] = frozenset(get_args(ArizeOtlpProtoc
 
 CAPTURE_MESSAGE_CONTENT_VAR: Final = "capture_message_content"
 EXCLUDED_SERVICES_VAR: Final = "excluded_services"
+BAGGAGE_METADATA_KEYS_VAR: Final = "baggage_metadata_keys"
+#: Team and key callback vars that tune that callback's own OTel v2 destination, never sent to the backend.
+OTEL_DESTINATION_VARS: Final[tuple[str, ...]] = (
+    CAPTURE_MESSAGE_CONTENT_VAR,
+    EXCLUDED_SERVICES_VAR,
+    BAGGAGE_METADATA_KEYS_VAR,
+)
 
 
 class CaptureMessageContent(str):
@@ -4156,6 +4164,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_image_1536: float | None = None
     output_cost_per_image_1K: float | None = None
     output_cost_per_image_2K: float | None = None
+    output_cost_per_billable_unit: float | None = None
     input_cost_per_pixel: float | None = None
     output_cost_per_pixel: float | None = None
 
@@ -4833,7 +4842,7 @@ OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS: set[str] = {
 }
 
 FILE_CONTENT_STREAMING_PROVIDERS: Final[frozenset[str]] = frozenset(
-    {*OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS, LlmProviders.VERTEX_AI.value}
+    {*OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS, LlmProviders.VERTEX_AI.value, LlmProviders.GEMINI.value}
 )
 
 LITELLM_EXECUTED_BATCH_PROVIDERS: Final[frozenset[str]] = frozenset({LlmProviders.HOSTED_VLLM.value})
@@ -5381,6 +5390,14 @@ class PriorityReservationSettings(LiteLLMBaseModel):
     saturation_threshold: float = Field(
         default=0.50,
         description="Saturation threshold (0.0-1.0) at which strict priority enforcement begins. Below this threshold, generous mode allows priority borrowing. Above this threshold, strict mode enforces normalized priority limits.",
+    )
+    team_model_limit_borrows_idle_capacity_from_other_teams: bool = Field(
+        default=False,
+        description="When true, a team's model_tpm_limit and model_rpm_limit on a model this limiter covers stop being ceilings. The team may run past them on capacity other teams are not using while the model is below saturation_threshold, and is held to them once the model saturates.",
+    )
+    priority_class_share_splits_equally_among_active_teams: bool = Field(
+        default=False,
+        description="When true, a priority class's share of a model is renormalized over the classes whose teams used the model in the current window and split equally among that class's active teams, and once the model saturates each team is held to its own share instead of the class pool. Keys without a team keep the class pool.",
     )
 
     saturation_check_cache_ttl: int = Field(

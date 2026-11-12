@@ -7256,6 +7256,256 @@ class TestAnthropicProxyRoute:
         assert thread_ids and thread_ids[0] != threading.get_ident()
 
 
+_HAIKU_PRICING: Final = MappingProxyType({"input_cost_per_token": 1e-07, "output_cost_per_token": 5e-07})
+
+
+def _anthropic_deployment(
+    deployment_id: str,
+    model_name: str = "claude-haiku-5-5",
+    backend: str = "anthropic/claude-haiku-5-5",
+    model_info_pricing: Mapping[str, float] = _HAIKU_PRICING,
+    params_pricing: Mapping[str, float] = MappingProxyType({}),
+    team_id: str | None = None,
+) -> dict[str, object]:
+    return {
+        "model_name": model_name,
+        "litellm_params": {"model": backend, "api_key": "sk-ant-test", **params_pricing},
+        "model_info": {"id": deployment_id, **model_info_pricing, **({"team_id": team_id} if team_id else {})},
+    }
+
+
+def _passthrough_pricing(
+    monkeypatch: pytest.MonkeyPatch,
+    *deployments: dict[str, object],
+    request_body: Mapping[str, object] = MappingProxyType({"model": "claude-haiku-5-5"}),
+    team_id: str | None = None,
+) -> Mapping[str, object] | None:
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        anthropic_deployment_pricing_model_info,
+    )
+
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+    router: Final = litellm.Router(model_list=[*deployments])
+    return anthropic_deployment_pricing_model_info(router, request_body, team_id)
+
+
+def test_anthropic_passthrough_prices_with_the_one_deployment_serving_the_requested_model(monkeypatch):
+    model_info: Final = _passthrough_pricing(monkeypatch, _anthropic_deployment("haiku-dep"))
+
+    assert model_info is not None
+    assert model_info["id"] == "haiku-dep"
+    assert {key: model_info[key] for key in _HAIKU_PRICING} == _HAIKU_PRICING
+
+
+def test_anthropic_passthrough_reads_custom_pricing_set_in_litellm_params(monkeypatch):
+    model_info: Final = _passthrough_pricing(
+        monkeypatch,
+        _anthropic_deployment("haiku-dep", model_info_pricing=MappingProxyType({}), params_pricing=_HAIKU_PRICING),
+    )
+
+    assert model_info is not None
+    assert model_info["id"] == "haiku-dep"
+    assert {key: model_info[key] for key in _HAIKU_PRICING} == _HAIKU_PRICING
+
+
+def test_anthropic_passthrough_prices_a_deployment_configured_with_the_alias_the_caller_sends(monkeypatch):
+    model_info: Final = _passthrough_pricing(
+        monkeypatch,
+        _anthropic_deployment(
+            "haiku-latest-dep", model_name="claude-haiku-latest", backend="anthropic/claude-haiku-latest"
+        ),
+        request_body={"model": "claude-haiku-latest"},
+    )
+
+    assert model_info is not None
+    assert model_info["id"] == "haiku-latest-dep"
+
+
+@pytest.mark.parametrize(
+    ("caller_team_id", "priced"),
+    [
+        pytest.param("team-a", True, id="owning-team"),
+        pytest.param("team-b", False, id="other-team"),
+        pytest.param(None, False, id="teamless-key"),
+    ],
+)
+def test_anthropic_passthrough_prices_a_team_deployment_only_for_its_team(monkeypatch, caller_team_id, priced):
+    model_info: Final = _passthrough_pricing(
+        monkeypatch, _anthropic_deployment("team-a-haiku-dep", team_id="team-a"), team_id=caller_team_id
+    )
+
+    assert (model_info is not None) is priced
+
+
+@pytest.mark.parametrize(
+    "deployments",
+    [
+        pytest.param(
+            (
+                _anthropic_deployment("haiku-dep-a"),
+                _anthropic_deployment("haiku-dep-b", model_info_pricing={"input_cost_per_token": 9e-07}),
+            ),
+            id="two-deployments-could-bill-either-price",
+        ),
+        pytest.param(
+            (_anthropic_deployment("opus-dep", backend="anthropic/claude-opus-5-5"),),
+            id="group-serves-a-different-upstream-model",
+        ),
+        pytest.param(
+            (_anthropic_deployment("bedrock-dep", backend="bedrock/claude-haiku-5-5"),),
+            id="deployment-is-not-anthropic",
+        ),
+        pytest.param(
+            (_anthropic_deployment("other-group-dep", model_name="haiku-alias"),),
+            id="model-group-not-requested",
+        ),
+        pytest.param(
+            (_anthropic_deployment("unpriced-dep", model_info_pricing=MappingProxyType({})),),
+            id="deployment-has-no-custom-pricing",
+        ),
+    ],
+)
+def test_anthropic_passthrough_attaches_no_deployment_pricing_without_one_priced_match(monkeypatch, deployments):
+    assert _passthrough_pricing(monkeypatch, *deployments) is None
+
+
+_RELAY_HAIKU_PRICING: Final = MappingProxyType({"input_cost_per_token": 1e-03, "output_cost_per_token": 2e-03})
+_RELAY_OPUS_PRICING: Final = MappingProxyType({"input_cost_per_token": 5e-03, "output_cost_per_token": 6e-03})
+_RELAY_MESSAGES: Final = ({"role": "user", "content": "hi"},)
+
+
+async def _hook_passes_body_through(*, data: dict[str, object], **_: object) -> dict[str, object]:
+    return data
+
+
+async def _hook_upgrades_to_opus(*, data: dict[str, object], **_: object) -> dict[str, object]:
+    return {**data, "model": "claude-opus-5-5"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_body", "pre_call_hook", "forwarded_model", "pricing"),
+    [
+        pytest.param(
+            {"model": "claude-haiku-5-5", "messages": [*_RELAY_MESSAGES]},
+            _hook_passes_body_through,
+            "claude-haiku-5-5",
+            _RELAY_HAIKU_PRICING,
+            id="requested-model",
+        ),
+        pytest.param(
+            {"model": "claude-haiku-5-5", "custom_body": {"model": "claude-opus-5-5", "messages": [*_RELAY_MESSAGES]}},
+            _hook_passes_body_through,
+            "claude-opus-5-5",
+            _RELAY_OPUS_PRICING,
+            id="custom-body-envelope",
+        ),
+        pytest.param(
+            {"model": "claude-haiku-5-5", "messages": [*_RELAY_MESSAGES]},
+            _hook_upgrades_to_opus,
+            "claude-opus-5-5",
+            _RELAY_OPUS_PRICING,
+            id="pre-call-hook-rewrite",
+        ),
+    ],
+)
+async def test_anthropic_proxy_route_bills_the_custom_price_of_the_forwarded_model(
+    monkeypatch, request_body, pre_call_hook, forwarded_model, pricing
+):
+    for name in (
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_API_BASE",
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_FEDERATION_RULE_ID",
+        "ANTHROPIC_ORGANIZATION_ID",
+        "ANTHROPIC_IDENTITY_TOKEN_FILE",
+        "ANTHROPIC_IDENTITY_TOKEN",
+        "SERVER_ROOT_PATH",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        litellm.Router(
+            model_list=[
+                _anthropic_deployment("haiku-dep", model_info_pricing=_RELAY_HAIKU_PRICING),
+                _anthropic_deployment(
+                    "opus-dep",
+                    model_name="claude-opus-5-5",
+                    backend="anthropic/claude-opus-5-5",
+                    model_info_pricing=_RELAY_OPUS_PRICING,
+                ),
+            ]
+        ),
+    )
+    upstream_response: Final = httpx.Response(
+        200,
+        json={
+            "id": "msg_relay",
+            "type": "message",
+            "role": "assistant",
+            "model": forwarded_model,
+            "content": [{"type": "text", "text": "pong"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 18, "output_tokens": 4},
+        },
+        request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+    )
+    httpx_client: Final = MagicMock()
+    httpx_client.build_request = MagicMock(return_value=MagicMock())
+    httpx_client.send = AsyncMock(return_value=upstream_response)
+    client_wrapper: Final = MagicMock()
+    client_wrapper.client = httpx_client
+    body: Final = json.dumps(request_body).encode()
+
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request: Final = Request(
+        {
+            "type": "http",
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "https",
+            "path": "/anthropic/v1/messages",
+            "raw_path": b"/anthropic/v1/messages",
+            "root_path": "",
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json")],
+            "client": ("127.0.0.1", 51234),
+            "server": ("proxy.local", 4000),
+            "state": {},
+        },
+        receive,
+    )
+
+    with (
+        patch(  # test-quality-ok: the upstream http client is the boundary, it answers with a real Anthropic body
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client",
+            return_value=client_wrapper,
+        ),
+        patch(  # test-quality-ok: the relay calls these hooks, and they need a db this test has no use for
+            "litellm.proxy.proxy_server.proxy_logging_obj"
+        ) as mock_logging_obj,
+    ):
+        mock_logging_obj.pre_call_hook = AsyncMock(side_effect=pre_call_hook)
+        mock_logging_obj.post_call_success_hook = AsyncMock()
+        mock_logging_obj.post_call_failure_hook = AsyncMock()
+        mock_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+        response: Final = await anthropic_proxy_route(
+            endpoint="v1/messages",
+            request=request,
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-caller-virtual-key"),
+        )
+
+    assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(
+        18 * pricing["input_cost_per_token"] + 4 * pricing["output_cost_per_token"]
+    )
+
+
 class TestAnthropicProxyRouteCallerAuthHeaders:
     """Regression for a caller credential riding upstream next to a server-owned one.
 
@@ -8250,6 +8500,7 @@ async def _bedrock_native_count(
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
     aws_reply: httpx.Response,
+    fastapi_response: Response,
     request_body: Mapping[str, object] = _BEDROCK_COUNT_BODY,
 ) -> dict[str, object]:
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
@@ -8288,7 +8539,7 @@ async def _bedrock_native_count(
     return await handle_bedrock_count_tokens(
         endpoint=f"model/{_BEDROCK_COUNT_ALIAS}/count-tokens",
         request=request,
-        fastapi_response=Response(),
+        fastapi_response=fastapi_response,
         user_api_key_dict=MagicMock(),
         request_body=dict(request_body),
     )
@@ -8301,9 +8552,13 @@ async def test_bedrock_native_count_tokens_logs_the_count_against_the_router_mod
     respx_mock: respx.MockRouter,
     token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
 ) -> None:
-    result: Final = await _bedrock_native_count(monkeypatch, respx_mock, httpx.Response(200, json={"inputTokens": 12}))
+    fastapi_response: Final = Response()
+    result: Final = await _bedrock_native_count(
+        monkeypatch, respx_mock, httpx.Response(200, json={"inputTokens": 12}), fastapi_response
+    )
 
     assert result == {"input_tokens": 12}
+    assert fastapi_response.headers.get("x-litellm-call-id") == "bedrock-native-count"
     assert len(respx_mock.calls) == 1
     assert respx_mock.calls.last.request.url.path == "/model/anthropic.claude-haiku-4-5-20251001-v1:0/count-tokens"
     assert token_count_log_lines() == (
@@ -8328,9 +8583,12 @@ async def test_bedrock_native_count_tokens_logs_the_provider_status_when_the_cou
 ) -> None:
     rejected: Final = httpx.Response(400, json={"message": "The provided model doesn't support counting tokens."})
     with pytest.raises(HTTPException) as exc_info:
-        await _bedrock_native_count(monkeypatch, respx_mock, rejected)
+        await _bedrock_native_count(monkeypatch, respx_mock, rejected, Response())
 
-    assert exc_info.value.status_code == 400
+    assert (exc_info.value.status_code, (exc_info.value.headers or {}).get("x-litellm-call-id")) == (
+        400,
+        "bedrock-native-count",
+    )
     assert token_count_log_lines() == (
         {
             "litellm_call_id": "bedrock-native-count",
@@ -8363,7 +8621,7 @@ async def test_bedrock_native_count_tokens_answers_400_for_a_malformed_body_with
 ) -> None:
     with pytest.raises(HTTPException) as exc_info:
         await _bedrock_native_count(
-            monkeypatch, respx_mock, httpx.Response(200, json={"inputTokens": 12}), request_body
+            monkeypatch, respx_mock, httpx.Response(200, json={"inputTokens": 12}), Response(), request_body
         )
 
     assert (exc_info.value.status_code, exc_info.value.detail) == (400, {"error": problem})
@@ -8455,6 +8713,33 @@ async def test_bedrock_native_count_tokens_without_a_model_logs_the_400_it_answe
             "count_source": None,
             "status_code": 400,
         },
+    )
+
+
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_without_a_model_answers_the_call_id_its_count_line_names(
+    token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
+) -> None:
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        handle_bedrock_count_tokens,
+    )
+
+    request: Final = Request(
+        {"type": "http", "method": "POST", "path": f"/bedrock/model/{_BEDROCK_COUNT_ALIAS}/count-tokens", "headers": []}
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await handle_bedrock_count_tokens(
+            endpoint=f"model/{_BEDROCK_COUNT_ALIAS}/count-tokens",
+            request=request,
+            fastapi_response=Response(),
+            user_api_key_dict=MagicMock(),
+            request_body={"messages": [{"role": "user", "content": "hi"}]},
+        )
+
+    (line,) = token_count_log_lines()
+    assert (exc_info.value.status_code, (exc_info.value.headers or {}).get("x-litellm-call-id")) == (
+        400,
+        line["litellm_call_id"],
     )
 
 
@@ -10445,6 +10730,29 @@ class TestFalAIPassthroughRoute:
                 return_value=httpx.Response(200, json={"request_id": "req-1"})
             )
             response = client.post("/fal_ai/fal-ai/priceless-model", json={"image_url": "https://example.com/in.png"})
+
+            assert response.status_code == 400, response.text
+            assert "no pricing entry" in response.text
+            assert not route.calls
+
+    def test_submit_to_endpoint_billed_by_reported_units_returns_400_without_upstream_call(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "fal_ai/acme/unit-billed-model",
+            {
+                "litellm_provider": "fal_ai",
+                "mode": "image_generation",
+                "output_cost_per_billable_unit": 1.0,
+                "output_cost_per_image": 0.04,
+            },
+        )
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.post("https://queue.fal.run/acme/unit-billed-model").mock(
+                return_value=httpx.Response(200, json={"request_id": "req-1"})
+            )
+            response = client.post("/fal_ai/acme/unit-billed-model", json={"prompt": "a red boat"})
 
             assert response.status_code == 400, response.text
             assert "no pricing entry" in response.text
