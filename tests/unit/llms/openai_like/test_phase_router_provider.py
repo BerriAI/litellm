@@ -269,3 +269,39 @@ async def test_phase_router_anthropic_messages_request_is_bridged_to_chat_comple
     assert body["model"] == "gpt-oss-120b"
     assert body["max_tokens"] == 32
     assert response["content"][0]["text"] == "Hello from Phase Router"
+
+
+@pytest.mark.parametrize("api", ("chat", "responses", "messages"))
+def test_missing_phase_key_does_not_fall_back_to_openai_credentials(api: str, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("PHASE_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-openai-key")
+    calls: Final = {
+        "chat": lambda: litellm.completion(
+            model="phase_router/gpt-oss-120b", messages=[{"role": "user", "content": "Say hello"}]
+        ),
+        "responses": lambda: litellm.responses(model="phase_router/gpt-oss-120b", input="Say hello"),
+        "messages": lambda: litellm.anthropic.messages.create(
+            model="phase_router/gpt-oss-120b",
+            messages=[{"role": "user", "content": "Say hello"}],
+            max_tokens=32,
+        ),
+    }
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(_CHAT_COMPLETIONS_URL).respond(200, json=_CHAT_COMPLETION)
+        with pytest.raises(litellm.AuthenticationError, match="PHASE_API_KEY"):
+            calls[api]()
+
+    assert not route.called
+
+
+def test_chat_does_not_send_the_openai_organization_to_phase_router(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("OPENAI_ORGANIZATION", "org-openai-only")
+    with respx.mock() as upstream:
+        route: Final = upstream.post(_CHAT_COMPLETIONS_URL).respond(200, json=_CHAT_COMPLETION)
+        litellm.completion(
+            model="phase_router/gpt-oss-120b",
+            messages=[{"role": "user", "content": "Say hello"}],
+            api_key="phk_test",
+        )
+
+    assert "openai-organization" not in route.calls.last.request.headers
