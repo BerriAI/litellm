@@ -41,6 +41,8 @@ import { useChatShell } from "@/contexts/ChatShellContext";
 import ViewSwitcher from "@/components/Navbar/ViewSwitcher";
 import ConversationList from "./ConversationList";
 
+const conversationUrl = (chatsRoute: string, id: string) => `${chatsRoute}?id=${encodeURIComponent(id)}`;
+
 export function getChatRoutes() {
   const base = uiHref("chat");
   return {
@@ -193,7 +195,7 @@ const ChatShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         <ConversationList
           conversations={conversations}
           activeConversationId={activeConversationId}
-          onSelect={(id) => navigate(`${routes.chats}?id=${encodeURIComponent(id)}`)}
+          onSelect={(id) => navigate(conversationUrl(routes.chats, id))}
           onDelete={(id) => {
             deleteConversation(id);
             if (id === activeConversationId) navigate(routes.chats);

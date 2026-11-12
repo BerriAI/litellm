@@ -23,7 +23,7 @@ describe("TeamMemberSpendBudgetCell", () => {
     expect(screen.getByText("My Spend")).toBeInTheDocument();
     expect(screen.getByText("$50.00")).toBeInTheDocument();
     expect(screen.getByText("/ $100.00")).toBeInTheDocument();
-    expect(screen.getByText("Resets Oct 20, 2026 UTC")).toBeInTheDocument();
+    expect(screen.getByText("Resets Oct 20, 2026 12:00 UTC")).toBeInTheDocument();
     expect(screen.getAllByRole("meter")[0]).toHaveAttribute("aria-valuetext", "Team $600.00 of $1,000.00");
     expect(screen.getAllByRole("meter")[1]).toHaveAttribute("aria-valuetext", "My Spend $50.00 of $100.00");
   });

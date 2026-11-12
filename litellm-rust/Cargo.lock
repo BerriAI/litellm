@@ -894,6 +894,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cffb0e931875b666fc4fcb20fee52e9bbd1ef836fd9e9e04ec21555f9f85f7ef"
 dependencies = [
  "fastrand",
+ "tokio",
 ]
 
 [[package]]
@@ -3657,19 +3658,15 @@ dependencies = [
 name = "litellm-cache-s3"
 version = "0.1.0"
 dependencies = [
- "aws-credential-types",
  "aws-sdk-s3",
- "aws-smithy-runtime-api",
  "aws-smithy-types",
- "aws-types",
  "futures-util",
- "http 1.4.2",
  "litellm-auth-aws",
  "litellm-cache",
  "litellm-cache-testing",
  "litellm-error",
  "litellm-http",
- "reqwest",
+ "litellm-s3",
  "rstest",
  "serde_json",
  "tokio",
@@ -4016,6 +4013,7 @@ dependencies = [
  "litellm-coroutine",
  "litellm-secret-value",
  "rstest",
+ "serde",
  "serde_json",
  "thiserror 2.0.19",
  "tokio",
@@ -4158,9 +4156,12 @@ name = "litellm-inference-messages"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "flate2",
  "futures-util",
+ "http 1.4.2",
  "litellm-auth",
  "litellm-auth-aws",
+ "litellm-cache",
  "litellm-cache-memory",
  "litellm-cache-response",
  "litellm-core-utils",
@@ -4181,6 +4182,7 @@ dependencies = [
  "rstest",
  "serde",
  "serde_json",
+ "thiserror 2.0.19",
  "tokio",
  "tracing",
  "wiremock",
@@ -4295,6 +4297,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "data-url",
+ "fancy-regex 0.19.2",
  "futures-util",
  "litellm-auth",
  "litellm-auth-aws",
@@ -4310,6 +4313,7 @@ dependencies = [
  "litellm-router-types",
  "litellm-secret-value",
  "litellm-secrets",
+ "litellm-tracing",
  "reqwest",
  "rstest",
  "serde",
@@ -4346,12 +4350,14 @@ dependencies = [
  "jsonschema",
  "litellm-cost",
  "litellm-error",
+ "litellm-tracing",
  "macro_rules_attribute",
  "rstest",
  "schemars 1.2.2",
  "serde",
  "serde_json",
  "serde_with",
+ "sha1 0.10.7",
  "strum",
  "thiserror 2.0.19",
  "time",
@@ -4361,9 +4367,13 @@ dependencies = [
 name = "litellm-model-catalog-refresh"
 version = "0.1.0"
 dependencies = [
+ "aws-credential-types",
+ "backon",
+ "bytes",
  "litellm-error",
  "litellm-http",
- "litellm-model-catalog",
+ "litellm-s3",
+ "litellm-tracing",
  "reqwest",
  "rstest",
  "thiserror 2.0.19",
@@ -4402,6 +4412,7 @@ dependencies = [
  "litellm-llms",
  "litellm-llms-types",
  "litellm-model-catalog",
+ "litellm-model-catalog-refresh",
  "litellm-python-compat",
  "litellm-redis-client",
  "litellm-redis-connect",
@@ -4423,6 +4434,7 @@ dependencies = [
  "pyo3-async-runtimes",
  "reqwest",
  "rstest",
+ "rustls 0.23.42",
  "serde",
  "serde_json",
  "serde_with",
@@ -4606,6 +4618,23 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
+]
+
+[[package]]
+name = "litellm-s3"
+version = "0.1.0"
+dependencies = [
+ "aws-config",
+ "aws-credential-types",
+ "aws-sdk-s3",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "aws-types",
+ "http 1.4.2",
+ "litellm-http",
+ "reqwest",
+ "rstest",
+ "thiserror 2.0.19",
 ]
 
 [[package]]

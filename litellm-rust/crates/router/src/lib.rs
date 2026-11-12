@@ -31,6 +31,8 @@ impl Router {
             .model_list
             .iter()
             .map(|model| {
+                let drop_params =
+                    drops_params_globally || is_on(model.litellm_params.drop_params.as_ref(), env);
                 (
                     model.model_name.clone(),
                     Deployment {
@@ -45,8 +47,8 @@ impl Router {
                         litellm_params: model.litellm_params.clone(),
                         shaping: MessagesShaping {
                             settings: MessagesSettings {
-                                drop_params: drops_params_globally
-                                    || is_on(model.litellm_params.drop_params.as_ref(), env),
+                                drop_params,
+                                drops_unsupported_params: drop_params,
                                 ..MessagesSettings::default()
                             },
                             ..MessagesShaping::default()
@@ -113,15 +115,18 @@ mod tests {
         ))
         .unwrap();
 
+        let settings = Router::from_config(&config, &|name: &str| {
+            (name == "DROP_PARAMS_FLAG").then(|| " Yes ".to_owned())
+        })
+        .get("public-model")
+        .unwrap()
+        .shaping
+        .settings
+        .clone();
+
         assert_eq!(
-            Router::from_config(&config, &|name: &str| (name == "DROP_PARAMS_FLAG")
-                .then(|| " Yes ".to_owned()))
-            .get("public-model")
-            .unwrap()
-            .shaping
-            .settings
-            .drop_params,
-            expected
+            (settings.drop_params, settings.drops_unsupported_params),
+            (expected, expected)
         );
     }
 }

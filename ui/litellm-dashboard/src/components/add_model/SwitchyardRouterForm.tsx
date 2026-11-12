@@ -16,6 +16,7 @@ import {
 } from "./switchyard_config";
 import SwitchyardConfigFields from "./SwitchyardConfigFields";
 import { handleAddSwitchyardSubmit, type SwitchyardModelInfo } from "./handle_add_auto_router_submit";
+import { useTranslation } from "react-i18next";
 
 interface FieldsProps {
   accessToken: string;
@@ -26,6 +27,7 @@ interface FieldsProps {
 }
 
 export function SwitchyardModelFields({ accessToken, routerName, value, onChange, onToolSemanticsError }: FieldsProps) {
+  const { t } = useTranslation();
   const { data: models = [], isError } = useQuery({
     queryKey: ["availableModels", "switchyard", accessToken],
     queryFn: () => fetchAvailableModels(accessToken),
@@ -37,12 +39,10 @@ export function SwitchyardModelFields({ accessToken, routerName, value, onChange
   const toChoice = (model: { model_group: string }) => ({ value: model.model_group, label: model.model_group });
   return (
     <div className="space-y-6">
-      <p className="text-sm text-muted-foreground">
-        Route between a capable and an efficient model using the conversation’s tool history.
-      </p>
+      <p className="text-sm text-muted-foreground">{t("addModel.switchyardRouterForm.modelFields.description")}</p>
       {isError && (
         <p role="alert" className="text-sm text-destructive">
-          Unable to load available models.
+          {t("addModel.switchyardRouterForm.modelFields.modelsLoadFailed")}
         </p>
       )}
       <SwitchyardConfigFields
@@ -110,6 +110,7 @@ interface Props {
 }
 
 export default function SwitchyardRouterForm({ accessToken, onSuccess, initial }: Props) {
+  const { t } = useTranslation();
   const id = useId();
   const parsed = switchyardConfigSchema.safeParse(initial.config);
   const [config, setConfig] = useState<SwitchyardConfig>(parsed.success ? parsed.data : emptySwitchyardConfig());
@@ -150,7 +151,7 @@ export default function SwitchyardRouterForm({ accessToken, onSuccess, initial }
     >
       <div className="space-y-2">
         <label htmlFor={`${id}-name`} className="text-sm font-medium">
-          Router name
+          {t("addModel.switchyardRouterForm.routerName")}
         </label>
         <Input id={`${id}-name`} value={name} onChange={(event) => setName(event.target.value)} />
       </div>
@@ -168,7 +169,7 @@ export default function SwitchyardRouterForm({ accessToken, onSuccess, initial }
       )}
       <div className="flex justify-end">
         <Button type="submit" disabled={saving || Boolean(toolError)}>
-          {saving ? "Saving…" : "Save changes"}
+          {saving ? t("addModel.switchyardRouterForm.saving") : t("addModel.switchyardRouterForm.saveChanges")}
         </Button>
       </div>
     </form>

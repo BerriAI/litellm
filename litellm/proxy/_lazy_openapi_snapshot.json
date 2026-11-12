@@ -3799,6 +3799,21 @@
               },
               "title": "Providers",
               "type": "object"
+            },
+            "teams": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "$ref": "#/components/schemas/MetricWithMetadata"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Customer spend by the key's current team, or last team for deleted keys. Keys without a known team are grouped under Unassigned",
+              "title": "Teams"
             }
           },
           "title": "BreakdownMetrics",
@@ -4865,6 +4880,12 @@
             "gateway_injected_caching_savings_spend": {
               "default": 0.0,
               "title": "Gateway Injected Caching Savings Spend",
+              "type": "number"
+            },
+            "guardrail_spend": {
+              "default": 0.0,
+              "description": "Guardrail spend in USD, already included in spend, so model spend is spend - guardrail_spend. Rows recorded before this field existed report 0 even when their spend includes guardrail cost",
+              "title": "Guardrail Spend",
               "type": "number"
             },
             "prompt_caching_savings_spend": {
@@ -27293,6 +27314,65 @@
           "title": "OutputToolSearchCall",
           "type": "object"
         },
+        "OutputToolSearchOutput": {
+          "additionalProperties": true,
+          "properties": {
+            "call_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Call Id"
+            },
+            "execution": {
+              "enum": [
+                "server",
+                "client"
+              ],
+              "title": "Execution",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "in_progress",
+                "completed",
+                "incomplete"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "tools": {
+              "default": [],
+              "items": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "title": "Tools",
+              "type": "array"
+            },
+            "type": {
+              "const": "tool_search_output",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "execution",
+            "status",
+            "type"
+          ],
+          "title": "OutputToolSearchOutput",
+          "type": "object"
+        },
         "PendingSafetyCheck": {
           "additionalProperties": true,
           "description": "A pending safety check for the computer call.",
@@ -29662,6 +29742,9 @@
                       },
                       {
                         "$ref": "#/components/schemas/OutputToolSearchCall"
+                      },
+                      {
+                        "$ref": "#/components/schemas/OutputToolSearchOutput"
                       },
                       {
                         "$ref": "#/components/schemas/ResponseCompactionItem"
@@ -35982,6 +36065,386 @@
             }
           ],
           "summary": "Openrouter Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/opensearch/{endpoint}": {
+        "delete": {
+          "description": "Call an OpenSearch index through the proxy, e.g. `POST /opensearch/<index>/_search`.\n\n`<index>` is a LiteLLM vector store index on an OpenSearch vector store. The key or its team needs `read` or\n`write` on it in `allowed_vector_store_indexes`, and LiteLLM signs the call with the vector store's AWS identity.",
+          "operationId": "opensearch_proxy_route_opensearch__endpoint__delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              },
+              "application/x-ndjson": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": false
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "OpenSearch's response, unmodified"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Opensearch Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "get": {
+          "description": "Call an OpenSearch index through the proxy, e.g. `POST /opensearch/<index>/_search`.\n\n`<index>` is a LiteLLM vector store index on an OpenSearch vector store. The key or its team needs `read` or\n`write` on it in `allowed_vector_store_indexes`, and LiteLLM signs the call with the vector store's AWS identity.",
+          "operationId": "opensearch_proxy_route_opensearch__endpoint__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              },
+              "application/x-ndjson": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": false
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "OpenSearch's response, unmodified"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Opensearch Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "head": {
+          "description": "Call an OpenSearch index through the proxy, e.g. `POST /opensearch/<index>/_search`.\n\n`<index>` is a LiteLLM vector store index on an OpenSearch vector store. The key or its team needs `read` or\n`write` on it in `allowed_vector_store_indexes`, and LiteLLM signs the call with the vector store's AWS identity.",
+          "operationId": "opensearch_proxy_route_opensearch__endpoint__head",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              },
+              "application/x-ndjson": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": false
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "OpenSearch's response, unmodified"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Opensearch Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "patch": {
+          "description": "Call an OpenSearch index through the proxy, e.g. `POST /opensearch/<index>/_search`.\n\n`<index>` is a LiteLLM vector store index on an OpenSearch vector store. The key or its team needs `read` or\n`write` on it in `allowed_vector_store_indexes`, and LiteLLM signs the call with the vector store's AWS identity.",
+          "operationId": "opensearch_proxy_route_opensearch__endpoint__patch",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              },
+              "application/x-ndjson": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": false
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "OpenSearch's response, unmodified"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Opensearch Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "post": {
+          "description": "Call an OpenSearch index through the proxy, e.g. `POST /opensearch/<index>/_search`.\n\n`<index>` is a LiteLLM vector store index on an OpenSearch vector store. The key or its team needs `read` or\n`write` on it in `allowed_vector_store_indexes`, and LiteLLM signs the call with the vector store's AWS identity.",
+          "operationId": "opensearch_proxy_route_opensearch__endpoint__post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              },
+              "application/x-ndjson": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": false
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "OpenSearch's response, unmodified"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Opensearch Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "put": {
+          "description": "Call an OpenSearch index through the proxy, e.g. `POST /opensearch/<index>/_search`.\n\n`<index>` is a LiteLLM vector store index on an OpenSearch vector store. The key or its team needs `read` or\n`write` on it in `allowed_vector_store_indexes`, and LiteLLM signs the call with the vector store's AWS identity.",
+          "operationId": "opensearch_proxy_route_opensearch__endpoint__put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              },
+              "application/x-ndjson": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": false
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "OpenSearch's response, unmodified"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Opensearch Proxy Route",
           "tags": [
             "llm_passthrough"
           ]

@@ -103,6 +103,13 @@ impl Error {
         matches!(self, Self::Http(error) if error.is_body_read_timeout())
     }
 
+    pub fn body_cut(&self) -> Option<litellm_http::BodyCut> {
+        match self {
+            Self::Http(error) => error.body_cut(),
+            _ => None,
+        }
+    }
+
     pub fn is_timeout(&self) -> Option<bool> {
         match self {
             Self::Http(error) if error.is_timeout() => Some(error.is_connect_timeout()),
@@ -161,6 +168,10 @@ pub enum ErrorDetail {
         actual: String,
         choices: Vec<&'static str>,
     },
+    #[error(
+        "Invalid reasoning_effort: {actual}. Must be one of: 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'none'"
+    )]
+    InvalidReasoningEffort { actual: String },
     #[error("{field}='{value}' is not supported by this model. Got model: {model}")]
     UnsupportedValue {
         field: &'static str,
@@ -180,6 +191,14 @@ pub enum ErrorDetail {
         "thinking.budget_tokens must be a number, got {actual}. To drop it, set `litellm.drop_params=True`, or `drop_params: true` under `litellm_settings` on the proxy"
     )]
     NonNumericThinkingBudget { actual: &'static str },
+    /// Python's comparison of two operands it cannot order, which raises `TypeError` with this
+    /// text before any request is sent.
+    #[error("'{op}' not supported between instances of '{left}' and '{right}'")]
+    UnorderableTypes {
+        op: &'static str,
+        left: &'static str,
+        right: &'static str,
+    },
     #[error(
         "Missing API Base - A call is being made to LLM Provider but no api base is set either in the environment variables ({{LLM_PROVIDER}}_API_KEY) or via params"
     )]

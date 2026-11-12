@@ -117,6 +117,7 @@ pub struct RecordingCall<P: litellm_host::protocol::Protocol> {
     pub events: Arc<CallEvents>,
     pub chunks: Mutex<Vec<P::Chunk>>,
     pub head: Mutex<Option<P::StreamHead>>,
+    pub retried: Mutex<Vec<litellm_host::interceptors::RetriedRequest>>,
 }
 
 #[derive(Default)]
@@ -167,6 +168,7 @@ impl<P: litellm_host::protocol::Protocol> RecordingCall<P> {
             events: Arc::new(CallEvents::default()),
             chunks: Mutex::new(Vec::new()),
             head: Mutex::new(None),
+            retried: Mutex::new(Vec::new()),
         }
     }
 }
@@ -193,6 +195,14 @@ impl<P: litellm_host::protocol::Protocol> litellm_host::interceptors::Intercepto
         &self,
         _: litellm_host::interceptors::RawResponse,
     ) -> Result<(), P::Error> {
+        Ok(())
+    }
+
+    async fn provider_request_retried(
+        &self,
+        retry: litellm_host::interceptors::RetriedRequest,
+    ) -> Result<(), P::Error> {
+        self.retried.lock().unwrap().push(retry);
         Ok(())
     }
 }

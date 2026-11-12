@@ -1,13 +1,11 @@
 docs
-cookbook
-.circleci
+litellm/proxy/discovery_endpoints/skill_scanner_adapter
 .github
 tests
 .git
 .devcontainer
 *.tgz
 log.txt
-docker/Dockerfile.*
 
 # Claude Flow generated files (must be excluded from Docker build)
 .claude/

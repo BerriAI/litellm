@@ -173,6 +173,7 @@ const ROUTER_SETTINGS_DEFAULT = {
   model_group_alias: null,
   enable_tag_filtering: false,
   routing_strategy_args: null,
+  weights: null,
 };
 
 const SECTION_PAYLOAD_ADDITIONS: Record<keyof typeof SECTIONS, Record<string, unknown>> = {

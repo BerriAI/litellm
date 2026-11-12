@@ -16,6 +16,7 @@ from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.models.access_group import LiteLLM_AccessGroupTable
 from litellm.repositories.accounting_delivery_repository import LedgerDatabase, LedgerTransaction
 from litellm.repositories.prisma_protocols import RowT_co, TableActions
 
@@ -31,6 +32,16 @@ class _PrismaReaderClientView(Protocol):
 class _PrismaWriterClientView(Protocol):
     @property
     def writer_db(self) -> object: ...
+
+
+class _LedgerWriterClientView(Protocol):
+    @property
+    def writer_db(self) -> LedgerDatabase: ...
+
+
+class _RawQueryWriterClientView(Protocol):
+    @property
+    def writer_db(self) -> LedgerTransaction: ...
 
 
 class PrismaTableRepository(Generic[RowT_co]):
@@ -142,7 +153,7 @@ class SpendLogsRepository(PrismaTableRepository["prisma_models.LiteLLM_SpendLogs
         )
         if not ledger:
             return legacy_count
-        database: Final[LedgerDatabase] = self.prisma_client.writer_db
+        database: Final = require_attributes(self._connected_client(), _LedgerWriterClientView, "writer_db").writer_db
         async with database.tx(timeout=timedelta(seconds=60)) as transaction:
             accepted: Final = await self._insert_ledger(transaction, ledger, write_spend_logs=write_spend_logs)
         return legacy_count + accepted
@@ -210,7 +221,7 @@ class SpendLogsRepository(PrismaTableRepository["prisma_models.LiteLLM_SpendLogs
         return frozenset(str(row["request_id"]) for row in rows)
 
     async def has_delivery(self, delivery_id: str) -> bool:
-        database: Final[LedgerTransaction] = self.prisma_client.writer_db
+        database: Final = require_attributes(self._connected_client(), _RawQueryWriterClientView, "writer_db").writer_db
         rows: Final = await database.query_raw(
             'SELECT 1 FROM "LiteLLM_SpendLogDelivery" WHERE delivery_id = $1', delivery_id
         )
@@ -299,6 +310,10 @@ class ModelTableRepository(PrismaTableRepository["prisma_models.LiteLLM_ModelTab
 
 class AccessGroupRepository(PrismaTableRepository["prisma_models.LiteLLM_AccessGroupTable"]):
     table_name = "litellm_accessgrouptable"
+
+    async def find_by_name(self, name: str) -> LiteLLM_AccessGroupTable | None:
+        row: Final = await self.table.find_unique(where={"access_group_name": name})
+        return LiteLLM_AccessGroupTable.model_validate(row, from_attributes=True) if row is not None else None
 
 
 class SSOConfigRepository(PrismaTableRepository["prisma_models.LiteLLM_SSOConfig"]):
@@ -401,6 +416,12 @@ class BackgroundInteractionSettlementRepository(
     PrismaTableRepository["prisma_models.LiteLLM_BackgroundInteractionSettlement"]
 ):
     table_name = "litellm_backgroundinteractionsettlement"
+
+
+class BackgroundResponseSettlementRepository(
+    PrismaTableRepository["prisma_models.LiteLLM_BackgroundResponseSettlement"]
+):
+    table_name = "litellm_backgroundresponsesettlement"
 
 
 class RetiredAgentRepository(PrismaTableRepository["prisma_models.LiteLLM_RetiredAgent"]):

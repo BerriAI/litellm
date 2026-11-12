@@ -89,6 +89,7 @@ ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG: Final[frozenset[str]] = frozenset(
         "ignore_invalid_deployments",
         "fallback_access_check",
         "fallback_budget_check",
+        "fallback_rate_limit_check",
         "auto_router_capability_limit",
     }
 )
@@ -735,6 +736,12 @@ ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE: Final = get_env_int(
 # upstream stream immediately, instead of continuing to drain for the real
 # terminal usage.
 ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS: Final = get_env_int("ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS", 100)
+ANTHROPIC_MESSAGES_STREAM_CLIENT_STALL_TIMEOUT_SECONDS: Final = get_env_float(
+    "ANTHROPIC_MESSAGES_STREAM_CLIENT_STALL_TIMEOUT_SECONDS", 600.0
+)
+ANTHROPIC_MESSAGES_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS: Final = get_env_float(
+    "ANTHROPIC_MESSAGES_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS", 600.0
+)
 LOGGING_WORKER_CONCURRENCY: Final = get_env_int("LOGGING_WORKER_CONCURRENCY", 100)  # Must be above 0
 LOGGING_WORKER_MAX_QUEUE_SIZE: Final = get_env_int("LOGGING_WORKER_MAX_QUEUE_SIZE", 50_000)
 LOGGING_WORKER_MAX_TIME_PER_COROUTINE: Final = get_env_float("LOGGING_WORKER_MAX_TIME_PER_COROUTINE", 20.0)
@@ -1533,6 +1540,7 @@ BEDROCK_CONVERSE_MODELS: Final = [
     "openai.gpt-oss-120b-1:0",
     "anthropic.claude-haiku-4-5-20251001-v1:0",
     "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "anthropic.claude-fable-5-2",
     "anthropic.claude-fable-5-1",
     "anthropic.claude-fable-5",
     "anthropic.claude-sonnet-5",
@@ -1705,11 +1713,13 @@ ROUTING_REQUEST_TAGS_METADATA_KEY: Final = "_routing_request_tags"
 BAGGAGE_MAPPED_TAGS_METADATA_KEY: Final = "_baggage_mapped_tags"
 VECTOR_STORE_CALLER_METADATA_KWARG: Final = "litellm_vector_store_caller_metadata"
 ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY: Final = "_litellm_router_usage_counted_tokens"
+USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY: Final = "_litellm_usage_based_routing_counted_tokens"
 INTERNAL_CALL_ORIGIN_METADATA_KEY: Final = "internal_call_origin"
 RESPONSES_WEBSOCKET_CALL_ID_METADATA_KEY: Final = "responses_websocket_call_id"
 BILLED_RETRY_ATTEMPT_METADATA_KEY: Final = "billed_retry_attempt"
 MANAGED_BACKGROUND_RESPONSE_METADATA_KEY: Final = "_managed_background_response"
 SESSION_ID_GENERATED_METADATA_KEY: Final = "litellm_session_id_generated"
+SESSION_SPEND_TOTAL_TTL_SECONDS: Final = 3600
 SESSION_ID_OMITTED_METADATA_KEY: Final = "litellm_session_id_omitted"
 CALLER_SESSION_ID_METADATA_KEY: Final = "litellm_caller_session_id"
 COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY: Final = "_complexity_router_child_session_id"
@@ -1787,6 +1797,7 @@ AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX: Final = "/azure_speech"
 AZURE_SPEECH_SHORT_AUDIO_PATH_PREFIX: Final = "/speech/"
 AZURE_SPEECH_BATCH_PATH_PREFIX: Final = "/speechtotext/"
 AZURE_SPEECH_FAST_TRANSCRIPTION_PATH: Final = "/speechtotext/transcriptions:transcribe"
+OPENSEARCH_PASS_THROUGH_ROUTE_PREFIX: Final = "/opensearch"
 AZURE_SPEECH_STT_DOMAIN: Final = "stt.speech.microsoft.com"
 AZURE_SPEECH_COGNITIVE_SERVICES_DOMAIN: Final = "api.cognitive.microsoft.com"
 AZURE_SPEECH_SUBSCRIPTION_KEY_HEADER: Final = "Ocp-Apim-Subscription-Key"
@@ -1940,6 +1951,7 @@ SPEND_ROLLUP_LOCK_TIMEOUT_MS: Final = max(1, get_env_int("SPEND_ROLLUP_LOCK_TIME
 SPEND_LOG_QUEUE_SIZE_THRESHOLD: Final = get_env_int("SPEND_LOG_QUEUE_SIZE_THRESHOLD", 100)
 SPEND_LOG_QUEUE_MAX_BYTES: Final = max(1, get_env_int("SPEND_LOG_QUEUE_MAX_BYTES", 64000000))
 SPEND_LOG_QUEUE_POLL_INTERVAL: Final = get_env_float("SPEND_LOG_QUEUE_POLL_INTERVAL", 2.0)
+SPEND_LOG_QUEUE_MAX_BACKOFF_SECONDS: Final = 30.0
 RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS: Final = max(1, get_env_int("RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS", 3))
 RESPONSES_SESSION_LOOKUP_RETRY_INTERVAL: Final = get_env_float("RESPONSES_SESSION_LOOKUP_RETRY_INTERVAL", 0.2)
 SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE: Final = get_env_int("SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE", 10000)
@@ -1965,6 +1977,7 @@ BATCH_LINE_ITEMS_MAX_PART_BYTES: Final = get_env_int_in_range(
 MANAGED_OBJECT_STALENESS_CUTOFF_DAYS: Final = max(1, get_env_int("MANAGED_OBJECT_STALENESS_CUTOFF_DAYS", 7))
 PENDING_RESPONSE_STATUSES: Final = ("queued", "in_progress")
 TERMINAL_RESPONSE_STATUSES: Final = frozenset({"completed", "failed", "cancelled", "incomplete"})
+BACKGROUND_RESPONSE_SETTLEMENT_TIMEOUT_SECONDS: Final = 2.0
 BATCH_OUTPUT_FILE_LOOKUP_TIMEOUT_SECONDS: Final = 10.0
 BATCH_OUTPUT_FILE_FALLBACK_RETRY_AFTER_SECONDS: Final = 60
 STALE_OBJECT_CLEANUP_BATCH_SIZE: Final = max(1, get_env_int("STALE_OBJECT_CLEANUP_BATCH_SIZE", 1000))
@@ -2367,6 +2380,7 @@ ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS: Final = (
     MAX_FILE_DOWNLOADS_PER_MINUTE_KEY,
 )
 FILE_USAGE_MAX_TRACKED_COUNTERS: Final = 20_000
+MESSAGE_THREAD_MAX_TRACKED_OWNERS: Final = 20_000
 
 # Shared read-only empty mapping, for defaulting optional Mapping parameters without
 # constructing a fresh mutable dict at each call site.

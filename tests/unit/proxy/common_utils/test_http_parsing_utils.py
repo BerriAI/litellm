@@ -31,10 +31,11 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     numeric_form_fields,
     populate_request_with_path_params,
     read_raw_json_body,
+    read_request_path_params,
 )
 from fastapi import Request as Request_http_parsing
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.utils import _invalidate_model_cost_lowercase_map
+from litellm.litellm_core_utils.model_cost_table import publish
 from starlette.types import Message
 from starlette.websockets import WebSocket
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
@@ -1561,7 +1562,7 @@ def isolate_litellm_state():
     for attr, original_value in original_state.items():
         if hasattr(litellm, attr):
             setattr(litellm, attr, original_value)
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
@@ -1786,3 +1787,22 @@ async def test_convert_upload_files_to_file_data_reads_every_upload_into_file_tu
         "tags": ["red", "blue"],
         "display_title": "My skill",
     }
+
+
+@pytest.mark.parametrize(
+    "scope_path_params, expected",
+    [
+        ({"model": "deployment/name"}, {"model": "deployment/name"}),
+        ({}, {}),
+        (None, None),
+    ],
+)
+def test_read_request_path_params_returns_mappings_and_drops_non_mapping_metadata(
+    scope_path_params: Mapping[str, object] | None, expected: Mapping[str, object] | None
+) -> None:
+    request: Final = Request({"type": "http", "path_params": scope_path_params})
+    assert read_request_path_params(request) == expected
+
+
+def test_read_request_path_params_without_request_is_none() -> None:
+    assert read_request_path_params(None) is None

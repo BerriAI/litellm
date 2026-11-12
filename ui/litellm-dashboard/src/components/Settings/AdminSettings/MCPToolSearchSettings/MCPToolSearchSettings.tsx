@@ -31,6 +31,7 @@ import {
   storedValuesToForm,
   ToolSearchFormValues,
 } from "./toolSearchForm";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 interface MCPToolSearchSettingsProps {
   accessToken: string | null;
@@ -232,7 +233,7 @@ export default function MCPToolSearchSettings({ accessToken }: MCPToolSearchSett
                       id={id}
                       ref={ref}
                       value={value}
-                      placeholder={"my_server-get_rates\nmy_server-list_accounts"}
+                      placeholder={codeSamples.mcpServers.toolSearchToolNames}
                       onChange={(event) => onChange(event.target.value)}
                       onBlur={onBlur}
                       disabled={isUpdating}
