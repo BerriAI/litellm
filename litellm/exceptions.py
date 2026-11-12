@@ -12,10 +12,11 @@
 import datetime
 import enum
 from collections.abc import Mapping, Sequence
-from typing import Any, Final
+from typing import Any, Final, Protocol, SupportsIndex, SupportsInt, runtime_checkable
 
 import httpx
 import openai
+from typing_extensions import Buffer
 
 import litellm
 from litellm.types.utils import LiteLLMCommonStrings
@@ -365,6 +366,10 @@ class VectorStoreSearchError(BadRequestError):
 
 
 class MalformedRequestFieldError(BadRequestError):
+    pass
+
+
+class MissingMessageRoleError(MalformedRequestFieldError):
     pass
 
 
@@ -867,6 +872,7 @@ class BadGatewayError(openai.APIStatusError):
 class InternalServerError(openai.InternalServerError):
     response: httpx.Response  # pyright: ignore[reportIncompatibleVariableOverride]  # LiteLLM constructs an HTTPX response
     request: httpx.Request  # pyright: ignore[reportIncompatibleVariableOverride]  # LiteLLM constructs an HTTPX request
+    provider_status_code: int | None
 
     def __init__(
         self,
@@ -878,8 +884,10 @@ class InternalServerError(openai.InternalServerError):
         max_retries: int | None = None,
         num_retries: int | None = None,
         body: object | None = None,
+        provider_status_code: int | None = None,
     ):
         self.status_code = 500
+        self.provider_status_code = provider_status_code
         self.message = f"litellm.InternalServerError: {message}"
         self.llm_provider = llm_provider
         self.model = model
@@ -1247,6 +1255,19 @@ class BlockedPiiEntityError(Exception):
         super().__init__(self.message)
 
 
+@runtime_checkable
+class _SupportsTrunc(Protocol):
+    def __trunc__(self) -> int: ...
+
+
+def _status_code_int(value: object) -> int:
+    if isinstance(value, (str, Buffer, SupportsInt, SupportsIndex, _SupportsTrunc)):
+        return int(value)
+    raise TypeError(
+        f"int() argument must be a string, a bytes-like object or a real number, not '{type(value).__name__}'"
+    )
+
+
 class MidStreamFallbackError(ServiceUnavailableError):
     def __init__(
         self,
@@ -1262,13 +1283,16 @@ class MidStreamFallbackError(ServiceUnavailableError):
         is_pre_first_chunk: bool = False,
         emitted_disqualifying_content: bool = False,
     ):
-        original_status: Final = getattr(original_exception, "status_code", None)
-        self.status_code = int(original_status) if original_status is not None else 503
+        original_status: Final[object] = getattr(original_exception, "status_code", None)
+        self.status_code = _status_code_int(original_status) if original_status is not None else 503
         self.message = f"litellm.MidStreamFallbackError: {message}"
         self.model = model
         self.llm_provider = llm_provider
         self.original_exception = original_exception
-        self.litellm_debug_info = litellm_debug_info
+        inherited_debug_info: Final[object] = getattr(original_exception, "litellm_debug_info", None)
+        self.litellm_debug_info = litellm_debug_info or (
+            inherited_debug_info if isinstance(inherited_debug_info, str) else None
+        )
         self.max_retries = max_retries
         self.num_retries = num_retries
         self.generated_content = generated_content
@@ -1306,7 +1330,7 @@ class MidStreamFallbackError(ServiceUnavailableError):
         )
 
         # Restore the propagated status and original response/request objects
-        self.status_code = int(original_status) if original_status is not None else 503
+        self.status_code = _status_code_int(original_status) if original_status is not None else 503
         self.response = _saved_response
         self.request = _saved_request
         self.message = _saved_message

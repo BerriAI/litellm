@@ -29,16 +29,20 @@ from litellm.integrations.anthropic_cache_control_hook import (
     configured_injection_points,
     routed_model_info,
 )
+from litellm.litellm_core_utils.allowed_tools_tool_choice import (
+    allowed_tools_tool_choice_in_effect,
+    allowed_tools_tool_choice_with_gateway_tools_as_functions,
+)
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params, require_attributes
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     declared_authenticating_provider,
     get_provider_affinity_header,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
+from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     update_responses_input_with_model_file_ids,
     update_responses_tools_with_model_file_ids,
 )
@@ -82,7 +86,11 @@ from litellm.types.llms.openai import (
 
 # Handle ResponseText import with fallback
 if TYPE_CHECKING:
-    from litellm.responses.streaming_iterator import ResponsesWsFrameGuard, ResponsesWsTurnAdmission
+    from litellm.responses.streaming_iterator import (
+        ResponsesWsFrameGuard,
+        ResponsesWsTurnAdmission,
+        ResponsesWsTurnUsageRecorder,
+    )
     from litellm.types.llms.openai import ResponseText
 else:
     ResponseText = str  # Fallback for ResponseText import
@@ -312,6 +320,11 @@ async def aresponses_api_with_mcp(
         LiteLLM_Proxy_MCP_Handler,
     )
 
+    request_kwargs: Final = _STR_MAPPING.validate_python(kwargs)
+    tool_choice_in_effect: Final = allowed_tools_tool_choice_in_effect(
+        tool_choice, model, drops_unsupported_params(request_kwargs.get("drop_params"))
+    )
+
     # Parse MCP tools and separate from other tools
     (
         mcp_tools_with_litellm_proxy,
@@ -330,14 +343,13 @@ async def aresponses_api_with_mcp(
         else (None, None, None, None)
     )
 
-    request_kwargs: Final = _STR_MAPPING.validate_python(kwargs)
     logging_obj: Final = request_kwargs.get("litellm_logging_obj")
     joins_request_trace: Final = isinstance(logging_obj, LiteLLMLoggingObj)
     bridged_first_turn: Final = (
         joins_request_trace
         and not stream
         and previous_response_id is None
-        and not provider_stores_the_conversation(model, custom_llm_provider, kwargs)
+        and not provider_stores_the_conversation(model, custom_llm_provider, request_kwargs)
     )
 
     listing_trace_id: Final = (
@@ -361,6 +373,9 @@ async def aresponses_api_with_mcp(
         raw_headers=discovery_raw_headers,
     )
     openai_tools: Final = LiteLLM_Proxy_MCP_Handler.transform_mcp_tools_to_openai(original_mcp_tools)
+    gateway: Final = await LiteLLM_Proxy_MCP_Handler.gateway_tools(
+        tool_choice_in_effect, tool_server_map, mcp_tools_with_litellm_proxy, user_api_key_auth
+    )
 
     # Combine with other tools
     all_tools: Final = openai_tools + other_tools if (openai_tools or other_tools) else None
@@ -379,7 +394,7 @@ async def aresponses_api_with_mcp(
         "stream": stream,
         "temperature": temperature,
         "text": text,
-        "tool_choice": tool_choice,
+        "tool_choice": allowed_tools_tool_choice_with_gateway_tools_as_functions(tool_choice_in_effect, gateway),
         "top_p": top_p,
         "truncation": truncation,
         "user": user,
@@ -418,6 +433,8 @@ async def aresponses_api_with_mcp(
             previous_response_id=previous_response_id,
             tool_server_map=tool_server_map,
             served_tools=original_mcp_tools,
+            tool_choice=tool_choice_in_effect,
+            gateway=gateway,
             **kwargs,
         )
         await mcp_streaming_response.start_initial_response()
@@ -456,7 +473,11 @@ async def aresponses_api_with_mcp(
     #########################################################
     if should_auto_execute and isinstance(response, ResponsesAPIResponse):
         with first_round_billed_on_failure(logging_obj, response):
-            tool_calls: Final = LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_response(response=response)
+            tool_calls: Final = LiteLLM_Proxy_MCP_Handler.tool_calls_to_run(
+                LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_response(response=response),
+                tool_choice_in_effect,
+                gateway,
+            )
 
             if tool_calls:
                 user_api_key_auth = kwargs.get("litellm_metadata", {}).get("user_api_key_auth")
@@ -759,9 +780,7 @@ def _api_base_kwarg(kwargs: Mapping[str, object]) -> str | None:
     return api_base if isinstance(api_base, str) else None
 
 
-def _dispatched_model_name(
-    model: str, custom_llm_provider: str, api_base: str | None, litellm_params: GenericLiteLLMParams | None = None
-) -> str:
+def _dispatched_model_name(model: str, custom_llm_provider: str) -> str:
     from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
 
     provider_model, _ = resolve_model_and_provider_for_metadata(model=model, custom_llm_provider=custom_llm_provider)
@@ -774,7 +793,6 @@ def _will_bridge_to_chat_completions(
     use_chat_completions_api: bool,
     model_info: object,
     api_base: str | None,
-    litellm_params: GenericLiteLLMParams | None = None,
 ) -> bool:
     """``_bridges_to_chat_completions`` for callers running before the provider config is resolved.
 
@@ -791,7 +809,7 @@ def _will_bridge_to_chat_completions(
         return True
     return _bridges_to_chat_completions(
         _resolve_responses_api_provider_config(
-            _dispatched_model_name(normalized_model[0], custom_llm_provider, api_base, litellm_params),
+            _dispatched_model_name(normalized_model[0], custom_llm_provider),
             custom_llm_provider,
             model_info,
             api_base,
@@ -816,7 +834,6 @@ def provider_stores_the_conversation(model: str, custom_llm_provider: str | None
         bool(kwargs.get("use_chat_completions_api")),
         kwargs.get("model_info"),
         api_base,
-        litellm_params,
     )
 
 
@@ -999,7 +1016,6 @@ async def aresponses(
                     bool(kwargs.get("use_chat_completions_api")),
                     kwargs.get("model_info"),
                     _api_base_kwarg(kwargs),
-                    GenericLiteLLMParams(**kwargs),
                 ),
             ):
                 _stamp_injection_points_for_the_hook(kwargs, model, custom_llm_provider, input, tools)
@@ -1152,8 +1168,12 @@ def _apply_prompt_management_to_responses_call(
 ) -> tuple[str | ResponseInputParam, str, str | None, object]:
     """Returns the prompt-managed input, model and provider, plus the deployment metadata that still
     describes the upstream (``None`` once the prompt manager moved the request to another provider)."""
-    async_outcome: Final[_AsyncPromptManagementOutcome | None] = kwargs.pop("_async_prompt_merged_params", None)
-    if async_outcome is not None:
+    carried_outcome: Final[object] = kwargs.get("_async_prompt_merged_params")
+    kwargs.pop("_async_prompt_merged_params", None)
+    if carried_outcome is not None:
+        async_outcome: Final = require_attributes(
+            carried_outcome, _AsyncPromptManagementOutcome, "merged_optional_params"
+        )
         for key, value in async_outcome.merged_optional_params.items():
             local_vars[key] = value
         return input, model, custom_llm_provider, async_outcome.deployment_model_info
@@ -1175,7 +1195,6 @@ def _apply_prompt_management_to_responses_call(
                 use_chat_completions_api,
                 kwargs.get("model_info"),
                 _api_base_kwarg(kwargs),
-                GenericLiteLLMParams(**kwargs),
             ),
         ):
             _stamp_injection_points_for_the_hook(kwargs, model, custom_llm_provider, input, tools)
@@ -2872,6 +2891,7 @@ async def _aresponses_websocket(
     api_key: str | None = None,
     timeout: float | None = None,
     turn_admission: "ResponsesWsTurnAdmission | None" = None,
+    turn_usage_recorder: "ResponsesWsTurnUsageRecorder | None" = None,
     responses_ws_frame_guard: "ResponsesWsFrameGuard | None" = None,
     **kwargs,
 ) -> Exception | None:
@@ -2966,6 +2986,7 @@ async def _aresponses_websocket(
         custom_llm_provider=_custom_llm_provider,
         request_defaults=_build_responses_websocket_request_defaults(deployment_kwargs),
         turn_admission=turn_admission,
+        turn_usage_recorder=turn_usage_recorder,
         frame_guard=responses_ws_frame_guard,
         **remaining_kwargs,
     )
