@@ -64,6 +64,7 @@ from litellm.constants import (
     REDACTED_BY_LITELLM,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+from litellm.litellm_core_utils import litellm_logging as litellm_logging_module
 from litellm.litellm_core_utils import token_counter as token_counter_module
 from litellm.litellm_core_utils.token_counter import token_counter
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -8019,11 +8020,11 @@ def _redacted_logging(
 async def _fail(logging_obj: LitellmLogging, exporter: InMemorySpanExporter, order: str) -> ReadableSpan:
     error: Final = litellm.Timeout(message="timed out", model="test-model", llm_provider="hosted_vllm")
     if order == _SYNC_THEN_ASYNC:
-        logging_obj.failure_handler(error, "tb")
+        logging_obj.failure_handler(error, "tb", for_async_request=True)
         await logging_obj.async_failure_handler(error, "tb")
     else:
         await logging_obj.async_failure_handler(error, "tb")
-        logging_obj.failure_handler(error, "tb")
+        logging_obj.failure_handler(error, "tb", for_async_request=True)
     assert logging_obj.model_call_details["messages"] == [{"role": "user", "content": REDACTED_BY_LITELLM}]
     (span,) = exporter.get_finished_spans()
     return span
@@ -8125,6 +8126,43 @@ async def test_failed_chat_span_skips_the_estimate_for_prompts_with_attachments(
     assert ESTIMATED_INPUT_TOKENS_ATTRIBUTE not in attributes
     assert parsed_pdfs == []
     assert _PROMPT_SECRET not in _span_text(span)
+
+
+@pytest.mark.asyncio
+async def test_async_failure_counts_the_prompt_off_the_event_loop(
+    in_memory_otel: tuple[OpenTelemetry, InMemorySpanExporter], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    otel, exporter = in_memory_otel
+    counting_started: Final = threading.Event()
+    release_counting: Final = threading.Event()
+
+    def blocked_token_counter(**_kwargs: object) -> int:
+        counting_started.set()
+        release_counting.wait(timeout=30)
+        return 4321
+
+    monkeypatch.setattr(litellm_logging_module, "get_token_counter_new", lambda: blocked_token_counter)
+    failure: Final = asyncio.create_task(
+        _fail(_redacted_logging(otel, list(_SECRET_PROMPT)), exporter, _SYNC_THEN_ASYNC)
+    )
+    try:
+        assert await asyncio.to_thread(counting_started.wait, 30)
+        other_coroutine_ran: Final = asyncio.Event()
+
+        async def other_request() -> None:
+            other_coroutine_ran.set()
+
+        await asyncio.create_task(other_request())
+        assert other_coroutine_ran.is_set()
+        assert not failure.done()
+    finally:
+        release_counting.set()
+        await asyncio.gather(failure, return_exceptions=True)
+    span: Final = failure.result()
+
+    attributes: Final = dict(span.attributes or {})
+    _assert_unknown_usage(attributes)
+    assert attributes[ESTIMATED_INPUT_TOKENS_ATTRIBUTE] == 4321
 
 
 @pytest.mark.asyncio
