@@ -2033,6 +2033,28 @@ async def test_an_alternate_granted_by_a_group_the_request_did_not_reserve_again
 
 
 @pytest.mark.asyncio
+async def test_a_pricier_alternate_is_never_used_while_a_budget_reservation_is_held(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "priority_reservation", None)
+    monkeypatch.setattr(litellm.priority_reservation_settings, "saturation_threshold", 0.5)
+    handler: Final = _steering_handler()
+    pricier_opus: Final = {
+        "luna": {"input_cost_per_token": 0.000001, "output_cost_per_token": 0.000002},
+        "opus": {"input_cost_per_token": 0.000005, "output_cost_per_token": 0.000002},
+    }
+    handler.update_variables(llm_router=_steering_router("luna", "opus", extra_params=pricier_opus))
+    await _saturate(handler, "luna")
+
+    reserved: Final = _team_user(["luna", "opus"], [{"model": "luna", "alternates": ["opus"]}])
+    reserved.budget_reservation = {"reserved_cost": 0.0001, "entries": []}
+    assert await handler.async_pre_call_hook(reserved, DualCache(), {"model": "luna"}, "completion") is None
+
+    unreserved: Final = _team_user(["luna", "opus"], [{"model": "luna", "alternates": ["opus"]}])
+    steered: Final = await handler.async_pre_call_hook(unreserved, DualCache(), {"model": "luna"}, "completion")
+    assert isinstance(steered, dict)
+    assert steered["model"] == "opus"
+
+
+@pytest.mark.asyncio
 async def test_an_alternate_that_does_not_serve_the_endpoint_is_never_used(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "priority_reservation", None)
     monkeypatch.setattr(litellm.priority_reservation_settings, "saturation_threshold", 0.5)

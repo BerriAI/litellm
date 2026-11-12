@@ -268,11 +268,29 @@ def _with_access_groups(data: Mapping[str, object], access_groups: tuple[str, ..
     return {**data, **stamped}
 
 
-def _reservation_covers(user_api_key_dict: UserAPIKeyAuth, access_groups: tuple[str, ...]) -> bool:
-    """Whether every model access group the request already reserved budget against also grants the alternate,
-    so settlement never charges a group that did not serve."""
+def _priced_within(preferred: ModelGroupInfo, alternate: ModelGroupInfo) -> bool:
+    """Whether ``alternate`` costs no more per token than ``preferred``, so a budget reserved for the preferred
+    model's estimate still covers the alternate."""
+    return (alternate.input_cost_per_token or 0.0) <= (preferred.input_cost_per_token or 0.0) and (
+        alternate.output_cost_per_token or 0.0
+    ) <= (preferred.output_cost_per_token or 0.0)
+
+
+def _reservation_covers(
+    user_api_key_dict: UserAPIKeyAuth,
+    access_groups: tuple[str, ...],
+    preferred: ModelGroupInfo,
+    alternate: ModelGroupInfo,
+) -> bool:
+    """Whether the budget the request already reserved still fits the alternate: the alternate costs no more per
+    token than the preferred model the estimate was made for, and every model access group reserved against also
+    grants the alternate, so settlement never charges a group that did not serve."""
     reservation: Final = user_api_key_dict.budget_reservation
-    entries: Final = reservation.get("entries") if reservation is not None else None
+    if reservation is None:
+        return True
+    if not _priced_within(preferred, alternate):
+        return False
+    entries: Final = reservation.get("entries")
     if not isinstance(entries, list):
         return True
     try:
@@ -1172,7 +1190,11 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         for alternate in alternates:
             if alternate == model or not self._steerable(model, alternate, data, call_type, user_api_key_dict.team_id):
                 continue
-            if (candidate := await self._idle_permitted_alternate(alternate, user_api_key_dict, threshold)) is not None:
+            if (
+                candidate := await self._idle_permitted_alternate(
+                    alternate, user_api_key_dict, threshold, model_group_info
+                )
+            ) is not None:
                 verbose_proxy_logger.info("Steering team %s from %s to %s", user_api_key_dict.team_id, model, alternate)
                 return candidate
         return None
@@ -1220,13 +1242,13 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         return True
 
     async def _idle_permitted_alternate(
-        self, alternate: str, user_api_key_dict: UserAPIKeyAuth, threshold: float
+        self, alternate: str, user_api_key_dict: UserAPIKeyAuth, threshold: float, preferred: ModelGroupInfo
     ) -> "SteeredModel | None":
         group_info: Final = self.llm_router.registry().group(alternate)
         if group_info is None:
             return None
         grant: Final = await self._is_model_authorized(user_api_key_dict, alternate)
-        if grant is None or not _reservation_covers(user_api_key_dict, grant.access_groups):
+        if grant is None or not _reservation_covers(user_api_key_dict, grant.access_groups, preferred, group_info):
             return None
         if await self._check_model_saturation(alternate, group_info) >= threshold:
             return None
