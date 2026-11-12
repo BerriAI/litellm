@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import abstractmethod
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, runtime_checkable
@@ -23,7 +23,6 @@ from litellm.types.vector_stores import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
-    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
     from litellm.router import Router
 
     from ..chat.transformation import BaseLLMException as _BaseLLMException
@@ -293,7 +292,8 @@ class BaseVectorStoreConfig:
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_params: Mapping[str, object],
-        client: HTTPHandler,
+        headers: Mapping[str, str],
+        get: Callable[[str, Mapping[str, str]], httpx.Response],
     ) -> VectorStoreSearchOptionalRequestParams:
         return vector_store_search_optional_params
 
@@ -303,7 +303,8 @@ class BaseVectorStoreConfig:
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_params: Mapping[str, object],
-        client: AsyncHTTPHandler,
+        headers: Mapping[str, str],
+        get: Callable[[str, Mapping[str, str]], Awaitable[httpx.Response]],
     ) -> VectorStoreSearchOptionalRequestParams:
         return vector_store_search_optional_params
 

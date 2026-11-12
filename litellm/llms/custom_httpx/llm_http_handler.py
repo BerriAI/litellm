@@ -405,6 +405,7 @@ class _AgenticLoopParamsView(TypedDict):
 
 
 _GOAWAY_RETRY_MESSAGE: Final = "Vector store search connection was closed by an HTTP/2 GOAWAY, retrying once"
+_SEARCH_HEADERS: Final = TypeAdapter(dict[str, str])
 
 
 def _closed_by_http2_goaway(error: httpx.RemoteProtocolError) -> bool:
@@ -433,6 +434,12 @@ def _send_with_goaway_retry(send: Callable[[], httpx.Response]) -> httpx.Respons
             raise
         verbose_logger.warning(_GOAWAY_RETRY_MESSAGE)
         return send()
+
+
+def _vector_store_search_timeout(provider_config: BaseVectorStoreConfig) -> BaseLLMException:
+    return provider_config.get_error_class(
+        error_message="Vector store search exceeded the caller timeout.", status_code=408, headers=httpx.Headers()
+    )
 
 
 def _is_sized_json_body(response: httpx.Response) -> bool:
@@ -10674,6 +10681,7 @@ class BaseLLMHTTPHandler:
 
         if extra_headers:
             headers.update(extra_headers)
+        search_headers: Final = _SEARCH_HEADERS.validate_python(headers)
 
         api_base: Final = await run_off_loop_if_aws(
             vector_store_provider_config,
@@ -10682,12 +10690,28 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
+        async def lookup(url: str, lookup_headers: Mapping[str, str]) -> httpx.Response:
+            try:
+                return await _asend_with_goaway_retry(
+                    partial(
+                        async_httpx_client.client.get,
+                        url,
+                        headers=dict(lookup_headers),
+                        timeout=httpx.USE_CLIENT_DEFAULT if timeout is None else timeout,
+                    )
+                )
+            except httpx.TimeoutException:
+                raise _vector_store_search_timeout(vector_store_provider_config) from None
+            except httpx.TransportError as e:
+                raise self._handle_error(e=e, provider_config=vector_store_provider_config)
+
         search_params: Final = await vector_store_provider_config.aresolve_search_params(
             vector_store_id=vector_store_id,
             vector_store_search_optional_params=vector_store_search_optional_params,
             api_base=api_base,
             litellm_params=MappingProxyType(dict(litellm_params, timeout=timeout)),
-            client=async_httpx_client,
+            headers=search_headers,
+            get=lookup,
         )
         search_embedding_executor: Final = EmbedOnceExecutor(
             BaseQueryEmbeddingVectorStoreConfig.query_embedding_executor(embedding_executor, None)
@@ -10724,7 +10748,7 @@ class BaseLLMHTTPHandler:
             signed_headers, signed_json_body = await run_off_loop_if_aws(
                 vector_store_provider_config,
                 vector_store_provider_config.sign_request,
-                headers=headers,
+                headers=search_headers,
                 optional_params={**dict(litellm_params), **(params or {})},
                 request_data=request_body,
                 api_base=url,
@@ -10749,11 +10773,7 @@ class BaseLLMHTTPHandler:
                     )
                 )
             except httpx.TimeoutException:
-                raise vector_store_provider_config.get_error_class(
-                    error_message="Vector store search exceeded the caller timeout.",
-                    status_code=408,
-                    headers=httpx.Headers(),
-                ) from None
+                raise _vector_store_search_timeout(vector_store_provider_config) from None
             except httpx.HTTPStatusError:
                 raise
             except Exception as e:
@@ -10855,18 +10875,35 @@ class BaseLLMHTTPHandler:
 
         if extra_headers:
             headers.update(extra_headers)
+        search_headers: Final = _SEARCH_HEADERS.validate_python(headers)
 
         api_base: Final = vector_store_provider_config.get_complete_url(
             api_base=litellm_params.api_base,
             litellm_params=dict(litellm_params),
         )
 
+        def lookup(url: str, lookup_headers: Mapping[str, str]) -> httpx.Response:
+            try:
+                return _send_with_goaway_retry(
+                    partial(
+                        sync_httpx_client.client.get,
+                        url,
+                        headers=dict(lookup_headers),
+                        timeout=httpx.USE_CLIENT_DEFAULT if timeout is None else timeout,
+                    )
+                )
+            except httpx.TimeoutException:
+                raise _vector_store_search_timeout(vector_store_provider_config) from None
+            except httpx.TransportError as e:
+                raise self._handle_error(e=e, provider_config=vector_store_provider_config)
+
         search_params: Final = vector_store_provider_config.resolve_search_params(
             vector_store_id=vector_store_id,
             vector_store_search_optional_params=vector_store_search_optional_params,
             api_base=api_base,
             litellm_params=MappingProxyType(dict(litellm_params, timeout=timeout)),
-            client=sync_httpx_client,
+            headers=search_headers,
+            get=lookup,
         )
         search_embedding_executor: Final = EmbedOnceExecutor(
             BaseQueryEmbeddingVectorStoreConfig.query_embedding_executor(embedding_executor, None)
@@ -10902,7 +10939,7 @@ class BaseLLMHTTPHandler:
                 )
 
             signed_headers, signed_json_body = vector_store_provider_config.sign_request(
-                headers=headers,
+                headers=search_headers,
                 optional_params={**dict(litellm_params), **(params or {})},
                 request_data=request_body,
                 api_base=url,
@@ -10925,11 +10962,7 @@ class BaseLLMHTTPHandler:
                     partial(sync_httpx_client.post, url=url, headers=signed_headers, data=request_data, timeout=timeout)
                 )
             except httpx.TimeoutException:
-                raise vector_store_provider_config.get_error_class(
-                    error_message="Vector store search exceeded the caller timeout.",
-                    status_code=408,
-                    headers=httpx.Headers(),
-                ) from None
+                raise _vector_store_search_timeout(vector_store_provider_config) from None
             except httpx.HTTPStatusError:
                 raise
             except Exception as e:

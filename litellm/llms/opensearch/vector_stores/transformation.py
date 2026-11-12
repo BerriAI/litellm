@@ -1,7 +1,7 @@
 import hashlib
 import json
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial, reduce
 from typing import TYPE_CHECKING, Annotated, ClassVar, Final, Literal, NoReturn, TypeAlias
@@ -44,7 +44,6 @@ if TYPE_CHECKING:
     from botocore.credentials import Credentials
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 DEFAULT_EMBEDDING_FIELD: Final = "embedding"
 DEFAULT_TEXT_FIELD: Final = "text"
@@ -57,7 +56,9 @@ _AWS_HOSTS: Final = (
 )
 _ACCOUNT_ID_LABEL: Final = re.compile(r"\A\d{12}\.")
 _UNFILTERABLE_KNN: Final = ("does not support filters", "unknown token [START_OBJECT] after [filter]")
-_ANALYZED_STRING_TYPES: Final = frozenset({"text", "match_only_text"})
+_ANALYZED_STRING_TYPES: Final = frozenset({"text", "match_only_text", "search_as_you_type"})
+_STRING_TYPES: Final = _ANALYZED_STRING_TYPES | {"keyword", "wildcard", "constant_keyword"}
+_FORBIDDEN: Final = 403
 _QUERY_VECTOR: Final = TypeAdapter(tuple[float, ...])
 _ATTRIBUTE_VALUE_TYPES: Final = (str, int, float, bool)
 _SEARCH_ONLY_MESSAGE: Final = (
@@ -82,15 +83,9 @@ def _bad_request(message: str) -> BadRequestError:
     return BadRequestError(message=message, model=None, llm_provider="opensearch")
 
 
-def _search_timeout() -> BaseLLMException:
-    return BaseLLMException(
-        status_code=408, message="Vector store search exceeded the caller timeout.", headers=httpx.Headers()
-    )
-
-
-def _timeout(litellm_params: Mapping[str, object], default: httpx.Timeout) -> float | httpx.Timeout:
-    timeout: Final = litellm_params.get("timeout")
-    return timeout if isinstance(timeout, (int, float, httpx.Timeout)) else default
+def _with_signed_headers(headers: Mapping[str, str], signed: Mapping[str, str]) -> Mapping[str, str]:
+    signed_names: Final = frozenset(name.lower() for name in signed)
+    return {**{name: value for name, value in headers.items() if name.lower() not in signed_names}, **signed}
 
 
 def _unauthenticated(reason: str) -> AuthenticationError:
@@ -200,6 +195,7 @@ class _FieldMapping(LiteLLMBaseModel):
     type: str = "object"
     ignore_above: int | None = None
     normalizer: str | None = None
+    path: str | None = None
     properties: "Mapping[str, _FieldMapping]" = Field(default_factory=dict)
     fields: "Mapping[str, _FieldMapping]" = Field(default_factory=dict)
 
@@ -223,6 +219,7 @@ class _ExactField:
 class _InexactKey:
     key: str
     reason: str
+    remedy: str | None = None
 
 
 def _child_field(field: _FieldMapping | None, name: str) -> _FieldMapping | None:
@@ -236,7 +233,25 @@ def _mapped_field(mapping: _FieldMapping, key: str) -> _FieldMapping | None:
     return reduce(_child_field, key.split("."), root)
 
 
-def _exact_field(key: str, field: _FieldMapping) -> _ExactField | _InexactKey:
+def _resolved_field(mapping: _FieldMapping, key: str) -> tuple[str, _FieldMapping] | None:
+    field: Final = _mapped_field(mapping, key)
+    if field is None:
+        return None
+    if field.type != "alias" or field.path is None:
+        return key, field
+    target: Final = _mapped_field(mapping, field.path)
+    return None if target is None else (field.path, target)
+
+
+def _exact_field(
+    key: str, field: _FieldMapping, comparison: _Equality | _Range | _Membership
+) -> _ExactField | _InexactKey:
+    if isinstance(comparison, _Range) and not isinstance(comparison.value, str) and field.type in _STRING_TYPES:
+        return _InexactKey(
+            key=key,
+            reason=f"the index maps {key} as {field.type}, which compares numbers as text",
+            remedy=f"Map {key} as a numeric field",
+        )
     if field.type not in _ANALYZED_STRING_TYPES and field.normalizer is None:
         return _ExactField(name=key, ignore_above=field.ignore_above)
     keywords: Final = sorted(
@@ -249,7 +264,7 @@ def _exact_field(key: str, field: _FieldMapping) -> _ExactField | _InexactKey:
         return _ExactField(name=f"{key}.{name}", ignore_above=ignore_above)
     if field.normalizer is not None or any(subfield.type == "keyword" for subfield in field.fields.values()):
         return _InexactKey(key=key, reason=f"the index normalizes every keyword mapping of {key}")
-    return _InexactKey(key=key, reason=f"the index maps {key} as text with no keyword subfield")
+    return _InexactKey(key=key, reason=f"the index maps {key} as {field.type} with no keyword subfield")
 
 
 def _string_values(comparison: _Equality | _Range | _Membership) -> tuple[str, ...]:
@@ -260,14 +275,11 @@ def _string_values(comparison: _Equality | _Range | _Membership) -> tuple[str, .
 def _exact_comparison(
     comparison: _Equality | _Range | _Membership, mappings: Mapping[str, _IndexMapping]
 ) -> _Equality | _Range | _Membership | _InexactKey:
-    values: Final = _string_values(comparison)
-    if not values:
-        return comparison
     key: Final = comparison.key
-    mapped: Final = tuple(
-        field for field in (_mapped_field(index.mappings, key) for index in mappings.values()) if field is not None
+    resolved: Final = tuple(
+        field for field in (_resolved_field(index.mappings, key) for index in mappings.values()) if field is not None
     )
-    exact: Final = tuple(_exact_field(key, field) for field in mapped)
+    exact: Final = tuple(_exact_field(name, field, comparison) for name, field in resolved)
     inexact: Final = next((field for field in exact if isinstance(field, _InexactKey)), None)
     if inexact is not None:
         return inexact
@@ -276,20 +288,25 @@ def _exact_comparison(
     if len(names) > 1:
         return _InexactKey(key=key, reason=f"the indexes behind this store map {key} differently")
     ignore_above: Final = min((field.ignore_above for field in fields if field.ignore_above), default=None)
-    if ignore_above is not None and any(len(value) > ignore_above for value in values):
+    if ignore_above is not None and any(len(value) > ignore_above for value in _string_values(comparison)):
         return _InexactKey(key=key, reason=f"the index ignores {key} values longer than {ignore_above} characters")
     return comparison.model_copy(update={"key": next(iter(names), key)})
 
 
 def _read_index_mappings(mapping: httpx.Response) -> Mapping[str, _IndexMapping] | BaseLLMException:
-    if not mapping.is_success:
+    if mapping.status_code == _FORBIDDEN:
         return BaseLLMException(
             status_code=mapping.status_code,
             message=(
-                f"OpenSearch answered {mapping.status_code} to the index mapping read that string filters need. "
-                "That read needs aoss:DescribeIndex on Serverless or es:ESHttpGet on a domain. "
-                "Set drop_params to drop the filters instead."
+                "OpenSearch refused the index mapping read that filters need. That read needs aoss:DescribeIndex on "
+                "Serverless or es:ESHttpGet on a domain. Set drop_params to drop the filters instead."
             ),
+            headers=mapping.headers,
+        )
+    if not mapping.is_success:
+        return BaseLLMException(
+            status_code=mapping.status_code,
+            message=f"OpenSearch answered {mapping.status_code} to the index mapping read that filters need.",
             headers=mapping.headers,
         )
     try:
@@ -310,14 +327,6 @@ def _exact_filter(search_filter: _Filter, mappings: Mapping[str, _IndexMapping])
             return inexact or search_filter.model_copy(update={"filters": children})
         case _:
             return _exact_comparison(search_filter, mappings)
-
-
-def _compares_strings(search_filter: _Filter) -> bool:
-    match search_filter:
-        case _Compound(filters=filters):
-            return any(_compares_strings(child) for child in filters)
-        case _:
-            return bool(_string_values(search_filter))
 
 
 def _opensearch_filter(search_filter: _Filter) -> Mapping[str, object]:
@@ -656,7 +665,7 @@ class OpenSearchVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, SignsRequ
         )
         return self._search_request(vector_store_id, query_text, embedding, search, api_base)
 
-    def _string_filter_mapping_url(
+    def _filter_mapping_url(
         self,
         vector_store_id: str,
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
@@ -664,9 +673,15 @@ class OpenSearchVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, SignsRequ
         litellm_params: Mapping[str, object],
     ) -> tuple[_Filter, str] | None:
         search: Final = self._params(litellm_params, vector_store_search_optional_params, None)
-        if search.search_filter is None or not _compares_strings(search.search_filter):
+        if search.search_filter is None:
             return None
         return search.search_filter, f"{api_base}/{quote(search.params.index_name(vector_store_id), safe='')}/_mapping"
+
+    def _signed_mapping_read_headers(
+        self, url: str, headers: Mapping[str, str], litellm_params: Mapping[str, object]
+    ) -> Mapping[str, str]:
+        signed: Final = self.sign_http_request("GET", url, b"", "application/json", litellm_params)
+        return _with_signed_headers(headers, dict(signed.headers.items()))
 
     def _exact_search_params(
         self,
@@ -679,13 +694,18 @@ class OpenSearchVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, SignsRequ
         exact: Final = mappings if isinstance(mappings, BaseLLMException) else _exact_filter(search_filter, mappings)
         if not isinstance(exact, BaseLLMException | _InexactKey):
             return {**vector_store_search_optional_params, "filters": exact.model_dump()}
+        if isinstance(exact, BaseLLMException) and exact.status_code != _FORBIDDEN:
+            raise exact
         if drops_unsupported_params(litellm_params.get("drop_params")):
             return {**vector_store_search_optional_params, "filters": None}
         if isinstance(exact, BaseLLMException):
             raise exact
+        remedy: Final = (
+            exact.remedy or f"Map {exact.key} as keyword without a normalizer or give it such a keyword subfield"
+        )
         raise _bad_request(
-            f"filters cannot match {exact.key} exactly because {exact.reason}. Map {exact.key} as keyword without a "
-            "normalizer or give it such a keyword subfield, or set drop_params to drop the filters."
+            f"filters cannot match {exact.key} exactly because {exact.reason}. {remedy}, or set drop_params to drop "
+            "the filters."
         )
 
     def resolve_search_params(
@@ -694,22 +714,16 @@ class OpenSearchVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, SignsRequ
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_params: Mapping[str, object],
-        client: "HTTPHandler",
+        headers: Mapping[str, str],
+        get: Callable[[str, Mapping[str, str]], httpx.Response],
     ) -> VectorStoreSearchOptionalRequestParams:
-        lookup: Final = self._string_filter_mapping_url(
+        lookup: Final = self._filter_mapping_url(
             vector_store_id, vector_store_search_optional_params, api_base, litellm_params
         )
         if lookup is None:
             return vector_store_search_optional_params
         search_filter, url = lookup
-        signed: Final = self.sign_http_request("GET", url, b"", "application/json", litellm_params)
-        http: Final = client.client
-        try:
-            mapping: Final = http.get(
-                url, headers=dict(signed.headers.items()), timeout=_timeout(litellm_params, http.timeout)
-            )
-        except httpx.TimeoutException:
-            raise _search_timeout() from None
+        mapping: Final = get(url, self._signed_mapping_read_headers(url, headers, litellm_params))
         return self._exact_search_params(vector_store_search_optional_params, search_filter, mapping, litellm_params)
 
     async def aresolve_search_params(
@@ -718,24 +732,17 @@ class OpenSearchVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, SignsRequ
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_params: Mapping[str, object],
-        client: "AsyncHTTPHandler",
+        headers: Mapping[str, str],
+        get: Callable[[str, Mapping[str, str]], Awaitable[httpx.Response]],
     ) -> VectorStoreSearchOptionalRequestParams:
-        lookup: Final = self._string_filter_mapping_url(
+        lookup: Final = self._filter_mapping_url(
             vector_store_id, vector_store_search_optional_params, api_base, litellm_params
         )
         if lookup is None:
             return vector_store_search_optional_params
         search_filter, url = lookup
-        signed: Final = await run_off_loop_if_aws(
-            self, self.sign_http_request, "GET", url, b"", "application/json", litellm_params
-        )
-        http: Final = client.client
-        try:
-            mapping: Final = await http.get(
-                url, headers=dict(signed.headers.items()), timeout=_timeout(litellm_params, http.timeout)
-            )
-        except httpx.TimeoutException:
-            raise _search_timeout() from None
+        signed: Final = await run_off_loop_if_aws(self, self._signed_mapping_read_headers, url, headers, litellm_params)
+        mapping: Final = await get(url, signed)
         return self._exact_search_params(vector_store_search_optional_params, search_filter, mapping, litellm_params)
 
     def recover_rejected_search(
@@ -765,12 +772,7 @@ class OpenSearchVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, SignsRequ
     ) -> tuple[dict[str, str], bytes]:  # mutable-ok: the shared HTTP handler requires writable headers
         body: Final = json.dumps(request_data).encode()
         signed: Final = self.sign_http_request("POST", api_base, body, "application/json", optional_params)
-        signed_headers: Final = dict(signed.headers.items())
-        signed_names: Final = frozenset(name.lower() for name in signed_headers)
-        return {
-            **{name: value for name, value in headers.items() if name.lower() not in signed_names},
-            **signed_headers,
-        }, body
+        return dict(_with_signed_headers(headers, dict(signed.headers.items()))), body
 
     def sign_http_request(
         self, method: str, url: str, body: bytes, content_type: str, litellm_params: Mapping[str, object]

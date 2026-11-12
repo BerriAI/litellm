@@ -3,11 +3,13 @@ import json
 import re
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
+from functools import partial
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 from unittest.mock import MagicMock
 
+import httpcore
 import httpx
 import openai
 import pytest
@@ -15,6 +17,7 @@ from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
 from botocore.credentials import Credentials, RefreshableCredentials
 from botocore.exceptions import CredentialRetrievalError
+from h2.events import ConnectionTerminated
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -717,10 +720,33 @@ async def test_filters_narrow_the_knn_query_with_the_matching_opensearch_filter(
             {"term": {"tenant": "acme"}},
             id="unmapped",
         ),
+        pytest.param(
+            {"properties": {"ref": {"type": "text", "fields": {"keyword": {"type": "keyword"}}}}},
+            {"type": "eq", "key": "ref", "value": 7},
+            {"term": {"ref.keyword": 7}},
+            id="number-on-text-with-a-keyword-subfield",
+        ),
+        pytest.param(
+            {"properties": {"ref_code": {"type": "keyword"}, "ref": {"type": "alias", "path": "ref_code"}}},
+            {"type": "eq", "key": "ref", "value": "FAC-017"},
+            {"term": {"ref_code": "FAC-017"}},
+            id="alias-to-a-keyword-field",
+        ),
+        pytest.param(
+            {
+                "properties": {
+                    "owner": {"properties": {"team": {"type": "text", "fields": {"raw": {"type": "keyword"}}}}},
+                    "team": {"type": "alias", "path": "owner.team"},
+                }
+            },
+            {"type": "in", "key": "team", "value": ["People Ops"]},
+            {"terms": {"owner.team.raw": ["People Ops"]}},
+            id="alias-to-text-with-a-keyword-subfield",
+        ),
     ],
 )
 @pytest.mark.asyncio
-async def test_string_filters_compare_the_exact_keyword_field_the_index_maps(
+async def test_filters_compare_the_exact_field_the_index_maps(
     asynchronous: bool,
     mapping: Mapping[str, object],
     search_filter: Mapping[str, object],
@@ -735,20 +761,6 @@ async def test_string_filters_compare_the_exact_keyword_field_the_index_maps(
     assert _signature_scope(mapping_read) == ("aoss", "us-east-1")
     (search,) = _searches(respond)
     assert json.loads(search.content)["query"]["knn"]["embedding"]["filter"] == opensearch_filter
-
-
-@pytest.mark.asyncio
-async def test_a_filter_without_string_comparisons_reads_no_index_mapping() -> None:
-    respond: Final = MagicMock(return_value=httpx.Response(200, json=_opensearch_hits("text", "embedding")))
-    numeric: Final = {
-        "type": "and",
-        "filters": [{"type": "gte", "key": "revision", "value": 7}, {"type": "eq", "key": "published", "value": True}],
-    }
-
-    await _search(True, respond, RecordingEmbeddingExecutor(), {"filters": numeric})
-
-    assert not _mapping_reads(respond)
-    assert len(_searches(respond)) == 1
 
 
 TEXT_ONLY: Final = {"litellm-qa-docs": {"properties": {"tenant": {"type": "text"}}}}
@@ -818,10 +830,44 @@ TEXT_ONLY: Final = {"litellm-qa-docs": {"properties": {"tenant": {"type": "text"
             "the index normalizes every keyword mapping of tenant",
             id="text-with-only-a-normalized-keyword-subfield",
         ),
+        pytest.param(
+            {"litellm-qa-docs": {"properties": {"year": {"type": "keyword"}}}},
+            {"type": "gte", "key": "year", "value": 2026},
+            "the index maps year as keyword, which compares numbers as text. Map year as a numeric field",
+            id="number-range-on-a-keyword-field",
+        ),
+        pytest.param(
+            {"litellm-qa-docs": {"properties": {"year": {"type": "text", "fields": {"keyword": {"type": "keyword"}}}}}},
+            {"type": "lt", "key": "year", "value": 2026.5},
+            "the index maps year as text, which compares numbers as text",
+            id="number-range-on-text-with-a-keyword-subfield",
+        ),
+        pytest.param(
+            TEXT_ONLY,
+            {"type": "eq", "key": "tenant", "value": 7},
+            "the index maps tenant as text with no keyword subfield",
+            id="number-on-text-only",
+        ),
+        pytest.param(
+            {"litellm-qa-docs": {"properties": {"title": {"type": "search_as_you_type"}}}},
+            {"type": "eq", "key": "title", "value": "HR"},
+            "the index maps title as search_as_you_type with no keyword subfield",
+            id="search-as-you-type",
+        ),
+        pytest.param(
+            {
+                "litellm-qa-docs": {
+                    "properties": {"tenant": {"type": "text"}, "org": {"type": "alias", "path": "tenant"}}
+                }
+            },
+            {"type": "ne", "key": "org", "value": "acme"},
+            "the index maps tenant as text with no keyword subfield",
+            id="alias-to-text-only",
+        ),
     ],
 )
 @pytest.mark.asyncio
-async def test_a_string_filter_the_index_cannot_match_exactly_is_a_400_unless_drop_params_drops_the_filters(
+async def test_a_filter_the_index_cannot_match_exactly_is_a_400_unless_drop_params_drops_the_filters(
     asynchronous: bool, mappings: Mapping[str, Mapping[str, object]], search_filter: Mapping[str, object], reason: str
 ) -> None:
     rejected: Final = MagicMock(return_value=_index_mappings(mappings))
@@ -846,23 +892,22 @@ async def test_a_string_filter_the_index_cannot_match_exactly_is_a_400_unless_dr
     assert json.loads(search.content)["query"] == {"knn": {"embedding": {"vector": QUERY_VECTOR, "k": 10}}}
 
 
+def _mapping_read_error(status: int) -> httpx.Response:
+    return httpx.Response(status, json={"status": status, "error": {"reason": "no mapping for you", "type": "x"}})
+
+
 @pytest.mark.parametrize("asynchronous", [False, True])
-@pytest.mark.parametrize("status", [403, 404])
 @pytest.mark.asyncio
-async def test_a_refused_index_mapping_read_keeps_its_status_and_sends_no_search(
-    asynchronous: bool, status: int
+async def test_a_refused_index_mapping_read_names_the_permission_it_needs_and_sends_no_search(
+    asynchronous: bool,
 ) -> None:
-    respond: Final = MagicMock(
-        return_value=httpx.Response(
-            status, json={"status": status, "error": {"reason": "no mapping for you", "type": "x"}}
-        )
-    )
+    respond: Final = MagicMock(return_value=_mapping_read_error(403))
     executor: Final = RecordingEmbeddingExecutor()
 
     with pytest.raises(openai.APIStatusError) as error:
         await _search(asynchronous, respond, executor, {"filters": {"type": "eq", "key": "tenant", "value": "acme"}})
 
-    assert error.value.status_code == status
+    assert error.value.status_code == 403
     assert "es:ESHttpGet" in str(error.value)
     assert "no mapping for you" not in str(error.value)
     assert not _searches(respond)
@@ -870,19 +915,43 @@ async def test_a_refused_index_mapping_read_keeps_its_status_and_sends_no_search
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("drop_params", [False, True])
 @pytest.mark.parametrize(
-    "status,body",
+    "mapping_read,status",
     [
-        pytest.param(403, {"status": 403, "error": {"reason": "no mapping for you", "type": "x"}}, id="refused"),
-        pytest.param(200, {"acknowledged": True}, id="unreadable"),
+        *(pytest.param(partial(_mapping_read_error, code), code, id=str(code)) for code in (404, 429, 500, 503)),
+        pytest.param(partial(httpx.Response, 200, json={"acknowledged": True}), 502, id="unreadable"),
     ],
 )
 @pytest.mark.asyncio
-async def test_an_unusable_index_mapping_read_under_drop_params_drops_the_filters_and_searches_once(
-    asynchronous: bool, status: int, body: Mapping[str, object]
+async def test_a_failed_index_mapping_read_keeps_the_filters_and_its_status_even_under_drop_params(
+    asynchronous: bool, drop_params: bool, mapping_read: Callable[[], httpx.Response], status: int
+) -> None:
+    respond: Final = MagicMock(side_effect=lambda request: mapping_read())
+    executor: Final = RecordingEmbeddingExecutor()
+
+    with pytest.raises(openai.APIStatusError) as error:
+        await _search(
+            asynchronous,
+            respond,
+            executor,
+            {"filters": {"type": "eq", "key": "tenant", "value": "acme"}, "drop_params": drop_params},
+        )
+
+    assert error.value.status_code == status
+    assert "es:ESHttpGet" not in str(error.value)
+    assert "no mapping for you" not in str(error.value)
+    assert not _searches(respond)
+    executor.call.assert_not_called()
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.asyncio
+async def test_a_refused_index_mapping_read_under_drop_params_drops_the_filters_and_searches_once(
+    asynchronous: bool,
 ) -> None:
     respond: Final = MagicMock(
-        side_effect=[httpx.Response(status, json=body), httpx.Response(200, json=_opensearch_hits("text", "embedding"))]
+        side_effect=[_mapping_read_error(403), httpx.Response(200, json=_opensearch_hits("text", "embedding"))]
     )
 
     response: Final = await _search(
@@ -911,6 +980,63 @@ ENGINE_REFUSES_FILTERS: Final = "failed to create query: Engine [NMSLIB] does no
 KNN_PARSER_REFUSES_FILTERS: Final = "[knn] unknown token [START_OBJECT] after [filter]"
 FILTERED_KNN: Final = {"knn": {"embedding": {"vector": QUERY_VECTOR, "k": 3, "filter": HR_EXACT}}}
 UNFILTERED_KNN: Final = {"knn": {"embedding": {"vector": QUERY_VECTOR, "k": 3}}}
+
+
+def _close_with_goaway(request: httpx.Request) -> httpx.Response:
+    raise httpx.RemoteProtocolError("GOAWAY", request=request) from httpcore.RemoteProtocolError(ConnectionTerminated())
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.asyncio
+async def test_the_index_mapping_read_sends_the_caller_headers_and_retries_a_goaway(asynchronous: bool) -> None:
+    answers: Final = iter(
+        (
+            _close_with_goaway,
+            lambda request: _index_mappings({"litellm-qa-docs": DYNAMIC_MAPPING}),
+            lambda request: httpx.Response(200, json=_opensearch_hits("text", "embedding")),
+        )
+    )
+    respond: Final = MagicMock(side_effect=lambda request: next(answers)(request))
+
+    response: Final = await _search(
+        asynchronous,
+        respond,
+        RecordingEmbeddingExecutor(),
+        {
+            "filters": {"type": "eq", "key": "category", "value": "hr"},
+            "max_num_results": 3,
+            "extra_headers": {"x-gateway-key": "gateway-secret"},
+        },
+    )
+
+    assert response["data"] == EXPECTED_RESULTS
+    goaway, mapping_read = _mapping_reads(respond)
+    assert mapping_read.headers["x-gateway-key"] == "gateway-secret"
+    assert _signature_scope(mapping_read) == ("aoss", "us-east-1")
+    (search,) = _searches(respond)
+    assert json.loads(search.content)["query"] == FILTERED_KNN
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.asyncio
+async def test_a_connection_failure_on_the_index_mapping_read_raises_what_one_on_the_search_raises(
+    asynchronous: bool,
+) -> None:
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    with pytest.raises(openai.APIError) as on_search:
+        await _search(asynchronous, MagicMock(side_effect=refuse), RecordingEmbeddingExecutor(), {})
+    with pytest.raises(openai.APIError) as on_mapping_read:
+        await _search(
+            asynchronous,
+            MagicMock(side_effect=refuse),
+            RecordingEmbeddingExecutor(),
+            {"filters": {"type": "eq", "key": "category", "value": "hr"}},
+        )
+
+    assert type(on_mapping_read.value) is type(on_search.value)
+    assert getattr(on_mapping_read.value, "status_code", None) == getattr(on_search.value, "status_code", None)
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
