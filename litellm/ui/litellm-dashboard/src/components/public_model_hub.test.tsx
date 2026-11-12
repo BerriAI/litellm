@@ -2,8 +2,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import { render, screen, waitFor, within, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { NuqsTestingAdapter } from "nuqs/adapters/testing";
 import { flexRender, getCoreRowModel, useReactTable } from "@tanstack/react-table";
 import PublicModelHub from "./public_model_hub";
+import { getClaudeCodePluginsList, skillHubPublicCall } from "./networking";
 import { getPublicMCPHubColumns, MCPServerData, ModelGroupInfo } from "./PublicModelHubTableColumns";
 
 const { apiGetMock } = vi.hoisted(() => ({ apiGetMock: vi.fn() }));
@@ -33,6 +35,7 @@ vi.mock("./networking", async (importOriginal) => {
     agentHubPublicModelsCall: vi.fn().mockResolvedValue([]),
     mcpHubPublicServersCall: vi.fn().mockResolvedValue([]),
     skillHubPublicCall: vi.fn().mockResolvedValue({ plugins: [] }),
+    getClaudeCodePluginsList: vi.fn().mockResolvedValue({ plugins: [] }),
     getUiConfig: vi.fn().mockResolvedValue({}),
   };
 });
@@ -71,6 +74,7 @@ const respondWith = (
   facetValues: Record<string, string[]> = FACET_VALUES,
 ) =>
   apiGetMock.mockImplementation((path: string) => {
+    if (path === "/skill-hub/skills/private-skill/versions") return Promise.resolve({ versions: [], total: 0 });
     const facet = facetValues[path];
     if (facet) {
       return Promise.resolve({
@@ -103,7 +107,9 @@ const renderHub = (props: React.ComponentProps<typeof PublicModelHub> = {}) => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   return render(
     <QueryClientProvider client={client}>
-      <PublicModelHub {...props} />
+      <NuqsTestingAdapter>
+        <PublicModelHub {...props} />
+      </NuqsTestingAdapter>
     </QueryClientProvider>,
   );
 };
@@ -126,6 +132,8 @@ beforeAll(() => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(getClaudeCodePluginsList).mockReset().mockResolvedValue({ plugins: [] });
+  vi.mocked(skillHubPublicCall).mockReset().mockResolvedValue({ plugins: [] });
   respondWith(DEFAULT_MODELS);
   Storage.prototype.getItem = vi.fn(() => "false");
   Storage.prototype.setItem = vi.fn();
@@ -140,6 +148,34 @@ beforeEach(() => {
 });
 
 describe("PublicModelHub", () => {
+  it.each([true, false])("keeps Skills catalog credentials scoped to embedded=%s", async (isEmbedded) => {
+    vi.mocked(getClaudeCodePluginsList).mockResolvedValueOnce({
+      plugins: [{ id: "private-skill", name: "private-skill", source: {}, enabled: false }],
+    });
+    vi.mocked(skillHubPublicCall).mockResolvedValueOnce({
+      plugins: [{ id: "public-skill", name: "public-skill", source: {}, enabled: true }],
+    });
+    renderHub({ isEmbedded, accessToken: "dashboard-session" });
+    await userEvent.click(await screen.findByRole("tab", { name: "Skills Hub" }));
+    expect(
+      await screen.findByRole("button", { name: isEmbedded ? "private-skill" : "public-skill" }),
+    ).toBeInTheDocument();
+    if (isEmbedded) {
+      expect(getClaudeCodePluginsList).toHaveBeenCalledWith("dashboard-session");
+      expect(skillHubPublicCall).not.toHaveBeenCalled();
+      await userEvent.click(screen.getByRole("button", { name: "private-skill" }));
+      await userEvent.click(await screen.findByRole("tab", { name: "Version history" }));
+      await waitFor(() =>
+        expect(apiGetMock).toHaveBeenCalledWith(
+          "/skill-hub/skills/private-skill/versions",
+          expect.objectContaining({ accessToken: "dashboard-session" }),
+        ),
+      );
+    } else {
+      expect(getClaudeCodePluginsList).not.toHaveBeenCalled();
+    }
+  });
+
   it("renders", () => {
     const { container } = renderHub();
     expect(container).toBeInTheDocument();
