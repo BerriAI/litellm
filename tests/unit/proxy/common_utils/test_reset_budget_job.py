@@ -1,12 +1,13 @@
 import asyncio
+import contextlib
 import itertools
 import json
 import sys
 import types
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from datetime import datetime, timedelta, timezone
 from datetime import time as dt_time
-from typing import Any, Dict, Final, List, Optional, cast
+from typing import Any, Dict, Final, List, Optional, TypeVar, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -3681,7 +3682,10 @@ def _field_matches(row: dict[str, _Cell], field: str, condition: object) -> bool
             return row.get(field) == condition
 
 
-async def _async_value(value):
+_Value = TypeVar("_Value")
+
+
+async def _async_value(value: _Value) -> _Value:
     return value
 
 
@@ -3716,22 +3720,21 @@ class _EndUserLedger:
             for org_id, (budget_id, spend) in (orgs or {}).items()
         }
         self.fail_commit: int | None = None
+        self.fail_stamp_clear = False
         self.commits = 0
         self.advances = 0
         self.stale_due_budgets: list[types.SimpleNamespace] | None = None
         replica: Final = [types.SimpleNamespace(**vars(budget)) for budget in self.budgets.values()]
         self.client = types.SimpleNamespace(
             writer_db=types.SimpleNamespace(
-                litellm_budgettable=types.SimpleNamespace(
-                    update_many=self._update_budgets, find_many=self._find_budgets, find_unique=self._find_budget
-                ),
+                litellm_budgettable=types.SimpleNamespace(update_many=self._update_budgets, find_many=self._find_budgets),
+                tx=self._transaction,
             ),
             db=types.SimpleNamespace(
                 litellm_budgettable=types.SimpleNamespace(
                     find_many=lambda where: _async_value(
                         [budget for budget in replica if _row_matches(vars(budget), where)]
                     ),
-                    update=self._write_budget,
                 ),
                 litellm_endusertable=self,
                 litellm_teammembership=MockTable(),
@@ -3789,7 +3792,27 @@ class _EndUserLedger:
         vars(budget).update(data)
         return types.SimpleNamespace(**vars(budget))
 
-    async def update_many(self, where: dict[str, object], data: dict[str, _Cell]) -> int:
+    @contextlib.asynccontextmanager
+    async def _transaction(self, timeout: timedelta) -> AsyncIterator[types.SimpleNamespace]:
+        """Writes made inside the block are undone when it raises."""
+        budgets: Final = {budget_id: dict(vars(budget)) for budget_id, budget in self.budgets.items()}
+        rows: Final = {user_id: dict(row) for user_id, row in self.rows.items()}
+        try:
+            yield types.SimpleNamespace(
+                litellm_budgettable=types.SimpleNamespace(find_unique=self._find_budget, update=self._write_budget),
+                litellm_endusertable=types.SimpleNamespace(update_many=self._clear_stamps),
+            )
+        except Exception:
+            for budget_id, saved in budgets.items():
+                vars(self.budgets[budget_id]).update(saved)
+            for user_id, saved in rows.items():
+                self.rows[user_id].update(saved)
+            raise
+
+    async def _clear_stamps(self, where: dict[str, object], data: dict[str, _Cell]) -> int:
+        if self.fail_stamp_clear:
+            self.fail_stamp_clear = False
+            raise RuntimeError("lock timeout")
         matching = [row for row in self.rows.values() if _row_matches(row, where)]
         for row in matching:
             row.update(data)
@@ -3922,7 +3945,9 @@ def test_end_users_are_reset_again_when_the_next_window_closes(
     assert ledger.spend() == {"over-cap": 12.0}
 
 
-async def _post_budget_update(monkeypatch, ledger: _EndUserLedger, budget_id: str, budget_reset_at: datetime) -> None:
+async def _post_budget_update(
+    monkeypatch: pytest.MonkeyPatch, ledger: _EndUserLedger, budget_id: str, budget_reset_at: datetime
+) -> None:
     proxy_server: Final = sys.modules["litellm.proxy.proxy_server"]
     monkeypatch.setattr(proxy_server, "prisma_client", ledger.client, raising=False)
     monkeypatch.setattr(proxy_server, "litellm_proxy_admin_name", "admin", raising=False)
@@ -3953,6 +3978,28 @@ def test_a_reset_forced_back_to_the_window_just_closed_resets_its_end_users_agai
     asyncio.run(job.reset_budget_for_litellm_budget_table())
 
     assert ledger.org_spend() == {"org-over-cap": 12.0}
+    assert ledger.spend() == {"over-cap": 12.0}
+
+
+def test_a_forced_reset_whose_write_failed_resets_its_end_users_when_the_admin_repeats_it(
+    rollover_enabled, ticking_reset_clock, monkeypatch
+):
+    """A forced reset that fails partway must leave the old reset time stored,
+    so the admin's repeated request still clears the stamps."""
+    _make_counter_invalidation_job(monkeypatch)
+    ledger: Final = _EndUserLedger(
+        budgets={"capped": (10.0, _CLOSED_WINDOW)}, endusers={"over-cap": ("capped", 15.0, None)}
+    )
+    job: Final = ResetBudgetJob(proxy_logging_obj=MockProxyLogging(), prisma_client=ledger.client)
+    asyncio.run(job.reset_budget_for_litellm_budget_table())
+    ledger.add_spend("over-cap", 17.0)
+
+    ledger.fail_stamp_clear = True
+    with pytest.raises(RuntimeError, match="lock timeout"):
+        asyncio.run(_post_budget_update(monkeypatch, ledger, "capped", _CLOSED_WINDOW))
+    asyncio.run(_post_budget_update(monkeypatch, ledger, "capped", _CLOSED_WINDOW))
+    asyncio.run(job.reset_budget_for_litellm_budget_table())
+
     assert ledger.spend() == {"over-cap": 12.0}
 
 

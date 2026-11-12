@@ -3,14 +3,16 @@ Budget repository for database operations on LiteLLM_BudgetTable.
 """
 
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from contextlib import AbstractAsyncContextManager
+from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Protocol
 
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.repositories.base_repository import BaseRepository
-from litellm.repositories.prisma_protocols import TableActions
-from litellm.repositories.table_repositories import EndUserRepository, PrismaTableRepository
+from litellm.repositories.prisma_protocols import TableActions, UpdateManyTable
+from litellm.repositories.table_repositories import PrismaTableRepository
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
@@ -18,6 +20,27 @@ if TYPE_CHECKING:
 
 class _BudgetTable(PrismaTableRepository["prisma_models.LiteLLM_BudgetTable"]):
     table_name = "litellm_budgettable"
+
+
+class _TierTransaction(Protocol):
+    @property
+    def litellm_budgettable(self) -> TableActions["prisma_models.LiteLLM_BudgetTable"]: ...
+
+    @property
+    def litellm_endusertable(self) -> UpdateManyTable: ...
+
+
+class _TierDatabase(Protocol):
+    def tx(self, *, timeout: timedelta) -> AbstractAsyncContextManager[_TierTransaction]: ...
+
+
+class _TierWriterClient(Protocol):
+    @property
+    def writer_db(self) -> _TierDatabase: ...
+
+
+def _reopens_closed_window(stored: datetime | None, written: datetime | None) -> bool:
+    return written is not None and written != stored and written <= datetime.now(timezone.utc)
 
 
 class BudgetRepository(BaseRepository[LiteLLM_BudgetTable]):
@@ -109,19 +132,23 @@ class BudgetRepository(BaseRepository[LiteLLM_BudgetTable]):
     ) -> "prisma_models.LiteLLM_BudgetTable | None":
         """Moving the tier's reset time back to a window its end users were
         already reset in clears their stamp, so that window resets them again.
-        Rewriting the stored time keeps the stamps a failed advance's retry needs."""
-        before: Final = (
-            await _BudgetTable(self._prisma_client, use_writer=True).table.find_unique(where={"budget_id": budget_id})
-            if "budget_reset_at" in data
-            else None
-        )
-        after: Final = await self.table.update(where={"budget_id": budget_id}, data=data)
-        if before is None or after is None or after.budget_reset_at in (None, before.budget_reset_at):
-            return after
-        await EndUserRepository(self._prisma_client).table.update_many(
-            where={"budget_id": budget_id, "spend_reset_window": after.budget_reset_at},
-            data={"spend_reset_window": None},
-        )
+        Rewriting the stored time keeps the stamps a failed advance's retry needs.
+        The write and the clear commit together, so repeating a failed request
+        still finds the old time and clears the stamps."""
+        if "budget_reset_at" not in data:
+            return await self.table.update(where={"budget_id": budget_id}, data=data)
+        writer: Final = require_attributes(self._connected_client(), _TierWriterClient, "writer_db").writer_db
+        async with writer.tx(timeout=timedelta(seconds=60)) as transaction:
+            before: Final = await transaction.litellm_budgettable.find_unique(where={"budget_id": budget_id})
+            after: Final = await transaction.litellm_budgettable.update(where={"budget_id": budget_id}, data=data)
+            if before is None or after is None:
+                return after
+            if not _reopens_closed_window(before.budget_reset_at, after.budget_reset_at):
+                return after
+            await transaction.litellm_endusertable.update_many(
+                where={"budget_id": budget_id, "spend_reset_window": after.budget_reset_at},
+                data={"spend_reset_window": None},
+            )
         return after
 
     async def pin_unset_reset_times(self, budget_ids: Sequence[str], at: datetime) -> Mapping[str, datetime]:
