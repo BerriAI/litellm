@@ -2500,3 +2500,48 @@ async def test_a_websocket_turn_under_the_teams_max_borrow_multiple_still_borrow
     handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.5)
     await _admit_then_settle(handler, _capped_team_key(2), 190)
     await handler.enforce_token_limits_for_frame(user_api_key_dict=_capped_team_key(2), requested_model="shared-model")
+
+
+@pytest.mark.asyncio
+async def test_a_configured_class_named_default_is_not_merged_with_teams_that_have_no_priority(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=False, splits=True)
+    monkeypatch.setattr(litellm, "priority_reservation", {"default": 0.6, "batch": 0.4})
+    await _burn(handler, _class_team("team-a", "default"), "default", 20)
+    await _burn(handler, _class_team("team-n", None), None, 20)
+    await _burn(handler, _class_team("team-a", "default"), "default", 700)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _class_team("team-a", "default"), saturation=0.74, priority="default")
+    assert "Priority: default, Active teams in class: 1, Active classes: 2, " in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_tokens_from_a_nested_call_do_not_land_on_the_outer_requests_team_counter(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=False, splits=True)
+    await _burn(handler, _class_team("team-b"), "interactive", 20)
+    await _check(handler, _class_team("team-a"), saturation=0.0, priority="interactive")
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import get_or_create_request_stash
+
+    stash: Final = get_or_create_request_stash()
+    stash.owner_litellm_call_id = "outer-call"
+    await handler.async_log_success_event(
+        kwargs={
+            "litellm_call_id": "judge-call",
+            "litellm_params": {"metadata": {"model_group": "shared-model"}},
+            "standard_logging_object": {
+                "metadata": {
+                    "user_api_key_team_id": "team-a",
+                    "user_api_key_auth_metadata": {"priority": "interactive"},
+                }
+            },
+        },
+        response_obj=litellm.ModelResponse(
+            usage=litellm.Usage(prompt_tokens=600, completion_tokens=0, total_tokens=600)
+        ),
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    await _check(handler, _class_team("team-a"), saturation=0.62, priority="interactive")

@@ -37,11 +37,15 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (  # noqa: F401  # l
     RateLimitedModel,
     RateLimitResponse,
     RateLimitStatus,
+    _call_id_from_callback_kwargs,  # pyright: ignore[reportPrivateUsage]  # same call-ownership check the regular limiter uses
+    _is_socket_turn,  # pyright: ignore[reportPrivateUsage]  # same socket-turn check the regular limiter uses
     _PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _socket_turn_tpm_windows,  # pyright: ignore[reportPrivateUsage]  # same per-turn TPM window the regular limiter checks
     borrowing_team_model_limits,
     claim_request_stash_for_data,
     get_or_create_request_stash,
+    get_request_stash,
+    get_request_stash_for_call,
 )
 from litellm.proxy.hooks.priority_class_share import (
     DEFAULT_CLASS,
@@ -583,7 +587,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             detail={
                 "error": f"Priority class share reached for {model} and the model is saturated. "
                 f"Team: {user_api_key_dict.team_id}, "
-                f"Priority: {self._priority_class(priority)}, "
+                f"Priority: {priority or 'default'}, "
                 f"Active teams in class: {share.active_teams_in_class}, "
                 f"Active classes: {share.active_classes}, "
                 f"Rate limit type: {status['rate_limit_type']}, "
@@ -1084,14 +1088,18 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             else:
                 priority_key = f"{model_group}:default_pool"
 
-            stash: Final = get_or_create_request_stash()
-            team_model_tokens: Final = _team_model_token_increment(
-                stash.borrowing_team_model_limit, total_tokens, self.v3_limiter.window_size
+            call_stash: Final = get_request_stash_for_call(_call_id_from_callback_kwargs(kwargs))
+            stash: Final = (
+                call_stash if call_stash is not None else (get_request_stash() if _is_socket_turn(kwargs) else None)
             )
+            team_model_tokens: Final = _team_model_token_increment(
+                None if stash is None else stash.borrowing_team_model_limit, total_tokens, self.v3_limiter.window_size
+            )
+            class_share: Final = None if stash is None else stash.priority_class_share
             priority_scope: Final = (
                 RateLimitScope("priority_model", priority_key)
-                if stash.priority_class_share is None
-                else RateLimitScope(stash.priority_class_share["key"], stash.priority_class_share["value"])
+                if class_share is None
+                else RateLimitScope(class_share["key"], class_share["value"])
             )
             pipeline_operations: Final = (
                 model_tokens,

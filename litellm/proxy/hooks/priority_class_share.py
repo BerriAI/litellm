@@ -17,7 +17,7 @@ from litellm.redis.stores.rate_limits import RATE_LIMITS_TARGET
 
 ACTIVE_TEAMS_KEY_PREFIX: Final = "dynamic_rate_limiter:active_teams:"
 MEMBER_SEPARATOR: Final = "\x1f"
-DEFAULT_CLASS: Final = "default"
+DEFAULT_CLASS: Final = "\x1edefault"
 _POOL_PREFIX: Final = f"{MEMBER_SEPARATOR}pool{MEMBER_SEPARATOR}"
 
 _TOUCH_LUA: Final = (
