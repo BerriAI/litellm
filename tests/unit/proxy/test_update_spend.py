@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch, AsyncMock
 import httpx
 import math
 from prisma.errors import FieldNotFoundError
+from typing import Final
 from litellm.constants import SPEND_LOG_WRITE_BATCH_MAX_ROWS
 from litellm.proxy.utils import update_spend
 
@@ -383,14 +384,14 @@ def _query_validation_error(issue_kind: str) -> FieldNotFoundError:
 
 @pytest.mark.asyncio
 async def test_update_spend_logs_drops_row_prisma_validation_rejects_and_keeps_the_rest() -> None:
-    prisma_client = MockPrismaClient()
-    proxy_logging_obj = create_mock_proxy_logging()
+    prisma_client: Final = MockPrismaClient()
+    proxy_logging_obj: Final = create_mock_proxy_logging()
     prisma_client.spend_log_transactions = [
         {"request_id": "good-1", "call_type": "acompletion"},
         {"request_id": "poison", "call_type": 5},
         {"request_id": "good-2", "call_type": "acompletion"},
     ]
-    written: list[str] = []
+    written: Final[list[str]] = []
 
     async def create_many(data: list[dict[str, object]], skip_duplicates: bool) -> None:
         if any(not isinstance(row["call_type"], str) for row in data):
@@ -417,8 +418,8 @@ async def test_update_spend_logs_drops_row_prisma_validation_rejects_and_keeps_t
 async def test_update_spend_logs_keeps_every_row_prisma_refuses_for_a_reason_other_than_a_value_type(
     refusal: FieldNotFoundError,
 ) -> None:
-    prisma_client = MockPrismaClient()
-    proxy_logging_obj = create_mock_proxy_logging()
+    prisma_client: Final = MockPrismaClient()
+    proxy_logging_obj: Final = create_mock_proxy_logging()
     proxy_logging_obj.db_spend_update_writer.redis_update_buffer.store_spend_logs_in_redis = AsyncMock(
         return_value=False
     )
