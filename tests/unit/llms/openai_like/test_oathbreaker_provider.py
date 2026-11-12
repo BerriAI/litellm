@@ -8,6 +8,37 @@ import litellm
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
 
+@pytest.mark.parametrize("provider_key", [None, ""])
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.asyncio
+async def test_missing_oathbreaker_key_never_sends_openai_credentials(
+    monkeypatch: pytest.MonkeyPatch, provider_key: str | None, asynchronous: bool
+) -> None:
+    monkeypatch.delenv("OATHBREAKER_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "fake-openai-environment-key")
+    monkeypatch.setattr(litellm, "openai_key", "fake-openai-global-key")
+    monkeypatch.setattr(litellm, "api_key", None)
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream.post("https://oathbreaker.ai/v1/chat/completions").respond(401)
+        if asynchronous:
+            with pytest.raises(litellm.AuthenticationError, match="OATHBREAKER_API_KEY"):
+                await litellm.acompletion(
+                    model="oathbreaker/oathbreaker-glm-5.3",
+                    messages=[{"role": "user", "content": "Hello"}],
+                    api_key=provider_key,
+                    num_retries=0,
+                )
+        else:
+            with pytest.raises(litellm.AuthenticationError, match="OATHBREAKER_API_KEY"):
+                litellm.completion(
+                    model="oathbreaker/oathbreaker-glm-5.3",
+                    messages=[{"role": "user", "content": "Hello"}],
+                    api_key=provider_key,
+                    num_retries=0,
+                )
+        assert len(upstream.calls) == 0
+
+
 def test_oathbreaker_resolves_environment_and_explicit_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OATHBREAKER_API_KEY", "fake-environment-key")
     assert get_llm_provider(model="oathbreaker/oathbreaker-glm-5.3") == (
