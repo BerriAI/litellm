@@ -901,3 +901,147 @@ async def test_catalog_sorts_all_matches_before_pagination(
     })
     assert response.status_code == 200, response.text
     assert [skill["name"] for skill in response.json()["skills"]] == [expected]
+
+
+async def _restorable_version(hub: HubClient) -> prisma_models.LiteLLM_ClaudeCodePluginVersion:
+    assert (await _upload(hub, _zip(FILES), version="1.0.0")).status_code == 200
+    original: Final = _stored_upload(hub, enabled=False)
+    history: Final = hub.database.litellm_claudecodepluginversion
+    retained: Final = prisma_models.LiteLLM_ClaudeCodePluginVersion.model_validate({
+        "id": "retained", **history.create.await_args.kwargs["data"],
+    })
+    history.count.return_value = 1
+    history.find_first.return_value = retained
+    hub.database.query_raw.return_value = [{
+        "id": retained.id, "version": retained.version, "description": retained.description,
+        "manifest": json.loads(retained.manifest_json), "published_at": retained.published_at,
+        "published_by": retained.published_by, "archive_available": True,
+    }]
+    hub.plugins.find_unique.return_value = original.model_copy(update={
+        "version": "2.0.0", "description": "Current description",
+        "updated_at": datetime(2026, 1, 2),
+    })
+    return retained
+
+
+def _restore_body() -> dict[str, object]:
+    return {"expected_skill_id": "hub-id", "expected_updated_at": "2026-01-02T00:00:00"}
+
+
+@pytest.mark.asyncio
+async def test_restore_republishes_retained_bytes_and_metadata_with_new_version(hub: HubClient) -> None:
+    retained: Final = await _restorable_version(hub)
+    response: Final = await hub.client.post(
+        f"{HUB}/{NAME}/versions/retained/restore", headers=_headers(MASTER_KEY), json=_restore_body(),
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["version"] == "2.0.1"
+    assert response.json()["description"] == retained.description
+    assert response.json()["id"] == "hub-id"
+    assert response.json()["visibility"] == "private"
+    assert response.json()["approved_by"] is None
+    assert response.json()["security_scan_passed"] is False
+    latest: Final = hub.database.litellm_claudecodepluginversion.create.await_args.kwargs["data"]
+    assert latest["content"] == retained.content
+    assert latest["version"] == "2.0.1"
+    assert json.loads(latest["manifest_json"])["agent_skill"] == json.loads(retained.manifest_json)["agent_skill"]
+    assert retained.version == "1.0.0"
+    assert latest["published_by"] == response.json()["published_by"]
+
+
+@pytest.mark.parametrize("scan_passed", (True, False))
+@pytest.mark.asyncio
+async def test_restore_carries_retained_scan_and_credits_restoring_admin(hub: HubClient, scan_passed: bool) -> None:
+    retained: Final = await _restorable_version(hub)
+    manifest: Final = {
+        **json.loads(retained.manifest_json),
+        "_litellm_review": {"approved_by": "previous-admin", "security_scan_passed": scan_passed},
+    }
+    hub.database.query_raw.return_value = [
+        {**row, "manifest": manifest} for row in hub.database.query_raw.return_value
+    ]
+    hub.database.litellm_claudecodepluginversion.find_first.return_value = retained.model_copy(update={
+        "manifest_json": json.dumps(manifest),
+    })
+    response: Final = await hub.client.post(
+        f"{HUB}/{NAME}/versions/retained/restore", headers=_headers(MASTER_KEY), json=_restore_body(),
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["security_scan_passed"] is scan_passed
+    assert response.json()["approved_by"] == response.json()["published_by"] == "default_user_id"
+    latest: Final = hub.database.litellm_claudecodepluginversion.create.await_args.kwargs["data"]
+    assert json.loads(latest["manifest_json"])["_litellm_review"] == {
+        "approved_by": "default_user_id", "security_scan_passed": scan_passed,
+    }
+    assert latest["published_by"] == "default_user_id"
+
+
+@pytest.mark.parametrize("key,status", (
+    (GRANTED_KEY, 403), (PLAIN_KEY, 403), (MEMBER_KEY, 403), (VIEWER_KEY, 403), (None, 401),
+))
+@pytest.mark.asyncio
+async def test_restore_rejects_nonadmins_even_with_skill_grants(hub: HubClient, key: str | None, status: int) -> None:
+    await _restorable_version(hub)
+    hub.plugins.update.reset_mock()
+    response: Final = await hub.client.post(
+        f"{HUB}/{NAME}/versions/retained/restore", headers=_headers(key), json=_restore_body(),
+    )
+    assert response.status_code == status, response.text
+    hub.plugins.update.assert_not_awaited()
+
+
+@pytest.mark.parametrize("change,status", (
+    ({"expected_skill_id": "deleted-skill"}, 409),
+    ({"expected_updated_at": "2026-01-01T00:00:00"}, 409),
+    ({"expected_updated_at": None}, 409),
+    ({"version": "invalid"}, 400),
+    ({"version": "1.0.0"}, 400),
+    ({"_litellm_review": {"approved_by": "forged", "security_scan_passed": True}}, 422),
+))
+@pytest.mark.asyncio
+async def test_restore_rejects_stale_state_and_invalid_requests(
+    hub: HubClient, change: Mapping[str, object], status: int,
+) -> None:
+    await _restorable_version(hub)
+    hub.plugins.update.reset_mock()
+    response: Final = await hub.client.post(
+        f"{HUB}/{NAME}/versions/retained/restore", headers=_headers(MASTER_KEY),
+        json={**_restore_body(), **change},
+    )
+    assert response.status_code == status, response.text
+    hub.plugins.update.assert_not_awaited()
+
+
+@pytest.mark.parametrize("missing,status", (("version", 404), ("content", 409), ("source_reference", 409)))
+@pytest.mark.asyncio
+async def test_restore_requires_a_retained_verified_archive(hub: HubClient, missing: str, status: int) -> None:
+    await _restorable_version(hub)
+    if missing == "version":
+        hub.database.query_raw.return_value = []
+    elif missing == "source_reference":
+        hub.database.query_raw.return_value = [
+            {**row, "archive_available": False} for row in hub.database.query_raw.return_value
+        ]
+    else:
+        hub.database.litellm_claudecodepluginversion.find_first.return_value = None
+    hub.plugins.update.reset_mock()
+    response: Final = await hub.client.post(
+        f"{HUB}/{NAME}/versions/retained/restore", headers=_headers(MASTER_KEY), json=_restore_body(),
+    )
+    assert response.status_code == status, response.text
+    hub.plugins.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_restore_checks_the_snapshot_again_under_the_publication_lock(hub: HubClient) -> None:
+    await _restorable_version(hub)
+    current: Final = hub.plugins.find_unique.return_value
+    hub.plugins.find_unique.side_effect = [
+        current, current.model_copy(update={"updated_at": datetime(2026, 1, 3)}),
+    ]
+    hub.plugins.update.reset_mock()
+    response: Final = await hub.client.post(
+        f"{HUB}/{NAME}/versions/retained/restore", headers=_headers(MASTER_KEY), json=_restore_body(),
+    )
+    assert response.status_code == 409, response.text
+    hub.plugins.update.assert_not_awaited()

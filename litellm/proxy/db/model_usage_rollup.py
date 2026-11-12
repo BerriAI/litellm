@@ -69,6 +69,7 @@ class ModelUsageTransaction:
     completion_tokens: int
     successful: bool
     counts_as_request: bool = True
+    duration_ms: int | None = None
 
 
 def model_usage_task_type(request_tags: str) -> str:
@@ -108,6 +109,8 @@ def build_model_usage_transaction(payload: SpendLogsPayload) -> ModelUsageTransa
     if date is None or (origin and origin != BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN):
         return None
     model: Final = payload["model"] or "unknown"
+    successful: Final = payload["status"] == "success"
+    duration: Final = payload["request_duration_ms"]
     return ModelUsageTransaction(
         key=ModelUsageKey(
             date=date,
@@ -119,8 +122,9 @@ def build_model_usage_transaction(payload: SpendLogsPayload) -> ModelUsageTransa
         spend=payload["spend"],
         prompt_tokens=payload["prompt_tokens"],
         completion_tokens=payload["completion_tokens"],
-        successful=payload["status"] == "success",
+        successful=successful,
         counts_as_request=not origin,
+        duration_ms=duration if not origin and successful and isinstance(duration, int) and duration >= 0 else None,
     )
 
 
@@ -157,6 +161,7 @@ async def flush_model_usage_transactions(
                     requests = tuple(entry for entry in entries if entry.counts_as_request)
                     successful = sum(1 for entry in requests if entry.successful)
                     failed = len(requests) - successful
+                    durations = tuple(entry.duration_ms for entry in requests if entry.duration_ms is not None)
                     key_fields = {
                         "date": key.date,
                         "model_group": key.model_group,
@@ -174,6 +179,8 @@ async def flush_model_usage_transactions(
                             "request_count": len(requests),
                             "successful_requests": successful,
                             "failed_requests": failed,
+                            "total_response_time_ms": sum(durations),
+                            "timed_requests": len(durations),
                         },
                     )
             return
