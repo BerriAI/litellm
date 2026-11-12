@@ -58,6 +58,7 @@ from collections.abc import AsyncIterator, Callable, Mapping
 from litellm.constants import KUBERNETES_POD_ROUTING_KEY, LOGGING_WORKER_MAX_TIME_PER_COROUTINE
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.hidden_params import set_hidden_params
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.types.utils import ChatCompletionMessageToolCall, Delta, Function, ModelResponseStream, StreamingChoices
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
@@ -416,7 +417,18 @@ def _aliased_response(provider_model: str | None) -> litellm.ModelResponse:
 
 def _streamed_aliased_response(provider_model: str | None) -> litellm.ModelResponse:
     wrapper: Final = CustomStreamWrapper(
-        completion_stream=None, model="qwen-small", logging_obj=MagicMock(), custom_llm_provider="hosted_vllm"
+        completion_stream=None,
+        model="qwen-small",
+        logging_obj=Logging(
+            model="qwen-small",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="acompletion",
+            start_time=1.0,
+            litellm_call_id="alias-call",
+            function_id="test",
+        ),
+        custom_llm_provider="hosted_vllm",
     )
     chunks: Final = tuple(
         wrapper.chunk_creator(
