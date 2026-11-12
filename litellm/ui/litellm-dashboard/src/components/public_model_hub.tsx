@@ -1,6 +1,7 @@
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { ExternalLinkIcon, SearchIcon } from "@heroicons/react/outline";
 import { SortingState } from "@tanstack/react-table";
+import { useQuery } from "@tanstack/react-query";
 import { Copy, Inbox, Info } from "lucide-react";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
@@ -33,6 +34,7 @@ import Navbar from "./navbar";
 import {
   agentHubPublicModelsCall,
   skillHubPublicCall,
+  getClaudeCodePluginsList,
   getGlobalLitellmHeaderName,
   getProxyBaseUrl,
   getPublicModelHubInfo,
@@ -124,8 +126,13 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   const [selectedAgent, setSelectedAgent] = useState<null | AgentCard>(null);
   const [selectedMcpServer, setSelectedMcpServer] = useState<null | MCPServerData>(null);
   const [activeTab, setActiveTab] = useState<string>("models");
-  const [skillHubData, setSkillHubData] = useState<Plugin[]>([]);
-  const [skillLoading, setSkillLoading] = useState<boolean>(false);
+  const skillsToken = isEmbedded ? accessToken : null;
+  const skillsQuery = useQuery({
+    queryKey: ["ai-hub-skills", skillsToken],
+    queryFn: () => (skillsToken ? getClaudeCodePluginsList(skillsToken) : skillHubPublicCall()),
+    enabled: !isChat,
+  });
+  const skillHubData: Plugin[] = skillsQuery.data?.plugins ?? [];
 
   useEffect(() => {
     const initializeAndFetch = async () => {
@@ -171,23 +178,10 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
         setUsefulLinks(publicModelHubInfo.useful_links || {});
       };
 
-      const fetchSkillData = async () => {
-        try {
-          setSkillLoading(true);
-          const response = await skillHubPublicCall();
-          setSkillHubData(response.plugins ?? []);
-        } catch (error) {
-          console.error("There was an error fetching the public skill data", error);
-        } finally {
-          setSkillLoading(false);
-        }
-      };
-
       fetchPublicModelHubInfo();
 
       fetchAgentData();
       fetchMcpData();
-      fetchSkillData();
     };
 
     initializeAndFetch();
@@ -804,7 +798,13 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                 {/* Skill Hub Tab */}
                 {!isChat && (
                   <TabsContent value="skills">
-                    <SkillHubDashboard skills={skillHubData} isLoading={skillLoading} publicPage={true} />
+                    <SkillHubDashboard
+                      key={skillsToken}
+                      skills={skillHubData}
+                      isLoading={skillsQuery.isLoading}
+                      accessToken={skillsToken}
+                      publicPage={!skillsToken}
+                    />
                   </TabsContent>
                 )}
               </Tabs>
