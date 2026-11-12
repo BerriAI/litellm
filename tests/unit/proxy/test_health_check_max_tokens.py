@@ -817,6 +817,29 @@ def test_health_check_params_lose_to_the_audio_speech_voice_knob():
 
 
 @pytest.mark.parametrize(
+    ("model_info", "litellm_params", "expected_voice"),
+    [
+        pytest.param({}, {"voice": "Puck"}, "Puck", id="deployment-voice"),
+        pytest.param({"health_check_params": {"voice": "Cherry"}}, {}, "Cherry", id="health-check-params-voice"),
+        pytest.param(
+            {"health_check_params": {"voice": "Cherry"}}, {"voice": "Puck"}, "Cherry", id="params-beat-deployment"
+        ),
+        pytest.param({"health_check_voice": "Kore"}, {"voice": "Puck"}, "Kore", id="knob-beats-deployment"),
+        pytest.param({}, {"voice": {"id": "voice_custom"}}, {"id": "voice_custom"}, id="custom-voice-object"),
+        pytest.param({}, {}, "alloy", id="no-voice-anywhere"),
+        pytest.param({"health_check_voice": ""}, {"voice": ""}, "alloy", id="empty-voices"),
+    ],
+)
+def test_audio_speech_probe_keeps_the_configured_voice(model_info, litellm_params, expected_voice):
+    updated = update_litellm_params_for_health_check(
+        {"mode": "audio_speech", **model_info},
+        {"model": "dashscope/qwen3-tts-flash", **litellm_params},
+    )
+
+    assert updated["voice"] == expected_voice
+
+
+@pytest.mark.parametrize(
     "bad_value",
     ["mediaSource", ["mediaSource"], 5, True],
 )

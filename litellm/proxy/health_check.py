@@ -866,7 +866,8 @@ def update_litellm_params_for_health_check(
       (image, embedding, audio_*, rerank, video, ocr, search, moderation, ...)
       reject unknown fields with 400 "Unknown parameter: 'max_tokens'".
     - updates the `model` param with the `health_check_model` if it exists Doc: https://docs.litellm.ai/docs/proxy/health#wildcard-routes
-    - updates the `voice` param with the `health_check_voice` for `audio_speech` mode if it exists Doc: https://docs.litellm.ai/docs/proxy/health#text-to-speech-models
+    - sets the `voice` param for `audio_speech` mode to `health_check_voice`, else the deployment's own `voice`
+      (from `litellm_params` or `health_check_params`), else "alloy" Doc: https://docs.litellm.ai/docs/proxy/health#text-to-speech-models
     - for Bedrock models with region routing (bedrock/region/model), strips the litellm routing prefix but preserves the model ID, and pins `custom_llm_provider` to `bedrock` (only when the deployment hasn't already set one, so an explicit `bedrock_converse` survives) so the bare model id still resolves to the provider (e.g. cross-region ids like `us.cohere.embed-v4:0`)
     - asks OpenAI and Azure chat models that support audio output for `modalities` text + audio and a wav
       `audio` in the `health_check_voice` (default "alloy"), since those models reject text-only requests.
@@ -912,7 +913,11 @@ def update_litellm_params_for_health_check(
     if _health_check_model is not None:
         litellm_params["model"] = _health_check_model
     if mode == "audio_speech":
-        litellm_params["voice"] = model_info.get("health_check_voice", "alloy")
+        litellm_params["voice"] = (
+            _MODEL_INFO_ADAPTER.validate_python(model_info).get("health_check_voice")
+            or _PROBE_PARAMS_ADAPTER.validate_python(litellm_params).get("voice")
+            or "alloy"
+        )
 
     logging_model_info: Final = _MODEL_INFO_ADAPTER.validate_python(
         _PROBE_PARAMS_ADAPTER.validate_python(litellm_params).get("model_info") or {}
