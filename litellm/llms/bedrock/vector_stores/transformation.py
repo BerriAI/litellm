@@ -32,6 +32,9 @@ from litellm.types.vector_stores import (
     BaseVectorStoreAuthCredentials,
     OpenAIComparisonFilter,
     OpenAICompoundFilter,
+    OpenAIEqualityFilter,
+    OpenAIMembershipFilter,
+    OpenAIRangeFilter,
     OpenAIVectorStoreFilter,
     VectorStoreIndexEndpoints,
     VectorStoreResultContent,
@@ -60,6 +63,7 @@ _AWS_COMPARISON_OPERATORS: Final = MappingProxyType(
     }
 )
 _AWS_LOGICAL_OPERATORS: Final = MappingProxyType({"and": "andAll", "or": "orAll"})
+_NUMERIC_MEMBERSHIP: Final = MappingProxyType({"in": ("or", "eq"), "nin": ("and", "ne")})
 _AWS_FILTER_KEYS: Final = frozenset(
     (
         *_AWS_COMPARISON_OPERATORS.values(),
@@ -75,14 +79,30 @@ _REASON_END_CHARS: Final = _MAX_REASON_CHARS // 2
 
 
 def _aws_retrieval_filter(openai_filter: OpenAIComparisonFilter | OpenAICompoundFilter) -> Mapping[str, object]:
-    if isinstance(openai_filter, OpenAIComparisonFilter):
-        value: Final = list(openai_filter.value) if isinstance(openai_filter.value, tuple) else openai_filter.value
-        return {_AWS_COMPARISON_OPERATORS[openai_filter.type]: {"key": openai_filter.key, "value": value}}
-    if len(openai_filter.filters) == 1:
-        return _aws_retrieval_filter(openai_filter.filters[0])
-    return {
-        _AWS_LOGICAL_OPERATORS[openai_filter.type]: [_aws_retrieval_filter(member) for member in openai_filter.filters]
-    }
+    match openai_filter:
+        case OpenAICompoundFilter():
+            return _aws_logical_filter(
+                openai_filter.type, tuple(_aws_retrieval_filter(member) for member in openai_filter.filters)
+            )
+        case OpenAIMembershipFilter() if all(isinstance(item, str) for item in openai_filter.value):
+            return _aws_comparison(openai_filter.type, openai_filter.key, list(openai_filter.value))
+        case OpenAIMembershipFilter():
+            logical, comparison = _NUMERIC_MEMBERSHIP[openai_filter.type]
+            return _aws_logical_filter(
+                logical, tuple(_aws_comparison(comparison, openai_filter.key, item) for item in openai_filter.value)
+            )
+        case OpenAIEqualityFilter() | OpenAIRangeFilter():
+            return _aws_comparison(openai_filter.type, openai_filter.key, openai_filter.value)
+
+
+def _aws_comparison(operator: str, key: str, value: str | float | list[str | float]) -> Mapping[str, object]:
+    return {_AWS_COMPARISON_OPERATORS[operator]: {"key": key, "value": value}}
+
+
+def _aws_logical_filter(operator: str, members: tuple[Mapping[str, object], ...]) -> Mapping[str, object]:
+    if len(members) == 1:
+        return members[0]
+    return {_AWS_LOGICAL_OPERATORS[operator]: list(members)}
 
 
 def _validation_reason(error: ValidationError) -> str:
@@ -294,6 +314,8 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
     def _aws_filters(self, filters: object, drop_params: bool) -> Mapping[str, object] | None:
         if not isinstance(filters, dict):
             return self._invalid_filters(f"filters must be an object, got {type(filters).__name__}", drop_params)
+        if not filters:
+            return self._invalid_filters("filters must not be empty", drop_params)
         if "operator" in filters:
             return self._map_operator_filter(filters)
         if "and" in filters or "or" in filters:
