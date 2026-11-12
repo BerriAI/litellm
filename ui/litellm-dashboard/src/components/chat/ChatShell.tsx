@@ -111,14 +111,24 @@ function ChatShellLayout({ children }: { children: React.ReactNode }) {
   const pathname = stripTrailingSlash(usePathname() ?? "");
   const { accessToken, conversations, activeConversationId, deleteConversation, renameConversation } = useChatShell();
   const handleLogout = useLogout(accessToken);
-  const { state, isMobile, setOpen, setOpenMobile } = useSidebar();
+  const { state, isMobile, openMobile, setOpen, setOpenMobile } = useSidebar();
   const collapsed = state === "collapsed" && !isMobile;
   useCloseMobileSidebarOn();
   const [searchOpen, setSearchOpen] = useState(false);
+  const [searchAwaitingDrawer, setSearchAwaitingDrawer] = useState(false);
   const shortcut = useShortcutLabel();
   const openSearch = () => {
-    if (isMobile) setOpenMobile(true);
-    else setOpen(true);
+    if (isMobile && !openMobile) {
+      setSearchAwaitingDrawer(true);
+      setOpenMobile(true);
+      return;
+    }
+    if (!isMobile) setOpen(true);
+    setSearchOpen(true);
+  };
+  const openSearchOnceDrawerHasFocus = () => {
+    if (!searchAwaitingDrawer) return;
+    setSearchAwaitingDrawer(false);
     setSearchOpen(true);
   };
   useHotkeys("mod+k", openSearch, { enableOnFormTags: true, preventDefault: true, useKey: true });
@@ -252,7 +262,9 @@ function ChatShellLayout({ children }: { children: React.ReactNode }) {
         aria-label={t("chat.shell.chatNavigation")}
         className="border-sidebar-border"
       >
-        {sidebar}
+        <div className="contents" onFocus={openSearchOnceDrawerHasFocus}>
+          {sidebar}
+        </div>
       </Sidebar>
       <SidebarInset className="min-w-0 overflow-hidden">
         <DashboardHeader
