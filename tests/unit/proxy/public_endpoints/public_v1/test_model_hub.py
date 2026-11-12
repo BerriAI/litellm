@@ -35,6 +35,9 @@ class _FakeRouter:
     def get_model_list_of_routed_group(self, model_group: str, team_id: str | None = None) -> list[DeploymentTypedDict]:
         return []
 
+    def get_model_ids(self, model_name: str) -> tuple[str, ...]:
+        return (f"{model_name}-deployment",) if model_name in self.infos else ()
+
 
 def _info(
     name: str,
@@ -170,7 +173,7 @@ def test_the_latest_health_check_lands_on_its_row(monkeypatch):
 def test_a_stale_row_sorting_after_the_fresh_one_does_not_speak_for_the_group(monkeypatch):
     """The read orders by model_id with NULL last; that order used to pick the group's health."""
     fresh = _health_check(
-        "model-001", model_id="deployment-a", checked_at=datetime(2026, 10, 16, 11, 10, tzinfo=timezone.utc)
+        "model-001", model_id="model-001-deployment", checked_at=datetime(2026, 10, 16, 11, 10, tzinfo=timezone.utc)
     )
     stale = _health_check("model-001", status="unhealthy", checked_at=datetime(2026, 9, 4, 11, 20, tzinfo=timezone.utc))
     prisma_client, _ = _recording_prisma([fresh, stale])
@@ -179,6 +182,32 @@ def test_a_stale_row_sorting_after_the_fresh_one_does_not_speak_for_the_group(mo
     rows = {row["model_group"]: row for row in _get().json()["data"]}
 
     assert rows["model-001"]["health_status"] == "healthy"
+    assert rows["model-001"]["health_checked_at"] == "2026-10-16T11:10:00+00:00"
+
+
+@pytest.mark.parametrize("retired_status,active_status", [("unhealthy", "healthy"), ("healthy", "unhealthy")])
+@pytest.mark.parametrize("retired_hour", [10, 12], ids=["older-retired-check", "newer-retired-check"])
+def test_retired_deployment_cannot_override_active_health(
+    monkeypatch: pytest.MonkeyPatch, retired_status: str, active_status: str, retired_hour: int
+) -> None:
+    active: Final = _health_check(
+        "model-001",
+        status=active_status,
+        model_id="model-001-deployment",
+        checked_at=datetime(2026, 10, 16, 11, 10, tzinfo=timezone.utc),
+    )
+    retired: Final = _health_check(
+        "model-001",
+        status=retired_status,
+        model_id="retired-deployment",
+        checked_at=datetime(2026, 10, 16, retired_hour, 0, tzinfo=timezone.utc),
+    )
+    prisma_client, _ = _recording_prisma((active, retired))
+    _publish(monkeypatch, _named(3), prisma_client=prisma_client)
+
+    rows: Final = {row["model_group"]: row for row in _get().json()["data"]}
+
+    assert rows["model-001"]["health_status"] == active_status
     assert rows["model-001"]["health_checked_at"] == "2026-10-16T11:10:00+00:00"
 
 
@@ -428,7 +457,9 @@ def test_features_filter_matches_a_model_with_any_of_the_named_features(monkeypa
 
 
 def test_a_single_feature_filter_selects_only_models_with_it(monkeypatch):
-    _publish(monkeypatch, (_info("sees", supports_vision=True), _info("plain"), _info("reasons", supports_reasoning=True)))
+    _publish(
+        monkeypatch, (_info("sees", supports_vision=True), _info("plain"), _info("reasons", supports_reasoning=True))
+    )
 
     assert _groups(_get("filter[features][in]=vision")) == ["sees"]
     assert _groups(_get("filter[features][in]=reasoning")) == ["reasons"]
@@ -463,11 +494,14 @@ def test_a_facet_serves_the_distinct_values_of_its_column(monkeypatch, facet):
     response = _facet(facet)
 
     assert response.status_code == 200, response.text
-    assert response.json()["data"] == {
-        "providers": ["anthropic", "mistral", "openai"],
-        "modes": ["chat", "embedding"],
-        "features": ["vision"],
-    }[facet]
+    assert (
+        response.json()["data"]
+        == {
+            "providers": ["anthropic", "mistral", "openai"],
+            "modes": ["chat", "embedding"],
+            "features": ["vision"],
+        }[facet]
+    )
 
 
 def test_a_facet_offers_only_values_the_table_can_show(monkeypatch):
