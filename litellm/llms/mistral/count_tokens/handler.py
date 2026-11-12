@@ -81,8 +81,13 @@ class MistralCountTokensHandler(MistralCountTokensConfig):
 
             mistral_response: Final = _DECODED_JSON.validate_python(response.json())
             verbose_logger.debug("Mistral count response: %s", mistral_response)
-        except (httpx.RequestError, litellm.Timeout, litellm.APIConnectionError, OSError):
-            raise
+        except litellm.Timeout as e:
+            raise MistralError(status_code=e.status_code, message=str(e), headers=httpx.Headers()) from e
+        except (httpx.RequestError, litellm.APIConnectionError, OSError) as e:
+            verbose_logger.error("Connection error in Mistral CountTokens handler: %s", e)
+            raise MistralError(
+                status_code=500, message=f"CountTokens connection error: {e}", headers=httpx.Headers()
+            ) from e
         except MistralError:
             raise
         except httpx.HTTPStatusError as e:

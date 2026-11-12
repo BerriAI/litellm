@@ -22,7 +22,7 @@ from litellm.llms.anthropic.messages.responses_adapters.handler import count_mes
 from litellm.llms.anthropic.messages.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
-from litellm.llms.base_llm.base_utils import BaseTokenCounter
+from litellm.llms.base_llm.base_utils import BaseTokenCounter, deployment_timeout
 from litellm.llms.mistral.chat.transformation import MistralConfig
 from litellm.llms.mistral.common_utils import MistralError, get_mistral_chat_credentials
 from litellm.llms.mistral.count_tokens.handler import (
@@ -92,19 +92,6 @@ def _counts_on_mistral(model: str) -> bool:
     )
     mode: Final = None if cost_entry is None else cost_entry.get("mode")
     return mode is None or mode in _MODES_MISTRAL_COUNTS
-
-
-def _deployment_timeout(deployment: Mapping[str, object] | None) -> float | httpx.Timeout | None:
-    litellm_params: Final = as_str_mapping(None if deployment is None else deployment.get("litellm_params")) or {}
-    match litellm_params.get("timeout"):
-        case bool():
-            return None
-        case httpx.Timeout() as timeout:
-            return timeout
-        case int(seconds) | float(seconds):
-            return float(seconds)
-        case _:
-            return None
 
 
 def _count_error(model_to_use: str, request_model: str, message: str, status_code: int) -> TokenCountResponse:
@@ -332,7 +319,9 @@ class MistralTokenCounter(BaseTokenCounter):
             if text is not None
             else _CHAT_TO_RESPONSES.transform_response_format_to_text_format(chat_params.get("response_format"))
         )
-        timeout: Final = _deployment_timeout(deployment)
+        timeout: Final = deployment_timeout(
+            as_str_mapping(None if deployment is None else deployment.get("litellm_params")) or {}
+        )
         tool_choice: Final = _counted_tool_choice(chat_params.get("tool_choice")) if counted_tools else None
 
         return await self._counted(
@@ -361,9 +350,6 @@ class MistralTokenCounter(BaseTokenCounter):
     ) -> TokenCountResponse | None:
         try:
             result: Final = await send(resolved.api_key, resolved.api_base)
-        except (httpx.RequestError, litellm.Timeout, litellm.APIConnectionError, OSError) as e:
-            verbose_logger.warning("Mistral count tokens connection error / timeout, falling back to local: %s", e)
-            return None
         except MistralError as e:
             verbose_logger.warning("Mistral CountTokens API error: status=%s, message=%s", e.status_code, e.message)
             return _count_error(model_to_use, request_model, e.message, e.status_code)

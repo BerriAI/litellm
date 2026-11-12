@@ -117,12 +117,19 @@ async def test_count_tokens_missing_api_key(monkeypatch: pytest.MonkeyPatch):
     assert "No Mistral API key is set" in (result.error_message or "")
 
 
+@pytest.mark.parametrize(
+    ("upstream_error", "status_code"),
+    [(httpx.ConnectTimeout("Connection timed out"), 408), (httpx.ConnectError("Connection refused"), 500)],
+    ids=["timeout", "connect_error"],
+)
 @pytest.mark.asyncio
-async def test_count_tokens_timeout_falls_back_to_none(monkeypatch: pytest.MonkeyPatch):
+async def test_count_tokens_reports_a_failed_connection_as_a_count_error(
+    monkeypatch: pytest.MonkeyPatch, upstream_error: httpx.RequestError, status_code: int
+):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     counter: Final = MistralTokenCounter()
     with respx.mock:
-        respx.post(COUNT_URL).mock(side_effect=httpx.ConnectTimeout("Connection timed out"))
+        respx.post(COUNT_URL).mock(side_effect=upstream_error)
         result: Final = await counter.count_tokens(
             model_to_use="mistral-large-4",
             messages=[{"role": "user", "content": "Hello"}],
@@ -130,23 +137,8 @@ async def test_count_tokens_timeout_falls_back_to_none(monkeypatch: pytest.Monke
             deployment={"litellm_params": {"api_key": "test-key"}},
             request_model="mistral/mistral-large-4",
         )
-    assert result is None
-
-
-@pytest.mark.asyncio
-async def test_count_tokens_connect_error_falls_back_to_none(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    counter: Final = MistralTokenCounter()
-    with respx.mock:
-        respx.post(COUNT_URL).mock(side_effect=httpx.ConnectError("Connection refused"))
-        result: Final = await counter.count_tokens(
-            model_to_use="mistral-large-4",
-            messages=[{"role": "user", "content": "Hello"}],
-            contents=None,
-            deployment={"litellm_params": {"api_key": "test-key"}},
-            request_model="mistral/mistral-large-4",
-        )
-    assert result is None
+    assert result is not None
+    assert (result.error, result.status_code, result.tokenizer_type) == (True, status_code, "mistral_api")
 
 
 @pytest.mark.asyncio
