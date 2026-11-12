@@ -8096,6 +8096,30 @@ async def test_failed_chat_span_flags_unknown_usage_without_inventing_an_estimat
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", ["acompletion", "completion"], ids=["async_request", "sync_request"])
+async def test_failed_prompt_estimate_keeps_the_prompt_out_of_debug_logs(
+    in_memory_otel: tuple[OpenTelemetry, InMemorySpanExporter], caplog: pytest.LogCaptureFixture, call_type: str
+) -> None:
+    otel, exporter = in_memory_otel
+    logging_obj: Final = _redacted_logging(otel, list(_SECRET_PROMPT), call_type=call_type)
+    error: Final = litellm.Timeout(message="timed out", model="test-model", llm_provider="hosted_vllm")
+
+    with caplog.at_level("DEBUG", logger="LiteLLM"):
+        if call_type == "acompletion":
+            logging_obj.failure_handler(error, "tb", for_async_request=True)
+            await logging_obj.async_failure_handler(error, "tb")
+        else:
+            logging_obj.failure_handler(error, "tb")
+
+    assert caplog.records
+    assert logging_obj.model_call_details[FAILED_PROMPT_TOKEN_ESTIMATE_KEY] == token_counter(
+        model=_FAILED_MODEL, messages=list(_SECRET_PROMPT)
+    )
+    assert _PROMPT_SECRET not in caplog.text
+    assert not any(_PROMPT_SECRET in _span_text(span) for span in exporter.get_finished_spans())
+
+
+@pytest.mark.asyncio
 async def test_failed_chat_span_estimates_structured_text_prompts(
     in_memory_otel: tuple[OpenTelemetry, InMemorySpanExporter],
 ) -> None:

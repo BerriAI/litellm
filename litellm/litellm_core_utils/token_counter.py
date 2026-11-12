@@ -929,7 +929,6 @@ def token_counter(
     if litellm.disable_token_counter is True:
         return 0
 
-    verbose_logger.debug("messages in token_counter: %s, text in token_counter: %s", messages, text)
     if text is not None and messages is not None:
         raise ValueError("text and messages cannot both be set")
     if use_default_image_token_count is None:
