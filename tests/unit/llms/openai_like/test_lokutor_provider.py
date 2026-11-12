@@ -97,3 +97,32 @@ async def test_async_speech_uses_lokutor_endpoint():
 
     assert response.content == WAV_BYTES
     assert str(requests[0].url) == f"{LOKUTOR_API_BASE}/audio/speech"
+
+
+def _only_openai_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LOKUTOR_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-must-not-leave")
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", None)
+
+
+def test_speech_without_a_lokutor_key_never_sends_the_openai_key(monkeypatch: pytest.MonkeyPatch):
+    _only_openai_key(monkeypatch)
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(f"{LOKUTOR_API_BASE}/audio/speech").respond(200, content=WAV_BYTES)
+
+        with pytest.raises(litellm.AuthenticationError):
+            litellm.speech(model="lokutor/tts-1", voice="alloy", input="Hi")
+
+    assert not route.called
+
+
+def test_transcription_without_a_lokutor_key_never_sends_the_openai_key(monkeypatch: pytest.MonkeyPatch):
+    _only_openai_key(monkeypatch)
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(f"{LOKUTOR_API_BASE}/audio/transcriptions").respond(200, json={"text": "x"})
+
+        with pytest.raises(litellm.AuthenticationError):
+            litellm.transcription(model="lokutor/whisper-1", file=("hello.wav", WAV_BYTES, "audio/wav"))
+
+    assert not route.called
