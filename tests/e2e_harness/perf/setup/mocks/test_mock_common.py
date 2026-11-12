@@ -59,3 +59,19 @@ def test_json_reply_waits_for_delay_plus_generation_time() -> None:
 
     assert decision.generation_s > 0.2
     assert DELAY_S + decision.generation_s <= elapsed < DELAY_S + decision.generation_s + 0.1
+
+
+def test_marker_is_the_request_s_own_even_when_earlier_turns_quote_an_example_marker() -> None:
+    log: Final = RequestLog("anthropic")
+    body: Final = {
+        "model": "claude-sonnet-5",
+        "max_tokens": 64,
+        "messages": [
+            {"role": "user", "content": [{"type": "tool_result", "content": "docs mention `perfreq-000123-n` here"}]},
+            {"role": "user", "content": "which files swallow exceptions? perfreq-000042-n"},
+        ],
+    }
+    decision: Final = log.decide(route="messages", stream=False, body=body, model="claude-sonnet-5")
+
+    assert decision.marker == "perfreq-000042-n"
+    assert log.snapshot()[0].marker == "perfreq-000042-n"

@@ -12,7 +12,6 @@ from scripts.bench_rust_vs_python.report import (
     RequestMetrics,
     RunMetrics,
     delta,
-    native_share,
     run_metrics,
     sustained,
     verdict,
@@ -83,7 +82,6 @@ def test_run_metrics_drops_warmup_and_charges_window_cpu_to_successful_requests(
     assert len(run.ttft_overheads_s) == 4
     assert run.ttft_overheads_s == pytest.approx((0.1,) * 4)
     assert run.rust_share == 1.0
-    assert run.native_upstream_share == pytest.approx(8 / 10)
     assert run.prometheus_matches and run.s3_matches
 
 
@@ -117,7 +115,6 @@ def _run(variant: str, cpu_ms: float, overhead_s: float) -> RunMetrics:
         measured=100,
         errors=0,
         rust_share=0.0,
-        native_upstream_share=None,
         window_s=60.0,
         cpu_ms_per_request=cpu_ms,
         loadgen_cpu_share=0.1,
@@ -196,15 +193,11 @@ def test_flame_buckets_charge_the_frame_closest_to_the_leaf() -> None:
     assert Profile(samples=folded, rate_hz=100.0, requests=10).ms_per_request("router selection") == pytest.approx(10.0)
 
 
-def test_native_share_ignores_unrecorded_agents_and_is_none_without_any() -> None:
-    assert native_share(("python-httpx/0.28.1", "reqwest/0.12", None, "litellm/1.0")) == pytest.approx(2 / 3)
-    assert native_share((None, None)) is None
-
-
 def test_run_log_keeps_the_upstream_user_agent_the_mock_recorded() -> None:
     from scripts.bench_rust_vs_python.run_bench import MockLog
 
-    served: Final = '{"requests":[{"marker":"perfreq-000001-n","delay_s":0.8,"stream":true,"output_tokens":9,"user_agent":"python-httpx/0.28.1"}]}'
-    kept: Final = json.loads(MockLog.model_validate_json(served).model_dump_json())["requests"]
+    served: Final = (
+        '{"requests":[{"marker":"m","delay_s":0.8,"stream":true,"output_tokens":9,"user_agent":"litellm/1.0"}]}'
+    )
 
-    assert native_share(tuple(entry.get("user_agent") for entry in kept)) == 0.0
+    assert MockLog.model_validate_json(served).requests[0].user_agent == "litellm/1.0"

@@ -33,8 +33,10 @@ Flag = Literal["n", "i", "b"]
 
 
 def marker_in(text: str) -> str | None:
-    match: Final = MARKER.search(text)
-    return None if match is None else match.group(0)
+    """The last marker in the prompt, since the plan puts it in the final user message and earlier turns can quote
+    files that mention example markers."""
+    markers: Final = MARKER.findall(text)
+    return markers[-1] if markers else None
 
 
 def flag_of(marker: str) -> Flag:

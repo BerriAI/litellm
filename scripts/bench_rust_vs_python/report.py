@@ -46,7 +46,6 @@ class RunMetrics:
     measured: int
     errors: int
     rust_share: float
-    native_upstream_share: float | None
     window_s: float
     cpu_ms_per_request: float
     loadgen_cpu_share: float
@@ -120,15 +119,6 @@ def _step_holds(requests: Sequence[RequestMetrics]) -> bool:
     return errors <= RAMP_ERROR_LIMIT and percentile(overheads, 99) <= RAMP_P99_LIMIT_S
 
 
-def native_share(user_agents: Sequence[object]) -> float | None:
-    """Share of upstream calls not made by Python's httpx client, the path the Rust host's own tests treat as
-    native. None when the mock did not record user agents."""
-    known: Final = tuple(agent for agent in user_agents if isinstance(agent, str))
-    if not known:
-        return None
-    return sum(1 for agent in known if not agent.startswith("python-httpx")) / len(known)
-
-
 def plan_steps(plan_path: Path) -> tuple[Step, ...]:
     return tuple(Step(**step) for step in json.loads(plan_path.with_suffix(".steps.json").read_text()))
 
@@ -142,11 +132,6 @@ def run_metrics(run_dir: Path) -> RunMetrics:
         str(entry["marker"]): {"delay_s": float(entry["delay_s"]), "generation_s": float(entry.get("generation_s", 0))}
         for entry in json.loads((run_dir / "mock.json").read_text())["requests"]
         if entry["marker"]
-    }
-    agents: Final = {
-        str(entry["marker"]): entry.get("user_agent")
-        for entry in json.loads((run_dir / "mock.json").read_text())["requests"]
-        if entry["marker"] and int(str(entry["marker"])[8:14]) < WARMUP_SEQ_START
     }
     samples: Final = json.loads((run_dir / "samples.json").read_text())
     t0: Final = statistics.median(float(r["started_at"]) - send_at[int(r["seq"])] for r in records)
@@ -168,7 +153,6 @@ def run_metrics(run_dir: Path) -> RunMetrics:
         measured=len(measured),
         errors=len(measured) - len(ok),
         rust_share=sum(1 for r in ok if r.rust) / max(1, len(ok)),
-        native_upstream_share=native_share(tuple(agents.values())),
         window_s=window_s,
         cpu_ms_per_request=1000 * cpu_s / max(1, sum(1 for r in ok)),
         loadgen_cpu_share=loadgen_s / window_s if window_s else float("nan"),
@@ -260,7 +244,6 @@ def html_report(runs: Sequence[RunMetrics], deltas: Mapping[str, Sequence[Delta]
                 run.measured,
                 run.errors,
                 _cell(run.rust_share),
-                "" if run.native_upstream_share is None else _cell(run.native_upstream_share),
                 _cell(run.cpu_ms_per_request),
                 _cell(percentile(run.overheads_s, 50) * 1000, 1),
                 _cell(percentile(run.overheads_s, 99) * 1000, 1),
@@ -289,7 +272,7 @@ def html_report(runs: Sequence[RunMetrics], deltas: Mapping[str, Sequence[Delta]
         "<!doctype html><meta charset=utf-8><title>Rust vs Python bench</title>"
         "<style>body{font:14px system-ui;margin:24px}table{border-collapse:collapse;margin:8px 0 24px}"
         "td,th{border:1px solid #ccc;padding:4px 8px;text-align:right}</style>"
-        f"{pair_tables}<h2>Runs</h2><table><tr><th>run</th><th>measured</th><th>errors</th><th>rust header share</th><th>native upstream share</th>"
+        f"{pair_tables}<h2>Runs</h2><table><tr><th>run</th><th>measured</th><th>errors</th><th>rust header share</th>"
         "<th>cpu ms/req</th><th>p50 ms</th><th>p99 ms</th><th>loadgen cpu %</th><th>peak rss MB</th>"
         f"<th>side effects ok</th><th>sustained rps</th></tr>{run_rows}</table>"
     )
