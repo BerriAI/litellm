@@ -16,7 +16,6 @@ from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH, request_timeout
 from litellm.google_genai.adapters.handler import CUSTOM_PRICING_PARAMS, GenerateContentToCompletionHandler
 from litellm.google_genai.adapters.transformation import adapter_untranslated_generation_config
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.litellm_core_utils.per_call_pricing import per_call_model_info
 from litellm.llms.base_llm.google_genai.transformation import (
     GENERATE_CONTENT_REQUEST_TOP_LEVEL_FIELDS,
@@ -360,17 +359,17 @@ def _custom_generate_content_wire_body(response: object) -> Mapping[str, JsonVal
 
 def _log_custom_generate_content_response(
     response: object, logging_obj: LiteLLMLoggingObj, contents: object, api_key: str | None
-) -> object:
+) -> Mapping[str, JsonValue]:
     wire_body: Final = _custom_generate_content_wire_body(response)
     raw_response: Final = httpx.Response(status_code=200, json={"usageMetadata": {}, **wire_body})
     logging_obj.model_call_details["httpx_response"] = raw_response  # rebind-ok: success logging needs raw response
     logging_obj.post_call(input=contents, api_key=api_key, original_response=raw_response.text)  # pyright: ignore[reportUnknownMemberType]  # legacy logging interface is untyped
-    return response if is_str_keyed_dict(response) else wire_body
+    return wire_body
 
 
 async def _await_custom_generate_content_response(
     response: Awaitable[object], logging_obj: LiteLLMLoggingObj, contents: object, api_key: str | None
-) -> object:
+) -> Mapping[str, JsonValue]:
     result: Final = await response
     return _log_custom_generate_content_response(result, logging_obj, contents, api_key)
 

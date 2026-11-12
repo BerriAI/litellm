@@ -477,7 +477,7 @@ async def test_custom_native_content_preserves_images_and_config(
         metadata={"user_api_key_alias": "caller"},
     )
     result: Final = await litellm.agenerate_content(**request) if is_async else litellm.generate_content(**request)
-    assert result is native_content_handler.response
+    assert result == native_content_handler.response
     received: Final = native_content_handler.requests[0]
     assert received["model"] == "image-model"
     assert received["contents"] is contents
@@ -503,7 +503,7 @@ async def test_custom_native_content_preserves_empty_request(
 ) -> None:
     request: Final = dict(model="native_image_test/image-model", contents=[], config=config)
     result: Final = await litellm.agenerate_content(**request) if is_async else litellm.generate_content(**request)
-    assert result is native_content_handler.response
+    assert result == native_content_handler.response
     received: Final = native_content_handler.requests[0]
     assert received["contents"] == []
     assert received["config"] == config
@@ -604,7 +604,9 @@ async def test_router_custom_native_content_leg(native_content_handler: NativeCo
         ]
     )
     result: Final = await router.agenerate_content(model="image-group", contents=[], config={})
-    assert result == native_content_handler.response
+    assert isinstance(result, dict)
+    assert {key: value for key, value in result.items() if key != "_hidden_params"} == native_content_handler.response
+    assert "_hidden_params" not in native_content_handler.response
     assert native_content_handler.requests[0]["contents"] == []
     assert native_content_handler.requests[0]["config"] == {}
 
@@ -667,7 +669,7 @@ async def test_custom_native_config_cannot_overwrite_accounting_context(
     result: Final = await litellm.agenerate_content(**request) if is_async else litellm.generate_content(**request)
     received: Final = native_content_handler.requests[0]
     logged: Final = received["logging_obj"].model_call_details
-    assert result is native_content_handler.response
+    assert result == native_content_handler.response
     assert received["config"] == config
     assert logged["litellm_params"]["metadata"]["user_api_key"] == "trusted-key-id"
     assert logged["litellm_params"]["metadata"]["user_api_key_team_id"] == "trusted-team"
@@ -959,6 +961,18 @@ _HOOK_RESPONSE_SHAPES: Final = (
         (3, 5),
         _IMAGE_WIRE_BODY,
         id="sdk-object-with-client-side-fields",
+    ),
+    pytest.param(
+        GenerateContentResponse(
+            candidates=[_IMAGE_CANDIDATE],
+            usage_metadata={"prompt_token_count": 3, "candidates_token_count": 5, "total_token_count": 8},
+            sdk_http_response={"headers": {"x-upstream-trace": "abc"}},
+            automatic_function_calling_history=[{"role": "user", "parts": [{"text": "draw"}]}],
+            parsed={"answer": "draw"},
+        ).model_dump(exclude_none=True),
+        (3, 5),
+        _IMAGE_WIRE_BODY,
+        id="dumped-sdk-dict-with-client-side-fields",
     ),
     pytest.param(_DICT_WITHOUT_USAGE, (0, 0), _DICT_WITHOUT_USAGE, id="dict-without-usage"),
 )
