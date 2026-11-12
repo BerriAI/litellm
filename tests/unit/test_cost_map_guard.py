@@ -11,7 +11,7 @@ from typing import Final
 import pytest
 
 ROOT: Final = Path(__file__).resolve().parents[2]
-CI_CD: Final = ROOT / "ci_cd"
+CI_CD: Final = ROOT / "scripts" / "ci_cd"
 
 
 def _load(name: str) -> ModuleType:
@@ -353,6 +353,35 @@ def test_checked_in_pins_hold_in_the_checked_in_cost_map() -> None:
     pins = (ROOT / guard.PINS_PATH).read_text()
     assert json.loads(pins), "the pins file must pin at least one capability"
     assert guard.pin_failures(pins, cost_map) == ()
+
+
+@pytest.mark.parametrize("pins_path", guard.PINS_PATHS)
+@pytest.mark.parametrize("pins", (PINS, "", "not JSON"))
+def test_relocated_pins_keep_the_same_validation(pins_path: str, pins: str) -> None:
+    cost_map: Final = _serialize(BASE_MAP)
+    blobs: Final = {
+        f"base:{guard.COST_MAP_PATH}": cost_map,
+        f"base:{guard.BACKUP_PATH}": cost_map,
+        f"head:{guard.COST_MAP_PATH}": cost_map,
+        f"head:{guard.BACKUP_PATH}": cost_map,
+        f"base:{guard.PINS_PATH}": PINS,
+        f"head:{pins_path}": pins,
+    }
+
+    def read_git(_operation: str, blob: str) -> str | None:
+        return blobs.get(blob)
+
+    base: Final = guard.snapshot("base", read_git=read_git)
+    head: Final = guard.snapshot("head", read_git=read_git)
+    assert base == _snapshot(BASE_MAP, pins=PINS)
+    assert head == _snapshot(BASE_MAP, pins=pins)
+    failures: Final = _failures(head, changed_files=(guard.PINS_PATH, pins_path), bot=False, base=base)
+    assert bool(failures) is (pins != PINS), failures
+
+
+@pytest.mark.parametrize("pins_path", guard.PINS_PATHS)
+def test_relocated_pins_cannot_be_changed_by_bots(pins_path: str) -> None:
+    assert guard.pin_author_failures("litellm_fix_pricing", "Bot", (pins_path,)) == (BOT_AUTHOR_PIN_FAILURE,)
 
 
 def _commit(repo: Path, cost_map: dict[str, object], message: str, pins: str | None = None) -> str:

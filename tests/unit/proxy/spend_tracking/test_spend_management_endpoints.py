@@ -944,8 +944,47 @@ async def test_ui_view_spend_logs_user_filter_reads_spend_logs_through_the_users
     assert '"LiteLLM_VerificationToken"' in lookup_sql
     assert lookup_params == ("alice", "2026-08-31", "2026-09-04", SPEND_LOG_API_KEY_SCOPE_MAX_KEYS + 1)
     page_sql, _, scoped_api_keys = _spend_logs_page_query(queries)
-    assert scoped_api_keys == ["sk-deleted", "sk-live"]
+    assert scoped_api_keys == ["sk-deleted", "sk-live", ""]
     assert '"user" = $' in page_sql
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("owner_filter", ["user_id", "team_id"])
+async def test_ui_view_spend_logs_owner_filter_preserves_empty_key_rows(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, owner_filter: str
+) -> None:
+    logs: Final = [
+        _owned_log("known", "sk-live", "alice", "team-alpha"),
+        _owned_log("unknown-key", "", "alice", "team-alpha"),
+        _owned_log("foreign", "", "bob", "team-beta"),
+    ]
+    monkeypatch.setattr(
+        ps,
+        "prisma_client",
+        make_ui_spend_logs_mock_prisma(
+            logs,
+            _owner_filtered_logs(logs),
+            owner_api_keys_fn=_owner_api_keys(
+                daily_rows={}, live_keys={"alice": {"sk-live"}, "team-alpha": {"sk-live"}}
+            ),
+        ),
+    )
+    monkeypatch.setitem(
+        app.dependency_overrides,
+        ps.user_api_key_auth,
+        lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"),
+    )
+    response: Final = client.get(
+        "/spend/logs/ui",
+        params={
+            owner_filter: "alice" if owner_filter == "user_id" else "team-alpha",
+            "start_date": "2026-09-01 00:00:00",
+            "end_date": "2026-09-03 23:59:59",
+        },
+        headers={"Authorization": "Bearer sk-test"},
+    )
+    assert response.status_code == 200, response.text
+    assert {row["request_id"] for row in response.json()["data"]} == {"known", "unknown-key"}
 
 
 @pytest.mark.asyncio
@@ -989,7 +1028,7 @@ async def test_ui_view_spend_logs_team_filter_reads_spend_logs_through_the_teams
     _, lookup_params = next((sql, params) for sql, params in queries if '"LiteLLM_DailyTeamSpend"' in sql)
     assert lookup_params[:3] == (["team-alpha"], "2026-08-31", "2026-09-04")
     page_sql, _, scoped_api_keys = _spend_logs_page_query(queries)
-    assert scoped_api_keys == ["sk-alpha-1", "sk-alpha-2"]
+    assert scoped_api_keys == ["sk-alpha-1", "sk-alpha-2", ""]
     assert "team_id = $" in page_sql
 
 

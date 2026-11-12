@@ -31,7 +31,8 @@ pub use gil::{PythonContext, attach_blocking, release_count, release_gil};
 pub use handle::{Execution, ExecutionBody, ExecutionStep, StepTypes, Suspension};
 pub use hooks::{HookChain, HookResume, HookStep, PythonCallEvent, PythonCallHooks, PythonRuntime};
 pub use marshal::{
-    Pythonized, from_py, from_py_argument, json_loads, json_object_field, panic_to_pyerr, to_py,
+    Pythonized, from_py, from_py_argument, json_from_py, json_loads, json_object_field, json_to_py,
+    panic_to_pyerr, to_py,
 };
 pub use owned::PythonOwned;
 pub use runtime::{

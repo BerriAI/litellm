@@ -54,7 +54,10 @@ from litellm.integrations.custom_guardrail import merged_guardrail_entries, with
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     attribute_or_none,
+    decoded_json_object,
     is_codex_user_agent,
+    iter_items,
+    keyword_arguments,
     normalize_drop_params,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
@@ -332,8 +335,10 @@ from litellm.types.router import BaggageMappedTagsStamp, holds_api_key_secret_re
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
     API_KEY_SECRET_REFERENCE_REJECTION,
+    BAGGAGE_METADATA_KEYS_VAR,
     CAPTURE_MESSAGE_CONTENT_VAR,
     EXCLUDED_SERVICES_VAR,
+    OTEL_DESTINATION_VARS,
     CustomPricingLiteLLMParams,
     LlmProviders,
     ProviderSpecificHeader,
@@ -342,7 +347,7 @@ from litellm.types.utils import (
     SupportedCacheControls,
 )
 
-_DESTINATION_ONLY_CALLBACK_VARS: Final[frozenset[str]] = frozenset({CAPTURE_MESSAGE_CONTENT_VAR, EXCLUDED_SERVICES_VAR})
+_DESTINATION_ONLY_CALLBACK_VARS: Final[frozenset[str]] = frozenset(OTEL_DESTINATION_VARS)
 
 _CALLBACK_CREDENTIAL_KEYS: Final = frozenset(StandardCallbackDynamicParams.__annotations__) | frozenset(
     {TRUSTED_CALLBACK_VARS_FIELD}
@@ -536,6 +541,7 @@ ROUTER_RESERVED_METADATA_FIELDS: Final = frozenset(
         "attempted_fallbacks",
         "original_model_group",
         "previous_models",
+        "rate_limit_fallback",
         "request_retry_count",
         CLIENT_OUTPUT_CEILING_METADATA_KEY,
         ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY,
@@ -1248,6 +1254,10 @@ def convert_key_logging_metadata_to_callback(
     return team_callback_settings_obj
 
 
+class _CallbackModelFields(TypedDict, total=False, extra_items=object):
+    pass
+
+
 def get_validated_callback_metadata(item: object, *, source: str) -> AddTeamCallback | None:
     if not isinstance(item, Mapping):
         raise TypeError(f"{source} metadata.logging must be a list of objects, got an item of {type(item).__name__}")
@@ -1277,9 +1287,9 @@ class KeyAndTeamLoggingSettings:
         return None
 
     @staticmethod
-    def get_team_dynamic_logging_settings(user_api_key_dict: UserAPIKeyAuth):
+    def get_team_dynamic_logging_settings(user_api_key_dict: UserAPIKeyAuth) -> object:
         if user_api_key_dict.team_metadata is not None and "logging" in user_api_key_dict.team_metadata:
-            return decrypt_callback_vars(user_api_key_dict.team_metadata).get("logging")
+            return decoded_json_object(decrypt_callback_vars(user_api_key_dict.team_metadata)).get("logging")
         return None
 
 
@@ -1288,14 +1298,14 @@ def get_dynamic_logging_metadata(
 ) -> TeamCallbackMetadata | None:
     callback_settings_obj: TeamCallbackMetadata | None = None
     key_dynamic_logging_settings: Final = KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(user_api_key_dict)
-    team_dynamic_logging_settings: Final[dict | None] = KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(
+    team_dynamic_logging_settings: Final = KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(
         user_api_key_dict
     )
     #########################################################################################
     # Key-based callbacks
     #########################################################################################
     if key_dynamic_logging_settings is not None:
-        for item in key_dynamic_logging_settings:
+        for item in iter_items(key_dynamic_logging_settings):
             callback = get_validated_callback_metadata(item=item, source="key-level")
             if callback is None:
                 continue
@@ -1307,7 +1317,7 @@ def get_dynamic_logging_metadata(
     # Team-based callbacks
     #########################################################################################
     elif team_dynamic_logging_settings is not None:
-        for item in team_dynamic_logging_settings:
+        for item in iter_items(team_dynamic_logging_settings):
             callback = get_validated_callback_metadata(item=item, source="team-level")
             if callback is None:
                 continue
@@ -1328,9 +1338,11 @@ def get_dynamic_logging_metadata(
         }
         }
         """
-        team_metadata: Final = decrypt_callback_vars(user_api_key_dict.team_metadata)
+        team_metadata: Final = decoded_json_object(decrypt_callback_vars(user_api_key_dict.team_metadata))
         callback_settings: Final = team_metadata.get("callback_settings", None) or {}
-        callback_settings_obj = TeamCallbackMetadata(**callback_settings)
+        callback_settings_obj = TeamCallbackMetadata(
+            **_CallbackModelFields(**keyword_arguments(callback_settings, TeamCallbackMetadata))
+        )
         verbose_proxy_logger.debug("Team callback settings activated: %s", callback_settings_obj)
     #########################################################################################
     # Enter here when configured on the config.yaml file.
@@ -1462,7 +1474,7 @@ def resolve_tenant_otel_destinations(
     disabled: Final = _dynamically_disabled_backends(user_api_key_dict, request_headers)
     callbacks: Final = tuple(
         callback
-        for item in entries
+        for item in iter_items(entries)
         if (callback := get_validated_callback_metadata(item=item, source="otel-destination")) is not None
         if callback.callback_name.lower() not in disabled
     )
@@ -1478,6 +1490,7 @@ def resolve_tenant_otel_destinations(
 def _tenant_destination(
     name: str, callbacks: Sequence[AddTeamCallback], service_name: str | None
 ) -> "OtelDestination | None":
+    from litellm.integrations.otel.model.baggage import parse_destination_metadata_keys
     from litellm.integrations.otel.model.config import parse_capture_message_content, parse_excluded_services
     from litellm.integrations.otel.presets.destinations import destination_for
 
@@ -1494,6 +1507,7 @@ def _tenant_destination(
         service_name,
         parse_capture_message_content(callback_vars.get(CAPTURE_MESSAGE_CONTENT_VAR)),
         parse_excluded_services(callback_vars.get(EXCLUDED_SERVICES_VAR)),
+        parse_destination_metadata_keys(callback_vars.get(BAGGAGE_METADATA_KEYS_VAR)),
     )
 
 
@@ -2217,15 +2231,41 @@ class LiteLLMProxyRequestSetup:
         return data
 
     @staticmethod
-    def add_key_level_controls(key_metadata: dict | None, data: dict, _metadata_variable_name: str):
+    def _request_cache_kept_for_key(
+        request_cache: Mapping[str, object],
+        key_cache: Mapping[str, object],
+        allowed_cache_controls: Sequence[object] | None,
+    ) -> Mapping[str, object]:
+        key_opts_out: Final = (
+            key_cache.get("no-cache", False) is not False or key_cache.get("use-cache", True) is not True
+        )
+        request_is_allowed: Final = not allowed_cache_controls or all(
+            control in allowed_cache_controls for control in request_cache
+        )
+        if key_opts_out or request_cache.get("use-cache") is not True or not request_is_allowed:
+            return MappingProxyType({})
+        return {k: v for k, v in request_cache.items() if not (k == "s-max-age" and "s-maxage" in key_cache)}
+
+    @staticmethod
+    def add_key_level_controls(
+        key_metadata: dict | None,
+        data: dict,
+        _metadata_variable_name: str,
+        allowed_cache_controls: Sequence[object] | None = None,
+    ):
         if key_metadata is None:
             return data
-        if "cache" in key_metadata:
-            data["cache"] = {}
-            if isinstance(key_metadata["cache"], dict):
-                for k, v in key_metadata["cache"].items():
-                    if k in SupportedCacheControls:
-                        data["cache"][k] = v
+        if "cache" in key_metadata and not isinstance(key_metadata["cache"], dict):
+            data["cache"] = {}  # rebind-ok: data is an out-param
+        elif "cache" in key_metadata:
+            request_cache: Final = _DECODED_JSON.validate_python(data["cache"]) if "cache" in data else None
+            key_cache: Final = _request_fields(_DECODED_JSON.validate_python(key_metadata["cache"]))
+            data["cache"] = {  # rebind-ok: data is an out-param
+                **LiteLLMProxyRequestSetup._request_cache_kept_for_key(
+                    _request_fields(request_cache), key_cache, allowed_cache_controls
+                ),
+                **{k: v for k, v in key_cache.items() if k in SupportedCacheControls},
+            }
 
         ## KEY-LEVEL SPEND LOGS / TAGS
         if "tags" in key_metadata and key_metadata["tags"] is not None:
@@ -2967,6 +3007,7 @@ async def add_litellm_data_to_request(
         key_metadata=key_metadata,
         data=data,
         _metadata_variable_name=_metadata_variable_name,
+        allowed_cache_controls=user_api_key_dict.allowed_cache_controls,
     )
     data[_metadata_variable_name] = LiteLLMProxyRequestSetup.add_team_and_project_level_controls(
         user_api_key_dict=user_api_key_dict,

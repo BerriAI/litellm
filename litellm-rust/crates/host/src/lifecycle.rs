@@ -6,7 +6,10 @@ use std::{
 
 use futures_util::TryStreamExt;
 
-use crate::{call::CallOutput, interceptors::RawResponse};
+use crate::{
+    call::CallOutput,
+    interceptors::{RawResponse, RetriedRequest},
+};
 
 /// Seconds since the Unix epoch, on one clock for every host.
 pub fn epoch_seconds() -> f64 {
@@ -50,13 +53,16 @@ pub enum CallEvent<Response = (), Error = (), Raw = RawResponse> {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ExecutionEvent<Raw = RawResponse> {
     ResultReady {
         facts: crate::interceptors::ExecutionFacts,
     },
     ProviderResponseReceived {
         raw: Raw,
+    },
+    ProviderRequestRetried {
+        retry: RetriedRequest,
     },
 }
 
@@ -74,6 +80,11 @@ impl<Response, Error, Raw: std::borrow::Borrow<RawResponse>> CallEvent<Response,
             Self::Execution(ExecutionEvent::ResultReady { facts }) => {
                 CallEvent::Execution(ExecutionEvent::ResultReady {
                     facts: facts.clone(),
+                })
+            }
+            Self::Execution(ExecutionEvent::ProviderRequestRetried { retry }) => {
+                CallEvent::Execution(ExecutionEvent::ProviderRequestRetried {
+                    retry: retry.clone(),
                 })
             }
             Self::Succeeded { timing, .. } => CallEvent::Succeeded {

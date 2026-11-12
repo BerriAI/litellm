@@ -32,6 +32,21 @@ pub async fn within<T>(future: impl Future<Output = T>) -> T {
     tokio::time::timeout(WAIT, future).await.expect("timed out")
 }
 
+/// A forwarder in front of `upstream` that drains once `shutdown` resolves, as `run` does.
+pub async fn serve_until(
+    upstream: SocketAddr,
+    keepalive: Duration,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> (SocketAddr, JoinHandle<()>) {
+    let forward = Forward::new(&format!("http://{upstream}").parse().unwrap(), keepalive);
+    let public = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = public.local_addr().unwrap();
+    (
+        address,
+        tokio::spawn(forward.serve(public, shutdown, DRAIN)),
+    )
+}
+
 /// A running forwarder in front of `upstream`, listening on a real socket like production.
 pub struct Gateway {
     pub address: SocketAddr,
@@ -45,17 +60,11 @@ impl Gateway {
     }
 
     pub async fn with_keepalive(upstream: SocketAddr, keepalive: Duration) -> Self {
-        let forward = Forward::new(&format!("http://{upstream}").parse().unwrap(), keepalive);
-        let public = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = public.local_addr().unwrap();
         let (stop, stopped) = oneshot::channel::<()>();
-        let server = tokio::spawn(forward.serve(
-            public,
-            async {
-                stopped.await.ok();
-            },
-            DRAIN,
-        ));
+        let (address, server) = serve_until(upstream, keepalive, async {
+            stopped.await.ok();
+        })
+        .await;
         Self {
             address,
             stop,
