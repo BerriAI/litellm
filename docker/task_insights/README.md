@@ -20,6 +20,10 @@ Open http://localhost:4000/ui, sign in as `admin` with the `LITELLM_MASTER_KEY` 
 
 ### Local preview without building Rust
 
+To just see the seeded demo without building Rust, use the companion branch `litellm_task_insights_demo`. It ports
+this feature onto the commit of a published image and starts with `bash docker/task_insights/demo.sh`, see its README
+for what differs from this branch.
+
 This is a preview path, not a supported way to run this branch yet. `Dockerfile.light` skips the Rust compile by
 starting from a prebuilt LiteLLM image and copying in a checkout's Python package, migrations and a freshly built
 dashboard (with a 4 GiB Node heap, since the dashboard build runs out of memory under Node's default heap on an 8 GB
