@@ -74,6 +74,7 @@ proxy = [
     "hiredis>=3.0.0,<4.0; python_version < '3.15'",
     "hiredis>=3.5.0,<4.0; python_version >= '3.15'",
     "apscheduler>=3.11.2,<4.0",
+    "tzdata>=2024.1",
     "fastapi-sso>=0.19.0,<1.0",
     "PyJWT>=2.13.0,<3.0",
     "python-multipart>=0.0.27,<1.0",
@@ -340,6 +341,7 @@ features = ["extension-module"]
 profile = "release"
 editable-profile = "dev"
 include = [
+    "litellm/integrations/prometheus_helpers/grafana_dashboards/**",
     "litellm/proxy/_experimental/out/**",
     "litellm/router_strategy/complexity_router/artifacts/*.json",
     "litellm/router_strategy/complexity_router/fuse_presets.json",
@@ -352,6 +354,8 @@ include = [
     { path = "model_prices_and_context_window.json", format = "sdist" },
 ]
 exclude = [
+    "litellm/proxy/discovery_endpoints/skill_scanner_adapter",
+    "litellm/proxy/discovery_endpoints/skill_scanner_adapter/**",
     "litellm/proxy/enterprise",
     "litellm/proxy/enterprise/**",
     "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/guardrail_benchmarks",
@@ -368,6 +372,7 @@ exclude = [
 concurrent-builds = 1
 cache-keys = [
     { file = "pyproject.toml" },
+    { env = "MATURIN_PEP517_ARGS" },
     { file = "rust-toolchain.toml" },
     { file = ".cargo/config.toml" },
     { file = "litellm-rust/Cargo.lock" },

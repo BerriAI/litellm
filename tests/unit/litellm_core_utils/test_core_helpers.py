@@ -17,6 +17,7 @@ from litellm.litellm_core_utils.core_helpers import (
     bind_budget_reservation_to_callbacks,
     budget_reservation_from_metadata,
     drop_params_env_flag,
+    env_flag,
     drop_params_flag,
     get_litellm_metadata_from_kwargs,
     get_or_create_metadata_bucket,
@@ -495,6 +496,32 @@ def test_drop_params_env_flag_keeps_a_non_flag_value_on_with_a_warning(configure
         f"LITELLM_DROP_PARAMS={configured!r} is not a flag value, treating it as on. Set it to true or false"
         in caplog.text
     )
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [("", False), ("false", False), ("False", False), ("0", False), ("no", False), ("true", True), (" 1 ", True)],
+)
+def test_env_flag_parses_modify_params_as_a_bool(configured: str, expected: bool, caplog: pytest.LogCaptureFixture):
+    with caplog.at_level(logging.WARNING, logger="env-flag-test"):
+        assert (
+            env_flag({"LITELLM_MODIFY_PARAMS": configured}, "LITELLM_MODIFY_PARAMS", logging.getLogger("env-flag-test"))
+            is expected
+        )
+    assert caplog.text == ""
+
+
+def test_env_flag_treats_a_non_flag_value_as_on_with_a_warning(caplog: pytest.LogCaptureFixture):
+    with caplog.at_level(logging.WARNING, logger="env-flag-test"):
+        assert (
+            env_flag({"LITELLM_MODIFY_PARAMS": "enabled"}, "LITELLM_MODIFY_PARAMS", logging.getLogger("env-flag-test"))
+            is True
+        )
+    assert "LITELLM_MODIFY_PARAMS='enabled' is not a flag value, treating it as on" in caplog.text
+
+
+def test_env_flag_is_off_when_unset():
+    assert env_flag({}, "LITELLM_MODIFY_PARAMS", logging.getLogger("env-flag-test")) is False
 
 
 class TestIsExpectedClientError:

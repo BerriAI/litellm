@@ -5,8 +5,6 @@ const LEGACY_PAGE_ROUTES: ReadonlyMap<string, string> = new Map(
     home: "home",
     "api-keys": "api-keys",
     models: "models-and-endpoints",
-    api_ref: "api-reference",
-    "api-reference": "api-reference",
     "llm-playground": "playground",
     projects: "projects",
     chat: "chat",

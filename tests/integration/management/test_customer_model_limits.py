@@ -53,3 +53,21 @@ def test_customer_per_model_rpm_limit_is_shared_across_keys_and_isolated_per_cus
         _assert_customer_model_limit_error(_chat(gateway, key_two, capped, acme), acme, capped)
         assert _chat(gateway, key_one, capped, globex).status_code == 200
         assert _chat(gateway, key_one, open_model, acme).status_code == 200
+
+
+@pytest.mark.parametrize(
+    ("limit_field", "limited_by"),
+    (("model_rpm_limit", "model_per_end_user"), ("rpm_limit", "end_user")),
+    ids=("customer-model", "customer-wide"),
+)
+def test_customer_rate_limit_429_names_the_limit_in_a_header(gateway: Gateway, limit_field: str, limited_by: str) -> None:
+    with gateway.scenario() as scenario:
+        capped: Final = scenario.model()
+        customer: Final = _customer(scenario, **{limit_field: {capped: 1} if limit_field.startswith("model_") else 1})
+        key: Final = scenario.key()
+
+        assert _chat(gateway, key, capped, customer).status_code == 200
+        rejected: Final = _chat(gateway, key, capped, customer)
+        assert rejected.status_code == 429, rejected.text
+        assert rejected.headers.get("rate_limit_type") == "requests", dict(rejected.headers)
+        assert rejected.headers.get("rate_limited_by") == limited_by, dict(rejected.headers)

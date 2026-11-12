@@ -3,7 +3,7 @@ import asyncio
 import json
 import os
 from collections import Counter
-from collections.abc import Mapping, MutableMapping, Sequence
+from collections.abc import ItemsView, Mapping, MutableMapping, Sequence
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -1306,6 +1306,16 @@ async def _load_environment_variables_param(
         return param_value
 
 
+def _submitted_sso_values(submitted: Mapping[str, object]) -> ItemsView[str, object]:
+    return submitted.items()
+
+
+def _environment_value(value: object) -> str:
+    if isinstance(value, str):
+        return value
+    raise TypeError(f"str expected, not {type(value).__name__}")
+
+
 def _decrypted_sso_fields(environment_variables: Mapping[str, object]) -> Mapping[str, str | None]:
     return MappingProxyType(
         {
@@ -1398,11 +1408,11 @@ async def update_sso_settings(
         field_name: submitted[field_name] if field_name in submitted else fallback_values.get(field_name)
         for field_name in SSOConfig.model_fields
     }
-    for field_name, value in submitted.items():
+    for field_name, value in _submitted_sso_values(submitted):
         if field_name in SSO_FIELD_ENV_VARS:
             env_var_name = SSO_FIELD_ENV_VARS[field_name]
             if value:
-                os.environ[env_var_name] = value
+                os.environ[env_var_name] = _environment_value(value)
             else:
                 # Clear environment variable if value is null/empty
                 os.environ.pop(env_var_name, None)

@@ -18,7 +18,9 @@ from fastapi import FastAPI, HTTPException
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
+from litellm.litellm_core_utils.batch_utils import POLLED_BATCH_COST_IS_FINAL_KWARG, POLLED_BATCH_ID_KWARG
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
+from litellm.litellm_core_utils.redact_messages import perform_redaction
 from litellm.proxy._types import ProxyException, SpendLogsPayload, UserAPIKeyAuth
 from litellm.proxy.collector import SpendEventConsumer
 from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
@@ -47,6 +49,10 @@ from litellm.proxy.utils import (
 )
 from litellm.types.proxy.carried_budget_state import CommittedBudgetSpend, EntitySpendCounterKeys
 from litellm.types.router import Deployment, LiteLLM_Params
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    SETTLES_BACKGROUND_RESPONSE_KWARG,
+    BackgroundResponseSettlement,
+)
 from litellm.types.utils import CallTypes, LiteLLMBatch, ModelResponse, PromptTokensDetailsWrapper, Usage
 from litellm.types.videos.main import VideoObject
 
@@ -3692,17 +3698,41 @@ def _completed_batch() -> LiteLLMBatch:
     )
 
 
+def _redacted_completed_batch() -> object:
+    return perform_redaction({}, _completed_batch())
+
+
 def _completed_video() -> VideoObject:
     return VideoObject(id="video_abc", object="video", status="completed")
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("call_type", "polled_job"),
-    [(CallTypes.aretrieve_batch.value, _completed_batch), ("avideo_status", _completed_video)],
+    ("job_kwargs", "polled_job"),
+    [
+        ({"call_type": CallTypes.aretrieve_batch.value}, _completed_batch),
+        (
+            {
+                "call_type": CallTypes.aretrieve_batch.value,
+                POLLED_BATCH_ID_KWARG: "batch_abc",
+                POLLED_BATCH_COST_IS_FINAL_KWARG: True,
+            },
+            _redacted_completed_batch,
+        ),
+        ({"call_type": "avideo_status"}, _completed_video),
+        (
+            {
+                "call_type": "pass_through_endpoint",
+                SETTLES_BACKGROUND_RESPONSE_KWARG: BackgroundResponseSettlement.SETTLES,
+            },
+            _offload_response,
+        ),
+    ],
+    ids=["batch_retrieve", "redacted_batch_retrieve", "video_status_poll", "background_response_settling_read"],
 )
-async def test_async_log_success_event_keeps_job_polls_in_process(call_type, polled_job):
-    """The spend event leaves out the polled video's status and id, which decide whether the poll charges the job."""
+async def test_async_log_success_event_keeps_job_polls_in_process(job_kwargs, polled_job):
+    """The spend event leaves out the polled video's status and id and a background response's settlement flag,
+    which decide whether the poll charges the job and which spend row it writes."""
     producer = SpendEventProducer(
         address=UnixAddress(path="/nonexistent/spend.sock"),
         on_unavailable="drop",
@@ -3711,7 +3741,7 @@ async def test_async_log_success_event_keeps_job_polls_in_process(call_type, pol
         fallback=_no_fallback,
     )
     logger = ProxyDBLogger(producer)
-    kwargs = {**_offload_kwargs(), "call_type": call_type}
+    kwargs = {**_offload_kwargs(), **job_kwargs}
     completed_job = polled_job()
 
     with (

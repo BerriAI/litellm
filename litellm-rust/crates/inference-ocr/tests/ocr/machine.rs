@@ -66,6 +66,11 @@ async fn drive_until(
                 reply.send(host.after_provider_response(raw).await);
                 Ok(())
             }
+            HostRequest::Intercept(InterceptRequest::ProviderRequestRetried { reply, .. }) => {
+                ops.push("retried");
+                reply.send(Ok(()));
+                Ok(())
+            }
         };
         if let Err(failure) = answer {
             break machine.interrupt(failure).await.map(completed);
@@ -86,6 +91,7 @@ async fn drive_until_notified(machine: &mut OcrMachine, host: &LocalOcrHost, sto
                         MachineStep::Suspended(HostRequest::HostCall(op)) => host.handle_host_call(op).await.unwrap(),
                         MachineStep::Suspended(HostRequest::Intercept(InterceptRequest::BeforeProviderRequest { wire, reply, .. })) => reply.send(*wire),
                         MachineStep::Suspended(HostRequest::Intercept(InterceptRequest::AfterProviderResponse { reply, .. })) => reply.send(Ok(())),
+                        MachineStep::Suspended(HostRequest::Intercept(InterceptRequest::ProviderRequestRetried { reply, .. })) => reply.send(Ok(())),
                         MachineStep::Suspended(HostRequest::Stream(stream)) => match stream {
                             litellm_host::protocol::StreamDelivery::Open(head, _) => match head {},
                             litellm_host::protocol::StreamDelivery::Chunk(chunk, _) => match chunk {},

@@ -2,7 +2,7 @@ use std::ops::ControlFlow;
 
 pub use litellm_coroutine::{Abandoned, Answer, Reply, reply};
 
-use crate::interceptors::{RawResponse, RequestContext, WireRequest};
+use crate::interceptors::{RawResponse, RequestContext, RetriedRequest, WireRequest};
 
 pub trait Protocol: Send + Sync + 'static {
     type Request: Send + 'static;
@@ -31,6 +31,10 @@ pub enum InterceptRequest<E> {
     },
     AfterProviderResponse {
         raw: RawResponse,
+        reply: Reply<Result<(), E>>,
+    },
+    ProviderRequestRetried {
+        retry: RetriedRequest,
         reply: Reply<Result<(), E>>,
     },
 }

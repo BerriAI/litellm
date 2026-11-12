@@ -4,7 +4,7 @@ use std::{
 };
 
 use litellm_auth::InputSource;
-use litellm_host_python::{from_py, from_py_argument, to_py};
+use litellm_host_python::{from_py, from_py_argument, json_to_py, to_py};
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value};
@@ -140,6 +140,19 @@ pub(crate) fn public_response(
     py.import(module)?
         .getattr("response")?
         .call1((to_py(py, response)?,))
+        .map(Bound::unbind)
+}
+
+pub(crate) fn public_json_response(
+    py: Python<'_>,
+    module: &str,
+    response: &(impl Serialize + ?Sized),
+) -> PyResult<Py<PyAny>> {
+    let factory = py.import(module)?.getattr("response")?;
+    let document =
+        serde_json::to_value(response).map_err(|error| PyValueError::new_err(error.to_string()))?;
+    factory
+        .call1((json_to_py(py, &document)?,))
         .map(Bound::unbind)
 }
 

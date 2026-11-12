@@ -5,6 +5,7 @@ import json
 import time
 from base64 import urlsafe_b64encode
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -15375,6 +15376,25 @@ _PUBLISHED_SLACK_METADATA: Final = {
 }
 
 
+def _in_memory_credentials_table(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "connect-check-test-salt")
+    prisma: Final = MagicMock()
+    rows: Final = prisma.db.litellm_mcpusercredentials
+
+    async def upsert(where: "Mapping[str, Mapping[str, str]]", data: "Mapping[str, Mapping[str, str]]") -> None:
+        key: Final = where["user_id_server_id"]
+        rows.find_unique.return_value = SimpleNamespace(
+            credential_b64=data["create"]["credential_b64"], user_id=key["user_id"], server_id=key["server_id"]
+        )
+
+    rows.find_unique = AsyncMock(return_value=None)
+    rows.upsert = AsyncMock(side_effect=upsert)
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    return prisma
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "server_update",
@@ -15391,9 +15411,10 @@ async def test_connect_reads_a_comma_grant_against_the_server_scopes(
     from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
 
     server: Final = _cimd_oauth_server().model_copy(update=server_update)
-    credential: Final = {**_stored_grant(), "scopes": ["channels:read,chat:write,files:read"]}
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
-    monkeypatch.setattr(db, "get_user_oauth_credential", AsyncMock(return_value=credential))
+    prisma: Final = _in_memory_credentials_table(monkeypatch)
+    await db.store_user_oauth_credential(
+        prisma, "owner", server.server_id, "vendor-token", scopes=["channels:read,chat:write,files:read"]
+    )
     assert await endpoints._vendor_credential_state("owner", server.server_id, ("channels:read",)) == "absent"
     monkeypatch.setitem(global_mcp_server_manager.registry, server.server_id, server)
     assert await endpoints._vendor_credential_state("owner", server.server_id, ("channels:read",)) == "present"

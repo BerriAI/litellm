@@ -22,6 +22,7 @@ pub(crate) fn event_name(event: &CallEvent) -> &'static str {
         CallEvent::Execution(ExecutionEvent::ResultReady { .. }) => "result_ready",
         CallEvent::Started { .. } => "started",
         CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { .. }) => "response",
+        CallEvent::Execution(ExecutionEvent::ProviderRequestRetried { .. }) => "retried",
         CallEvent::Succeeded { .. } => "success",
         CallEvent::Failed { .. } => "failure",
         CallEvent::Cancelled { .. } => "cancelled",
