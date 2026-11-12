@@ -2244,10 +2244,15 @@ async def _reject_from_headers_before_reading_body(
         return
     from litellm.proxy.common_request_processing import proxy_exception_from_http_exception
     from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
-    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+    from litellm.proxy.proxy_server import general_settings, prisma_client, proxy_logging_obj, user_api_key_cache
 
+    configured_header: Final = _GENERAL_SETTINGS_ADAPTER.validate_python(general_settings).get(
+        "litellm_key_header_name"
+    )
     bearer_token: Final = (
-        _get_bearer_token_or_received_api_key(custom_litellm_key_header)
+        get_api_key_from_custom_header(request=request, custom_litellm_key_header_name=configured_header)
+        if isinstance(configured_header, str) and configured_header in request.headers
+        else _get_bearer_token_or_received_api_key(custom_litellm_key_header)
         if isinstance(custom_litellm_key_header, str)
         else get_bearer_token(api_key=api_key)
         if isinstance(api_key, str)
