@@ -1,6 +1,7 @@
 import asyncio
 import time
-from collections.abc import Mapping
+from collections import deque
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
@@ -103,17 +104,21 @@ def replicate_prediction_input(prediction: Mapping[str, object]) -> Mapping[str,
     return _JSON_OBJECT.validate_python(raw_input) if isinstance(raw_input, Mapping) else MappingProxyType({})
 
 
+def _output_leaves(output: object) -> Iterator[object]:
+    pending: Final = deque([output])
+    while pending:
+        if isinstance((item := pending.popleft()), Mapping):
+            pending.extendleft(reversed(tuple(_JSON_OBJECT.validate_python(item).values())))
+        elif isinstance(item, (list, tuple)):
+            pending.extendleft(reversed(TypeAdapter(tuple[object, ...]).validate_python(item)))
+        else:
+            yield item
+
+
 def replicate_output_urls(output: object) -> tuple[str, ...]:
-    if isinstance(output, str):
-        return (output,) if output.startswith(("http://", "https://")) else ()
-    if isinstance(output, Mapping):
-        return replicate_output_urls(tuple(_JSON_OBJECT.validate_python(output).values()))
-    if isinstance(output, (list, tuple)):
-        items: Final = TypeAdapter(tuple[object, ...]).validate_python(output)
-        return tuple(
-            url for item in items for url in replicate_output_urls(item)
-        )  # comprehension-ok: flattening nested output lists
-    return ()
+    return tuple(
+        leaf for leaf in _output_leaves(output) if isinstance(leaf, str) and leaf.startswith(("http://", "https://"))
+    )
 
 
 def replicate_prediction_failure(prediction: Mapping[str, object]) -> str | None:
@@ -154,6 +159,10 @@ def _poll_url(prediction: Mapping[str, object], raw_response: httpx.Response) ->
 
 
 def _finished_prediction(raw_response: httpx.Response) -> Mapping[str, object] | None:
+    if raw_response.status_code >= 400:
+        raise ReplicateError(
+            status_code=raw_response.status_code, message=raw_response.text, headers=raw_response.headers
+        )
     prediction: Final = replicate_prediction(raw_response)
     return prediction if replicate_prediction_is_done(prediction) else None
 

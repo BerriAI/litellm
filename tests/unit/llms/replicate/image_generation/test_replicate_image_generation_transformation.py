@@ -48,7 +48,7 @@ def _download(url: str, content: bytes) -> httpx.Response:
 
 
 def _config(client: _FakeClient) -> ReplicateImageGenerationConfig:
-    return ReplicateImageGenerationConfig(sync_client_factory=lambda: client)  # pyright: ignore[reportArgumentType]  # fake stands in for HTTPHandler
+    return ReplicateImageGenerationConfig(sync_client_factory=lambda _ssl_verify: client)  # pyright: ignore[reportArgumentType]  # fake stands in for HTTPHandler
 
 
 def _transform(
@@ -169,6 +169,47 @@ def test_polling_gives_up_after_retry_budget(monkeypatch: pytest.MonkeyPatch):
         _transform(_config(client), pending)
 
 
+def test_poll_http_error_raises_instead_of_retrying(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(time, "sleep", lambda _: None)
+    poll_url = f"{API_BASE}/predictions/p1"
+    client = _FakeClient(
+        httpx.Response(401, json={"detail": "Unauthenticated"}, request=httpx.Request("GET", poll_url)),
+        httpx.Response(200, json={"id": "p1", "status": "succeeded", "output": IMAGE_URLS[0]}),
+    )
+    pending = _prediction_response({"id": "p1", "status": "starting", "output": None, "urls": {"get": poll_url}})
+    with pytest.raises(ReplicateError, match="Unauthenticated") as excinfo:
+        _transform(_config(client), pending)
+    assert excinfo.value.status_code == 401
+    assert len(client.calls) == 1
+
+
+def test_polling_client_gets_deployment_ssl_verify():
+    seen: list[object] = []
+
+    def factory(ssl_verify: object) -> _FakeClient:
+        seen.append(ssl_verify)
+        return _FakeClient()
+
+    config = ReplicateImageGenerationConfig(sync_client_factory=factory)  # pyright: ignore[reportArgumentType]  # fake stands in for HTTPHandler
+    config.transform_image_generation_response(
+        model=MODEL,
+        raw_response=_prediction_response({"id": "p1", "status": "succeeded", "output": [IMAGE_URLS[0]]}),
+        model_response=litellm.ImageResponse(),
+        logging_obj=Mock(),
+        request_data={},
+        optional_params={},
+        litellm_params={"ssl_verify": "/etc/ssl/gateway.pem"},
+        encoding=None,
+    )
+    assert seen == ["/etc/ssl/gateway.pem"]
+
+
+def test_output_urls_keep_nested_order_without_recursion():
+    nested = [[IMAGE_URLS[0]], "not a url", {"files": [IMAGE_URLS[1], {"deep": "https://cdn.example/3.png"}]}, 7]
+    assert common_utils.replicate_output_urls(nested) == (IMAGE_URLS[0], IMAGE_URLS[1], "https://cdn.example/3.png")
+    assert common_utils.replicate_output_urls("plain text") == ()
+
+
 def test_failed_prediction_raises_with_replicate_error_text():
     with pytest.raises(ReplicateError, match="NSFW content detected"):
         _transform(
@@ -180,7 +221,7 @@ def test_failed_prediction_raises_with_replicate_error_text():
 @pytest.mark.asyncio
 async def test_async_transform_downloads_b64_json_with_async_client():
     client = _FakeAsyncClient(_download(IMAGE_URLS[0], b"img0"))
-    config = ReplicateImageGenerationConfig(async_client_factory=lambda: client)  # pyright: ignore[reportArgumentType]  # fake stands in for AsyncHTTPHandler
+    config = ReplicateImageGenerationConfig(async_client_factory=lambda _ssl_verify: client)  # pyright: ignore[reportArgumentType]  # fake stands in for AsyncHTTPHandler
     result = await config.async_transform_image_generation_response(
         model=MODEL,
         raw_response=_prediction_response({"id": "p1", "status": "succeeded", "output": [IMAGE_URLS[0]]}),

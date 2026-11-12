@@ -45,15 +45,19 @@ def _aspect_ratio(size: object) -> Mapping[str, str]:
     return MappingProxyType({"aspect_ratio": f"{int(width_text) // divisor}:{int(height_text) // divisor}"})
 
 
-def _get_replicate_async_httpx_client() -> AsyncHTTPHandler:
-    return get_async_httpx_client(llm_provider=LlmProviders.REPLICATE)
+def _get_replicate_httpx_client(ssl_verify: object) -> HTTPHandler:
+    return get_httpx_client(params={"ssl_verify": ssl_verify})
+
+
+def _get_replicate_async_httpx_client(ssl_verify: object) -> AsyncHTTPHandler:
+    return get_async_httpx_client(llm_provider=LlmProviders.REPLICATE, params={"ssl_verify": ssl_verify})
 
 
 class ReplicateImageGenerationConfig(BaseImageGenerationConfig):
     def __init__(
         self,
-        sync_client_factory: Callable[[], HTTPHandler] = get_httpx_client,
-        async_client_factory: Callable[[], AsyncHTTPHandler] = _get_replicate_async_httpx_client,
+        sync_client_factory: Callable[[object], HTTPHandler] = _get_replicate_httpx_client,
+        async_client_factory: Callable[[object], AsyncHTTPHandler] = _get_replicate_async_httpx_client,
     ) -> None:
         self._sync_client_factory: Final = sync_client_factory
         self._async_client_factory: Final = async_client_factory
@@ -156,7 +160,7 @@ class ReplicateImageGenerationConfig(BaseImageGenerationConfig):
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:
-        client: Final = self._sync_client_factory()
+        client: Final = self._sync_client_factory(litellm_params.get("ssl_verify"))
         urls: Final = self._image_urls(wait_for_replicate_prediction(raw_response, client), raw_response)
         contents: Final = (
             tuple(self._download(client, url) for url in urls)
@@ -178,7 +182,7 @@ class ReplicateImageGenerationConfig(BaseImageGenerationConfig):
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:
-        client: Final = self._async_client_factory()
+        client: Final = self._async_client_factory(litellm_params.get("ssl_verify"))
         urls: Final = self._image_urls(await async_wait_for_replicate_prediction(raw_response, client), raw_response)
         contents: Final = (
             tuple([await self._async_download(client, url) for url in urls])

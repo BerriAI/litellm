@@ -56,6 +56,15 @@ def test_map_openai_params_keeps_voice_and_speed_only():
     assert ReplicateTextToSpeechConfig().map_openai_params(MODEL, {}, voice=None) == (None, {})
 
 
+def test_map_openai_params_passes_extra_body_as_native_input():
+    _, params = ReplicateTextToSpeechConfig().map_openai_params(
+        MODEL, {"speed": 0.9}, voice="ara", kwargs={"extra_body": {"output_format": "wav", "speed": 2}}
+    )
+    assert params == {"output_format": "wav", "speed": 0.9}
+    _, ignored = ReplicateTextToSpeechConfig().map_openai_params(MODEL, {}, voice=None, kwargs={"extra_body": "x"})
+    assert ignored == {}
+
+
 def test_validate_environment_sets_bearer_and_prefer_wait():
     headers = ReplicateTextToSpeechConfig().validate_environment({}, MODEL, api_key="r8_key")
     assert headers["Authorization"] == "Bearer r8_key"

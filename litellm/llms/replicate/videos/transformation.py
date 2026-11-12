@@ -313,7 +313,8 @@ class ReplicateVideoConfig(BaseVideoConfig):
         logging_obj: object,
         client: "HTTPHandler | None" = None,
     ) -> bytes:
-        video_response: Final[httpx.Response] = self._sync_client_factory().get(self._video_url(raw_response))  # pyright: ignore[reportUnknownMemberType]  # HTTP handler stubs are untyped
+        download_client: Final = client if client is not None else self._sync_client_factory()
+        video_response: Final[httpx.Response] = download_client.get(self._video_url(raw_response))  # pyright: ignore[reportUnknownMemberType]  # HTTP handler stubs are untyped
         video_response.raise_for_status()
         return video_response.content
 
@@ -323,7 +324,8 @@ class ReplicateVideoConfig(BaseVideoConfig):
         logging_obj: object,
         client: "AsyncHTTPHandler | None" = None,
     ) -> bytes:
-        video_response: Final[httpx.Response] = await self._async_client_factory().get(self._video_url(raw_response))  # pyright: ignore[reportUnknownMemberType]  # HTTP handler stubs are untyped
+        download_client: Final = client if client is not None else self._async_client_factory()
+        video_response: Final[httpx.Response] = await download_client.get(self._video_url(raw_response))  # pyright: ignore[reportUnknownMemberType]  # HTTP handler stubs are untyped
         video_response.raise_for_status()
         return video_response.content
 

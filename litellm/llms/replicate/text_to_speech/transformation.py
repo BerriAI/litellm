@@ -3,6 +3,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeAlias
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig, TextToSpeechRequestData
@@ -30,6 +31,7 @@ if TYPE_CHECKING:
 
 _SpeechParams: TypeAlias = dict[str, object]
 _SpeechHeaders: TypeAlias = dict[str, str]
+_NATIVE_INPUT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _VOICE_KEY_BY_OWNER: Final[Mapping[str, str]] = MappingProxyType(
     {"minimax": "voice_id", "inworld": "voice_id", "qwen": "speaker"}
 )
@@ -67,9 +69,13 @@ class ReplicateTextToSpeechConfig(BaseTextToSpeechConfig):
         kwargs: Mapping[str, object] | None = None,
     ) -> tuple[str | None, _SpeechParams]:
         speed: Final = optional_params.get("speed")
+        extra_body: Final = (kwargs or {}).get("extra_body")
         return (
             voice if isinstance(voice, str) and voice else None,
-            {"speed": speed} if isinstance(speed, (int, float)) and not isinstance(speed, bool) else {},
+            {
+                **(_NATIVE_INPUT.validate_python(extra_body) if isinstance(extra_body, Mapping) else {}),
+                **({"speed": speed} if isinstance(speed, (int, float)) and not isinstance(speed, bool) else {}),
+            },
         )
 
     def validate_environment(

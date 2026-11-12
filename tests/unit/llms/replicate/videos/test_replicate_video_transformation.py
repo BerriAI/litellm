@@ -209,6 +209,15 @@ async def test_async_content_response_downloads_first_output():
     assert await config.async_transform_video_content_response(response, Mock()) == b"mp4-bytes"
 
 
+def test_content_response_prefers_the_handler_client():
+    download = httpx.Response(200, content=b"mp4-bytes", request=httpx.Request("GET", VIDEO_URL))
+    handler_client = _FakeClient(download)
+    config = ReplicateVideoConfig(sync_client_factory=lambda: _FakeClient())  # pyright: ignore[reportArgumentType]  # fake stands in for HTTPHandler
+    response = _prediction_response({"id": "abc", "status": "succeeded", "output": VIDEO_URL})
+    assert config.transform_video_content_response(response, Mock(), client=handler_client) == b"mp4-bytes"  # pyright: ignore[reportArgumentType]  # fake stands in for HTTPHandler
+    assert handler_client.calls == [VIDEO_URL]
+
+
 def test_content_response_errors_without_output():
     config = ReplicateVideoConfig(sync_client_factory=lambda: _FakeClient())  # pyright: ignore[reportArgumentType]  # fake stands in for HTTPHandler
     with pytest.raises(ReplicateError, match="no video output yet"):
