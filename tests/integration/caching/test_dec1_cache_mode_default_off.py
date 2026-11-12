@@ -161,29 +161,33 @@ def test_use_cache_opts_an_embedding_request_in(opt_in_rig: CacheRig) -> None:
         assert not second.reached_upstream and second.json()["data"] == first.json()["data"]
 
 
-def test_key_metadata_cache_cannot_opt_a_key_in_and_drops_the_callers_opt_in(opt_in_rig: CacheRig) -> None:
-    """A key has ``metadata: {"cache": {"use-cache": true}}``. Its requests, with or without their own
-    ``cache: {"use-cache": true}``, must all reach the upstream, and the opted-in request must leave no entry in
-    Redis: key-level cache metadata only carries ``ttl``, ``s-maxage``, ``no-cache`` and ``no-store``
-    (``SupportedCacheControls``, ``litellm/types/utils.py:181``) and replaces the caller's ``cache`` object
-    (``litellm/proxy/litellm_pre_call_utils.py:2221``), so the opt-in is lost. Surprising, and pinned so the
-    rewrite does not change who gets cached answers.
-    The absence of the entry is held for a few seconds before the third request, since an entry is written by
-    a background task after the answer; without that wait the third request could race the write and the
-    check would depend on timing (run 43044106414 saw the third request replay the second's answer).
+def test_key_metadata_cache_cannot_opt_a_key_in_but_keeps_the_callers_opt_in(opt_in_rig: CacheRig) -> None:
+    """A key has ``metadata: {"cache": {"use-cache": true}}``. Its plain request must reach the upstream and
+    leave no entry in Redis, since key-level cache metadata only carries ``ttl``, ``s-maxage``, ``no-cache`` and
+    ``no-store`` (``SupportedCacheControls``, ``litellm/types/utils.py:181``), so the key cannot opt itself in.
+    Its request that sends its own ``cache: {"use-cache": true}`` keeps that opt-in, because the key's cache
+    block is merged into the request's instead of replacing it (``_request_cache_kept_for_key``,
+    ``litellm/proxy/litellm_pre_call_utils.py:2234``, from #50999): it fills an entry and the repeat is served
+    from it.
+    The absence of an entry for the plain request is held for a few seconds, since an entry is written by a
+    background task after the answer.
+    Before #50999 the key's block replaced the caller's, and this cell pinned that the opt-in was dropped;
+    run 43314424795 saw the opted-in answer written to Redis after main brought the merge in.
     """
     with opt_in_rig.gateway.scenario() as scenario:
         target: Final = probe(scenario)
         key: Final = scenario.key(models=[target.model], metadata={"cache": {"use-cache": True}})
         text: Final = prompt()
         plain: Final = target.chat(text, key=key)
-        opted: Final = target.chat(text, key=key, cache=USE_CACHE)
-        assert plain.reached_upstream and opted.reached_upstream, (plain.response.text, opted.response.text)
+        assert plain.reached_upstream, plain.response.text
         store: Final = opt_in_rig.store()
-        held(lambda: entry_keys_naming(store, opted.id()), lambda found: found == frozenset(), holding=5)
+        held(lambda: entry_keys_naming(store, plain.id()), lambda found: found == frozenset(), holding=5)
+        opted: Final = target.chat(text, key=key, cache=USE_CACHE)
+        assert_miss(plain, opted)
+        filled(store, opted)
         again: Final = target.chat(text, key=key, cache=USE_CACHE)
-        assert_miss(opted, again)
-        assert target.calls() == 3
+        assert_hit(opted, again)
+        assert target.calls() == 2
 
 
 def test_cache_ping_is_healthy_under_default_off(opt_in_rig: CacheRig) -> None:

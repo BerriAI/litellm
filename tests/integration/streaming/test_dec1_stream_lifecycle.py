@@ -214,12 +214,16 @@ def test_stream_then_non_stream_of_the_same_request_do_not_share_a_cache_entry(g
     `litellm/caching/caching.py:428`, over `ModelParamHelper.get_all_llm_api_params`). A third request that
     streams again is served the stored stream without a provider call, which proves the first entry exists and
     the miss came from the key. Pinned current behaviour: a rewrite that drops `stream` from the key would
-    start serving one mode's answer to the other."""
+    start serving one mode's answer to the other.
+    The streamed and the JSON answer carry different ids: a SpendLogs row is keyed by the response id
+    (`request_id @id`, `litellm/proxy-extras/litellm_proxy_extras/schema.prisma:723`), so two answers sharing
+    one id leave one row and run 43314424795 waited for a second row that could never be written."""
     prompt: Final = f"dec1 cross mode cache {marker()}"
-    identity: Final = f"chatcmpl-{marker()}"
+    streamed: Final = f"chatcmpl-{marker()}"
+    answered: Final = f"chatcmpl-{marker()}"
     with scripted(
         gateway,
-        serving(text_frames(identity, ("shared ", "entry")), json_body=completion_json(identity, "from provider")),
+        serving(text_frames(streamed, ("shared ", "entry")), json_body=completion_json(answered, "from provider")),
     ) as rig:
         assert rig.chat(prompt).status_code == 200
         rig.spend_rows(1)

@@ -72,6 +72,7 @@ from integration.messages_endpoint.dec1_msgprov_support import (
 )
 from pydantic import JsonValue
 
+_ANTHROPIC_SONNET_NAME: Final = "claude-sonnet-4-5-20250929"
 _INVOKE: Final = f"/model/{BEDROCK_MODEL_ID}/invoke"
 _INVOKE_STREAM: Final = f"/model/{BEDROCK_MODEL_ID}/invoke-with-response-stream"
 _BILLING_BLOCK: Final[dict[str, JsonValue]] = {
@@ -229,7 +230,9 @@ def test_the_callers_proxy_key_never_reaches_bedrock(gateway: Gateway) -> None:
 
 
 @pytest.mark.parametrize("stream", [False, True])
-def test_the_invoke_body_carries_bedrock_anthropic_version_and_no_model_or_stream(gateway: Gateway, stream: bool) -> None:
+def test_the_invoke_body_carries_bedrock_anthropic_version_and_no_model_or_stream(
+    gateway: Gateway, stream: bool
+) -> None:
     """For a plain request the body sent to Bedrock is exactly
     `{"anthropic_version": "bedrock-2023-05-31", "max_tokens": 64, "messages": [...]}`: `model` and
     `stream` are removed because InvokeModel rejects them (the route carries both), and the Bedrock
@@ -351,7 +354,11 @@ def test_cache_control_keeps_a_ttl_on_claude_4_5_and_drops_scope(gateway: Gatewa
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": prompt, "cache_control": {"type": "ephemeral", "ttl": "1h", "scope": "global"}}
+                    {
+                        "type": "text",
+                        "text": prompt,
+                        "cache_control": {"type": "ephemeral", "ttl": "1h", "scope": "global"},
+                    }
                 ],
             }
         ]
@@ -549,7 +556,13 @@ def test_an_error_on_stream_open_is_an_http_error_not_a_200_stream(gateway: Gate
     ("status", "error_class", "message", "answered", "anthropic_type"),
     [
         (400, "ValidationException", "messages.0.content: Field required", 400, "invalid_request_error"),
-        (403, "AccessDeniedException", "You don't have access to the model with the specified model ID.", 403, "permission_error"),
+        (
+            403,
+            "AccessDeniedException",
+            "You don't have access to the model with the specified model ID.",
+            403,
+            "permission_error",
+        ),
         (404, "ResourceNotFoundException", "Could not resolve the foundation model.", 404, "not_found_error"),
         (429, "ThrottlingException", "Too many requests, please wait before trying again.", 429, "rate_limit_error"),
         (429, "ModelNotReadyException", "Model is not ready to serve inference requests.", 429, "rate_limit_error"),
@@ -582,16 +595,25 @@ def test_a_bedrock_500_is_answered_as_503(gateway: Gateway) -> None:
         assert anthropic_error(response)["type"] == "api_error"
 
 
-def test_an_invalid_security_token_is_answered_as_401_authentication_error(gateway: Gateway) -> None:
+def test_an_invalid_security_token_is_answered_with_bedrocks_403_as_a_permission_error(gateway: Gateway) -> None:
     """Pinned current behaviour: Bedrock answers bad SigV4 credentials with 403
     UnrecognizedClientException "The security token included in the request is invalid.". The mapper
-    matches that text and raises `AuthenticationError`, so the caller gets HTTP 401 and
-    `authentication_error`, not 403."""
-    reply: Final = aws_error(403, "UnrecognizedClientException", "The security token included in the request is invalid.")
+    matches that text and raises `AuthenticationError` (`litellm/litellm_core_utils/exception_mapping_utils.py:1057`),
+    whose own `status_code = 401` is overwritten by the OpenAI base class with the status of the upstream
+    response it is given (`litellm/exceptions.py:194` then `super().__init__(..., response=...)`), unlike
+    `ServiceUnavailableError`, which rebuilds the response with its own status. So the caller gets HTTP 403 and
+    `permission_error`, while `error.message` still names `AuthenticationError` and keeps Bedrock's text.
+    Run 43314424795 saw exactly that; a rewrite that answers 401 here must change this cell on purpose."""
+    reply: Final = aws_error(
+        403, "UnrecognizedClientException", "The security token included in the request is invalid."
+    )
     with _sigv4(gateway, lambda _r: reply) as rig:
         response: Final = rig.post(rig.body())
-        assert response.status_code == 401, response.text
-        assert anthropic_error(response)["type"] == "authentication_error"
+        assert response.status_code == 403, response.text
+        error: Final = anthropic_error(response)
+        assert error["type"] == "permission_error"
+        assert "AuthenticationError" in str(error["message"])
+        assert "The security token included in the request is invalid." in str(error["message"])
 
 
 def test_a_too_long_input_is_a_400_invalid_request_error(gateway: Gateway) -> None:
@@ -625,7 +647,11 @@ def test_the_spend_row_names_bedrock_and_prices_the_tokens(gateway: Gateway) -> 
     with _bearer(gateway, **PRICES) as rig:
         assert rig.post(rig.body()).status_code == 200
         row: Final = only_spend_row(rig)
-        assert (row["call_type"], row["custom_llm_provider"], row["status"]) == ("anthropic_messages", "bedrock", "success")
+        assert (row["call_type"], row["custom_llm_provider"], row["status"]) == (
+            "anthropic_messages",
+            "bedrock",
+            "success",
+        )
         assert (row["prompt_tokens"], row["completion_tokens"]) == (11, 7)
         assert BEDROCK_MODEL_ID in str(row["model"])
         assert spend_of(row) == pytest.approx(11 * INPUT_COST + 7 * OUTPUT_COST)
@@ -634,9 +660,16 @@ def test_the_spend_row_names_bedrock_and_prices_the_tokens(gateway: Gateway) -> 
 def test_the_cost_map_price_of_the_us_inference_profile_applies_without_deployment_prices(gateway: Gateway) -> None:
     """With no prices on the deployment, the cost map row of `us.anthropic.claude-sonnet-4-5-20250929-v1:0`
     (3.3e-06 input, 1.65e-05 output, the regional profile premium over the base id) prices
-    1000 input and 100 output tokens at 0.00495. UNVERIFIED: that the cost lookup strips the
-    `invoke/` route and keeps the `us.` prefix; see `litellm/cost_calculator.py`."""
-    reply: Final = invoke_message_reply(message_id(), usage={"input_tokens": 1000, "output_tokens": 100})
+    1000 input and 100 output tokens at 0.00495.
+    The reply names the model the way Bedrock InvokeModel does for Claude, by its Anthropic name
+    `claude-sonnet-4-5-20250929`. The cost is priced from the answered model first
+    (`_served_or_priced_requested_model`, `litellm/cost_calculator.py:1137`) and falls back to the deployment's
+    profile row only when the answered name has no Bedrock row of its own; a reply naming the base Bedrock id
+    `anthropic.claude-sonnet-4-5-20250929-v1:0`, as run 43314424795 sent, is priced on the base row (0.0045) on
+    `/v1/messages` and `/v1/chat/completions` alike, so that run's miss was the reply, not the route."""
+    reply: Final = invoke_message_reply(
+        message_id(), model=_ANTHROPIC_SONNET_NAME, usage={"input_tokens": 1000, "output_tokens": 100}
+    )
     with _bearer(gateway, lambda _r: reply) as rig:
         assert rig.post(rig.body()).status_code == 200
         assert spend_of(only_spend_row(rig)) == pytest.approx(1000 * 3.3e-06 + 100 * 1.65e-05)
@@ -676,7 +709,9 @@ def test_count_tokens_with_string_content_uses_the_converse_count_input(gateway:
     next to `input_tokens`."""
     prompt: Final = unique_text()
     with _bearer(gateway, _count_reply) as rig:
-        response: Final = rig.post({"model": rig.model, "messages": [{"role": "user", "content": prompt}]}, path="/v1/messages/count_tokens")
+        response: Final = rig.post(
+            {"model": rig.model, "messages": [{"role": "user", "content": prompt}]}, path="/v1/messages/count_tokens"
+        )
         assert response.status_code == 200, response.text
         assert JSON_OBJECT.validate_json(response.content)["input_tokens"] == 42
         call: Final = rig.one_call()
@@ -691,7 +726,9 @@ def test_count_tokens_with_content_blocks_uses_the_invoke_model_body(gateway: Ga
     `model` key."""
     content: Final[list[JsonValue]] = [{"type": "text", "text": unique_text()}]
     with _bearer(gateway, _count_reply) as rig:
-        response: Final = rig.post({"model": rig.model, "messages": [{"role": "user", "content": content}]}, path="/v1/messages/count_tokens")
+        response: Final = rig.post(
+            {"model": rig.model, "messages": [{"role": "user", "content": content}]}, path="/v1/messages/count_tokens"
+        )
         assert response.status_code == 200, response.text
         encoded: Final = object_value(object_value(body_of(rig.one_call())["input"])["invokeModel"])["body"]
         decoded: Final = JSON_OBJECT.validate_json(base64.b64decode(str(encoded)))
@@ -741,7 +778,9 @@ def test_an_invoke_chunk_frame_helper_round_trips(gateway: Gateway) -> None:
 
     def respond(_request: Request) -> Reply:
         frames: Final = invoke_stream_reply(identity).chunks or ()
-        return Reply(content_type="application/vnd.amazon.eventstream", chunks=(invoke_chunk({"type": "ping"}), *frames))
+        return Reply(
+            content_type="application/vnd.amazon.eventstream", chunks=(invoke_chunk({"type": "ping"}), *frames)
+        )
 
     with _bearer(gateway, respond) as rig:
         response, text = rig.stream(rig.body(stream=True))

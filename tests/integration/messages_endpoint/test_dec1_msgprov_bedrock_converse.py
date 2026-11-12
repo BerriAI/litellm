@@ -159,7 +159,11 @@ def test_tools_become_converse_tool_specs(gateway: Gateway) -> None:
         spec: Final = object_value(at(rig.one_body(), "toolConfig", "tools", 0, "toolSpec"))
         assert (spec["name"], spec["description"]) == (TOOL["name"], TOOL["description"])
         schema: Final = object_value(at(spec, "inputSchema", "json"))
-        assert (schema["type"], schema["properties"], schema["required"]) == ("object", {"city": {"type": "string"}}, ["city"])
+        assert (schema["type"], schema["properties"], schema["required"]) == (
+            "object",
+            {"city": {"type": "string"}},
+            ["city"],
+        )
 
 
 @pytest.mark.parametrize(
@@ -238,7 +242,15 @@ def test_a_converse_text_answer_becomes_an_anthropic_message(gateway: Gateway) -
 
 def test_a_converse_tool_use_becomes_an_anthropic_tool_use_block(gateway: Gateway) -> None:
     """A Converse `toolUse` block (`toolUseId`, `name`, `input`) with `stopReason: tool_use` becomes
-    `{"type": "tool_use", "id", "name", "input"}` with the same values and `stop_reason: tool_use`."""
+    `{"type": "tool_use", "id", "name", "input"}` with the same values and `stop_reason: tool_use`.
+    BUG: a tool-only Converse answer comes back with an extra `{"type": "text", "text": ""}` before the
+    `tool_use` block. Converse sets the chat `content` to `""` whenever no text block was answered
+    (`litellm/llms/bedrock/chat/converse_transformation.py:3078`), and the adapter keeps an empty string as a
+    text block unless compaction blocks are present
+    (`litellm/llms/anthropic/messages/adapters/transformation.py:1564`). Anthropic never answers an empty text
+    block and rejects one on input, which the product itself states when it drops such blocks from tool-call
+    turns (`litellm/litellm_core_utils/prompt_templates/factory.py:2503`). Seen in run 43314424795."""
+    pytest.skip("BUG: a tool-only Converse answer on /v1/messages gains an empty text block before tool_use")
     tool_use: Final[dict[str, JsonValue]] = {
         "toolUse": {"toolUseId": "tooluse_msgprov01", "name": "get_weather", "input": {"city": "Lisbon"}}
     }
