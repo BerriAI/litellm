@@ -84,7 +84,7 @@ from litellm.proxy.common_utils.config_sync_pubsub import (
     publish_config_change,
 )
 from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_keys
-from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time, keeps_due_budget_reset
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import build_model_max_budget_usage
@@ -2743,17 +2743,15 @@ async def prepare_key_update_data(
             non_default_values["budget_duration"] = None
             non_default_values["budget_reset_at"] = None
         elif isinstance(budget_duration, str) and len(budget_duration) > 0:
-            from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-
-            key_reset_at: Final = get_budget_reset_time(budget_duration=budget_duration)
-            non_default_values["budget_reset_at"] = key_reset_at
             non_default_values["budget_duration"] = budget_duration
+            if not keeps_due_budget_reset(
+                budget_duration, existing_key_row.budget_duration, existing_key_row.budget_reset_at
+            ):
+                non_default_values["budget_reset_at"] = get_budget_reset_time(budget_duration=budget_duration)
 
     if "budget_limits" in non_default_values:
         raw_windows: Final = non_default_values["budget_limits"]
         if raw_windows:
-            from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-
             initialized_windows: Final = []
             for window in raw_windows:
                 w = window if isinstance(window, dict) else window.model_dump()
