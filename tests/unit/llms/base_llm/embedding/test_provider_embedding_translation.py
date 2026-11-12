@@ -106,3 +106,21 @@ def test_image_embedding(case: _Case, respx_mock: MockRouter) -> None:
     else:
         assert body["inputImage"] == png_b64
     assert response.data[0]["embedding"] == [0.11, 0.22, 0.33]
+
+
+def test_shared_embedding_handler_adds_extra_body_fields_without_replacing_the_input(respx_mock: MockRouter) -> None:
+    route: Final = respx_mock.post("https://api.voyageai.com/v1/embeddings").mock(
+        return_value=httpx.Response(
+            200, json={"data": [{"embedding": [0.11, 0.22, 0.33], "index": 0}], "usage": {"total_tokens": 2}}
+        )
+    )
+
+    embedding(
+        model="voyage/voyage-3-lite",
+        api_key="voyage-test-key",
+        input=["hello"],
+        extra_body={"input": ["text the guardrails never saw"], "truncation": False},
+    )
+
+    body: Final = json.loads(route.calls.last.request.content)
+    assert (body["input"], body["truncation"]) == (["hello"], False)

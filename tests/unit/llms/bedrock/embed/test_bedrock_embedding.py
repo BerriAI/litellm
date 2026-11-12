@@ -2217,3 +2217,35 @@ def test_bedrock_embedding_extra_body_cannot_replace_the_input_or_a_mapped_param
     )
 
     assert json.loads(route.calls.last.request.read())[field] == expected
+
+
+def test_bedrock_embedding_signs_the_body_it_sends(respx_mock: respx.MockRouter) -> None:
+    from botocore.auth import SigV4Auth
+    from botocore.awsrequest import AWSRequest
+    from botocore.credentials import Credentials
+
+    route = respx_mock.post(
+        "https://bedrock-runtime.us-east-1.amazonaws.com/model/amazon.titan-embed-text-v2:0/invoke"
+    ).mock(return_value=httpx.Response(200, json=titan_embedding_response))
+
+    litellm.embedding(
+        model="bedrock/amazon.titan-embed-text-v2:0",
+        input=[test_input],
+        aws_access_key_id="AKIAIOSFODNN7EXAMPLE",
+        aws_secret_access_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        aws_region_name="us-east-1",
+        dimensions=256,
+        extra_body={"dimensions": 512},
+    )
+
+    sent: Final = route.calls.last.request
+    replay: Final = AWSRequest(
+        method="POST", url=str(sent.url), data=sent.content, headers={"Content-Type": "application/json"}
+    )
+    replay.context["timestamp"] = sent.headers["x-amz-date"]
+    SigV4Auth(
+        Credentials("AKIAIOSFODNN7EXAMPLE", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"), "bedrock", "us-east-1"
+    ).add_auth(replay)
+
+    assert json.loads(sent.content)["dimensions"] == 256
+    assert replay.headers["Authorization"] == sent.headers["authorization"]

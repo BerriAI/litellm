@@ -306,7 +306,7 @@ class BedrockEmbedding(BaseAWSLLM):
                 aws_region_name=aws_region_name,
                 extra_headers=extra_headers,
                 endpoint_url=endpoint_url,
-                data=json.dumps({**data, **extra_body}),
+                data=json.dumps(data),
                 headers=headers,
                 api_key=api_key,
             )
@@ -377,7 +377,7 @@ class BedrockEmbedding(BaseAWSLLM):
                 aws_region_name=aws_region_name,
                 extra_headers=extra_headers,
                 endpoint_url=endpoint_url,
-                data=json.dumps({**data, **extra_body}),
+                data=json.dumps(data),
                 headers=headers,
                 api_key=api_key,
             )
