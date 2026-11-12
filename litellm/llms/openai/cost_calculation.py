@@ -4,7 +4,9 @@ Helper util for handling openai-specific cost calculation
 """
 
 from collections.abc import Mapping
-from typing import Any, Final, Literal
+from typing import Final, Literal, SupportsFloat, SupportsIndex
+
+from typing_extensions import Buffer
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
@@ -100,8 +102,14 @@ def _video_resolution_to_cost_field_suffix(resolution: str) -> str | None:
     return safe
 
 
+def _native_float(value: object) -> float:
+    if isinstance(value, (str, Buffer, SupportsFloat, SupportsIndex)):
+        return float(value)
+    raise TypeError(f"float() argument must be a string or a real number, not '{type(value).__name__}'")
+
+
 def video_output_cost_per_second(
-    model_info: Mapping[str, Any],
+    model_info: Mapping[str, object],
     video_resolution: str | None,
 ) -> float | None:
     """
@@ -118,10 +126,10 @@ def video_output_cost_per_second(
             tier_key: Final = f"output_cost_per_second_{suffix}"
             tier_rate: Final = model_info.get(tier_key)
             if tier_rate is not None:
-                return float(tier_rate)
+                return _native_float(tier_rate)
     out: Final = model_info.get("output_cost_per_second")
     if out is not None:
-        return float(out)
+        return _native_float(out)
     return None
 
 

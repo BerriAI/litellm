@@ -10953,6 +10953,42 @@ class TestCheckTeamMemberModelBudgetWithFallback:
         assert request_data["model"] == "gpt-4o-mini"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("operation", ["generations", "edits"])
+    async def test_image_deployment_key_fallback_is_the_model_later_checks_and_reservation_see(
+        self, monkeypatch: pytest.MonkeyPatch, operation: str
+    ) -> None:
+        from litellm.proxy import proxy_server
+        from litellm.proxy.auth.auth_utils import get_model_from_request
+
+        monkeypatch.setattr(proxy_server, "general_settings", {})
+        monkeypatch.setattr(proxy_server, "user_model", None)
+        route: Final = f"/openai/deployments/gpt-4o/images/{operation}"
+        valid_token: Final = UserAPIKeyAuth(
+            token="test-key",
+            models=["gpt-4o", "gpt-4o-mini"],
+            budget_fallbacks={"gpt-4o": ["gpt-4o-mini"]},
+            model_max_budget={
+                "gpt-4o": {"max_budget": 5.0, "budget_duration": "1d"},
+                "gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d"},
+            },
+        )
+        limiter, _ = await _real_model_budget_limiter(key_spend={"gpt-4o": 10.0})
+        request_data: Final[dict[str, object]] = {"model": "gpt-4o"}
+        request: Final = self._request("gpt-4o")
+        assert get_model_from_request(request_data, route, request=request) == "gpt-4o"
+
+        await _check_key_model_budget_with_fallback(
+            valid_token=valid_token,
+            model_max_budget_limiter=limiter,
+            model_name="gpt-4o",
+            request_data=request_data,
+            request=request,
+        )
+
+        assert get_model_from_request(request_data, route, request=request) == "gpt-4o-mini"
+        assert get_model_from_request(request_data, route, path_params=request.path_params) == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
     async def test_fallback_outside_member_allowed_models_is_rejected(self):
         valid_token: Final = UserAPIKeyAuth(
             token="test-key",
@@ -13440,6 +13476,10 @@ async def test_managed_actor_cannot_access_provider_resource_routes(monkeypatch,
         ("/v1/chat/completions", {}, "forbidden-model"),
         ("/v1/images/generations", {"image_generation_model": "forbidden-model"}, None),
         ("/v1/images/edits", {"image_generation_model": "forbidden-model"}, None),
+        ("/v1beta/models/test-model:generateContent", {"completion_model": "forbidden-model"}, None),
+        ("/models/test-model:streamGenerateContent", {}, "forbidden-model"),
+        ("/openai/deployments/test-model/images/generations", {}, "forbidden-model"),
+        ("/openai/deployments/test-model/images/edits", {"completion_model": "forbidden-model"}, None),
     ],
 )
 async def test_managed_agent_cannot_bypass_grants_with_server_default(

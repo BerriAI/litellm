@@ -27,7 +27,20 @@ pub fn json(
     body: &impl Serialize,
     timeout: Option<Duration>,
 ) -> Result<Request, Error> {
-    let body = serde_json::to_vec(body).map_err(Repr::RequestBody)?;
+    json_bytes(
+        url,
+        headers,
+        serde_json::to_vec(body).map_err(Repr::RequestBody)?,
+        timeout,
+    )
+}
+
+pub fn json_bytes(
+    url: &str,
+    headers: &[(String, String)],
+    body: Vec<u8>,
+    timeout: Option<Duration>,
+) -> Result<Request, Error> {
     let url = Url::parse(url).map_err(Repr::ParseUrl)?;
     let with_headers = headers.iter().fold(
         http::Request::post(url.as_str()),

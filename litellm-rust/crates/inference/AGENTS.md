@@ -81,3 +81,4 @@
 - Cache lookup follows provider preparation, credential resolution, and the request interceptor
   - keys describe the effective provider URL, authenticated headers, and rewritten body
   - signed requests bypass caching until the signing identity has a stable cache representation
+- A service that keys entries by the caller's arguments (`keyed_by_caller`, the Python host's legacy cache) is looked up before provider preparation, as Python's `@client` wrapper does, and a hit skips request building and the request interceptor
