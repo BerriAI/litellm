@@ -275,6 +275,7 @@ class TestOutputConfigStructuredOutput:
                     "rows": {"type": "array", "items": open_object({"id": {"type": "integer"}}, [])},
                     "choice": {"anyOf": [open_object({"a": {"type": "string"}}, []), {"type": "null"}]},
                     "ref": {"$ref": "#/$defs/Item"},
+                    "maybe": {**open_object({"flag": {"type": "boolean"}}, []), "type": ["object", "null"]},
                 },
                 ["entry"],
             ),
@@ -292,6 +293,7 @@ class TestOutputConfigStructuredOutput:
                     "rows": {"type": "array", "items": closed_object({"id": {"type": "integer"}})},
                     "choice": {"anyOf": [closed_object({"a": {"type": "string"}}), {"type": "null"}]},
                     "ref": {"$ref": "#/$defs/Item"},
+                    "maybe": {**closed_object({"flag": {"type": "boolean"}}), "type": ["object", "null"]},
                 }
             ),
             "$defs": {"Item": closed_object({"label": {"type": "string"}})},

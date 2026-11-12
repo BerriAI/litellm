@@ -63,10 +63,16 @@ def openai_strict_json_schema(schema: object) -> object:
     properties: Final = object_mapping(source.get("properties"))
     closing: Final[Mapping[str, object]] = (
         {"required": list(properties), "additionalProperties": False}
-        if source.get("type") == "object" and properties is not None
+        if properties is not None and _is_object_type(source.get("type"))
         else {}
     )
     return {**{key: _strict_subschema(key, value) for key, value in source.items()}, **closing}
+
+
+def _is_object_type(schema_type: object) -> bool:
+    """Whether a ``type`` keyword names an object, alone or in a union such as ``["object", "null"]``."""
+    types: Final = _json_array(schema_type)
+    return schema_type == "object" if types is None else "object" in types
 
 
 def _strict_subschema(key: str, value: object) -> object:
