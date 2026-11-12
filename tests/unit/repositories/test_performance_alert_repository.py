@@ -8,29 +8,33 @@ from pydantic import TypeAdapter
 
 from litellm.models.performance_alert import ResourceUnreadableError, SweepOwnershipLostError, SweepState
 from litellm.proxy.spend_tracking.performance_alerts import run_performance_alerts
-from litellm.repositories.performance_alert_repository import PerformanceAlertRepository, is_statement_timeout
+from litellm.repositories.performance_alert_repository import PerformanceAlertRepository
 
 
-def _raw_query_error(message: str) -> Exception:
+def _raw_query_error(message: str, code: str = "") -> Exception:
     from prisma.errors import RawQueryError
 
-    return RawQueryError({"user_facing_error": {"is_panic": False, "message": message, "meta": {}}})
+    return RawQueryError({"user_facing_error": {"is_panic": False, "message": message, "meta": {"code": code}}})
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("message", "expected"),
+    ("message", "code", "retryable"),
     (
-        ("Raw query failed. Code: `57014`. Message: `ERROR: canceling statement due to statement timeout`", True),
-        ("Error querying the database: FATAL: sorry, too many clients already", False),
-        (
-            "Raw query failed. Code: `57P01`. Message: `FATAL: terminating connection due to administrator command`",
-            False,
-        ),
-        ("Raw query failed. Code: `40P01`. Message: `ERROR: deadlock detected`", False),
+        ("ERROR: canceling statement due to statement timeout", "57014", True),
+        ("Query canceled", "57014", True),
+        ("ERROR: canceling statement due to statement timeout", "", True),
+        ("FATAL: sorry, too many clients already", "53300", False),
+        ("FATAL: terminating connection due to administrator command", "57P01", False),
+        ("ERROR: deadlock detected", "40P01", False),
     ),
 )
-def test_only_a_statement_timeout_marks_a_resource_unreadable(message: str, expected: bool) -> None:
-    assert is_statement_timeout(_raw_query_error(message)) is expected
+async def test_only_a_statement_timeout_marks_a_resource_unreadable(message: str, code: str, retryable: bool) -> None:
+    error: Final = _raw_query_error(message, code)
+    repository, _query, execute = _repository(error)
+    with pytest.raises(ResourceUnreadableError if retryable else type(error)):
+        await repository.evaluate_page("worker-a", SweepState(day=date(2026, 1, 8), scope="model"), 25)
+    execute.assert_not_awaited()
 
 
 def _repository(
@@ -138,7 +142,7 @@ async def test_lost_ownership_aborts_the_page_transaction(spend_window: Mapping[
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ("timeout", "invalid_data", "connection_lost"))
 async def test_unreadable_data_is_retryable_but_database_failures_propagate(failure: str) -> None:
-    error: Final = _raw_query_error("query failed `57014`" if failure == "timeout" else "connection closed `57P01`")
+    error: Final = _raw_query_error("query failed", "57014" if failure == "timeout" else "57P01")
     repository, _query, execute = _repository(({},) if failure == "invalid_data" else error)
     with pytest.raises(ResourceUnreadableError if failure != "connection_lost" else type(error)):
         await repository.evaluate_page("worker-a", SweepState(day=date(2026, 1, 8), scope="model"), 25)

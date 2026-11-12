@@ -22,13 +22,13 @@ from litellm.models.performance_alert import (
     advance,
     detect,
 )
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.repositories.alert_repository import record_alerts
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
 KEY_DATE_INDEX: Final = "LiteLLM_DailyUserSpend_api_key_date_idx"
-_STATEMENT_TIMED_OUT: Final = "`57014`"
 _STATEMENT_TIMEOUT: Final = "2s"
 _TRANSACTION_TIMEOUT: Final = timedelta(seconds=5)
 
@@ -172,10 +172,6 @@ WHERE id = 1 AND owner = $1"""
 _INDEX_READY: Final = """SELECT 1 AS resource_id FROM pg_index WHERE indexrelid = to_regclass($1) AND indisvalid"""
 
 
-def is_statement_timeout(error: Exception) -> bool:
-    return _STATEMENT_TIMED_OUT in str(error)
-
-
 class PerformanceAlertRepository:
     def __init__(self, prisma_client: "PrismaClient", *, enterprise: bool = False, configured: bool = True) -> None:
         self._database: Final = cast(  # cast-ok: generated Prisma transactions expose the bounded SQL surface
@@ -264,7 +260,7 @@ class PerformanceAlertRepository:
         except ValidationError as exc:
             raise ResourceUnreadableError() from exc
         except RawQueryError as exc:
-            if is_statement_timeout(exc):
+            if PrismaDBExceptionHandler.is_statement_timeout_error(exc):
                 raise ResourceUnreadableError() from exc
             raise
 
