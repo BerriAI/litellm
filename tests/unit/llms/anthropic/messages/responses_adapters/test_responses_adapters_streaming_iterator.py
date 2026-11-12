@@ -10,6 +10,7 @@ import os
 import sys
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from types import SimpleNamespace
+from typing import Final
 
 import anyio
 import httpx
@@ -823,14 +824,14 @@ class TestUpstreamFailureReachesTheProxyFailureHook:
         assert len(finished) == 1
 
 
-_RESPONSE_CREATED = (
+_RESPONSE_CREATED: Final = (
     b'data: {"type": "response.created", "response": {"id": "resp_1", "status": "in_progress", "output": []}}\n\n'
 )
-_MESSAGE_ADDED = (
+_MESSAGE_ADDED: Final = (
     b'data: {"type": "response.output_item.added", "output_index": 0, "item": '
     b'{"type": "message", "id": "msg_1", "role": "assistant", "content": [], "status": "in_progress"}}\n\n'
 )
-_TEXT_DELTA = (
+_TEXT_DELTA: Final = (
     b'data: {"type": "response.output_text.delta", "item_id": "msg_1", "output_index": 0, '
     b'"content_index": 0, "delta": "word "}\n\n'
 )
@@ -895,13 +896,13 @@ def test_closing_the_sse_stream_mid_response_closes_the_provider_response(
     upstream_class: type[ResponsesAPIStreamingIterator] | type[SyncResponsesAPIStreamingIterator],
 ):
     async def _close_after_the_first_text_delta() -> None:
-        upstream = upstream_class(
+        upstream: Final = upstream_class(
             response=httpx.Response(200, stream=provider_stream),
             model="m",
             responses_api_provider_config=OpenAIResponsesAPIConfig(),
             logging_obj=_logging_obj_with_failure_hook(_FailureHookRecorder()),
         )
-        sse = AnthropicResponsesStreamWrapper(responses_stream=upstream, model="m").async_anthropic_sse_wrapper()
+        sse: Final = AnthropicResponsesStreamWrapper(responses_stream=upstream, model="m").async_anthropic_sse_wrapper()
         async for frame in sse:
             if b'"text_delta"' in frame:
                 await sse.aclose()
@@ -914,21 +915,21 @@ def test_closing_the_sse_stream_mid_response_closes_the_provider_response(
 
 def test_a_close_refused_while_another_task_reads_leaves_the_provider_response_to_that_read():
     async def _close_from_another_task_mid_read() -> tuple[bool, bytes]:
-        provider_stream = _ProviderStreamThatPausesAfterTheFirstTextDelta()
-        upstream = ResponsesAPIStreamingIterator(
+        provider_stream: Final = _ProviderStreamThatPausesAfterTheFirstTextDelta()
+        upstream: Final = ResponsesAPIStreamingIterator(
             response=httpx.Response(200, stream=provider_stream),
             model="m",
             responses_api_provider_config=OpenAIResponsesAPIConfig(),
             logging_obj=_logging_obj_with_failure_hook(_FailureHookRecorder()),
         )
-        sse = AnthropicResponsesStreamWrapper(responses_stream=upstream, model="m").async_anthropic_sse_wrapper()
-        text_deltas = (frame async for frame in sse if b'"text_delta"' in frame)
+        sse: Final = AnthropicResponsesStreamWrapper(responses_stream=upstream, model="m").async_anthropic_sse_wrapper()
+        text_deltas: Final = (frame async for frame in sse if b'"text_delta"' in frame)
         await text_deltas.__anext__()
-        second_text_delta = asyncio.ensure_future(text_deltas.__anext__())
+        second_text_delta: Final = asyncio.ensure_future(text_deltas.__anext__())
         await provider_stream.paused.wait()
         with pytest.raises(RuntimeError, match="already running"):
             await sse.aclose()
-        closed_by_the_refused_close = provider_stream.closed
+        closed_by_the_refused_close: Final = provider_stream.closed
         provider_stream.resume.set()
         return closed_by_the_refused_close, await second_text_delta
 

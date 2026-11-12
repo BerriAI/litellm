@@ -10,7 +10,8 @@ import json
 import threading
 import time
 import weakref
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Final, Optional
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -296,6 +297,50 @@ def _failure_tracking_logging_obj() -> Mock:
 def _assert_failure_logged_once(logging_obj: Mock, exception: Exception) -> None:
     assert logging_obj.async_failure_handler.await_count == 1
     assert logging_obj.async_failure_handler.await_args.kwargs["exception"] is exception
+
+
+class _ProviderStreamThatBlocksUntilClosed(httpx.SyncByteStream):
+    def __init__(self, ends_with: Exception | None) -> None:
+        self._ends_with = ends_with
+        self._closed = threading.Event()
+        self.reading = threading.Event()
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield _CREATED_EVENT
+        self.reading.set()
+        self._closed.wait(timeout=5)
+        if self._ends_with is not None:
+            raise self._ends_with
+
+    def close(self) -> None:
+        self._closed.set()
+
+
+@pytest.mark.parametrize(
+    "ends_with",
+    [httpx.RemoteProtocolError("peer closed connection without sending complete message body"), None],
+    ids=["read-error", "clean-end"],
+)
+def test_closing_a_sync_stream_mid_read_ends_that_read_without_reporting_a_failure(ends_with):
+    provider_stream: Final = _ProviderStreamThatBlocksUntilClosed(ends_with)
+    logging_obj: Final = _failure_tracking_logging_obj()
+    iterator: Final = SyncResponsesAPIStreamingIterator(
+        response=httpx.Response(200, stream=provider_stream),
+        model="gpt-4o-mini",
+        responses_api_provider_config=_mock_config(),
+        logging_obj=logging_obj,
+        litellm_metadata={},
+        custom_llm_provider="openai",
+    )
+    next(iterator)
+
+    with ThreadPoolExecutor(max_workers=1) as reader:
+        read_in_flight: Final = reader.submit(next, iterator, None)
+        assert provider_stream.reading.wait(timeout=5)
+        iterator.close()
+        assert read_in_flight.result(timeout=5) is None
+
+    assert logging_obj.async_failure_handler.await_count == 0
 
 
 @pytest.mark.asyncio
