@@ -2,7 +2,7 @@ import math
 import sys
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
@@ -75,6 +75,11 @@ _H3_MAX_PROFILE: Final[_ModelProfile] = _ModelProfile(
     reference_key="image_url",
     reference_as_list=False,
 )
+_SEEDANCE_REFERENCE_PROFILE: Final[_ModelProfile] = replace(
+    _SEEDANCE_PROFILE,
+    reference_key="image_urls",
+    reference_as_list=True,
+)
 _QUEUE_NAMESPACES: Final[frozenset[str]] = frozenset(("workflows", "comfy"))
 _STATUS_MAP: Final[Mapping[str, str]] = MappingProxyType(
     {
@@ -113,7 +118,8 @@ def _profile_for_model(model: str) -> _ModelProfile:
         return _H3_PROFILE
     if model.startswith("minimax/h3-max"):
         return _H3_MAX_PROFILE
-    return _SEEDANCE_PROFILE
+    is_seedance_reference: Final = model.startswith("bytedance/seedance-") and model.endswith("/reference-to-video")
+    return _SEEDANCE_REFERENCE_PROFILE if is_seedance_reference else _SEEDANCE_PROFILE
 
 
 def _resolution_for_short_side(short_side: int, profile: _ModelProfile) -> str:

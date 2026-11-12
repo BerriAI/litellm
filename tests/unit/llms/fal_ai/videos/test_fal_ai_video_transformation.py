@@ -117,6 +117,19 @@ class TestFalAIVideoTransformation:
         assert "reference_image_urls" not in mapped
         assert mapped["duration"] == "5"
 
+    @pytest.mark.parametrize(
+        ("model", "expected"),
+        [
+            ("bytedance/seedance-2.5/reference-to-video", {"image_urls": ["https://example.com/image.png"]}),
+            ("bytedance/seedance-2.0/fast/reference-to-video", {"image_urls": ["https://example.com/image.png"]}),
+            ("bytedance/seedance-2.5/image-to-video", {"image_url": "https://example.com/image.png"}),
+        ],
+    )
+    def test_map_openai_params_seedance_input_reference_follows_task(self, model: str, expected: dict[str, object]):
+        mapped = self.config.map_openai_params({"input_reference": "https://example.com/image.png"}, model, False)
+
+        assert mapped == expected
+
     def test_map_openai_params_h3_omits_auto_duration(self):
         assert self.config.map_openai_params({"seconds": "auto"}, H3_TEXT_MODEL, False) == {}
         assert self.config.map_openai_params({"seconds": "auto"}, MODEL, False) == {"duration": "auto"}
