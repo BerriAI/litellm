@@ -428,8 +428,8 @@ class LoggingCallbackManager:
 
     _get_all_callbacks = get_all_callbacks
 
-    def get_failure_callbacks(self) -> list[CustomLogger | Callable[..., object] | str]:
-        return litellm.failure_callback + litellm._async_failure_callback
+    def get_failure_callbacks(self) -> tuple[CustomLogger | Callable[..., object] | str, ...]:
+        return (*litellm.failure_callback, *litellm._async_failure_callback)
 
     def remove_callback_from_all_lists(self, obj: object, require_self: bool = False) -> None:
         """
