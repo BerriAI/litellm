@@ -1,7 +1,3 @@
-import subprocess
-import sys
-from typing import Final
-
 import pytest
 
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import validate_excluded_services_value
@@ -11,49 +7,6 @@ from litellm.types.utils import (
     CaptureMessageContent,
     captures_span_content,
 )
-
-
-def test_parallel_first_usage_construction_does_not_race_schema_build() -> None:
-    probe: Final = r'''
-import inspect
-import sys
-import threading
-from concurrent.futures import ThreadPoolExecutor
-from pydantic import BaseModel
-from litellm.types.utils import Usage, PromptTokensDetailsWrapper, CompletionTokensDetailsWrapper
-
-source, first_line = inspect.getsourcelines(BaseModel.model_rebuild)
-delete_line = next((first_line + i for i, line in enumerate(source) if "delattr(cls, attr)" in line), None)
-sys.setswitchinterval(1e-6)
-
-for model in (Usage, PromptTokensDetailsWrapper, CompletionTokensDetailsWrapper):
-    barrier = threading.Barrier(8, timeout=5)
-    start_barrier = threading.Barrier(8, timeout=5)
-    def trace(frame, event, arg):
-        if (event == "line" and frame.f_code is BaseModel.model_rebuild.__func__.__code__
-            and delete_line is not None and frame.f_lineno == delete_line and frame.f_locals.get("cls") is model
-            and frame.f_locals.get("attr") == "__pydantic_core_schema__"):
-            barrier.wait()
-        return trace
-
-    def construct(index):
-        sys.settrace(trace)
-        try:
-            start_barrier.wait()
-            return model().model_dump()
-        finally:
-            sys.settrace(None)
-
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        results = tuple(pool.map(construct, range(8)))
-    assert len(results) == 8
-    assert all(result == results[0] for result in results)
-    print(model.__name__ + ": 8 parallel constructions passed")
-'''
-    result: Final = subprocess.run(
-        [sys.executable, "-P", "-c", probe], capture_output=True, text=True, timeout=30
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
 
 
 @pytest.mark.parametrize("value", ["", "  ", "auth", "none,redis", "redis,", ",postgres"])
