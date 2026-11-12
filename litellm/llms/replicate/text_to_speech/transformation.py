@@ -137,8 +137,12 @@ class ReplicateTextToSpeechConfig(BaseTextToSpeechConfig):
     @staticmethod
     def _usage(prediction: Mapping[str, object]) -> Usage | None:
         metrics: Final = replicate_prediction_metrics(prediction)
-        prompt_tokens: Final = replicate_positive_int(metrics.get("token_input_count"))
-        completion_tokens: Final = replicate_positive_int(metrics.get("token_output_count"))
+        prompt_tokens: Final = replicate_positive_int(
+            metrics.get("token_input_count", metrics.get("input_token_count"))
+        )
+        completion_tokens: Final = replicate_positive_int(
+            metrics.get("token_output_count", metrics.get("output_token_count"))
+        )
         if prompt_tokens is None and completion_tokens is None:
             return None
         return Usage(
@@ -154,7 +158,7 @@ class ReplicateTextToSpeechConfig(BaseTextToSpeechConfig):
         from litellm.types.llms.openai import HttpxBinaryResponseContent
 
         audio_response.raise_for_status()
-        binary: Final = HttpxBinaryResponseContent(
+        return HttpxBinaryResponseContent(
             httpx.Response(
                 status_code=200,
                 headers={
@@ -163,10 +167,9 @@ class ReplicateTextToSpeechConfig(BaseTextToSpeechConfig):
                 },
                 content=audio_response.content,
                 request=raw_response.request,
-            )
+            ),
+            usage=usage,
         )
-        binary.usage = usage
-        return binary
 
     def transform_text_to_speech_response(
         self,

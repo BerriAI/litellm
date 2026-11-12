@@ -10,7 +10,11 @@ import httpx
 from pydantic import ConfigDict, TypeAdapter
 
 import litellm
-from litellm.constants import DEFAULT_REPLICATE_POLLING_DELAY_SECONDS, DEFAULT_REPLICATE_SYNC_POLLING_RETRIES
+from litellm.constants import (
+    DEFAULT_REPLICATE_POLLING_DELAY_SECONDS,
+    DEFAULT_REPLICATE_SYNC_POLLING_RETRIES,
+    REPLICATE_MAX_OUTPUT_DOWNLOAD_BYTES,
+)
 from litellm.litellm_core_utils.url_utils import (
     assert_same_origin,
     async_safe_get,
@@ -20,7 +24,7 @@ from litellm.litellm_core_utils.url_utils import (
     safe_get,
 )
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, HTTPResponseLimitError
 from litellm.secret_managers.main import get_secret_str
 
 REPLICATE_DEFAULT_API_BASE: Final[str] = "https://api.replicate.com/v1"
@@ -227,13 +231,27 @@ async def async_wait_for_replicate_prediction(
     )
 
 
+def _download_too_large(url: str, error: HTTPResponseLimitError) -> ReplicateError:
+    return ReplicateError(
+        status_code=502,
+        message=f"Replicate output at {url} exceeds REPLICATE_MAX_OUTPUT_DOWNLOAD_BYTES={REPLICATE_MAX_OUTPUT_DOWNLOAD_BYTES}: {error}",
+        headers={},
+    )
+
+
 def replicate_download(client: HTTPHandler, url: str) -> httpx.Response:
-    response: Final = safe_get(client, url)
+    try:
+        response: Final = safe_get(client, url, max_response_bytes=REPLICATE_MAX_OUTPUT_DOWNLOAD_BYTES)
+    except HTTPResponseLimitError as error:
+        raise _download_too_large(url, error) from error
     response.raise_for_status()
     return response
 
 
 async def async_replicate_download(client: AsyncHTTPHandler, url: str) -> httpx.Response:
-    response: Final = await async_safe_get(client, url)
+    try:
+        response: Final = await async_safe_get(client, url, max_response_bytes=REPLICATE_MAX_OUTPUT_DOWNLOAD_BYTES)
+    except HTTPResponseLimitError as error:
+        raise _download_too_large(url, error) from error
     response.raise_for_status()
     return response

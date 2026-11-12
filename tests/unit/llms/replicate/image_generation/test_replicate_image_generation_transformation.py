@@ -7,6 +7,8 @@ import httpx
 import pytest
 
 import litellm
+from litellm.llms.custom_httpx.http_handler import HTTPResponseLimitError
+from litellm.constants import REPLICATE_MAX_OUTPUT_DOWNLOAD_BYTES
 from litellm.litellm_core_utils.url_utils import SSRFError
 from litellm.llms.replicate import common_utils
 from litellm.llms.replicate.common_utils import ReplicateError
@@ -322,3 +324,39 @@ def test_response_size_stays_unset_without_both_native_dimensions(prediction_inp
         _prediction_response({"id": "p1", "status": "succeeded", "output": IMAGE_URLS[0], "input": prediction_input}),
     )
     assert result.size is None
+
+
+def test_b64_download_is_bounded_by_the_output_byte_limit():
+    seen: list[object] = []
+
+    class _LimitAwareClient(_FakeClient):
+        def get(
+            self, url: str, headers: dict[str, str] | None = None, params: object = None, **kwargs: object
+        ) -> httpx.Response:
+            seen.append(kwargs.get("max_response_bytes"))
+            return super().get(url, headers=headers, params=params, **kwargs)
+
+    client = _LimitAwareClient(_download(IMAGE_URLS[0], b"png"))
+    result = _transform(
+        _config(client),
+        _prediction_response({"id": "p1", "status": "succeeded", "output": IMAGE_URLS[0]}),
+        {"response_format": "b64_json"},
+    )
+    assert result.data[0].b64_json == base64.b64encode(b"png").decode()
+    assert seen == [REPLICATE_MAX_OUTPUT_DOWNLOAD_BYTES]
+
+
+def test_oversized_b64_download_is_a_replicate_error():
+    class _OverflowingClient(_FakeClient):
+        def get(
+            self, url: str, headers: dict[str, str] | None = None, params: object = None, **kwargs: object
+        ) -> httpx.Response:
+            raise HTTPResponseLimitError("Response exceeds the configured size limit")
+
+    with pytest.raises(ReplicateError, match="REPLICATE_MAX_OUTPUT_DOWNLOAD_BYTES") as refused:
+        _transform(
+            _config(_OverflowingClient()),
+            _prediction_response({"id": "p1", "status": "succeeded", "output": IMAGE_URLS[0]}),
+            {"response_format": "b64_json"},
+        )
+    assert refused.value.status_code == 502
