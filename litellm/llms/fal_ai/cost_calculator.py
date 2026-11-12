@@ -1,12 +1,13 @@
 import os
 from collections.abc import Mapping
-from math import ceil
+from math import ceil, isfinite
 from types import MappingProxyType
 from typing import Final
 
 from pydantic import TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import get_provider_response_headers_from_hidden_params
 from litellm.litellm_core_utils.llm_cost_calc.utils import deployment_pricing, resolve_image_model_info
 from litellm.types.utils import ImageObject, ImageResponse, ModelInfo
 
@@ -28,6 +29,7 @@ FAL_NAMED_IMAGE_SIZES: Final[Mapping[str, str]] = MappingProxyType(
 _OBJECT_MAP: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
 FAL_AI_QUEUE_DEFAULT_BASE: Final[str] = "https://queue.fal.run"
+FAL_BILLABLE_UNITS_HEADER: Final[str] = "x-fal-billable-units"
 
 
 def fal_ai_queue_base() -> str:
@@ -150,6 +152,26 @@ def _resolution_cost_per_image(entry: Mapping[str, object] | None, resolution: o
     return float(cost) if isinstance(cost, (int, float)) else None
 
 
+def _billable_units(response: object) -> float | None:
+    headers: Final = get_provider_response_headers_from_hidden_params(response)
+    raw_units: Final = None if headers is None else headers.get(FAL_BILLABLE_UNITS_HEADER)
+    if raw_units is None:
+        return None
+    try:
+        units: Final = float(raw_units)
+    except ValueError:
+        return None
+    return units if isfinite(units) and units >= 0 else None
+
+
+def _billable_units_cost(prices: Mapping[str, object] | None, response: object) -> float | None:
+    unit_cost: Final = None if prices is None else prices.get("output_cost_per_billable_unit")
+    units: Final = _billable_units(response)
+    if isinstance(unit_cost, bool) or not isinstance(unit_cost, (int, float)) or units is None:
+        return None
+    return unit_cost * units
+
+
 def _requested_image_count(request_body: Mapping[str, object]) -> int:
     num_images: Final = request_body.get("num_images")
     return num_images if type(num_images) is int and num_images > 0 else 1
@@ -165,7 +187,7 @@ def _passthrough_cost_per_image(entry: Mapping[str, object], request_body: Mappi
 
 def fal_ai_passthrough_cost(model: str, request_body: Mapping[str, object]) -> float | None:
     entry: Final = _entry(f"{litellm.LlmProviders.FAL_AI.value}/{model}")
-    if entry is None:
+    if entry is None or "output_cost_per_billable_unit" in entry:
         return None
     cost_per_image: Final = _passthrough_cost_per_image(entry, request_body)
     if cost_per_image is None:
@@ -187,15 +209,20 @@ def cost_calculator(
     normalized_model: Final = model.removeprefix(f"{litellm.LlmProviders.FAL_AI.value}/")
     images: Final = tuple(image_response.data or ())
     deployment_prices: Final = deployment_pricing(model_info)
+    deployment_billable_units_cost: Final = _billable_units_cost(deployment_prices, image_response)
+    if deployment_billable_units_cost is not None:
+        return deployment_billable_units_cost
     deployment_cost_per_image: Final = (
         None if deployment_prices is None else deployment_prices.get("output_cost_per_image")
     )
     if deployment_cost_per_image is not None:
         return deployment_cost_per_image * len(images)
+    entry: Final = _entry(f"{litellm.LlmProviders.FAL_AI.value}/{normalized_model}")
+    billable_units_cost: Final = _billable_units_cost(entry, image_response)
+    if billable_units_cost is not None:
+        return billable_units_cost
     params: Final[Mapping[str, object]] = optional_params or MappingProxyType({})
-    resolution_cost_per_image: Final = _resolution_cost_per_image(
-        _entry(f"{litellm.LlmProviders.FAL_AI.value}/{normalized_model}"), params.get("resolution")
-    )
+    resolution_cost_per_image: Final = _resolution_cost_per_image(entry, params.get("resolution"))
     if resolution_cost_per_image is not None:
         return resolution_cost_per_image * len(images)
     keyed_costs: Final = tuple(

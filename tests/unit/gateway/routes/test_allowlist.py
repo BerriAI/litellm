@@ -7,7 +7,9 @@ import pytest
 from backend.routes.allowlist import BACKEND_EXACT_PATHS, BACKEND_PATH_PREFIXES
 from gateway.routes.allowlist import GATEWAY_EXACT_PATHS, GATEWAY_PATH_PREFIXES
 
-_INGRESS_TEMPLATE: Final = Path(__file__).parents[4] / "helm" / "litellm" / "templates" / "ingress.yaml"
+_INGRESS_TEMPLATE: Final = (
+    Path(__file__).parents[4] / "litellm" / "deploy" / "helm" / "litellm" / "templates" / "ingress.yaml"
+)
 
 # A route template whose first segment is any provider name (/{provider}/v1/files). An Ingress Prefix cannot
 # express it, so those requests reach the backend unless the provider has its own prefix above.

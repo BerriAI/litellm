@@ -57,7 +57,10 @@ from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 from collections.abc import AsyncIterator, Callable, Mapping
 from litellm.constants import KUBERNETES_POD_ROUTING_KEY, LOGGING_WORKER_MAX_TIME_PER_COROUTINE
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.types.utils import ChatCompletionMessageToolCall, Function
+from litellm.litellm_core_utils.hidden_params import set_hidden_params
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.types.utils import ChatCompletionMessageToolCall, Delta, Function, ModelResponseStream, StreamingChoices
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 exporter = InMemorySpanExporter()
@@ -399,6 +402,121 @@ def test_v1_auto_router_response_model_names_the_routed_model(decision: object, 
     (finished,) = exporter.get_finished_spans()
     attributes: Final = finished.attributes
     assert (attributes["gen_ai.response.model"], attributes["gen_ai.usage.input_tokens"]) == (expected, 3)
+
+
+def _response_with_provider_model(model: str, provider_model: str | None) -> litellm.ModelResponse:
+    response: Final = litellm.ModelResponse(model=model)
+    if provider_model:
+        set_hidden_params(response, {"provider_response_model": provider_model})
+    return response
+
+
+def _aliased_response(provider_model: str | None) -> litellm.ModelResponse:
+    return _response_with_provider_model("qwen-small", provider_model)
+
+
+def _streamed_aliased_response(provider_model: str | None) -> litellm.ModelResponse:
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=None,
+        model="qwen-small",
+        logging_obj=Logging(
+            model="qwen-small",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="acompletion",
+            start_time=1.0,
+            litellm_call_id="alias-call",
+            function_id="test",
+        ),
+        custom_llm_provider="hosted_vllm",
+    )
+    chunks: Final = tuple(
+        wrapper.chunk_creator(
+            chunk=ModelResponseStream(
+                id="chunk-1",
+                model=provider_model,
+                choices=[StreamingChoices(finish_reason=finish_reason, index=0, delta=delta)],
+            )
+        )
+        for finish_reason, delta in ((None, Delta(content="hi")), ("stop", Delta()))
+    )
+    assembled: Final = litellm.stream_chunk_builder(chunks=list(chunks))
+    assert isinstance(assembled, litellm.ModelResponse) and assembled.model == "qwen-small"
+    return assembled
+
+
+def _logged_model_names(
+    response_obj: object, latest_semconv: bool, model_group: str = "qwen-small", decision: object = None
+) -> tuple[object, object, object]:
+    semconv: Final = {OTELSemconvCategory.GEN_AI_LATEST_EXPERIMENTAL} if latest_semconv else set[OTELSemconvCategory]()
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    with patch.dict(os.environ, {"OTEL_SEMCONV_STABILITY_OPT_IN": ""}):
+        otel: Final = OpenTelemetry(
+            config=OpenTelemetryConfig(semconv_stability_opt_in=semconv), tracer_provider=provider
+        )
+    with provider.get_tracer(__name__).start_as_current_span("inference") as span:
+        otel.set_attributes(
+            span,
+            {
+                "model": "qwen-dep",
+                "standard_logging_object": {
+                    "id": "alias-call",
+                    "call_type": "acompletion",
+                    "model_group": model_group,
+                    "metadata": {"routing_decision": decision},
+                },
+            },
+            response_obj,
+        )
+    (finished,) = exporter.get_finished_spans()
+    attributes: Final = finished.attributes
+    return (
+        attributes.get("gen_ai.response.model"),
+        attributes.get("litellm.model_group"),
+        attributes.get("gen_ai.request.model"),
+    )
+
+
+@pytest.mark.parametrize(
+    ("make_response", "provider_model", "latest_semconv", "expected_response_model"),
+    [
+        (_aliased_response, "Qwen3-0.6B-served", True, "Qwen3-0.6B-served"),
+        (_streamed_aliased_response, "Qwen3-0.6B-served", True, "Qwen3-0.6B-served"),
+        (_aliased_response, None, True, "qwen-dep"),
+        (_aliased_response, "Qwen3-0.6B-served", False, "qwen-small"),
+        (_streamed_aliased_response, "Qwen3-0.6B-served", False, "qwen-small"),
+    ],
+    ids=["semconv", "semconv-streamed", "semconv-deployment-fallback", "legacy", "legacy-streamed"],
+)
+def test_aliased_response_model_names_the_provider_model_only_under_latest_semconv(
+    make_response: Callable[[str | None], litellm.ModelResponse],
+    provider_model: str | None,
+    latest_semconv: bool,
+    expected_response_model: str,
+) -> None:
+    assert _logged_model_names(make_response(provider_model), latest_semconv) == (
+        expected_response_model,
+        "qwen-small",
+        "qwen-dep",
+    )
+
+
+@pytest.mark.parametrize(
+    ("provider_model", "expected_response_model"),
+    [("Qwen3-0.6B-served", "Qwen3-0.6B-served"), (None, "answer")],
+    ids=["provider-model", "routed-model"],
+)
+def test_latest_semconv_auto_router_response_model_prefers_provider_then_routed_model(
+    provider_model: str | None, expected_response_model: str
+) -> None:
+    assert _logged_model_names(
+        _response_with_provider_model("auto-router", provider_model),
+        latest_semconv=True,
+        model_group="auto-router",
+        decision={"router_model_name": "auto-router", "routed_model": "answer"},
+    ) == (expected_response_model, "auto-router", "qwen-dep")
 
 
 def test_v1_server_tool_calls_lead_the_completion_function_call_attributes() -> None:

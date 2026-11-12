@@ -1,5 +1,5 @@
 """
-``RustCore``: the router core served by litellm-rust/crates/router-core through ``_native``.
+``RustCore``: the router core served by litellm/rust/crates/router-core through ``_native``.
 
 The Rust core owns the registry, selection, retries, fallbacks and cooldowns. It reaches outside
 itself only through its host, and the host never calls back into a Python router:
@@ -1351,6 +1351,9 @@ class _EndpointPort:
     def group_deployments(self, model_name: str) -> Sequence[Mapping[str, object]] | None:
         return self._core._hosted._core_get_model_list(model_name=model_name)  # pyright: ignore[reportPrivateUsage]  # see the class docstring
 
+    def group_members(self, model_name: str) -> Sequence[tuple[object, object]] | None:
+        return self._core._hosted._group_members(model_name)  # pyright: ignore[reportPrivateUsage]  # see the class docstring
+
     def routed_name(self, model: object) -> str:
         return self._core.routed_name(model)
 
@@ -1683,7 +1686,11 @@ class RustCore(
 
         try:
             selector: Final = self._prefetch_usage_selector(model, request)
-            deployments: Final = self._hosted._core_get_model_list(model_name=model) or []  # pyright: ignore[reportPrivateUsage]  # see __init__
+            deployments: Final = (
+                self._hosted._core_get_model_list(model_name=model) or []  # pyright: ignore[reportPrivateUsage]  # see __init__
+                if isinstance(selector, LowestTPMLoggingHandler_v2)
+                else []
+            )
         except Exception:  # noqa: BLE001  # the batched read is an optimisation: the reads stay apart
             yield
             return
