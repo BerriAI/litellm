@@ -157,18 +157,24 @@ def test_custom_clip_pricing_controls_admission(pricing_source: str) -> None:
 
 @pytest.mark.parametrize("pricing_source", ["direct", "model_info", "registered"])
 @pytest.mark.parametrize(
-    ("pricing", "expected_cost"),
+    ("seconds", "pricing", "expected_cost"),
     [
-        ({"output_cost_per_second": 0.12}, 8 * 0.12),
-        ({"output_cost_per_second_720p": 0.13}, 8 * 0.13),
-        ({"output_cost_per_video_per_second": 0.14}, 8 * 0.14),
-        ({"output_cost_per_video_clip": {"8s": {"720p": 0.73}}}, 0.73),
-        ({"output_cost_per_video_clip": {"8s": {"720p": 0.0}}}, 0.0),
+        ("8", {"output_cost_per_second": 0.12}, 8 * 0.12),
+        ("8", {"output_cost_per_second_720p": 0.13}, 8 * 0.13),
+        ("8", {"output_cost_per_video_per_second": 0.14}, 8 * 0.14),
+        ("8", {"output_cost_per_video_clip": {"8s": {"720p": 0.73}}}, 0.73),
+        ("8", {"output_cost_per_video_clip": {"8s": {"720p": 0.0}}}, 0.0),
+        ("5", {"output_cost_per_second": 0.12}, 5 * 0.12),
+        ("5", {"output_cost_per_second_720p": 0.13}, 5 * 0.13),
+        ("5", {"output_cost_per_video_per_second": 0.14}, 5 * 0.14),
+        ("5", {"output_cost_per_second": 0.12, "output_cost_per_video_clip": {"5s": {"720p": 0.71}}}, 0.71),
+        ("8", {"output_cost_per_second": 0.12, "output_cost_per_video_clip": {"5s": {"720p": 0.71}}}, 8 * 0.12),
     ],
 )
 def test_video_override_is_admitted_and_billed_without_leaking(
     monkeypatch: pytest.MonkeyPatch,
     pricing_source: str,
+    seconds: str,
     pricing: dict[str, object],
     expected_cost: float,
 ) -> None:
@@ -194,7 +200,7 @@ def test_video_override_is_admitted_and_billed_without_leaking(
         video: Final = litellm.video_generation(
             model=model,
             prompt="clip",
-            seconds="8",
+            seconds=seconds,
             size="720p",
             api_key="synthetic-fal-key",
             client=HTTPHandler(client=client),
@@ -217,15 +223,24 @@ def test_video_override_is_admitted_and_billed_without_leaking(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("pricing_source", ["litellm_params", "model_info"])
 @pytest.mark.parametrize(
-    ("pricing", "expected_cost"),
+    ("seconds", "pricing", "expected_cost"),
     [
-        ({"output_cost_per_second": 0.12}, 8 * 0.12),
-        ({"output_cost_per_second_720p": 0.13}, 8 * 0.13),
-        ({"output_cost_per_video_clip": {"8s": {"720p": 0.73}}}, 0.73),
+        ("8", {"output_cost_per_second": 0.12}, 8 * 0.12),
+        ("8", {"output_cost_per_second_720p": 0.13}, 8 * 0.13),
+        ("8", {"output_cost_per_video_clip": {"8s": {"720p": 0.73}}}, 0.73),
+        ("5", {"output_cost_per_second": 0.12}, 5 * 0.12),
+        ("5", {"output_cost_per_second_720p": 0.13}, 5 * 0.13),
+        ("5", {"output_cost_per_video_per_second": 0.14}, 5 * 0.14),
+        ("5", {"output_cost_per_second": 0.12, "output_cost_per_video_clip": {"5s": {"720p": 0.71}}}, 0.71),
+        ("8", {"output_cost_per_second": 0.12, "output_cost_per_video_clip": {"5s": {"720p": 0.71}}}, 8 * 0.12),
     ],
 )
 async def test_router_deployment_video_pricing_is_admitted_and_billed(
-    monkeypatch: pytest.MonkeyPatch, pricing_source: str, pricing: dict[str, object], expected_cost: float
+    monkeypatch: pytest.MonkeyPatch,
+    pricing_source: str,
+    seconds: str,
+    pricing: dict[str, object],
+    expected_cost: float,
 ) -> None:
     model: Final = "fal_ai/fal-ai/pixverse/v5/transition"
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -255,7 +270,7 @@ async def test_router_deployment_video_pricing_is_admitted_and_billed(
         video: Final = await router.avideo_generation(
             model="custom-video",
             prompt="clip",
-            seconds="8",
+            seconds=seconds,
             size="720p",
         )
     assert video.status == "queued"

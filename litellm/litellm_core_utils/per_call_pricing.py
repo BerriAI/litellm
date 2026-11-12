@@ -68,6 +68,7 @@ def per_call_model_info(
         {
             **catalog,
             **_token_rates_cleared_for_per_second_overrides(custom),
+            **_clip_table_cleared_for_video_rate_overrides(mode, custom),
             **custom,
             **_tiers_with_flat_overrides(catalog, custom),
             **(zeroed or {}),
@@ -112,6 +113,20 @@ def resolve_video_model_info(model: str, custom_llm_provider: str, kwargs: Mappi
 _FLAT_TOKEN_RATE_FIELDS: Final = ("input_cost_per_token", "output_cost_per_token")
 _PER_SECOND_RATE_FIELDS: Final = ("cost_per_second", "input_cost_per_second", "output_cost_per_second")
 _TIERS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+def _clip_table_cleared_for_video_rate_overrides(
+    mode: Literal["chat", "embedding", "video_generation"], custom: Mapping[str, object]
+) -> Mapping[str, object]:
+    if mode != "video_generation" or custom.get("output_cost_per_video_clip") is not None:
+        return {}
+    if any(
+        key in ("output_cost_per_video_per_second", "output_cost_per_second")
+        or key.startswith("output_cost_per_second_")
+        for key in custom
+    ):
+        return {"output_cost_per_video_clip": None}
+    return {}
 
 
 def _token_rates_cleared_for_per_second_overrides(custom: Mapping[str, object]) -> Mapping[str, object]:
