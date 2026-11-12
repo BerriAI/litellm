@@ -80,7 +80,7 @@ describe("CustomerUsageOverview", () => {
     expect(screen.getByTitle("700 tokens")).toBeInTheDocument();
     expect(screen.getByText("customer-primary")).toBeInTheDocument();
     expect(screen.getByText("customer-reserve")).toBeInTheDocument();
-    expect(screen.queryByText("No budget")).not.toBeInTheDocument();
+    expect(screen.queryByText("No budget set")).not.toBeInTheDocument();
     const url = requestedUrls()[0];
     expect(url.pathname).toBe("/customer/daily/activity/aggregated");
     expect(url.searchParams.get("end_user_ids")).toBe("customer-1");
