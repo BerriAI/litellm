@@ -19,12 +19,16 @@ use wiremock::ResponseTemplate;
 mod support;
 use support::*;
 
+mod gateway;
 mod host;
+mod pre_request;
 mod request;
 mod response;
+mod retry;
 mod secrets;
 mod stream;
 mod tencent;
+mod transport;
 
 const MODEL: &str = "claude-sonnet-4-5";
 

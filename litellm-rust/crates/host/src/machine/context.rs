@@ -5,7 +5,7 @@ use litellm_coroutine::Co;
 
 use super::coroutine::MachineFault;
 use crate::{
-    interceptors::{RawResponse, RequestContext, WireRequest},
+    interceptors::{RawResponse, RequestContext, RetriedRequest, WireRequest},
     protocol::{HostRequest, InterceptRequest, Protocol, Reply, StreamDelivery},
 };
 
@@ -116,6 +116,14 @@ where
         self.0
             .request_reply(|reply| {
                 HostRequest::Intercept(InterceptRequest::AfterProviderResponse { raw, reply })
+            })
+            .await?
+    }
+
+    async fn provider_request_retried(&self, retry: RetriedRequest) -> Result<(), P::Error> {
+        self.0
+            .request_reply(|reply| {
+                HostRequest::Intercept(InterceptRequest::ProviderRequestRetried { retry, reply })
             })
             .await?
     }

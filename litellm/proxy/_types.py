@@ -31,9 +31,8 @@ from typing_extensions import (
 from litellm._uuid import uuid
 from litellm.constants import DEFAULT_STAGGER_WINDOW_SECONDS, MCP_STDIO_ALLOWED_COMMANDS
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+    OTEL_DESTINATION_VALIDATORS,
     validate_arize_otlp_protocol_value,
-    validate_capture_message_content_value,
-    validate_excluded_services_value,
     validate_langfuse_environment_value,
     validate_langfuse_span_scope_value,
     validate_no_callback_env_reference,
@@ -96,8 +95,7 @@ from litellm.types.router import AllowedModelRegion, RouterErrors, UpdateRouterC
 from litellm.types.router_weights import validate_router_settings_dict
 from litellm.types.secret_managers.main import KeyManagementSystem
 from litellm.types.utils import (
-    CAPTURE_MESSAGE_CONTENT_VAR,
-    EXCLUDED_SERVICES_VAR,
+    OTEL_DESTINATION_VARS,
     AzureSpillover,
     CallTypes,
     CostBreakdown,
@@ -229,6 +227,7 @@ class LitellmTableNames(str, enum.Enum):
     SSO_CONFIG_TABLE_NAME = "LiteLLM_SSOConfig"
     UI_SETTINGS_TABLE_NAME = "LiteLLM_UISettings"
     AGENT_TABLE_NAME = "LiteLLM_AgentsTable"
+    GUARDRAILS_TABLE_NAME = "LiteLLM_GuardrailsTable"
 
 
 from litellm.types.integrations.slack_alerting import (
@@ -729,6 +728,7 @@ class LiteLLMRoutes(enum.Enum):
             # model
             "/model/new",
             "/model/update",
+            "/model/{model_id}/update",
             "/model/delete",
             "/model/info",
             "/model/{model_id}/kubernetes_pods",
@@ -2151,9 +2151,7 @@ class BlockModelRequest(LiteLLMPydanticObjectBase):
     model_id: str  # required
 
 
-CALLBACK_VAR_NAMES: Final = frozenset(
-    {*StandardCallbackDynamicParams.__annotations__, CAPTURE_MESSAGE_CONTENT_VAR, EXCLUDED_SERVICES_VAR}
-)
+CALLBACK_VAR_NAMES: Final = frozenset({*StandardCallbackDynamicParams.__annotations__, *OTEL_DESTINATION_VARS})
 
 
 class AddTeamCallback(LiteLLMPydanticObjectBase):
@@ -2168,7 +2166,7 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
         for key, value in callback_vars.items():
             if key not in CALLBACK_VAR_NAMES:
                 raise ValueError(f"Invalid callback variable: {key}. Must be one of {set(CALLBACK_VAR_NAMES)}")
-            if key in (CAPTURE_MESSAGE_CONTENT_VAR, EXCLUDED_SERVICES_VAR) and not isinstance(value, str):
+            if key in OTEL_DESTINATION_VARS and not isinstance(value, str):
                 raise ValueError(f"{key} must be a string, got {type(value).__name__}")
             callback_vars[key] = str(value)
             validate_no_callback_env_reference(key, callback_vars[key], source="key/team callback metadata")
@@ -2178,10 +2176,8 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
                 validate_langfuse_span_scope_value(callback_vars[key])
             if key == "arize_otlp_protocol":
                 validate_arize_otlp_protocol_value(callback_vars[key])
-            if key == CAPTURE_MESSAGE_CONTENT_VAR:
-                validate_capture_message_content_value(callback_vars[key])
-            if key == EXCLUDED_SERVICES_VAR:
-                validate_excluded_services_value(callback_vars[key])
+            if (destination_validator := OTEL_DESTINATION_VALIDATORS.get(key)) is not None:
+                destination_validator(callback_vars[key])
         return values
 
 

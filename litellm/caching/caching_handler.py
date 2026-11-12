@@ -19,7 +19,8 @@ import datetime
 import inspect
 import time
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Generator, Mapping
-from typing import TYPE_CHECKING, Any, Final, Optional, TypeVar
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Final, Optional, Protocol, TypeVar
 
 from pydantic import ConfigDict, SkipValidation, TypeAdapter, ValidationError
 from typing_extensions import TypedDict
@@ -72,10 +73,25 @@ from litellm.litellm_core_utils.core_helpers import (
     as_object_list,
     as_str_mapping,
     get_parent_otel_span_from_kwargs,
+    json_contains,
+    require_attributes,
 )
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 
 EmbeddingCacheInputElement = str | list[int] | ChatCompletionFileObject
+
+
+@dataclass(frozen=True, slots=True)
+class CacheRead:
+    kwargs: dict[str, object]  # mutable-ok: the @client call kwargs the embedding path keeps reading and rewriting
+    checked: bool = False
+    cached_result: object | None = None
+    model: str = ""
+    end_time: datetime.datetime | None = None
+
+    @property
+    def hit(self) -> bool:
+        return self.end_time is not None
 
 
 class CachingHandlerResponse(LiteLLMBaseModel):
@@ -246,6 +262,15 @@ def _stream_replay_requested(kwargs: Mapping[str, object]) -> bool:
     return converted_stream_requested(kwargs) and not kwargs.get("_agentic_loop_depth")
 
 
+class _CacheControls(Protocol):
+    def get(self, key: str, default: bool, /) -> object: ...
+
+
+def _cache_reads_disabled(kwargs: Mapping[str, object]) -> bool:
+    cache_controls: Final = require_attributes(kwargs.get("cache", {}), _CacheControls, "get")
+    return cache_controls.get("no-cache", False) is True
+
+
 def _should_defer_streaming_cache_hit_callbacks(*, cached_result: object) -> bool:
     """
     When the cache hit is replayed as a stream, do not run success callbacks at cache-hit time.
@@ -300,6 +325,10 @@ def create_cache_write_task(write_factory: Callable[[], Awaitable[None]]) -> "as
 def _request_cache_key(request_kwargs: Mapping[str, Any]) -> str | None:
     """Read the caller-supplied ``cache_key`` off the request kwargs."""
     return request_kwargs.get("cache_key", None)
+
+
+def _is_cache_miss(cached_result: object) -> bool:
+    return cached_result is None or isinstance(cached_result, list)
 
 
 def _set_cached_hidden_param(response: object, key: str, value: object) -> None:
@@ -395,121 +424,146 @@ class LLMCachingHandler:
         Raises:
             None
         """
-        if _is_response_cache_excluded(model=model, kwargs=kwargs):
-            self.request_kwargs = _drop_logging_obj_from_kwargs(kwargs)
+        if not self.reads_cache(model=model, kwargs=kwargs):
             return None
-
-        # Check if caching should be performed BEFORE doing expensive operations
-        if (
-            (kwargs.get("caching", None) is None and litellm.cache is not None) or kwargs.get("caching", False) is True
-        ) and (
-            kwargs.get("cache", {}).get("no-cache", False) is not True
-        ):  # allow users to control returning cached responses from the completion function
-            args = args or ()
-            final_embedding_cached_response: EmbeddingResponse | None = None
-            embedding_all_elements_cache_hit: bool = False
-            cached_result: object | None = None
-            kwargs = kwargs.copy()
-            #########################################################
-            # Init cache timing metrics
-            #########################################################
-            cache_check_start_time: Final = time.perf_counter()
-            cache_check_end_time: float | None = None
-            #########################################################
-            parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
-            kwargs["parent_otel_span"] = parent_otel_span
-
-            if litellm.cache is not None and self._is_call_type_supported_by_cache(original_function=original_function):
-                verbose_logger.debug("Checking Async Cache")
-                logging_obj.reset_caching_details()
-                cached_result = await self._retrieve_from_cache(
-                    call_type=call_type,
+        args = args or ()
+        final_embedding_cached_response: EmbeddingResponse | None = None
+        embedding_all_elements_cache_hit: bool = False
+        read: Final = await self.async_read_cache(
+            model=model,
+            original_function=original_function,
+            logging_obj=logging_obj,
+            call_type=call_type,
+            kwargs=kwargs,
+            args=args,
+        )
+        kwargs = read.kwargs
+        cached_result: object | None = read.cached_result
+        if litellm.cache is not None and read.checked:
+            if read.end_time is not None:
+                cached_result = self._convert_cached_result_to_model_response(
+                    cached_result=cached_result,
+                    call_type=original_function.__name__,
                     kwargs=kwargs,
+                    logging_obj=logging_obj,
+                    model=read.model,
+                    custom_llm_provider=kwargs.get("custom_llm_provider", None),
                     args=args,
                 )
-                cache_check_end_time = time.perf_counter()
-
-                if cached_result is not None and not isinstance(cached_result, list):
-                    verbose_logger.debug("Cache Hit!")
-                    cache_hit: Final = True
-                    end_time: Final = datetime.datetime.now()
-                    provider_model, custom_llm_provider, _, _ = litellm.get_llm_provider(
-                        model=model,
-                        custom_llm_provider=kwargs.get("custom_llm_provider", None),
-                        api_base=kwargs.get("api_base", None),
-                        api_key=kwargs.get("api_key", None),
-                    )
-                    cache_duration_ms: Final = (cache_check_end_time - cache_check_start_time) * 1000
-                    self._update_litellm_logging_obj_environment(
+                if not _should_defer_streaming_cache_hit_callbacks(cached_result=cached_result):
+                    # LOG SUCCESS
+                    self._async_log_cache_hit_on_callbacks(
                         logging_obj=logging_obj,
-                        model=provider_model,
-                        kwargs=kwargs,
                         cached_result=cached_result,
-                        is_async=True,
-                        custom_llm_provider=custom_llm_provider,
-                        cache_duration_ms=cache_duration_ms,
-                    )
-
-                    call_type = original_function.__name__
-
-                    cached_result = self._convert_cached_result_to_model_response(
-                        cached_result=cached_result,
-                        call_type=call_type,
-                        kwargs=kwargs,
-                        logging_obj=logging_obj,
-                        model=provider_model,
-                        custom_llm_provider=kwargs.get("custom_llm_provider", None),
-                        args=args,
-                    )
-                    if not _should_defer_streaming_cache_hit_callbacks(cached_result=cached_result):
-                        # LOG SUCCESS
-                        self._async_log_cache_hit_on_callbacks(
-                            logging_obj=logging_obj,
-                            cached_result=cached_result,
-                            start_time=start_time,
-                            end_time=end_time,
-                            cache_hit=cache_hit,
-                        )
-                    cache_key: Final = (
-                        self.preset_cache_key
-                        or self.request_kwargs.get("cache_key")
-                        or litellm.cache.get_cache_key(**self.request_kwargs)
-                    )
-                    _set_cached_hidden_param(cached_result, "cache_key", cache_key)
-                    return CachingHandlerResponse(cached_result=cached_result)
-                elif (
-                    call_type == CallTypes.aembedding.value
-                    and cached_result is not None
-                    and isinstance(cached_result, list)
-                    and litellm.cache is not None
-                    and not isinstance(litellm.cache.cache, S3Cache)  # s3 doesn't support bulk writing. Exclude.
-                ):
-                    (
-                        final_embedding_cached_response,
-                        embedding_all_elements_cache_hit,
-                    ) = self._process_async_embedding_cached_response(
-                        final_embedding_cached_response=final_embedding_cached_response,
-                        cached_result=cached_result,
-                        kwargs=kwargs,
-                        logging_obj=logging_obj,
                         start_time=start_time,
-                        model=model,
+                        end_time=read.end_time,
+                        cache_hit=True,
                     )
-                    return CachingHandlerResponse(
-                        final_embedding_cached_response=final_embedding_cached_response,
-                        embedding_all_elements_cache_hit=embedding_all_elements_cache_hit,
-                        embedding_uncached_input=self.handle_kwargs_input_list_or_str(kwargs),
-                    )
+                _set_cached_hidden_param(cached_result, "cache_key", self.hit_cache_key())
+                return CachingHandlerResponse(cached_result=cached_result)
+            elif (
+                call_type == CallTypes.aembedding.value
+                and cached_result is not None
+                and isinstance(cached_result, list)
+                and litellm.cache is not None
+                and not isinstance(litellm.cache.cache, S3Cache)  # s3 doesn't support bulk writing. Exclude.
+            ):
+                (
+                    final_embedding_cached_response,
+                    embedding_all_elements_cache_hit,
+                ) = self._process_async_embedding_cached_response(
+                    final_embedding_cached_response=final_embedding_cached_response,
+                    cached_result=cached_result,
+                    kwargs=kwargs,
+                    logging_obj=logging_obj,
+                    start_time=start_time,
+                    model=model,
+                )
+                return CachingHandlerResponse(
+                    final_embedding_cached_response=final_embedding_cached_response,
+                    embedding_all_elements_cache_hit=embedding_all_elements_cache_hit,
+                    embedding_uncached_input=self.handle_kwargs_input_list_or_str(kwargs),
+                )
 
-            verbose_logger.debug("CACHE RESULT: %s", cached_result)
-            return CachingHandlerResponse(
-                cached_result=cached_result,
-                final_embedding_cached_response=final_embedding_cached_response,
-            )
-        # Caching disabled - return None to indicate no caching attempted
-        return None
+        verbose_logger.debug("CACHE RESULT: %s", cached_result)
+        return CachingHandlerResponse(
+            cached_result=cached_result,
+            final_embedding_cached_response=final_embedding_cached_response,
+        )
 
     _async_get_cache = async_get_cache
+
+    def reads_cache(
+        self,
+        model: str,
+        kwargs: dict[str, Any],  # pyright: ignore[reportExplicitAny]  # mutable-ok: the @client call kwargs, read as the wrapper reads them
+    ) -> bool:
+        if _is_response_cache_excluded(model=model, kwargs=kwargs):
+            self.request_kwargs = _drop_logging_obj_from_kwargs(kwargs)
+            return False
+        return (
+            (kwargs.get("caching", None) is None and litellm.cache is not None) or kwargs.get("caching", False) is True
+        ) and (
+            not _cache_reads_disabled(kwargs)
+        )  # allow users to control returning cached responses from the completion function
+
+    async def async_read_cache(
+        self,
+        model: str,
+        original_function: Callable[..., object],
+        logging_obj: LiteLLMLoggingObj,
+        call_type: str,
+        kwargs: Mapping[str, Any],  # pyright: ignore[reportExplicitAny]  # the @client call kwargs, read as the wrapper reads them
+        args: tuple[object, ...],
+    ) -> CacheRead:
+        cache_check_start_time: Final = time.perf_counter()
+        read_kwargs: Final = dict(kwargs)
+        read_kwargs["parent_otel_span"] = get_parent_otel_span_from_kwargs(read_kwargs)
+        if litellm.cache is None or not self._is_call_type_supported_by_cache(original_function=original_function):
+            return CacheRead(kwargs=read_kwargs)
+        verbose_logger.debug("Checking Async Cache")
+        logging_obj.reset_caching_details()
+        cached_result: Final = await self._retrieve_from_cache(
+            call_type=call_type,
+            kwargs=read_kwargs,
+            args=args,
+        )
+        cache_check_end_time: Final = time.perf_counter()
+        if _is_cache_miss(cached_result):
+            return CacheRead(kwargs=read_kwargs, checked=True, cached_result=cached_result)
+        verbose_logger.debug("Cache Hit!")
+        end_time: Final = datetime.datetime.now()
+        provider_model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+            model=model,
+            custom_llm_provider=read_kwargs.get("custom_llm_provider", None),
+            api_base=read_kwargs.get("api_base", None),
+            api_key=read_kwargs.get("api_key", None),
+        )
+        self._update_litellm_logging_obj_environment(
+            logging_obj=logging_obj,
+            model=provider_model,
+            kwargs=read_kwargs,
+            cached_result=cached_result,
+            is_async=True,
+            custom_llm_provider=custom_llm_provider,
+            cache_duration_ms=(cache_check_end_time - cache_check_start_time) * 1000,
+        )
+        return CacheRead(
+            kwargs=read_kwargs,
+            checked=True,
+            cached_result=cached_result,
+            model=provider_model,
+            end_time=end_time,
+        )
+
+    def hit_cache_key(self) -> object:
+        if litellm.cache is None:
+            return None
+        return (
+            self.preset_cache_key
+            or self.request_kwargs.get("cache_key")
+            or litellm.cache.get_cache_key(**self.request_kwargs)
+        )
 
     def sync_get_cache(
         self,
@@ -521,7 +575,7 @@ class LLMCachingHandler:
         kwargs: dict[str, Any],
         args: tuple[object, ...] | None = None,
     ) -> CachingHandlerResponse:
-        cached_result: Any | None = None
+        cached_result: object | None = None
 
         # Check if caching should be performed BEFORE doing expensive kwargs copy
         if _is_response_cache_excluded(model=model, kwargs=kwargs):
@@ -550,7 +604,7 @@ class LLMCachingHandler:
                 verbose_logger.debug("LiteLLM Cache: cached response has no output, treating it as a miss")
                 return CachingHandlerResponse(cached_result=None)
             if cached_result is not None:
-                if "detail" in cached_result:
+                if json_contains(cached_result, "detail"):
                     # implies an error occurred
                     pass
                 else:
@@ -882,14 +936,14 @@ class LLMCachingHandler:
 
     _combine_cached_embedding_response_with_api_result = combine_cached_embedding_response_with_api_result
 
-    def _async_log_cache_hit_on_callbacks(
+    def async_log_cache_hit_on_callbacks(
         self,
         logging_obj: LiteLLMLoggingObj,
         cached_result: object,
         start_time: datetime.datetime,
         end_time: datetime.datetime,
         cache_hit: bool,
-    ):
+    ) -> None:
         """
         Helper function to log the success of a cached result on callbacks
 
@@ -929,6 +983,8 @@ class LLMCachingHandler:
             end_time=end_time,
             cache_hit=cache_hit,
         )
+
+    _async_log_cache_hit_on_callbacks = async_log_cache_hit_on_callbacks
 
     async def _retrieve_from_cache(
         self, call_type: str, kwargs: dict[str, object], args: tuple[object, ...]
@@ -1460,6 +1516,7 @@ class LLMCachingHandler:
         Returns:
             None
         """
+        request_kwargs: Final = dict[str, object](kwargs)
         litellm_params: Final = {
             "logger_fn": kwargs.get("logger_fn", None),
             "acompletion": is_async,
@@ -1473,7 +1530,7 @@ class LLMCachingHandler:
 
         if litellm.cache is not None:
             litellm_params["preset_cache_key"] = (
-                self.preset_cache_key or litellm.cache.get_preset_cache_key_from_kwargs(**kwargs)
+                self.preset_cache_key or litellm.cache.get_preset_cache_key_from_kwargs(**request_kwargs)
             )
         else:
             litellm_params["preset_cache_key"] = None
@@ -1483,11 +1540,11 @@ class LLMCachingHandler:
             user=kwargs.get("user", None),
             optional_params={},
             litellm_params=litellm_params,
-            input=(kwargs.get("messages", "") if not is_embedding else kwargs.get("input", "")),
-            api_key=kwargs.get("api_key", None),
+            input=(request_kwargs.get("messages", "") if not is_embedding else request_kwargs.get("input", "")),
+            api_key=request_kwargs.get("api_key", None),
             original_response=str(cached_result),
             additional_args=None,
-            stream=kwargs.get("stream", False),
+            stream=request_kwargs.get("stream", False),
             custom_llm_provider=custom_llm_provider,
         )
 

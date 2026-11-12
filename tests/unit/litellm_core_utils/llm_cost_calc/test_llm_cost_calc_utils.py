@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     apply_off_peak_pricing,
     apply_provider_cache_read_default,
     calculate_cache_writing_cost,
+    calculate_image_response_cost_from_usage,
     generic_cost_per_token,
     get_billed_token_rates,
     get_regional_uplift_multiplier,
@@ -27,6 +28,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
 from litellm.llms.gemini.image_generation.cost_calculator import (
     cost_calculator as gemini_image_generation_cost_calculator,
 )
+from litellm.llms.gemini.image_usage_transformation import transform_gemini_image_usage
 from litellm.llms.vertex_ai.image_generation.cost_calculator import (
     cost_calculator as vertex_image_generation_cost_calculator,
 )
@@ -3509,6 +3511,48 @@ def test_token_type_cost_breakdown_applies_anthropic_geo_multiplier(_local_model
     text_output_cost = 300 * 25e-6 * 1.1
     assert text_input_cost + geo.cache_read_cost + geo.cache_creation_cost == pytest.approx(prompt_cost)
     assert text_output_cost + geo.reasoning_cost == pytest.approx(completion_cost)
+
+
+@pytest.mark.parametrize("has_image", [False, True])
+@pytest.mark.parametrize("thoughts", [0, 40])
+@pytest.mark.parametrize("gemini_usage", [False, True])
+@pytest.mark.parametrize("explicit_breakdown", [False, True])
+def test_image_response_unitemized_output_uses_returned_images(
+    has_image: bool, thoughts: int, gemini_usage: bool, explicit_breakdown: bool
+) -> None:
+    prices: Final[ModelInfo] = {
+        "input_cost_per_token": 2e-6,
+        "output_cost_per_token": 3e-6,
+        "output_cost_per_image_token": 7e-5,
+    }
+    response: Final = ImageResponse(
+        data=[ImageObject(b64_json="x")] if has_image else [],
+        usage=transform_gemini_image_usage(
+            {
+                "promptTokenCount": 5,
+                "candidatesTokenCount": 25,
+                "thoughtsTokenCount": thoughts,
+                "totalTokenCount": 30 + thoughts,
+                **({"candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 25}]} if explicit_breakdown else {}),
+            }
+        )
+        if gemini_usage
+        else ImageUsage(
+            input_tokens=5,
+            input_tokens_details=ImageUsageInputTokensDetails(text_tokens=5, image_tokens=0),
+            output_tokens=25 + thoughts,
+            total_tokens=30 + thoughts,
+            **(
+                {"output_tokens_details": {"text_tokens": 25, "image_tokens": 0, "reasoning_tokens": thoughts}}
+                if explicit_breakdown
+                else {"output_tokens_details": {"reasoning_tokens": thoughts}}
+            ),
+        ),
+    )
+    expected_output_rate: Final = 7e-5 if has_image and not explicit_breakdown else 3e-6
+    assert calculate_image_response_cost_from_usage(
+        model="gemini-image-test", image_response=response, custom_llm_provider="gemini", model_info=prices
+    ) == pytest.approx(5 * 2e-6 + 25 * expected_output_rate + thoughts * 3e-6)
 
 
 @pytest.mark.parametrize("details_as_dict", [True, False])

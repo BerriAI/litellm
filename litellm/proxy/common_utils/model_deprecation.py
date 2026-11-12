@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Final, TypeAlias
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
-from litellm.rust_bridge.host.model_cost import AliasedCostEntry
+from litellm.litellm_core_utils.model_cost_table import AliasedCostEntry
 from litellm.types.proxy.model_deprecation import (
     DEFAULT_DEPRECATION_WARN_DAYS,
     DeprecationStatus,

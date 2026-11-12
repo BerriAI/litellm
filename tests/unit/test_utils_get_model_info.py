@@ -14,7 +14,7 @@ from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.utils import ModelInfoBase
 from litellm.utils import supports_native_structured_output
-from litellm.rust_bridge.host.model_cost import publish
+from litellm.litellm_core_utils.model_cost_table import publish
 import os
 from unittest.mock import MagicMock, patch
 

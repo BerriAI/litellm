@@ -89,6 +89,7 @@ ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG: Final[frozenset[str]] = frozenset(
         "ignore_invalid_deployments",
         "fallback_access_check",
         "fallback_budget_check",
+        "fallback_rate_limit_check",
         "auto_router_capability_limit",
     }
 )
@@ -735,6 +736,12 @@ ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE: Final = get_env_int(
 # upstream stream immediately, instead of continuing to drain for the real
 # terminal usage.
 ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS: Final = get_env_int("ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS", 100)
+ANTHROPIC_MESSAGES_STREAM_CLIENT_STALL_TIMEOUT_SECONDS: Final = get_env_float(
+    "ANTHROPIC_MESSAGES_STREAM_CLIENT_STALL_TIMEOUT_SECONDS", 600.0
+)
+ANTHROPIC_MESSAGES_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS: Final = get_env_float(
+    "ANTHROPIC_MESSAGES_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS", 600.0
+)
 LOGGING_WORKER_CONCURRENCY: Final = get_env_int("LOGGING_WORKER_CONCURRENCY", 100)  # Must be above 0
 LOGGING_WORKER_MAX_QUEUE_SIZE: Final = get_env_int("LOGGING_WORKER_MAX_QUEUE_SIZE", 50_000)
 LOGGING_WORKER_MAX_TIME_PER_COROUTINE: Final = get_env_float("LOGGING_WORKER_MAX_TIME_PER_COROUTINE", 20.0)
@@ -1712,6 +1719,7 @@ RESPONSES_WEBSOCKET_CALL_ID_METADATA_KEY: Final = "responses_websocket_call_id"
 BILLED_RETRY_ATTEMPT_METADATA_KEY: Final = "billed_retry_attempt"
 MANAGED_BACKGROUND_RESPONSE_METADATA_KEY: Final = "_managed_background_response"
 SESSION_ID_GENERATED_METADATA_KEY: Final = "litellm_session_id_generated"
+SESSION_SPEND_TOTAL_TTL_SECONDS: Final = 3600
 SESSION_ID_OMITTED_METADATA_KEY: Final = "litellm_session_id_omitted"
 CALLER_SESSION_ID_METADATA_KEY: Final = "litellm_caller_session_id"
 COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY: Final = "_complexity_router_child_session_id"
@@ -2372,6 +2380,7 @@ ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS: Final = (
     MAX_FILE_DOWNLOADS_PER_MINUTE_KEY,
 )
 FILE_USAGE_MAX_TRACKED_COUNTERS: Final = 20_000
+MESSAGE_THREAD_MAX_TRACKED_OWNERS: Final = 20_000
 
 # Shared read-only empty mapping, for defaulting optional Mapping parameters without
 # constructing a fresh mutable dict at each call site.
