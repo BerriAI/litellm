@@ -1819,3 +1819,221 @@ async def test_post_call_success_hook_priority_header_is_always_http_encodable(t
     http_response = Response(headers={key: str(value) for key, value in additional_headers.items()})
     assert http_response.headers.get("x-litellm-priority") == expected_priority_header
     assert http_response.headers["x-litellm-rate-limiter-version"] == "v3"
+
+
+@pytest.fixture
+def team_share_settings():
+    from litellm.types.utils import PriorityReservationSettings
+
+    saved = (litellm.priority_reservation, litellm.priority_reservation_settings)
+
+    def configure(**overrides):
+        litellm.priority_reservation = {"interactive": 0.6, "batch": 0.4}
+        litellm.priority_reservation_settings = PriorityReservationSettings(
+            guaranteed_team_shares=True, saturation_check_cache_ttl=1, **overrides
+        )
+
+    yield configure
+    litellm.priority_reservation, litellm.priority_reservation_settings = saved
+
+
+def _team_share_handler(model: str, tpm: int) -> tuple[DynamicRateLimitHandler, DualCache]:
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+    handler.update_variables(
+        llm_router=Router(
+            model_list=[
+                {
+                    "model_name": model,
+                    "litellm_params": {
+                        "model": "gpt-3.5-turbo",
+                        "api_key": "test-key",
+                        "mock_response": "ok",
+                        "tpm": tpm,
+                    },
+                }
+            ]
+        )
+    )
+    return handler, dual_cache
+
+
+def _team(team_id: str, priority: str, **team_metadata) -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(team_id=team_id, team_metadata={"priority": priority, **team_metadata})
+
+
+async def _admit(handler: DynamicRateLimitHandler, cache: DualCache, model: str, user: UserAPIKeyAuth):
+    return await handler.async_pre_call_hook(
+        user_api_key_dict=user, cache=cache, data={"model": model}, call_type="completion"
+    )
+
+
+async def _spend(handler: DynamicRateLimitHandler, model: str, user: UserAPIKeyAuth, tokens: int) -> None:
+    from litellm.types.utils import ModelResponse, Usage
+
+    await handler.async_log_success_event(
+        kwargs={
+            "standard_logging_object": {
+                "metadata": {
+                    "user_api_key_auth_metadata": {"priority": user.team_metadata["priority"]},
+                    "user_api_key_team_id": user.team_id,
+                },
+            },
+            "litellm_params": {"metadata": {"model_group": model}},
+        },
+        response_obj=ModelResponse(
+            model=model, usage=Usage(prompt_tokens=0, completion_tokens=tokens, total_tokens=tokens)
+        ),
+        start_time=None,
+        end_time=None,
+    )
+
+
+async def _rejection(handler: DynamicRateLimitHandler, cache: DualCache, model: str, user: UserAPIKeyAuth):
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as blocked:
+        await _admit(handler, cache, model, user)
+    assert blocked.value.status_code == 429, blocked.value.detail
+    return blocked.value
+
+
+@pytest.mark.asyncio
+async def test_lone_team_borrows_the_whole_model_when_the_other_class_is_idle(monkeypatch, team_share_settings):
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
+    team_share_settings(saturation_threshold=0.5)
+    model = "team-shares-lone-team"
+    handler, cache = _team_share_handler(model, tpm=1000)
+    state_generation = _team("state-generation", "batch")
+
+    assert await _admit(handler, cache, model, state_generation) is None
+    await _spend(handler, model, state_generation, 700)
+
+    assert await _admit(handler, cache, model, state_generation) is None, "batch alone owns 100%, not 40%"
+    await _spend(handler, model, state_generation, 300)
+
+    ceiling = await _rejection(handler, cache, model, state_generation)
+    assert ceiling.detail["reason"] == "model_ceiling"
+    assert ceiling.headers["x-litellm-rate-limit-reason"] == "model_ceiling"
+
+
+@pytest.mark.asyncio
+async def test_saturated_model_holds_a_borrower_to_its_share_and_admits_under_share_teams(
+    monkeypatch, team_share_settings
+):
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
+    team_share_settings(saturation_threshold=0.5)
+    model = "team-shares-contention"
+    handler, cache = _team_share_handler(model, tpm=1000)
+    assistant = _team("assistant", "interactive")
+    state_generation = _team("state-generation", "batch")
+    decisioning = _team("decisioning", "batch")
+
+    for team in (assistant, state_generation, decisioning):
+        assert await _admit(handler, cache, model, team) is None
+    await _spend(handler, model, state_generation, 600)
+
+    held = await _rejection(handler, cache, model, state_generation)
+    assert held.detail["reason"] == "over_share_saturated"
+    assert "Share: 20.0% of the model (2 active batch team(s), 2 active class(es))" in held.detail["error"]
+    assert held.headers["x-litellm-rate-limit-reason"] == "over_share_saturated"
+
+    assert await _admit(handler, cache, model, decisioning) is None
+    await _spend(handler, model, decisioning, 200)
+    assert (await _rejection(handler, cache, model, decisioning)).detail["reason"] == "over_share_saturated"
+
+    assert await _admit(handler, cache, model, assistant) is None
+    await _spend(handler, model, assistant, 199)
+    assert await _admit(handler, cache, model, assistant) is None, "interactive owns 60% and has used 199"
+
+
+@pytest.mark.asyncio
+async def test_burst_multiplier_caps_borrowing_below_the_saturation_threshold(monkeypatch, team_share_settings):
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
+    team_share_settings(saturation_threshold=0.95, default_max_borrow_multiplier=2.0)
+    model = "team-shares-burst"
+    handler, cache = _team_share_handler(model, tpm=1000)
+    assistant = _team("assistant", "interactive")
+    state_generation = _team("state-generation", "batch")
+
+    for team in (assistant, state_generation):
+        assert await _admit(handler, cache, model, team) is None
+    await _spend(handler, model, state_generation, 500)
+
+    assert await _admit(handler, cache, model, state_generation) is None, "500 of a 400 share bursts to 800"
+    await _spend(handler, model, state_generation, 300)
+
+    capped = await _rejection(handler, cache, model, state_generation)
+    assert capped.detail["reason"] == "burst_cap"
+    assert "Limit: 800" in capped.detail["error"]
+    assert await _admit(handler, cache, model, assistant) is None
+
+
+@pytest.mark.asyncio
+async def test_team_metadata_burst_multiplier_overrides_the_default(monkeypatch, team_share_settings):
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
+    team_share_settings(saturation_threshold=0.95, default_max_borrow_multiplier=2.0)
+    model = "team-shares-burst-override"
+    handler, cache = _team_share_handler(model, tpm=1000)
+    assistant = _team("assistant", "interactive")
+    paa = _team("paa", "batch", max_borrow_multiplier=1)
+
+    for team in (assistant, paa):
+        assert await _admit(handler, cache, model, team) is None
+    await _spend(handler, model, paa, 400)
+
+    assert (await _rejection(handler, cache, model, paa)).detail["reason"] == "burst_cap"
+
+
+@pytest.mark.asyncio
+async def test_without_a_burst_multiplier_borrowing_is_bounded_only_by_the_model(monkeypatch, team_share_settings):
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
+    team_share_settings(saturation_threshold=0.95)
+    model = "team-shares-unbounded"
+    handler, cache = _team_share_handler(model, tpm=1000)
+    assistant = _team("assistant", "interactive")
+    state_generation = _team("state-generation", "batch")
+
+    for team in (assistant, state_generation):
+        assert await _admit(handler, cache, model, team) is None
+    await _spend(handler, model, state_generation, 900)
+
+    assert await _admit(handler, cache, model, state_generation) is None
+    await _spend(handler, model, state_generation, 100)
+    assert (await _rejection(handler, cache, model, state_generation)).detail["reason"] == "model_ceiling"
+
+
+@pytest.mark.asyncio
+async def test_team_shares_stay_off_by_default_so_teams_share_their_priority_pool(monkeypatch, team_share_settings):
+    from litellm.types.utils import PriorityReservationSettings
+
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
+    team_share_settings(saturation_threshold=0.5)
+    litellm.priority_reservation_settings = PriorityReservationSettings(saturation_threshold=0.5)
+    model = "team-shares-off"
+    handler, cache = _team_share_handler(model, tpm=1000)
+    state_generation = _team("state-generation", "batch")
+
+    assert await _admit(handler, cache, model, state_generation) is None
+    await _spend(handler, model, state_generation, 500)
+
+    legacy = await _rejection(handler, cache, model, state_generation)
+    assert "Priority-based rate limit exceeded" in legacy.detail["error"]
+    assert legacy.headers["x-litellm-rate-limit-reason"] == "over_share_saturated"
+
+
+@pytest.mark.asyncio
+async def test_keys_outside_a_team_keep_using_the_priority_pool(monkeypatch, team_share_settings):
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
+    team_share_settings(saturation_threshold=0.5)
+    model = "team-shares-no-team"
+    handler, cache = _team_share_handler(model, tpm=1000)
+    loose_key = UserAPIKeyAuth(metadata={"priority": "batch"})
+    state_generation = _team("state-generation", "batch")
+
+    assert await _admit(handler, cache, model, loose_key) is None
+    assert await _admit(handler, cache, model, state_generation) is None
+    await _spend(handler, model, state_generation, 700)
+
+    pooled = await _rejection(handler, cache, model, loose_key)
+    assert "Priority-based rate limit exceeded" in pooled.detail["error"]

@@ -125,6 +125,48 @@ Output: {key_a: 0.43, key_b: 0.57} = 1.00 total
 
 This ensures total allocation never exceeds model capacity.
 
+## Guaranteed Team Shares
+
+Off by default. With `priority_reservation_settings.guaranteed_team_shares: true`, a request from a team is held to
+that team's own share of the model instead of the shared pool of its priority class:
+
+```yaml
+litellm_settings:
+  priority_reservation:
+    interactive: 0.6
+    batch: 0.4
+  priority_reservation_settings:
+    guaranteed_team_shares: true
+    saturation_threshold: 0.5
+    saturation_check_cache_ttl: 1
+    default_max_borrow_multiplier: 2.0   # optional, omit to let a team borrow up to the model ceiling
+```
+
+A team's share is `model capacity x class weight / teams in that class`, where the class weight is renormalized over
+the classes that have at least one team active on the model inside the current window (`team_shares.py`,
+`compute_team_share`). With a 500M TPM model, two interactive teams and four batch teams each get 150M and 50M. If
+no interactive team is sending, the batch class owns 100% and each batch team gets 125M. A team's class is read from
+the same priority lookup as the priority pools, so unknown classes land in `default` with `default_priority` weight.
+
+Admission on each request:
+
+1. The model ceiling is always enforced (`model_saturation_check`, 429 reason `model_ceiling`).
+2. Below `saturation_threshold` a team may borrow idle capacity. With a burst multiplier (team metadata
+   `max_borrow_multiplier`, else `default_max_borrow_multiplier`) the team is capped at `share x multiplier`
+   (429 reason `burst_cap`); without one, only the ceiling applies.
+3. At or above the threshold every team is held to its share (429 reason `over_share_saturated`). A team under its
+   share is admitted, a borrower over it is refused, so under-share teams go first as the window frees up.
+
+The reason is in the 429 body (`detail.reason`) and the `x-litellm-rate-limit-reason` header. Recovery: a team that
+was borrowed from regains its full share within one rate limit window (`LITELLM_RATE_LIMIT_WINDOW_SIZE`, 60s) of the
+model saturating, plus at most `saturation_check_cache_ttl` seconds for every worker to see the saturation. Keep the
+cache TTL at or below a quarter of the window when team shares are on; the limiter logs a warning otherwise.
+
+Active teams are tracked per model in `dynamic_rate_limiter:team_shares:{model}` (Redis for one window, locally for
+`saturation_check_cache_ttl`) and per-team usage in the `team_share` descriptor `{model}:{team_id}`. Team
+`model_tpm_limit` / `model_rpm_limit` and every key, end-user and organization limit stay hard limits enforced by the
+parallel request limiter, so borrowing never bypasses them. Keys outside a team keep using their priority pool.
+
 ## Implementation Details
 
 ### Saturation Detection

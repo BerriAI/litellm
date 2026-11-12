@@ -4,10 +4,12 @@ Dynamic rate limiter v3 - Saturation-aware priority-based rate limiting
 
 import os
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Final, Literal
 
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 
 import litellm
 from litellm import ModelResponse, Router
@@ -37,6 +39,14 @@ from litellm.proxy.hooks.rate_limiter_utils import (
     convert_priority_to_percent,
     resolve_llm_provider_for_rate_limit,
 )
+from litellm.proxy.hooks.team_shares import (
+    DEFAULT_CLASS,
+    TeamShare,
+    TeamShareRegistry,
+    ThrottleReason,
+    compute_team_share,
+    team_burst_multiplier,
+)
 from litellm.proxy.utils import InternalUsageCache
 from litellm.redis.stores.rate_limits import RATE_LIMITS_TARGET, CounterIncrement, RateLimitCounter, RateLimitScope
 from litellm.types.router import ModelGroupInfo
@@ -64,6 +74,25 @@ def _get_priority_settings() -> "PriorityReservationSettings":
 
 def _is_latin1_encodable(value: object) -> bool:
     return all(ord(char) < 256 for char in str(value))
+
+
+TEAM_SHARE_DESCRIPTOR_KEY: Final = "team_share"
+_OBJECT_MAP: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
+_OPTIONAL_TEXT: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
+
+
+@dataclass(frozen=True, slots=True)
+class _TeamSharePlan:
+    """What the limiter holds one team to on this request: its share when the model is saturated, its burst cap
+    when it is not and one is configured, otherwise nothing (the descriptor is only tracked)."""
+
+    share: TeamShare
+    descriptor: RateLimitDescriptor
+    reason: ThrottleReason | None
+
+    @property
+    def enforced(self) -> bool:
+        return self.reason is not None
 
 
 class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
@@ -96,6 +125,76 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
     def update_variables(self, llm_router: Router) -> None:
         self.llm_router = llm_router
+        settings: Final = _get_priority_settings()
+        if settings.guaranteed_team_shares and settings.saturation_check_cache_ttl * 4 > self.v3_limiter.window_size:
+            verbose_proxy_logger.warning(
+                "priority_reservation_settings.saturation_check_cache_ttl=%ss is more than a quarter of the %ss "
+                "rate limit window, so with guaranteed_team_shares workers can keep admitting borrowers for up to "
+                "that long after a model saturates. Lower it to %ss or less.",
+                settings.saturation_check_cache_ttl,
+                self.v3_limiter.window_size,
+                self.v3_limiter.window_size // 4,
+            )
+
+    def _team_share_registry(self) -> TeamShareRegistry:
+        return TeamShareRegistry(
+            dual_cache=self.internal_usage_cache.dual_cache,
+            window_size=self.v3_limiter.window_size,
+            local_ttl=_get_priority_settings().saturation_check_cache_ttl,
+        )
+
+    def _team_share_class(self, priority: str | None) -> str:
+        if (
+            priority is not None
+            and litellm.priority_reservation is not None
+            and priority in litellm.priority_reservation
+        ):
+            return priority
+        return DEFAULT_CLASS
+
+    async def _team_share_plan(
+        self,
+        model: str,
+        model_group_info: ModelGroupInfo,
+        user_api_key_dict: UserAPIKeyAuth,
+        priority: str | None,
+        saturated: bool,
+    ) -> _TeamSharePlan | None:
+        """``None`` unless guaranteed team shares are on, the request belongs to a team and the model has a limit."""
+        settings: Final = _get_priority_settings()
+        team_id: Final = user_api_key_dict.team_id
+        if not settings.guaranteed_team_shares or not team_id or litellm.priority_reservation is None:
+            return None
+        if model_group_info.tpm is None and model_group_info.rpm is None:
+            return None
+        members: Final = await self._team_share_registry().members(
+            model=model, team_id=team_id, priority=self._team_share_class(priority)
+        )
+        share: Final = compute_team_share(
+            team_id=team_id,
+            members=members,
+            class_weights=self._normalize_priority_weights(model_group_info),
+            default_weight=settings.default_priority,
+        )
+        multiplier: Final = team_burst_multiplier(user_api_key_dict, settings.default_max_borrow_multiplier)
+        scale: Final = 1.0 if saturated or multiplier is None else multiplier
+        reason: ThrottleReason | None = "over_share_saturated" if saturated else "burst_cap" if multiplier else None
+        share_tpm: Final = share.tokens(model_group_info.tpm)
+        share_rpm: Final = share.requests(model_group_info.rpm)
+        descriptor: Final = RateLimitDescriptor(
+            key=TEAM_SHARE_DESCRIPTOR_KEY,
+            value=f"{model}:{team_id}",
+            rate_limit={
+                "tokens_per_unit": None
+                if share_tpm is None
+                else min(int(share_tpm * scale), model_group_info.tpm or 0),
+                "requests_per_unit": None
+                if share_rpm is None
+                else min(int(share_rpm * scale), model_group_info.rpm or 0),
+                "window_size": self.v3_limiter.window_size,
+            },
+        )
+        return _TeamSharePlan(share=share, descriptor=descriptor, reason=reason)
 
     def _get_saturation_check_cache_ttl(self) -> int:
         """Get the configurable TTL for local cache when reading saturation values."""
@@ -410,25 +509,33 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         saturation_threshold: Final = _get_priority_settings().saturation_threshold
         should_enforce_priority: Final = saturation >= saturation_threshold
 
-        # Build ALL descriptors upfront
-        descriptors_to_check: Final[list[RateLimitDescriptor]] = []
-
         # Model-wide descriptor (always enforce)
         model_wide_descriptor: Final = self._create_model_tracking_descriptor(
             model=model,
             model_group_info=model_group_info,
             high_limit_multiplier=1,
         )
-        descriptors_to_check.append(model_wide_descriptor)
 
-        # Priority descriptors (always track, conditionally enforce)
-        priority_descriptors: Final = self._create_priority_based_descriptors(
+        # A team with a guaranteed share is held to that share instead of its priority pool
+        team_share_plan: Final = await self._team_share_plan(
             model=model,
+            model_group_info=model_group_info,
             user_api_key_dict=user_api_key_dict,
             priority=priority,
+            saturated=should_enforce_priority,
         )
-        if priority_descriptors:
-            descriptors_to_check.extend(priority_descriptors)
+
+        # Priority descriptors (always track, conditionally enforce)
+        priority_descriptors: Final = (
+            [team_share_plan.descriptor]
+            if team_share_plan is not None
+            else self._create_priority_based_descriptors(
+                model=model,
+                user_api_key_dict=user_api_key_dict,
+                priority=priority,
+            )
+        )
+        enforce_pool: Final = team_share_plan.enforced if team_share_plan is not None else should_enforce_priority
 
         # Atomic check-and-increment for the ENFORCED descriptor set:
         # - model_saturation_check is always enforced
@@ -439,7 +546,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         # All-or-nothing: if any enforced descriptor would exceed its limit,
         # no counter is modified and the response carries "OVER_LIMIT".
         enforced_descriptors: Final[list[RateLimitDescriptor]] = [model_wide_descriptor]
-        if priority_descriptors and should_enforce_priority:
+        if priority_descriptors and enforce_pool:
             enforced_descriptors.extend(priority_descriptors)
 
         per_request_increment: Final[dict[Literal["requests", "tokens"], int]] = {
@@ -456,6 +563,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
         if atomic_response["overall_code"] == "OVER_LIMIT":
             resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(model)
+            share: Final = team_share_plan.share if team_share_plan is not None else None
             for status in atomic_response["statuses"]:
                 if status["code"] != "OVER_LIMIT":
                     continue
@@ -468,12 +576,43 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                             f"Rate limit type: {status['rate_limit_type']}, "
                             f"Model TPM: {model_group_info.tpm if model_group_info.tpm is not None else 'not configured'}, "
                             f"Model RPM: {model_group_info.rpm if model_group_info.rpm is not None else 'not configured'}, "
-                            f"Remaining: {status['limit_remaining']}"
+                            f"Remaining: {status['limit_remaining']}",
+                            "reason": "model_ceiling",
                         },
                         headers={
                             "retry-after": str(self.v3_limiter.window_size),
                             "rate_limit_type": str(status["rate_limit_type"]),
                             "x-litellm-priority": priority or "default",
+                            "x-litellm-rate-limit-reason": "model_ceiling",
+                        },
+                        rate_limit_type=map_v3_rate_limit_type(status["rate_limit_type"]),
+                        model=resolved_model,
+                        llm_provider=llm_provider,
+                    )
+                if descriptor_key == TEAM_SHARE_DESCRIPTOR_KEY and team_share_plan is not None and share is not None:
+                    raise ProxyRateLimitError(
+                        detail={
+                            "error": f"Team share exceeded for {model}. "
+                            f"Team: {share.team_id}, "
+                            f"Priority: {share.priority}, "
+                            f"Reason: {team_share_plan.reason}, "
+                            f"Share: {share.fraction:.1%} of the model "
+                            f"({share.active_teams_in_class} active {share.priority} team(s), "
+                            f"{share.active_classes} active class(es)), "
+                            f"Rate limit type: {status['rate_limit_type']}, "
+                            f"Limit: {status['current_limit']}, "
+                            f"Model TPM: {model_group_info.tpm if model_group_info.tpm is not None else 'not configured'}, "
+                            f"Model RPM: {model_group_info.rpm if model_group_info.rpm is not None else 'not configured'}, "
+                            f"Remaining: {status['limit_remaining']}, "
+                            f"Model saturation: {saturation:.1%}",
+                            "reason": team_share_plan.reason,
+                        },
+                        headers={
+                            "retry-after": str(self.v3_limiter.window_size),
+                            "rate_limit_type": str(status["rate_limit_type"]),
+                            "x-litellm-priority": priority or "default",
+                            "x-litellm-saturation": f"{saturation:.2%}",
+                            "x-litellm-rate-limit-reason": team_share_plan.reason,
                         },
                         rate_limit_type=map_v3_rate_limit_type(status["rate_limit_type"]),
                         model=resolved_model,
@@ -492,13 +631,15 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                             f"Model TPM: {model_group_info.tpm if model_group_info.tpm is not None else 'not configured'}, "
                             f"Model RPM: {model_group_info.rpm if model_group_info.rpm is not None else 'not configured'}, "
                             f"Remaining: {status['limit_remaining']}, "
-                            f"Model saturation: {saturation:.1%}"
+                            f"Model saturation: {saturation:.1%}",
+                            "reason": "over_share_saturated",
                         },
                         headers={
                             "retry-after": str(self.v3_limiter.window_size),
                             "rate_limit_type": str(status["rate_limit_type"]),
                             "x-litellm-priority": priority or "default",
                             "x-litellm-saturation": f"{saturation:.2%}",
+                            "x-litellm-rate-limit-reason": "over_share_saturated",
                         },
                         rate_limit_type=map_v3_rate_limit_type(status["rate_limit_type"]),
                         model=resolved_model,
@@ -544,7 +685,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         # priority allocation has accurate usage when it later becomes
         # enforced. The increment-then-check semantics of should_rate_limit
         # are fine because we ignore the OVER_LIMIT response.
-        if priority_descriptors and not should_enforce_priority:
+        if priority_descriptors and not enforce_pool:
             priority_tracking_response: Final = await self.v3_limiter.should_rate_limit(
                 descriptors=priority_descriptors,
                 parent_otel_span=user_api_key_dict.parent_otel_span,
@@ -700,8 +841,10 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             litellm_parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
 
             # Get metadata from standard_logging_object
-            standard_logging_object: Final = kwargs.get("standard_logging_object") or {}
-            standard_logging_metadata: Final = standard_logging_object.get("metadata") or {}
+            standard_logging_object: Final = _OBJECT_MAP.validate_python(kwargs.get("standard_logging_object") or {})
+            standard_logging_metadata: Final = _OBJECT_MAP.validate_python(
+                standard_logging_object.get("metadata") or {}
+            )
 
             # Get model and priority
             model_group: Final = get_model_group_from_litellm_kwargs(kwargs)
@@ -710,8 +853,10 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
             # Get priority from user_api_key_auth_metadata in standard_logging_metadata
             # This is where user_api_key_dict.metadata is stored during pre-call
-            user_api_key_auth_metadata: Final = standard_logging_metadata.get("user_api_key_auth_metadata") or {}
-            key_priority: Final[str | None] = user_api_key_auth_metadata.get("priority")
+            user_api_key_auth_metadata: Final = _OBJECT_MAP.validate_python(
+                standard_logging_metadata.get("user_api_key_auth_metadata") or {}
+            )
+            key_priority: Final = _OPTIONAL_TEXT.validate_python(user_api_key_auth_metadata.get("priority"))
 
             # Get total tokens from response
             total_tokens = 0
@@ -750,6 +895,18 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             else:
                 priority_key = f"{model_group}:default_pool"
 
+            team_id: Final = _OPTIONAL_TEXT.validate_python(standard_logging_metadata.get("user_api_key_team_id"))
+            team_share_tokens: Final = (
+                (
+                    CounterIncrement(
+                        counter=RateLimitScope(TEAM_SHARE_DESCRIPTOR_KEY, f"{model_group}:{team_id}").counter("tokens"),
+                        amount=total_tokens,
+                        ttl=self.v3_limiter.window_size,
+                    ),
+                )
+                if team_id and _get_priority_settings().guaranteed_team_shares
+                else ()
+            )
             pipeline_operations: Final = (
                 model_tokens,
                 CounterIncrement(
@@ -757,6 +914,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                     amount=total_tokens,
                     ttl=self.v3_limiter.window_size,
                 ),
+                *team_share_tokens,
             )
 
             # Execute token increments with TTL preservation

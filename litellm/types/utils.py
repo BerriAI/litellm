@@ -5395,6 +5395,16 @@ class PriorityReservationSettings(LiteLLMBaseModel):
         description="TTL in seconds for local cache when reading saturation check values from Redis.",
     )
 
+    guaranteed_team_shares: bool = Field(
+        default=False,
+        description="Give every team using a model its own guaranteed share of the model's capacity, derived from its priority class weight normalized over the classes active on that model and split equally among the active teams of the class. Teams borrow idle capacity below the saturation threshold and are held to their share above it. Off by default.",
+    )
+
+    default_max_borrow_multiplier: float | None = Field(
+        default=None,
+        description="Default ceiling on borrowing when guaranteed_team_shares is on, as a multiple of a team's share (2.0 lets a 50M share burst to 100M). A team's metadata max_borrow_multiplier overrides it. None means a team may borrow up to the model ceiling.",
+    )
+
     model_config = ConfigDict(protected_namespaces=())
 
 
