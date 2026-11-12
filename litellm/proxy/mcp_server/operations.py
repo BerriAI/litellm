@@ -3160,7 +3160,7 @@ async def mcp_read_resource(
         return candidate if any(str(resource.uri) == str(url) for resource in resources) else None
 
     async def resolve_owner() -> MCPServer:
-        candidates: Final = tuple([await owner(candidate) for candidate in allowed_mcp_servers])
+        candidates: Final = await asyncio.gather(*(owner(candidate) for candidate in allowed_mcp_servers))
         owners: Final = tuple(candidate for candidate in candidates if candidate is not None)
         if len(owners) == 1:
             return owners[0]
