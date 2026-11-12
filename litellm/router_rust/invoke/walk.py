@@ -39,6 +39,7 @@ _WALK_KEYS: Final = (
 _SERVED_KEYS: Final = ("model_info", "deployment")
 # The walk state `run_async_fallback` hands every hop as kwargs.
 _HOP_KWARGS: Final = ("fallback_depth", "max_fallbacks", "attempted_targets", "include_fallback_errors")
+_RETRY_RECORD_KEYS: Final = ("previous_models", "request_retry_count")
 
 
 def _reentrant_hop_stamps(request: Mapping[str, object], field: str) -> Mapping[str, object]:
@@ -179,11 +180,13 @@ class WalkMetadata:
             return
         sibling: Final = request.get("metadata" if self._field == "litellm_metadata" else "litellm_metadata")
         if isinstance(sibling, dict):
-            sibling.pop("attempted_fallbacks", None)  # pyright: ignore[reportUnknownMemberType]  # the caller's metadata dict
-            sibling.pop("original_model_group", None)  # pyright: ignore[reportUnknownMemberType]  # see above
+            for key in ("attempted_fallbacks", "original_model_group", *_RETRY_RECORD_KEYS):
+                sibling.pop(key, None)  # pyright: ignore[reportUnknownMemberType]  # the caller's metadata dict
         bucket: Final = request.get(self._field)
         if not isinstance(bucket, dict):
             return
+        for key in _RETRY_RECORD_KEYS:
+            bucket.pop(key, None)  # pyright: ignore[reportUnknownMemberType]  # see above
         bucket["attempted_fallbacks"] = 0
         model: Final = request.get("model")
         if model is not None:

@@ -21,7 +21,7 @@ from botocore.credentials import Credentials
 
 import litellm
 from litellm.constants import DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET
-from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.llms.bedrock.common_utils import BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES, BedrockError
 from litellm.llms.bedrock.files.transformation import BedrockFilesConfig, BedrockJsonlFilesTransformation
 from tests.unit.proxy.conftest import httpx_transport
 
@@ -2069,6 +2069,76 @@ class TestBedrockBatchAnthropicRowParams:
         assert ("format" in model_input.get("output_config", {})) is native_output
         assert (tool_names == {"json_tool_call"}) is not native_output
 
+    @pytest.mark.parametrize(
+        ("model", "native_over_the_limit"),
+        [(MODEL, True), ("bedrock/us.anthropic.claude-opus-5-5", False)],
+        ids=["already_native_model", "native_by_default_model"],
+    )
+    @pytest.mark.parametrize("over_the_limit", [False, True], ids=["at_the_limit", "over_the_limit"])
+    def test_only_native_by_default_models_send_json_schemas_wider_than_the_limit_through_the_json_tool(
+        self, local_model_cost_map, model, native_over_the_limit, over_the_limit
+    ):
+        native_output: Final = native_over_the_limit or not over_the_limit
+        field_names: Final = tuple(
+            f"field_{index:03d}" for index in range(BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES + over_the_limit)
+        )
+        wide_schema: Final = {
+            "type": "object",
+            "properties": {name: {"type": "string"} for name in field_names},
+            "required": list(field_names),
+            "additionalProperties": False,
+        }
+        model_input: Final = self._transform(
+            "/v1/chat/completions",
+            {
+                "messages": [{"role": "user", "content": "Describe a ceramic coffee mug"}],
+                "response_format": {"type": "json_schema", "json_schema": {"name": "wide", "schema": wide_schema}},
+            },
+            model=model,
+        )
+        tool_names: Final = frozenset(tool["name"] for tool in model_input.get("tools", []))
+
+        assert ("format" in model_input.get("output_config", {})) is native_output
+        assert (tool_names == {"json_tool_call"}) is not native_output
+
+    def test_a_deployment_opt_out_sends_uploaded_json_schema_rows_through_the_json_tool(self, local_model_cost_map):
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        record: Final = {
+            "custom_id": "row-1",
+            "method": "POST",
+            "url": "/v1/chat/completions",
+            "body": {
+                "model": self.MODEL,
+                "messages": [{"role": "user", "content": "Weather in Paris?"}],
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "weather", "schema": self.PARAMETERS},
+                },
+            },
+        }
+        request: Final = BedrockFilesConfig().transform_create_file_request(
+            model=self.MODEL,
+            create_file_data={
+                "file": ("batch.jsonl", json.dumps(record).encode(), "application/jsonl"),
+                "purpose": "batch",
+            },
+            optional_params={
+                "aws_access_key_id": "test-key-id",
+                "aws_secret_access_key": "test-secret",
+                "aws_region_name": "us-west-2",
+            },
+            litellm_params={
+                "s3_bucket_name": "litellm-batch-bucket",
+                "litellm_metadata": {"model_info": {"supports_bedrock_native_structured_output": False}},
+            },
+        )
+        assert isinstance(request, dict)
+        model_input: Final = json.loads(request["data"].splitlines()[0])["modelInput"]
+
+        assert "format" not in model_input.get("output_config", {})
+        assert [tool["name"] for tool in model_input["tools"]] == ["json_tool_call"]
+
     def test_provider_native_params_still_pass_through(self):
         model_input = self._transform(
             "/v1/chat/completions",
@@ -2856,6 +2926,88 @@ class TestBedrockFileContentTransformation:
             .startswith("AWS4-HMAC-SHA256")
         )
         assert response.content == b'{"recordId": "x"}'
+
+
+class TestBedrockFileContentFromTheStoredBucket:
+    TEAM_OUTPUT_URI: Final = "s3://team-a-bucket/litellm-batch-outputs/job-1/input.jsonl.out"
+    TEAM_OUTPUT_URL: Final = "https://s3.us-west-2.amazonaws.com/team-a-bucket/litellm-batch-outputs/job-1/input.jsonl.out"
+    CREDENTIALS: Final = {
+        "aws_access_key_id": "AKIAEXAMPLE",
+        "aws_secret_access_key": "secret",
+        "aws_region_name": "us-west-2",
+    }
+
+    def test_file_in_another_bucket_is_refused_without_the_stored_bucket(self) -> None:
+        with pytest.raises(Exception, match="does not match the configured storage bucket"):
+            litellm.file_content(
+                file_id=self.TEAM_OUTPUT_URI,
+                custom_llm_provider="bedrock",
+                s3_bucket_name="model-bucket",
+                **self.CREDENTIALS,
+            )
+
+    def test_file_in_the_stored_bucket_is_read_from_that_bucket(self) -> None:
+        import httpx
+        import respx
+
+        with respx.mock:
+            route: Final = respx.get(self.TEAM_OUTPUT_URL).mock(return_value=httpx.Response(200, content=b"{}"))
+            response: Final = litellm.file_content(
+                file_id=self.TEAM_OUTPUT_URI,
+                custom_llm_provider="bedrock",
+                s3_bucket_name="model-bucket",
+                stored_s3_bucket_name="team-a-bucket",
+                **self.CREDENTIALS,
+            )
+
+        assert route.call_count == 1
+        assert response.content == b"{}"
+
+    @pytest.mark.parametrize(
+        "stored_file_id",
+        [
+            "s3://team-a-bucket/tenant/litellm-batch-outputs/job-1/input.jsonl.out",
+            "s3://team-a-bucket/tenant/litellm-bedrock-files-nova-1.jsonl",
+            "s3://team-a-bucket/tenant/deeper/litellm-bedrock-files/nova-1.jsonl",
+        ],
+    )
+    def test_file_written_under_a_prefixed_request_bucket_is_read_back_from_it(self, stored_file_id: str) -> None:
+        import httpx
+        import respx
+
+        from litellm.litellm_core_utils.cloud_storage_security import stored_s3_bucket_kwargs
+
+        url: Final = f"https://s3.us-west-2.amazonaws.com/{stored_file_id.removeprefix('s3://')}"
+        with respx.mock:
+            route: Final = respx.get(url).mock(return_value=httpx.Response(200, content=b"{}"))
+            litellm.file_content(
+                file_id=stored_file_id,
+                custom_llm_provider="bedrock",
+                s3_bucket_name="model-bucket",
+                **stored_s3_bucket_kwargs(stored_file_id),
+                **self.CREDENTIALS,
+            )
+
+        assert route.call_count == 1
+
+    def test_file_under_the_model_bucket_prefix_keeps_its_url_when_a_stored_bucket_is_passed(self) -> None:
+        import httpx
+        import respx
+
+        prefixed_url: Final = (
+            "https://s3.us-west-2.amazonaws.com/model-bucket/tenant/litellm-batch-outputs/job-1/input.jsonl.out"
+        )
+        with respx.mock:
+            route: Final = respx.get(prefixed_url).mock(return_value=httpx.Response(200, content=b"{}"))
+            litellm.file_content(
+                file_id="s3://model-bucket/tenant/litellm-batch-outputs/job-1/input.jsonl.out",
+                custom_llm_provider="bedrock",
+                s3_bucket_name="model-bucket/tenant",
+                stored_s3_bucket_name="model-bucket",
+                **self.CREDENTIALS,
+            )
+
+        assert route.call_count == 1
 
 
 class TestBedrockFilesS3SignatureEncoding:

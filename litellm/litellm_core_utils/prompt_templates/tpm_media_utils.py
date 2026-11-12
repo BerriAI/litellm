@@ -202,12 +202,16 @@ def _tpm_embedding_leaf(value: object) -> _TPMMediaProjection:
     part: Final = as_str_mapping(value)
     if part is not None and part.get("type") == "file":
         return _tpm_embedding_file_block(part)
-    if not isinstance(value, str) or not value.startswith("data:"):
+    if not isinstance(value, str) or is_plain_embedding_text(value):
         return _tpm_media_leaf(value)
     if not _is_base64_data_uri(value):
         return _TPMMediaProjection(value)
     media: Final = _tpm_file_media({"file_data": value}).media or _tpm_embedding_file(value)
     return _TPMMediaProjection("" if media else value, media)
+
+
+def is_plain_embedding_text(value: object) -> bool:
+    return isinstance(value, str) and not value.startswith("data:")
 
 
 def _is_json_array(value: object) -> bool:

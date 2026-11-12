@@ -3,17 +3,20 @@ Dynamic rate limiter v3 - Saturation-aware priority-based rate limiting
 """
 
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Final, Literal
 
 from fastapi import HTTPException
+from pydantic import BaseModel, ConfigDict
 
 import litellm
-from litellm import ModelResponse, Router
+from litellm import Router
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
+from litellm.cost_calculator import get_usage_object
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.add_retry_fallback_headers import (
     ensure_response_additional_headers,
@@ -25,11 +28,16 @@ from litellm.proxy.common_utils.proxy_rate_limit_error import (
     map_v3_rate_limit_type,
 )
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (  # noqa: F401  # legacy module exports
+    BorrowingTeamModelLimits,
     PROXY_MaxParallelRequestsHandler_v3,
     RateLimitDescriptor,
     RateLimitDescriptorRateLimitObject,
+    RateLimitedModel,
     RateLimitResponse,
+    RateLimitStatus,
     _PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _socket_turn_tpm_windows,  # pyright: ignore[reportPrivateUsage]  # same per-turn TPM window the regular limiter checks
+    borrowing_team_model_limits,
     claim_request_stash_for_data,
     get_or_create_request_stash,
 )
@@ -38,11 +46,69 @@ from litellm.proxy.hooks.rate_limiter_utils import (
     resolve_llm_provider_for_rate_limit,
 )
 from litellm.proxy.utils import InternalUsageCache
+from litellm.redis.stores.rate_limits import RATE_LIMITS_TARGET, CounterIncrement, RateLimitCounter, RateLimitScope
 from litellm.types.router import ModelGroupInfo
-from litellm.types.utils import CallTypesLiteral, LLMResponseTypes
+from litellm.types.utils import CallTypesLiteral, LLMResponseTypes, Usage
 
 if TYPE_CHECKING:
     from litellm.types.utils import PriorityReservationSettings
+
+
+class _SettlementMetadata(BaseModel):
+    """The two fields of a request's standard logging metadata that token settlement reads."""
+
+    model_config = ConfigDict(frozen=True)
+
+    user_api_key_auth_metadata: Mapping[str, object] | None = None
+    user_api_key_team_id: str | None = None
+
+    @property
+    def priority(self) -> str | None:
+        value: Final = (self.user_api_key_auth_metadata or {}).get("priority")
+        return value if isinstance(value, str) else None
+
+
+def _usage_of(response_obj: object) -> Usage | None:
+    usage: Final = getattr(response_obj, "usage", None)
+    return usage if isinstance(usage, Usage) else get_usage_object(response_obj)
+
+
+TEAM_MODEL_LIMIT_AT_SATURATION: Final = "model_per_team_saturated"
+TEAM_MODEL_LIMIT_MAX_BORROW_MULTIPLE: Final = "model_per_team_max_borrow_multiple"
+
+
+@dataclass(frozen=True, slots=True)
+class _BorrowingTeamShare:
+    """The team's share and, when the team caps how far it borrows, its ceiling, both on the share's counter."""
+
+    limits: BorrowingTeamModelLimits
+    share: RateLimitDescriptor
+    ceiling: RateLimitDescriptor | None
+
+    def enforced(self, saturated: bool) -> RateLimitDescriptor | None:
+        return self.share if saturated else self.ceiling
+
+
+def _team_limit_name(rate_limit_type: str) -> str:
+    return "model_rpm_limit" if rate_limit_type == "requests" else "model_tpm_limit"
+
+
+def _team_model_token_increment(
+    descriptor: RateLimitDescriptor | None, total_tokens: int, ttl: int
+) -> tuple[CounterIncrement, ...]:
+    """Charge the team counter the pre-call hook tracked, and only when that team limit has a TPM share."""
+    if descriptor is None:
+        return ()
+    rate_limit: Final = descriptor["rate_limit"]
+    if rate_limit is None or rate_limit.get("tokens_per_unit") is None:
+        return ()
+    return (
+        CounterIncrement(
+            counter=RateLimitScope(descriptor["key"], descriptor["value"]).counter("tokens"),
+            amount=total_tokens,
+            ttl=ttl,
+        ),
+    )
 
 
 def _get_priority_settings() -> "PriorityReservationSettings":
@@ -102,8 +168,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
     async def _get_saturation_value_from_cache(
         self,
-        counter_key: str,
-    ) -> str | None:
+        counter: RateLimitCounter,
+    ) -> int | float | str | None:
         """
         Get saturation value with configurable local cache TTL.
 
@@ -111,19 +177,15 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         TTL is configurable via litellm.priority_reservation_settings.saturation_check_cache_ttl
 
         Args:
-            counter_key: The cache key for the saturation counter
+            counter: The saturation counter
 
         Returns:
-            Counter value as string, or None if not found
+            Counter value, or None if not found
         """
-        local_cache_ttl: Final = self._get_saturation_check_cache_ttl()
-
-        return await self.internal_usage_cache.async_get_cache(
-            key=counter_key,
-            litellm_parent_otel_span=None,
-            local_only=False,
-            ttl=local_cache_ttl,
+        value: Final = await self.v3_limiter.rate_limits.get(
+            counter, backfill_ttl=self._get_saturation_check_cache_ttl()
         )
+        return None if isinstance(value, dict) else value
 
     def _get_priority_weight(self, priority: str | None, model_info: ModelGroupInfo | None = None) -> float:
         """Get the weight for a given priority from litellm.priority_reservation"""
@@ -250,14 +312,10 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             # Query RPM saturation - always read from Redis for multi-node consistency
             if model_group_info.rpm is not None and model_group_info.rpm > 0:
                 # Use v3 limiter's key format: {key:value}:rate_limit_type
-                counter_key = self.v3_limiter.create_rate_limit_keys(
-                    key="model_saturation_check",
-                    value=model,
-                    rate_limit_type="requests",
-                )
-
                 # Query Redis directly for current counter value (skip local cache for consistency)
-                counter_value = await self._get_saturation_value_from_cache(counter_key=counter_key)
+                counter_value = await self._get_saturation_value_from_cache(
+                    RateLimitScope("model_saturation_check", model).counter("requests")
+                )
 
                 if counter_value is not None:
                     current_requests: Final = int(counter_value)
@@ -270,13 +328,9 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
             # Query TPM saturation
             if model_group_info.tpm is not None and model_group_info.tpm > 0:
-                counter_key = self.v3_limiter.create_rate_limit_keys(
-                    key="model_saturation_check",
-                    value=model,
-                    rate_limit_type="tokens",
+                counter_value = await self._get_saturation_value_from_cache(
+                    RateLimitScope("model_saturation_check", model).counter("tokens")
                 )
-
-                counter_value = await self._get_saturation_value_from_cache(counter_key=counter_key)
 
                 if counter_value is not None:
                     current_tokens: Final = float(counter_value)
@@ -353,6 +407,143 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
         return descriptors
 
+    def _borrowing_team_share(self, model: str, user_api_key_dict: UserAPIKeyAuth) -> _BorrowingTeamShare | None:
+        """One counter per team and resolved model group, so an alias and its target share the team's share."""
+        rate_limited: Final = self.v3_limiter.rate_limited_model(model) or RateLimitedModel(
+            requested=model, group=model
+        )
+        limits: Final = borrowing_team_model_limits(user_api_key_dict, rate_limited)
+        if limits.tpm is None and limits.rpm is None:
+            return None
+        ceiling: Final = limits.borrow_ceiling()
+        value: Final = f"{user_api_key_dict.team_id}:{rate_limited.group}"
+        return _BorrowingTeamShare(
+            limits=limits,
+            share=self._team_share_descriptor(value, limits),
+            ceiling=None if ceiling is None else self._team_share_descriptor(value, ceiling),
+        )
+
+    def _team_share_descriptor(self, value: str, limits: BorrowingTeamModelLimits) -> RateLimitDescriptor:
+        return RateLimitDescriptor(
+            key=TEAM_MODEL_LIMIT_AT_SATURATION,
+            value=value,
+            rate_limit={
+                "tokens_per_unit": limits.tpm,
+                "requests_per_unit": limits.rpm,
+                "window_size": self.v3_limiter.window_size,
+            },
+        )
+
+    def _team_share_error(
+        self,
+        model: str,
+        status: RateLimitStatus,
+        saturation: float,
+        priority: str | None,
+        user_api_key_dict: UserAPIKeyAuth,
+        team_share: _BorrowingTeamShare,
+    ) -> ProxyRateLimitError:
+        if saturation >= _get_priority_settings().saturation_threshold:
+            return self._team_limit_error(model, status, saturation, priority, user_api_key_dict)
+        return self._team_borrow_ceiling_error(
+            model, status, saturation, priority, user_api_key_dict, team_share.limits
+        )
+
+    def _team_borrow_ceiling_error(
+        self,
+        model: str,
+        status: RateLimitStatus,
+        saturation: float,
+        priority: str | None,
+        user_api_key_dict: UserAPIKeyAuth,
+        limits: BorrowingTeamModelLimits,
+    ) -> ProxyRateLimitError:
+        resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(model)
+        limit_name: Final = _team_limit_name(status["rate_limit_type"])
+        return ProxyRateLimitError(
+            detail={
+                "error": f"Team {limit_name} borrow cap reached for {model}: the team may use at most "
+                f"{limits.max_borrow_multiple}x its {limit_name} while borrowing idle capacity. "
+                f"Team: {user_api_key_dict.team_id}, "
+                f"Rate limit type: {status['rate_limit_type']}, "
+                f"Team {limit_name}: {limits.share(status['rate_limit_type'])}, "
+                f"Borrow cap: {status['current_limit']}, "
+                f"Remaining: {status['limit_remaining']}, "
+                f"Model saturation: {saturation:.1%}"
+            },
+            headers={
+                "retry-after": str(self.v3_limiter.window_size),
+                "rate_limit_type": str(status["rate_limit_type"]),
+                "rate_limited_by": TEAM_MODEL_LIMIT_MAX_BORROW_MULTIPLE,
+                "x-litellm-priority": priority or "default",
+                "x-litellm-saturation": f"{saturation:.2%}",
+            },
+            rate_limit_type=map_v3_rate_limit_type(status["rate_limit_type"]),
+            model=resolved_model,
+            llm_provider=llm_provider,
+        )
+
+    def _team_limit_error(
+        self,
+        model: str,
+        status: RateLimitStatus,
+        saturation: float,
+        priority: str | None,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> ProxyRateLimitError:
+        resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(model)
+        return ProxyRateLimitError(
+            detail={
+                "error": f"Team {_team_limit_name(status['rate_limit_type'])} reached for {model} "
+                "and the model is saturated, so there is no idle capacity to borrow. "
+                f"Team: {user_api_key_dict.team_id}, "
+                f"Rate limit type: {status['rate_limit_type']}, "
+                f"Team {_team_limit_name(status['rate_limit_type'])}: {status['current_limit']}, "
+                f"Remaining: {status['limit_remaining']}, "
+                f"Model saturation: {saturation:.1%}"
+            },
+            headers={
+                "retry-after": str(self.v3_limiter.window_size),
+                "rate_limit_type": str(status["rate_limit_type"]),
+                "rate_limited_by": TEAM_MODEL_LIMIT_AT_SATURATION,
+                "x-litellm-priority": priority or "default",
+                "x-litellm-saturation": f"{saturation:.2%}",
+            },
+            rate_limit_type=map_v3_rate_limit_type(status["rate_limit_type"]),
+            model=resolved_model,
+            llm_provider=llm_provider,
+        )
+
+    async def enforce_token_limits_for_frame(
+        self, user_api_key_dict: UserAPIKeyAuth, requested_model: str | None
+    ) -> None:
+        """Hold a Responses WebSocket turn to the team's share once the model saturates, like the regular limiter does."""
+        if requested_model is None:
+            return
+        team_share: Final = self._borrowing_team_share(model=requested_model, user_api_key_dict=user_api_key_dict)
+        model_group_info: Final = self.llm_router.registry().group(requested_model)
+        if team_share is None or model_group_info is None:
+            return
+        saturation: Final = await self._check_model_saturation(requested_model, model_group_info)
+        enforced: Final = team_share.enforced(saturation >= _get_priority_settings().saturation_threshold)
+        if enforced is None:
+            return
+        tpm_windows: Final = _socket_turn_tpm_windows((enforced,))
+        response: Final = await self.v3_limiter.should_rate_limit(
+            tpm_windows, parent_otel_span=user_api_key_dict.parent_otel_span, read_only=True, skip_parallel_check=True
+        )
+        over_limit: Final = next((s for s in response["statuses"] if s["code"] == "OVER_LIMIT"), None)
+        if over_limit is None:
+            return
+        raise self._team_share_error(
+            requested_model,
+            over_limit,
+            saturation,
+            self._get_priority_from_user_api_key_dict(user_api_key_dict),
+            user_api_key_dict,
+            team_share,
+        )
+
     def _create_model_tracking_descriptor(
         self,
         model: str,
@@ -417,7 +608,6 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         Raises:
             HTTPException: If any limit is exceeded
         """
-        import json
 
         saturation_threshold: Final = _get_priority_settings().saturation_threshold
         should_enforce_priority: Final = saturation >= saturation_threshold
@@ -450,9 +640,17 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         # asyncio.Lock + in-memory fallback for single-process deployments.
         # All-or-nothing: if any enforced descriptor would exceed its limit,
         # no counter is modified and the response carries "OVER_LIMIT".
+        team_share: Final = self._borrowing_team_share(model=model, user_api_key_dict=user_api_key_dict)
+        get_or_create_request_stash().borrowing_team_model_limit = None if team_share is None else team_share.share
+        if team_share is not None:
+            descriptors_to_check.append(team_share.share)
+        enforced_team_share: Final = None if team_share is None else team_share.enforced(should_enforce_priority)
+
         enforced_descriptors: Final[list[RateLimitDescriptor]] = [model_wide_descriptor]
         if priority_descriptors and should_enforce_priority:
             enforced_descriptors.extend(priority_descriptors)
+        if enforced_team_share is not None:
+            enforced_descriptors.append(enforced_team_share)
 
         per_request_increment: Final[dict[Literal["requests", "tokens"], int]] = {
             "requests": 1,
@@ -464,9 +662,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             parent_otel_span=user_api_key_dict.parent_otel_span,
         )
 
-        verbose_proxy_logger.debug(
-            "Atomic check+increment response: %s", json.dumps(atomic_response, indent=2, default=list)
-        )
+        verbose_proxy_logger.debug("Atomic check+increment response: %s", atomic_response)
 
         if atomic_response["overall_code"] == "OVER_LIMIT":
             resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(model)
@@ -519,6 +715,9 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                         llm_provider=llm_provider,
                     )
 
+                if descriptor_key == TEAM_MODEL_LIMIT_AT_SATURATION and team_share is not None:
+                    raise self._team_share_error(model, status, saturation, priority, user_api_key_dict, team_share)
+
             # Fail-closed guard: overall_code says OVER_LIMIT but no status
             # matched a descriptor key we know how to translate into a 429.
             # Refuse the request rather than silently fall through and let an
@@ -558,6 +757,12 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         # priority allocation has accurate usage when it later becomes
         # enforced. The increment-then-check semantics of should_rate_limit
         # are fine because we ignore the OVER_LIMIT response.
+        if team_share is not None and enforced_team_share is None:
+            await self.v3_limiter.atomic_check_and_increment_by_n(
+                descriptors=[team_share.share],
+                increments=[per_request_increment],
+                parent_otel_span=user_api_key_dict.parent_otel_span,
+            )
         if priority_descriptors and not should_enforce_priority:
             priority_tracking_response: Final = await self.v3_limiter.should_rate_limit(
                 descriptors=priority_descriptors,
@@ -571,7 +776,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         else:
             get_or_create_request_stash().rate_limit_response = atomic_response
 
-    @with_service_target("rate_limits")
+    @with_service_target(RATE_LIMITS_TARGET)
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -659,7 +864,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
         return None
 
-    @with_service_target("rate_limits")
+    @with_service_target(RATE_LIMITS_TARGET)
     async def async_post_call_success_hook(
         self, data: dict, user_api_key_dict: UserAPIKeyAuth, response
     ) -> LLMResponseTypes:
@@ -691,8 +896,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             verbose_proxy_logger.exception("Error in dynamic rate limiter v3 post-call hook: %s", e)
             return response
 
-    @with_service_target("rate_limits")
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+    @with_service_target(RATE_LIMITS_TARGET)
+    async def async_log_success_event(self, kwargs, response_obj: object, start_time, end_time) -> None:
         """
         Update token usage for priority-based rate limiting after successful API calls.
 
@@ -706,8 +911,6 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         from litellm.proxy.common_utils.callback_utils import (
             get_model_group_from_litellm_kwargs,
         )
-        from litellm.types.caching import RedisPipelineIncrementOperation
-        from litellm.types.utils import Usage
 
         try:
             verbose_proxy_logger.debug("INSIDE dynamic rate limiter ASYNC SUCCESS LOGGING")
@@ -716,7 +919,9 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
             # Get metadata from standard_logging_object
             standard_logging_object: Final = kwargs.get("standard_logging_object") or {}
-            standard_logging_metadata: Final = standard_logging_object.get("metadata") or {}
+            settlement_metadata: Final = _SettlementMetadata.model_validate(
+                standard_logging_object.get("metadata") or {}
+            )
 
             # Get model and priority
             model_group: Final = get_model_group_from_litellm_kwargs(kwargs)
@@ -725,41 +930,29 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
             # Get priority from user_api_key_auth_metadata in standard_logging_metadata
             # This is where user_api_key_dict.metadata is stored during pre-call
-            user_api_key_auth_metadata: Final = standard_logging_metadata.get("user_api_key_auth_metadata") or {}
-            key_priority: Final[str | None] = user_api_key_auth_metadata.get("priority")
+            key_priority: Final = settlement_metadata.priority
 
             # Get total tokens from response
             total_tokens = 0
             rate_limit_type: Final = self.v3_limiter.get_rate_limit_type()
 
-            if isinstance(response_obj, ModelResponse):
-                _usage: Final = getattr(response_obj, "usage", None)
-                if _usage and isinstance(_usage, Usage):
-                    if rate_limit_type == "output":
-                        total_tokens = _usage.completion_tokens
-                    elif rate_limit_type == "input":
-                        total_tokens = _usage.prompt_tokens
-                    elif rate_limit_type == "total":
-                        total_tokens = _usage.total_tokens
+            _usage: Final = _usage_of(response_obj)
+            if _usage is not None:
+                if rate_limit_type == "output":
+                    total_tokens = _usage.completion_tokens
+                elif rate_limit_type == "input":
+                    total_tokens = _usage.prompt_tokens
+                elif rate_limit_type == "total":
+                    total_tokens = _usage.total_tokens
 
             if total_tokens == 0:
                 return
 
-            # Create pipeline operations for token increments
-            pipeline_operations: Final[list[RedisPipelineIncrementOperation]] = []
-
             # Model-wide token tracking (model_saturation_check)
-            model_token_key: Final = self.v3_limiter.create_rate_limit_keys(
-                key="model_saturation_check",
-                value=model_group,
-                rate_limit_type="tokens",
-            )
-            pipeline_operations.append(
-                RedisPipelineIncrementOperation(
-                    key=model_token_key,
-                    increment_value=total_tokens,
-                    ttl=self.v3_limiter.window_size,
-                )
+            model_tokens: Final = CounterIncrement(
+                counter=RateLimitScope("model_saturation_check", model_group).counter("tokens"),
+                amount=total_tokens,
+                ttl=self.v3_limiter.window_size,
             )
 
             # Priority-specific token tracking (priority_model)
@@ -775,17 +968,17 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             else:
                 priority_key = f"{model_group}:default_pool"
 
-            priority_token_key: Final = self.v3_limiter.create_rate_limit_keys(
-                key="priority_model",
-                value=priority_key,
-                rate_limit_type="tokens",
+            team_model_tokens: Final = _team_model_token_increment(
+                get_or_create_request_stash().borrowing_team_model_limit, total_tokens, self.v3_limiter.window_size
             )
-            pipeline_operations.append(
-                RedisPipelineIncrementOperation(
-                    key=priority_token_key,
-                    increment_value=total_tokens,
+            pipeline_operations: Final = (
+                model_tokens,
+                CounterIncrement(
+                    counter=RateLimitScope("priority_model", priority_key).counter("tokens"),
+                    amount=total_tokens,
                     ttl=self.v3_limiter.window_size,
-                )
+                ),
+                *team_model_tokens,
             )
 
             # Execute token increments with TTL preservation

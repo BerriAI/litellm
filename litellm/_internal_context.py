@@ -44,6 +44,8 @@ _service_caller: Final[ContextVar[str | None]] = ContextVar("service_caller", de
 
 _mirrored_call: Final[ContextVar[bool]] = ContextVar("mirrored_call", default=False)
 
+_resent_on: Final[ContextVar[Callable[[Exception], bool] | None]] = ContextVar("resent_on", default=None)
+
 _request_parent_otel_span: Final[ContextVar[Span | None]] = ContextVar("request_parent_otel_span", default=None)
 
 
@@ -105,8 +107,15 @@ def current_service_target() -> str | None:
     return _service_target.get()
 
 
-def with_service_target(target: str) -> Callable[[Callable[_P, _R]], Callable[_P, _R]]:
-    """Run every call of the decorated function, coroutine functions included, under ``service_target(target)``."""
+def with_service_target(
+    target: str, *, preserve_existing: bool = False
+) -> Callable[[Callable[_P, _R]], Callable[_P, _R]]:
+    """Run calls under the target, or the inherited target when ``preserve_existing`` is true."""
+
+    def call_target() -> str:
+        if preserve_existing:
+            return current_service_target() or target
+        return target
 
     def decorate(fn: Callable[_P, _R]) -> Callable[_P, _R]:
         if inspect.iscoroutinefunction(fn):
@@ -116,14 +125,14 @@ def with_service_target(target: str) -> Callable[[Callable[_P, _R]], Callable[_P
 
             @wraps(fn)
             async def run_async(*args: _P.args, **kwargs: _P.kwargs) -> object:
-                with service_target(target):
+                with service_target(call_target()):
                     return await awaitable_fn(*args, **kwargs)
 
             return cast("Callable[_P, _R]", run_async)  # cast-ok: same coroutine-returning signature as ``fn``
 
         @wraps(fn)
         def run(*args: _P.args, **kwargs: _P.kwargs) -> _R:
-            with service_target(target):
+            with service_target(call_target()):
                 return fn(*args, **kwargs)
 
         return run
@@ -159,6 +168,23 @@ def mirrored_call() -> Generator[None]:
 
 def in_mirrored_call() -> bool:
     return _mirrored_call.get()
+
+
+@contextmanager
+def resent_on(rejection: Callable[[Exception], bool]) -> Generator[None]:
+    """An attempt its caller sends again when it fails with ``rejection``. That failure is not the request's
+    outcome, so it is neither logged as the request's failure nor retried, and its budget reservation and rate-limit
+    slot stay with the attempt sent again."""
+    token: Final = _resent_on.set(rejection)
+    try:
+        yield
+    finally:
+        _restore(_resent_on, token)
+
+
+def is_resent_failure(error: Exception) -> bool:
+    rejection: Final = _resent_on.get()
+    return rejection is not None and rejection(error)
 
 
 def set_request_parent_otel_span(span: Span) -> None:
