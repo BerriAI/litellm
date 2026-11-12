@@ -8,7 +8,7 @@ import datetime
 import json
 import os
 import sys
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from types import SimpleNamespace
 
 import anyio
@@ -29,7 +29,7 @@ from litellm.llms.anthropic.messages.responses_adapters.streaming_iterator impor
     AnthropicResponsesStreamWrapper,
 )
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
-from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
+from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator, SyncResponsesAPIStreamingIterator
 from litellm.types.llms.openai import ResponseFailedEvent, ResponsesAPIResponse
 
 
@@ -823,31 +823,79 @@ class TestUpstreamFailureReachesTheProxyFailureHook:
         assert len(finished) == 1
 
 
+_RESPONSE_CREATED = (
+    b'data: {"type": "response.created", "response": {"id": "resp_1", "status": "in_progress", "output": []}}\n\n'
+)
+_MESSAGE_ADDED = (
+    b'data: {"type": "response.output_item.added", "output_index": 0, "item": '
+    b'{"type": "message", "id": "msg_1", "role": "assistant", "content": [], "status": "in_progress"}}\n\n'
+)
+_TEXT_DELTA = (
+    b'data: {"type": "response.output_text.delta", "item_id": "msg_1", "output_index": 0, '
+    b'"content_index": 0, "delta": "word "}\n\n'
+)
+
+
 class _EndlessProviderStream(httpx.AsyncByteStream):
     def __init__(self) -> None:
         self.closed = False
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
-        yield b'data: {"type": "response.created", "response": {"id": "resp_1", "status": "in_progress", "output": []}}\n\n'
-        yield (
-            b'data: {"type": "response.output_item.added", "output_index": 0, "item": '
-            b'{"type": "message", "id": "msg_1", "role": "assistant", "content": [], "status": "in_progress"}}\n\n'
-        )
+        yield _RESPONSE_CREATED
+        yield _MESSAGE_ADDED
         while True:
-            yield (
-                b'data: {"type": "response.output_text.delta", "item_id": "msg_1", "output_index": 0, '
-                b'"content_index": 0, "delta": "word "}\n\n'
-            )
+            yield _TEXT_DELTA
 
     async def aclose(self) -> None:
         self.closed = True
 
 
-def test_closing_the_sse_stream_mid_response_closes_the_provider_response():
-    provider_stream = _EndlessProviderStream()
+class _EndlessSyncProviderStream(httpx.SyncByteStream):
+    def __init__(self) -> None:
+        self.closed = False
 
+    def __iter__(self) -> Iterator[bytes]:
+        yield _RESPONSE_CREATED
+        yield _MESSAGE_ADDED
+        while True:
+            yield _TEXT_DELTA
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _ProviderStreamThatPausesAfterTheFirstTextDelta(httpx.AsyncByteStream):
+    def __init__(self) -> None:
+        self.closed = False
+        self.paused = asyncio.Event()
+        self.resume = asyncio.Event()
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield _RESPONSE_CREATED
+        yield _MESSAGE_ADDED
+        yield _TEXT_DELTA
+        self.paused.set()
+        await self.resume.wait()
+        yield _TEXT_DELTA
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+@pytest.mark.parametrize(
+    ("provider_stream", "upstream_class"),
+    [
+        (_EndlessProviderStream(), ResponsesAPIStreamingIterator),
+        (_EndlessSyncProviderStream(), SyncResponsesAPIStreamingIterator),
+    ],
+    ids=["async_responses_call", "sync_responses_call"],
+)
+def test_closing_the_sse_stream_mid_response_closes_the_provider_response(
+    provider_stream: _EndlessProviderStream | _EndlessSyncProviderStream,
+    upstream_class: type[ResponsesAPIStreamingIterator] | type[SyncResponsesAPIStreamingIterator],
+):
     async def _close_after_the_first_text_delta() -> None:
-        upstream = ResponsesAPIStreamingIterator(
+        upstream = upstream_class(
             response=httpx.Response(200, stream=provider_stream),
             model="m",
             responses_api_provider_config=OpenAIResponsesAPIConfig(),
@@ -862,3 +910,28 @@ def test_closing_the_sse_stream_mid_response_closes_the_provider_response():
 
     asyncio.run(_close_after_the_first_text_delta())
     assert provider_stream.closed
+
+
+def test_a_close_refused_while_another_task_reads_leaves_the_provider_response_to_that_read():
+    async def _close_from_another_task_mid_read() -> tuple[bool, bytes]:
+        provider_stream = _ProviderStreamThatPausesAfterTheFirstTextDelta()
+        upstream = ResponsesAPIStreamingIterator(
+            response=httpx.Response(200, stream=provider_stream),
+            model="m",
+            responses_api_provider_config=OpenAIResponsesAPIConfig(),
+            logging_obj=_logging_obj_with_failure_hook(_FailureHookRecorder()),
+        )
+        sse = AnthropicResponsesStreamWrapper(responses_stream=upstream, model="m").async_anthropic_sse_wrapper()
+        text_deltas = (frame async for frame in sse if b'"text_delta"' in frame)
+        await text_deltas.__anext__()
+        second_text_delta = asyncio.ensure_future(text_deltas.__anext__())
+        await provider_stream.paused.wait()
+        with pytest.raises(RuntimeError, match="already running"):
+            await sse.aclose()
+        closed_by_the_refused_close = provider_stream.closed
+        provider_stream.resume.set()
+        return closed_by_the_refused_close, await second_text_delta
+
+    closed_by_the_refused_close, second_frame = asyncio.run(_close_from_another_task_mid_read())
+    assert not closed_by_the_refused_close
+    assert b'"text_delta"' in second_frame

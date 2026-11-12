@@ -3,7 +3,7 @@
 import asyncio
 from collections import deque
 from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
 
 import anyio
 from pydantic import ConfigDict, field_validator
@@ -93,6 +93,20 @@ def _failure_status_and_message(exception: Exception) -> tuple[int, str]:
     status_code: Final = failure.status_code if failure.status_code is not None else 500
     message: Final = failure.message or str(original) or INCOMPLETE_STREAM_ERROR_MESSAGE
     return status_code, message
+
+
+@runtime_checkable
+class _Closeable(Protocol):
+    def close(self) -> None: ...
+
+
+async def _close_upstream(upstream: object) -> None:
+    from litellm.llms.anthropic.messages.native.streaming_iterator import SupportsAclose
+
+    if isinstance(upstream, SupportsAclose):
+        await upstream.aclose()
+    elif isinstance(upstream, _Closeable):
+        upstream.close()
 
 
 def _anthropic_error_chunk(status_code: int, message: str) -> dict[str, object]:
@@ -576,12 +590,8 @@ class AnthropicResponsesSSEByteStream:
         return await self._frames.__anext__()
 
     async def aclose(self) -> None:
-        from litellm.llms.anthropic.messages.native.streaming_iterator import aclose_if_supported
-
-        try:
-            await self._frames.aclose()
-        finally:
-            await aclose_if_supported(self._wrapper.responses_stream)
+        await self._frames.aclose()
+        await _close_upstream(self._wrapper.responses_stream)
 
     def partial_response_on_disconnect(self) -> "ResponseIncompleteEvent | None":
         return self._wrapper.partial_response_on_disconnect()
