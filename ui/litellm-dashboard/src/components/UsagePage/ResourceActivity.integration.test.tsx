@@ -120,7 +120,7 @@ describe("ResourceActivity", () => {
     expect(screen.queryByText("anthropic/other-model")).not.toBeInTheDocument();
     expect(networking.dailyActivityAggregatedCall).toHaveBeenCalledExactlyOnceWith(
       "user",
-      expect.objectContaining({ model: undefined }),
+      expect.objectContaining({ model: undefined, includeEntityBreakdown: false }),
     );
   });
 
@@ -165,9 +165,15 @@ describe("ResourceActivity", () => {
 
     expect(await screen.findByText("$12.34")).toBeInTheDocument();
     expect(screen.getByText("42")).toBeInTheDocument();
+    const expectedRequest = {
+      ...filter,
+      includeEntityBreakdown: scope === "model" ? false : undefined,
+      startTime: expect.any(Date),
+      endTime: expect.any(Date),
+    };
     expect(networking.dailyActivityAggregatedCall).toHaveBeenCalledWith(
       entity,
-      expect.objectContaining({ ...filter, startTime: expect.any(Date), endTime: expect.any(Date) }),
+      expect.objectContaining(expectedRequest),
     );
   });
 
