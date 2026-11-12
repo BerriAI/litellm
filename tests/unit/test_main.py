@@ -20,7 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import respx
-from openai import APITimeoutError, AsyncOpenAI, OpenAI
+from openai import APIError, APITimeoutError, AsyncOpenAI, OpenAI
 from openai._legacy_response import LegacyAPIResponse
 from openai.types.chat.chat_completion import ChatCompletion
 from pydantic import BaseModel, ConfigDict, TypeAdapter
@@ -52,6 +52,7 @@ from litellm.types.utils import (
     Delta,
     ModelResponseStream,
     StandardCallbackDynamicParams,
+    StandardLoggingPayload,
     StreamingChoices,
     TextCompletionResponse,
     Usage,
@@ -101,6 +102,63 @@ def preserve_litellm_completion_state(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 WHITE_PNG: Final = (Path(__file__).parents[1] / "white_100x100.png").read_bytes()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["image_generation", "embedding"])
+@pytest.mark.parametrize("deployment_id", [None, "health-deployment"])
+async def test_health_check_logs_the_same_cost_and_deployment_as_normal_calls(
+    mode: str, deployment_id: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: Final[asyncio.Queue[StandardLoggingPayload]] = asyncio.Queue()
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "standard/1024-x-1024/health-image",
+        {"input_cost_per_image": 0.25, "litellm_provider": "openai", "mode": "image_generation"},
+    )
+
+    class SpendCapture(CustomLogger):
+        async def async_log_success_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+        ) -> None:
+            events.put_nowait(TypeAdapter(StandardLoggingPayload).validate_python(kwargs["standard_logging_object"]))
+
+    monkeypatch.setattr(litellm, "_async_success_callback", [SpendCapture()])
+    model: Final = "openai/health-image" if mode == "image_generation" else "openai/text-embedding-3-small"
+    payload: Final = (
+        {"created": 1, "data": [{"url": "https://example.com/image.png"}]}
+        if mode == "image_generation"
+        else {
+            "object": "list",
+            "data": [{"object": "embedding", "embedding": [0.1], "index": 0}],
+            "model": "text-embedding-3-small",
+            "usage": {"prompt_tokens": 10, "total_tokens": 10},
+        }
+    )
+    params: Final = {
+        "model": model,
+        "api_base": "https://health-test.example/v1",
+        "api_key": "test-key",
+        **({"model_info": {"id": deployment_id}} if deployment_id else {}),
+        **({"size": "1024x1024", "quality": "standard", "n": 1} if mode == "image_generation" else {}),
+    }
+    with respx.mock:
+        respx.post(url__regex=r"https://health-test.example/v1/.*").mock(return_value=httpx.Response(200, json=payload))
+        if mode == "image_generation":
+            await litellm.aimage_generation(**params, prompt="test")
+        else:
+            await litellm.aembedding(**params, input=["test"])
+        normal: Final = await asyncio.wait_for(events.get(), timeout=10)
+        result: Final = await litellm.ahealth_check(model_params=params.copy(), mode=mode, prompt="test")
+        assert "error" not in result, result
+        health: Final = await asyncio.wait_for(events.get(), timeout=10)
+
+    assert health["call_type"] == normal["call_type"]
+    assert health["model"] == normal["model"]
+    assert health["response_cost"] == normal["response_cost"]
+    assert health["response_cost"] > 0
+    assert health["model_id"] == (deployment_id or "")
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
@@ -12016,3 +12074,57 @@ def test_supplied_openai_client_base_url_decides_data_residency(monkeypatch: pyt
         )
 
     assert captured["logging_obj"].litellm_params.get("data_residency") is None
+
+
+_ALEPH_ALPHA_COMPLETE_URL: Final = "https://api.aleph-alpha.com/complete"
+
+
+def _aleph_alpha_completion() -> object:
+    return litellm.completion(
+        model="luminous-base",
+        custom_llm_provider="aleph_alpha",
+        messages=[{"role": "user", "content": "Capital of France?"}],
+        api_key="aleph-test-key",
+    )
+
+
+def test_aleph_alpha_completion_returns_each_upstream_completion_as_a_choice(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post(_ALEPH_ALPHA_COMPLETE_URL).respond(
+        200,
+        json={
+            "model_version": "2022-04",
+            "completions": [
+                {"completion": " Paris", "finish_reason": "maximum_tokens"},
+                {"completion": " Lyon", "finish_reason": "end_of_text"},
+            ],
+        },
+    )
+
+    response: Final = _aleph_alpha_completion()
+
+    assert [choice.message.content for choice in response.choices] == [" Paris", " Lyon"]
+
+
+def test_aleph_alpha_error_in_a_successful_body_fails_the_call_with_the_upstream_message(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post(_ALEPH_ALPHA_COMPLETE_URL).respond(
+        200, json={"error": "Prompt rejected by the content filter", "code": "PROMPT_REJECTED"}
+    )
+
+    with pytest.raises(APIError) as raised:
+        _aleph_alpha_completion()
+
+    assert "Prompt rejected by the content filter" in raised.value.message
+
+
+@pytest.mark.parametrize("completion", [42, None])
+def test_aleph_alpha_completion_that_is_not_text_fails_the_call(
+    respx_mock: respx.MockRouter, completion: object
+) -> None:
+    respx_mock.post(_ALEPH_ALPHA_COMPLETE_URL).respond(
+        200, json={"completions": [{"completion": completion, "finish_reason": "end_of_text"}]}
+    )
+
+    with pytest.raises(APIError):
+        _aleph_alpha_completion()

@@ -15779,7 +15779,7 @@ async def test_token_counter_keeps_the_event_loop_free_during_a_huggingface_coun
     warm_tokenizer("claude-fable-5")
 
     response, took, lags = await timed_with_loop_lags(
-        lambda: proxy_server_module.token_counter(TokenCountRequest(model="claude-fable-5", prompt=text * 100))
+        lambda: proxy_server_module.count_request_tokens(TokenCountRequest(model="claude-fable-5", prompt=text * 100))
     )
 
     assert response.total_tokens > 0
@@ -15820,7 +15820,7 @@ async def test_token_counter_loads_a_custom_tokenizer_off_the_event_loop(monkeyp
 
     litellm.utils._select_custom_tokenizer_helper.cache_clear()
     try:
-        response: Final = await proxy_server_module.token_counter(
+        response: Final = await proxy_server_module.count_request_tokens(
             TokenCountRequest(model="self-hosted", prompt="count me off the loop")
         )
         assert loader_threads.get_nowait() is not loop_thread
@@ -15861,7 +15861,7 @@ async def test_token_counter_loads_a_custom_tokenizer_once_per_identifier_revisi
     litellm.utils._select_custom_tokenizer_helper.cache_clear()
     try:
         responses: Final = [
-            await proxy_server_module.token_counter(TokenCountRequest(model="self-hosted", prompt="count me once"))
+            await proxy_server_module.count_request_tokens(TokenCountRequest(model="self-hosted", prompt="count me once"))
             for _ in range(3)
         ]
         assert from_pretrained.call_args_list == [mock.call("my-org/tokenizer", revision="main", token=None)]
@@ -15869,8 +15869,8 @@ async def test_token_counter_loads_a_custom_tokenizer_once_per_identifier_revisi
         assert len({response.total_tokens for response in responses}) == 1
         assert responses[0].total_tokens > 0
 
-        await proxy_server_module.token_counter(TokenCountRequest(model="self-hosted-pinned", prompt="count me once"))
-        await proxy_server_module.token_counter(TokenCountRequest(model="self-hosted-private", prompt="count me once"))
+        await proxy_server_module.count_request_tokens(TokenCountRequest(model="self-hosted-pinned", prompt="count me once"))
+        await proxy_server_module.count_request_tokens(TokenCountRequest(model="self-hosted-private", prompt="count me once"))
         assert from_pretrained.call_args_list == [
             mock.call("my-org/tokenizer", revision="main", token=None),
             mock.call("my-org/tokenizer", revision="v2", token=None),

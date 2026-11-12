@@ -171,6 +171,38 @@ where
     M: Machine<Protocol = H::Protocol> + 'static,
     M::Complete: Into<HostedCompletion<<H::Protocol as Protocol>::Response>>,
 {
+    run_public_call_after_policy(
+        py,
+        arguments,
+        start,
+        host,
+        hooks,
+        HookChain::new(),
+        asynchronous,
+    )
+}
+
+fn run_public_call_after_policy<H, M>(
+    py: Python<'_>,
+    arguments: Py<PyDict>,
+    start: impl FnOnce(
+        Python<'_>,
+        &Bound<'_, PyDict>,
+        <H::Protocol as Protocol>::Request,
+    ) -> PyResult<M>
+    + Send
+    + Sync
+    + 'static,
+    host: H,
+    hooks: impl PythonCallHooks + 'static,
+    after_policy: impl PythonCallHooks + 'static,
+    asynchronous: bool,
+) -> PyResult<Py<PyAny>>
+where
+    H: PythonBinding + PythonHostCalls<H::Protocol> + 'static,
+    M: Machine<Protocol = H::Protocol> + 'static,
+    M::Complete: Into<HostedCompletion<<H::Protocol as Protocol>::Response>>,
+{
     litellm_host_python::run_call(
         py,
         move |py, arguments, request| {
@@ -179,7 +211,8 @@ where
         host,
         HookChain::new()
             .with(hooks)
-            .with(crate::preflight::SdkPolicy),
+            .with(crate::preflight::SdkPolicy)
+            .with(after_policy),
         arguments,
         CallOptions::new(asynchronous, execution_steps),
     )

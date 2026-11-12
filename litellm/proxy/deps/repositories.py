@@ -4,12 +4,14 @@ from fastapi import Depends
 
 from litellm.models.alert import AlertStore
 from litellm.models.deployment_warning import DeploymentWarningIgnoreStore
+from litellm.models.fallback import RouterFallbackStore
 from litellm.models.gateway_activity import GatewayActivityStore
 from litellm.models.plugin_upload import PluginUploadStore
 from litellm.models.skill_submission import SkillSubmissionStore
 from litellm.models.user_banner import UserBannerStore
 from litellm.proxy.deps.database import DatabaseDep
 from litellm.repositories.alert_repository import AlertRepository
+from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.deployment_warning_ignore_repository import DeploymentWarningIgnoreRepository
 from litellm.repositories.gateway_activity_repository import GatewayActivityRepository
 from litellm.repositories.plugin_upload_repository import PluginUploadRepository
@@ -63,3 +65,10 @@ async def get_alert_repository(database: DatabaseDep) -> AlertStore | None:
 
 
 AlertRepositoryDep: TypeAlias = Annotated[AlertStore | None, Depends(get_alert_repository)]
+
+
+async def get_router_fallback_repository(database: DatabaseDep) -> RouterFallbackStore | None:
+    return None if database is None else ConfigRepository(database.prisma, use_writer=True)
+
+
+RouterFallbackRepositoryDep: TypeAlias = Annotated[RouterFallbackStore | None, Depends(get_router_fallback_repository)]

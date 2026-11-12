@@ -61,6 +61,10 @@ pub trait StreamCachable: Cachable {
 
     fn replay(data: Bytes) -> Option<OutputOf<Self>>;
     fn bytes(chunk: &Self::Chunk) -> &[u8];
+
+    fn storable_stream(text: &str) -> bool {
+        successful_stream(text, Self::TERMINAL_EVENT)
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -238,12 +242,19 @@ impl<P: StreamCachable> CallCache<P> {
         identity: &ProviderIdentity,
         wire: &WireRequest,
     ) -> Self {
+        Self::new(
+            cache,
+            policy,
+            CacheRequest::from_wire(identity.clone(), Some(wire)),
+        )
+    }
+
+    pub fn new(cache: Option<&ScopedCache>, policy: CachePolicy, request: CacheRequest) -> Self {
         let session = cache.and_then(|cache| {
             if !policy.enabled() {
                 return None;
             }
             let options = cache.options(Some(policy));
-            let request = CacheRequest::from_wire(identity.clone(), Some(wire));
             Some(CacheSession {
                 request: options.request(
                     &cache.service.config().namespace,
@@ -281,7 +292,7 @@ impl<P: StreamCachable> CallCache<P> {
         P::Response: Serialize,
     {
         let Some(session) = self.session.filter(|session| {
-            *source == ResultSource::Provider && session.request.controls.writes()
+            !matches!(source, ResultSource::Cache { .. }) && session.request.controls.writes()
         }) else {
             return output;
         };
@@ -322,7 +333,7 @@ fn capture_stream<P: StreamCachable>(
                 None => {
                     if let Some(data) = captured
                         && let Ok(text) = String::from_utf8(data)
-                        && successful_stream(&text, P::TERMINAL_EVENT)
+                        && P::storable_stream(&text)
                         && let Ok(entry) = serde_json::to_value(ResponseEnvelope::new(
                             P::SURFACE,
                             CachedOutput::<Value>::Stream(text),

@@ -6,17 +6,6 @@ use litellm_host::{
 };
 use pyo3::{prelude::*, types::PyDict};
 
-pub(crate) struct Cached<P>(std::marker::PhantomData<P>);
-
-impl<P: Protocol> Protocol for Cached<P> {
-    type Request = (P::Request, Selection);
-    type Response = P::Response;
-    type Error = P::Error;
-    type HostCall = python::CacheCall;
-    type Chunk = P::Chunk;
-    type StreamHead = P::StreamHead;
-}
-
 enum Backend {
     Disabled,
     Python { namespace: String },
@@ -28,11 +17,12 @@ pub(crate) struct Selection {
 }
 
 impl Selection {
-    pub(crate) fn attach<P: Protocol<HostCall = python::CacheCall>>(
+    pub(crate) fn attach<P: Protocol>(
         self,
         services: HostServices<P>,
     ) -> (Option<ScopedCache>, CacheOptions)
     where
+        P::HostCall: From<python::CacheCall>,
         P::Error: From<MachineFault> + std::error::Error,
     {
         let service = match self.backend {
@@ -51,15 +41,21 @@ fn selected_cache<'py>(
     kwargs: &Bound<'py, PyDict>,
     call_type: &str,
 ) -> PyResult<Option<Bound<'py, PyAny>>> {
+    if kwargs
+        .get_item("caching")?
+        .is_some_and(|value| value.is(pyo3::types::PyBool::new(py, false)))
+    {
+        return Ok(None);
+    }
+    configured_cache(py, call_type)
+}
+
+fn configured_cache<'py>(py: Python<'py>, call_type: &str) -> PyResult<Option<Bound<'py, PyAny>>> {
     let configured = py
         .import(CACHE_HOST_MODULE)?
         .getattr("configured_cache")?
         .call0()?;
-    if configured.is_none()
-        || kwargs
-            .get_item("caching")?
-            .is_some_and(|value| value.is(pyo3::types::PyBool::new(py, false)))
-    {
+    if configured.is_none() {
         return Ok(None);
     }
     let supported = configured.getattr("supported_call_types")?;
@@ -90,9 +86,14 @@ pub(crate) fn configure(
     python: &mut python::PythonCache,
     py: Python<'_>,
     arguments: &Bound<'_, PyDict>,
-    call_type: &str,
+    function: &Bound<'_, PyAny>,
 ) -> PyResult<Selection> {
-    let selected = selected_cache(py, arguments, call_type)?;
+    let call_type: String = function.getattr("__name__")?.extract()?;
+    let selected = if python.asynchronous() {
+        configured_cache(py, &call_type)?
+    } else {
+        None
+    };
     let Some(cache) = selected else {
         return Ok(Selection {
             backend: Backend::Disabled,
@@ -102,6 +103,9 @@ pub(crate) fn configure(
     let enabled = cache
         .call_method("should_use_cache", (), Some(arguments))?
         .extract::<bool>()?;
+    let skips_read = arguments
+        .get_item("caching")?
+        .is_some_and(|value| !value.is_none() && !value.is(pyo3::types::PyBool::new(py, true)));
     let controls = arguments
         .get_item("cache")?
         .filter(|value| !value.is_none());
@@ -117,7 +121,7 @@ pub(crate) fn configure(
     };
     let options = CacheOptions {
         policy: CachePolicy {
-            no_cache: boolean("no-cache")?,
+            no_cache: boolean("no-cache")? || skips_read,
             no_store: boolean("no-store")?,
             ..CachePolicy::default()
         },
@@ -129,7 +133,7 @@ pub(crate) fn configure(
         .map(|value| value.extract())
         .transpose()?
         .unwrap_or_default();
-    python.bind(cache, arguments);
+    python.bind(cache, function, arguments);
     Ok(Selection {
         backend: if enabled {
             Backend::Python { namespace }
