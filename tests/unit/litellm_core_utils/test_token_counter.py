@@ -3656,3 +3656,33 @@ def _fastest(run: Callable[[str], None], model: str, repeats: int = 5) -> float:
         run(model)
         timings.append((time.perf_counter() - started) * 1000)
     return min(timings)
+
+
+@pytest.mark.parametrize("prefix", ["", "my-deployment/", "azure/"])
+def test_listed_openai_model_name_sees_models_registered_after_import(prefix: str) -> None:
+    """The length bound started out as a constant computed at import time, but `register_model`
+    keeps adding names afterwards. A name longer than anything in the shipped catalog has to
+    stay findable, or registering it silently stops counting it with the OpenAI encoding."""
+    name: Final = "gpt-4o-reserved-capacity-deployment-for-the-eu-central-region"
+    assert len(name) > token_counter_module._longest_listed_openai_model()
+    litellm.register_model(
+        {
+            name: {
+                "input_cost_per_token": 3e-6,
+                "output_cost_per_token": 1.5e-5,
+                "litellm_provider": "openai",
+                "mode": "chat",
+            }
+        },
+        persist_across_reloads=False,
+    )
+    try:
+        assert token_counter_module._listed_openai_model_name(f"{prefix}{name}") == name
+        if not prefix:
+            # the point of naming it an OpenAI model: it gets counted with the o200k encoding
+            expected: Final = len(tiktoken.get_encoding("o200k_base").encode(_MULTILINGUAL_SAMPLE))
+            assert litellm.token_counter(model=name, text=_MULTILINGUAL_SAMPLE) == expected
+    finally:
+        litellm.model_cost.pop(name, None)
+        litellm.open_ai_chat_completion_models.discard(name)
+        token_counter_module._longest_bound["key"] = (-1, -1, -1)

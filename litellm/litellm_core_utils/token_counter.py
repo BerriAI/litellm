@@ -1375,11 +1375,15 @@ def _listed_openai_model_name(model: str) -> str | None:
     #
     # A candidate longer than the longest listed name cannot match anything, so the walk only looks one up while it is
     # short enough. Skipping is just moving to the next slash, which keeps the whole thing linear in the name length.
+    #
+    # The bound is read per call rather than frozen at import: `register_model` keeps adding names, and a name longer
+    # than anything in the shipped catalog is exactly the sort of thing it is used for.
+    limit: Final = _longest_listed_openai_model()
     tail: Final = model.rsplit("/", 1)[-1]
     length: Final = len(model)
     start: Final = 0
     while True:
-        if length - start <= _LONGEST_LISTED_OPENAI_MODEL:
+        if length - start <= limit:
             rest: Final = model[start:]
             if _is_openai_cost_map_model(rest) or _is_openai_cost_map_model(f"azure/{rest}"):
                 return tail
@@ -1408,14 +1412,23 @@ def _is_azure_text_cost_info(cost_info: object) -> bool:
     )
 
 
-_LONGEST_LISTED_OPENAI_MODEL: Final = max(
-    len(name)
-    for name in chain(
-        litellm.azure_llms,
-        litellm.open_ai_chat_completion_models,
-        (name for name, cost_info in litellm.model_cost.items() if _is_azure_text_cost_info(cost_info)),
-    )
-)
+_longest_bound: Final = {"key": (-1, -1, -1), "length": 0}
+
+
+def _longest_listed_openai_model() -> int:
+    """Longest name `_is_openai_cost_map_model` can match, re-read when the lists change.
+
+    Started out as a module constant, which missed everything registered after import. The
+    three sizes are enough to notice a change; otherwise this would walk the whole catalog on
+    every call, which is what the constant was there to avoid."""
+    key: Final = (len(litellm.azure_llms), len(litellm.open_ai_chat_completion_models), len(litellm.model_cost))
+    if _longest_bound["key"] != key:
+        _longest_bound["key"] = key
+        # ask `_is_openai_cost_map_model` itself so this stays right if it learns new sources
+        _longest_bound["length"] = max(
+            (len(name) for name in litellm.model_cost if _is_openai_cost_map_model(name)), default=0
+        )
+    return _longest_bound["length"]
 
 
 def _is_azure_openai_text_model(model: str) -> bool:
