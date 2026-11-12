@@ -120,5 +120,5 @@ def test_file_batch_created_through_gemini_passthrough_is_registered_for_the_cal
             lambda rows: len(rows) == 1,
             seconds=70,
         )
-        assert spend_rows[0]["model"].endswith(_MODEL), spend_rows
+        assert str(spend_rows[0]["model"]).endswith(_MODEL), spend_rows
         assert float(spend_rows[0]["spend"]) == 0.0, spend_rows

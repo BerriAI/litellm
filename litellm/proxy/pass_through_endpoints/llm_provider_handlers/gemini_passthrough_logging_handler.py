@@ -1,8 +1,10 @@
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -31,6 +33,10 @@ if TYPE_CHECKING:
 else:
     PassThroughEndpointLogging = Any
     EndpointType = Any
+
+
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
+_EMPTY: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 class GeminiPassthroughLoggingHandler:
@@ -64,7 +70,7 @@ class GeminiPassthroughLoggingHandler:
                 logging_obj=logging_obj,
                 url_route=url_route,
                 start_time=start_time,
-                kwargs=kwargs,
+                kwargs=_JSON_OBJECT.validate_python(kwargs),
             )
         if "predictLongRunning" in url_route:
             model = GeminiPassthroughLoggingHandler.extract_model_from_url(url_route)
@@ -141,12 +147,31 @@ class GeminiPassthroughLoggingHandler:
             }
 
     @staticmethod
+    def gemini_deployment_id(model: str) -> str | None:
+        """The configured ``gemini/<model>`` deployment CheckBatchCost bills a pass-through batch through, or nothing."""
+        from litellm.proxy.proxy_server import llm_router
+
+        if llm_router is None:
+            return None
+        deployments: Final = tuple(
+            _JSON_OBJECT.validate_python(deployment)
+            for deployment in llm_router.registry().deployments(model_name=model) or ()
+        )
+        deployment_ids: Final = (
+            _JSON_OBJECT.validate_python(deployment.get("model_info") or _EMPTY).get("id")
+            for deployment in deployments
+            if _JSON_OBJECT.validate_python(deployment.get("litellm_params") or _EMPTY).get("model")
+            == f"gemini/{model}"
+        )
+        return next((deployment_id for deployment_id in deployment_ids if isinstance(deployment_id, str)), None)
+
+    @staticmethod
     def _batch_create_handler(
         httpx_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         url_route: str,
         start_time: datetime,
-        kwargs: dict,
+        kwargs: Mapping[str, object],
     ) -> PassThroughEndpointLoggingTypedDict:
         """A 200 from ``models/{model}:batchGenerateContent`` registers the job for the calling key, so
         CheckBatchCost prices its output file when it completes. Anything else is logged as the plain
@@ -155,18 +180,25 @@ class GeminiPassthroughLoggingHandler:
         from litellm.llms.gemini.batches.transformation import GeminiBatchesConfig
 
         model: Final = GeminiPassthroughLoggingHandler.extract_model_from_url(url_route)
-        if httpx_response.status_code != 200 or "name" not in httpx_response.json():
-            kwargs["model"] = model
-            kwargs["custom_llm_provider"] = "gemini"
-            return {"result": None, "kwargs": kwargs}
+        if httpx_response.status_code != 200 or "name" not in _JSON_OBJECT.validate_json(httpx_response.content):
+            return {"result": None, "kwargs": dict(kwargs, model=model, custom_llm_provider="gemini")}
         batch: Final = GeminiBatchesConfig().transform_create_batch_response(
-            model=model, raw_response=httpx_response, logging_obj=logging_obj, litellm_params={}
+            model=model, raw_response=httpx_response, logging_obj=logging_obj, litellm_params=MappingProxyType({})
         )
-        model_id: Final = VertexPassthroughLoggingHandler.get_actual_model_id_from_router(model)
-        unified_object_id: Final = unified_batch_object_id(
-            model_id if model_id != model else f"gemini/{model}", batch.id
-        )
-        request_metadata: Final = (kwargs.get("litellm_params") or {}).get("metadata") or {}
+        deployment_id: Final = GeminiPassthroughLoggingHandler.gemini_deployment_id(model)
+        if deployment_id is None:
+            verbose_proxy_logger.warning(
+                "No gemini/%s deployment is configured, so batch %s created through the pass-through cannot be billed",
+                model,
+                batch.id,
+            )
+            return {
+                "result": None,
+                "kwargs": dict(kwargs, model=model, custom_llm_provider="gemini", batch_id=batch.id),
+            }
+        unified_object_id: Final = unified_batch_object_id(deployment_id, batch.id)
+        litellm_params: Final = _JSON_OBJECT.validate_python(kwargs.get("litellm_params") or _EMPTY)
+        request_metadata: Final = _JSON_OBJECT.validate_python(litellm_params.get("metadata") or _EMPTY)
         register_passthrough_batch("Gemini", unified_object_id, batch, batch.id, request_metadata)
 
         litellm_model_response: Final = ModelResponse()
@@ -191,17 +223,21 @@ class GeminiPassthroughLoggingHandler:
                 },
             )
         ]
-        kwargs["response_cost"] = 0.0
-        kwargs["model"] = model
-        kwargs["custom_llm_provider"] = "gemini"
-        kwargs["batch_id"] = batch.id
-        kwargs["unified_object_id"] = unified_object_id
-        logging_obj.model = model
-        logging_obj.model_call_details["model"] = model
-        logging_obj.model_call_details["custom_llm_provider"] = "gemini"
-        logging_obj.model_call_details["response_cost"] = 0.0
-        logging_obj.model_call_details["batch_id"] = batch.id
-        return {"result": litellm_model_response, "kwargs": kwargs}
+        logging_obj.model = model  # rebind-ok: passthrough attribution records the resolved Gemini model
+        logging_obj.model_call_details.update(
+            {"model": model, "custom_llm_provider": "gemini", "response_cost": 0.0, "batch_id": batch.id}
+        )
+        return {
+            "result": litellm_model_response,
+            "kwargs": dict(
+                kwargs,
+                response_cost=0.0,
+                model=model,
+                custom_llm_provider="gemini",
+                batch_id=batch.id,
+                unified_object_id=unified_object_id,
+            ),
+        }
 
     @staticmethod
     def _handle_logging_gemini_collected_chunks(

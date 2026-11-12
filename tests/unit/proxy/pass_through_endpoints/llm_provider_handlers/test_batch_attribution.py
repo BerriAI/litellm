@@ -102,8 +102,16 @@ class TestRequestTagsFromMetadata:
         ("https://api.anthropic.com/v1/messages/batches/msgbatch_1", "/v1/messages/batches", False),
         # a proxied base with a path prefix still resolves, because this is a suffix match
         ("https://gateway.internal/anthropic/v1/messages/batches", "/v1/messages/batches", True),
-        ("https://aiplatform.googleapis.com/v1/projects/p/locations/l/batchPredictionJobs", "batchPredictionJobs", True),
-        ("https://aiplatform.googleapis.com/v1/projects/p/locations/l/batchPredictionJobs/9", "batchPredictionJobs", False),
+        (
+            "https://aiplatform.googleapis.com/v1/projects/p/locations/l/batchPredictionJobs",
+            "batchPredictionJobs",
+            True,
+        ),
+        (
+            "https://aiplatform.googleapis.com/v1/projects/p/locations/l/batchPredictionJobs/9",
+            "batchPredictionJobs",
+            False,
+        ),
     ],
 )
 def test_is_collection_route(url_route, suffix, expected):
@@ -181,6 +189,20 @@ class TestLogBatchRegistrationResult:
         logger.error.assert_called_once()
 
 
+def _pending_batch(batch_id: str):
+    from litellm.types.utils import LiteLLMBatch
+
+    return LiteLLMBatch(
+        id=batch_id,
+        object="batch",
+        status="validating",
+        completion_window="24h",
+        created_at=1762905329,
+        endpoint="/v1/chat/completions",
+        input_file_id="files/wireinput123",
+    )
+
+
 def test_unified_batch_object_id_decodes_to_the_deployment_and_provider_batch_id():
     import base64
 
@@ -206,7 +228,7 @@ def test_register_passthrough_batch_stores_the_calling_key_team_and_tags():
 
     hook = MagicMock()
     hook.store_unified_object_id = AsyncMock()
-    batch_object = {"id": "b1", "object": "batch", "status": "validating"}
+    batch_object = _pending_batch("b1")
     metadata = {
         "user_api_key": "hashed-key",
         "user_api_key_user_id": "user-7",
@@ -235,15 +257,45 @@ def test_register_passthrough_batch_stores_the_calling_key_team_and_tags():
     assert stored["user_api_key_dict"].team_id == "team-3"
 
 
+def test_register_passthrough_batch_leaves_the_user_unset_for_a_key_without_one():
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
+        register_passthrough_batch,
+    )
+
+    hook = MagicMock()
+    hook.store_unified_object_id = AsyncMock()
+
+    async def run():
+        with patch("litellm.proxy.proxy_server.proxy_logging_obj") as proxy_logging:
+            proxy_logging.get_proxy_hook.return_value = hook
+            register_passthrough_batch("Gemini", "uoi", _pending_batch("b1"), "b1", {"user_api_key": "hashed-key"})
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+
+    asyncio.run(run())
+    stored = hook.store_unified_object_id.await_args.kwargs
+    assert stored["user_api_key_dict"].user_id is None
+    assert stored["user_api_key_dict"].api_key == "hashed-key"
+
+
 def test_register_passthrough_batch_without_a_managed_files_hook_stores_nothing():
     from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
         register_passthrough_batch,
     )
 
     async def run():
-        with patch("litellm.proxy.proxy_server.proxy_logging_obj") as proxy_logging:
+        with (
+            patch("litellm.proxy.proxy_server.proxy_logging_obj") as proxy_logging,
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution.verbose_proxy_logger"
+            ) as logger,
+        ):
             proxy_logging.get_proxy_hook.return_value = None
-            register_passthrough_batch("Gemini", "uoi", {"id": "b1"}, "b1", {})
+            register_passthrough_batch("Gemini", "uoi", _pending_batch("b1"), "b1", {})
             await asyncio.sleep(0)
+            return logger.warning.call_args
 
-    asyncio.run(run())
+    warned = asyncio.run(run())
+    assert warned is not None and "Gemini" in warned.args and "b1" in warned.args, warned

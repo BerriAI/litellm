@@ -7,17 +7,35 @@ background poll that has no request to read them from.
 
 import asyncio
 import base64
-from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Final
+from collections.abc import Coroutine, Mapping, Sequence
+from functools import partial
+from typing import TYPE_CHECKING, Final, Literal, Protocol, runtime_checkable
 
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.safe_json_dumps import strip_null_bytes
-from litellm.types.utils import SpecialEnums
+from litellm.types.utils import LiteLLMBatch, SpecialEnums
 
 if TYPE_CHECKING:
-    from litellm.types.llms.openai import LiteLLMBatch
+    from litellm.proxy._types import UserAPIKeyAuth
+
+
+@runtime_checkable
+class BatchRegistry(Protocol):
+    """The managed-files hook's write path, the one method passthrough batch attribution needs from it."""
+
+    def store_unified_object_id(
+        self,
+        unified_object_id: str,
+        file_object: LiteLLMBatch,
+        litellm_parent_otel_span: None,
+        model_object_id: str,
+        file_purpose: Literal["batch"],
+        user_api_key_dict: "UserAPIKeyAuth",
+        request_tags: Sequence[str] | None,
+        persist_attribution: bool,
+    ) -> Coroutine[object, object, None]: ...
 
 
 def optional_str(value: object) -> str | None:
@@ -104,7 +122,7 @@ def unified_batch_object_id(model_id: str, batch_id: str) -> str:
 def register_passthrough_batch(
     provider: str,
     unified_object_id: str,
-    batch_object: "LiteLLMBatch",
+    batch_object: LiteLLMBatch,
     model_object_id: str,
     request_metadata: Mapping[str, object],
 ) -> None:
@@ -114,13 +132,13 @@ def register_passthrough_batch(
     from litellm.proxy.proxy_server import proxy_logging_obj
 
     managed_files_hook: Final = proxy_logging_obj.get_proxy_hook("managed_files")
-    if managed_files_hook is None or not hasattr(managed_files_hook, "store_unified_object_id"):
+    if not isinstance(managed_files_hook, BatchRegistry):
         verbose_proxy_logger.warning(
             "Managed files hook not available, cannot store %s batch %s for cost tracking", provider, model_object_id
         )
         return
     user_api_key_dict: Final = UserAPIKeyAuth(
-        user_id=optional_str(request_metadata.get("user_api_key_user_id")) or "default-user",
+        user_id=optional_str(request_metadata.get("user_api_key_user_id")),
         api_key=optional_str(request_metadata.get("user_api_key")),
         team_id=optional_str(request_metadata.get("user_api_key_team_id")),
         user_role=LitellmUserRoles.CUSTOMER,
@@ -131,7 +149,7 @@ def register_passthrough_batch(
         model_max_budget={},
         model_spend={},
     )
-    task: Final = asyncio.create_task(
+    task: Final[asyncio.Task[None]] = asyncio.create_task(
         managed_files_hook.store_unified_object_id(
             unified_object_id=unified_object_id,
             file_object=batch_object,
@@ -144,7 +162,11 @@ def register_passthrough_batch(
         )
     )
     task.add_done_callback(
-        lambda finished: log_batch_registration_result(
-            finished, provider, unified_object_id, model_object_id, is_batch_create=True
+        partial(
+            log_batch_registration_result,
+            provider=provider,
+            unified_object_id=unified_object_id,
+            model_object_id=model_object_id,
+            is_batch_create=True,
         )
     )
