@@ -27,7 +27,7 @@ from typing import (
 )
 
 import httpx
-from openai._streaming import ServerSentEvent, SSEDecoder
+from openai._streaming import SSEDecoder
 from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import TypeIs
 
@@ -1365,35 +1365,23 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         )
         self._replays_stored_stream = replays_stored_stream
         self.stream_iterator = SSEDecoder().iter_bytes(response.iter_bytes())
-        self._closed = False
 
     def __iter__(self):
         return self
 
     def close(self) -> None:
-        self._closed = True
         self.response.close()
-
-    def _next_sse(self) -> ServerSentEvent | None:
-        try:
-            return next(self.stream_iterator)
-        except StopIteration:
-            return None
-        except (httpx.TransportError, httpx.StreamError):
-            if self._closed:
-                return None
-            raise
 
     def __next__(self):
         try:
             self._check_max_streaming_duration()
             while True:
                 # Get the next chunk from the stream
-                sse = self._next_sse()
-                if sse is None:
+                try:
+                    sse = next(self.stream_iterator)
+                except StopIteration:
                     self.finished = True
-                    if not self._closed:
-                        self._raise_if_ended_without_terminal_event()
+                    self._raise_if_ended_without_terminal_event()
                     raise StopIteration
 
                 self._check_max_streaming_duration()
