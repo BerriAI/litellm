@@ -1050,6 +1050,14 @@ GuardrailNumRetries: TypeAlias = Annotated[
 
 
 class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch update guardrails
+    mcp_block_behavior: Literal["tool_result", "raise"] | None = Field(
+        default=None,
+        description=(
+            "How to handle guardrail blocks when executing MCP tools for an LLM request. "
+            "'raise' propagates the guardrail error to the client. 'tool_result' or None "
+            "returns the block as a tool result and lets the LLM continue."
+        ),
+    )
     api_key: str | None = Field(default=None, description="API key for the guardrail service")
     api_base: str | None = Field(default=None, description="Base URL for the guardrail service API")
 
@@ -1162,12 +1170,13 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         description=(
             "For /v1/realtime sessions: 'warn' speaks the violation message and continues; "
             "'end_session' speaks the message and closes the connection. "
+            "Bedrock Nova Sonic cannot cancel a spoken turn's answer, so a blocked spoken turn always ends its session. "
             "For guardrail='mcp_security': 'block' rejects the request; 'alert' only logs a warning."
         ),
     )
     realtime_violation_message: str | None = Field(
         default=None,
-        description="The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to violation_message_template if not set.",
+        description="The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to the guardrail's block reason if not set.",
     )
 
     # Model Armor params

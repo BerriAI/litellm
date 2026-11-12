@@ -1036,6 +1036,19 @@ def test_worker_count_never_exceeds_the_cap():
     assert checker._worker_count(100_000) <= checker.MAX_WORKERS
 
 
+def test_standalone_scanner_adapter_is_outside_the_package_lint_scope(tmp_path: Path) -> None:
+    adapter: Final = tmp_path / "litellm" / "proxy" / "discovery_endpoints" / "skill_scanner_adapter"
+    adapter.mkdir(parents=True)
+    server: Final = adapter / "server.py"
+    server.write_text("value = []\n")
+    proxy: Final = tmp_path / "proxy.py"
+    proxy.write_text("value = []\n")
+
+    assert tuple(checker.collect_paths([str(tmp_path)])) == (proxy,)
+    assert tuple(checker.collect_paths([str(server)])) == ()
+    assert checker.scan_paths(tuple(checker.collect_paths([str(tmp_path)])))
+
+
 def test_scan_paths_below_the_threshold_returns_every_violation(tmp_path):
     paths = _corpus(tmp_path, 3)
     assert checker._worker_count(len(paths)) == 1

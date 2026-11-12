@@ -8,7 +8,7 @@ const repeatsEarlierValue = (values: readonly string[], index: number): boolean 
   values[index] !== "" && values.indexOf(values[index]) !== index;
 
 const modelLimitSchema = z.object({
-  model: z.string().min(1, "Missing model"),
+  model: z.string().min(1, { error: () => i18n.t("projects.form.errors.missingModel") }),
   tpm: z.number().optional(),
   rpm: z.number().optional(),
   itpm: z.number().optional(),
@@ -17,11 +17,15 @@ const modelLimitSchema = z.object({
 
 export const projectFormSchema = z
   .object({
-    project_alias: z.string().min(1, "Please enter a project name"),
+    project_alias: z.string().min(1, { error: () => i18n.t("projects.form.errors.projectNameRequired") }),
     team_id: z
       .string()
       .nullable()
-      .pipe(z.string({ error: "Please select a team" }).min(1, "Please select a team")),
+      .pipe(
+        z
+          .string({ error: () => i18n.t("projects.form.errors.teamRequired") })
+          .min(1, { error: () => i18n.t("projects.form.errors.teamRequired") }),
+      ),
     description: z.string().optional(),
     models: z.array(z.string()),
     max_budget: z.number().nullish(),
@@ -31,8 +35,8 @@ export const projectFormSchema = z
     metadata: z
       .array(
         z.object({
-          key: z.string().min(1, "Missing key"),
-          value: z.string().min(1, "Missing value"),
+          key: z.string().min(1, { error: () => i18n.t("projects.form.errors.missingKey") }),
+          value: z.string().min(1, { error: () => i18n.t("projects.form.errors.missingValue") }),
         }),
       )
       .optional(),

@@ -25,6 +25,7 @@ from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.redis.stores.router_usage import ROUTER_USAGE_TARGET
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     async_io_token_pre_call_check,
     async_io_token_reconcile_success,
@@ -35,7 +36,6 @@ from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     io_token_reconcile_success,
     io_token_refund_failure,
 )
-from litellm.router_utils.routing_read_batch import ROUTER_USAGE_TARGET
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.router import RouterErrors, parse_daily_reset_time
 from litellm.types.utils import StandardLoggingPayload

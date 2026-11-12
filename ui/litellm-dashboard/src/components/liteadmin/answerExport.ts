@@ -185,7 +185,9 @@ function copyAnswerNode(source: Node, target: Document): Node | null {
 }
 
 export function createAriaAnswerDocument(question: string, answerElement: HTMLElement): Document {
-  const report = answerElement.ownerDocument.implementation.createHTMLDocument(`${ARIA_AGENT_LABEL} answer`);
+  const report = answerElement.ownerDocument.implementation.createHTMLDocument(
+    i18n.t("aria.answer.exportDocumentTitle", { agent: ARIA_AGENT_LABEL }),
+  );
   report.documentElement.lang = "en";
   const policy = report.createElement("meta");
   policy.httpEquiv = "Content-Security-Policy";

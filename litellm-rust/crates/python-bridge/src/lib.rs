@@ -9,9 +9,11 @@ mod execution;
 mod http;
 mod logger;
 mod marshal;
+mod model_cost;
 mod model_registry;
 mod preflight;
 mod python_settings;
+mod redis;
 mod router;
 mod routes;
 mod secrets;
@@ -33,9 +35,42 @@ mod _native {
     #[pymodule_export]
     use crate::errors::{RustBridgeDeclined, RustUpstreamError};
     #[pymodule_export]
+    use crate::http::unsupported_tls_settings;
+    #[pymodule_export]
     use crate::logger::NativeDiagnosticProcessor;
     #[pymodule_export]
+    use crate::model_cost::{
+        NativeCostMapSource, NativeFetchFailed, NativeFetchPolicy, NativeFetched, NativeInstalled,
+        NativeModelCostMap, NativeModelCostMapState, NativeProvenance, NativeRegistered,
+        NativeRejected, NativeTableSwapped,
+    };
+    #[pymodule_export]
     use crate::model_registry::bundled_model_cost_map;
+    #[pymodule_export]
+    use crate::redis::breaker::{NativeAdmission, NativeRedisBreaker, native_redis_breaker_states};
+    #[pymodule_export]
+    use crate::redis::client::NativeRedisClient;
+    #[pymodule_export]
+    use crate::redis::store::auth_cache::{NativeAuthCache, PyLocalSizes};
+    #[pymodule_export]
+    use crate::redis::store::rate_limits::{
+        NativeRateLimits, PyAtomicApplied, PyAtomicOverLimit, PyGaugeOverLimit, PyGaugesAcquired,
+        PyGuardedReply, PyWindowCount,
+    };
+    #[pymodule_export]
+    use crate::redis::store::request::{NativeRequestRedis, NativeSend};
+    #[pymodule_export]
+    use crate::redis::store::router_usage::NativeRouterUsage;
+    #[pymodule_export]
+    use crate::redis::store::sensitive_route_pins::NativeSensitiveRoutePins;
+    #[pymodule_export]
+    use crate::redis::store::spend_counters::{
+        NativeSpendCounters, PyPostCallSettlement, PySpendRead,
+    };
+    #[pymodule_export]
+    use crate::redis::store::{
+        NativePending, NativeRedisStoreError, router_cooldowns::NativeRouterCooldowns,
+    };
     #[pymodule_export]
     use crate::router::{RouterCall, RouterCoreHandle};
     #[pymodule_export]
@@ -66,6 +101,7 @@ mod _native {
 
     #[pymodule_init]
     fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
+        let _ = rustls::crypto::ring::default_provider().install_default();
         let py = module.py();
         let dict = module.dict();
         dict.set_item(
@@ -111,11 +147,45 @@ mod tests {
                 "aresponses",
                 "ResponsesWebSocketConnection",
                 "NativeDiagnosticProcessor",
+                "NativeRedisClient",
+                "NativeRedisBreaker",
+                "NativeAdmission",
+                "NativeRequestRedis",
+                "NativeSend",
+                "NativeAuthCache",
+                "NativeRateLimits",
+                "WindowCount",
+                "AtomicApplied",
+                "AtomicOverLimit",
+                "GuardedReply",
+                "GaugesAcquired",
+                "GaugeOverLimit",
+                "NativePending",
+                "NativeRouterCooldowns",
+                "NativeRouterUsage",
+                "NativeSensitiveRoutePins",
+                "NativeRedisStoreError",
+                "NativeSpendCounters",
+                "PostCallSettlement",
+                "SpendRead",
+                "LocalSizes",
+                "native_redis_breaker_states",
                 "NativeClickHouseSpendConfig",
                 "NativeClickHouseSpendStorage",
                 "NativeDatabase",
                 "trace_encode_error",
                 "bundled_model_cost_map",
+                "NativeModelCostMap",
+                "NativeModelCostMapState",
+                "NativeInstalled",
+                "NativeRejected",
+                "NativeRegistered",
+                "NativeTableSwapped",
+                "NativeProvenance",
+                "NativeCostMapSource",
+                "NativeFetchPolicy",
+                "NativeFetched",
+                "NativeFetchFailed",
                 "TokenCounter",
                 "Tokenizer",
                 "RouterCoreHandle",
@@ -123,6 +193,7 @@ mod tests {
                 "gil_stats",
                 "process_state_started",
                 "reserve_process_for_forking",
+                "unsupported_tls_settings",
             ];
             #[cfg(feature = "huggingface")]
             expected.push("HuggingFaceEncoding");
@@ -139,5 +210,19 @@ mod tests {
             public_names.sort_unstable();
             assert_eq!(public_names, expected);
         });
+    }
+    #[rstest::rstest]
+    fn module_import_installs_ring_as_the_process_crypto_provider() {
+        Python::initialize();
+        Python::attach(|py| {
+            native_module(py);
+        });
+
+        let installed = rustls::crypto::CryptoProvider::get_default()
+            .expect("importing _native should install a process crypto provider");
+        assert_eq!(
+            format!("{installed:?}"),
+            format!("{:?}", rustls::crypto::ring::default_provider())
+        );
     }
 }

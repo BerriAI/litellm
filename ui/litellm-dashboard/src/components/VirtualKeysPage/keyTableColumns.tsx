@@ -389,11 +389,15 @@ export const getKeyTableColumns = (
     header: ({ column }) => (
       <DataTableSortHeader column={column} title={t("apiKeys.keyTableColumns.columns.budgetReset")} />
     ),
-    size: 130,
+    size: 160,
     enableSorting: true,
     sortDescFirst: false,
     cell: (info) => (
-      <DateCell value={info.getValue() as string | null} fallback={t("apiKeys.keyTableColumns.cells.never")} />
+      <DateCell
+        value={info.getValue() as string | null}
+        fallback={t("apiKeys.keyTableColumns.cells.never")}
+        timeZone="UTC"
+      />
     ),
   },
   {

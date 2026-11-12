@@ -733,34 +733,30 @@ def test_resolve_timeout__httpx_timeout_returns_float_read():
     assert resolved == 99.0
 
 
-def test_retrieve__forwards_trusted_model_credentials_into_litellm_params(seams):
+def test_retrieve__keeps_the_deployment_bucket_settings_in_litellm_params(seams: Seams) -> None:
     """The batch's cost is computed by reading its output file after the retrieve, and
-    Bedrock resolves that bucket only from this immutable snapshot. get_litellm_params has
-    a fixed signature that drops it, so without re-adding it here the snapshot never
-    reaches the logging object and cost accounting fails on a bucket that is configured."""
-    snapshot = MappingProxyType({"s3_bucket_name": "configured-bucket"})
+    that read finds the Bedrock bucket in these litellm_params. Dropping them fails cost
+    accounting on a bucket the deployment has configured."""
     logging_obj = MagicMock()
 
     bm.retrieve_batch(
         batch_id="batch-1",
         custom_llm_provider="openai",
         litellm_logging_obj=logging_obj,
-        _litellm_internal_model_credentials=snapshot,
+        s3_bucket_name="configured-bucket",
+        s3_output_bucket_name="output-bucket",
+        allow_legacy_cloud_file_ids=True,
     )
 
     litellm_params = logging_obj.update_from_kwargs.call_args.kwargs["litellm_params"]
-    assert litellm_params["_litellm_internal_model_credentials"] is snapshot
-
-
-def test_retrieve__omits_trusted_model_credentials_when_not_supplied(seams):
-    """A retrieve with no snapshot must not invent an empty one, which would read as a
-    configured bucket of nothing."""
-    logging_obj = MagicMock()
-
-    bm.retrieve_batch(batch_id="batch-1", custom_llm_provider="openai", litellm_logging_obj=logging_obj)
-
-    litellm_params = logging_obj.update_from_kwargs.call_args.kwargs["litellm_params"]
-    assert "_litellm_internal_model_credentials" not in litellm_params
+    assert {
+        key: litellm_params[key]
+        for key in ("s3_bucket_name", "s3_output_bucket_name", "allow_legacy_cloud_file_ids")
+    } == {
+        "s3_bucket_name": "configured-bucket",
+        "s3_output_bucket_name": "output-bucket",
+        "allow_legacy_cloud_file_ids": True,
+    }
 
 
 # =========================================================================== #
@@ -1519,3 +1515,28 @@ async def test_openai_batch_list_items_come_back_as_openai_sent_them(respx_mock:
     assert first.usage is not None
     assert (first.usage.input_tokens_details.cached_tokens, first.usage.output_tokens_details.reasoning_tokens) == (4, 2)
     assert (second.id, second.object, second.status) == ("batch_def456", "batch", "queued")
+
+
+# =========================================================================== #
+# gemini - a provider-config provider, like mistral, so it requires `model`
+# =========================================================================== #
+
+
+def test_create__gemini_routes_to_base_http_handler_with_gemini_config(seams):
+    result = bm.create_batch(**CREATE_KW, custom_llm_provider="gemini", model="gemini/gemini-3.8-flash")
+
+    assert result is seams.base_http.create_batch.return_value
+    _assert_only(seams.base_http.create_batch, seams, "create_batch")
+    forwarded = seams.base_http.create_batch.call_args.kwargs
+    assert type(forwarded["provider_config"]).__name__ == "GeminiBatchesConfig"
+    assert forwarded["model"] == "gemini-3.8-flash"
+
+
+def test_retrieve__gemini_routes_to_base_http_handler_with_gemini_config(seams):
+    result = bm.retrieve_batch(batch_id="la6", custom_llm_provider="gemini", model="gemini/gemini-3.8-flash")
+
+    assert result is seams.base_http.retrieve_batch.return_value
+    _assert_only(seams.base_http.retrieve_batch, seams, "retrieve_batch")
+    forwarded = seams.base_http.retrieve_batch.call_args.kwargs
+    assert type(forwarded["provider_config"]).__name__ == "GeminiBatchesConfig"
+    assert forwarded["batch_id"] == "la6"

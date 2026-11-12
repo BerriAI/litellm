@@ -1864,13 +1864,15 @@ export interface paths {
         };
         /**
          * Codex Passthrough Route
-         * @description Forward a client's ChatGPT subscription with separate LiteLLM authentication.
+         * @description Forward a client's ChatGPT subscription with separate LiteLLM authentication, listing and serving the
+         *     key's other chat models through LiteLLM.
          */
         get: operations["codex_passthrough_route_backend_api_codex__endpoint__get"];
         put?: never;
         /**
          * Codex Passthrough Route
-         * @description Forward a client's ChatGPT subscription with separate LiteLLM authentication.
+         * @description Forward a client's ChatGPT subscription with separate LiteLLM authentication, listing and serving the
+         *     key's other chat models through LiteLLM.
          */
         post: operations["codex_passthrough_route_backend_api_codex__endpoint__post"];
         delete?: never;
@@ -2129,6 +2131,8 @@ export interface paths {
          *     - rpm_limit: Optional[int] - The requests per minute limit for the budget.
          *     - tpd_limit: Optional[int] - The tokens per day limit for the budget. Charged by batch submissions instead of tpm_limit/rpm_limit.
          *     - model_max_budget: Optional[dict] - Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d", "tpm_limit": 100000, "rpm_limit": 100000}}
+         *     - model_tpm_limit: Optional[dict] - Max tokens per minute per model, shared by everything on this budget. Example: {"gpt-4o": 400000}
+         *     - model_rpm_limit: Optional[dict] - Max requests per minute per model, shared by everything on this budget. Example: {"gpt-4o": 200}
          *     - budget_reset_at: Optional[datetime] - Datetime when the initial budget is reset. Default is now.
          */
         post: operations["new_budget_budget_new_post"];
@@ -2186,6 +2190,8 @@ export interface paths {
          *     - rpm_limit: Optional[int] - The requests per minute limit for the budget.
          *     - tpd_limit: Optional[int] - The tokens per day limit for the budget. Charged by batch submissions instead of tpm_limit/rpm_limit.
          *     - model_max_budget: Optional[dict] - Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d", "tpm_limit": 100000, "rpm_limit": 100000}}
+         *     - model_tpm_limit: Optional[dict] - Max tokens per minute per model, shared by everything on this budget. Example: {"gpt-4o": 400000}
+         *     - model_rpm_limit: Optional[dict] - Max requests per minute per model, shared by everything on this budget. Example: {"gpt-4o": 200}
          *     - budget_reset_at: Optional[datetime] - Update the Datetime when the budget was last reset.
          */
         post: operations["update_budget_budget_update_post"];
@@ -4543,12 +4549,13 @@ export interface paths {
          *     - allowed_model_region: Optional[Union[Literal["eu"], Literal["us"]]] - Require all user requests to use models in this specific region.
          *     - default_model: Optional[str] - If no equivalent model in the allowed region, default all requests to this model.
          *     - models: Optional[list[str]] - Restrict this customer's access to the listed models.
-         *     - metadata: Optional[dict] = Metadata for customer, store information for customer. Example metadata = {"data_training_opt_out": True}
          *     - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
          *     - tpm_limit: Optional[int] - [Not Implemented Yet] Specify tpm limit for a given customer (Tokens per minute)
          *     - rpm_limit: Optional[int] - [Not Implemented Yet] Specify rpm limit for a given customer (Requests per minute)
          *     - tpd_limit: Optional[int] - Specify tpd limit for a given customer (Tokens per day). Batch submissions are charged against it instead of tpm_limit/rpm_limit
          *     - model_max_budget: Optional[dict] - [Not Implemented Yet] Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d"}}
+         *     - model_tpm_limit: Optional[dict] - Max tokens per minute per model for this customer, shared across every key the customer is sent on. Stored on the customer's budget. Example: {"gpt-4o": 400000}
+         *     - model_rpm_limit: Optional[dict] - Max requests per minute per model for this customer. Stored on the customer's budget. Example: {"gpt-4o": 200}
          *     - max_parallel_requests: Optional[int] - [Not Implemented Yet] Specify max parallel requests for a given customer.
          *     - soft_budget: Optional[float] - [Not Implemented Yet] Get alerts when customer crosses given budget, doesn't block requests.
          *     - spend: Optional[float] - Specify initial spend for a given customer.
@@ -4572,7 +4579,7 @@ export interface paths {
          *     ```
          *     curl --location 'http://0.0.0.0:4000/customer/new'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"         --header 'Content-Type: application/json'         --data '{
          *             "user_id" : "ishaan-jaff-3",
-         *             "allowed_region": "eu",
+         *             "allowed_model_region": "eu",
          *             "budget_id": "free_tier",
          *             "models": ["gpt-4o-mini"],
          *             "default_model": "azure/gpt-3.5-turbo-eu"
@@ -5221,12 +5228,13 @@ export interface paths {
          *     - allowed_model_region: Optional[Union[Literal["eu"], Literal["us"]]] - Require all user requests to use models in this specific region.
          *     - default_model: Optional[str] - If no equivalent model in the allowed region, default all requests to this model.
          *     - models: Optional[list[str]] - Restrict this customer's access to the listed models.
-         *     - metadata: Optional[dict] = Metadata for customer, store information for customer. Example metadata = {"data_training_opt_out": True}
          *     - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
          *     - tpm_limit: Optional[int] - [Not Implemented Yet] Specify tpm limit for a given customer (Tokens per minute)
          *     - rpm_limit: Optional[int] - [Not Implemented Yet] Specify rpm limit for a given customer (Requests per minute)
          *     - tpd_limit: Optional[int] - Specify tpd limit for a given customer (Tokens per day). Batch submissions are charged against it instead of tpm_limit/rpm_limit
          *     - model_max_budget: Optional[dict] - [Not Implemented Yet] Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d"}}
+         *     - model_tpm_limit: Optional[dict] - Max tokens per minute per model for this customer, shared across every key the customer is sent on. Stored on the customer's budget. Example: {"gpt-4o": 400000}
+         *     - model_rpm_limit: Optional[dict] - Max requests per minute per model for this customer. Stored on the customer's budget. Example: {"gpt-4o": 200}
          *     - max_parallel_requests: Optional[int] - [Not Implemented Yet] Specify max parallel requests for a given customer.
          *     - soft_budget: Optional[float] - [Not Implemented Yet] Get alerts when customer crosses given budget, doesn't block requests.
          *     - spend: Optional[float] - Specify initial spend for a given customer.
@@ -5250,7 +5258,7 @@ export interface paths {
          *     ```
          *     curl --location 'http://0.0.0.0:4000/customer/new'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"         --header 'Content-Type: application/json'         --data '{
          *             "user_id" : "ishaan-jaff-3",
-         *             "allowed_region": "eu",
+         *             "allowed_model_region": "eu",
          *             "budget_id": "free_tier",
          *             "models": ["gpt-4o-mini"],
          *             "default_model": "azure/gpt-3.5-turbo-eu"
@@ -6069,7 +6077,11 @@ export interface paths {
          * Latest Release Info
          * @description Newest stable release on the LiteLLM changelog, linked to its changelog page, with the PR count of its whole
          *     minor line (e.g. v1.105.0 + v1.105.1) from GitHub split into new features, bug fixes and other updates.
-         *     Returns null when the changelog or GitHub can't be reached so the dashboard upgrade banner simply doesn't render.
+         *     Never waits on the changelog or GitHub. It answers from the cache and, when the cache is empty or expired, responds
+         *     202 with null and fetches after the response is sent, so a later call returns the release. Responds 502 once that
+         *     fetch has failed because the changelog or GitHub couldn't be reached or answered with something unusable, so the dashboard
+         *     upgrade notice simply doesn't render. The three counts are all zero when the release notes list no change in a
+         *     format this proxy can count.
          *     Set LITELLM_DISABLE_LATEST_RELEASE_CHECK=true to return null without making any outbound request.
          */
         get: operations["latest_release_info_get_latest_release_info_get"];
@@ -8681,7 +8693,7 @@ export interface paths {
          *     - prompts: Optional[List[str]] - List of allowed prompts for the key. If specified, the key will only be able to use these specific prompts.
          *     - auto_rotate: Optional[bool] - Whether this key should be automatically rotated (regenerated)
          *     - rotation_interval: Optional[str] - How often to auto-rotate this key (e.g., '30s', '30m', '30h', '30d'). Required if auto_rotate=True.
-         *     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
+         *     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Only a proxy admin can set or change it. Create index, using `/v1/indexes` endpoint.
          *     - router_settings: Optional[UpdateRouterConfig] - key-specific router settings. Example - {"model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}}}. IF null or {} then no router settings.
          *     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the key. Access groups define which models a key can access. Example - ["access_group_1", "access_group_2"].
          *     - budget_limits: Optional[list] - List of concurrent budget windows for the key. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
@@ -8996,7 +9008,7 @@ export interface paths {
          *     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
          *     Examples:
-         *     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
+         *     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Only a proxy admin can set or change it. Create index, using `/v1/indexes` endpoint.
          *
          *
          *     1. Allow users to turn on/off pii masking
@@ -9148,7 +9160,7 @@ export interface paths {
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
          *     - auto_rotate: Optional[bool] - Whether this key should be automatically rotated
          *     - rotation_interval: Optional[str] - How often to rotate this key (e.g., '30d', '90d'). Required if auto_rotate=True
-         *     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
+         *     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Only a proxy admin can set or change it. Create index, using `/v1/indexes` endpoint.
          *     - router_settings: Optional[UpdateRouterConfig] - key-specific router settings. Example - {"model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}}}. IF null or {} then no router settings.
          *     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the key. Access groups define which models a key can access. Example - ["access_group_1", "access_group_2"].
          *     - budget_limits: Optional[list] - List of concurrent budget windows for the key. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
@@ -11711,6 +11723,64 @@ export interface paths {
         head?: never;
         /** Openrouter Proxy Route */
         patch: operations["openrouter_proxy_route_openrouter__endpoint__patch"];
+        trace?: never;
+    };
+    "/opensearch/{endpoint}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Opensearch Proxy Route
+         * @description Call an OpenSearch index through the proxy, e.g. `POST /opensearch/<index>/_search`.
+         *
+         *     `<index>` is a LiteLLM vector store index on an OpenSearch vector store. The key or its team needs `read` or
+         *     `write` on it in `allowed_vector_store_indexes`, and LiteLLM signs the call with the vector store's AWS identity.
+         */
+        get: operations["opensearch_proxy_route_opensearch__endpoint__get"];
+        /**
+         * Opensearch Proxy Route
+         * @description Call an OpenSearch index through the proxy, e.g. `POST /opensearch/<index>/_search`.
+         *
+         *     `<index>` is a LiteLLM vector store index on an OpenSearch vector store. The key or its team needs `read` or
+         *     `write` on it in `allowed_vector_store_indexes`, and LiteLLM signs the call with the vector store's AWS identity.
+         */
+        put: operations["opensearch_proxy_route_opensearch__endpoint__put"];
+        /**
+         * Opensearch Proxy Route
+         * @description Call an OpenSearch index through the proxy, e.g. `POST /opensearch/<index>/_search`.
+         *
+         *     `<index>` is a LiteLLM vector store index on an OpenSearch vector store. The key or its team needs `read` or
+         *     `write` on it in `allowed_vector_store_indexes`, and LiteLLM signs the call with the vector store's AWS identity.
+         */
+        post: operations["opensearch_proxy_route_opensearch__endpoint__post"];
+        /**
+         * Opensearch Proxy Route
+         * @description Call an OpenSearch index through the proxy, e.g. `POST /opensearch/<index>/_search`.
+         *
+         *     `<index>` is a LiteLLM vector store index on an OpenSearch vector store. The key or its team needs `read` or
+         *     `write` on it in `allowed_vector_store_indexes`, and LiteLLM signs the call with the vector store's AWS identity.
+         */
+        delete: operations["opensearch_proxy_route_opensearch__endpoint__delete"];
+        options?: never;
+        /**
+         * Opensearch Proxy Route
+         * @description Call an OpenSearch index through the proxy, e.g. `POST /opensearch/<index>/_search`.
+         *
+         *     `<index>` is a LiteLLM vector store index on an OpenSearch vector store. The key or its team needs `read` or
+         *     `write` on it in `allowed_vector_store_indexes`, and LiteLLM signs the call with the vector store's AWS identity.
+         */
+        head: operations["opensearch_proxy_route_opensearch__endpoint__head"];
+        /**
+         * Opensearch Proxy Route
+         * @description Call an OpenSearch index through the proxy, e.g. `POST /opensearch/<index>/_search`.
+         *
+         *     `<index>` is a LiteLLM vector store index on an OpenSearch vector store. The key or its team needs `read` or
+         *     `write` on it in `allowed_vector_store_indexes`, and LiteLLM signs the call with the vector store's AWS identity.
+         */
+        patch: operations["opensearch_proxy_route_opensearch__endpoint__patch"];
         trace?: never;
     };
     "/organization/daily/activity": {
@@ -17159,6 +17229,7 @@ export interface paths {
          *
          *     Parameters:
          *     - name: str - The name of the tag to update
+         *     - spend: Optional[float] - Updated spend for the tag
          *     - description: Optional[str] - Updated description
          *     - models: List[str] - Updated list of allowed LLM models
          *     - budget_id: Optional[str] - The id for a budget to associate with the tag
@@ -17850,7 +17921,7 @@ export interface paths {
          *     - team_member_key_duration: Optional[str] - The duration for a team member's key. e.g. "1d", "1w", "1mo"
          *     - allowed_passthrough_routes: Optional[List[str]] - List of allowed pass through routes for the team.
          *     - denied_passthrough_routes: Optional[List[str]] - List of pass through routes the team's keys may not call, even if allowed. Applies together with each key's `denied_passthrough_routes`.
-         *     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
+         *     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Only a proxy admin can set or change it. Create index, using `/v1/indexes` endpoint.
          *     - secret_manager_settings: Optional[dict] - Secret manager settings for the team. [Docs](https://docs.litellm.ai/docs/secret_managers/overview)
          *     - router_settings: Optional[UpdateRouterConfig] - team-specific router settings. Example - {"model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}}}. IF null or {} then no router settings.
          *     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the team. Access groups define which models the team can access. Example - ["access_group_1", "access_group_2"].
@@ -18086,7 +18157,7 @@ export interface paths {
          *     - default_estimated_output_tokens_per_model: Optional[Dict[str, int]] - Per-model override of the above. Example: {"gpt-4": 4096, "gpt-3.5-turbo": 1024}
          *     - mcp_rpm_limit: Optional[Dict[str, int]] - Per-MCP-server RPM limit for this team, keyed by MCP server name (alias if set, else the configured name). Example: {"github": 100, "slack": 200}. Applied across all keys for this team.
          *     Example - update team TPM Limit
-         *     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
+         *     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Only a proxy admin can set or change it. Create index, using `/v1/indexes` endpoint.
          *     - secret_manager_settings: Optional[dict] - Secret manager settings for the team. [Docs](https://docs.litellm.ai/docs/secret_managers/overview)
          *     - router_settings: Optional[UpdateRouterConfig] - team-specific router settings. Example - {"model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}}}. IF null or {} then no router settings.
          *     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the team. Access groups define which models the team can access. Example - ["access_group_1", "access_group_2"].
@@ -18212,6 +18283,7 @@ export interface paths {
          *           An explicit value overrides the global setting for this destination; omitted follows the proxy's own callback for that backend, else the global setting.
          *           "span_only" puts prompt and response content on the destination's spans, "no_content" leaves it out
          *         - excluded_services: For OTel v2 callbacks, a comma-separated list of datastore names such as "redis,postgres", or "none" to exclude nothing. An explicit value replaces the global exclusions; omitted follows them
+         *         - baggage_metadata_keys: For OTel v2 callbacks, a comma-separated list of request metadata keys such as "requester_metadata.correlation_id", exported as litellm.metadata.<key> on this destination's spans only, on top of the global LITELLM_OTEL_BAGGAGE_METADATA_KEYS. At most 20 keys; names of proxy identity fields (user_api_key_*, requester_ip_address) and request headers (requester_metadata.headers.*) are rejected
          *         - gcs_bucket_name: The name of the GCS bucket
          *         - gcs_path_service_account: The path to the GCS service account
          *         - langsmith_api_key: The API key for the Langsmith callback
@@ -19813,13 +19885,13 @@ export interface paths {
         put?: never;
         /**
          * Token Counter
-         * @description Args:
+         * @description Returns:
+         *         TokenCountResponse
+         *
+         *     Args:
          *         request: TokenCountRequest
          *         call_endpoint: bool - When set to "True" it will call the token counting endpoint - e.g Anthropic or Google AI Studio Token Counting APIs.
          *         litellm_call_id: the x-litellm-call-id header, logged with the count so it joins the inference call's logs
-         *
-         *     Returns:
-         *         TokenCountResponse
          */
         post: operations["token_counter_utils_token_counter_post"];
         delete?: never;
@@ -26178,6 +26250,17 @@ export interface components {
             /** Updated By */
             updated_by?: string | null;
         };
+        /** AccessGroupRule */
+        AccessGroupRule: {
+            /** Access Group */
+            access_group: string;
+            /** Attribute */
+            attribute: string;
+            /** Contains */
+            contains?: string | number | boolean | null;
+            /** Equals */
+            equals?: string | number | boolean | null;
+        };
         /** AccessGroupUpdateRequest */
         AccessGroupUpdateRequest: {
             /** Access Agent Ids */
@@ -27844,7 +27927,7 @@ export interface components {
             router_type: string;
             /**
              * Saved Spend
-             * @description Recorded historical savings plus newer estimates, net of classifier cost
+             * @description Recorded historical savings plus newer estimates, net of classifier cost. None until a turn is estimated. A turn that starts within the longest prompt-cache TTL its breakpoints use (5 minutes, or 1 hour with a 1h breakpoint) of the session's first observed turn, or of the last turn whose observation was incomplete, is not estimated, because the baseline's cache state is unknown then. Two kinds of turn are still estimated inside that window: turns that took the identical baseline path, and turns whose whole cached prefix the session had already written
              */
             saved_spend: number | null;
             /**
@@ -27869,6 +27952,11 @@ export interface components {
              * @description What the session's routed traffic actually cost, classifier calls included
              */
             spend: number;
+            /**
+             * Total Spend
+             * @description Spend billed to this key under the session id, routed or not, from a shared Redis counter whose one-hour expiry every billed request resets. None without a shared Redis or once the counter expired. A best-effort figure, not a lifetime total: a session idle past the expiry restarts from zero, and a failed Redis write, eviction or flush drops spend without notice
+             */
+            total_spend?: number | null;
             /**
              * Turns
              * @description Auto-routed turns the rollup has recorded for this session so far
@@ -28057,6 +28145,11 @@ export interface components {
              */
             max_input_chars?: number | null;
             /**
+             * Mcp Block Behavior
+             * @description How to handle guardrail blocks when executing MCP tools for an LLM request. 'raise' propagates the guardrail error to the client. 'tool_result' or None returns the block as a tool result and lets the LLM continue.
+             */
+            mcp_block_behavior?: ("tool_result" | "raise") | null;
+            /**
              * Model
              * @description Optional field if guardrail requires a 'model' parameter
              */
@@ -28073,7 +28166,7 @@ export interface components {
             on_sensitive_data?: ("block" | "route") | null;
             /**
              * On Violation
-             * @description For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection. For guardrail='mcp_security': 'block' rejects the request; 'alert' only logs a warning.
+             * @description For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection. Bedrock Nova Sonic cannot cancel a spoken turn's answer, so a blocked spoken turn always ends its session. For guardrail='mcp_security': 'block' rejects the request; 'alert' only logs a warning.
              */
             on_violation?: ("warn" | "end_session" | "block" | "alert") | null;
             /**
@@ -28104,7 +28197,7 @@ export interface components {
             patterns?: components["schemas"]["ContentFilterPattern"][] | null;
             /**
              * Realtime Violation Message
-             * @description The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to violation_message_template if not set.
+             * @description The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to the guardrail's block reason if not set.
              */
             realtime_violation_message?: string | null;
             /**
@@ -28691,6 +28784,13 @@ export interface components {
             providers?: {
                 [key: string]: components["schemas"]["MetricWithMetadata"];
             };
+            /**
+             * Teams
+             * @description Customer spend by the key's current team, or last team for deleted keys. Keys without a known team are grouped under Unassigned
+             */
+            teams?: {
+                [key: string]: components["schemas"]["MetricWithMetadata"];
+            } | null;
         };
         /** BudgetConfig */
         BudgetConfig: {
@@ -28789,6 +28889,20 @@ export interface components {
              */
             model_max_budget?: {
                 [key: string]: components["schemas"]["BudgetConfig"];
+            } | null;
+            /**
+             * Model Rpm Limit
+             * @description Max requests per minute per model for this budget id, shared by every key, team and customer on it (e.g. {'gpt-4o': 200})
+             */
+            model_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /**
+             * Model Tpm Limit
+             * @description Max tokens per minute per model for this budget id, shared by every key, team and customer on it (e.g. {'gpt-4o': 400000})
+             */
+            model_tpm_limit?: {
+                [key: string]: number;
             } | null;
             /**
              * Rpm Limit
@@ -29994,6 +30108,8 @@ export interface components {
         ChatCompletionToolMessage: {
             /** Content */
             content: string | (components["schemas"]["ChatCompletionTextObject"] | components["schemas"]["ChatCompletionImageObject"] | components["schemas"]["ChatCompletionAudioObject"] | components["schemas"]["ChatCompletionFileObject"] | components["schemas"]["ChatCompletionToolReferenceObject"])[];
+            /** Is Error */
+            is_error?: boolean;
             /**
              * Role
              * @constant
@@ -30740,6 +30856,8 @@ export interface components {
          * @description Documents all the fields supported by `general_settings` in config.yaml
          */
         ConfigGeneralSettings: {
+            /** Access Group Rules */
+            access_group_rules?: components["schemas"]["AccessGroupRule"][] | null;
             /**
              * Admission Queue Timeout Seconds
              * @description maximum time a request waits for a worker slot
@@ -30791,6 +30909,16 @@ export interface components {
              * @description If True, lets keys address Responses API ids that this proxy did not issue (raw provider ids, or ids issued before response-id encryption was configured). Such an id carries no owner, so no ownership check can run on it; ids this proxy did issue keep full ownership enforcement. Off by default, in which case an unrecognized response id is rejected with 403
              */
             allow_unmanaged_response_ids?: boolean | null;
+            /**
+             * Allowed Client Side S3 Buckets
+             * @description S3 bucket names a client may send as `s3_bucket_name` or `s3_output_bucket_name` in a request body, e.g. on /v1/batches. Any other bucket is rejected unless client-side credentials are allowed
+             */
+            allowed_client_side_s3_buckets?: string[] | null;
+            /**
+             * Allowed Client Side S3 Endpoint Urls
+             * @description Exact `s3_endpoint_url` values a client may send in a request body. Any other value is rejected unless client-side credentials are allowed
+             */
+            allowed_client_side_s3_endpoint_urls?: string[] | null;
             /**
              * Allowed File Extensions
              * @description the only file extensions (e.g. ['.jsonl', '.pdf', '.txt']) accepted on /v1/files uploads, for any purpose, matched case-insensitively against the uploaded filename. Files with any other extension, or none, are rejected. An empty list rejects every upload. Unset means no allowlist is applied
@@ -31302,6 +31430,11 @@ export interface components {
             spend_capture_rate_check?: components["schemas"]["SpendCaptureRateCheckSettings"] | null;
             /** @description Which keys of LiteLLM_SpendLogs.metadata are written to the database. Set exactly one of 'include' (write only these keys) or 'exclude' (drop these keys). 'status' and 'cold_storage_object_key' are always written. Daily spend tables, budgets and logging callbacks still see every key. Unset writes every key */
             spend_logs_metadata_fields?: components["schemas"]["SpendLogsMetadataFields"] | null;
+            /**
+             * Spend Logs Prompt Storage
+             * @description With store_prompts_in_spend_logs on, 'latest_turn' stores only the current turn of a stateless request (/chat/completions, /v1/messages, and /v1/responses without previous_response_id): the model and the latest user message, with the system prompt, tool definitions and earlier turns dropped. Requests that continue a stored conversation and the response are stored as they are today. Unset stores the full request.
+             */
+            spend_logs_prompt_storage?: "latest_turn" | null;
             /**
              * Store Model In Db
              * @description If True, models and config are stored in and loaded from the database. Default is False.
@@ -32641,6 +32774,11 @@ export interface components {
          */
         DefaultTeamSSOParams: {
             /**
+             * Access Group Ids
+             * @description Default access groups attached to new teams created without explicit access_group_ids
+             */
+            access_group_ids?: string[] | null;
+            /**
              * Budget Duration
              * @description Default budget duration for new teams, when not explicitly provided (e.g. '24h', '7d', '30d')
              */
@@ -32815,6 +32953,20 @@ export interface components {
             model_name: string;
         } & {
             [key: string]: unknown;
+        };
+        /** DeploymentPricing */
+        DeploymentPricing: {
+            /** Costs */
+            costs: {
+                [key: string]: number;
+            };
+            /** Provider */
+            provider: string;
+            /**
+             * Tiered Pricing
+             * @default []
+             */
+            tiered_pricing: components["schemas"]["PriceTier"][];
         };
         /** DeploymentWarning */
         DeploymentWarning: {
@@ -35397,6 +35549,14 @@ export interface components {
             model_max_budget?: {
                 [key: string]: unknown;
             } | null;
+            /** Model Rpm Limit */
+            model_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Model Tpm Limit */
+            model_tpm_limit?: {
+                [key: string]: number;
+            } | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Soft Budget */
@@ -35435,6 +35595,14 @@ export interface components {
             /** Model Max Budget */
             model_max_budget?: {
                 [key: string]: unknown;
+            } | null;
+            /** Model Rpm Limit */
+            model_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Model Tpm Limit */
+            model_tpm_limit?: {
+                [key: string]: number;
             } | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
@@ -36286,6 +36454,8 @@ export interface components {
              * @default false
              */
             allow_client_keepalive_override: boolean | null;
+            /** Allow Legacy Cloud File Ids */
+            allow_legacy_cloud_file_ids?: boolean | null;
             /** Annotation Cost Per Page */
             annotation_cost_per_page?: number | null;
             /** Annotation Cost Per Page Batches */
@@ -36454,6 +36624,8 @@ export interface components {
             cache_read_input_audio_token_cost_priority?: number | null;
             /** Cache Read Input Image Token Cost */
             cache_read_input_image_token_cost?: number | null;
+            /** Cache Read Input Image Token Cost Batches */
+            cache_read_input_image_token_cost_batches?: number | null;
             /** Cache Read Input Token Cost */
             cache_read_input_token_cost?: number | null;
             /** Cache Read Input Token Cost Above 100K Tokens */
@@ -36687,6 +36859,10 @@ export interface components {
             output_cost_per_image_1024?: number | null;
             /** Output Cost Per Image 1536 */
             output_cost_per_image_1536?: number | null;
+            /** Output Cost Per Image 1K */
+            output_cost_per_image_1K?: number | null;
+            /** Output Cost Per Image 2K */
+            output_cost_per_image_2K?: number | null;
             /** Output Cost Per Image 512 */
             output_cost_per_image_512?: number | null;
             /** Output Cost Per Image Token */
@@ -36810,6 +36986,10 @@ export interface components {
             /** Stream Timeout By Service Tier */
             stream_timeout_by_service_tier?: {
                 [key: string]: number;
+            } | null;
+            /** Switchyard Router Config */
+            switchyard_router_config?: {
+                [key: string]: unknown;
             } | null;
             /** Tag Regex */
             tag_regex?: string[] | null;
@@ -38114,6 +38294,11 @@ export interface components {
              */
             max_input_chars?: number | null;
             /**
+             * Mcp Block Behavior
+             * @description How to handle guardrail blocks when executing MCP tools for an LLM request. 'raise' propagates the guardrail error to the client. 'tool_result' or None returns the block as a tool result and lets the LLM continue.
+             */
+            mcp_block_behavior?: ("tool_result" | "raise") | null;
+            /**
              * Metadata
              * @description Additional metadata to include in the request
              */
@@ -38173,7 +38358,7 @@ export interface components {
             on_sensitive_data?: ("block" | "route") | null;
             /**
              * On Violation
-             * @description For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection. For guardrail='mcp_security': 'block' rejects the request; 'alert' only logs a warning.
+             * @description For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection. Bedrock Nova Sonic cannot cancel a spoken turn's answer, so a blocked spoken turn always ends its session. For guardrail='mcp_security': 'block' rejects the request; 'alert' only logs a warning.
              */
             on_violation?: ("warn" | "end_session" | "block" | "alert") | null;
             /**
@@ -38331,7 +38516,7 @@ export interface components {
             prompt_injections?: boolean | null;
             /**
              * Realtime Violation Message
-             * @description The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to violation_message_template if not set.
+             * @description The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to the guardrail's block reason if not set.
              */
             realtime_violation_message?: string | null;
             /**
@@ -39664,6 +39849,11 @@ export interface components {
             } | null;
             /** Custom Tags */
             custom_tags?: string[] | null;
+            /**
+             * Deployment Pricing
+             * @default []
+             */
+            deployment_pricing: components["schemas"]["DeploymentPricing"][];
             /** Description */
             description?: string | null;
             /** Health Checked At */
@@ -40037,6 +40227,20 @@ export interface components {
              */
             model_max_budget?: {
                 [key: string]: components["schemas"]["BudgetConfig"];
+            } | null;
+            /**
+             * Model Rpm Limit
+             * @description Max requests per minute per model for this budget id, shared by every key, team and customer on it (e.g. {'gpt-4o': 200})
+             */
+            model_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /**
+             * Model Tpm Limit
+             * @description Max tokens per minute per model for this budget id, shared by every key, team and customer on it (e.g. {'gpt-4o': 400000})
+             */
+            model_tpm_limit?: {
+                [key: string]: number;
             } | null;
             /** Models */
             models?: string[] | null;
@@ -41567,6 +41771,37 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** OutputToolSearchOutput */
+        OutputToolSearchOutput: {
+            /** Call Id */
+            call_id?: string | null;
+            /**
+             * Execution
+             * @enum {string}
+             */
+            execution: "server" | "client";
+            /** Id */
+            id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_progress" | "completed" | "incomplete";
+            /**
+             * Tools
+             * @default []
+             */
+            tools: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Type
+             * @constant
+             */
+            type: "tool_search_output";
+        } & {
+            [key: string]: unknown;
+        };
         /**
          * PageLinks
          * @description Hypermedia for a paginated list. No `first`/`last`: without a total count the last page is unknown.
@@ -42868,6 +43103,18 @@ export interface components {
              */
             version_status: string;
         };
+        /** PriceTier */
+        PriceTier: {
+            /** Costs */
+            costs: {
+                [key: string]: number;
+            };
+            /** Range */
+            range: [
+                number,
+                number
+            ];
+        };
         /** Prompt */
         Prompt: {
             litellm_params: components["schemas"]["PromptLiteLLMParams"];
@@ -43885,7 +44132,7 @@ export interface components {
             heuristic_v2_success_threshold?: number | null;
             /**
              * Housekeeping Patterns
-             * @description Additional case-sensitive literal sentinels that mark a request as client housekeeping, on top of the built-in conversation-title ones. For clients whose wording the built-ins don't cover, or after a client release changes its strings.
+             * @description Additional case-sensitive literal sentinels that mark a request as client housekeeping, on top of the built-in conversation-title, agent-summary and prompt-suggestion ones. For clients whose wording the built-ins don't cover, or after a client release changes its strings.
              */
             housekeeping_patterns?: string[] | null;
             /**
@@ -45647,7 +45894,7 @@ export interface components {
             /** Output */
             output: (components["schemas"]["ResponseOutputMessage"] | components["schemas"]["ResponseFileSearchToolCall"] | components["schemas"]["ResponseFunctionToolCall"] | components["schemas"]["ResponseFunctionToolCallOutputItem"] | components["schemas"]["ResponseFunctionWebSearch"] | components["schemas"]["ResponseComputerToolCall"] | components["schemas"]["ResponseComputerToolCallOutputItem"] | components["schemas"]["ResponseReasoningItem"] | components["schemas"]["ResponseToolSearchCall"] | components["schemas"]["ResponseToolSearchOutputItem"] | components["schemas"]["ResponseCompactionItem"] | components["schemas"]["ImageGenerationCall"] | components["schemas"]["ResponseCodeInterpreterToolCall"] | components["schemas"]["LocalShellCall"] | components["schemas"]["LocalShellCallOutput"] | components["schemas"]["ResponseFunctionShellToolCall"] | components["schemas"]["ResponseFunctionShellToolCallOutput"] | components["schemas"]["ResponseApplyPatchToolCall"] | components["schemas"]["ResponseApplyPatchToolCallOutput"] | components["schemas"]["McpCall"] | components["schemas"]["McpListTools"] | components["schemas"]["McpApprovalRequest"] | components["schemas"]["McpApprovalResponse"] | components["schemas"]["ResponseCustomToolCall"] | components["schemas"]["ResponseCustomToolCallOutputItem"] | {
                 [key: string]: unknown;
-            })[] | (components["schemas"]["GenericResponseOutputItem"] | components["schemas"]["OutputCodeInterpreterCall"] | components["schemas"]["OutputFunctionToolCall"] | components["schemas"]["OutputImageGenerationCall"] | components["schemas"]["ResponseFunctionToolCall"] | components["schemas"]["ResponseFunctionWebSearch"] | components["schemas"]["CustomToolCallOutputItem"] | components["schemas"]["OutputToolSearchCall"] | components["schemas"]["ResponseCompactionItem"])[];
+            })[] | (components["schemas"]["GenericResponseOutputItem"] | components["schemas"]["OutputCodeInterpreterCall"] | components["schemas"]["OutputFunctionToolCall"] | components["schemas"]["OutputImageGenerationCall"] | components["schemas"]["ResponseFunctionToolCall"] | components["schemas"]["ResponseFunctionWebSearch"] | components["schemas"]["CustomToolCallOutputItem"] | components["schemas"]["OutputToolSearchCall"] | components["schemas"]["OutputToolSearchOutput"] | components["schemas"]["ResponseCompactionItem"])[];
             /** Parallel Tool Calls */
             parallel_tool_calls?: boolean | null;
             /** Previous Response Id */
@@ -47461,6 +47708,12 @@ export interface components {
              */
             gateway_injected_caching_savings_spend: number;
             /**
+             * Guardrail Spend
+             * @description Guardrail spend in USD, already included in spend, so model spend is spend - guardrail_spend. Rows recorded before this field existed report 0 even when their spend includes guardrail cost
+             * @default 0
+             */
+            guardrail_spend: number;
+            /**
              * Prompt Caching Savings Spend
              * @default 0
              */
@@ -47608,7 +47861,7 @@ export interface components {
              * Router Type
              * @enum {string}
              */
-            router_type?: "complexity" | "adaptive" | "quality" | "semantic";
+            router_type?: "complexity" | "adaptive" | "quality" | "semantic" | "switchyard";
             /** Savings Baseline Deployment Id */
             savings_baseline_deployment_id?: string;
             /** Savings Baseline Model */
@@ -47617,6 +47870,12 @@ export interface components {
             score?: number;
             /** Signals */
             signals?: string[];
+            /** Switchyard Algorithm */
+            switchyard_algorithm?: string;
+            /** Switchyard Evidence */
+            switchyard_evidence?: unknown;
+            /** Switchyard Fallback Reason */
+            switchyard_fallback_reason?: string;
             /** Tier */
             tier?: string;
             tier_boundaries?: components["schemas"]["StandardLoggingRoutingDecisionTierBoundaries"];
@@ -47960,6 +48219,8 @@ export interface components {
             rpm_limit?: number | null;
             /** Soft Budget */
             soft_budget?: number | null;
+            /** Spend */
+            spend?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
         };
@@ -51209,6 +51470,14 @@ export interface components {
             end_user_model_max_budget?: {
                 [key: string]: unknown;
             } | null;
+            /** End User Model Rpm Limit */
+            end_user_model_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** End User Model Tpm Limit */
+            end_user_model_tpm_limit?: {
+                [key: string]: number;
+            } | null;
             end_user_object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
             /** End User Rpm Limit */
             end_user_rpm_limit?: number | null;
@@ -52217,6 +52486,8 @@ export interface components {
             discoverable?: boolean | null;
             /** Enable Tag Filtering */
             enable_tag_filtering?: boolean | null;
+            /** Encrypted Content Boundary */
+            encrypted_content_boundary?: string | null;
             /** Enforce Supported Endpoints */
             enforce_supported_endpoints?: boolean | null;
             /** Explicit Cache Read Input Token Cost */
@@ -52381,6 +52652,8 @@ export interface components {
              * @default false
              */
             allow_client_keepalive_override: boolean | null;
+            /** Allow Legacy Cloud File Ids */
+            allow_legacy_cloud_file_ids?: boolean | null;
             /** Annotation Cost Per Page */
             annotation_cost_per_page?: number | null;
             /** Annotation Cost Per Page Batches */
@@ -52549,6 +52822,8 @@ export interface components {
             cache_read_input_audio_token_cost_priority?: number | null;
             /** Cache Read Input Image Token Cost */
             cache_read_input_image_token_cost?: number | null;
+            /** Cache Read Input Image Token Cost Batches */
+            cache_read_input_image_token_cost_batches?: number | null;
             /** Cache Read Input Token Cost */
             cache_read_input_token_cost?: number | null;
             /** Cache Read Input Token Cost Above 100K Tokens */
@@ -52782,6 +53057,10 @@ export interface components {
             output_cost_per_image_1024?: number | null;
             /** Output Cost Per Image 1536 */
             output_cost_per_image_1536?: number | null;
+            /** Output Cost Per Image 1K */
+            output_cost_per_image_1K?: number | null;
+            /** Output Cost Per Image 2K */
+            output_cost_per_image_2K?: number | null;
             /** Output Cost Per Image 512 */
             output_cost_per_image_512?: number | null;
             /** Output Cost Per Image Token */
@@ -52905,6 +53184,10 @@ export interface components {
             /** Stream Timeout By Service Tier */
             stream_timeout_by_service_tier?: {
                 [key: string]: number;
+            } | null;
+            /** Switchyard Router Config */
+            switchyard_router_config?: {
+                [key: string]: unknown;
             } | null;
             /** Tag Regex */
             tag_regex?: string[] | null;
@@ -55912,7 +56195,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Unmodified Codex response or server-sent events */
+            /** @description Codex response, the model catalog with the key's LiteLLM models, or server-sent events */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -59591,6 +59874,7 @@ export interface operations {
                 page?: number;
                 page_size?: number;
                 exclude_end_user_ids?: string | null;
+                team_ids?: string | null;
             };
             header?: never;
             path?: never;
@@ -59629,6 +59913,7 @@ export interface operations {
                 api_key?: string | null;
                 exclude_end_user_ids?: string | null;
                 timezone?: number | null;
+                team_ids?: string | null;
             };
             header?: never;
             path?: never;
@@ -59668,6 +59953,7 @@ export interface operations {
                 api_key?: string | null;
                 exclude_end_user_ids?: string | null;
                 timezone?: number | null;
+                team_ids?: string | null;
             };
             header?: never;
             path?: never;
@@ -59708,6 +59994,7 @@ export interface operations {
                 api_key?: string | null;
                 exclude_end_user_ids?: string | null;
                 timezone?: number | null;
+                team_ids?: string | null;
             };
             header?: never;
             path?: never;
@@ -59747,6 +60034,7 @@ export interface operations {
                 api_key?: string | null;
                 exclude_end_user_ids?: string | null;
                 timezone?: number | null;
+                team_ids?: string | null;
             };
             header?: never;
             path?: never;
@@ -59786,6 +60074,7 @@ export interface operations {
                 api_key?: string | null;
                 exclude_end_user_ids?: string | null;
                 timezone?: number | null;
+                team_ids?: string | null;
             };
             header?: never;
             path?: never;
@@ -60642,6 +60931,7 @@ export interface operations {
                 page?: number;
                 page_size?: number;
                 exclude_end_user_ids?: string | null;
+                team_ids?: string | null;
             };
             header?: never;
             path?: never;
@@ -60680,6 +60970,7 @@ export interface operations {
                 api_key?: string | null;
                 exclude_end_user_ids?: string | null;
                 timezone?: number | null;
+                team_ids?: string | null;
             };
             header?: never;
             path?: never;
@@ -60719,6 +61010,7 @@ export interface operations {
                 api_key?: string | null;
                 exclude_end_user_ids?: string | null;
                 timezone?: number | null;
+                team_ids?: string | null;
             };
             header?: never;
             path?: never;
@@ -60759,6 +61051,7 @@ export interface operations {
                 api_key?: string | null;
                 exclude_end_user_ids?: string | null;
                 timezone?: number | null;
+                team_ids?: string | null;
             };
             header?: never;
             path?: never;
@@ -60798,6 +61091,7 @@ export interface operations {
                 api_key?: string | null;
                 exclude_end_user_ids?: string | null;
                 timezone?: number | null;
+                team_ids?: string | null;
             };
             header?: never;
             path?: never;
@@ -60837,6 +61131,7 @@ export interface operations {
                 api_key?: string | null;
                 exclude_end_user_ids?: string | null;
                 timezone?: number | null;
+                team_ids?: string | null;
             };
             header?: never;
             path?: never;
@@ -62783,6 +63078,20 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["LatestReleaseInfo"] | null;
                 };
+            };
+            /** @description The release is being fetched in the background, so ask again shortly */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The changelog or GitHub could not be reached or answered with something unusable */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -69978,6 +70287,246 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    opensearch_proxy_route_opensearch__endpoint__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+                "application/x-ndjson": string;
+            };
+        };
+        responses: {
+            /** @description OpenSearch's response, unmodified */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    opensearch_proxy_route_opensearch__endpoint__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+                "application/x-ndjson": string;
+            };
+        };
+        responses: {
+            /** @description OpenSearch's response, unmodified */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    opensearch_proxy_route_opensearch__endpoint__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+                "application/x-ndjson": string;
+            };
+        };
+        responses: {
+            /** @description OpenSearch's response, unmodified */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    opensearch_proxy_route_opensearch__endpoint__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+                "application/x-ndjson": string;
+            };
+        };
+        responses: {
+            /** @description OpenSearch's response, unmodified */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    opensearch_proxy_route_opensearch__endpoint__head: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+                "application/x-ndjson": string;
+            };
+        };
+        responses: {
+            /** @description OpenSearch's response, unmodified */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    opensearch_proxy_route_opensearch__endpoint__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+                "application/x-ndjson": string;
+            };
+        };
+        responses: {
+            /** @description OpenSearch's response, unmodified */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */

@@ -1,29 +1,45 @@
 use litellm_auth::CredentialPlacement;
+use litellm_host::interceptors::{RetriedRequest, RetryReason};
+use litellm_http::request::{with_header, without_headers};
 use litellm_llms_types::{
     formats::messages::{
-        ContentBlock, ContentBlockType, ContextEdit, ContextManagement, Message,
+        ContentBlock, ContentBlockType, ContextEdit, ContextManagement, Message, MessageContent,
         MessagesOptionalParams, MessagesRequest, Speed, ThinkingConfig, ThinkingDisplay,
     },
-    providers::anthropic::{AnthropicBeta, BetaProvider, BetaSet, DEFAULT_HEADERS},
-    recognized::Recognized,
+    providers::anthropic::{AnthropicBeta, BETA_HEADER, BetaProvider, BetaSet, DEFAULT_HEADERS},
+    recognized::{Recognized, map_known_runs},
 };
 use litellm_router_types::LitellmParams;
 use serde_json::{Map, Value, json};
 
-use super::{handler::shape_anthropic_messages_request, thinking::translate_thinking};
-use crate::base_llm::messages::context::MessagesTransformContext;
+use super::{
+    handler::shape_anthropic_messages_request,
+    scalar::{is_one, python_str, python_value},
+    thinking::translate_thinking,
+};
+use crate::anthropic::beta_headers::accepted_or_unlisted;
+use crate::base_llm::messages::{
+    context::{MessagesShapeOptions, MessagesTransformContext},
+    tools::ToolCustomField,
+};
 use crate::{
     Error,
     anthropic::common_utils::{
         ANTHROPIC_API_BASE_ENV, ANTHROPIC_API_KEY_ENV, ANTHROPIC_AUTH_TOKEN_ENV,
-        ANTHROPIC_BASE_URL_ENV, OauthHandling, complete_anthropic_url, get_auth_header,
-        has_advisor_tool, has_anthropic_credential, is_tool_search_used, merge_beta_headers,
-        optionally_handle_anthropic_oauth, requires_native_compaction_beta, strip_advisor_blocks,
-        strip_encrypted_reasoning_blocks,
+        ANTHROPIC_BASE_URL_ENV, OauthHandling,
+        anthropic_request_errors_on_thinking_binding_mismatch, complete_anthropic_url,
+        existing_betas, get_auth_header, has_advisor_tool, has_anthropic_credential,
+        is_anthropic_invalid_thinking_block_error, is_anthropic_thinking_binding_mismatch_error,
+        is_claude_strict_tools_rejection, is_tool_search_used, merge_beta_headers,
+        minted_oauth_environment, optionally_handle_anthropic_oauth,
+        requires_native_compaction_beta, strip_advisor_blocks, strip_encrypted_reasoning_blocks,
+        strip_thinking_blocks_from_anthropic_messages_request, tools_without_strict,
     },
     base_llm::{
         auth::AuthScheme,
-        messages::transformation::{BaseMessagesConfig, Headers, ValidatedEnvironment},
+        messages::transformation::{
+            BaseMessagesConfig, FederatedEnvironment, Headers, ValidatedEnvironment,
+        },
     },
 };
 
@@ -35,9 +51,9 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
     fn shape_request(
         &self,
         request: MessagesRequest,
-        reasoning_auto_summary: bool,
+        options: MessagesShapeOptions,
     ) -> Result<MessagesRequest, Error> {
-        shape_anthropic_messages_request(request, reasoning_auto_summary)
+        shape_anthropic_messages_request(request, options)
     }
 
     fn get_complete_url(
@@ -57,6 +73,12 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         context: &MessagesTransformContext,
     ) -> Result<MessagesRequest, Error> {
         transform_messages_request(request, &context.keeping_display_updates())
+    }
+
+    fn tool_custom_field(&self, model: &str) -> ToolCustomField {
+        ToolCustomField::Rewrite {
+            hoist_defer_loading: is_claude_model(model),
+        }
     }
 
     fn secret_names(&self) -> &'static [&'static str] {
@@ -79,31 +101,22 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         _litellm_params: &LitellmParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
-        let headers = match optionally_handle_anthropic_oauth(headers, api_key) {
-            OauthHandling::Bearer { headers, token } => {
-                return Ok(ValidatedEnvironment {
-                    headers,
-                    auth: AuthScheme::Credential {
-                        placement: CredentialPlacement::Bearer,
-                        secret: token,
-                    },
-                });
-            }
-            OauthHandling::Untouched(headers) => headers,
-        };
-        if has_anthropic_credential(&headers) {
-            return Ok(ValidatedEnvironment {
-                headers,
-                auth: AuthScheme::Forwarded,
-            });
+        match anthropic_environment(headers, api_key, env_lookup) {
+            FederatedEnvironment::Validated(validated) => Ok(validated),
+            FederatedEnvironment::Unauthenticated { missing, .. } => Err(missing),
         }
-        let auth = get_auth_header(api_key, env_lookup).ok_or(Error::Auth(
-            litellm_auth::Error::MissingApiKey {
-                provider: "Anthropic",
-                environment_variable: ANTHROPIC_API_KEY_ENV,
-            },
-        ))?;
-        Ok(ValidatedEnvironment { headers, auth })
+    }
+
+    fn validate_federated_environment(
+        &self,
+        headers: Headers,
+        api_key: Option<&str>,
+        _model: &str,
+        _optional_params: &MessagesOptionalParams,
+        _litellm_params: &LitellmParams,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<FederatedEnvironment, Error> {
+        Ok(anthropic_environment(headers, api_key, env_lookup))
     }
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
@@ -116,6 +129,157 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
             provider_feature_betas(request, BetaProvider::Anthropic),
         )
     }
+
+    fn retry_after_http_error(
+        &self,
+        status: u16,
+        error_text: &str,
+        request_body: &Value,
+        context: &MessagesTransformContext,
+    ) -> Option<RetriedRequest> {
+        retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
+    }
+
+    fn headers_for_url(&self, headers: Headers, url: &str) -> Headers {
+        if !is_foundry_url(url) {
+            return headers;
+        }
+        let betas = existing_betas(&headers);
+        if betas.is_empty() {
+            return headers;
+        }
+        let kept = accepted_or_unlisted(betas, BetaProvider::AzureAi);
+        if kept.is_empty() {
+            return without_headers(headers, &[BETA_HEADER]);
+        }
+        with_header(headers, BETA_HEADER, kept.to_string())
+    }
+}
+
+const FOUNDRY_HOST_SUFFIXES: [&str; 3] = [
+    "services.ai.azure.com",
+    "openai.azure.com",
+    "cognitiveservices.azure.com",
+];
+
+fn is_foundry_url(url: &str) -> bool {
+    let absolute = if url.contains("://") {
+        url.to_string()
+    } else {
+        format!("https://{url}")
+    };
+    url::Url::parse(&absolute)
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(str::to_ascii_lowercase))
+        .is_some_and(|host| {
+            FOUNDRY_HOST_SUFFIXES
+                .iter()
+                .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
+        })
+}
+
+pub(crate) fn is_claude_model(model: &str) -> bool {
+    model.to_lowercase().contains("claude")
+}
+
+pub fn should_retry_anthropic_messages_on_http_error(
+    status: u16,
+    error_text: &str,
+    request_body: &Value,
+    context: &MessagesTransformContext,
+) -> bool {
+    if status != 400 {
+        return false;
+    }
+    let drops_rejected_strict_tools = context.drops_unsupported_params
+        && is_claude_strict_tools_rejection(status, error_text)
+        && tools_without_strict(request_body.get("tools")).is_some();
+    if drops_rejected_strict_tools {
+        return true;
+    }
+    let caller_asked_for_this_error =
+        anthropic_request_errors_on_thinking_binding_mismatch(request_body)
+            && is_anthropic_thinking_binding_mismatch_error(error_text);
+    !caller_asked_for_this_error && is_anthropic_invalid_thinking_block_error(error_text)
+}
+
+pub fn transform_anthropic_messages_request_on_http_error(
+    status: u16,
+    error_text: &str,
+    request_body: Value,
+) -> RetriedRequest {
+    let mut reasons = Vec::new();
+    let mut body = if status == 400 && is_anthropic_invalid_thinking_block_error(error_text) {
+        reasons.push(RetryReason::ThinkingSignature);
+        strip_thinking_blocks_from_anthropic_messages_request(request_body)
+    } else {
+        request_body
+    };
+    let without_strict = if is_claude_strict_tools_rejection(status, error_text) {
+        tools_without_strict(body.get("tools"))
+    } else {
+        None
+    };
+    if let (Some(without_strict), Value::Object(fields)) = (without_strict, &mut body) {
+        reasons.push(RetryReason::StrictTools {
+            dropped: without_strict.dropped_count,
+        });
+        fields.insert("tools".to_owned(), Value::Array(without_strict.tools));
+    }
+    RetriedRequest { reasons, body }
+}
+
+pub fn retry_anthropic_messages_after_http_error(
+    status: u16,
+    error_text: &str,
+    request_body: &Value,
+    context: &MessagesTransformContext,
+) -> Option<RetriedRequest> {
+    should_retry_anthropic_messages_on_http_error(status, error_text, request_body, context).then(
+        || {
+            transform_anthropic_messages_request_on_http_error(
+                status,
+                error_text,
+                request_body.clone(),
+            )
+        },
+    )
+}
+
+fn anthropic_environment(
+    headers: Headers,
+    api_key: Option<&str>,
+    env_lookup: &dyn Fn(&str) -> Option<String>,
+) -> FederatedEnvironment {
+    let headers = match optionally_handle_anthropic_oauth(headers, api_key) {
+        OauthHandling::Bearer { headers, token } => {
+            return FederatedEnvironment::Validated(ValidatedEnvironment {
+                headers,
+                auth: AuthScheme::Credential {
+                    placement: CredentialPlacement::Bearer,
+                    secret: token,
+                },
+            });
+        }
+        OauthHandling::Untouched(headers) => headers,
+    };
+    if has_anthropic_credential(&headers) {
+        return FederatedEnvironment::Validated(ValidatedEnvironment {
+            headers,
+            auth: AuthScheme::Forwarded,
+        });
+    }
+    match get_auth_header(api_key, env_lookup) {
+        Some(auth) => FederatedEnvironment::Validated(ValidatedEnvironment { headers, auth }),
+        None => FederatedEnvironment::Unauthenticated {
+            headers,
+            missing: Error::Auth(litellm_auth::Error::MissingApiKey {
+                provider: "Anthropic",
+                environment_variable: ANTHROPIC_API_KEY_ENV,
+            }),
+            federate: minted_oauth_environment,
+        },
+    }
 }
 
 pub(crate) fn transform_messages_request(
@@ -125,6 +289,7 @@ pub(crate) fn transform_messages_request(
     if request.params.max_tokens.is_none() {
         return Err(Error::MissingField("max_tokens"));
     }
+    let request = without_unstructured_output_format(request, context);
     let request = drop_unsupported_params(request, context)?;
     let request = translate_thinking(request, &context.thinking)?;
     let context_management = request
@@ -132,13 +297,20 @@ pub(crate) fn transform_messages_request(
         .context_management
         .clone()
         .map(map_openai_context_management_to_anthropic);
-    let messages = if has_advisor_tool(request.params.tools.as_deref()) {
+    let messages = if has_advisor_tool(request.params.tools.as_deref())
+        || continues_message_thread(&request.params)
+    {
         request.messages
     } else {
-        strip_advisor_blocks(request.messages)
+        map_known_runs(request.messages, strip_advisor_blocks)
+    };
+    let messages = if context.drops_unsupported_params {
+        drop_non_string_tool_result_texts(messages)
+    } else {
+        messages
     };
     Ok(MessagesRequest {
-        messages: strip_encrypted_reasoning_blocks(messages),
+        messages: map_known_runs(messages, strip_encrypted_reasoning_blocks),
         params: MessagesOptionalParams {
             context_management,
             extra: without_null_safeguards(request.params.extra),
@@ -146,6 +318,84 @@ pub(crate) fn transform_messages_request(
         },
         ..request
     })
+}
+
+fn without_unstructured_output_format(
+    request: MessagesRequest,
+    context: &MessagesTransformContext,
+) -> MessagesRequest {
+    if !context.drops_unsupported_params
+        || request
+            .params
+            .output_format
+            .as_ref()
+            .is_none_or(Value::is_object)
+    {
+        return request;
+    }
+    MessagesRequest {
+        params: MessagesOptionalParams {
+            output_format: None,
+            ..request.params
+        },
+        ..request
+    }
+}
+
+fn is_python_str(value: &Value) -> bool {
+    match value {
+        Value::String(text) => {
+            litellm_host::raw_json::decode(text).is_none_or(|raw| raw.starts_with('"'))
+        }
+        _ => false,
+    }
+}
+
+fn is_non_string_text(part: &Value) -> bool {
+    part.get("type").and_then(Value::as_str) == Some("text")
+        && part.get("text").is_some_and(|text| !is_python_str(text))
+}
+
+fn without_non_string_texts(content: &mut Value) {
+    if let Value::Array(parts) = content {
+        parts.retain(|part| !is_non_string_text(part));
+    }
+}
+
+fn drop_non_string_tool_result_texts(
+    messages: Vec<Recognized<Message>>,
+) -> Vec<Recognized<Message>> {
+    messages
+        .into_iter()
+        .map(|message| match message {
+            Recognized::Known(mut message) => {
+                if message.role == "user"
+                    && let MessageContent::Blocks(blocks) = &mut message.content
+                {
+                    blocks
+                        .iter_mut()
+                        .filter(|block| block.is_type(ContentBlockType::ToolResult))
+                        .filter_map(|block| block.content.as_mut())
+                        .for_each(without_non_string_texts);
+                }
+                Recognized::Known(message)
+            }
+            Recognized::Unrecognized(mut message) => {
+                if message.get("role").and_then(Value::as_str) == Some("user")
+                    && let Some(Value::Array(blocks)) = message.get_mut("content")
+                {
+                    blocks
+                        .iter_mut()
+                        .filter(|block| {
+                            block.get("type").and_then(Value::as_str) == Some("tool_result")
+                        })
+                        .filter_map(|block| block.get_mut("content"))
+                        .for_each(without_non_string_texts);
+                }
+                Recognized::Unrecognized(message)
+            }
+        })
+        .collect()
 }
 
 fn without_null_safeguards(extra: Map<String, Value>) -> Map<String, Value> {
@@ -193,22 +443,45 @@ fn mapped_host_betas(params: &MessagesOptionalParams) -> BetaSet {
         .collect()
 }
 
+fn continues_message_thread(params: &MessagesOptionalParams) -> bool {
+    let Some(Value::Object(thread)) = params.extra.get("thread") else {
+        return false;
+    };
+    thread.get("type").and_then(Value::as_str) == Some("continue")
+        && thread
+            .get("previous_message_id")
+            .is_none_or(Value::is_string)
+}
+
+fn is_threaded(params: &MessagesOptionalParams) -> bool {
+    params
+        .extra
+        .get("thread")
+        .is_some_and(|thread| !thread.is_null())
+}
+
 fn feature_betas(request: &MessagesRequest) -> BetaSet {
     let params = &request.params;
     let tools = params.tools.as_deref();
+    let scanned_messages: &[Recognized<Message>] = if continues_message_thread(params) {
+        &[]
+    } else {
+        &request.messages
+    };
     [
-        requires_native_compaction_beta(params.compaction.as_ref(), &request.messages)
+        requires_native_compaction_beta(params.compaction.as_ref(), scanned_messages)
             .then_some(AnthropicBeta::Compact20260904),
         uses_structured_output(params).then_some(AnthropicBeta::StructuredOutputs20251113),
         (params.speed == Some(Recognized::Known(Speed::Fast)))
             .then_some(AnthropicBeta::FastMode20260201),
-        messages_carry_output_config(&request.messages)
+        messages_carry_output_config(scanned_messages)
             .then_some(AnthropicBeta::PerTurnControl20260701),
+        is_threaded(params).then_some(AnthropicBeta::MessageThreads20260812),
         uses_thinking_display_updates(params)
             .then_some(AnthropicBeta::ThinkingDisplayUpdates20260818),
         uses_thinking_block_binding(params)
             .then_some(AnthropicBeta::ThinkingBindingControls20260801),
-        messages_carry_tool_changes(&request.messages)
+        messages_carry_tool_changes(scanned_messages)
             .then_some(AnthropicBeta::MidConversationToolChanges20260701),
         has_advisor_tool(tools).then_some(AnthropicBeta::AdvisorTool20260301),
         is_tool_search_used(tools).then_some(AnthropicBeta::AdvancedToolUse20251120),
@@ -254,9 +527,10 @@ fn carries_safeguards(params: &MessagesOptionalParams) -> bool {
         .is_some_and(|value| !value.is_null())
 }
 
-fn messages_carry_output_config(messages: &[Message]) -> bool {
+fn messages_carry_output_config(messages: &[Recognized<Message>]) -> bool {
     messages
         .iter()
+        .filter_map(Recognized::known)
         .any(|message| message.extra.contains_key("output_config"))
 }
 
@@ -301,9 +575,10 @@ fn is_tool_reference_change(block: &ContentBlock) -> bool {
         == Some("tool_reference")
 }
 
-fn messages_carry_tool_changes(messages: &[Message]) -> bool {
+fn messages_carry_tool_changes(messages: &[Recognized<Message>]) -> bool {
     messages
         .iter()
+        .filter_map(Recognized::known)
         .filter(|message| message.role == "system")
         .flat_map(Message::blocks)
         .any(is_tool_reference_change)
@@ -334,7 +609,7 @@ pub fn drop_unsupported_params(
     let params = request.params;
     let speed = match &params.speed {
         Some(speed) if !capabilities.supports_speed => {
-            reject("speed", format!("'{}'", speed_text(speed)), "")?;
+            reject("speed", speed_repr(speed), "")?;
             None
         }
         _ => params.speed.clone(),
@@ -346,21 +621,21 @@ pub fn drop_unsupported_params(
         });
     }
     let temperature = match params.temperature {
-        Some(temperature) if temperature != 1.0 => {
+        Some(temperature) if !is_one(&temperature) => {
             reject(
                 "temperature",
-                json!(temperature).to_string(),
+                python_str(&temperature),
                 "Only temperature=1 is supported. ",
             )?;
             None
         }
         temperature => temperature,
     };
-    if let Some(top_p) = params.top_p {
-        reject("top_p", json!(top_p).to_string(), "")?;
+    if let Some(top_p) = &params.top_p {
+        reject("top_p", python_str(top_p), "")?;
     }
-    if let Some(top_k) = params.top_k {
-        reject("top_k", json!(top_k).to_string(), "")?;
+    if let Some(top_k) = &params.top_k {
+        reject("top_k", python_str(top_k), "")?;
     }
     Ok(MessagesRequest {
         params: MessagesOptionalParams {
@@ -374,11 +649,10 @@ pub fn drop_unsupported_params(
     })
 }
 
-fn speed_text(speed: &Recognized<Speed>) -> String {
+fn speed_repr(speed: &Recognized<Speed>) -> String {
     match speed {
-        Recognized::Known(speed) => <&'static str>::from(*speed).to_string(),
-        Recognized::Unrecognized(Value::String(text)) => text.clone(),
-        Recognized::Unrecognized(other) => other.to_string(),
+        Recognized::Known(speed) => format!("'{}'", <&'static str>::from(*speed)),
+        Recognized::Unrecognized(other) => litellm_python_compat::repr::repr(&python_value(other)),
     }
 }
 
@@ -437,6 +711,7 @@ mod tests {
 
     use super::*;
     use crate::anthropic::common_utils::ENCRYPTED_REASONING_SIGNATURE_PREFIX;
+    use litellm_http::request::header_values;
 
     type Env = &'static [(&'static str, &'static str)];
 
@@ -679,6 +954,21 @@ mod tests {
         json!({"speed": "fast"}),
         "claude does not support speed='fast'. To drop unsupported params, set `litellm.drop_params = True`."
     )]
+    #[case::integer_temperature_keeps_no_decimal(
+        sampling_removed(),
+        json!({"temperature": 0}),
+        "claude does not support temperature=0. Only temperature=1 is supported. To drop unsupported params, set `litellm.drop_params = True`."
+    )]
+    #[case::integer_top_p(
+        sampling_removed(),
+        json!({"top_p": 1}),
+        "claude does not support top_p=1. To drop unsupported params, set `litellm.drop_params = True`."
+    )]
+    #[case::non_string_speed_is_reprd(
+        unmapped(),
+        json!({"speed": 2}),
+        "claude does not support speed=2. To drop unsupported params, set `litellm.drop_params = True`."
+    )]
     #[case::speed_ahead_of_sampling_params(
         sampling_removed(),
         json!({"speed": "fast", "temperature": 0.5}),
@@ -694,6 +984,28 @@ mod tests {
             panic!("expected an invalid request");
         };
         assert_eq!(detail.to_string(), message);
+    }
+
+    #[rstest]
+    #[case::string_dropped(json!("json"), true, None)]
+    #[case::string_kept_without_drop_params(json!("json"), false, Some(json!("json")))]
+    #[case::object_kept(json!({"type": "json_schema"}), true, Some(json!({"type": "json_schema"})))]
+    fn a_non_object_output_format_is_dropped_under_drop_params(
+        #[case] output_format: Value,
+        #[case] drops_unsupported_params: bool,
+        #[case] expected: Option<Value>,
+    ) {
+        let context = MessagesTransformContext {
+            drops_unsupported_params,
+            ..MessagesTransformContext::with_lookup(unmapped(), false, &no_env)
+        };
+        let transformed = ANTHROPIC_MESSAGES_CONFIG
+            .transform_anthropic_messages_request(
+                request(json!({"output_format": output_format})),
+                &context,
+            )
+            .unwrap();
+        assert_eq!(transformed.params.output_format, expected);
     }
 
     #[rstest]
@@ -803,6 +1115,40 @@ mod tests {
     }
 
     #[rstest]
+    #[case::continue_turn(json!({"type": "continue", "previous_message_id": "msg_1"}), false)]
+    #[case::continue_without_a_previous_message_id(json!({"type": "continue"}), false)]
+    #[case::continue_with_extra_keys(json!({"type": "continue", "previous_message_id": "msg_1", "note": 1}), false)]
+    #[case::create_turn(json!({"type": "create"}), true)]
+    #[case::continue_with_a_null_previous_message_id(json!({"type": "continue", "previous_message_id": null}), true)]
+    #[case::continue_with_a_numeric_previous_message_id(json!({"type": "continue", "previous_message_id": 1}), true)]
+    #[case::not_an_object(json!("continue"), true)]
+    fn advisor_history_is_kept_on_a_thread_continue_turn(
+        #[case] thread: Value,
+        #[case] stripped: bool,
+        unmapped: MessagesModelCapabilities,
+    ) {
+        let messages = if stripped {
+            json!([
+                {"role": "user", "content": "Build a worker pool."},
+                {"role": "assistant", "content": [
+                    {"type": "text", "text": "Let me consult the advisor."},
+                    {"type": "text", "text": "Here is the implementation."}
+                ]}
+            ])
+        } else {
+            advisor_history()
+        };
+        assert_eq!(
+            transform(
+                json!({"messages": advisor_history(), "thread": thread.clone()}),
+                unmapped,
+                false
+            ),
+            Ok(body(json!({"messages": messages, "thread": thread})))
+        );
+    }
+
+    #[rstest]
     fn bridge_minted_reasoning_is_stripped_from_the_wire(unmapped: MessagesModelCapabilities) {
         let messages = json!([
             {"role": "user", "content": "Solve it."},
@@ -864,6 +1210,7 @@ mod tests {
                         keeps_display_updates: false,
                     },
                     drop_params: true,
+                    drops_unsupported_params: false,
                 }
             );
             return;
@@ -1165,6 +1512,55 @@ mod tests {
         ]}),
         &[]
     )]
+    #[case::thread_create(json!({"thread": {"type": "create"}}), &["message-threads-2026-08-12"])]
+    #[case::thread_continue(
+        json!({"thread": {"type": "continue", "previous_message_id": "msg_1"}}),
+        &["message-threads-2026-08-12"]
+    )]
+    #[case::thread_of_any_shape(json!({"thread": "opaque"}), &["message-threads-2026-08-12"])]
+    #[case::null_thread(json!({"thread": null}), &[])]
+    #[case::thread_create_still_scans_history(
+        json!({
+            "thread": {"type": "create"},
+            "messages": [
+                {"role": "assistant", "content": [{"type": "compaction", "content": "summary", "signature": "sig"}]},
+                {"role": "user", "content": "hi", "output_config": {"effort": "low"}},
+                {"role": "system", "content": [{"type": "tool_addition", "tool": {"type": "tool_reference", "name": "ping"}}]},
+            ],
+        }),
+        &[
+            "compact-2026-09-04",
+            "message-threads-2026-08-12",
+            "mid-conversation-tool-changes-2026-07-01",
+            "per-turn-control-2026-07-01",
+        ]
+    )]
+    #[case::thread_continue_skips_history(
+        json!({
+            "thread": {"type": "continue", "previous_message_id": "msg_1"},
+            "messages": [
+                {"role": "assistant", "content": [{"type": "compaction", "content": "summary", "signature": "sig"}]},
+                {"role": "user", "content": "hi", "output_config": {"effort": "low"}},
+                {"role": "system", "content": [{"type": "tool_addition", "tool": {"type": "tool_reference", "name": "ping"}}]},
+            ],
+        }),
+        &["message-threads-2026-08-12"]
+    )]
+    #[case::thread_continue_keeps_param_betas(
+        json!({
+            "thread": {"type": "continue", "previous_message_id": "msg_1"},
+            "compaction": {},
+            "speed": "fast",
+        }),
+        &["compact-2026-09-04", "fast-mode-2026-02-01", "message-threads-2026-08-12"]
+    )]
+    #[case::malformed_continue_scans_history(
+        json!({
+            "thread": {"type": "continue", "previous_message_id": 7},
+            "messages": [{"role": "user", "content": "hi", "output_config": {"effort": "low"}}],
+        }),
+        &["message-threads-2026-08-12", "per-turn-control-2026-07-01"]
+    )]
     fn feature_betas_follow_the_request(#[case] fields: Value, #[case] expected: &[&str]) {
         assert_eq!(feature_betas(&request(fields)), betas(expected));
     }
@@ -1351,5 +1747,159 @@ mod tests {
             })
             .collect();
         assert_eq!(undeclared, Vec::<&String>::new());
+    }
+
+    const FOUNDRY: &str = "https://team.services.ai.azure.com/anthropic/v1/messages";
+
+    #[rstest]
+    #[case::drops_a_beta_foundry_lacks(
+        FOUNDRY,
+        "advisor-tool-2026-03-01,context-1m-2025-08-07",
+        Some("context-1m-2025-08-07")
+    )]
+    #[case::forwards_unknown_betas_sorted(
+        FOUNDRY,
+        "zzz,files-api-2025-04-14,aaa",
+        Some("aaa,files-api-2025-04-14,zzz")
+    )]
+    #[case::removes_the_header_when_nothing_is_left(FOUNDRY, "advisor-tool-2026-03-01", None)]
+    #[case::cognitive_services_host(
+        "team.cognitiveservices.azure.com/anthropic",
+        "advisor-tool-2026-03-01",
+        None
+    )]
+    #[case::anthropic_host_is_untouched(
+        "https://api.anthropic.com/v1/messages",
+        "advisor-tool-2026-03-01",
+        Some("advisor-tool-2026-03-01")
+    )]
+    #[case::lookalike_host_is_untouched(
+        "https://notservices.ai.azure.com.example/v1/messages",
+        "advisor-tool-2026-03-01",
+        Some("advisor-tool-2026-03-01")
+    )]
+    fn foundry_urls_filter_betas_through_the_azure_ai_row(
+        #[case] url: &str,
+        #[case] betas: &str,
+        #[case] expected: Option<&str>,
+    ) {
+        let filtered = ANTHROPIC_MESSAGES_CONFIG
+            .headers_for_url(headers(&[("x-a", "1"), (BETA_HEADER, betas)]), url);
+        assert_eq!(
+            header_values(&filtered, BETA_HEADER).collect::<Vec<_>>(),
+            expected.into_iter().collect::<Vec<_>>()
+        );
+        assert_eq!(header_values(&filtered, "x-a").collect::<Vec<_>>(), ["1"]);
+    }
+
+    #[rstest]
+    fn foundry_url_without_betas_keeps_the_headers() {
+        let sent = headers(&[("x-a", "1")]);
+        assert_eq!(
+            ANTHROPIC_MESSAGES_CONFIG.headers_for_url(sent.clone(), FOUNDRY),
+            sent
+        );
+    }
+
+    #[test]
+    fn the_http_error_retry_matches_the_cases_shared_with_python() {
+        let fixture: Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/anthropic_messages_http_error_retry.json"
+        )))
+        .unwrap();
+        let table = &fixture["http_error_retry"];
+        let cases = table["cases"].as_array().unwrap();
+        assert!(!cases.is_empty());
+        let mismatched: Vec<&str> = cases
+            .iter()
+            .filter(|case| {
+                let mut body = table["request"].clone();
+                body["thinking"] = case["thinking"].clone();
+                let status = u16::try_from(case["status"].as_u64().unwrap()).unwrap();
+                let error_text = case["error_text"].as_str().unwrap();
+                let retried = should_retry_anthropic_messages_on_http_error(
+                    status,
+                    error_text,
+                    &body,
+                    &MessagesTransformContext::default(),
+                );
+                let stripped = case["stripped"].as_bool().unwrap();
+                let transformed = transform_anthropic_messages_request_on_http_error(
+                    status,
+                    error_text,
+                    body.clone(),
+                );
+                let expected = if stripped {
+                    RetriedRequest {
+                        reasons: vec![RetryReason::ThinkingSignature],
+                        body: table["stripped_request"].clone(),
+                    }
+                } else {
+                    RetriedRequest {
+                        reasons: Vec::new(),
+                        body,
+                    }
+                };
+                retried != case["retried"].as_bool().unwrap() || transformed != expected
+            })
+            .map(|case| case["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(mismatched, Vec::<&str>::new());
+    }
+
+    #[test]
+    fn the_strict_tools_retry_matches_the_cases_shared_with_python() {
+        let fixture: Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/anthropic_messages_http_error_retry.json"
+        )))
+        .unwrap();
+        let replay = &fixture["http_error_retry"];
+        let table = &fixture["strict_tools_retry"];
+        let cases = table["cases"].as_array().unwrap();
+        assert!(!cases.is_empty());
+        let mismatched: Vec<&str> = cases
+            .iter()
+            .filter(|case| {
+                let mut body = replay["request"].clone();
+                body["thinking"] = case["thinking"].clone();
+                body["tools"] = table["tools"].clone();
+                let status = u16::try_from(case["status"].as_u64().unwrap()).unwrap();
+                let error_text = case["error_text"].as_str().unwrap();
+                let context = MessagesTransformContext {
+                    drops_unsupported_params: case["drops_unsupported_params"].as_bool().unwrap(),
+                    ..MessagesTransformContext::default()
+                };
+                let mut reasons = Vec::new();
+                let mut expected = if case["stripped"].as_bool().unwrap() {
+                    reasons.push(RetryReason::ThinkingSignature);
+                    replay["stripped_request"].clone()
+                } else {
+                    body.clone()
+                };
+                expected["tools"] = if case["strict_dropped"].as_bool().unwrap() {
+                    reasons.push(RetryReason::StrictTools {
+                        dropped: usize::try_from(table["dropped"].as_u64().unwrap()).unwrap(),
+                    });
+                    table["tools_without_strict"].clone()
+                } else {
+                    table["tools"].clone()
+                };
+                let retried = should_retry_anthropic_messages_on_http_error(
+                    status, error_text, &body, &context,
+                );
+                let transformed =
+                    transform_anthropic_messages_request_on_http_error(status, error_text, body);
+                retried != case["retried"].as_bool().unwrap()
+                    || transformed
+                        != RetriedRequest {
+                            reasons,
+                            body: expected,
+                        }
+            })
+            .map(|case| case["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(mismatched, Vec::<&str>::new());
     }
 }

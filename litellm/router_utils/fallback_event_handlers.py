@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 import httpx
 from pydantic import TypeAdapter
@@ -766,6 +766,47 @@ async def _is_fallback_target_within_budget(
     return False
 
 
+async def _is_fallback_target_admitted(
+    ctx: "RoutingContext",
+    fallback_entry: str | Mapping[str, object],
+    original_model_group: str,
+    kwargs: Mapping[str, object],
+    *,
+    attempted: AttemptedFallbackTargets,
+) -> bool:
+    return (
+        await _is_fallback_target_authorized(ctx, fallback_entry, original_model_group, kwargs, attempted=attempted)
+        and await _is_fallback_target_within_budget(
+            ctx, fallback_entry, original_model_group, kwargs, attempted=attempted
+        )
+        and await _is_fallback_target_within_rate_limit(
+            ctx, fallback_entry, original_model_group, kwargs, attempted=attempted
+        )
+    )
+
+
+async def _is_fallback_target_within_rate_limit(
+    ctx: "RoutingContext",
+    fallback_entry: str | Mapping[str, object],
+    original_model_group: str,
+    kwargs: Mapping[str, object],
+    *,
+    attempted: AttemptedFallbackTargets,
+) -> bool:
+    rate_limit_check: Final = ctx.settings().fallback_rate_limit_check
+    target: Final = _get_fallback_target_model_group(fallback_entry)
+    if rate_limit_check is None or target is None or target == original_model_group:
+        return True
+    if await ctx.fallback_rate_limit_allowed(model=target, request_kwargs=kwargs):
+        return True
+    verbose_router_logger.info(
+        "Skipping fallback to model_group = %s: caller is over its per-model rate limit",
+        mask_sensitive_structure(fallback_entry),
+    )
+    attempted.record_skip(target, FallbackSkipReason.RATE_LIMITED)
+    return False
+
+
 def references_provider_scoped_resource(kwargs: Mapping[str, object]) -> bool:
     """
     True when a file, batch, or fine-tuning job operation names an id that only exists
@@ -811,7 +852,7 @@ async def run_async_fallback(
     fallback_depth: int,
     include_fallback_errors: bool = False,
     **kwargs,
-) -> Any:
+) -> object:
     """
     Loops through all the fallback model groups and calls kwargs["original_function"] with the arguments and keyword arguments provided.
 
@@ -876,18 +917,16 @@ async def run_async_fallback(
                 original_model_group,
             )
             continue
-        if not await _is_fallback_target_authorized(ctx, mg, original_model_group, kwargs, attempted=attempted):
-            continue
-        if not await _is_fallback_target_within_budget(ctx, mg, original_model_group, kwargs, attempted=attempted):
-            continue
         attempt_key = fallback_attempt_key(mg)
+        if attempt_key is not None and attempt_key in attempted:
+            verbose_router_logger.info(
+                "Skipping fallback to model_group = %s, already attempted for this request",
+                mask_sensitive_structure(mg),
+            )
+            continue
+        if not await _is_fallback_target_admitted(ctx, mg, original_model_group, kwargs, attempted=attempted):
+            continue
         if attempt_key is not None:
-            if attempt_key in attempted:
-                verbose_router_logger.info(
-                    "Skipping fallback to model_group = %s, already attempted for this request",
-                    mask_sensitive_structure(mg),
-                )
-                continue
             attempted.record(attempt_key)
         try:
             # LOGGING

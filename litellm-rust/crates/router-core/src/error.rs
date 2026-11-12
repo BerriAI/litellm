@@ -284,6 +284,7 @@ impl Error {
     strum::EnumString,
     strum::IntoStaticStr,
     strum::VariantArray,
+    serde_with::SerializeDisplay,
 )]
 pub enum FailureKind {
     #[strum(serialize = "RateLimitError")]
@@ -473,6 +474,17 @@ mod tests {
     fn failure_kind_round_trips_its_exception_name(#[case] wire: &str, #[case] kind: FailureKind) {
         assert_eq!(wire.parse::<FailureKind>().unwrap(), kind);
         assert_eq!(<&'static str>::from(kind), wire);
+    }
+
+    #[rstest]
+    #[case::rate_limit(FailureKind::RateLimit, "RateLimitError")]
+    #[case::timeout(FailureKind::Timeout, "Timeout")]
+    #[case::api_connection(FailureKind::ApiConnection, "APIConnectionError")]
+    fn failure_kind_serializes_as_its_exception_name(
+        #[case] kind: FailureKind,
+        #[case] wire: &str,
+    ) {
+        assert_eq!(serde_json::to_value(kind).unwrap(), serde_json::json!(wire));
     }
 
     #[rstest]
