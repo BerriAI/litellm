@@ -1,4 +1,4 @@
-"""Tests for scripts/check_openapi_docs.py, the scan behind scripts/openapi_docs_gate.py."""
+"""Tests for litellm/scripts/check_openapi_docs.py, the scan behind litellm/scripts/openapi_docs_gate.py."""
 
 from collections.abc import Mapping
 from typing import Final

@@ -127,8 +127,38 @@ def _run_verifier(
 
 def test_accepts_expected_release_wheel_tags(tmp_path: Path) -> None:
     wheel: Final = _write_wheel(tmp_path, filename_tag=_EXPECTED_TAG)
+    with zipfile.ZipFile(wheel, "a") as archive:
+        archive.writestr("litellm/proxy/_experimental/out/index.html", "built dashboard")
 
     assert _run_verifier(wheel) == 0
+
+
+@pytest.mark.parametrize(
+    "member",
+    (
+        "litellm/deploy/docker/Dockerfile",
+        "litellm/ui/litellm-dashboard/package.json",
+        "litellm/ui/litellm-dashboard/node_modules/example/index.js",
+        "litellm/vscode-extension/package.json",
+        "litellm/enterprise/litellm_enterprise/__init__.py",
+        "litellm/proxy-extras/litellm_proxy_extras/__init__.py",
+        "litellm/rust/crates/config/src/lib.rs",
+        "litellm/packaging/litellm-core/pyproject.toml",
+        "litellm/scripts/default_branch.py",
+        "litellm/runtime/backend/main.py",
+        "litellm/runtime/gateway/launch.py",
+        "litellm/schema.prisma",
+    ),
+)
+def test_rejects_repository_sources_in_the_wheel(
+    tmp_path: Path, member: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    wheel: Final = _write_wheel(tmp_path, filename_tag=_EXPECTED_TAG)
+    with zipfile.ZipFile(wheel, "a") as archive:
+        archive.writestr(member, "deployment source")
+
+    assert _run_verifier(wheel) == 1
+    assert member in capsys.readouterr().err
 
 
 def test_rejects_cp312_version_specific_wheel(tmp_path: Path) -> None:

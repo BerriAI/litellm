@@ -152,7 +152,7 @@ def owned_redis(
             ],
             text=True,
         ).strip()
-        assert host, "CircleCI owned Redis container has no address"
+        assert host, "CI-owned Redis container has no address"
         prefix: Final = ("docker", "exec", "redis-cache", "redis-server")
     output: Final = Path(inherited.get("INTEGRATION_RESULTS_DIR", str(directory)))
     output.mkdir(parents=True, exist_ok=True)
