@@ -450,6 +450,20 @@ async def chat_completion_pass_through_endpoint(
         )
 
 
+_PASS_THROUGH_REQUEST_STATE_KEYS: Final = (
+    LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
+    LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
+    LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
+    LITELLM_PASS_THROUGH_DEPLOYMENT_PRICING_STATE_KEY,
+)
+
+
+def _clear_pass_through_request_state(state: object) -> None:
+    for key in _PASS_THROUGH_REQUEST_STATE_KEYS:
+        if hasattr(state, key):
+            delattr(state, key)
+
+
 def _is_provider_payload(request: Request) -> bool:
     return is_opaque_pass_through_request(get_request_route(request), request.headers.get("content-type", ""))
 
@@ -2546,14 +2560,7 @@ def create_pass_through_route(
                         keep_target_query=keep_target_query,
                     )
                 finally:
-                    if hasattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY):
-                        delattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY)
-                    if hasattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY):
-                        delattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY)
-                    if hasattr(request.state, LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY):
-                        delattr(request.state, LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY)
-                    if hasattr(request.state, LITELLM_PASS_THROUGH_DEPLOYMENT_PRICING_STATE_KEY):
-                        delattr(request.state, LITELLM_PASS_THROUGH_DEPLOYMENT_PRICING_STATE_KEY)
+                    _clear_pass_through_request_state(request.state)
 
             # The upstream withholds its response headers until its first token, so
             # the whole time-to-first-token is spent inside _relay with nothing on
