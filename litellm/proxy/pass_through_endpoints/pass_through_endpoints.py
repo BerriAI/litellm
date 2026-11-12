@@ -1236,10 +1236,13 @@ def _anthropic_user_id_to_forward(
     return user_id
 
 
-def _with_anthropic_user_id(body: Mapping[str, object] | None, user_id: str | None) -> Mapping[str, object] | None:
-    if body is None or user_id is None:
+def _with_anthropic_user_id(
+    body: Mapping[str, object] | None, user_id: str | None, url: str
+) -> Mapping[str, object] | None:
+    if body is None or anthropic_upstream_user_id_limit(url) is None:
         return body
-    return {**body, "metadata": {"user_id": user_id}}
+    body_without_metadata: Final = {k: v for k, v in body.items() if k != "metadata"}
+    return body_without_metadata if user_id is None else {**body_without_metadata, "metadata": {"user_id": user_id}}
 
 
 def _eu_jev_client_body(custom_llm_provider: str | None, body: Mapping[str, object]) -> Mapping[str, object] | None:
@@ -1650,7 +1653,7 @@ async def pass_through_request(
                 logging_url = str(url) + "?" + requested_query_params_str
 
         outgoing_body: Final = cast("Mapping[str, object] | None", _parsed_body)  # cast-ok: json
-        upstream_body: Final = _with_anthropic_user_id(outgoing_body, client_user_id)
+        upstream_body: Final = _with_anthropic_user_id(outgoing_body, client_user_id, str(url))
         logging_obj.pre_call(
             input=[{"role": "user", "content": safe_dumps(_parsed_body)}],
             api_key="",
@@ -1941,7 +1944,7 @@ async def pass_through_request(
 
         if response.status_code < 400 and response_body is not None and guardrails_to_run:
             hook_data: Final = {
-                **{k: v for k, v in (_parsed_body or {}).items() if k not in ("metadata", "litellm_metadata")},
+                **{k: v for k, v in _json_object(_parsed_body).items() if k not in ("metadata", "litellm_metadata")},
                 "metadata": {"guardrails": guardrails_to_run},
             }
             post_call_guardrail_data = hook_data

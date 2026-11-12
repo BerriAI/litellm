@@ -11672,6 +11672,50 @@ async def test_configured_pass_through_forwards_the_client_body_unchanged(tmp_pa
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("no_configured_anthropic_base")
+@pytest.mark.parametrize(
+    "path, client_metadata, forwarded_metadata",
+    [
+        ("/cfg-anthropic", {"user_id": "user-1", "tags": ["a"]}, {"user_id": "user-1"}),
+        ("/cfg-anthropic", {"tags": ["a"], "foo": "bar"}, None),
+        ("/cfg-anthropic", {"user_id": "a@example.com"}, None),
+        ("/cfg-anthropic-guarded", {"user_id": "user-1"}, None),
+    ],
+    ids=["user-id-beside-other-keys", "no-user-id", "email-user-id", "guardrail-on-the-route"],
+)
+async def test_configured_anthropic_pass_through_forwards_only_an_acceptable_user_id(
+    tmp_path, monkeypatch, path, client_metadata, forwarded_metadata
+):
+    proxy: Final = await _boot_db_backed_proxy(
+        tmp_path,
+        monkeypatch,
+        config_pass_through_endpoints=[
+            {"path": "/cfg-anthropic", "target": _ANTHROPIC_MESSAGES, "auth": False},
+            {
+                "path": "/cfg-anthropic-guarded",
+                "target": _ANTHROPIC_MESSAGES,
+                "auth": False,
+                "guardrails": {"pii-guard": {}},
+            },
+        ],
+        db_pass_through_endpoints=[],
+    )
+    await _run_db_sync_cycle(proxy)
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [CustomGuardrail(guardrail_name="pii-guard", default_on=False, event_hook=GuardrailEventHooks.pre_call)],
+    )
+
+    response, upstream_requests = await _send_through_proxy(
+        path, {}, body={**_MESSAGES_BODY, "metadata": client_metadata}
+    )
+
+    assert response.status_code == 200
+    assert [json.loads(request.content).get("metadata") for request in upstream_requests] == [forwarded_metadata]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
 async def test_configured_pass_through_body_cannot_switch_off_a_default_on_post_call_guardrail(
     tmp_path, monkeypatch, metadata_key
