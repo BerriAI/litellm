@@ -28,7 +28,7 @@
     "api_key",
     "additional_args"
   ],
-  "messages_input": [
+  "messages_input_order": [
     "body",
     "kwargs"
   ],

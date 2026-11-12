@@ -274,7 +274,7 @@ def test_the_rust_contract_matches_the_shim_signatures() -> None:
     assert contract == {name: list(inspect.signature(getattr(legacy, name)).parameters) for name in contract}
 
 
-def test_messages_input_is_the_body_as_the_python_handler_builds_and_serializes_it() -> None:
+def test_messages_input_order_is_the_key_order_the_python_handler_builds_its_body_in() -> None:
     body: Final = {
         "model": "claude-sonnet-4-5",
         "messages": [{"role": "user", "content": "hi"}],
@@ -285,17 +285,19 @@ def test_messages_input_is_the_body_as_the_python_handler_builds_and_serializes_
         "output_config": {"effort": "low"},
     }
 
-    logged: Final = legacy.messages_input(
-        body, {"output_config": {"effort": "low"}, "context_management": {"edits": []}}
+    order: Final = legacy.messages_input_order(
+        body, {"output_config": {"effort": "low"}, "context_management": {"edits": []}, "absent": 1}
     )
 
-    assert logged == [
-        {
-            "role": "user",
-            "content": '{"messages": [{"role": "user", "content": "hi"}], "max_tokens": 16, "model": "claude-sonnet-4-5", '
-            '"stream": true, "system": "brief", "output_config": {"effort": "low"}, "context_management": {"edits": []}}',
-        }
-    ]
+    assert order == (
+        "messages",
+        "max_tokens",
+        "model",
+        "stream",
+        "system",
+        "output_config",
+        "context_management",
+    )
 
 
 def _messages_logger() -> Logging:

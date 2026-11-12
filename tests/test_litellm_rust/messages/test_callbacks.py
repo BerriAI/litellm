@@ -564,12 +564,34 @@ def _messages_logger() -> Logging:
     )
 
 
-async def _logged_request(
+_TOOL_TURN: Final = (
+    {"role": "user", "content": "Weather in Paris?"},
+    {
+        "role": "assistant",
+        "content": [{"type": "tool_use", "id": "toolu_01Wide", "name": "get_weather", "input": {"big": _WIDE}}],
+    },
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01Wide", "content": "18C"}]},
+)
+_LOGGED_INPUT: Final = TypeAdapter(tuple[dict[str, str]])
+_DECODER: Final = json.JSONDecoder()
+_DECODED_AT: Final = TypeAdapter(tuple[object, int])
+_KEY_AT: Final = TypeAdapter(tuple[str, int])
+
+
+def _members(text: str, start: int = 1) -> tuple[tuple[str, str], ...]:
+    if text[start] == "}":
+        return ()
+    key, colon = _KEY_AT.validate_python(_DECODER.raw_decode(text, start))
+    _, end = _DECODED_AT.validate_python(_DECODER.raw_decode(text, colon + 1))
+    return ((key, text[colon + 1 : end]), *_members(text, end + (text[end] == ",")))
+
+
+async def _logged_exchange(
     server: RecordingServer,
     stream: bool,
     messages: Sequence[Mapping[str, object]] = MESSAGES,
     thinking: Mapping[str, object] | None = None,
-) -> httpx.Request:
+) -> tuple[httpx.Request, str]:
     logging_obj: Final = _messages_logger()
     if stream:
         server.enqueue(_STREAM)
@@ -584,7 +606,12 @@ async def _logged_request(
     )
     if stream:
         _ = await consume(response)
-    return _HTTPX_RESPONSE.validate_python(logging_obj.model_call_details["httpx_response"]).request
+    (logged,) = _LOGGED_INPUT.validate_python(logging_obj.model_call_details["input"])
+    assert logged["role"] == "user"
+    return (
+        _HTTPX_RESPONSE.validate_python(logging_obj.model_call_details["httpx_response"]).request,
+        logged["content"],
+    )
 
 
 @pytest.mark.asyncio
@@ -592,7 +619,7 @@ async def _logged_request(
 async def test_the_logged_provider_request_is_the_bytes_the_provider_received(
     server: RecordingServer, stream: bool
 ) -> None:
-    sent: Final = await _logged_request(server, stream)
+    sent, _ = await _logged_exchange(server, stream)
 
     assert_served_natively(server)
     assert sent.content == server.requests[0].raw_body
@@ -605,8 +632,41 @@ async def test_the_logged_provider_request_of_a_retried_call_is_the_retried_byte
 ) -> None:
     server.responses.insert(0, ResponseSpec(body=_INVALID_SIGNATURE, status=400))
 
-    sent: Final = await _logged_request(server, stream, _THINKING_REPLAY, {"type": "enabled", "budget_tokens": 2048})
+    sent, _ = await _logged_exchange(server, stream, _THINKING_REPLAY, {"type": "enabled", "budget_tokens": 2048})
 
     assert_served_natively(server, count=2)
     assert sent.content == server.requests[1].raw_body
     assert json.loads(sent.content)["messages"][1]["content"][-1]["input"] == {"big": _WIDE}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", (False, True), ids=("unary", "stream"))
+async def test_the_logged_input_holds_the_bytes_the_provider_received_in_the_handler_key_order(
+    server: RecordingServer, stream: bool
+) -> None:
+    sent, logged = await _logged_exchange(server, stream, _TOOL_TURN)
+
+    assert_served_natively(server)
+    members: Final = _members(logged)
+    assert dict(members) == dict(_members(server.requests[0].raw_body.decode()))
+    assert [name for name, _ in members][:3] == ["messages", "max_tokens", "model"]
+    assert sent.content == server.requests[0].raw_body
+    assert json.loads(logged)["messages"][1]["content"][0]["input"] == {"big": _WIDE}
+
+
+@pytest.mark.asyncio
+async def test_a_pre_api_call_edit_reaches_the_wire_but_not_the_logged_input(server: RecordingServer) -> None:
+    class Edit(CustomLogger):
+        def log_pre_api_call(self, model: str, messages: object, kwargs: dict[str, object]) -> None:
+            request_body(kwargs)["system"] = "edited"
+
+    recorder: Final = RecordingLogger()
+
+    response: Final = await call(server, system="original", callbacks=[Edit(), recorder])
+
+    assert_served_natively(server, response)
+    assert _OBJECT.validate_python(server.requests[0].body)["system"] == "edited"
+    pre_call: Final = recorder.wait_for("log_pre_api_call")[0].kwargs
+    assert isinstance(pre_call, dict)
+    (logged,) = _LOGGED_INPUT.validate_python(pre_call["input"])
+    assert json.loads(logged["content"])["system"] == "original"

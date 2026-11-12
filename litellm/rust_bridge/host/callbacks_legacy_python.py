@@ -9,8 +9,8 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import datetime
+import functools
 import inspect
-import json
 import sys
 import traceback
 import uuid
@@ -266,22 +266,18 @@ def pre_call(
     logger.pre_call(input=input, api_key=api_key, additional_args=additional_args)
 
 
-def messages_input(body: Mapping[str, object], kwargs: Mapping[str, object]) -> Sequence[Mapping[str, str]]:
+@functools.cache
+def _messages_handler_parameters() -> tuple[str, ...]:
     from litellm.messages import anthropic_messages_handler
 
+    return tuple(inspect.signature(anthropic_messages_handler).parameters)
+
+
+def messages_input_order(body: Mapping[str, object], kwargs: Mapping[str, object]) -> tuple[str, ...]:
     # Python's Messages handler builds its body as messages, max_tokens, model, then its own parameters in
     # signature order and the caller's other keywords in their order, and logs that body as serialized
-    order: Final = (
-        "messages",
-        "max_tokens",
-        "model",
-        *inspect.signature(anthropic_messages_handler).parameters,
-        *kwargs,
-        *body,
-    )
-    return [
-        {"role": "user", "content": json.dumps({name: body[name] for name in dict.fromkeys(order) if name in body})}
-    ]
+    order: Final = ("messages", "max_tokens", "model", *_messages_handler_parameters(), *kwargs, *body)
+    return tuple(name for name in dict.fromkeys(order) if name in body)
 
 
 def post_call(
