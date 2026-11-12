@@ -11,7 +11,7 @@ from pydantic import TypeAdapter
 import litellm
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.url_utils import join_api_base
-from litellm.llms.anthropic.common_utils import AnthropicError
+from litellm.llms.anthropic.common_utils import AnthropicError, AnthropicModelInfo
 from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
@@ -29,28 +29,37 @@ class _InvalidEffort:
     effort: object
 
 
-def _output_config_fields(params: Mapping[str, object]) -> Mapping[str, object]:
-    output_config: Final = params.get("output_config")
-    return _FIELDS.validate_python(output_config) if isinstance(output_config, dict) else {}
-
-
 def _without(params: Mapping[str, object], key: str) -> Mapping[str, object]:
     return {name: value for name, value in params.items() if name != key}
 
 
-def _deepseek_effort_params(params: Mapping[str, object], drop_params: bool) -> Mapping[str, object] | _InvalidEffort:
-    alias: Final = params.get("reasoning_effort")
-    output_config: Final = _output_config_fields(params)
-    effort: Final = output_config.get("effort", alias if isinstance(alias, str) else None)
-    forwarded: Final = _without(params, "reasoning_effort") if isinstance(alias, str) else dict(params)
+def _with_output_config_effort(
+    params: Mapping[str, object], alias_effort: str | None, drop_params: bool
+) -> Mapping[str, object] | _InvalidEffort:
+    output_config: Final = params.get("output_config")
+    if output_config is not None and not isinstance(output_config, dict):
+        return params
+    fields: Final = _FIELDS.validate_python(output_config or {})
+    effort: Final = fields.get("effort", alias_effort)
     if effort is None:
-        return forwarded
+        return params
     if effort in DEEPSEEK_EFFORT_LEVELS:
-        return {**forwarded, "output_config": {**output_config, "effort": effort}}
+        return {**params, "output_config": {**fields, "effort": effort}}
     if not drop_params:
         return _InvalidEffort(effort=effort)
-    remaining: Final = _without(output_config, "effort")
-    return {**_without(forwarded, "output_config"), **({"output_config": remaining} if remaining else {})}
+    remaining: Final = _without(fields, "effort")
+    return {**_without(params, "output_config"), **({"output_config": remaining} if remaining else {})}
+
+
+def _deepseek_effort_params(params: Mapping[str, object], drop_params: bool) -> Mapping[str, object] | _InvalidEffort:
+    alias: Final = params.get("reasoning_effort")
+    if not isinstance(alias, str):
+        return _with_output_config_effort(params, None, drop_params)
+    if alias in DEEPSEEK_EFFORT_LEVELS:
+        return _with_output_config_effort(_without(params, "reasoning_effort"), alias, drop_params)
+    if not drop_params:
+        return _InvalidEffort(effort=alias)
+    return _with_output_config_effort(_without(params, "reasoning_effort"), None, drop_params)
 
 
 def _custom_tool_without_type(tool: object) -> Mapping[object, object] | None:
@@ -77,11 +86,12 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
     thinking blocks in assistant history, but rejects Anthropic's explicit
     custom-tool discriminator (`{"type": "custom"}`).
 
-    It reads `thinking` and `output_config.effort` natively (ignoring
-    `budget_tokens`) and accepts any `temperature`, so the Claude-specific
-    effort and temperature reshaping is skipped. The `reasoning_effort` alias
-    becomes `output_config.effort`, and a level DeepSeek does not accept is a
-    400, or dropped under `drop_params`.
+    Its reasoning models read `thinking` and `output_config.effort` natively
+    (ignoring `budget_tokens`) and accept any `temperature`, so the
+    Claude-specific effort and temperature reshaping is skipped for them,
+    while models the cost map lists without reasoning keep the base drop. The
+    `reasoning_effort` alias becomes `output_config.effort`, and a level
+    DeepSeek does not accept is a 400, or dropped under `drop_params`.
     """
 
     @property
@@ -157,9 +167,19 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
 
     @staticmethod
     def _translate_adaptive_effort_for_non_adaptive_model(
-        model: str, optional_params: Mapping[str, object], max_tokens: int | None, custom_llm_provider: str
+        model: str,
+        optional_params: dict[str, object],  # mutable-ok: the base hook edits the request params in place
+        max_tokens: int | None,
+        custom_llm_provider: str,
     ) -> None:
-        return None
+        if AnthropicModelInfo.supports_model_capability(model, "supports_reasoning", custom_llm_provider):
+            return None
+        return AnthropicMessagesConfig._translate_adaptive_effort_for_non_adaptive_model(  # pyright: ignore[reportUnknownMemberType]  # the base hook takes a bare dict
+            model=model,
+            optional_params=optional_params,
+            max_tokens=max_tokens,
+            custom_llm_provider=custom_llm_provider,
+        )
 
     @staticmethod
     def _drop_incompatible_temperature_for_thinking(
