@@ -1069,13 +1069,13 @@ class PrometheusLogger(CustomLogger):
 
             self.litellm_dynamic_limiter_share_tokens = self._gauge_factory(
                 "litellm_dynamic_limiter_share_tokens",
-                "Dynamic rate limiter: a team's guaranteed share of a model's TPM in the current window",
+                "Dynamic rate limiter: a team's guaranteed share of a model's TPM, as of the team's last admission check",
                 labelnames=self.get_labels_for_metric("litellm_dynamic_limiter_share_tokens"),
             )
 
             self.litellm_dynamic_limiter_borrowed_tokens = self._gauge_factory(
                 "litellm_dynamic_limiter_borrowed_tokens",
-                "Dynamic rate limiter: tokens a team has used above its share in the current window",
+                "Dynamic rate limiter: tokens a team had used above its share at its last admission check",
                 labelnames=self.get_labels_for_metric("litellm_dynamic_limiter_borrowed_tokens"),
             )
 
@@ -1758,12 +1758,16 @@ class PrometheusLogger(CustomLogger):
         enum_values: Final = UserAPIKeyLabelValues(
             model_group=model_group, team=team, team_alias=team_alias, priority=priority
         )
-        labels: Final = prometheus_label_factory(
+        share_labels: Final = prometheus_label_factory(
             supported_enum_labels=self.get_labels_for_metric("litellm_dynamic_limiter_share_tokens"),
             enum_values=enum_values,
         )
-        self.litellm_dynamic_limiter_share_tokens.labels(**labels).set(share_tokens)
-        self.litellm_dynamic_limiter_borrowed_tokens.labels(**labels).set(max(0, used_tokens - share_tokens))
+        borrowed_labels: Final = prometheus_label_factory(
+            supported_enum_labels=self.get_labels_for_metric("litellm_dynamic_limiter_borrowed_tokens"),
+            enum_values=enum_values,
+        )
+        self.litellm_dynamic_limiter_share_tokens.labels(**share_labels).set(share_tokens)
+        self.litellm_dynamic_limiter_borrowed_tokens.labels(**borrowed_labels).set(max(0, used_tokens - share_tokens))
 
     def increment_dynamic_limiter_throttled(
         self,

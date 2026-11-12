@@ -721,20 +721,20 @@ class PrometheusMetricLabels:
 
     litellm_deployment_failed_fallbacks = litellm_deployment_successful_fallbacks
 
-    litellm_dynamic_limiter_share_tokens = [
+    litellm_dynamic_limiter_share_tokens: ClassVar[tuple[str, ...]] = (
         UserAPIKeyLabelNames.MODEL_GROUP.value,
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
         UserAPIKeyLabelNames.PRIORITY.value,
-    ]
+    )
 
-    litellm_dynamic_limiter_borrowed_tokens = litellm_dynamic_limiter_share_tokens
+    litellm_dynamic_limiter_borrowed_tokens: ClassVar[tuple[str, ...]] = litellm_dynamic_limiter_share_tokens
 
-    litellm_dynamic_limiter_throttled_total = [
+    litellm_dynamic_limiter_throttled_total: ClassVar[tuple[str, ...]] = (
         *litellm_dynamic_limiter_share_tokens,
         UserAPIKeyLabelNames.RATE_LIMIT_TYPE.value,
         UserAPIKeyLabelNames.RATE_LIMIT_REASON.value,
-    ]
+    )
 
     litellm_remaining_team_budget_metric = [
         UserAPIKeyLabelNames.TEAM.value,

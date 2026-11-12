@@ -110,27 +110,33 @@ class _TeamSharePlan:
         if share_tokens is None:
             return
         for logger in _prometheus_loggers():
-            logger.set_dynamic_limiter_share(
-                model_group=model,
-                team=self.share.team_id,
-                team_alias=user_api_key_dict.team_alias,
-                priority=self.share.priority,
-                share_tokens=share_tokens,
-                used_tokens=used_tokens,
-            )
+            try:
+                logger.set_dynamic_limiter_share(
+                    model_group=model,
+                    team=self.share.team_id,
+                    team_alias=user_api_key_dict.team_alias,
+                    priority=self.share.priority,
+                    share_tokens=share_tokens,
+                    used_tokens=used_tokens,
+                )
+            except Exception as error:  # noqa: BLE001 - metrics never change an admission decision
+                verbose_proxy_logger.warning("Dynamic rate limiter: share metrics failed for %s: %s", model, error)
 
     def record_throttled(
         self, user_api_key_dict: UserAPIKeyAuth, model: str, rate_limit_type: str, reason: ThrottleReason
     ) -> None:
         for logger in _prometheus_loggers():
-            logger.increment_dynamic_limiter_throttled(
-                model_group=model,
-                team=self.share.team_id,
-                team_alias=user_api_key_dict.team_alias,
-                priority=self.share.priority,
-                rate_limit_type=rate_limit_type,
-                reason=reason,
-            )
+            try:
+                logger.increment_dynamic_limiter_throttled(
+                    model_group=model,
+                    team=self.share.team_id,
+                    team_alias=user_api_key_dict.team_alias,
+                    priority=self.share.priority,
+                    rate_limit_type=rate_limit_type,
+                    reason=reason,
+                )
+            except Exception as error:  # noqa: BLE001 - metrics never change an admission decision
+                verbose_proxy_logger.warning("Dynamic rate limiter: throttle metrics failed for %s: %s", model, error)
 
 
 class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
@@ -502,6 +508,21 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             },
         )
 
+    async def _record_team_share(
+        self, plan: _TeamSharePlan, user_api_key_dict: UserAPIKeyAuth, model: str, model_tpm: int | None
+    ) -> None:
+        """Publish the team's share and borrowing. Metrics only, so a failure here never changes admission."""
+        try:
+            used_value: Final = await self._get_saturation_value_from_cache(
+                RateLimitScope(TEAM_SHARE_DESCRIPTOR_KEY, plan.descriptor["value"]).counter("tokens")
+            )
+        except Exception as error:  # noqa: BLE001 - metrics never change an admission decision
+            verbose_proxy_logger.warning("Dynamic rate limiter: could not read team usage for %s: %s", model, error)
+            return
+        plan.record(
+            user_api_key_dict, model, model_tpm, used_tokens=0 if used_value is None else int(float(used_value))
+        )
+
     async def _check_rate_limits(
         self,
         model: str,
@@ -595,15 +616,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         verbose_proxy_logger.debug("Atomic check+increment response: %s", atomic_response)
 
         if team_share_plan is not None:
-            used_value: Final = await self._get_saturation_value_from_cache(
-                RateLimitScope(TEAM_SHARE_DESCRIPTOR_KEY, team_share_plan.descriptor["value"]).counter("tokens")
-            )
-            team_share_plan.record(
-                user_api_key_dict,
-                model,
-                model_group_info.tpm,
-                used_tokens=0 if used_value is None else int(float(used_value)),
-            )
+            await self._record_team_share(team_share_plan, user_api_key_dict, model, model_group_info.tpm)
 
         if atomic_response["overall_code"] == "OVER_LIMIT":
             resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(model)

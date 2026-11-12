@@ -2038,8 +2038,20 @@ async def test_keys_outside_a_team_keep_using_the_priority_pool(monkeypatch, tea
     assert "Priority-based rate limit exceeded" in pooled.detail["error"]
 
 
+@pytest.fixture
+def fresh_prometheus_registry():
+    """PrometheusLogger pins a few metrics to the process-wide registry, so a second logger in one test run collides."""
+    from prometheus_client import REGISTRY
+
+    for collector, names in list(REGISTRY._collector_to_names.items()):
+        if any(name.startswith("litellm_") for name in names):
+            REGISTRY.unregister(collector)
+
+
 @pytest.mark.asyncio
-async def test_team_share_metrics_report_share_borrowed_and_throttle_reason(monkeypatch, team_share_settings):
+async def test_team_share_metrics_report_share_borrowed_and_throttle_reason(
+    monkeypatch, team_share_settings, fresh_prometheus_registry
+):
     from prometheus_client import CollectorRegistry
 
     from litellm.integrations.prometheus import PrometheusLogger
@@ -2069,3 +2081,35 @@ async def test_team_share_metrics_report_share_borrowed_and_throttle_reason(monk
         **labels, rate_limit_type="tokens", rate_limit_reason="over_share_saturated"
     )
     assert throttled._value.get() == 1
+
+
+@pytest.mark.asyncio
+async def test_a_failing_metrics_sink_never_changes_team_share_admission(
+    monkeypatch, team_share_settings, fresh_prometheus_registry
+):
+    from prometheus_client import CollectorRegistry
+
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
+    team_share_settings(saturation_threshold=0.5)
+    prometheus = PrometheusLogger(registry=CollectorRegistry())
+    monkeypatch.setattr(litellm, "callbacks", [prometheus])
+
+    def broken_sink(**_labels):
+        raise RuntimeError("gauge label mismatch")
+
+    monkeypatch.setattr(prometheus, "set_dynamic_limiter_share", broken_sink)
+    monkeypatch.setattr(prometheus, "increment_dynamic_limiter_throttled", broken_sink)
+    model = "team-shares-metrics-broken"
+    handler, cache = _team_share_handler(model, tpm=1000)
+    assistant = _team("assistant", "interactive")
+    state_generation = UserAPIKeyAuth(
+        team_id="state-generation", team_alias="state-gen", team_metadata={"priority": "batch"}
+    )
+
+    for team in (assistant, state_generation):
+        assert await _admit(handler, cache, model, team) is None, "an under-share team is admitted despite the sink"
+    await _spend(handler, model, state_generation, 600)
+    held = await _rejection(handler, cache, model, state_generation)
+    assert held.detail["reason"] == "over_share_saturated", "a broken metrics sink must not let the borrower through"
