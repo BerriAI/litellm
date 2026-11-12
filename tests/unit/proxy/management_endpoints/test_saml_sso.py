@@ -13,6 +13,10 @@ import logging
 import re
 import time
 from http.cookies import SimpleCookie
+from types import SimpleNamespace
+from typing import Final
+from unittest.mock import AsyncMock
+from urllib.parse import parse_qs, urlencode, urlparse
 
 import pytest
 from fastapi import HTTPException, Request
@@ -31,7 +35,8 @@ from starlette.datastructures import URL
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache
-from litellm.proxy._types import LitellmUserRoles
+from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_endpoints.sso.saml_sso import (
     _SAML_AUTHN_REQUEST_CACHE_PREFIX,
     _SAML_AUTHN_STATE_COOKIE,
@@ -633,6 +638,120 @@ async def test_build_login_redirect_targets_idp_and_caches_request_id(saml_env):
     set_cookie = redirect.headers["set-cookie"]
     assert f"{_SAML_AUTHN_STATE_COOKIE}={request_id}" in set_cookie
     assert "httponly" in set_cookie.lower()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("user_code", "relay_override", "sign"),
+    [
+        (None, None, True),
+        ("ABCD-EFGH", None, True),
+        (None, "litellm-session-token:", True),
+        (None, "litellm-session-token:cli-never-issued-session-00", True),
+        (None, None, False),
+    ],
+)
+async def test_saml_cli_device_login_completes_after_signed_assertion(
+    saml_env, monkeypatch, user_code, relay_override, sign
+):
+    from litellm.proxy import proxy_server
+    from litellm.proxy.management_endpoints.ui_sso import (
+        _get_cli_sso_flow_cache_key,
+        google_login,
+        saml_callback,
+    )
+
+    key_pem, cert_pem = saml_env
+    login_id: Final = "cli-saml-device-login-0001"
+    cli_cache: Final = DualCache()
+    flow_key: Final = _get_cli_sso_flow_cache_key(login_id)
+    cli_cache.set_cache(key=flow_key, value={"poll_secret_hash": "hash", "code_challenge": "pkce-challenge"})
+    user_cache: Final = UserApiKeyCache()
+    user_cache.set_cache(
+        key="alice@example.com",
+        value=LiteLLM_UserTable(user_id="alice@example.com", user_email="alice@example.com", teams=[]),
+    )
+    monkeypatch.setattr(proxy_server, "cli_sso_session_cache", cli_cache)
+    monkeypatch.setattr(proxy_server, "saml_sso_cache", _shared_cache())
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", user_cache)
+    monkeypatch.setattr(
+        proxy_server,
+        "prisma_client",
+        SimpleNamespace(
+            db=SimpleNamespace(
+                litellm_usertable=SimpleNamespace(update_many=AsyncMock()),
+            )
+        ),
+    )
+    monkeypatch.setattr(proxy_server, "master_key", "sk-test-master")
+    monkeypatch.setattr(proxy_server, "general_settings", {"allow_cli_sso_verification_uri_complete": True})
+    monkeypatch.setattr(proxy_server, "user_custom_ui_sso_sign_in_handler", None)
+    for name in ("MICROSOFT_CLIENT_ID", "GOOGLE_CLIENT_ID", "GENERIC_CLIENT_ID", "DISABLE_ADMIN_UI"):
+        monkeypatch.delenv(name, raising=False)
+
+    request: Final = Request(
+        {
+            "type": "http",
+            "scheme": "https",
+            "server": ("proxy.example.com", 443),
+            "path": "/sso/key/generate",
+            "query_string": b"",
+            "headers": [],
+        }
+    )
+    redirect: Final = await google_login(request, source="litellm-cli", key=login_id, user_code=user_code)
+    relay: Final = parse_qs(urlparse(redirect.headers["location"]).query)["RelayState"][0]
+    assert relay == f"litellm-session-token:{login_id}" + (f":{user_code}" if user_code else "")
+    ticket: Final = SimpleCookie(redirect.headers["set-cookie"])[_SAML_AUTHN_STATE_COOKIE].value
+    signed: Final = _build_signed_response(key_pem, cert_pem, in_response_to=ticket, sign=sign)
+    body: Final = urlencode({"SAMLResponse": _b64(signed), "RelayState": relay_override or relay}).encode()
+
+    async def receive():
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    callback: Final = Request(
+        {
+            "type": "http",
+            "scheme": "https",
+            "server": ("proxy.example.com", 443),
+            "path": "/sso/saml/callback",
+            "query_string": b"",
+            "headers": [
+                (b"cookie", f"{_SAML_AUTHN_STATE_COOKIE}={ticket}".encode()),
+                (b"content-type", b"application/x-www-form-urlencoded"),
+            ],
+        },
+        receive,
+    )
+    if relay_override is not None or not sign:
+        with pytest.raises(HTTPException):
+            await saml_callback(callback)
+        assert "sso_complete" not in cli_cache.get_cache(key=flow_key)
+        return
+    response: Final = await saml_callback(callback)
+    completed: Final = cli_cache.get_cache(key=flow_key)
+    assert completed["sso_complete"] is True
+    assert completed["session_data"]["user_id"] == "alice@example.com"
+    assert completed["code_challenge"] == "pkce-challenge"
+    assert response.status_code == 200
+    assert f"sso/cli/complete/{login_id}" in response.body.decode()
+    if user_code:
+        assert f'value="{user_code}"' in response.body.decode()
+
+
+@pytest.mark.asyncio
+async def test_saml_ui_login_preserves_return_to(saml_env, monkeypatch):
+    from litellm.proxy import proxy_server
+    from litellm.proxy.management_endpoints.ui_sso import google_login
+
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace())
+    monkeypatch.setattr(proxy_server, "master_key", "sk-test-master")
+    monkeypatch.setattr(proxy_server, "saml_sso_cache", _shared_cache())
+    monkeypatch.setattr(proxy_server, "user_custom_ui_sso_sign_in_handler", None)
+    for name in ("MICROSOFT_CLIENT_ID", "GOOGLE_CLIENT_ID", "GENERIC_CLIENT_ID", "DISABLE_ADMIN_UI"):
+        monkeypatch.delenv(name, raising=False)
+    response: Final = await google_login(_fake_request(), return_to="/ui/?tab=keys")
+    assert parse_qs(urlparse(response.headers["location"]).query)["RelayState"] == ["/ui/?tab=keys"]
 
 
 @pytest.mark.asyncio
