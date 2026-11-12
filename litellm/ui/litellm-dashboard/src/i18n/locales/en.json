@@ -8131,7 +8131,6 @@
         "toolPolicies": "Tool Policies",
         "usage": "Usage",
         "alerts": "Alerts",
-        "modelLeaderboard": "Model Leaderboard",
         "costOptimization": "Cost Optimization",
         "logs": "Logs",
         "lens": "Lens",
@@ -8178,7 +8177,6 @@
       "newUsage": "View usage analytics and metrics",
       "alerts": "Review and resolve model deprecation alerts across keys and teams",
       "costOptimization": "Track and configure cost-saving features: prompt compression, caching, and auto routing",
-      "modelInsights": "Model Leaderboard: compare usage, spend, tokens, and task mix across this gateway",
       "logs": "Access request and response logs",
       "lens": "Review agent activity and investigate patterns with supporting evidence",
       "guardrailsMonitor": "Monitor guardrail performance and view logs",
@@ -19965,38 +19963,6 @@
       "added": "Alias added successfully",
       "updated": "Alias updated successfully",
       "deleted": "Alias deleted successfully"
-    }
-  },
-  "modelInsights": {
-    "modelInsightsView": {
-      "granularity": {
-        "day": "Daily",
-        "week": "Weekly"
-      },
-      "metrics": {
-        "requests": "requests",
-        "spend": "spend",
-        "tokens": "tokens"
-      },
-      "byProvider": "by {{provider}}",
-      "loadError": "Could not load model insights",
-      "title": "Model Leaderboard",
-      "description": "See which models your gateway used from {{start}} through {{end}}",
-      "topModels": {
-        "title": "Top models",
-        "description": "{{granularity}} {{metric}} across your gateway"
-      },
-      "bucketSize": "Bucket size",
-      "gatewayTotal": "Gateway total",
-      "leaderboard": {
-        "title": "Leaderboard",
-        "description": "Share of {{metric}}, with the change between the first and second half of the period"
-      },
-      "costPerSession": {
-        "title": "Cost per session",
-        "description": "Session cost is not estimated from request counts",
-        "hint": "Add a stable session_id to requests to unlock accurate session-level model comparisons in a future bounded session rollup"
-      }
     }
   },
   "transformRequest": {
