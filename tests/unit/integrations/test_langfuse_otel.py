@@ -20,6 +20,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from opentelemetry.trace import Span
 
 import litellm
+from litellm.integrations._types.open_inference import SpanAttributes
 from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL, REDACTED_BY_LITELLM
 from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
 from litellm.integrations.langfuse.langfuse_otel_attributes import LangfuseLLMObsOTELAttributes
@@ -28,7 +29,20 @@ from litellm.integrations.otel.model.destination import OtelDestination
 from litellm.integrations.otel.plumbing.context import set_request_destinations
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.openai import ResponsesAPIResponse
-from litellm.types.utils import Choices, ModelResponse, StandardCallbackDynamicParams
+from litellm.types.utils import Choices, Message, ModelResponse, StandardCallbackDynamicParams
+
+CHAT_MESSAGE_DICTS: Final = ({"role": "user", "content": "hello"}, {"role": "assistant", "content": "hi back"})
+CHAT_MESSAGE_OBJECTS: Final = tuple(
+    Message(role=message["role"], content=message["content"]) for message in CHAT_MESSAGE_DICTS
+)
+NOT_JSON_ENCODABLE: Final = object()
+NON_UTF8_BYTES: Final = b"\x80"
+GENERATION_USAGE_AND_PARAM_KEYS: Final = (
+    SpanAttributes.LLM_TOKEN_COUNT_PROMPT,
+    SpanAttributes.LLM_TOKEN_COUNT_COMPLETION,
+    SpanAttributes.LLM_TOKEN_COUNT_TOTAL,
+    SpanAttributes.LLM_INVOCATION_PARAMETERS,
+)
 
 
 class TestLangfuseOtelIntegration:
@@ -139,6 +153,52 @@ class TestLangfuseOtelIntegration:
             mock_span.set_attribute.assert_any_call(
                 "langfuse.observation.type", "generation"
             )
+
+    @pytest.mark.parametrize(
+        ("messages", "expected_input"),
+        [
+            (CHAT_MESSAGE_DICTS, list(CHAT_MESSAGE_DICTS)),
+            (CHAT_MESSAGE_OBJECTS, [message.model_dump() for message in CHAT_MESSAGE_OBJECTS]),
+            (
+                (Message(role="user", content="hello", trace_handle=NOT_JSON_ENCODABLE),),
+                [{**CHAT_MESSAGE_OBJECTS[0].model_dump(), "trace_handle": str(NOT_JSON_ENCODABLE)}],
+            ),
+            (
+                (Message(role="user", content="hello", audio_bytes=NON_UTF8_BYTES),),
+                [{**CHAT_MESSAGE_OBJECTS[0].model_dump(), "audio_bytes": str(NON_UTF8_BYTES)}],
+            ),
+        ],
+        ids=[
+            "dict_messages",
+            "litellm_message_objects",
+            "litellm_message_with_value_json_cannot_encode",
+            "litellm_message_with_non_utf8_bytes",
+        ],
+    )
+    def test_generation_keeps_input_model_params_and_token_usage(
+        self, messages: Sequence[object], expected_input: Sequence[object]
+    ) -> None:
+        span: Final = TracerProvider().get_tracer("langfuse-otel-tests").start_span("litellm_request")
+        response: Final = ModelResponse(
+            model="gpt-4o",
+            choices=[{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "done"}}],
+            usage={"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10},
+        )
+
+        LangfuseOtelLogger.set_langfuse_otel_attributes(
+            span,
+            {"messages": messages, "standard_logging_object": {"model_parameters": {"temperature": 0.2}}},
+            response,
+        )
+
+        attributes: Final = span.attributes or {}
+        assert json.loads(str(attributes["langfuse.observation.input"])) == expected_input
+        assert {key: attributes.get(key) for key in GENERATION_USAGE_AND_PARAM_KEYS} == {
+            SpanAttributes.LLM_TOKEN_COUNT_PROMPT: 7,
+            SpanAttributes.LLM_TOKEN_COUNT_COMPLETION: 3,
+            SpanAttributes.LLM_TOKEN_COUNT_TOTAL: 10,
+            SpanAttributes.LLM_INVOCATION_PARAMETERS: json.dumps({"temperature": 0.2}),
+        }
 
     def test_set_langfuse_environment_attribute(self):
         """Test that Langfuse environment is set correctly when environment variable is present."""

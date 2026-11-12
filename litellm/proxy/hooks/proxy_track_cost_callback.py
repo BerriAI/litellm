@@ -425,7 +425,7 @@ class _ProxyDBLogger(CustomLogger):
     async def async_log_success_event(
         self, kwargs: ObjectMapping, response_obj: object, start_time: datetime, end_time: datetime
     ) -> None:
-        if self.spend_event_producer is None or not is_offloadable_success(response_obj, kwargs.get("call_type")):
+        if self.spend_event_producer is None or not is_offloadable_success(response_obj, kwargs):
             await self._PROXY_track_cost_callback(dict(kwargs), response_obj, start_time, end_time)
             return
         event: Final = build_spend_event(
@@ -479,15 +479,20 @@ class _ProxyDBLogger(CustomLogger):
             return
 
         request_route: Final = user_api_key_dict.request_route
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import InitPassThroughEndpointHelpers
+
+        route_is_trackable: Final = (
+            request_route is None
+            or RouteChecks.is_llm_api_route(route=request_route)
+            or RouteChecks.is_info_route(route=request_route)
+            or InitPassThroughEndpointHelpers.has_configured_route_ignoring_trailing_slash(route=request_route)
+        )
         if (
             ProxyDBLogger._should_track_errors_in_db() is False
             and not completed_cost
             or ProxyDBLogger._skips_pre_routing_rejections()
             and is_pre_routing_rejection(original_exception, _REQUEST_DATA.validate_python(request_data))
-            or request_route is not None
-            and not (
-                RouteChecks.is_llm_api_route(route=request_route) or RouteChecks.is_info_route(route=request_route)
-            )
+            or not route_is_trackable
             or request_route is not None
             and RouteChecks.is_dashboard_session_info_route(request_route, user_api_key_dict.team_id)
         ):

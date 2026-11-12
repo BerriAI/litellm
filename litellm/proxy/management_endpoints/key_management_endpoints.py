@@ -20,13 +20,13 @@ import secrets
 import traceback
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
-from types import MappingProxyType
+from types import MappingProxyType, TracebackType
 from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeVar, cast
 
 import fastapi
 import yaml
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
-from pydantic import TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -68,9 +68,14 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     evict_and_broadcast,
 )
-from litellm.proxy.common_utils.callback_config_validation import logging_metadata_config_error
+from litellm.proxy.common_utils.callback_config_validation import (
+    credential_reference_rejection,
+    logging_metadata_config_error,
+)
 from litellm.proxy.common_utils.callback_utils import (
     decrypt_callback_vars,
+    decrypted_callback_metadata,
+    decrypted_logging_entries,
     encrypt_callback_vars,
 )
 from litellm.proxy.common_utils.config_sync_pubsub import (
@@ -79,8 +84,9 @@ from litellm.proxy.common_utils.config_sync_pubsub import (
 )
 from litellm.proxy.common_utils.openai_error_payload import openai_error_param, proxy_exception_for
 from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_keys
-from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time, keeps_due_budget_reset
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache, is_user_key_cache_key
+from litellm.proxy.guardrails.guardrail_helpers import validate_guardrail_names
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import build_model_max_budget_usage
 from litellm.proxy.management.teams.authz import TEAM_ADMIN_ONLY, TEAM_OR_ORG_ADMIN, is_team_admin
@@ -240,13 +246,20 @@ class _UserRowLike(Protocol):
 
 
 class _TxTables(Protocol):
-    litellm_proxymodeltable: TableActions[object]
+    @property
+    def litellm_proxymodeltable(self) -> TableActions[object]: ...
 
 
 class _ModelReencryptTransaction(Protocol):
     async def __aenter__(self) -> _TxTables: ...
 
-    async def __aexit__(self, *exc_info: object) -> None: ...
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+        /,
+    ) -> None: ...
 
 
 class _ModelParamsUpdate(TypedDict):
@@ -264,6 +277,12 @@ class _KeyUpdateResult(TypedDict):
 
 class _StoredKeyRouterSettings(LiteLLMBaseModel):
     router_settings: Mapping[str, object] | None = None
+
+
+class _StoredKeyMetadata(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    metadata: object = None
 
 
 class _KeyRowWhere(TypedDict):
@@ -934,6 +953,23 @@ def raise_on_invalid_key_logging_config(metadata: Mapping[str, object] | None) -
         raise HTTPException(status_code=400, detail={"error": error})
 
 
+def raise_on_logging_credential_change(
+    requested_metadata: object, existing_key_row: LiteLLM_VerificationToken | None, user_api_key_dict: UserAPIKeyAuth
+) -> None:
+    stored_metadata: Final = (
+        None
+        if existing_key_row is None
+        else _StoredKeyMetadata.model_validate(existing_key_row, from_attributes=True).metadata
+    )
+    rejection: Final = credential_reference_rejection(
+        decrypted_callback_metadata(requested_metadata),
+        decrypted_logging_entries(stored_metadata),
+        is_proxy_admin=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
+    )
+    if rejection is not None:
+        raise HTTPException(status_code=rejection.status_code, detail={"error": rejection.message})
+
+
 def common_key_access_checks(
     user_api_key_dict: UserAPIKeyAuth,
     data: GenerateKeyRequest | UpdateKeyRequest,
@@ -1485,6 +1521,7 @@ async def _common_key_generation_helper(
 
     validate_budget_duration(data.budget_duration)
     raise_on_invalid_key_logging_config(data.metadata)
+    raise_on_logging_credential_change(data.metadata, None, user_api_key_dict)
 
     if data.throttle_on_budget_exceeded is True and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
         raise HTTPException(
@@ -1579,6 +1616,7 @@ async def _common_key_generation_helper(
         _requested_metadata,
         user_api_key_dict,
     )
+    await validate_guardrail_names(data.guardrails, _requested_metadata, None, prisma_client, license_first=True)
 
     # APPLY ENTERPRISE KEY MANAGEMENT PARAMS
     try:
@@ -3087,11 +3125,11 @@ async def prepare_key_update_data(
             non_default_values["budget_duration"] = None
             non_default_values["budget_reset_at"] = None
         elif isinstance(budget_duration, str) and len(budget_duration) > 0:
-            from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-
-            key_reset_at: Final = get_budget_reset_time(budget_duration=budget_duration)
-            non_default_values["budget_reset_at"] = key_reset_at
             non_default_values["budget_duration"] = budget_duration
+            if not keeps_due_budget_reset(
+                budget_duration, existing_key_row.budget_duration, existing_key_row.budget_reset_at
+            ):
+                non_default_values["budget_reset_at"] = get_budget_reset_time(budget_duration=budget_duration)
 
     if "budget_limits" in non_default_values:
         requested_windows: Final = _budget_limit_windows(data.budget_limits)
@@ -3367,6 +3405,13 @@ async def _process_single_key_update(
         user_api_key_dict,
         existing_metadata=existing_key_row.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
     )
+    await validate_guardrail_names(
+        update_key_request.guardrails,
+        update_key_request.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+        existing_key_row.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
+        prisma_client,
+        license_first=True,
+    )
 
     # Custom key update hook
     if user_custom_key_update is not None:
@@ -3430,6 +3475,7 @@ async def _process_single_key_update(
     )
 
     # Prepare update data
+    raise_on_logging_credential_change(key_request.metadata, existing_key_row, user_api_key_dict)
     non_default_values = await prepare_key_update_data(
         data=key_request, existing_key_row=existing_key_row, prisma_client=prisma_client, llm_router=llm_router
     )
@@ -3920,6 +3966,13 @@ async def _validate_update_key_data(
         user_api_key_dict,
         existing_metadata=existing_key_row.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
     )
+    await validate_guardrail_names(
+        data.guardrails,
+        data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+        existing_key_row.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
+        checked_prisma_client,
+        license_first=True,
+    )
 
     # Check team limits if key has a team_id (from request or existing key)
     team_obj: LiteLLM_TeamTableCachedObj | None = None
@@ -4176,6 +4229,7 @@ async def update_key_fn(
 
         # Enforce upperbound key params on update (don't fill defaults)
         _enforce_upperbound_key_params(data, fill_defaults=False)
+        raise_on_logging_credential_change(data.metadata, existing_key_row, user_api_key_dict)
         non_default_values: Final = await prepare_key_update_data(
             data=data, existing_key_row=existing_key_row, prisma_client=prisma_client, llm_router=llm_router
         )
@@ -6363,6 +6417,7 @@ async def _execute_virtual_key_regeneration(
             await _enforce_custom_key_update_policy(hook=_custom_key_update_hook(proxy_server), data=update_request)
         # Enforce upperbound key params on regenerate (don't fill defaults)
         _enforce_upperbound_key_params(data, fill_defaults=False)
+        raise_on_logging_credential_change(data.metadata, key_in_db, user_api_key_dict)
         non_default_values = await prepare_key_update_data(
             data=data, existing_key_row=key_in_db, prisma_client=prisma_client, llm_router=llm_router
         )
@@ -6712,6 +6767,13 @@ async def regenerate_key_fn(
             data,
             user_api_key_dict,
             existing_metadata=_key_in_db.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
+        )
+        await validate_guardrail_names(
+            data.guardrails if data is not None else None,
+            data.metadata if data is not None else None,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+            _key_in_db.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
+            prisma_client,
+            license_first=True,
         )
 
         if data is not None and (data.access_group_ids or data.object_permission is not None):

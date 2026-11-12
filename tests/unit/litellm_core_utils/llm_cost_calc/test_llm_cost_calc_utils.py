@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     apply_off_peak_pricing,
     apply_provider_cache_read_default,
     calculate_cache_writing_cost,
+    calculate_image_response_cost_from_usage,
     generic_cost_per_token,
     get_billed_token_rates,
     get_regional_uplift_multiplier,
@@ -27,6 +28,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
 from litellm.llms.gemini.image_generation.cost_calculator import (
     cost_calculator as gemini_image_generation_cost_calculator,
 )
+from litellm.llms.gemini.image_usage_transformation import transform_gemini_image_usage
 from litellm.llms.vertex_ai.image_generation.cost_calculator import (
     cost_calculator as vertex_image_generation_cost_calculator,
 )
@@ -3511,6 +3513,48 @@ def test_token_type_cost_breakdown_applies_anthropic_geo_multiplier(_local_model
     assert text_output_cost + geo.reasoning_cost == pytest.approx(completion_cost)
 
 
+@pytest.mark.parametrize("has_image", [False, True])
+@pytest.mark.parametrize("thoughts", [0, 40])
+@pytest.mark.parametrize("gemini_usage", [False, True])
+@pytest.mark.parametrize("explicit_breakdown", [False, True])
+def test_image_response_unitemized_output_uses_returned_images(
+    has_image: bool, thoughts: int, gemini_usage: bool, explicit_breakdown: bool
+) -> None:
+    prices: Final[ModelInfo] = {
+        "input_cost_per_token": 2e-6,
+        "output_cost_per_token": 3e-6,
+        "output_cost_per_image_token": 7e-5,
+    }
+    response: Final = ImageResponse(
+        data=[ImageObject(b64_json="x")] if has_image else [],
+        usage=transform_gemini_image_usage(
+            {
+                "promptTokenCount": 5,
+                "candidatesTokenCount": 25,
+                "thoughtsTokenCount": thoughts,
+                "totalTokenCount": 30 + thoughts,
+                **({"candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 25}]} if explicit_breakdown else {}),
+            }
+        )
+        if gemini_usage
+        else ImageUsage(
+            input_tokens=5,
+            input_tokens_details=ImageUsageInputTokensDetails(text_tokens=5, image_tokens=0),
+            output_tokens=25 + thoughts,
+            total_tokens=30 + thoughts,
+            **(
+                {"output_tokens_details": {"text_tokens": 25, "image_tokens": 0, "reasoning_tokens": thoughts}}
+                if explicit_breakdown
+                else {"output_tokens_details": {"reasoning_tokens": thoughts}}
+            ),
+        ),
+    )
+    expected_output_rate: Final = 7e-5 if has_image and not explicit_breakdown else 3e-6
+    assert calculate_image_response_cost_from_usage(
+        model="gemini-image-test", image_response=response, custom_llm_provider="gemini", model_info=prices
+    ) == pytest.approx(5 * 2e-6 + 25 * expected_output_rate + thoughts * 3e-6)
+
+
 @pytest.mark.parametrize("details_as_dict", [True, False])
 def test_image_response_input_image_tokens_priced_at_image_rate(details_as_dict):
     """
@@ -4161,6 +4205,23 @@ def test_get_batch_cost_rates_parses_string_rates():
     )
 
     assert (rates.input, rates.output, rates.cache_read) == (2e-6, 6e-6, 2e-7)
+
+
+def test_get_batch_cost_rates_reads_the_batch_cached_image_rate_for_the_crossed_tier():
+    from litellm.litellm_core_utils.llm_cost_calc.utils import get_batch_cost_rates
+
+    rates = get_batch_cost_rates(
+        _batch_rates_model_info(
+            input_cost_per_token_batches=2.5e-6,
+            cache_read_input_image_token_cost=2e-6,
+            cache_read_input_image_token_cost_batches=1e-6,
+            cache_read_input_image_token_cost_above_272k_tokens_batches=1.5e-6,
+        ),
+        Usage(prompt_tokens=300_000, completion_tokens=1, total_tokens=300_001),
+        "openai",
+    )
+
+    assert rates.cache_read_image == 1.5e-6
 
 
 def test_get_batch_cost_rates_falls_back_to_the_flat_rates_when_tier_rates_are_unparsable():

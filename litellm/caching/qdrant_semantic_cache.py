@@ -41,6 +41,7 @@ from .base_cache import BaseCache
 
 _WAIT_FOR_INDEXING: Final = MappingProxyType({"wait": "true"})
 _EMBEDDING_VECTOR: Final = TypeAdapter(object)
+_CACHED_RESPONSE: Final = TypeAdapter(object)
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -175,14 +176,13 @@ class QdrantSemanticCache(BaseCache):
             else:
                 raise Exception("Error while creating new collection")
 
-    def _get_cache_logic(self, cached_response: Any):
+    def _get_cache_logic(self, cached_response: Any) -> object:
         if cached_response is None:
             return cached_response
         try:
-            cached_response = json.loads(cached_response)  # Convert string to dictionary
+            return _CACHED_RESPONSE.validate_python(json.loads(cached_response))
         except Exception:
-            cached_response = ast.literal_eval(cached_response)
-        return cached_response
+            return _CACHED_RESPONSE.validate_python(ast.literal_eval(cached_response))
 
     def _get_qdrant_cache_key_filter(self, key: str) -> dict:
         return {

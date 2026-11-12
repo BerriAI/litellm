@@ -2,6 +2,7 @@ import asyncio
 import contextvars
 import copy
 import datetime
+import time
 import gzip
 import json
 from collections.abc import AsyncIterable, Awaitable, Coroutine, Mapping
@@ -1018,6 +1019,49 @@ class TestProxyBaseLLMRequestProcessing:
             proxy_logging_obj=mock_proxy_logging_obj,
         )
         tag_budget_check.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "http_method, route, route_type, expect_rejected",
+        [
+            ("GET", "/v1/videos/video_abc", "avideo_status", False),
+            ("GET", "/videos/video_abc/content", "avideo_content", False),
+            ("POST", "/v1/videos", "avideo_generation", True),
+            ("POST", "/v1/videos/video_abc/remix", "avideo_remix", True),
+            ("GET", "/v1/videos", "avideo_list", True),
+        ],
+    )
+    async def test_common_processing_pre_call_logic_spares_only_video_retrieval_from_exhausted_guardrail_tags(
+        self, monkeypatch: pytest.MonkeyPatch, http_method: str, route: str, route_type: str, expect_rejected: bool
+    ) -> None:
+        processing_obj, mock_request, mock_proxy_logging_obj, mock_proxy_config, tag_budget_check = (
+            self._guardrail_tag_budget_harness(
+                monkeypatch,
+                request_body={"model": "paid-model", "metadata": {"tags": ["existing-tag"]}},
+                guardrail_tags=["guardrail-tag"],
+                route=route,
+            )
+        )
+        tag_budget_check.side_effect = litellm.BudgetExceededError(current_cost=0.4, max_budget=0.3)
+        mock_request.method = http_method
+
+        async def pre_call() -> None:
+            await processing_obj.common_processing_pre_call_logic(
+                request=mock_request,
+                general_settings={},
+                user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+                proxy_logging_obj=mock_proxy_logging_obj,
+                proxy_config=mock_proxy_config,
+                route_type=route_type,
+                llm_router=self._router_with_free_and_paid_models(),
+            )
+
+        if not expect_rejected:
+            await pre_call()
+            return
+        with pytest.raises(ProxyException) as exc_info:
+            await pre_call()
+        assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
 
     @pytest.mark.asyncio
     async def test_enforce_guardrail_added_tag_budgets_raises_budget_exceeded_proxy_exception(self, monkeypatch):
@@ -5447,6 +5491,29 @@ class TestHandleLLMApiExceptionFramingHeaders:
         assert proxy_exc.headers["x-request-id"] == "abc-123"
 
 
+class _FakeClock:
+    """Hand-advanced stand-in for time.perf_counter, so the hook's cost is exact and no real time passes."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+class _TimeWithFakeClock:
+    """The module's `time` with perf_counter swapped for the fake clock, everything else untouched."""
+
+    def __init__(self, clock: _FakeClock) -> None:
+        self.perf_counter = clock
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(time, name)
+
+
 class TestAsyncStreamingDataGeneratorFastPath:
     """Fast/slow path branching in async_streaming_data_generator."""
 
@@ -5513,6 +5580,62 @@ class TestAsyncStreamingDataGeneratorFastPath:
 
         assert len(out) == 1
         hook_spy.assert_awaited_once()
+
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    @pytest.mark.asyncio
+    async def test_slow_path_records_first_chunk_work_on_the_logging_object(self, monkeypatch: pytest.MonkeyPatch):
+        """The overhead header is stamped before any chunk is read, so the time the proxy spends in
+        the hook on the first chunk is recorded on the logging object for the success callback to add.
+        Later chunks are not summed, a 20 ms hook on 3 chunks delays the client by 20 ms, not 60, and a
+        keepalive ping that arrives before any provider output is not the first chunk."""
+        import litellm.proxy.common_request_processing as common_request_processing_module
+
+        clock: Final = _FakeClock()
+        monkeypatch.setattr(common_request_processing_module, "time", _TimeWithFakeClock(clock))
+
+        class _SlowStreamingCb(CustomLogger):
+            async def async_post_call_streaming_hook(
+                self, user_api_key_dict: UserAPIKeyAuth, response: object
+            ) -> object:
+                clock.advance(0.5 if response == STREAM_SSE_KEEPALIVE_PING_BYTES else 0.02)
+                return response
+
+        monkeypatch.setattr(litellm, "callbacks", [_SlowStreamingCb()])
+        ProxyLogging._callback_capabilities_cache.clear()
+
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=MagicMock())
+        logging_obj = Logging(
+            model="claude-x",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="completion",
+            start_time=datetime.datetime.now(),
+            litellm_call_id="call-stream",
+            function_id="fn",
+        )
+        chunks = [
+            STREAM_SSE_KEEPALIVE_PING_BYTES,
+            *(
+                ModelResponseStream(choices=[StreamingChoices(delta=Delta(content=word))])
+                for word in ("Hello", " world", " more")
+            ),
+        ]
+
+        out = [
+            c
+            async for c in ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+                response=self._aiter(chunks),
+                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+                request_data={"model": "claude-x", "litellm_logging_obj": logging_obj},
+                proxy_logging_obj=proxy_logging_obj,
+                serialize_chunk=ProxyBaseLLMRequestProcessing.return_sse_chunk,
+                serialize_error=lambda e: "data: error\n\n",
+            )
+        ]
+
+        assert len(out) == len(chunks)
+        assert logging_obj.first_chunk_overhead_ms == pytest.approx(20.0)
 
         ProxyLogging._callback_capabilities_cache.clear()
 
@@ -11528,6 +11651,69 @@ async def test_a_broken_hook_does_not_replace_the_real_error_with_its_own_bug():
     assert "audit backend" not in collected[-2].decode()
 
 
+async def _block_once_released(release: asyncio.Event) -> Response:
+    await release.wait()
+    raise ModifyResponseException(
+        message="blocked by policy", model="gpt-4o", request_data={"stream": True}, guardrail_name="g"
+    )
+
+
+async def _drain_releasing(response: StreamingResponse, release: asyncio.Event) -> tuple[bytes, ...]:
+    async def chunks() -> AsyncGenerator[bytes, None]:
+        async for chunk in response.body_iterator:
+            release.set()
+            yield chunk if isinstance(chunk, bytes) else str(chunk).encode()
+
+    return tuple([chunk async for chunk in chunks()])
+
+
+@pytest.mark.asyncio
+async def test_a_late_passthrough_block_streams_the_routes_block_response_instead_of_an_error_frame():
+    block_frames: Final = ('data: {"choices": [{"delta": {"content": "blocked by policy"}}]}\n\n', "data: [DONE]\n\n")
+    release: Final = asyncio.Event()
+    stream_block: Final = AsyncMock(side_effect=lambda _block: _sse_response(block_frames))
+    record_failure: Final = AsyncMock(return_value=None)
+
+    response: Final = await open_sse_before_first_byte(
+        _block_once_released(release),
+        ping_interval_seconds=0.05,
+        on_late_failure=record_failure,
+        on_passthrough_block=stream_block,
+    )
+    collected: Final = await _drain_releasing(response, release)
+
+    assert collected[0] == TTFT_PING
+    assert [chunk for chunk in collected if chunk != TTFT_PING] == [frame.encode() for frame in block_frames]
+    assert [call.args[0].message for call in stream_block.await_args_list] == ["blocked by policy"]
+    record_failure.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_late_passthrough_block_on_a_route_without_a_block_stream_still_ends_the_stream():
+    release: Final = asyncio.Event()
+    response: Final = await open_sse_before_first_byte(_block_once_released(release), ping_interval_seconds=0.05)
+    collected: Final = await _drain_releasing(response, release)
+
+    assert collected[0] == TTFT_PING
+    assert "error" in json.loads(collected[-2].decode().removeprefix("data: ").strip())
+    assert collected[-1] == b"data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_a_late_passthrough_block_whose_block_stream_fails_still_ends_the_stream():
+    release: Final = asyncio.Event()
+    broken_block_stream: Final = AsyncMock(side_effect=RuntimeError("block stream unavailable"))
+
+    response: Final = await open_sse_before_first_byte(
+        _block_once_released(release), ping_interval_seconds=0.05, on_passthrough_block=broken_block_stream
+    )
+    collected: Final = await _drain_releasing(response, release)
+
+    assert collected[0] == TTFT_PING
+    assert "error" in json.loads(collected[-2].decode().removeprefix("data: ").strip())
+    assert collected[-1] == b"data: [DONE]\n\n"
+
+
 @pytest.mark.parametrize(
     "exc,expect_traceback",
     [
@@ -13662,3 +13848,38 @@ class TestTotalTimeout:
         assert not prepared
         assert not called
         assert elapsed < 120
+
+
+@pytest.mark.parametrize("router_attempted_fallbacks", (0, 1))
+def test_get_custom_headers_count_a_quota_fallback_and_name_its_reason(router_attempted_fallbacks: int) -> None:
+    auth: Final = ProxyUserAPIKeyAuth(api_key="sk-quota-fallback", tpm_limit=None, rpm_limit=None, max_budget=None)
+    request_data: Final = {
+        "model": "luna",
+        "metadata": {"rate_limit_fallback": {"original_model_group": "opus", "descriptor_key": "model_per_key"}},
+    }
+
+    custom_headers: Callable[..., dict[str, str]] = ProxyBaseLLMRequestProcessing.get_custom_headers
+    headers: Final = custom_headers(
+        user_api_key_dict=auth,
+        call_id="quota-fallback",
+        request_data=request_data,
+        **{"x-litellm-attempted-fallbacks": router_attempted_fallbacks},
+    )
+
+    assert headers["x-litellm-attempted-fallbacks"] == str(router_attempted_fallbacks + 1)
+    assert headers["x-litellm-fallback-reason"] == "rate_limit:model_per_key"
+
+
+def test_get_custom_headers_leave_a_plain_request_without_a_fallback_reason() -> None:
+    auth: Final = ProxyUserAPIKeyAuth(api_key="sk-no-fallback", tpm_limit=None, rpm_limit=None, max_budget=None)
+
+    custom_headers: Callable[..., dict[str, str]] = ProxyBaseLLMRequestProcessing.get_custom_headers
+    headers: Final = custom_headers(
+        user_api_key_dict=auth,
+        call_id="no-fallback",
+        request_data={"model": "opus", "metadata": {}},
+        **{"x-litellm-attempted-fallbacks": 0},
+    )
+
+    assert headers["x-litellm-attempted-fallbacks"] == "0"
+    assert "x-litellm-fallback-reason" not in headers
