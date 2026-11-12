@@ -39,16 +39,19 @@ def _respond(request: Request) -> Reply:
 @pytest.fixture(scope="module")
 def saturated_model(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[Gateway, str]]:
     directory: Final = tmp_path_factory.mktemp("recovery-window")
-    configuration: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
-    configuration["litellm_settings"] = {
-        **configuration["litellm_settings"],
-        "callbacks": ["dynamic_rate_limiter_v3"],
-        "priority_reservation": {"interactive": 0.6, "batch": 0.4},
-        "priority_reservation_settings": {
-            "default_priority": 1.0,
-            "saturation_threshold": 0.5,
-            "team_model_limit_borrows_idle_capacity_from_other_teams": True,
-            "saturation_check_cache_ttl": SATURATION_CACHE_TTL,
+    base: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    configuration: Final = {
+        **base,
+        "litellm_settings": {
+            **base["litellm_settings"],
+            "callbacks": ["dynamic_rate_limiter_v3"],
+            "priority_reservation": {"interactive": 0.6, "batch": 0.4},
+            "priority_reservation_settings": {
+                "default_priority": 1.0,
+                "saturation_threshold": 0.5,
+                "team_model_limit_borrows_idle_capacity_from_other_teams": True,
+                "saturation_check_cache_ttl": SATURATION_CACHE_TTL,
+            },
         },
     }
     path: Final = directory / "borrower_regains_share.yaml"

@@ -2571,6 +2571,20 @@ async def test_a_fallback_target_still_borrows_while_idle_and_its_tokens_are_for
 
 
 @pytest.mark.asyncio
+async def test_an_idle_fallback_target_is_not_charged_and_the_admitting_models_hold_is_given_back(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _borrowing_handler(monkeypatch, borrows=True)
+    key: Final = _team_key(team_limits={"model_tpm_limit": {"shared-model": 100, "other-model": 100}})
+    await _check(handler, key, saturation=0.5, data=_prompt(20))
+    assert await _team_tokens_remaining(handler, key) < 100
+    assert await handler.async_fallback_target_allowed(key, "other-model", _prompt(20)) is True
+    await _settle_tokens(handler, 150, model_group="other-model")
+    assert await _team_tokens_remaining(handler, key) == 100
+    assert await _team_tokens_remaining(handler, key, model="other-model") == 100
+
+
+@pytest.mark.asyncio
 async def test_a_fallback_attempt_counts_toward_the_targets_saturation(monkeypatch: pytest.MonkeyPatch):
     handler = _borrowing_handler(monkeypatch, borrows=True)
     group: Final = handler.llm_router.registry().group("shared-model")

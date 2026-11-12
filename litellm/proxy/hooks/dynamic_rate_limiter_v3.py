@@ -1370,9 +1370,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         )
         if response["overall_code"] == "OVER_LIMIT":
             return False
-        if enforced is None:
-            return True
-        self._hold_fallback_share(model, team_share.share, reservation, _reserved_window(response, enforced))
+        self._hold_fallback_share(model, team_share.share, enforced, reservation, _reserved_window(response, enforced))
         return True
 
     async def _share_has_room(
@@ -1388,13 +1386,23 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         )
 
     def _hold_fallback_share(
-        self, model: str, share: RateLimitDescriptor, reserved_tokens: int, window: ReservationWindowIdentity | None
+        self,
+        model: str,
+        share: RateLimitDescriptor,
+        charged: RateLimitDescriptor | None,
+        reserved_tokens: int,
+        window: ReservationWindowIdentity | None,
     ) -> None:
-        """Remember the hold under the requested name and the resolved group, so settlement finds it either way."""
+        """Remember the hold under the requested name and the resolved group, so settlement finds it either way.
+
+        ``charged`` is the share the target's usage settles to, or None for an idle target whose usage is forgiven.
+        """
         stash: Final = get_or_create_request_stash()
         earlier: Final = stash.borrowing_team_model_fallback_limits.get(model)
         carried: Final = earlier.reserved_tokens if earlier is not None and earlier.window == window else 0
-        hold: Final = BorrowingTeamModelHold(descriptor=share, reserved_tokens=reserved_tokens + carried, window=window)
+        hold: Final = BorrowingTeamModelHold(
+            descriptor=charged, reserved_tokens=reserved_tokens + carried, window=window
+        )
         stash.borrowing_team_model_fallback_limits = MappingProxyType(
             {**stash.borrowing_team_model_fallback_limits, model: hold, share["value"].rpartition(":")[2]: hold}
         )
