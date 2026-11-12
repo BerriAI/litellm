@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Annotated, Final, Literal, Protocol, TypeAlias, runtime_checkable
@@ -27,11 +27,13 @@ from litellm.redis.stores.rate_limits import RATE_LIMITS_TARGET
 
 ThrottleReason: TypeAlias = Literal["over_share_saturated", "burst_cap", "model_ceiling"]
 DEFAULT_CLASS: Final = "default"
-_MEMBER_TABLE: Final[TypeAdapter[dict[str, tuple[str, float]]]] = TypeAdapter(dict[str, tuple[str, float]])
-_STORED_TABLE: Final[TypeAdapter[str | bytes | dict[str, object] | None]] = TypeAdapter(
+_MEMBER_TABLE: Final[TypeAdapter[Mapping[str, tuple[str, float]]]] = TypeAdapter(Mapping[str, tuple[str, float]])
+_STORED_TABLE: Final[TypeAdapter[str | bytes | Mapping[str, object] | None]] = TypeAdapter(
     str | bytes | dict[str, object] | None
 )
-_ACTIVE_ENTRIES: Final[TypeAdapter[list[tuple[str | bytes, float]]]] = TypeAdapter(list[tuple[str | bytes, float]])
+_ACTIVE_ENTRIES: Final[TypeAdapter[Sequence[tuple[str | bytes, float]]]] = TypeAdapter(
+    Sequence[tuple[str | bytes, float]]
+)
 _BURST_MULTIPLIER: Final[TypeAdapter[float]] = TypeAdapter(Annotated[float, Field(ge=1.0, allow_inf_nan=False)])
 _MEMBER_SEPARATOR: Final = "\x1f"
 
@@ -146,7 +148,7 @@ class TeamShareRegistry:
 
     async def _register(
         self, model: str, team_id: str, priority: str, now: float, snapshot: Mapping[str, tuple[str, float]]
-    ) -> dict[str, tuple[str, float]]:
+    ) -> Mapping[str, tuple[str, float]]:
         table: Final = (
             {**snapshot, team_id: (priority, now)}
             if self._redis is None
@@ -164,32 +166,32 @@ class TeamShareRegistry:
         priority: str,
         now: float,
         snapshot: Mapping[str, tuple[str, float]],
-    ) -> dict[str, tuple[str, float]]:
+    ) -> Mapping[str, tuple[str, float]]:
         key: Final = self.key(model)
         cutoff: Final = now - self._window_size
         try:
-            client = redis.init_async_client()
+            client: Final = redis.init_async_client()
             if not isinstance(client, _SortedSetCommands):
                 raise TypeError("redis client has no sorted-set commands")
             await client.zremrangebyscore(key, "-inf", cutoff)
             await client.zadd(key, {f"{team_id}{_MEMBER_SEPARATOR}{priority}": now})
             await client.expire(key, self._window_size)
-            entries = _ACTIVE_ENTRIES.validate_python(await client.zrangebyscore(key, cutoff, "+inf", withscores=True))
+            entries: Final = _ACTIVE_ENTRIES.validate_python(
+                await client.zrangebyscore(key, cutoff, "+inf", withscores=True)
+            )
         except Exception as error:  # noqa: BLE001 - any Redis failure falls back to this worker's own snapshot
             verbose_proxy_logger.warning(
                 "Dynamic rate limiter: could not register team %s on %s: %s", team_id, key, error
             )
             return {**snapshot, team_id: (priority, now)}
-        table: dict[str, tuple[str, float]] = {}
-        for member, score in entries:
-            text = member.decode() if isinstance(member, bytes) else member
-            team, _, team_class = text.rpartition(_MEMBER_SEPARATOR)
-            previous = table.get(team)
-            if previous is None or score >= previous[1]:
-                table[team] = (team_class, score)
-        return table
+        decoded: Final = (
+            (member.decode() if isinstance(member, bytes) else member, score) for member, score in entries
+        )
+        parsed: Final = ((text.rpartition(_MEMBER_SEPARATOR), score) for text, score in decoded)
+        # zrangebyscore returns ascending scores, so the newest entry for a team wins
+        return {team: (team_class, score) for (team, _, team_class), score in parsed}
 
-    async def _read_local(self, model: str) -> dict[str, tuple[str, float]]:
+    async def _read_local(self, model: str) -> Mapping[str, tuple[str, float]]:
         key: Final = self.key(model)
         raw: Final = _STORED_TABLE.validate_python(await self._memory.async_get_cache(key))
         if raw is None:

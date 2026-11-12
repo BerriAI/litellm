@@ -3,7 +3,7 @@ Dynamic rate limiter v3 - Saturation-aware priority-based rate limiting
 """
 
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Final, Literal
@@ -77,7 +77,7 @@ def _is_latin1_encodable(value: object) -> bool:
 
 
 TEAM_SHARE_DESCRIPTOR_KEY: Final = "team_share"
-_OBJECT_MAP: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
+_OBJECT_MAP: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _OPTIONAL_TEXT: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
 
 
@@ -178,7 +178,9 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         )
         multiplier: Final = team_burst_multiplier(user_api_key_dict, settings.default_max_borrow_multiplier)
         scale: Final = 1.0 if saturated or multiplier is None else multiplier
-        reason: ThrottleReason | None = "over_share_saturated" if saturated else "burst_cap" if multiplier else None
+        reason: Final[ThrottleReason | None] = (
+            "over_share_saturated" if saturated else "burst_cap" if multiplier else None
+        )
         descriptor: Final = RateLimitDescriptor(
             key=TEAM_SHARE_DESCRIPTOR_KEY,
             value=f"{model}:{team_id}",
