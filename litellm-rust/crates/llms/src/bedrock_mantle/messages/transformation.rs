@@ -1,6 +1,10 @@
+use crate::anthropic::messages::transformation::retry_anthropic_messages_after_http_error;
+use litellm_host::interceptors::RetriedRequest;
 use std::sync::LazyLock;
 
-use litellm_auth::{AwsParams, CredentialPlacement, SecretValue};
+use litellm_auth::{AwsParams, CredentialPlacement};
+use litellm_secret_value::SecretValue;
+
 use litellm_auth_aws::AwsCredentialSource;
 use litellm_auth_aws::bedrock_model_id_and_region;
 use litellm_core_utils::settings::resolve_non_empty;
@@ -15,6 +19,7 @@ use serde_json::Value;
 use crate::{
     Error,
     anthropic::{
+        beta_headers::accepted_or_unlisted,
         common_utils::{existing_betas, merge_beta_headers},
         messages::{
             handler::shape_anthropic_messages_request,
@@ -24,7 +29,7 @@ use crate::{
     base_llm::{
         auth::AuthScheme,
         messages::{
-            context::MessagesTransformContext,
+            context::{MessagesShapeOptions, MessagesTransformContext},
             transformation::{BaseMessagesConfig, Headers, ValidatedEnvironment},
         },
     },
@@ -54,6 +59,16 @@ pub const BEDROCK_MANTLE_MESSAGES_CONFIG: BedrockMantleAnthropicMessagesConfig =
     BedrockMantleAnthropicMessagesConfig;
 
 impl BaseMessagesConfig for BedrockMantleAnthropicMessagesConfig {
+    fn retry_after_http_error(
+        &self,
+        status: u16,
+        error_text: &str,
+        request_body: &Value,
+        context: &MessagesTransformContext,
+    ) -> Option<RetriedRequest> {
+        retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
+    }
+
     fn validate_environment(
         &self,
         headers: Headers,
@@ -127,9 +142,9 @@ impl BaseMessagesConfig for BedrockMantleAnthropicMessagesConfig {
     fn shape_request(
         &self,
         request: MessagesRequest,
-        reasoning_auto_summary: bool,
+        options: MessagesShapeOptions,
     ) -> Result<MessagesRequest, Error> {
-        shape_anthropic_messages_request(request, reasoning_auto_summary)
+        shape_anthropic_messages_request(request, options)
     }
 
     fn wire_body(&self, body: Value) -> Value {
@@ -189,14 +204,10 @@ impl BaseMessagesConfig for BedrockMantleAnthropicMessagesConfig {
             .filter_map(Value::as_str)
             .filter_map(|beta| beta.parse::<AnthropicBeta>().ok())
             .collect();
-        let caller: BetaSet = existing_betas(&headers)
-            .union(body_betas)
-            .into_iter()
-            .filter_map(|beta| match beta {
-                AnthropicBeta::Other(_) => Some(beta),
-                _ => beta.on(BetaProvider::BedrockMantle),
-            })
-            .collect();
+        let caller = accepted_or_unlisted(
+            existing_betas(&headers).union(body_betas),
+            BetaProvider::BedrockMantle,
+        );
         let safeguards: BetaSet = request
             .params
             .extra

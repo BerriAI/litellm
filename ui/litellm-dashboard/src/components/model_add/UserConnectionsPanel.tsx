@@ -2,6 +2,7 @@
 
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { userConnectionsKeys, useUserConnections } from "@/app/(dashboard)/hooks/credentials/useUserConnections";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -20,6 +21,7 @@ const providerLabel = (provider: string): string =>
   provider;
 
 export default function UserConnectionsPanel() {
+  const { t } = useTranslation();
   const { accessToken } = useAuthorized();
   const queryClient = useQueryClient();
   const { data, isLoading, isError, refetch } = useUserConnections();
@@ -38,37 +40,34 @@ export default function UserConnectionsPanel() {
     }
     try {
       await userConnectionDeleteCall(accessToken, credentialName);
-      toast.success("GitHub Copilot disconnected");
+      toast.success(t("modelAdd.userConnectionsPanel.disconnected"));
       setConnectingCredential(null);
       await refreshConnections();
     } catch (error) {
-      toast.error("Failed to disconnect GitHub Copilot");
+      toast.error(t("modelAdd.userConnectionsPanel.disconnectFailed"));
     }
   };
 
   return (
     <section className="mx-auto flex w-full flex-col gap-3 p-2">
       <div>
-        <h3 className="text-base font-semibold">Your connections</h3>
-        <p className="text-sm text-muted-foreground">
-          Credentials that use your own account. Connect once, and your requests to models on that credential use your
-          own access.
-        </p>
+        <h3 className="text-base font-semibold">{t("modelAdd.userConnectionsPanel.title")}</h3>
+        <p className="text-sm text-muted-foreground">{t("modelAdd.userConnectionsPanel.description")}</p>
       </div>
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>Credential</TableHead>
-            <TableHead>Provider</TableHead>
-            <TableHead>Status</TableHead>
-            <TableHead className="text-right">Actions</TableHead>
+            <TableHead>{t("modelAdd.userConnectionsPanel.credential")}</TableHead>
+            <TableHead>{t("modelAdd.userConnectionsPanel.provider")}</TableHead>
+            <TableHead>{t("modelAdd.userConnectionsPanel.status")}</TableHead>
+            <TableHead className="text-right">{t("modelAdd.userConnectionsPanel.actions")}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {isLoading && (
             <TableRow>
               <TableCell colSpan={4} className="text-sm text-muted-foreground">
-                Loading connections...
+                {t("modelAdd.userConnectionsPanel.loading")}
               </TableCell>
             </TableRow>
           )}
@@ -76,9 +75,9 @@ export default function UserConnectionsPanel() {
             <TableRow>
               <TableCell colSpan={4} className="text-sm">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-muted-foreground">Could not load your connections.</span>
+                  <span className="text-muted-foreground">{t("modelAdd.userConnectionsPanel.loadFailed")}</span>
                   <Button variant="outline" size="sm" onClick={() => refetch()}>
-                    Retry
+                    {t("modelAdd.userConnectionsPanel.retry")}
                   </Button>
                 </div>
               </TableCell>
@@ -87,7 +86,7 @@ export default function UserConnectionsPanel() {
           {showEmpty && (
             <TableRow>
               <TableCell colSpan={4} className="text-sm text-muted-foreground">
-                No credentials need a personal connection.
+                {t("modelAdd.userConnectionsPanel.empty")}
               </TableCell>
             </TableRow>
           )}
@@ -97,19 +96,19 @@ export default function UserConnectionsPanel() {
               <TableCell>{providerLabel(connection.provider)}</TableCell>
               <TableCell>
                 {connection.connected ? (
-                  <Badge>Connected as @{connection.github_login}</Badge>
+                  <Badge>{t("modelAdd.userConnectionsPanel.connectedAs", { login: connection.github_login })}</Badge>
                 ) : (
-                  <Badge variant="outline">Not connected</Badge>
+                  <Badge variant="outline">{t("modelAdd.userConnectionsPanel.notConnected")}</Badge>
                 )}
               </TableCell>
               <TableCell className="text-right">
                 {connection.connected ? (
                   <Button variant="outline" size="sm" onClick={() => disconnect(connection.credential_name)}>
-                    Disconnect
+                    {t("modelAdd.userConnectionsPanel.disconnect")}
                   </Button>
                 ) : (
                   <Button size="sm" onClick={() => setConnectingCredential(connection.credential_name)}>
-                    Connect
+                    {t("modelAdd.userConnectionsPanel.connect")}
                   </Button>
                 )}
               </TableCell>

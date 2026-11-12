@@ -24,6 +24,8 @@ pub enum Error {
     Secret(#[from] SecretError),
     #[error("the host driver failed")]
     Host(#[source] MachineFault),
+    #[error("the host transport failed")]
+    Transport(#[source] litellm_error::Source),
     #[error("post-call hook failed")]
     PostCallHook(#[source] Arc<Error>),
 }
@@ -47,6 +49,10 @@ impl Error {
         Self::PostCallHook(Arc::new(error))
     }
 
+    pub fn transport(cause: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self::Transport(litellm_error::Source::new(cause))
+    }
+
     /// The caller's request is what is wrong, as opposed to the environment, the wire, or
     /// the provider's answer.
     pub fn is_request(&self) -> bool {
@@ -55,7 +61,11 @@ impl Error {
             Self::Llm(error) => error.is_request(),
             Self::Auth(error) => error.is_request(),
             Self::Http(error) => error.is_request(),
-            Self::Declined(_) | Self::Secret(_) | Self::Host(_) | Self::PostCallHook(_) => false,
+            Self::Declined(_)
+            | Self::Secret(_)
+            | Self::Host(_)
+            | Self::Transport(_)
+            | Self::PostCallHook(_) => false,
         }
     }
 
@@ -70,6 +80,7 @@ impl Error {
             | Self::Headers(_)
             | Self::Secret(_)
             | Self::Host(_)
+            | Self::Transport(_)
             | Self::PostCallHook(_) => false,
         }
     }
@@ -85,6 +96,7 @@ impl Error {
             | Self::Http(_)
             | Self::Secret(_)
             | Self::Host(_)
+            | Self::Transport(_)
             | Self::PostCallHook(_) => false,
         }
     }
@@ -100,6 +112,7 @@ impl Error {
             | Self::Http(_)
             | Self::Secret(_)
             | Self::Host(_)
+            | Self::Transport(_)
             | Self::PostCallHook(_) => None,
         }
     }
@@ -121,7 +134,7 @@ impl Error {
         match self {
             Self::Llm(error) => error.dispatched(),
             Self::Http(error) => error.dispatched(),
-            Self::Host(_) | Self::PostCallHook(_) => true,
+            Self::Host(_) | Self::Transport(_) | Self::PostCallHook(_) => true,
             Self::InvalidProvider(_)
             | Self::UnresolvedProvider { .. }
             | Self::Declined(_)
@@ -142,7 +155,44 @@ impl Error {
             | Self::Http(_)
             | Self::Secret(_)
             | Self::Host(_)
+            | Self::Transport(_)
             | Self::PostCallHook(_) => None,
+        }
+    }
+
+    /// The provider's response headers on an upstream failure; empty for every other error.
+    pub fn upstream_headers(&self) -> &[(String, String)] {
+        match self {
+            Self::Llm(error) => error.upstream_headers(),
+            Self::Http(error) => error.upstream_headers(),
+            _ => &[],
+        }
+    }
+
+    /// A read of a streamed body timed out after the response head arrived.
+    pub fn body_read_timeout(&self) -> bool {
+        match self {
+            Self::Llm(error) => error.is_body_read_timeout(),
+            Self::Http(error) => error.is_body_read_timeout(),
+            _ => false,
+        }
+    }
+
+    pub fn body_cut(&self) -> Option<litellm_http::BodyCut> {
+        match self {
+            Self::Llm(error) => error.body_cut(),
+            Self::Http(error) => error.body_cut(),
+            _ => None,
+        }
+    }
+
+    /// `Some(connect)` when the call timed out, where `connect` says the connection was never
+    /// established; `None` for every other error.
+    pub fn timeout(&self) -> Option<bool> {
+        match self {
+            Self::Llm(error) => error.is_timeout(),
+            Self::Http(error) if error.is_timeout() => Some(error.is_connect_timeout()),
+            _ => None,
         }
     }
 
@@ -157,6 +207,7 @@ impl Error {
             | Self::Headers(_)
             | Self::Secret(_)
             | Self::Host(_)
+            | Self::Transport(_)
             | Self::PostCallHook(_) => None,
         }
     }

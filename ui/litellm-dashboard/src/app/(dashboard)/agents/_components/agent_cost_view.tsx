@@ -1,4 +1,5 @@
 import React from "react";
+import { useTranslation } from "react-i18next";
 import { Agent } from "@/components/agents/types";
 
 interface AgentCostViewProps {
@@ -6,6 +7,7 @@ interface AgentCostViewProps {
 }
 
 const AgentCostView: React.FC<AgentCostViewProps> = ({ agent }) => {
+  const { t } = useTranslation();
   const params = agent.litellm_params;
 
   if (params?.cost_per_query == null && params?.input_cost_per_token == null && params?.output_cost_per_token == null) {
@@ -14,15 +16,15 @@ const AgentCostView: React.FC<AgentCostViewProps> = ({ agent }) => {
 
   const rows = (
     [
-      ["Cost Per Query", params.cost_per_query],
-      ["Input Cost Per Token", params.input_cost_per_token],
-      ["Output Cost Per Token", params.output_cost_per_token],
+      [t("agents.costView.costPerQuery"), params.cost_per_query],
+      [t("agents.costView.inputCostPerToken"), params.input_cost_per_token],
+      [t("agents.costView.outputCostPerToken"), params.output_cost_per_token],
     ] as const
   ).filter(([, value]) => value != null);
 
   return (
     <div className="mt-6">
-      <h3 className="text-lg font-semibold text-foreground">Cost Configuration</h3>
+      <h3 className="text-lg font-semibold text-foreground">{t("agents.costView.title")}</h3>
       <dl className="mt-4 divide-y divide-border overflow-hidden rounded-lg border border-border">
         {rows.map(([label, value]) => (
           <div key={label} className="grid grid-cols-1 sm:grid-cols-3">

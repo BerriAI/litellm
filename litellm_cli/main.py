@@ -33,7 +33,7 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
-    from fastapi import FastAPI
+    from litellm.proxy.rust_forward.peer import ASGIApp
 
 SDK_PACKAGE: Final = "litellm"
 CLI_PACKAGE: Final = "litellm.proxy.client"
@@ -214,10 +214,12 @@ def without_gc_pauses() -> Generator[None, None, None]:
         gc.enable()
 
 
-def proxy_worker_app() -> "FastAPI":
+def proxy_worker_app() -> "ASGIApp":
     with without_gc_pauses():
         from litellm.proxy.proxy_cli import ProxyInitializationHelpers
 
         ProxyInitializationHelpers.apply_worker_log_config(os.environ)
         from litellm.proxy.proxy_server import app
-    return app
+        from litellm.proxy.rust_forward.mode import rust_forward_mode
+        from litellm.proxy.rust_forward.peer import wrap
+    return wrap(app, rust_forward_mode(os.environ))

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import i18n from "@/i18n/i18n";
 import { UseFormReturn, UseFormSetValue } from "react-hook-form";
 
 import { KeyResponse } from "../key_team_helpers/key_list";
@@ -142,11 +143,11 @@ export const keyEditFormSchema = z.object({
   model_rpm_limit: z.custom<string | undefined>().optional(),
   default_estimated_output_tokens: z
     .custom<number | string | null | undefined>()
-    .refine(estimateChecks.positive.isValid, estimateChecks.positive.message)
+    .refine(estimateChecks.positive.isValid, { error: () => i18n.t(estimateChecks.positive.messageKey) })
     .optional(),
   default_estimated_output_tokens_per_model: z
     .custom<string | undefined>()
-    .refine(estimateChecks.perModel.isValid, estimateChecks.perModel.message)
+    .refine(estimateChecks.perModel.isValid, { error: () => i18n.t(estimateChecks.perModel.messageKey) })
     .optional(),
   guardrails: z.custom<string[] | undefined>().optional(),
   disable_global_guardrails: z.custom<boolean | undefined>().optional(),
