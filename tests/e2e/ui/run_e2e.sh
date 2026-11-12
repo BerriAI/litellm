@@ -36,7 +36,7 @@ PROXY_LOG=""
 # Ports, overridable so two checkouts can run this harness at the same time --
 # otherwise a second run aborts on "port 4000 is in use" and the only way out is
 # to stop someone else's stack. Defaults are the historical values, so an unset
-# environment behaves exactly as before (CI, the CircleCI job and the docs all
+# environment behaves exactly as before (CI and the docs
 # assume 4000/5432/8090).
 PROXY_PORT="${PROXY_PORT:-4000}"
 POSTGRES_PORT="${POSTGRES_PORT:-5432}"

@@ -12,6 +12,7 @@ litellm-framer.workspace = true
 tokio-util = { version = "0.7", features = ["codec"] }
 litellm-secrets.workspace = true
 litellm-core-utils.workspace = true
+litellm-error.workspace = true
 litellm-host.workspace = true
 bytes.workspace = true
 futures-util.workspace = true
@@ -29,7 +30,6 @@ time.workspace = true
 url.workspace = true
 
 [dev-dependencies]
-litellm-error.workspace = true
 litellm-cache-memory.workspace = true
 litellm-http = { workspace = true, features = ["test-support"] }
 litellm-llms = { workspace = true, features = ["test-support"] }

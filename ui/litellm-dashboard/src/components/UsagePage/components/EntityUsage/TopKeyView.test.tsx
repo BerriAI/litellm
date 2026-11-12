@@ -1,5 +1,8 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderWithProviders as render } from "../../../../../tests/test-utils";
+import { parseAsString, useQueryStates } from "nuqs";
+import type { UrlUpdateEvent } from "nuqs/adapters/testing";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { KeyResponse } from "../../../key_team_helpers/key_list";
@@ -21,12 +24,26 @@ vi.mock("../../../key_team_helpers/transform_key_info", () => ({
 }));
 
 vi.mock("../../../templates/key_info_view", () => ({
-  default: ({ keyId, onClose }: { keyId: string; onClose: () => void }) => (
-    <div data-testid="key-info-view">
-      <div>Key Info View for {keyId}</div>
-      <button onClick={onClose}>Close</button>
-    </div>
-  ),
+  default: function KeyInfoViewMock({ keyId, onClose }: { keyId: string; onClose: () => void }) {
+    const [, setActivity] = useQueryStates({
+      detail_tab: parseAsString,
+      activity_from: parseAsString,
+      activity_to: parseAsString,
+    });
+    return (
+      <div data-testid="key-info-view">
+        <div>Key Info View for {keyId}</div>
+        <button
+          onClick={() =>
+            void setActivity({ detail_tab: "activity", activity_from: "2026-11-01", activity_to: "2026-11-02" })
+          }
+        >
+          Select activity
+        </button>
+        <button onClick={onClose}>Close</button>
+      </div>
+    );
+  },
 }));
 
 const chartBars = (container: HTMLElement) => Array.from(container.querySelectorAll("path.recharts-rectangle"));
@@ -456,6 +473,26 @@ describe("TopKeyView", () => {
     await user.click(collapseButton);
 
     expect(screen.queryByText(/tag-3/)).not.toBeInTheDocument();
+  });
+
+  it("clears another key's tab and dates on open and clears the selected activity on close", async () => {
+    const onUrlUpdate = vi.fn<(event: UrlUpdateEvent) => void>();
+    mockKeyInfoV1Call.mockResolvedValue({ key: "key-123" });
+    mockTransformKeyInfo.mockReturnValue({ token: "key-123" } as KeyResponse);
+    render(<TopKeyView {...baseProps} topKeys={[{ api_key: "key-123", key_alias: "Test Key", spend: 100 }]} />, {
+      searchParams: "?tab=usage&detail_tab=activity&activity_from=2026-10-01&activity_to=2026-10-02",
+      onUrlUpdate,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "key-123" }));
+    expect(await screen.findByText("Key Info View for key-123")).toBeInTheDocument();
+    await waitFor(() => expect(onUrlUpdate.mock.lastCall?.[0].searchParams.toString()).toBe("tab=usage"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Select activity" }));
+    await waitFor(() => expect(onUrlUpdate.mock.lastCall?.[0].searchParams.get("activity_from")).toBe("2026-11-01"));
+    fireEvent.click(screen.getByLabelText("Close"));
+    await waitFor(() => expect(onUrlUpdate.mock.lastCall?.[0].searchParams.toString()).toBe("tab=usage"));
+    expect(screen.queryByTestId("key-info-view")).not.toBeInTheDocument();
   });
 
   it("should open modal when key ID is clicked", async () => {

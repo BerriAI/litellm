@@ -1,19 +1,33 @@
+use litellm_host::interceptors::RetriedRequest;
 use litellm_llms_types::formats::messages::{
     MessagesOptionalParams, MessagesRequest, MessagesResponse,
 };
 use litellm_router_types::LitellmParams;
+use litellm_secret_value::SecretValue;
 use serde_json::Value;
 
-use super::context::MessagesTransformContext;
+use super::{
+    context::{MessagesShapeOptions, MessagesTransformContext},
+    tools::ToolCustomField,
+};
 
 pub use crate::base_llm::auth::{Headers, ValidatedEnvironment};
 use crate::{Error, base_llm::messages::streaming::StreamDecoder};
+
+pub enum FederatedEnvironment {
+    Validated(ValidatedEnvironment),
+    Unauthenticated {
+        headers: Headers,
+        missing: Error,
+        federate: fn(Headers, SecretValue) -> ValidatedEnvironment,
+    },
+}
 
 pub trait BaseMessagesConfig: Sync {
     fn shape_request(
         &self,
         request: MessagesRequest,
-        _reasoning_auto_summary: bool,
+        _options: MessagesShapeOptions,
     ) -> Result<MessagesRequest, Error> {
         Ok(request)
     }
@@ -33,6 +47,10 @@ pub trait BaseMessagesConfig: Sync {
         _context: &MessagesTransformContext,
     ) -> Result<MessagesRequest, Error> {
         Ok(request)
+    }
+
+    fn tool_custom_field(&self, _model: &str) -> ToolCustomField {
+        ToolCustomField::Keep
     }
 
     fn transform_anthropic_messages_response(
@@ -62,6 +80,26 @@ pub trait BaseMessagesConfig: Sync {
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error>;
 
+    fn validate_federated_environment(
+        &self,
+        headers: Headers,
+        api_key: Option<&str>,
+        model: &str,
+        optional_params: &MessagesOptionalParams,
+        litellm_params: &LitellmParams,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<FederatedEnvironment, Error> {
+        self.validate_environment(
+            headers,
+            api_key,
+            model,
+            optional_params,
+            litellm_params,
+            env_lookup,
+        )
+        .map(FederatedEnvironment::Validated)
+    }
+
     /// `None` relays the upstream bytes untouched, which is right for every host that already
     /// speaks Anthropic SSE. A host on another wire returns the decoder that lifts its frames
     /// into Anthropic stream events, and the route re-encodes those as Anthropic SSE.
@@ -74,6 +112,10 @@ pub trait BaseMessagesConfig: Sync {
     }
 
     fn request_headers(&self, headers: Headers, _request: &MessagesRequest) -> Headers {
+        headers
+    }
+
+    fn headers_for_url(&self, headers: Headers, _url: &str) -> Headers {
         headers
     }
 
@@ -90,6 +132,16 @@ pub trait BaseMessagesConfig: Sync {
     /// Python's configs `pop("model")` when the model is addressed by the URL.
     fn wire_body(&self, body: Value) -> Value {
         body
+    }
+
+    fn retry_after_http_error(
+        &self,
+        _status: u16,
+        _error_text: &str,
+        _request_body: &Value,
+        _context: &MessagesTransformContext,
+    ) -> Option<RetriedRequest> {
+        None
     }
 }
 
@@ -149,9 +201,10 @@ mod tests {
     }
 
     #[rstest]
-    #[case::disabled(false)]
-    #[case::enabled(true)]
-    fn default_shaping_preserves_provider_policy_inputs(#[case] reasoning_auto_summary: bool) {
+    fn default_shaping_preserves_provider_policy_inputs(
+        #[values(false, true)] reasoning_auto_summary: bool,
+        #[values(false, true)] presanitized: bool,
+    ) {
         let request: MessagesRequest = serde_json::from_value(serde_json::json!({
             "model": "test-model",
             "metadata": {"user_id": 7, "extra": "keep"},
@@ -160,7 +213,13 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(
-            DefaultsConfig.shape_request(request.clone(), reasoning_auto_summary),
+            DefaultsConfig.shape_request(
+                request.clone(),
+                MessagesShapeOptions {
+                    reasoning_auto_summary,
+                    presanitized
+                }
+            ),
             Ok(request)
         );
         assert_eq!(

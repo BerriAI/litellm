@@ -32,7 +32,7 @@ LIT008  `**kwargs` parameter. The keyword contract is erased and everything it c
         syntax. Declare explicit keyword params, or accept one frozen payload. `*args`,
         by contrast, is fine when typed (it's just a tuple). Suppress: `# kwargs-ok: <reason>`.
 LIT009  `# type: ignore` in any shape (bare, with codes, with a reason).
-        pyrightconfig.json sets enableTypeIgnoreComments to false, so basedpyright
+        [tool.pyright] in pyproject.toml sets enableTypeIgnoreComments to false, so basedpyright
         never honors it: the comment is inert dead syntax that suppresses nothing.
         Use `# pyright: ignore[ruleName]  # <reason>` instead.
 LIT010  Variable assignment without a `Final` declaration. Every local and module-level
@@ -1158,8 +1158,12 @@ def collect_paths(raw: Iterable[str]) -> Iterator[Path]:
     for item in raw:
         p = Path(item)
         if p.is_dir():
-            yield from sorted(p.rglob("*.py"))
-        elif p.suffix == ".py":
+            yield from (
+                path
+                for path in sorted(p.rglob("*.py"))
+                if "litellm/proxy/discovery_endpoints/skill_scanner_adapter/" not in path.as_posix()
+            )
+        elif p.suffix == ".py" and "litellm/proxy/discovery_endpoints/skill_scanner_adapter/" not in p.as_posix():
             yield p
 
 

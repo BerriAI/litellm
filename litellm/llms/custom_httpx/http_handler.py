@@ -345,6 +345,10 @@ def _set_ciphers(
             )
 
 
+def rsa_key_exchange_and_chacha20_excluded() -> bool:
+    return _rsa_key_exchange_and_chacha20_excluded.is_set()
+
+
 def exclude_rsa_key_exchange_and_chacha20(excluded: bool) -> None:
     """
     Turn RSA key exchange and TLS 1.2 ChaCha20 off or back on for new SSL contexts and every cached one, which clients

@@ -248,14 +248,14 @@ def test_diff_gate_selects_top_level_and_nested_python_files_only(tmp_path: Path
     (
         "tests/e2e_harness/top_level_module.py",
         "tests/e2e_harness/pkg/sub/nested_module.py",
-        "pyrightconfig.json",
+        "pyproject.toml",
     ),
 )
 def test_e2e_basedpyright_gate_also_fires_on_harness_python_and_pyrightconfig(tmp_path: Path, trigger: str) -> None:
     selected = _changed_files_selected_by(
         tmp_path,
         _gate_rooted_at("tests/e2e/"),
-        (trigger, "tests/e2e_harness/notes.md", "elsewhere/pyrightconfig.json", "tests/e2e_harnessish/module.py"),
+        (trigger, "tests/e2e_harness/notes.md", "elsewhere/pyproject.toml", "tests/e2e_harnessish/module.py"),
     )
     assert selected == frozenset({trigger})
 
