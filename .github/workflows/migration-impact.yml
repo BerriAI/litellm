@@ -32,5 +32,5 @@ jobs:
           set -euo pipefail
           base_sha=$(git rev-parse --verify --end-of-options "${BASE_REF}^{commit}")
           head_sha=$(git rev-parse --verify --end-of-options "${HEAD_REF}^{commit}")
-          python3 ci_cd/migration_impact.py --base "${base_sha}" --head "${head_sha}" --output "${RUNNER_TEMP}/schema_section.md"
+          python3 litellm/scripts/ci_cd/migration_impact.py --base "${base_sha}" --head "${head_sha}" --output "${RUNNER_TEMP}/schema_section.md"
           cat "${RUNNER_TEMP}/schema_section.md" >> "${GITHUB_STEP_SUMMARY}"

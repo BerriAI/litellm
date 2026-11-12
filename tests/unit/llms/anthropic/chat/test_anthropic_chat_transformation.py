@@ -15,6 +15,7 @@ from httpx import Headers
 from pydantic import BaseModel, ConfigDict
 
 import litellm
+from litellm.llms.anthropic.messages.native import handler as python_messages
 from litellm.constants import (
     ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
@@ -4509,7 +4510,7 @@ async def test_native_compaction_wire_roundtrip(
         return httpx.Response(200, json=body)
 
     route.mock(side_effect=respond)
-    call: Final = litellm.anthropic.messages.acreate if messages_api else litellm.acompletion
+    call: Final = python_messages.anthropic_messages if messages_api else litellm.acompletion
     params: Final = dict(
         model=f"{'openai/' if gateway else ''}anthropic/claude-sonnet-5",
         api_key="test",

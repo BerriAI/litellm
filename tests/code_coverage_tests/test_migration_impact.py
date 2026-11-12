@@ -1,4 +1,4 @@
-"""Tests for ci_cd/migration_impact.py.
+"""Tests for litellm/scripts/ci_cd/migration_impact.py.
 
 The fixtures are the real statements from the migrations that caused the rolling-upgrade
 failures this report exists to announce: the `key_type` column added to
@@ -7,6 +7,7 @@ inside a `DO $$` block.
 """
 
 import importlib.util
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -16,7 +17,7 @@ from typing import Final
 import pytest
 
 ROOT: Final = Path(__file__).resolve().parents[2]
-CI_CD: Final = ROOT / "ci_cd"
+CI_CD: Final = ROOT / "litellm" / "scripts" / "ci_cd"
 
 
 def _load(name: str) -> ModuleType:
@@ -188,6 +189,15 @@ def test_star_read_discovery_ignores_aliases_that_only_appear_in_a_comment() -> 
     # `-- Added comma to separate b.* columns` must not register LiteLLM_BudgetTable as whole-row read.
     tables = {read.table for read in impact.star_reads_in_source(AUTH_QUERY_SOURCE, "litellm/proxy/utils.py")}
     assert tables == {"LiteLLM_VerificationToken"}
+
+
+def test_star_read_discovery_keeps_comment_markers_inside_sql_literals() -> None:
+    source = '''query = """
+        SELECT '--' AS delimiter, v.*
+        FROM "LiteLLM_VerificationToken" v
+    """'''
+    reads = impact.star_reads_in_source(source, "query.py")
+    assert [read.table for read in reads] == ["LiteLLM_VerificationToken"]
 
 
 def test_star_read_discovery_ignores_view_definitions() -> None:
@@ -595,6 +605,7 @@ def test_report_does_not_treat_a_partial_base_index_as_a_full_unique_key(tmp_pat
     "retirement",
     (
         'DROP INDEX IF EXISTS "other", "old_key";',
+        "DROP INDEX IF EXISTS OLD_KEY;",
         'ALTER INDEX "old_key" RENAME TO "renamed_key";',
     ),
 )
@@ -619,6 +630,65 @@ def test_report_does_not_reuse_an_index_retired_before_the_base(tmp_path: Path, 
     report = impact.build_report(repo, "retired-base", "HEAD")
     finding = next(f for f in report.findings if 'CREATE UNIQUE INDEX "new_key"' in f.statement)
     assert finding.severity == impact.WRITE_REJECT
+
+
+def test_report_does_not_assume_an_if_not_exists_index_was_created(tmp_path: Path) -> None:
+    repo = _two_version_repo(tmp_path)
+    _write_migration(
+        repo,
+        "20250301000000_existing_non_unique",
+        'CREATE INDEX "old_key" ON "LiteLLM_VerificationToken"("key_name");',
+    )
+    _write_migration(
+        repo,
+        "20250302000000_attempt_unique",
+        'CREATE UNIQUE INDEX IF NOT EXISTS "old_key" ON "LiteLLM_VerificationToken"("key_name");',
+    )
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "base with existing index")
+    _git(repo, "tag", "if-not-exists-base")
+    _write_migration(
+        repo,
+        "20250303000000_new_key",
+        'DROP INDEX "old_key";\nCREATE UNIQUE INDEX "new_key" ON "LiteLLM_VerificationToken"("key_name");',
+    )
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "new unique key")
+    report = impact.build_report(repo, "if-not-exists-base", "HEAD")
+    finding = next(f for f in report.findings if 'CREATE UNIQUE INDEX "new_key"' in f.statement)
+    assert finding.severity == impact.WRITE_REJECT
+
+
+def test_report_finds_new_migrations_after_the_repository_directory_move(tmp_path: Path) -> None:
+    repo = _two_version_repo(tmp_path)
+    _git(repo, "mv", "litellm-proxy-extras", "litellm/proxy-extras")
+    migration = repo / "litellm/proxy-extras/litellm_proxy_extras/migrations/20250301000000_required/migration.sql"
+    migration.parent.mkdir(parents=True)
+    migration.write_text(
+        'ALTER TABLE "LiteLLM_VerificationToken" ADD COLUMN "required" TEXT NOT NULL;', encoding="utf-8"
+    )
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "move migrations and add required column")
+    report = impact.build_report(repo, "v1.1.0", "HEAD")
+    assert report.migrations == ("20250301000000_required",)
+    assert len(report.findings) == 1
+    assert report.findings[0].severity == impact.BREAKING
+
+
+def test_cli_finds_the_repository_from_its_new_script_location(tmp_path: Path) -> None:
+    repo = _two_version_repo(tmp_path)
+    script = repo / "litellm/scripts/ci_cd/migration_impact.py"
+    script.parent.mkdir(parents=True)
+    script.write_bytes((CI_CD / "migration_impact.py").read_bytes())
+    output = subprocess.run(
+        (sys.executable, "-I", str(script), "--base", "v1.0.0", "--head", "v1.1.0", "--format", "json"),
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    report = json.loads(output.stdout)
+    assert report["migrations"] == ["20250201000000_add_key_type", "20250202000000_scope_key_name_by_issuer"]
 
 
 def test_report_for_the_same_ref_twice_has_nothing_to_say(tmp_path: Path) -> None:
@@ -713,6 +783,24 @@ def test_unique_index_that_narrows_a_dropped_key_can_reject_writes() -> None:
         base_unique={
             "LiteLLM_VerificationToken_key_name_team_id_key": ("LiteLLM_VerificationToken", ("key_name", "team_id"))
         },
+    )
+    assert finding.severity == impact.WRITE_REJECT
+
+
+def test_nulls_not_distinct_can_reject_rows_a_prior_unique_key_allowed() -> None:
+    finding = _classify(
+        'CREATE UNIQUE INDEX "strict_key" ON "LiteLLM_VerificationToken"("key_name") NULLS NOT DISTINCT',
+        schema=_base_schema(),
+        dropped=frozenset({"LiteLLM_VerificationToken_key_name_key"}),
+        base_unique=TOKEN_KEY_NAME_KEY,
+    )
+    assert finding.severity == impact.WRITE_REJECT
+
+
+def test_nulls_not_distinct_on_a_new_nullable_column_can_reject_old_writes() -> None:
+    finding = _classify(
+        'CREATE UNIQUE INDEX "strict_new_key" ON "LiteLLM_VerificationToken"("new_column") NULLS NOT DISTINCT',
+        schema=_base_schema(),
     )
     assert finding.severity == impact.WRITE_REJECT
 

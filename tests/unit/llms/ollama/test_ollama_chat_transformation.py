@@ -5,8 +5,10 @@ import logging
 import os
 import sys
 import traceback
+from datetime import datetime, timezone
 from typing import Final, cast
 
+import httpx
 import pytest
 import respx
 from pydantic import BaseModel
@@ -28,6 +30,7 @@ from unittest.mock import ANY, MagicMock, patch
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
     Choices,
@@ -1444,3 +1447,59 @@ def test_reasoning_effort_with_a_matching_think_value_does_not_warn(
 
     assert result["think"] is think
     assert _warnings_naming(caplog, "reasoning_effort") == ()
+
+
+def _transform_json_format_function_call(content: object) -> ModelResponse:
+    return OllamaChatConfig().transform_response(
+        model="llama3.2",
+        raw_response=httpx.Response(
+            200,
+            json={
+                "model": "llama3.2",
+                "message": {"role": "assistant", "content": content},
+                "done": True,
+                "prompt_eval_count": 12,
+                "eval_count": 8,
+            },
+        ),
+        model_response=ModelResponse(),
+        logging_obj=Logging(
+            model="llama3.2",
+            messages=[{"role": "user", "content": "Weather in Paris?"}],
+            stream=False,
+            call_type="completion",
+            start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            litellm_call_id="ollama-json-function-call",
+            function_id="ollama-json-function-call",
+        ),
+        request_data={"format": "json"},
+        messages=[{"role": "user", "content": "Weather in Paris?"}],
+        optional_params={},
+        litellm_params={"function_name": "lookup_weather"},
+        encoding=None,
+    )
+
+
+@pytest.mark.parametrize(
+    ("content", "name", "arguments"),
+    [
+        pytest.param(
+            '{"name": "get_weather", "arguments": {"city": "Paris"}}', "get_weather", {"city": "Paris"}, id="named-call"
+        ),
+        pytest.param('{"city": "Paris"}', "lookup_weather", {"city": "Paris"}, id="bare-arguments"),
+    ],
+)
+def test_json_format_response_for_a_function_call_becomes_a_tool_call(
+    content: str, name: str, arguments: dict[str, object]
+) -> None:
+    response: Final = _transform_json_format_function_call(content)
+
+    choice: Final = response.choices[0]
+    tool_call: Final = choice.message.tool_calls[0]
+    assert (choice.finish_reason, choice.message.content) == ("tool_calls", None)
+    assert (tool_call.function.name, json.loads(tool_call.function.arguments)) == (name, arguments)
+
+
+def test_json_format_function_call_response_without_text_content_raises_type_error() -> None:
+    with pytest.raises(TypeError):
+        _transform_json_format_function_call(None)

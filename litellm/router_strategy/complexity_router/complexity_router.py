@@ -520,6 +520,11 @@ _CODEX_REMINDER_MARKERS: Final = _DEFAULT_REMINDER_MARKERS + (
     ("<environments_instructions>", "</environments_instructions>"),
     ("# agents.md instructions for ", "</instructions>"),
 )
+_OPENCODE_REMINDER_MARKERS: Final = _DEFAULT_REMINDER_MARKERS + (
+    ("<task_result>", "</task_result>"),
+    ("<subagent ", "</subagent>"),
+)
+_OPENCODE_USER_AGENT_PREFIX: Final = "opencode/"
 
 _TRUNCATION_MARKER: Final = "..."
 _TRUNCATION_HEAD_FRACTION: Final = 0.3
@@ -528,6 +533,10 @@ _MIN_QUOTED_TURN_CHARS: Final = 120
 _CLASSIFIER_CIRCUIT_OPEN_SIGNAL: Final = "classifier-circuit-open"
 
 _CJK_CHARACTER: Final = re.compile("[぀-ヿㇰ-ㇿ㐀-䶿一-鿿豈-﫿ｦ-ﾝ\U00020000-\U0003ffff]")
+
+
+def _is_opencode_user_agent(user_agent: str) -> bool:
+    return user_agent.lower().startswith(_OPENCODE_USER_AGENT_PREFIX)
 
 
 def _message_text(content: object) -> str:
@@ -4418,12 +4427,20 @@ class ComplexityRouter(CustomLogger):
     def _reminder_markers_for_request(self, request_kwargs: Mapping[str, object]) -> tuple[tuple[str, str], ...]:
         if self.config.reminder_markers is not None:
             return self._reminder_markers
-        return _CODEX_REMINDER_MARKERS if self._is_codex_request(request_kwargs) else _DEFAULT_REMINDER_MARKERS
+        if self._is_codex_request(request_kwargs):
+            return _CODEX_REMINDER_MARKERS
+        if self._request_user_agent_matches(request_kwargs, _is_opencode_user_agent):
+            return _OPENCODE_REMINDER_MARKERS
+        return _DEFAULT_REMINDER_MARKERS
 
     @staticmethod
     def _is_codex_request(request_kwargs: Mapping[str, object]) -> bool:
+        return ComplexityRouter._request_user_agent_matches(request_kwargs, is_codex_user_agent)
+
+    @staticmethod
+    def _request_user_agent_matches(request_kwargs: Mapping[str, object], matches: Callable[[str], bool]) -> bool:
         return any(
-            is_codex_user_agent(user_agent)
+            matches(user_agent)
             for metadata_key in ("litellm_metadata", "metadata")
             if isinstance(metadata := request_kwargs.get(metadata_key), Mapping)
             if isinstance(user_agent := metadata.get("user_agent"), str)

@@ -9246,6 +9246,12 @@ async def test_update_team_guardrails_with_org_id(
         mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
             return_value=mock_existing_team
         )
+        mock_prisma.writer_db.litellm_guardrailstable.find_many = AsyncMock(
+            return_value=[
+                SimpleNamespace(guardrail_name="aporia-pre-call"),
+                SimpleNamespace(guardrail_name="aporia-post-call"),
+            ]
+        )
         mock_cache.async_set_cache = AsyncMock()
 
         # Mock organization fetch - this is where the bug occurred
@@ -17400,7 +17406,7 @@ async def test_get_team_spend_by_user_admin_groups_spend_logs_by_team_and_user(m
     assert any("statement_timeout = 30000" in statement for statement in transaction.statements)
     mock_db_client.db.tx.assert_not_called()
     sql, *params = transaction.query_raw.call_args.args
-    assert params == ["2026-09-01", "2026-09-04", "team-alpha", "team-beta", ["sk-alpha", "sk-beta"]]
+    assert params == ["2026-09-01", "2026-09-04", "team-alpha", "team-beta", ["sk-alpha", "sk-beta", ""]]
     assert 'FROM "LiteLLM_SpendLogs" sl' in sql
     assert 'sl."startTime" >= $1::timestamp' in sql
     assert "sl.\"startTime\" < $2::timestamp + INTERVAL '1 day'" in sql
@@ -17440,7 +17446,7 @@ async def test_get_team_spend_by_user_team_admin_sees_every_member(mock_db_clien
     )
 
     sql, *params = transaction.query_raw.call_args.args
-    assert params == ["2026-09-01", "2026-09-04", "team-alpha", ["sk-alpha"]]
+    assert params == ["2026-09-01", "2026-09-04", "team-alpha", ["sk-alpha", ""]]
     assert 'sl."user" = $' not in sql
     assert "sl.api_key = ANY($4::text[])" in sql
 
@@ -17465,7 +17471,7 @@ async def test_get_team_spend_by_user_plain_member_only_sees_own_row(mock_db_cli
     )
 
     sql, *params = transaction.query_raw.call_args.args
-    assert params == ["2026-09-01", "2026-09-04", "team-alpha", "bob", ["sk-bob"]]
+    assert params == ["2026-09-01", "2026-09-04", "team-alpha", "bob", ["sk-bob", ""]]
     assert "sl.team_id IN ($3)" in sql
     assert 'AND sl."user" = $4' in sql
     assert "sl.api_key = ANY($5::text[])" in sql
@@ -19573,3 +19579,62 @@ async def test_team_info_keeps_the_auth_label_for_a_caller_outside_the_team(monk
         )
 
     assert (exc_info.value.code, exc_info.value.type) == ("403", "auth_error")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fields",
+    ({"guardrails": ["typo"]}, {"metadata": {"guardrails": ["typo"]}}),
+    ids=("top_level", "metadata"),
+)
+async def test_new_team_rejects_an_unregistered_guardrail_before_writing(
+    mock_db_client, mock_admin_auth, monkeypatch, fields
+):
+    from fastapi import Request
+
+    from litellm.proxy._types import NewTeamRequest, ProxyException
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    mock_db_client.db.litellm_teamtable.count = AsyncMock(return_value=0)
+    mock_db_client.db.litellm_teamtable.create = AsyncMock()
+    mock_db_client.writer_db.litellm_guardrailstable.find_many = AsyncMock(return_value=[])
+
+    with pytest.raises(ProxyException) as exc:
+        await new_team(
+            data=NewTeamRequest(team_alias="gr-team", **fields),
+            http_request=MagicMock(spec=Request),
+            user_api_key_dict=mock_admin_auth,
+        )
+
+    assert str(exc.value.code) == "400"
+    assert "typo" in str(exc.value.message)
+    mock_db_client.db.litellm_teamtable.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_team_rejects_an_added_unregistered_guardrail(mock_db_client, mock_admin_auth, monkeypatch):
+    from fastapi import Request
+
+    from litellm.proxy._types import ProxyException, UpdateTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    existing = MagicMock()
+    existing.metadata = {"guardrails": ["stale"]}
+    existing.model_dump.return_value = {"team_id": "t1", "metadata": {"guardrails": ["stale"]}}
+    mock_db_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing)
+    mock_db_client.db.litellm_teamtable.update = AsyncMock()
+    mock_db_client.writer_db.litellm_guardrailstable.find_many = AsyncMock(return_value=[])
+
+    with pytest.raises(ProxyException) as exc:
+        await update_team(
+            data=UpdateTeamRequest(team_id="t1", guardrails=["stale", "typo"]),
+            http_request=MagicMock(spec=Request),
+            user_api_key_dict=mock_admin_auth,
+        )
+
+    assert str(exc.value.code) == "400"
+    assert "typo" in str(exc.value.message)
+    assert "stale" not in str(exc.value.message)
+    mock_db_client.db.litellm_teamtable.update.assert_not_awaited()

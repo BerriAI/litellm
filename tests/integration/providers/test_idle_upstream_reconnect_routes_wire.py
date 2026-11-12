@@ -33,7 +33,7 @@ pytestmark: Final = pytest.mark.timeout(int(2 * graceful_stop_seconds() + 120 + 
 
 ROWS: Final = (
     Row("messages-anthropic-sdk-sync", anthropic_deployment, messages_sdk),
-    Row("messages-anthropic-sdk-async-stream", anthropic_deployment, messages_sdk_stream),
+    Row("messages-anthropic-sdk-async-stream", anthropic_deployment, messages_sdk_stream, rust=True),
     Row("messages-upstream-resets-stale-connection", anthropic_deployment, messages_sdk, drop=Drop.RESET),
     Row("custom-pass-through-raw-httpx", pass_through_deployment, pass_through),
     Row("generic-guardrail-api-pre-call", guardrail_deployment, chat_with_guardrail),
