@@ -88,6 +88,24 @@ def _class_path(instance_path: str, cls: type) -> str:
     return f"{entry_module if defined_in_entry_module else cls.__module__}.{cls.__name__}"
 
 
+def _guardrail_path_error(
+    guardrail_name: str, guardrail_path: str, resolved: object
+) -> CustomGuardrailPathError | None:
+    if callable(resolved):
+        return None
+    if isinstance(resolved, CustomLogger):
+        return CustomGuardrailPathError(
+            f"Guardrail '{guardrail_name}' sets guardrail: {guardrail_path}, which is a {type(resolved).__name__} "
+            "instance, but the proxy builds each guardrail itself and needs the class. Point it at the class, e.g. "
+            f"`guardrail: {_class_path(guardrail_path, type(resolved))}`. "
+            "Instances like this one belong under litellm_settings.callbacks."
+        )
+    return CustomGuardrailPathError(
+        f"Guardrail '{guardrail_name}' sets guardrail: {guardrail_path}, which is a {type(resolved).__name__} "
+        "value, but the proxy builds each guardrail itself and needs a CustomGuardrail class."
+    )
+
+
 class _GuardrailRowLike(Protocol):
     @property
     def guardrail_id(self) -> str: ...
@@ -927,13 +945,9 @@ class InMemoryGuardrailHandler:
         _guardrail_class: Final[Callable[..., CustomGuardrail]] = get_instance_fn(
             guardrail_type, config_file_path=config_file_path
         )
-        if isinstance(_guardrail_class, CustomLogger):
-            raise CustomGuardrailPathError(
-                f"Guardrail '{guardrail['guardrail_name']}' sets guardrail: {guardrail_type}, which is a "
-                f"{type(_guardrail_class).__name__} instance, but the proxy builds each guardrail itself and needs the "
-                f"class. Point it at the class, e.g. `guardrail: {_class_path(guardrail_type, type(_guardrail_class))}`. "
-                "Instances like this one belong under litellm_settings.callbacks."
-            )
+        path_error: Final = _guardrail_path_error(guardrail["guardrail_name"], guardrail_type, _guardrail_class)
+        if path_error is not None:
+            raise path_error
 
         mode: Final = litellm_params.mode
         if mode is None:

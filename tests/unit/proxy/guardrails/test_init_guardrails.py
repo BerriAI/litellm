@@ -473,6 +473,45 @@ def test_init_guardrails_v2_stops_boot_when_a_custom_guardrail_path_names_an_ins
     assert isinstance(get_instance_fn(class_path, config_file_path=config_file_path), type)
 
 
+def test_init_guardrails_v2_stops_boot_when_a_custom_guardrail_path_names_a_non_callable_value(tmp_path: Path) -> None:
+    (tmp_path / "custom_callbacks.py").write_text("guardrail_settings = {'mode': 'pre_call'}\n")
+    all_guardrails: Final = [
+        {
+            "guardrail_name": "my-guard",
+            "litellm_params": {"guardrail": "custom_callbacks.guardrail_settings", "mode": "pre_call"},
+        },
+    ]
+
+    with pytest.raises(
+        CustomGuardrailPathError,
+        match=r"^Guardrail 'my-guard' sets guardrail: custom_callbacks\.guardrail_settings, which is a dict value",
+    ):
+        init_guardrails_v2(all_guardrails=all_guardrails, config_file_path=str(tmp_path / "config.yaml"))
+
+
+def test_initialize_guardrail_builds_a_custom_guardrail_from_a_factory_function(tmp_path: Path) -> None:
+    (tmp_path / "custom_callbacks.py").write_text(
+        "from litellm.integrations.custom_guardrail import CustomGuardrail\n\n\n"
+        "class MyGuardrail(CustomGuardrail):\n"
+        "    pass\n\n\n"
+        "def make_guardrail(**kwargs):\n"
+        "    return MyGuardrail(**kwargs)\n"
+    )
+    handler: Final = InMemoryGuardrailHandler()
+
+    handler.initialize_guardrail(
+        guardrail={
+            "guardrail_name": "my-guard",
+            "litellm_params": {"guardrail": "custom_callbacks.make_guardrail", "mode": "pre_call"},
+        },
+        config_file_path=str(tmp_path / "config.yaml"),
+    )
+
+    (built,) = handler.guardrail_id_to_custom_guardrail.values()
+    assert type(built).__name__ == "MyGuardrail"
+    assert built.guardrail_name == "my-guard"
+
+
 def test_init_guardrails_v2_accepts_during_call_advisory_mode():
     """
     Maintainer finding on BerriAI/litellm#34940: on_flagged='inject_system_message'
