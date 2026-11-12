@@ -1,11 +1,15 @@
 import json
+from typing import Final
+from unittest.mock import MagicMock
 
+import httpx
 import pytest
 
 import litellm
 from litellm.llms.bedrock.chat.invoke_transformations.amazon_nova_transformation import (
     AmazonInvokeNovaConfig,
 )
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.integrations.anthropic_cache_control_hook import GATEWAY_INJECTED_CACHE_METADATA_KEY
 
 MODEL = "us.amazon.nova-pro-v1:0"
@@ -115,3 +119,27 @@ def test_tool_config_injection_point_is_neither_placed_nor_credited(local_model_
     assert [tool["toolSpec"]["name"] for tool in request["toolConfig"]["tools"]] == ["f"]
     assert "cachePoint" not in json.dumps(request)
     assert GATEWAY_INJECTED_CACHE_METADATA_KEY not in metadata
+
+
+@pytest.mark.parametrize(
+    ("service_tier", "sent_tier"),
+    [("priority", "priority"), ("flex", "flex"), ("reserved", "reserved"), ("Standard", "default"), ("auto", None)],
+)
+def test_invoke_sends_the_service_tier_in_the_header_invoke_model_takes(service_tier: str, sent_tier: str | None):
+    send: Final = MagicMock(return_value=httpx.Response(200))
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(send)))
+
+    litellm.completion(
+        model=f"bedrock/invoke/{MODEL}",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        service_tier=service_tier,
+        client=client,
+        aws_access_key_id="fake",
+        aws_secret_access_key="fake",
+        aws_region_name="us-east-1",
+    )
+
+    request: Final = send.call_args.args[0]
+    assert request.headers.get("X-Amzn-Bedrock-Service-Tier") == sent_tier
+    assert "serviceTier" not in json.loads(request.content)

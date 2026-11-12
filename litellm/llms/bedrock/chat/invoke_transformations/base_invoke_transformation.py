@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Final, cast, get_args
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -46,7 +47,14 @@ else:
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 
 _GUARDRAIL_CONFIG_VALIDATOR: Final["TypeAdapter[GuardrailConfigBlock]"] = TypeAdapter(GuardrailConfigBlock)
+_BEDROCK_SERVICE_TIER_HEADER: Final = "X-Amzn-Bedrock-Service-Tier"
 
+
+class _InvokeServiceTierParams(TypedDict):
+    serviceTier: NotRequired[ReadOnly[object]]
+
+
+_INVOKE_SERVICE_TIER_PARAMS: Final = TypeAdapter(_InvokeServiceTierParams)
 _GUARDRAIL_CONFIG_EXPECTED_FORMAT: Final = (
     "{'guardrailIdentifier': str, 'guardrailVersion': str, 'trace': 'enabled'|'disabled'|'enabled_full'}"
 )
@@ -58,6 +66,14 @@ _INVOKE_PROVIDERS: Final = TypeAdapter(tuple[litellm.BEDROCK_INVOKE_PROVIDERS_LI
 
 def _response_header(headers: Mapping[str, str], name: str) -> str | None:
     return headers.get(name, None)
+
+
+def _bedrock_invoke_service_tier_headers(optional_params: _InvokeServiceTierParams) -> tuple[tuple[str, str], ...]:
+    match optional_params.get("serviceTier"):
+        case {"type": str(tier)}:
+            return ((_BEDROCK_SERVICE_TIER_HEADER, tier),)
+        case _:
+            return ()
 
 
 def bedrock_invoke_guardrail_headers(raw_guardrail_config: object) -> "dict[str, str]":
@@ -442,8 +458,13 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             if raw_guardrail_config is None
             else tuple(bedrock_invoke_guardrail_headers(raw_guardrail_config).items())
         )
+        service_tier_headers: Final = _bedrock_invoke_service_tier_headers(
+            _INVOKE_SERVICE_TIER_PARAMS.validate_python(optional_params)
+        )
         owned_names, metadata_headers = bedrock_request_metadata_headers(litellm_params)
-        return merge_bedrock_invoke_headers(headers, guardrail_headers, metadata_headers, owned_names)
+        return merge_bedrock_invoke_headers(
+            headers, (*guardrail_headers, *service_tier_headers), metadata_headers, owned_names
+        )
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return BedrockError(status_code=status_code, message=error_message, headers=headers)
