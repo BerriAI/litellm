@@ -4935,6 +4935,10 @@ class JWTIssuerConfig(LiteLLMBaseModel):
         default=None,
         description="Issuer-specific policy when the virtual key claim has no mapping. Falls back to the global policy.",
     )
+    agent_identity_provider: Literal["okta"] | None = Field(
+        default=None,
+        description="Set to okta to let this issuer's client-credentials tokens authenticate as Okta-bound agents.",
+    )
 
     model_config = ConfigDict(extra="forbid")
 

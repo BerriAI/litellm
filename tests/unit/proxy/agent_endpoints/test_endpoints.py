@@ -1787,6 +1787,99 @@ def test_agent_detail_cache_miss_preserves_admin_identity_visibility(role, monke
     assert response.json()["identity"] == (binding.model_dump(mode="json") if role == LitellmUserRoles.PROXY_ADMIN else None)
 
 
+@pytest.mark.parametrize("jwt_auth_enabled", [True, False])
+def test_okta_agent_issuers_count_only_while_jwt_auth_is_enabled(
+    monkeypatch: pytest.MonkeyPatch, jwt_auth_enabled: bool
+) -> None:
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import JWTIssuerConfig, LiteLLM_JWTAuth
+    from litellm.proxy.auth.handle_jwt import JWTHandler
+    from tests.unit.proxy.agent_endpoints.test_managed_identity import OKTA_ISSUER
+
+    handler: Final = JWTHandler()
+    issuer: Final = JWTIssuerConfig(issuer=OKTA_ISSUER, audience="gateway", agent_identity_provider="okta")
+    handler.update_environment(None, DualCache(), LiteLLM_JWTAuth(issuers=[issuer]))
+    monkeypatch.setattr(proxy_server, "jwt_handler", handler)
+    monkeypatch.setattr(proxy_server, "general_settings", {"enable_jwt_auth": jwt_auth_enabled})
+    expected: Final = frozenset({OKTA_ISSUER}) if jwt_auth_enabled else frozenset()
+    assert agent_endpoints._okta_agent_issuers() == expected
+
+
+def test_identity_providers_list_only_opted_in_okta_issuers_when_asked(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import JWTIssuerConfig, LiteLLM_JWTAuth
+    from litellm.proxy.auth.handle_jwt import JWTHandler
+    from tests.unit.proxy.agent_endpoints.test_managed_identity import OKTA_ISSUER
+
+    people: Final = "https://example.okta.com/oauth2/people"
+    handler: Final = JWTHandler()
+    issuers: Final = [
+        JWTIssuerConfig(issuer=people, audience="gateway"),
+        JWTIssuerConfig(issuer=OKTA_ISSUER, audience="gateway", agent_identity_provider="okta"),
+    ]
+    handler.update_environment(None, DualCache(), LiteLLM_JWTAuth(issuers=issuers))
+    monkeypatch.setattr(proxy_server, "jwt_handler", handler)
+    monkeypatch.setattr(proxy_server, "general_settings", {"enable_jwt_auth": True})
+    monkeypatch.delenv("JWT_ISSUER", raising=False)
+    assert client.get("/v1/agents/identity/providers").json() == [people, OKTA_ISSUER]
+    assert client.get("/v1/agents/identity/providers", params={"provider": "okta"}).json() == [OKTA_ISSUER]
+    assert client.get("/v1/agents/identity/providers", params={"provider": "other"}).status_code == 422
+
+
+@pytest.mark.parametrize(
+    "identity,message",
+    [
+        (
+            {"provider": "okta", "issuer": "https://example.okta.com", "client_id": "0oa1"},
+            "Invalid Okta identity configuration",
+        ),
+        (
+            {"provider": "microsoft_entra", "tenant_id": "invalid", "client_id": "invalid"},
+            "Invalid Entra identity configuration",
+        ),
+    ],
+)
+def test_invalid_identity_configuration_names_its_provider(identity: Mapping[str, object], message: str) -> None:
+    with pytest.raises(HTTPException) as failure:
+        agent_endpoints._validate_managed_identity_request({"identity": identity})
+    assert (failure.value.status_code, failure.value.detail) == (400, message)
+
+
+def test_okta_identity_registers_for_an_opted_in_issuer(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests.unit.proxy.agent_endpoints.test_managed_identity import OKTA_CONFIGURATION, OKTA_ISSUER
+
+    monkeypatch.setattr(agent_endpoints, "_okta_agent_issuers", lambda: frozenset({OKTA_ISSUER}))
+    assert agent_endpoints._validate_managed_identity_request({"identity": OKTA_CONFIGURATION}) is None
+
+
+def test_okta_delegated_mode_is_rejected_as_unsupported_not_as_missing_microsoft_sso(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.agent_endpoints.managed_identity import managed_write_fields
+    from litellm.types.proxy.agent_identity import AgentIdentityFailure
+    from tests.unit.proxy.agent_endpoints.test_managed_identity import OKTA_CONFIGURATION, OKTA_ISSUER
+
+    monkeypatch.setattr(agent_endpoints, "_okta_agent_issuers", lambda: frozenset({OKTA_ISSUER}))
+    monkeypatch.delenv("MICROSOFT_TENANT", raising=False)
+    request: Final = {"identity": OKTA_CONFIGURATION, "execution_mode": "delegated"}
+    agent_endpoints._validate_managed_identity_request(request)
+    assert managed_write_fields(request, None, "admin") == AgentIdentityFailure(
+        message="Okta agent identities support autonomous mode only"
+    )
+
+
+def test_okta_identity_cannot_register_for_an_issuer_that_has_not_opted_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests.unit.proxy.agent_endpoints.test_managed_identity import OKTA_CONFIGURATION, OKTA_ISSUER
+
+    monkeypatch.setattr(agent_endpoints, "_okta_agent_issuers", lambda: frozenset({"https://other.okta.com/oauth2/default"}))
+    monkeypatch.setattr(agent_endpoints, "_trusted_agent_issuers", lambda: (OKTA_ISSUER,))
+    with pytest.raises(HTTPException, match="Set agent_identity_provider: okta") as failure:
+        agent_endpoints._validate_managed_identity_request({"identity": OKTA_CONFIGURATION})
+    assert failure.value.status_code == 400
+
+
 @pytest.mark.parametrize("trusted", [False, True])
 def test_invalid_identity_and_untrusted_tenant_cannot_be_registered(
     monkeypatch: pytest.MonkeyPatch, trusted: bool

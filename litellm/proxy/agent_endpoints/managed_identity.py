@@ -4,19 +4,22 @@ from typing import Final, NoReturn, TypedDict
 from uuid import uuid4
 
 from fastapi import HTTPException
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly
 
 from litellm.types.agents import AgentResponse
 from litellm.types.proxy.agent_identity import (
+    AGENT_IDENTITY_CONFIG,
     AgentExecutionMode,
     AgentIdentityBinding,
     AgentIdentityFailure,
     AgentSubject,
     EntraIdentityConfig,
+    OktaIdentityConfig,
 )
 
 _MODE: Final = TypeAdapter(AgentExecutionMode)
+_SCOPES: Final = TypeAdapter(list[str], config=ConfigDict(strict=True))
 
 
 class IdentityFields(TypedDict, total=False):
@@ -70,11 +73,18 @@ def raise_identity_failure(failure: AgentIdentityFailure, status_code: int = 403
 
 
 def _configuration_failure(
-    identity: EntraIdentityConfig | AgentIdentityBinding | None,
+    identity: EntraIdentityConfig | OktaIdentityConfig | AgentIdentityBinding | None,
     mode: AgentExecutionMode,
     enabling_without_binding: bool,
 ) -> AgentIdentityFailure | None:
-    if identity is not None and mode != "delegated" and not identity.service_principal_id:
+    if identity is not None and identity.provider == "okta" and mode != "autonomous":
+        return AgentIdentityFailure(message="Okta agent identities support autonomous mode only")
+    if (
+        identity is not None
+        and identity.provider == "microsoft_entra"
+        and mode != "delegated"
+        and not identity.service_principal_id
+    ):
         return AgentIdentityFailure(
             message="Autonomous mode requires the Enterprise application service-principal object ID"
         )
@@ -92,7 +102,9 @@ def managed_write_fields(
 ) -> ManagedWriteFields | AgentIdentityFailure:
     try:
         identity: Final = (
-            EntraIdentityConfig.model_validate(incoming["identity"]) if incoming.get("identity") is not None else None
+            AGENT_IDENTITY_CONFIG.validate_python(incoming["identity"])
+            if incoming.get("identity") is not None
+            else None
         )
         mode: Final = _MODE.validate_python(
             incoming.get("execution_mode", existing.execution_mode if existing else "autonomous")
@@ -119,11 +131,13 @@ def managed_write_fields(
         return AgentIdentityFailure(message=f"Invalid agent identity configuration: {exc}")
 
 
-def _identity_fields(identity: EntraIdentityConfig) -> Mapping[str, object]:
+def _identity_fields(identity: EntraIdentityConfig | OktaIdentityConfig) -> Mapping[str, object]:
     return identity.model_dump()
 
 
-def _identity_write(identity: EntraIdentityConfig | None, existing: AgentResponse | None) -> ManagedWriteFields:
+def _identity_write(
+    identity: EntraIdentityConfig | OktaIdentityConfig | None, existing: AgentResponse | None
+) -> ManagedWriteFields:
     if identity is None:
         unbind: Final[ManagedWriteFields] = {
             **(
@@ -142,12 +156,13 @@ def _identity_write(identity: EntraIdentityConfig | None, existing: AgentRespons
     ):
         unchanged: Final[ManagedWriteFields] = {}
         return unchanged
+    tenant: Final = identity.tenant_id if isinstance(identity, EntraIdentityConfig) else identity.issuer
     binding: Final[IdentityFields] = {
         "provider": identity.provider,
-        "tenant_id": identity.tenant_id,
+        "tenant_id": tenant,
         "client_id": identity.client_id,
-        "service_principal_id": identity.service_principal_id,
-        "required_roles": identity.required_roles,
+        "service_principal_id": identity.service_principal_id if isinstance(identity, EntraIdentityConfig) else None,
+        "required_roles": identity.required_roles if isinstance(identity, EntraIdentityConfig) else (),
         "required_scopes": identity.required_scopes,
         "issuer": identity.issuer,
         "active": True,
@@ -159,7 +174,7 @@ def _identity_write(identity: EntraIdentityConfig | None, existing: AgentRespons
             "create": {
                 "provider": identity.provider,
                 "issuer": identity.issuer,
-                "tenant_id": identity.tenant_id,
+                "tenant_id": tenant,
                 "client_id": identity.client_id,
             }
         },
@@ -174,6 +189,8 @@ def classify_agent_subject(
     claims: Mapping[str, object],
     allowed_mode: AgentExecutionMode,
 ) -> AgentSubject | AgentIdentityFailure:
+    if binding.provider == "okta":
+        return _classify_okta_subject(binding, claims, allowed_mode)
     if (claims.get("iss"), claims.get("tid"), claims.get("azp")) != (
         binding.issuer,
         binding.tenant_id,
@@ -204,3 +221,26 @@ def classify_agent_subject(
     if not frozenset(binding.required_roles).issubset(roles):
         return AgentIdentityFailure(message="Token lacks the required application roles")
     return AgentSubject(kind="application", oid=oid, mode="autonomous")
+
+
+def _classify_okta_subject(
+    binding: AgentIdentityBinding,
+    claims: Mapping[str, object],
+    allowed_mode: AgentExecutionMode,
+) -> AgentSubject | AgentIdentityFailure:
+    client: Final = claims.get("cid")
+    if (claims.get("iss"), client) != (binding.issuer, binding.client_id):
+        return AgentIdentityFailure(message="Token does not match the registered Okta application")
+    if allowed_mode == "delegated" or not is_okta_client_credentials(claims):
+        return AgentIdentityFailure(message="Only Okta client-credentials tokens can authenticate this agent")
+    try:
+        scopes: Final = _SCOPES.validate_python(claims.get("scp", []))
+    except ValidationError:
+        return AgentIdentityFailure(message="Invalid scope claim")
+    if not frozenset(binding.required_scopes).issubset(scopes):
+        return AgentIdentityFailure(message="Token lacks the required scopes")
+    return AgentSubject(kind="application", oid=binding.client_id, mode="autonomous")
+
+
+def is_okta_client_credentials(claims: Mapping[str, object]) -> bool:
+    return isinstance(claims.get("cid"), str) and claims.get("sub") == claims.get("cid") and "uid" not in claims

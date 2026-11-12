@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Final
@@ -12,6 +13,7 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.repositories.table_repositories import (
     AgentIdentityRepository,
     AgentsRepository,
+    RetiredAgentIdentityRepository,
     VerifiedSubjectRepository,
 )
 from litellm.types.agents import AgentResponse
@@ -448,3 +450,126 @@ async def test_application_and_unregistered_clients_do_not_depend_on_human_subje
     else:
         assert result is None
     humans.find_unique.assert_not_awaited()
+
+
+OKTA_ISSUER: Final = "https://example.okta.com/oauth2/aus1agents"
+OKTA_ISSUERS: Final = frozenset({OKTA_ISSUER})
+OKTA_CLIENT: Final = "0oa1AgentClient"
+OKTA_BINDING: Final = AgentIdentityBinding(
+    agent_id="agent-one",
+    provider="okta",
+    tenant_id=OKTA_ISSUER,
+    client_id=OKTA_CLIENT,
+    issuer=OKTA_ISSUER,
+    required_scopes=(),
+    revision="okta-one",
+)
+OKTA_CLAIMS: Final = {"iss": OKTA_ISSUER, "cid": OKTA_CLIENT, "sub": OKTA_CLIENT, "scp": ["agents:invoke"]}
+OKTA_LOOKUP: Final = {
+    "where": {"provider_tenant_id_client_id": {"provider": "okta", "tenant_id": OKTA_ISSUER, "client_id": OKTA_CLIENT}}
+}
+
+
+def setup_okta_store(cache: UserApiKeyCache | None = None) -> tuple[AgentIdentityStore, AsyncMock]:
+    store, _, identities, _ = setup_store(
+        agent=stored_agent(identity=OKTA_BINDING, execution_mode="autonomous"), cache=cache
+    )
+    identities.find_unique.return_value = OKTA_BINDING
+    return store, identities
+
+
+@pytest.mark.asyncio
+async def test_okta_client_credentials_token_resolves_its_bound_agent() -> None:
+    store, identities = setup_okta_store()
+    result: Final = await store.resolve_verified_claims(OKTA_CLAIMS, OKTA_ISSUERS)
+    assert result == ManagedAgentContext(
+        agent_id="agent-one", binding_revision="okta-one", mode="autonomous", subject_oid=OKTA_CLIENT
+    )
+    identities.find_unique.assert_awaited_once_with(**OKTA_LOOKUP)
+
+
+@pytest.mark.asyncio
+async def test_okta_token_without_a_scope_claim_matches_a_binding_that_requires_none() -> None:
+    store, _ = setup_okta_store()
+    claims: Final = {key: value for key, value in OKTA_CLAIMS.items() if key != "scp"}
+    assert isinstance(await store.resolve_verified_claims(claims, OKTA_ISSUERS), ManagedAgentContext)
+
+
+@pytest.mark.asyncio
+async def test_okta_tokens_skip_the_agent_lookup_unless_their_issuer_opted_in() -> None:
+    store, identities = setup_okta_store()
+    assert await store.resolve_verified_claims(OKTA_CLAIMS) is None
+    assert await store.resolve_verified_claims(OKTA_CLAIMS, frozenset({"https://other.okta.com/oauth2/default"})) is None
+    identities.find_unique.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "claims",
+    [
+        {**OKTA_CLAIMS, "sub": "person@example.com", "uid": "00u1person"},
+        {**OKTA_CLAIMS, "uid": "00u1person"},
+        {**OKTA_CLAIMS, "sub": "person@example.com"},
+        {key: value for key, value in OKTA_CLAIMS.items() if key != "cid"},
+        {key: value for key, value in OKTA_CLAIMS.items() if key != "iss"},
+    ],
+)
+async def test_tokens_that_are_not_okta_client_credentials_skip_the_agent_lookup(
+    claims: Mapping[str, object],
+) -> None:
+    store, identities = setup_okta_store()
+    assert await store.resolve_verified_claims(claims, OKTA_ISSUERS) is None
+    identities.find_unique.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_entra_tokens_keep_the_entra_lookup_when_they_also_carry_okta_claims() -> None:
+    store, _, identities, _ = setup_store()
+    result: Final = await store.resolve_verified_claims({**CLAIMS, "cid": CLIENT, "sub": CLIENT}, OKTA_ISSUERS)
+    assert isinstance(result, ManagedAgentContext)
+    identities.find_unique.assert_awaited_once_with(
+        where={
+            "provider_tenant_id_client_id": {"provider": "microsoft_entra", "tenant_id": TENANT, "client_id": CLIENT}
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_opted_in_okta_issuer_uses_the_okta_lookup_even_with_entra_shaped_claims() -> None:
+    store, identities = setup_okta_store()
+    result: Final = await store.resolve_verified_claims({**OKTA_CLAIMS, "tid": TENANT, "azp": CLIENT}, OKTA_ISSUERS)
+    assert isinstance(result, ManagedAgentContext)
+    identities.find_unique.assert_awaited_once_with(**OKTA_LOOKUP)
+
+
+@pytest.mark.asyncio
+async def test_cached_okta_binding_is_not_reused_for_an_entra_lookup_with_the_same_ids() -> None:
+    store, identities = setup_okta_store(cache=UserApiKeyCache())
+    assert isinstance(await store.resolve_verified_claims(OKTA_CLAIMS, OKTA_ISSUERS), ManagedAgentContext)
+    identities.find_unique.return_value = None
+    entra_shaped: Final = {"iss": ISSUER, "tid": OKTA_ISSUER, "azp": OKTA_CLIENT}
+    assert await store.resolve_verified_claims(entra_shaped, OKTA_ISSUERS) is None
+    assert identities.find_unique.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_retired_okta_client_is_denied() -> None:
+    store, identities = setup_okta_store()
+    identities.find_unique.return_value = None
+    retired: Final = AsyncMock()
+    retired.find_unique.return_value = SimpleNamespace(agent_id="deleted-agent")
+    db: Final = SimpleNamespace(db=SimpleNamespace(litellm_retiredagentidentity=retired))
+    checked: Final = AgentIdentityStore(
+        store.agents, store.identities, store.humans, RetiredAgentIdentityRepository(db)
+    )
+    result: Final = await checked.resolve_verified_claims(OKTA_CLAIMS, OKTA_ISSUERS)
+    assert result == AgentIdentityFailure(message="This agent identity binding has been retired")
+    retired.find_unique.assert_awaited_once_with(**OKTA_LOOKUP)
+
+
+@pytest.mark.asyncio
+async def test_okta_lookup_failure_is_reported_as_unavailable_not_as_an_allow() -> None:
+    store, identities = setup_okta_store()
+    identities.find_unique.side_effect = ConnectionError("writer unavailable")
+    result: Final = await store.resolve_verified_claims(OKTA_CLAIMS, OKTA_ISSUERS)
+    assert result == AgentIdentityFailure(code="policy_unavailable", message="Agent identity could not be loaded")

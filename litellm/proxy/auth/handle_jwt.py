@@ -1149,6 +1149,13 @@ class JWTHandler:
                 return bool(item.audience) and not item.disable_audience_validation
         return issuer == os.getenv("JWT_ISSUER") and bool(os.getenv("JWT_AUDIENCE"))
 
+    def okta_agent_issuers(self) -> frozenset[str]:
+        return frozenset(
+            item.issuer
+            for item in self.litellm_jwtauth.issuers or ()
+            if item.agent_identity_provider == "okta" and item.audience and not item.disable_audience_validation
+        )
+
     def _get_configured_issuer(self, token: str) -> JWTIssuerConfig | None:
         litellm_jwtauth: Final[_JWTAuthSettings | None] = getattr(self, "litellm_jwtauth", None)
         if litellm_jwtauth is None:
@@ -2665,7 +2672,9 @@ class JWTAuthManager:
         """Resolve and authorize JWT context; only normal admission supplies provisioning."""
         handler: Final = jwt_handler
         jwt_valid_token: Final = await JWTAuthManager.authenticate_jwt(api_key, handler)
-        managed: Final = await resolve_managed_agent(jwt_valid_token, prisma_client, cache=user_api_key_cache)
+        managed: Final = await resolve_managed_agent(
+            jwt_valid_token, prisma_client, cache=user_api_key_cache, okta_issuers=handler.okta_agent_issuers()
+        )
         if managed is not None:
             if not handler.managed_issuer_is_trusted(jwt_valid_token.get("iss")):
                 raise HTTPException(403, "Managed agents require trusted JWT issuer and audience validation")

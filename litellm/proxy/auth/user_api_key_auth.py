@@ -2509,7 +2509,13 @@ async def user_api_key_auth_builder(
 
                     if (
                         jwt_claims
-                        and await resolve_managed_agent(jwt_claims, prisma_client, cache=user_api_key_cache) is not None
+                        and await resolve_managed_agent(
+                            jwt_claims,
+                            prisma_client,
+                            cache=user_api_key_cache,
+                            okta_issuers=jwt_handler.okta_agent_issuers(),
+                        )
+                        is not None
                     ):
                         raise HTTPException(
                             403, "Managed agents require direct JWT authentication without virtual-key mapping"
