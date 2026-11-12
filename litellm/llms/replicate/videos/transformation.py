@@ -142,7 +142,7 @@ def _video_object(
     prediction_input: Final = replicate_prediction_input(prediction)
     duration: Final = prediction_input.get("duration")
     resolution: Final = prediction_input.get("resolution")
-    video_object: Final = VideoObject(
+    return VideoObject(
         id=encode_video_id_with_provider(prediction_id, custom_llm_provider or _REPLICATE_PROVIDER, model),
         object="video",
         status="failed" if failure else _STATUS_MAP.get(raw_status, "queued"),
@@ -151,9 +151,8 @@ def _video_object(
         seconds=str(duration) if isinstance(duration, (int, float)) and not isinstance(duration, bool) else None,
         size=resolution if isinstance(resolution, str) else None,
         error={"code": "replicate_error", "message": failure} if failure else None,
+        usage=dict(_usage_from_input(prediction_input)),
     )
-    video_object.usage = _usage_from_input(prediction_input)
-    return video_object
 
 
 def _owned_prediction(raw_response: httpx.Response) -> Mapping[str, object]:
