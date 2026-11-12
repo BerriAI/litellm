@@ -28,7 +28,7 @@ async def heartbeat_database(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[t
         try:
             migration: Final = (
                 Path(__file__).resolve().parents[3]
-                / "litellm-proxy-extras/litellm_proxy_extras/migrations/20261009120000_proxy_worker_expiry/migration.sql"
+                / "litellm/proxy-extras/litellm_proxy_extras/migrations/20261009120000_proxy_worker_expiry/migration.sql"
             )
             with psycopg.connect(url) as connection:
                 _ = connection.execute(migration.read_text())
