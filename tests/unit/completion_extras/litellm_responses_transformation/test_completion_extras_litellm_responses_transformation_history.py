@@ -252,7 +252,8 @@ def test_next_turn_replays_every_item_phase_and_boundary_once_in_order(stream: b
 
     sent: Final = _next_turn_input(assistant)
 
-    assert assistant["content"] == "Checking the weather.Paris: light rain."
+    assert assistant["content"] == "Paris: light rain."
+    assert _replayed_fields(assistant)["commentary"] == "Checking the weather."
     assert _replayed_fields(assistant)["phase"] == "final_answer"
     assert sent[1:-1] == list(REPLAYED)
     assert sent[-1]["type"] == "function_call_output"
@@ -278,8 +279,8 @@ def _edit_arguments(message: Mapping[str, object]) -> Mapping[str, object]:
     ("edit", "expected_text", "expected_phase", "expected_arguments"),
     [
         (_edit_content, "Checking the weather. Paris: heavy rain.", "final_answer", '{"city":"Paris"}'),
-        (_edit_phase, "Checking the weather.Paris: light rain.", "commentary", '{"city":"Paris"}'),
-        (_edit_arguments, "Checking the weather.Paris: light rain.", "final_answer", '{"city":"Lyon"}'),
+        (_edit_phase, "Paris: light rain.", "commentary", '{"city":"Paris"}'),
+        (_edit_arguments, "Paris: light rain.", "final_answer", '{"city":"Lyon"}'),
     ],
     ids=["content", "phase", "arguments"],
 )
@@ -330,7 +331,7 @@ def test_missing_or_corrupt_replay_metadata_falls_back_to_the_chat_fields(
     sent: Final = _next_turn_input({**assistant, "provider_specific_fields": corrupt(_replayed_fields(assistant))})
 
     assert _types(sent[1:-1]) == ["reasoning", "reasoning", "message", "function_call"]
-    assert sent[3]["content"] == [{"type": "output_text", "text": "Checking the weather.Paris: light rain."}]
+    assert sent[3]["content"] == [{"type": "output_text", "text": "Paris: light rain."}]
     assert sent[3]["phase"] == "final_answer"
 
 
@@ -495,7 +496,7 @@ def test_an_interrupted_stream_records_no_replay() -> None:
         received: Final = tuple(_chunks_before_error(iter(stream)))
     assistant: Final = litellm.stream_chunk_builder(list(received), messages=[USER]).choices[0].message.model_dump()
 
-    assert assistant["content"] == "Checking the weather.Paris: light rain."
+    assert assistant["content"] == "Paris: light rain."
     assert _replayed_fields(assistant) == {}
 
 
@@ -503,7 +504,7 @@ def test_an_interrupted_stream_records_no_replay() -> None:
 def test_a_non_openai_route_records_no_phase_or_replay(stream: bool) -> None:
     assistant: Final = _assistant_turn(OUTPUT, stream=stream, model=f"azure/responses/{MODEL}")
 
-    assert _replayed_fields(assistant) == {}
+    assert _replayed_fields(assistant) == {"commentary": "Checking the weather."}
 
 
 def test_a_non_openai_route_ignores_a_recorded_replay() -> None:
@@ -581,7 +582,7 @@ def test_a_resealed_record_that_does_not_fit_the_chat_fields_falls_back(items: S
     sent: Final = _next_turn_input(_resealed(assistant, items))
 
     assert _types(sent[1:-1]) == ["message", "function_call"]
-    assert sent[1]["content"] == [{"type": "output_text", "text": "Checking the weather.Paris: light rain."}]
+    assert sent[1]["content"] == [{"type": "output_text", "text": "Paris: light rain."}]
 
 
 PATCH_CALL: Final = {
