@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Final, Literal
 
 from fastapi import HTTPException
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 import litellm
 from litellm import Router
@@ -42,6 +42,7 @@ from litellm.proxy.hooks.rate_limiter_utils import (
 )
 from litellm.proxy.utils import InternalUsageCache
 from litellm.redis.stores.rate_limits import RATE_LIMITS_TARGET, CounterIncrement, RateLimitCounter, RateLimitScope
+from litellm.types.llms.openai import ResponseAPIUsage
 from litellm.types.router import ModelGroupInfo
 from litellm.types.utils import CallTypesLiteral, LLMResponseTypes, Usage
 
@@ -54,12 +55,12 @@ class _SettlementMetadata(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    user_api_key_auth_metadata: Mapping[str, object] = Field(default_factory=dict)
+    user_api_key_auth_metadata: Mapping[str, object] | None = None
     user_api_key_team_id: str | None = None
 
     @property
     def priority(self) -> str | None:
-        value: Final = self.user_api_key_auth_metadata.get("priority")
+        value: Final = (self.user_api_key_auth_metadata or {}).get("priority")
         return value if isinstance(value, str) else None
 
 
@@ -68,14 +69,19 @@ class _ResponseUsage(BaseModel):
 
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
-    usage: Usage | None = None
+    usage: Usage | ResponseAPIUsage | None = None
 
 
 def _usage_of(response_obj: object) -> Usage | None:
     try:
-        return _ResponseUsage.model_validate(response_obj).usage
+        usage: Final = _ResponseUsage.model_validate(response_obj).usage
     except ValidationError:
         return None
+    if isinstance(usage, ResponseAPIUsage):
+        return Usage(
+            prompt_tokens=usage.input_tokens, completion_tokens=usage.output_tokens, total_tokens=usage.total_tokens
+        )
+    return usage
 
 
 TEAM_MODEL_LIMIT_AT_SATURATION: Final = "model_per_team_saturated"
@@ -406,7 +412,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
     ) -> RateLimitDescriptor | None:
         limits: Final = borrowing_team_model_limits(
-            user_api_key_dict, RateLimitedModel(requested=model, group=model_group_info.model_group)
+            user_api_key_dict,
+            self.v3_limiter.rate_limited_model(model) or RateLimitedModel(requested=model, group=model),
         )
         if limits.tpm is None and limits.rpm is None:
             return None

@@ -2502,6 +2502,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if response["overall_code"] == "OVER_LIMIT":
             self._handle_rate_limit_error(response, tpm_windows, requested_model)
 
+    def rate_limited_model(self, requested_model: str | None) -> RateLimitedModel | None:
+        """The requested name and the model group it resolves to, so limits keyed by either name are found."""
+        return self._rate_limited_model(requested_model)
+
     def _rate_limited_model(self, requested_model: str | None) -> RateLimitedModel | None:
         if not requested_model:
             return None
