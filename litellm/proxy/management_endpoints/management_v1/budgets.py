@@ -35,7 +35,7 @@ from litellm.proxy.list_api.list_framework import (
     where_sql,
 )
 from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V1_PREFIX
-from litellm.proxy.utils import PrismaClient
+from litellm.proxy.utils import PrismaClient, query_raw_rows
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.management_endpoints.management_v1 import (
     ListResponse,
@@ -113,7 +113,7 @@ class PrismaBudgetListExecutor:
     async def count(self, where: tuple[Predicate, ...]) -> int:
         clauses, params = where_sql(where)
         sql: Final = f"SELECT COUNT(*) AS count FROM {BUDGET_TABLE}" + (f" WHERE {clauses}" if clauses else "")
-        counted: Final = _ROW_COUNTS.validate_python(await self.prisma_client.db.query_raw(sql, *params))
+        counted: Final = _ROW_COUNTS.validate_python(await query_raw_rows(self.prisma_client.db, sql, *params))
         return counted[0].count if counted else 0
 
     async def find_many(self, plan: QueryPlan) -> Sequence[BudgetListItem]:
@@ -130,7 +130,9 @@ class PrismaBudgetListExecutor:
             + f" ORDER BY {ordering}"
             + f" LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
         )
-        return _BUDGET_ROWS.validate_python(await self.prisma_client.db.query_raw(sql, *params, plan.take, plan.skip))
+        return _BUDGET_ROWS.validate_python(
+            await query_raw_rows(self.prisma_client.db, sql, *params, plan.take, plan.skip)
+        )
 
 
 def _serialize(row: BudgetListItem) -> BudgetListItem:

@@ -4,6 +4,7 @@ Translation from OpenAI's `/chat/completions` endpoint to IBM WatsonX's `/text/c
 Docs: https://cloud.ibm.com/apidocs/watsonx-ai#text-chat
 """
 
+import copy
 from typing import Final
 
 from litellm import verbose_logger
@@ -57,7 +58,7 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
         _tools = non_default_params.pop("tools", None)
         if _tools is not None:
             # remove 'additionalProperties' from tools
-            _tools = remove_additional_properties(_tools)
+            _tools = remove_additional_properties(copy.deepcopy(_tools))  # pyright: ignore[reportUnknownArgumentType]  # tools arrive untyped through the bare-dict params
             # remove 'strict' from tools
             _tools = remove_strict_from_schema(_tools)
         if _tools is not None:

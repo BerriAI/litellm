@@ -1,11 +1,14 @@
 from collections.abc import Mapping, Sequence
+from dataclasses import asdict, fields, replace
 from datetime import date, datetime
-from types import SimpleNamespace
+from types import FunctionType, SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 from fastapi import HTTPException
+from prisma.errors import DataError, PrismaError, TableNotFoundError
 
 import litellm.proxy.management_endpoints.common_daily_activity as common_daily_activity_module
 from litellm.constants import USAGE_TOP_API_KEYS_DEFAULT
@@ -32,10 +35,353 @@ from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_E
 from litellm.proxy.utils import PrismaClient, hash_token
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     DailySpendMetadata,
+    KeyMetadata,
     SpendAnalyticsPaginatedResponse,
     SpendMetrics,
 )
-from litellm.types.repositories.daily_activity import GroupingSetsRow, KeyMetadataRow
+from litellm.types.repositories.daily_activity import (
+    AggregatedRows,
+    CustomerTeamRollupRow,
+    DailyActivityScope,
+    DailyActivityTable,
+    EntityRollupRow,
+    GroupingSetsRow,
+    KeyMetadataRow,
+)
+
+
+def _raise_missing_error_meta() -> None:
+    raise AttributeError("'NoneType' object has no attribute 'get'")
+
+
+def _query_engine_crash_on_closed_connection() -> AttributeError:
+    raise_inside_query_engine: Final = FunctionType(
+        _raise_missing_error_meta.__code__, {"__name__": "prisma.engine.utils"}
+    )
+    with pytest.raises(AttributeError) as crash:
+        raise_inside_query_engine()
+    return crash.value
+
+
+DATABASE_FAILURES: Final = pytest.mark.parametrize(
+    "failure",
+    [
+        DataError(
+            {"user_facing_error": {"error_code": "P1001", "message": "Can't reach database server at `db:5432`"}}
+        ),
+        PrismaError("metadata unavailable"),
+        httpx.ReadTimeout("the query engine stopped answering"),
+        httpx.ConnectError("the query engine refused the connection"),
+        _query_engine_crash_on_closed_connection(),
+    ],
+    ids=[
+        "unreachable-database",
+        "prisma-error",
+        "engine-read-timeout",
+        "engine-connect-error",
+        "engine-crash-on-closed-connection",
+    ],
+)
+
+CODE_BUGS: Final = (
+    pytest.param(TypeError("not a database failure"), id="type-error"),
+    pytest.param(AttributeError("not a database failure"), id="attribute-error"),
+)
+REJECTED_QUERIES: Final = (
+    pytest.param(
+        DataError({"user_facing_error": {"error_code": "P2010", "message": "not a database failure"}}),
+        id="rejected-query",
+    ),
+    pytest.param(
+        TableNotFoundError(
+            {
+                "user_facing_error": {
+                    "error_code": "P2021",
+                    "message": "not a database failure",
+                    "meta": {"table": "LiteLLM_VerificationToken"},
+                }
+            }
+        ),
+        id="missing-table",
+    ),
+)
+NOT_DATABASE_OUTAGES: Final = pytest.mark.parametrize("bug", (*CODE_BUGS, *REJECTED_QUERIES))
+
+
+@pytest.mark.asyncio
+@DATABASE_FAILURES
+@pytest.mark.parametrize(
+    ("key_failure", "user_failure", "empty"),
+    [(False, False, False), (True, False, False), (False, True, False), (True, True, False), (False, False, True)],
+)
+async def test_entity_metadata_outages_preserve_daily_spend_and_other_metadata(
+    failure: Exception, key_failure: bool, user_failure: bool, empty: bool
+) -> None:
+    prisma: Final = MagicMock()
+    key: Final = SimpleNamespace(token="key", key_alias="Alias", team_id=None, user_id=None, metadata=None)
+    user: Final = SimpleNamespace(user_id="user", user_email="user@example.com", user_alias="User")
+    main_rows: Final = tuple(
+        asdict(_grouping_row(level, api_key=api_key, spend=2.0))
+        for level, api_key in ((127, None), (63, None), (31, "key"))
+    )
+    entity_rows: Final = tuple(
+        {**asdict(_grouping_row(63, api_key=api_key, spend=2.0)), "entity_id": "user", "api_key_rolled": rolled}
+        for rolled, api_key in ((1, None), (0, "key"))
+    )
+    prisma.db.query_raw = AsyncMock(side_effect=[main_rows, entity_rows])
+    prisma.db.litellm_verificationtoken.find_many = AsyncMock(
+        side_effect=[[key], failure if key_failure else ([] if empty else [key])]
+    )
+    prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
+    prisma.db.litellm_usertable.find_many = AsyncMock(
+        side_effect=failure if user_failure else None,
+        return_value=[] if empty else [user],
+    )
+
+    result: Final = await get_daily_activity_aggregated(
+        prisma_client=prisma,
+        table_name="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id=None,
+        start_date="2024-01-01",
+        end_date="2024-01-01",
+        model=None,
+        api_key=None,
+        include_entity_breakdown=True,
+    )
+
+    day: Final = result.results[0]
+    entity: Final = day.breakdown.entities["user"]
+    assert result.metadata.total_spend == day.metrics.spend == entity.metrics.spend == 2.0
+    assert day.breakdown.api_keys["key"].metadata.key_alias == "Alias"
+    assert entity.metadata == (
+        {} if user_failure or empty else {"user_email": "user@example.com", "user_alias": "User"}
+    )
+    assert entity.api_key_breakdown["key"].metrics.spend == 2.0
+    assert entity.api_key_breakdown["key"].metadata == (
+        KeyMetadata() if key_failure else KeyMetadata(key_alias=None if empty else "Alias", key_exists=not empty)
+    )
+
+
+def _usage_scope() -> DailyActivityScope:
+    return daily_activity_scope(
+        "litellm_dailyuserspend", "user_id", None, None, None, "2024-01-01", "2024-01-01", None, None
+    )
+
+
+def _entity_row() -> EntityRollupRow:
+    grouping: Final = asdict(_grouping_row(63, api_key="key", spend=2.0))
+    return EntityRollupRow(
+        **{
+            **{field.name: grouping[field.name] for field in fields(EntityRollupRow) if field.name in grouping},
+            "entity_id": "user",
+            "api_key_rolled": 0,
+        }
+    )
+
+
+def _usage_repository() -> MagicMock:
+    repository: Final = MagicMock()
+    repository.aggregated = AsyncMock(
+        return_value=AggregatedRows(
+            grouping_rows=tuple(
+                _grouping_row(level, api_key=api_key, spend=2.0)
+                for level, api_key in ((127, None), (63, None), (31, "key"))
+            ),
+            entity_rows=(_entity_row(),),
+            distinct_api_keys=1,
+        )
+    )
+    repository.key_metadata = AsyncMock(return_value={})
+    repository.user_metadata = AsyncMock(return_value={})
+    repository.guardrail_spend = AsyncMock(return_value=())
+    return repository
+
+
+@pytest.mark.asyncio
+@DATABASE_FAILURES
+async def test_usage_keeps_spend_when_the_first_key_lookup_hits_a_database_failure(failure: Exception) -> None:
+    repository: Final = _usage_repository()
+    repository.key_metadata = AsyncMock(side_effect=failure)
+
+    result: Final = await _get_daily_activity_aggregated(repository, _usage_scope())
+
+    day: Final = result.results[0]
+    assert result.metadata.total_spend == day.metrics.spend == 2.0
+    assert day.breakdown.api_keys["key"].metrics.spend == 2.0
+    assert day.breakdown.api_keys["key"].metadata == KeyMetadata()
+
+
+@pytest.mark.asyncio
+@DATABASE_FAILURES
+async def test_usage_keeps_spend_when_the_guardrail_lookup_hits_a_database_failure(failure: Exception) -> None:
+    repository: Final = _usage_repository()
+    repository.guardrail_spend = AsyncMock(side_effect=failure)
+
+    result: Final = await _get_daily_activity_aggregated(repository, _usage_scope(), include_guardrail_breakdown=True)
+
+    assert result.metadata.total_spend == result.results[0].metrics.spend == 2.0
+    assert result.results[0].breakdown.guardrails == {}
+
+
+@pytest.mark.asyncio
+@DATABASE_FAILURES
+async def test_customer_usage_keeps_spend_when_the_team_lookup_hits_a_database_failure(failure: Exception) -> None:
+    repository: Final = _usage_repository()
+    repository.customer_team_spend = AsyncMock(side_effect=failure)
+    scope: Final = replace(_usage_scope(), table=DailyActivityTable.CUSTOMER, entity_id_field="end_user_id")
+
+    result: Final = await _get_daily_activity_aggregated(repository, scope)
+
+    assert result.metadata.total_spend == result.results[0].metrics.spend == 2.0
+    assert result.results[0].breakdown.api_keys["key"].metrics.spend == 2.0
+    assert result.results[0].breakdown.teams == {}
+
+
+@pytest.mark.asyncio
+@DATABASE_FAILURES
+async def test_customer_daily_activity_keeps_spend_when_the_team_lookup_hits_a_database_failure(
+    failure: Exception,
+) -> None:
+    prisma: Final = _daily_user_spend_prisma(AsyncMock(return_value=[]))
+    prisma.db.litellm_dailyenduserspend.count = AsyncMock(return_value=1)
+    prisma.db.litellm_dailyenduserspend.find_many = AsyncMock(
+        return_value=[
+            SimpleNamespace(
+                **vars(_daily_user_spend_record(user_id="user", api_key="key", spend=7.0)),
+                end_user_id="customer",
+                id="row",
+            )
+        ]
+    )
+    prisma.db.query_raw = AsyncMock(side_effect=failure)
+
+    result: Final = await get_daily_activity(
+        prisma_client=prisma,
+        table_name="litellm_dailyenduserspend",
+        entity_id_field="end_user_id",
+        entity_id=None,
+        entity_metadata_field=None,
+        start_date="2024-01-01",
+        end_date="2024-01-01",
+        model=None,
+        api_key=None,
+        page=1,
+        page_size=1000,
+    )
+
+    assert result.metadata.total_spend == result.results[0].metrics.spend == 7.0
+    assert result.results[0].breakdown.teams == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", REJECTED_QUERIES)
+async def test_usage_keeps_spend_when_the_guardrail_table_rejects_the_query(failure: Exception) -> None:
+    repository: Final = _usage_repository()
+    repository.guardrail_spend = AsyncMock(side_effect=failure)
+
+    result: Final = await _get_daily_activity_aggregated(repository, _usage_scope(), include_guardrail_breakdown=True)
+
+    assert result.metadata.total_spend == result.results[0].metrics.spend == 2.0
+    assert result.results[0].breakdown.guardrails == {}
+
+
+async def _assert_usage_reports_the_bug(repository: MagicMock) -> None:
+    with pytest.raises(HTTPException) as error:
+        await _get_daily_activity_aggregated(
+            repository, _usage_scope(), include_entity_breakdown=True, include_guardrail_breakdown=True
+        )
+
+    assert error.value.status_code == 500
+    assert error.value.detail == {"error": "Failed to fetch analytics: not a database failure"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lookup", ["key_metadata", "user_metadata"])
+@NOT_DATABASE_OUTAGES
+async def test_usage_still_reports_a_lookup_bug_that_is_not_a_database_failure(lookup: str, bug: Exception) -> None:
+    repository: Final = _usage_repository()
+    setattr(repository, lookup, AsyncMock(side_effect=bug))
+
+    await _assert_usage_reports_the_bug(repository)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bug", CODE_BUGS)
+async def test_usage_still_reports_a_guardrail_lookup_bug_that_is_not_a_database_error(bug: Exception) -> None:
+    repository: Final = _usage_repository()
+    repository.guardrail_spend = AsyncMock(side_effect=bug)
+
+    await _assert_usage_reports_the_bug(repository)
+
+
+def _daily_user_spend_prisma(key_lookup: AsyncMock) -> MagicMock:
+    prisma: Final = MagicMock()
+    records: Final = [_daily_user_spend_record(user_id="user", api_key="key", spend=7.0)]
+    prisma.db.litellm_dailyuserspend.count = AsyncMock(return_value=len(records))
+    prisma.db.litellm_dailyuserspend.find_many = AsyncMock(return_value=records)
+    prisma.db.litellm_verificationtoken.find_many = key_lookup
+    prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
+    return prisma
+
+
+async def _daily_user_activity(prisma: MagicMock, user_emails: AsyncMock) -> SpendAnalyticsPaginatedResponse:
+    return await get_daily_activity(
+        prisma_client=prisma,
+        table_name="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id=None,
+        entity_metadata_field=None,
+        start_date="2024-01-01",
+        end_date="2024-01-01",
+        model=None,
+        api_key=None,
+        page=1,
+        page_size=1000,
+        resolve_entity_metadata=user_emails,
+    )
+
+
+@pytest.mark.asyncio
+@DATABASE_FAILURES
+@pytest.mark.parametrize(("key_failure", "email_failure"), [(True, False), (False, True)])
+async def test_daily_activity_keeps_spend_when_a_metadata_lookup_hits_a_database_failure(
+    failure: Exception, key_failure: bool, email_failure: bool
+) -> None:
+    key: Final = SimpleNamespace(token="key", key_alias="Alias", team_id=None, user_id=None, metadata=None)
+    prisma: Final = _daily_user_spend_prisma(
+        AsyncMock(side_effect=failure if key_failure else None, return_value=[key])
+    )
+    user_emails: Final = AsyncMock(
+        side_effect=failure if email_failure else None, return_value={"user": {"user_email": "user@example.com"}}
+    )
+
+    result: Final = await _daily_user_activity(prisma, user_emails)
+
+    day: Final = result.results[0]
+    assert result.metadata.total_spend == day.metrics.spend == 7.0
+    assert day.breakdown.api_keys["key"].metadata == (
+        KeyMetadata() if key_failure else KeyMetadata(key_alias="Alias", key_exists=True)
+    )
+    assert day.breakdown.entities["user"].metadata == ({} if email_failure else {"user_email": "user@example.com"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lookup", ["key metadata", "user emails"])
+@NOT_DATABASE_OUTAGES
+async def test_daily_activity_still_reports_a_metadata_lookup_bug_that_is_not_a_database_failure(
+    lookup: str, bug: Exception
+) -> None:
+    prisma: Final = _daily_user_spend_prisma(
+        AsyncMock(side_effect=bug if lookup == "key metadata" else None, return_value=[])
+    )
+    user_emails: Final = AsyncMock(side_effect=bug if lookup == "user emails" else None, return_value={})
+
+    with pytest.raises(HTTPException) as error:
+        await _daily_user_activity(prisma, user_emails)
+
+    assert error.value.status_code == 500
+    assert error.value.detail == {"error": "Failed to fetch analytics: not a database failure"}
 
 
 async def _run_aggregated_daily_activity(
@@ -364,6 +710,7 @@ async def test_get_daily_activity_aggregated_with_endpoint_breakdown():
         "prompt_caching_savings_spend": 0.0,
         "gateway_injected_caching_savings_spend": 0.0,
         "autorouter_savings_spend": 0.0,
+        "guardrail_spend": 0.0,
         "total_response_time_ms": 0,
         "timed_requests": 0,
         "failed_requests": 0,
@@ -948,6 +1295,7 @@ def test_update_breakdown_metrics_includes_user_email():
         prompt_caching_savings_spend=0,
         gateway_injected_caching_savings_spend=0,
         autorouter_savings_spend=0,
+        guardrail_spend=0,
         total_response_time_ms=0,
         timed_requests=0,
         total_tokens=2,
@@ -1029,6 +1377,7 @@ async def test_tag_daily_activity_metadata_totals_not_zero():
     mock_record_1.prompt_caching_savings_spend = 0.0
     mock_record_1.gateway_injected_caching_savings_spend = 0.0
     mock_record_1.autorouter_savings_spend = 0.0
+    mock_record_1.guardrail_spend = 0.0
     mock_record_1.total_response_time_ms = 18_000
     mock_record_1.timed_requests = 9
     mock_record_1.api_requests = 10
@@ -1055,6 +1404,7 @@ async def test_tag_daily_activity_metadata_totals_not_zero():
     mock_record_2.prompt_caching_savings_spend = 0.0
     mock_record_2.gateway_injected_caching_savings_spend = 0.0
     mock_record_2.autorouter_savings_spend = 0.0
+    mock_record_2.guardrail_spend = 0.0
     mock_record_2.total_response_time_ms = 2_500
     mock_record_2.timed_requests = 5
     mock_record_2.api_requests = 5
@@ -1127,6 +1477,7 @@ async def test_aggregated_activity_preserves_metadata_for_deleted_keys():
         "prompt_caching_savings_spend": 0.0,
         "gateway_injected_caching_savings_spend": 0.0,
         "autorouter_savings_spend": 0.0,
+        "guardrail_spend": 0.0,
         "total_response_time_ms": 0,
         "timed_requests": 0,
         "failed_requests": 0,
@@ -1223,6 +1574,7 @@ async def test_aggregated_activity_flags_only_keys_that_key_info_can_still_resol
         "prompt_caching_savings_spend": 0.0,
         "gateway_injected_caching_savings_spend": 0.0,
         "autorouter_savings_spend": 0.0,
+        "guardrail_spend": 0.0,
         "total_response_time_ms": 0,
         "timed_requests": 0,
         "api_requests": 1,
@@ -1272,7 +1624,7 @@ async def test_aggregated_activity_flags_only_keys_that_key_info_can_still_resol
     assert key_breakdown["deleted-key"].metadata.key_alias == "deleted"
 
 
-def _daily_user_spend_record(*, user_id, api_key, spend, model="gpt-4", model_group="gpt-4"):
+def _daily_user_spend_record(*, user_id, api_key, spend, model="gpt-4", model_group="gpt-4", guardrail_spend=0.0):
     """A LiteLLM_DailyUserSpend row as the per-user breakdown reads it."""
     return SimpleNamespace(
         date="2024-01-01",
@@ -1293,12 +1645,45 @@ def _daily_user_spend_record(*, user_id, api_key, spend, model="gpt-4", model_gr
         prompt_caching_savings_spend=0.0,
         gateway_injected_caching_savings_spend=0.0,
         autorouter_savings_spend=0.0,
+        guardrail_spend=guardrail_spend,
         total_response_time_ms=0,
         timed_requests=0,
         api_requests=1,
         successful_requests=1,
         failed_requests=0,
     )
+
+
+@pytest.mark.asyncio
+async def test_paginated_activity_separates_guardrail_spend_per_model_and_key():
+    records = [
+        _daily_user_spend_record(user_id="u", api_key="key", spend=0.0076916, model="guarded", guardrail_spend=0.00015),
+        _daily_user_spend_record(user_id="u", api_key="key", spend=0.002, model="unguarded"),
+    ]
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_dailyuserspend.count = AsyncMock(return_value=len(records))
+    mock_prisma.db.litellm_dailyuserspend.find_many = AsyncMock(return_value=records)
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+
+    result = await get_daily_activity(
+        prisma_client=mock_prisma,
+        table_name="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id=None,
+        entity_metadata_field=None,
+        start_date="2024-01-01",
+        end_date="2024-01-01",
+        model=None,
+        api_key=None,
+        page=1,
+        page_size=1000,
+    )
+
+    models = result.results[0].breakdown.models
+    guarded = models["guarded"].api_key_breakdown["key"].metrics
+    assert guarded.spend - guarded.guardrail_spend == pytest.approx(0.0075416)
+    assert models["unguarded"].api_key_breakdown["key"].metrics.guardrail_spend == 0.0
+    assert result.results[0].metrics.guardrail_spend == pytest.approx(0.00015)
 
 
 @pytest.mark.asyncio
@@ -1442,6 +1827,7 @@ async def test_get_daily_activity_aggregated_empty_result_set():
             "prompt_caching_savings_spend": None,
             "gateway_injected_caching_savings_spend": None,
             "autorouter_savings_spend": None,
+            "guardrail_spend": None,
             "total_response_time_ms": None,
             "timed_requests": None,
             "api_requests": None,
@@ -1490,6 +1876,7 @@ def _no_spend_record():
         prompt_caching_savings_spend=None,
         gateway_injected_caching_savings_spend=None,
         autorouter_savings_spend=None,
+        guardrail_spend=None,
         total_response_time_ms=None,
         timed_requests=None,
         api_requests=None,
@@ -1629,6 +2016,7 @@ def _spend_record(api_key, *, model="gpt-4o-mini-ptu", spend=0.0, ptu_flat_cost=
         prompt_caching_savings_spend=0,
         gateway_injected_caching_savings_spend=0,
         autorouter_savings_spend=0,
+        guardrail_spend=0,
         total_response_time_ms=0,
         timed_requests=0,
         total_tokens=0,
@@ -1675,6 +2063,7 @@ def _grouping_row(
     endpoint=None,
     spend=0.0,
     ptu_flat_cost=0.0,
+    guardrail_spend=None,
 ):
     return GroupingSetsRow(
         date="2024-01-01",
@@ -1697,6 +2086,7 @@ def _grouping_row(
         prompt_caching_savings_spend=0.0,
         gateway_injected_caching_savings_spend=0.0,
         autorouter_savings_spend=0.0,
+        guardrail_spend=guardrail_spend,
         total_response_time_ms=0,
         timed_requests=0,
         api_requests=0,
@@ -1740,6 +2130,38 @@ def test_grouping_sets_dispatcher_excludes_ptu_sentinel_from_key_breakdowns(ptu_
     assert model_bucket.metrics.spend == 5.0
     assert PTU_SENTINEL_API_KEY not in model_bucket.api_key_breakdown
     assert "real-key" in model_bucket.api_key_breakdown
+
+
+def test_model_key_breakdown_separates_guardrail_spend_from_model_spend():
+    from litellm.proxy.management_endpoints.common_daily_activity import (
+        _GROUP_DATE_API_KEY,
+        _GROUP_DATE_MODEL,
+        _GROUP_DATE_MODEL_API_KEY,
+        _GROUP_GRAND_TOTAL,
+        _aggregate_grouping_sets_records_sync,
+    )
+
+    records = [
+        _grouping_row(_GROUP_DATE_MODEL, model="guarded", spend=0.0076916, guardrail_spend=0.00015),
+        _grouping_row(_GROUP_DATE_MODEL, model="unguarded", spend=0.002),
+        _grouping_row(
+            _GROUP_DATE_MODEL_API_KEY, model="guarded", api_key="key", spend=0.0076916, guardrail_spend=0.00015
+        ),
+        _grouping_row(_GROUP_DATE_MODEL_API_KEY, model="unguarded", api_key="key", spend=0.002),
+        _grouping_row(_GROUP_DATE_API_KEY, api_key="key", spend=0.0096916, guardrail_spend=0.00015),
+        _grouping_row(_GROUP_GRAND_TOTAL, spend=0.0096916, guardrail_spend=0.00015),
+    ]
+
+    aggregated = _aggregate_grouping_sets_records_sync(records=records, api_key_metadata={})
+    day = aggregated["results"][0]
+
+    guarded = day.breakdown.models["guarded"].api_key_breakdown["key"].metrics
+    unguarded = day.breakdown.models["unguarded"].api_key_breakdown["key"].metrics
+    assert guarded.spend - guarded.guardrail_spend == pytest.approx(0.0075416)
+    assert unguarded.guardrail_spend == 0.0
+    assert day.breakdown.models["guarded"].metrics.guardrail_spend == pytest.approx(0.00015)
+    assert day.breakdown.api_keys["key"].metrics.guardrail_spend == pytest.approx(0.00015)
+    assert aggregated["totals"].guardrail_spend == pytest.approx(0.00015)
 
 
 def test_grouping_sets_dispatcher_populates_every_breakdown_level(ptu_cost_attribution_enabled):
@@ -1859,6 +2281,7 @@ def test_update_breakdown_metrics_covers_mcp_endpoint_and_entity(ptu_cost_attrib
         prompt_caching_savings_spend=0,
         gateway_injected_caching_savings_spend=0,
         autorouter_savings_spend=0,
+        guardrail_spend=0,
         total_response_time_ms=0,
         timed_requests=0,
         total_tokens=0,
@@ -2214,6 +2637,7 @@ async def test_get_daily_activity_aggregated_with_entity_breakdown():
         "prompt_caching_savings_spend": 0.0,
         "gateway_injected_caching_savings_spend": 0.0,
         "autorouter_savings_spend": 0.0,
+        "guardrail_spend": 0.0,
         "total_response_time_ms": 0,
         "timed_requests": 0,
         "failed_requests": 0,
@@ -2553,6 +2977,71 @@ async def test_get_daily_activity_rejects_non_canonical_dates_before_querying(st
     mock_table.find_many.assert_not_awaited()
 
 
+def _provider_record(provider: str, *, model: str, spend: float):
+    base = vars(_spend_record("real-key", model=model, spend=spend))
+    return SimpleNamespace(**{**base, "custom_llm_provider": provider, "api_requests": 1, "successful_requests": 1})
+
+
+def test_per_row_provider_bucket_marks_subscription_backed_providers_only():
+    from litellm.proxy.management_endpoints.common_daily_activity import update_breakdown_metrics
+    from litellm.types.proxy.management_endpoints.common_daily_activity import BreakdownMetrics
+
+    breakdown = BreakdownMetrics()
+    update_breakdown_metrics(breakdown, _provider_record("chatgpt", model="gpt-5.6-terra", spend=0.0), {}, {}, {})
+    update_breakdown_metrics(breakdown, _provider_record("openai", model="gpt-5.6", spend=0.0), {}, {}, {})
+    update_breakdown_metrics(breakdown, _provider_record("chatgpt", model="gpt-5.6-sol", spend=0.0), {}, {}, {})
+
+    assert breakdown.providers["chatgpt"].metadata == {"subscription_covered": True}
+    assert "subscription_covered" not in breakdown.providers["openai"].metadata
+    assert breakdown.providers["chatgpt"].metrics.api_requests == 2
+    assert "subscription_covered" not in breakdown.models["gpt-5.6-terra"].metadata
+
+
+def test_per_row_provider_marker_keeps_existing_provider_metadata():
+    from litellm.proxy.management_endpoints.common_daily_activity import update_breakdown_metrics
+    from litellm.types.proxy.management_endpoints.common_daily_activity import BreakdownMetrics
+
+    breakdown = BreakdownMetrics()
+    update_breakdown_metrics(
+        breakdown,
+        _provider_record("chatgpt", model="gpt-5.6-terra", spend=0.0),
+        {},
+        {"chatgpt": {"region": "us"}},
+        {},
+    )
+
+    assert breakdown.providers["chatgpt"].metadata == {"region": "us", "subscription_covered": True}
+
+
+@pytest.mark.parametrize("provider_row_first", [True, False])
+def test_grouping_sets_provider_bucket_marks_subscription_backed_providers_in_any_row_order(provider_row_first):
+    from litellm.proxy.management_endpoints.common_daily_activity import (
+        _GROUP_DATE_PROVIDER,
+        _GROUP_DATE_PROVIDER_API_KEY,
+        _GROUP_GRAND_TOTAL,
+        _aggregate_grouping_sets_records_sync,
+    )
+
+    provider_rows = [
+        _grouping_row(_GROUP_DATE_PROVIDER, custom_llm_provider="chatgpt", spend=0.0),
+        _grouping_row(_GROUP_DATE_PROVIDER_API_KEY, custom_llm_provider="chatgpt", api_key="real-key", spend=0.0),
+    ]
+    ordered_rows = provider_rows if provider_row_first else list(reversed(provider_rows))
+    records = [
+        *ordered_rows,
+        _grouping_row(_GROUP_DATE_PROVIDER, custom_llm_provider="openai", spend=0.0),
+        _grouping_row(_GROUP_DATE_PROVIDER_API_KEY, custom_llm_provider="openai", api_key="real-key", spend=0.0),
+        _grouping_row(_GROUP_GRAND_TOTAL, spend=0.0),
+    ]
+
+    aggregated = _aggregate_grouping_sets_records_sync(records=records, api_key_metadata={})
+
+    providers = aggregated["results"][0].breakdown.providers
+    assert providers["chatgpt"].metadata == {"subscription_covered": True}
+    assert "real-key" in providers["chatgpt"].api_key_breakdown
+    assert "subscription_covered" not in providers["openai"].metadata
+
+
 @pytest.mark.parametrize("missing", [None, ""])
 def test_missing_dimensions_preserve_all_paginated_metrics(missing: str | None) -> None:
     records: Final = (
@@ -2694,3 +3183,34 @@ def test_metric_merges_preserve_every_additive_field() -> None:
     metrics: Final = SpendMetrics.model_validate(dict.fromkeys(SpendMetrics.model_fields, 2))
     merged: Final = common_daily_activity_module.sum_spend_metrics((SpendMetrics(), metrics, metrics))
     assert merged.model_dump() == dict.fromkeys(SpendMetrics.model_fields, 4)
+
+
+@pytest.mark.parametrize("team_ids", (("team-a", "Unassigned"), ()))
+def test_customer_teams_preserve_metrics_and_unassigned_bucket(team_ids: tuple[str, ...]) -> None:
+    from litellm.types.proxy.management_endpoints.common_daily_activity import DailySpendData
+
+    rows: Final = tuple(
+        CustomerTeamRollupRow(
+            date="2026-01-01",
+            api_key=None,
+            team_id=team_id,
+            team_alias="Team A" if team_id == "team-a" else None,
+            **{
+                field.name: 2
+                for field in fields(CustomerTeamRollupRow)
+                if field.name not in ("date", "api_key", "team_id", "team_alias")
+            },
+        )
+        for team_id in team_ids
+    )
+    day: Final = DailySpendData(date=date(2026, 1, 1), metrics=SpendMetrics())
+    results: Final = common_daily_activity_module._with_customer_teams((day,), rows)
+    teams: Final = results[0].breakdown.teams
+    assert teams is not None
+    assert tuple(teams) == team_ids
+    for team_id in team_ids:
+        assert teams[team_id].metrics.spend == 2
+        assert teams[team_id].metrics.api_requests == 2
+        assert teams[team_id].metrics.total_tokens == 4
+        assert teams[team_id].metadata == {"team_alias": "Team A" if team_id == "team-a" else None}
+    assert "teams" not in day.breakdown.model_dump()

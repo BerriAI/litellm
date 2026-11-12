@@ -23,6 +23,12 @@ impl SupportedEffortTiers {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MessagesShapeOptions {
+    pub reasoning_auto_summary: bool,
+    pub presanitized: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MessagesModelCapabilities {
     #[serde(default)]
@@ -31,6 +37,8 @@ pub struct MessagesModelCapabilities {
     pub supports_adaptive_thinking: bool,
     #[serde(default)]
     pub thinking_always_on: bool,
+    #[serde(default)]
+    pub thinking_on_by_default: bool,
     #[serde(default)]
     pub supports_legacy_thinking: bool,
     #[serde(default)]
@@ -55,6 +63,7 @@ impl Default for MessagesModelCapabilities {
             supports_reasoning: false,
             supports_adaptive_thinking: false,
             thinking_always_on: false,
+            thinking_on_by_default: false,
             supports_legacy_thinking: false,
             supports_output_config: false,
             supports_sampling_params: true,
@@ -110,11 +119,17 @@ impl ThinkingBudgets {
 pub struct ThinkingContext {
     pub capabilities: MessagesModelCapabilities,
     pub budgets: ThinkingBudgets,
+    /// `drop_params` as Python's thinking translation reads it.
+    pub drop_params: bool,
+    /// The provider accepts `display: "updates"` on thinking translated from the legacy shape
+    /// (Python's `LEGACY_THINKING_DISPLAY_UPDATES_PROVIDERS`).
+    pub keeps_display_updates: bool,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MessagesTransformContext {
     pub thinking: ThinkingContext,
     pub drop_params: bool,
+    pub drops_unsupported_params: bool,
 }
 impl MessagesTransformContext {
     pub fn new(capabilities: MessagesModelCapabilities, drop_params: bool) -> Self {
@@ -130,8 +145,23 @@ impl MessagesTransformContext {
             thinking: ThinkingContext {
                 capabilities,
                 budgets: ThinkingBudgets::from_lookup(env),
+                drop_params,
+                keeps_display_updates: false,
             },
             drop_params,
+            drops_unsupported_params: false,
+        }
+    }
+
+    /// The same context for a provider in Python's `LEGACY_THINKING_DISPLAY_UPDATES_PROVIDERS`.
+    #[must_use]
+    pub fn keeping_display_updates(&self) -> Self {
+        Self {
+            thinking: ThinkingContext {
+                keeps_display_updates: true,
+                ..self.thinking
+            },
+            ..*self
         }
     }
 }

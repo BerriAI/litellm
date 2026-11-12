@@ -10,6 +10,18 @@ pub struct WireRequest {
     pub body: Value,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RetryReason {
+    ThinkingSignature,
+    StrictTools { dropped: usize },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RetriedRequest {
+    pub reasons: Vec<RetryReason>,
+    pub body: Value,
+}
+
 /// What the route knows about the request it is sending, for a host that logs it. The
 /// route owns these facts; a host reads them beside the wire request and never rewrites
 /// them.
@@ -22,12 +34,34 @@ pub struct RequestContext {
     /// Optional-param names that carry credentials and must be redacted when logged.
     pub secret_fields: Vec<String>,
     /// The credential the route resolved for the provider call.
-    pub api_key: Option<litellm_auth::SecretValue>,
+    pub api_key: Option<litellm_secret_value::SecretValue>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RawResponse {
     pub body: String,
+    /// The provider's HTTP status and headers, when the route forwards them to logging.
+    pub head: Option<ResponseHead>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResponseHead {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+}
+
+impl RawResponse {
+    pub fn new(body: String) -> Self {
+        Self { body, head: None }
+    }
+
+    #[must_use]
+    pub fn with_head(self, head: ResponseHead) -> Self {
+        Self {
+            head: Some(head),
+            ..self
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -40,6 +74,7 @@ pub struct ProviderIdentity {
 pub enum ResultSource {
     Provider,
     Cache { key: String },
+    Host,
 }
 
 /// What the call cost, settled once by the route. A host records it; it never re-derives it.
@@ -57,6 +92,7 @@ impl Cost {
     pub fn settle(source: &ResultSource, reported: Option<serde_json::Number>) -> Self {
         match (source, reported) {
             (ResultSource::Cache { .. }, _) => Self::CacheHit,
+            (ResultSource::Host, _) => Self::Deferred,
             (ResultSource::Provider, Some(amount)) => Self::Reported { amount },
             (ResultSource::Provider, None) => Self::Deferred,
         }
@@ -85,6 +121,13 @@ pub trait Interceptors<E>: Send + Sync {
         &self,
         raw: RawResponse,
     ) -> impl Future<Output = Result<(), E>> + Send;
+
+    fn provider_request_retried(
+        &self,
+        _retry: RetriedRequest,
+    ) -> impl Future<Output = Result<(), E>> + Send {
+        async { Ok(()) }
+    }
 }
 
 impl<E, T: Interceptors<E> + ?Sized> Interceptors<E> for &T {
@@ -105,6 +148,13 @@ impl<E, T: Interceptors<E> + ?Sized> Interceptors<E> for &T {
         raw: RawResponse,
     ) -> impl Future<Output = Result<(), E>> + Send {
         (**self).after_provider_response(raw)
+    }
+
+    fn provider_request_retried(
+        &self,
+        retry: RetriedRequest,
+    ) -> impl Future<Output = Result<(), E>> + Send {
+        (**self).provider_request_retried(retry)
     }
 }
 
@@ -186,7 +236,7 @@ mod tests {
                 .await?;
                 Interceptors::after_provider_response(
                     &channel.interceptors,
-                    RawResponse { body: "raw".into() },
+                    RawResponse::new("raw".into()),
                 )
                 .await?;
                 Ok((sent, ()))

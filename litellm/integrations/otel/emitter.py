@@ -6,16 +6,15 @@ from types import MappingProxyType
 from typing import Final
 
 from opentelemetry.context import Context
-from opentelemetry.sdk.trace import ReadableSpan, SpanLimits
-from opentelemetry.sdk.trace import Span as SdkSpan
+from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.trace import Link, Span, Tracer
 from opentelemetry.trace.status import Status, StatusCode
 
 from litellm.integrations.otel.mappers import resolve_mappers
 from litellm.integrations.otel.mappers.base import AttributeMapper, AttrValue, SpanData
-from litellm.integrations.otel.mappers.langfuse import LANGFUSE_REQUEST_METADATA_ATTRIBUTES
+from litellm.integrations.otel.mappers.langfuse import LANGFUSE_REQUEST_METADATA_ATTRIBUTES, LangfuseMapper
 from litellm.integrations.otel.mappers.openinference import fit_indexed_messages
-from litellm.integrations.otel.model.config import OpenTelemetryV2Config
+from litellm.integrations.otel.model.config import ExporterOwner, OpenTelemetryV2Config
 from litellm.integrations.otel.model.payloads import (
     GuardrailSpanData,
     LLMCallSpanData,
@@ -34,8 +33,9 @@ from litellm.integrations.otel.model.spans import (
     mcp_tool_call_span_name,
     service_span_name,
 )
+from litellm.integrations.otel.plumbing.context import destination_backends
 from litellm.integrations.otel.plumbing.events import GenAIEventRecorder
-from litellm.integrations.otel.plumbing.providers import to_otel_span_kind
+from litellm.integrations.otel.plumbing.providers import span_limits, to_otel_span_kind
 
 # Roles emit() knows how to name and emit. PROXY_REQUEST and the management
 # routes are SERVER spans owned by the mounted FastAPI instrumentor, so they
@@ -87,9 +87,7 @@ def error_attributes(error: SpanError) -> Mapping[str, AttrValue]:
 
 def span_attribute_limit(span: Span) -> int | None:
     """The attribute count limit ``span`` was built with, ``None`` when unbounded."""
-    if not isinstance(span, SdkSpan):
-        return SpanLimits().max_span_attributes
-    return span._limits.max_span_attributes  # pyright: ignore[reportPrivateUsage]  # SDK has no public getter
+    return span_limits(span).max_span_attributes
 
 
 def _carried_keys(
@@ -167,6 +165,9 @@ class SpanEmitter:
         # passed in, resolve it from the config so there's one source of truth.
         self._mappers: list[AttributeMapper] = (
             list(mappers) if mappers is not None else resolve_mappers(config.mapper_names)
+        )
+        self._langfuse: Final = (
+            None if any(isinstance(mapper, LangfuseMapper) for mapper in self._mappers) else LangfuseMapper()
         )
         # Bounded LRU (ordered by insertion / most-recent touch). Storing keys
         # only — the value is unused — so it behaves like a capped set.
@@ -295,17 +296,27 @@ class SpanEmitter:
             )
             else None
         )
-        mapped: Final = MappingProxyType(
-            {key: value for mapper in self._mappers for key, value in mapper.map(data).items()}
+        configured: Final = {key: value for mapper in self._mappers for key, value in mapper.map(data).items()}
+        for_langfuse: Final = (
+            dict(
+                sorted(
+                    self._langfuse.map(data).items(),
+                    key=lambda item: item[0] not in LANGFUSE_REQUEST_METADATA_ATTRIBUTES,
+                )
+            )
+            if self._langfuse is not None and ExporterOwner.LANGFUSE_OTEL in destination_backends()
+            else _NO_ATTRIBUTES
         )
+        mapped: Final = MappingProxyType({**configured, **for_langfuse})
         stamped_later: Final = error_attributes(error) if error else _NO_ATTRIBUTES
         reserved: Final = len(stamped_later.keys() - mapped.keys())
         overwrites: Final = carried_keys(span) & mapped.keys()
-        # The Langfuse request metadata sheds first, so a span at its attribute limit loses nothing else to it.
+        # The Langfuse request metadata, and the Langfuse vocabulary only a destination asked for, shed first,
+        # so a span at its attribute limit loses nothing else to them.
         fitted: Final = fit_indexed_messages(
             MappingProxyType({key: value for key, value in mapped.items() if key not in overwrites}),
             attribute_budget(span, reserved),
-            LANGFUSE_REQUEST_METADATA_ATTRIBUTES,
+            LANGFUSE_REQUEST_METADATA_ATTRIBUTES.union(for_langfuse),
         )
         for key, value in mapped.items():
             if key in overwrites or key in fitted:

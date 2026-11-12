@@ -101,20 +101,73 @@ pub(crate) fn call_config(
     kwargs: &Bound<'_, PyDict>,
     asynchronous: bool,
 ) -> PyResult<HttpClientConfig> {
-    let settings = HttpSettings::from_layers([
+    Ok(resolved(py, call_settings(py, kwargs, asynchronous)?))
+}
+
+fn call_settings(
+    py: Python<'_>,
+    kwargs: &Bound<'_, PyDict>,
+    asynchronous: bool,
+) -> PyResult<HttpSettings> {
+    Ok(HttpSettings::from_layers([
         for_call(call_ssl_verify(kwargs)?, asynchronous),
         HttpSettingsLayer::from_environment(&ProcessEnvironment),
         match PythonSettings::Http.read_or_unset(py)? {
             Some(snapshot) => configured(&snapshot)?,
             None => HttpSettingsLayer::default(),
         },
-    ])
-    .without_missing_files(&|path: &Path| path.exists());
-    let resolution = Resolution::from(&settings);
+    ]))
+}
+
+pub(crate) fn settings_config(
+    py: Python<'_>,
+    use_http_settings: bool,
+) -> PyResult<HttpClientConfig> {
+    let snapshot = if use_http_settings {
+        PythonSettings::Http.read_or_unset(py)?
+    } else {
+        None
+    };
+    let layer = match snapshot {
+        Some(snapshot) => configured(&snapshot)?,
+        None => HttpSettingsLayer::default(),
+    };
+    let settings = HttpSettings::from_layers([
+        HttpSettingsLayer::from_environment(&ProcessEnvironment),
+        layer,
+    ]);
+    Ok(resolved(py, settings))
+}
+
+#[pyfunction]
+#[pyo3(signature = (ssl_security_level=None, ssl_ecdh_curve=None))]
+pub(crate) fn unsupported_tls_settings(
+    ssl_security_level: Option<String>,
+    ssl_ecdh_curve: Option<String>,
+) -> Vec<String> {
+    let settings = HttpSettings::from_layers([HttpSettingsLayer {
+        ssl_security_level,
+        ssl_ecdh_curve,
+        ..HttpSettingsLayer::default()
+    }]);
+    Resolution::from(&settings)
+        .unsupported
+        .iter()
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn resolution(settings: HttpSettings) -> Resolution {
+    Resolution::from(&settings.without_missing_files(&|path: &Path| path.exists()))
+}
+
+/// The client config `settings` resolve to, warning once per process about each setting the client cannot apply
+fn resolved(py: Python<'_>, settings: HttpSettings) -> HttpClientConfig {
+    let resolution = resolution(settings);
     for unsupported in unreported(&REPORTED_UNSUPPORTED, resolution.unsupported) {
         crate::logger::capture(py).scope(|| litellm_tracing::warn!("{unsupported}"));
     }
-    Ok(resolution.config)
+    resolution.config
 }
 
 pub(crate) fn provider_client(
@@ -124,6 +177,15 @@ pub(crate) fn provider_client(
 ) -> PyResult<Result<Client, litellm_http::Error>> {
     let config = call_config(py, kwargs, asynchronous)?;
     Ok(pool().client(&config, ClientVariant::Provider))
+}
+
+pub(crate) fn messages_client(
+    py: Python<'_>,
+    kwargs: &Bound<'_, PyDict>,
+    asynchronous: bool,
+) -> PyResult<Result<Client, litellm_http::Error>> {
+    let config = resolution(call_settings(py, kwargs, asynchronous)?).config;
+    Ok(pool().client(&config, ClientVariant::Undecoded))
 }
 
 pub(crate) fn host_client(py: Python<'_>, variant: ClientVariant) -> PyResult<Client> {

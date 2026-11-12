@@ -3,9 +3,9 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use litellm_auth::{
-    ResolvedCredential, SecretValue, TokenFuture, TokenProvider, TokenProviderHandle,
-};
+use litellm_auth::{ResolvedCredential, TokenFuture, TokenProvider, TokenProviderHandle};
+use litellm_secret_value::SecretValue;
+
 use rstest::rstest;
 
 use super::*;
