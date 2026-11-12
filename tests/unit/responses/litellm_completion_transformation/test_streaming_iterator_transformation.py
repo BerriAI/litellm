@@ -16,6 +16,7 @@ from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from openai.types.responses import ResponseOutputMessage
 
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
     LiteLLMCompletionStreamingIterator,
@@ -23,9 +24,12 @@ from litellm.responses.litellm_completion_transformation.streaming_iterator impo
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     BaseLiteLLMOpenAIResponseObject,
+    OutputTextDeltaEvent,
+    ReasoningSummaryTextDeltaEvent,
+    ResponseCompletedEvent,
     ResponsesAPIStreamEvents,
 )
-from litellm.types.responses.main import build_web_search_call
+from litellm.types.responses.main import GenericResponseOutputItem, build_web_search_call
 from litellm.types.utils import (
     Delta,
     ModelResponse,
@@ -1014,6 +1018,36 @@ async def _collect_events(
     if sync_mode:
         return list(iterator)
     return [event async for event in iterator]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", (True, False))
+@pytest.mark.parametrize("prefix", ("", "First "))
+async def test_mixed_reasoning_chunk_keeps_the_first_answer_delta(sync_mode: bool, prefix: str) -> None:
+    mixed: Final = ModelResponseStream(
+        id=CHAT_COMPLETION_ID,
+        created=1748575031,
+        model="claude-haiku-4-5",
+        choices=[StreamingChoices(index=0, delta=Delta(reasoning_content="multiply", content="1"))],
+    )
+    chunks: Final = (
+        *((_reasoning_chunk(prefix),) if prefix else ()),
+        mixed,
+        _chunk("9 × 29 = **551**", finish_reason="stop"),
+    )
+    events: Final = await _collect_events(_build_iterator(chunks), sync_mode)
+    text: Final = "".join(event.delta for event in events if isinstance(event, OutputTextDeltaEvent))
+    reasoning: Final = "".join(event.delta for event in events if isinstance(event, ReasoningSummaryTextDeltaEvent))
+    completed: Final = next(event for event in events if isinstance(event, ResponseCompletedEvent))
+    message_texts: Final = (
+        "".join(part.text for part in item.content if part.type == "output_text")
+        for item in completed.response.output
+        if isinstance(item, (ResponseOutputMessage, GenericResponseOutputItem)) and item.type == "message"
+    )
+    completed_text: Final = "".join(message_texts)
+
+    assert text == completed_text == "19 × 29 = **551**"
+    assert reasoning == f"{prefix}multiply"
 
 
 def _is_message_item(event: BaseLiteLLMOpenAIResponseObject) -> bool:
