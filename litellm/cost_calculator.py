@@ -1144,9 +1144,27 @@ def _served_or_priced_requested_model(
     if served in (requested, requested.partition("/")[2]):
         return served
     pricing_provider: Final = _get_provider_for_cost_calc(requested, custom_llm_provider)
+    profile_of_served: Final = _is_bedrock_cross_region_profile_of(requested_model, served_model, pricing_provider)
+    if profile_of_served and _resolves_to_rates(requested, pricing_provider):
+        return requested
     if _resolves_to_rates(served, pricing_provider):
         return served
     return requested if _resolves_to_rates(requested, pricing_provider) else served
+
+
+def _is_bedrock_cross_region_profile_of(profile: str, served_model: str, custom_llm_provider: str | None) -> bool:
+    if custom_llm_provider != "bedrock":
+        return False
+    from litellm.llms.bedrock.common_utils import (
+        get_bedrock_cross_region_inference_regions,
+        strip_bedrock_routing_prefix,
+    )
+
+    region, _, profiled_model = strip_bedrock_routing_prefix(profile).partition(".")
+    return (
+        region in get_bedrock_cross_region_inference_regions()
+        and strip_bedrock_routing_prefix(served_model) == profiled_model
+    )
 
 
 def _strip_unregistered_leading_segments(model: str, region_name: str | None) -> str:
