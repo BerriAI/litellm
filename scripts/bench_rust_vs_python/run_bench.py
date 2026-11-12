@@ -209,6 +209,16 @@ def s3_object_count(endpoint: str) -> int:
     return sum(page.get("KeyCount", 0) for page in pages)
 
 
+def s3_object_bytes(endpoint: str) -> int:
+    client: Final = boto3.client(
+        "s3", endpoint_url=endpoint, aws_access_key_id="bench", aws_secret_access_key="bench", region_name="us-east-1"
+    )
+    pages: Final = client.get_paginator("list_objects_v2").paginate(Bucket=BUCKET)
+    return sum(
+        int(item["Size"]) for page in pages for item in page.get("Contents", ())
+    )  # comprehension-ok: flatten pages
+
+
 def wait_for_s3(endpoint: str, expected: int, timeout_s: float) -> int:
     deadline: Final = time.monotonic() + timeout_s
     while True:
@@ -424,6 +434,7 @@ def run_once(spec: RunSpec) -> dict[str, object]:
             "ok": ok_count,
             "prometheus_requests_delta": requests_after - requests_before,
             "s3_objects": s3_objects,
+            "s3_bytes": s3_object_bytes(s3_url),
             "locust_exit": loadgen.returncode,
             "profiled": profiler is not None,
             "profile_rate_hz": spec.profile_rate_hz,
