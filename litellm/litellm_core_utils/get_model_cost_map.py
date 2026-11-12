@@ -32,8 +32,12 @@ from litellm.constants import (
     MODEL_COST_MAP_MAX_SHRINK_RATIO,
     MODEL_COST_MAP_MIN_MODEL_COUNT,
 )
+from litellm.litellm_core_utils import model_cost_table
 from litellm.litellm_core_utils.fallback_generalizations import (
     set_fallback_generalizations,
+)
+from litellm.litellm_core_utils.model_cost_table import (
+    AliasedCostEntry as AliasedCostEntry,  # noqa: PLC0414  # main exported the row type from here
 )
 from litellm.litellm_core_utils.offline_mode import is_offline_mode
 from litellm.rust_bridge._native import (
@@ -44,11 +48,6 @@ from litellm.rust_bridge._native import (
     NativeModelCostMap,
     NativeRejected,
 )
-from litellm.rust_bridge.host import model_cost as model_cost_host
-from litellm.rust_bridge.host.model_cost import (
-    AliasedCostEntry as AliasedCostEntry,  # noqa: PLC0414  # main exported the row type from here
-)
-from litellm.rust_bridge.host.settings import HttpSettings
 
 _CLI_ENTRYPOINT_NAMES: Final = frozenset({"lite", "litellm-proxy"})
 _CATALOG_ADAPTER: Final = TypeAdapter(dict[str, dict[str, object]])
@@ -259,8 +258,8 @@ def get_model_cost_map_loaded_at() -> "datetime | None":
     return _LastLoad.current.loaded_at
 
 
-def cost_map_source(url: str, http_settings: HttpSettings | None) -> NativeCostMapSource:
-    return NativeCostMapSource(url, http_settings=http_settings)
+def cost_map_source(url: str, use_http_settings: bool) -> NativeCostMapSource:
+    return NativeCostMapSource(url, use_http_settings=use_http_settings)
 
 
 def fetch_policy(timeout: float, max_attempts: int) -> NativeFetchPolicy:
@@ -288,7 +287,7 @@ def adopt_model_cost_map(new_model_cost_map: dict) -> int:  # mutable-ok: main's
     import litellm
     from litellm import utils
 
-    model_cost_host.publish(new_model_cost_map)
+    model_cost_table.publish(new_model_cost_map)
     litellm.add_known_models(model_cost_map=new_model_cost_map)
     utils.reapply_runtime_model_cost_registrations()
     return len(new_model_cost_map)
@@ -354,15 +353,13 @@ async def refetch_model_cost_map(
     on failure it returns ``ModelCostMapReloadUnavailable`` and the map already
     installed stays.
     """
-    from litellm.rust_bridge.host.settings import http_settings
-
     _warn_ignored_fetch_hooks(sleep, rng, client)
 
     if _uses_bundled_map_only():
         _mark_rows_with_rules_set("local", None, True, None, datetime.now(timezone.utc))
         return ModelCostMapReloaded(model_count=_install(model_cost_inputs.install_bundled()))
 
-    fetched: Final = await cost_map_source(url, http_settings()).fetch(fetch_policy(timeout, max_attempts))
+    fetched: Final = await cost_map_source(url, use_http_settings=True).fetch(fetch_policy(timeout, max_attempts))
     if isinstance(fetched, NativeFetchFailed):
         verbose_logger.warning(
             "LiteLLM: model cost map reload failed: %s. Keeping the currently loaded map.", fetched.reason
@@ -382,7 +379,9 @@ def _retry_remote_fetch_in_background(
     url: str, timeout: int, max_attempts: int, first_failure: NativeFetchFailed
 ) -> None:
     try:
-        fetched: Final = cost_map_source(url, None).fetch_blocking(fetch_policy(timeout, max_attempts), first_failure)
+        fetched: Final = cost_map_source(url, use_http_settings=False).fetch_blocking(
+            fetch_policy(timeout, max_attempts), first_failure
+        )
         if isinstance(fetched, NativeFetchFailed):
             verbose_logger.warning(
                 "LiteLLM: Failed to fetch remote model cost map from %s after %d attempts; keeping local backup",
@@ -425,7 +424,7 @@ def get_model_cost_map(
         _mark_rows_with_rules_set("local", None, True, None, started)
         return _rows_with_rules_set(model_cost_inputs.install_bundled())
 
-    fetched: Final = cost_map_source(url, None).fetch_blocking(fetch_policy(timeout, 1))
+    fetched: Final = cost_map_source(url, use_http_settings=False).fetch_blocking(fetch_policy(timeout, 1))
     if isinstance(fetched, NativeFetchFailed):
         if fetched.retryable and max_attempts > 1:
             threading.Thread(
@@ -459,7 +458,7 @@ def get_model_cost_map(
 
 def fetch_registration_document(url: str) -> dict[str, dict[str, object]] | None:
     """The document behind ``register_model(url)``, fetched in one attempt, or ``None`` when the fetch failed."""
-    fetched: Final = cost_map_source(url, None).fetch_blocking(fetch_policy(5, 1))
+    fetched: Final = cost_map_source(url, use_http_settings=False).fetch_blocking(fetch_policy(5, 1))
     if isinstance(fetched, NativeFetchFailed):
         verbose_logger.warning("LiteLLM: register_model could not fetch %s: %s", url, fetched.reason)
         return None

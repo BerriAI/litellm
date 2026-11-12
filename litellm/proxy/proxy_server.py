@@ -210,8 +210,10 @@ from litellm.rust_bridge.catalog import Target
 from litellm.types.utils import (
     PRICING_OVERRIDES_KEY,
     CallTypes,
+    Choices,
     CountContextManagement,
     LlmProviders,
+    Message,
     ModelResponse,
     ModelResponseStream,
     TextCompletionResponse,
@@ -392,6 +394,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
     get_parent_otel_span_from_kwargs,
     iter_items,
+    json_contains,
     normalize_drop_params,
     require_attributes,
 )
@@ -419,7 +422,7 @@ from litellm.llms.anthropic.messages.convertible_blocks import (
     malformed_tool_result_count_error,
 )
 from litellm.llms.custom_httpx.aiohttp_pool_diagnostics import build_pool_wait_trace_config
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, exclude_rsa_key_exchange_and_chacha20
 from litellm.llms.openai.live import parse_live_session_start
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
@@ -454,6 +457,7 @@ from litellm.proxy.auth.auth_utils import (
 )
 from litellm.proxy.auth.fallback_budget import RouterFallbackBudgetCheck, router_fallback_budget_check
 from litellm.proxy.auth.fallback_model_access import router_fallback_access_check
+from litellm.proxy.auth.fallback_rate_limit import RouterFallbackRateLimitCheck
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.legacy_empty_models_check import warn_about_legacy_empty_models
 from litellm.proxy.auth.litellm_license import AUTO_ROUTER_LICENSE_REMEDY, LicenseCheck
@@ -546,7 +550,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.proxy.common_utils.error_body_call_id import JSON_OBJECT, error_body_call_id, with_call_id
-from litellm.proxy.common_utils.fips import enforce_fips_mode
+from litellm.proxy.common_utils.fips import enforce_fips_mode, fips_mode_setting
 from litellm.proxy.common_utils.healthy_model_filter import (
     get_hidden_unhealthy_model_names,
     is_healthy_only_listing_default,
@@ -622,6 +626,7 @@ from litellm.proxy.common_utils.timezone_utils import (
     get_budget_reset_time,
 )
 from litellm.proxy.common_utils.token_count_log import (
+    answered_with_litellm_call_id,
     deployment_model_id,
     logged_token_count,
     rejected_token_count,
@@ -2529,6 +2534,7 @@ class _InvitationAcceptTxManager(Protocol):
         exc_type: type[BaseException] | None,
         exc_value: BaseException | None,
         traceback: TracebackType | None,
+        /,
     ) -> bool | None: ...
 
 
@@ -2590,6 +2596,9 @@ async def otel_unhandled_exception_handler(request: Request, exc: Exception):
         raise exc
     response: Final = await _unhandled_exception_response(request, exc)
     response.headers.update(trace_response_headers(getattr(request.state, "parent_otel_span", None)))
+    litellm_call_id: Final = attribute_of(request.state, "litellm_call_id")
+    if isinstance(litellm_call_id, str):
+        response.headers.setdefault(LITELLM_CALL_ID_HEADER, litellm_call_id)
     return response
 
 
@@ -3180,6 +3189,10 @@ _GENERAL_SETTINGS_VIEW: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(M
 
 def general_settings_view() -> Mapping[str, object]:
     return _GENERAL_SETTINGS_VIEW.validate_python(general_settings)
+
+
+def user_model_view() -> str | None:
+    return user_model if isinstance(user_model, str) else None
 
 
 config_passthrough_endpoints: list[dict[str, object]] | None = None
@@ -5735,7 +5748,6 @@ def should_load_db_object(object_type: str | SupportedDBObjectType) -> bool:
 _CONFIG_PERSISTED_SECTIONS: Final = ("general_settings", "router_settings", "litellm_settings")
 _CONFIG_UNMANAGED_EXCLUSIONS: Final = frozenset(("environment_variables", "model_list"))
 _CONFIG_SECTION_VALUES: Final = TypeAdapter(Mapping[str, JsonValue])
-_CONFIG_SECTION_LOCK_SQL: Final = "SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtext($1))"
 
 
 class _ConfigParamWhere(TypedDict):
@@ -6288,7 +6300,7 @@ class ProxyConfig:
         prisma_client: PrismaClient,
     ) -> Mapping[str, JsonValue] | None:
         async with prisma_client.tx() as tx:
-            await tx.query_raw(_CONFIG_SECTION_LOCK_SQL, section_name)
+            await tx.query_raw(CONFIG_PARAM_LOCK_SQL, section_name)
             config_table: Final = cast("TableActions[_ConfigParamRow]", tx.litellm_config)
             config_where: Final[_ConfigParamWhere] = {"param_name": section_name}
             existing_row: Final[_ConfigParamRow | None] = await config_table.find_first(where=config_where)
@@ -6678,6 +6690,11 @@ class ProxyConfig:
         ## PRINT YAML FOR CONFIRMING IT WORKS
         printed_yaml: Final = copy.deepcopy(config)
         printed_yaml.pop("environment_variables", None)
+
+        # Secret manager reads and the rest of config load make outbound TLS calls before enforce_fips_mode runs
+        raw_general_settings: Final = as_str_mapping(config.get("general_settings"))
+        if raw_general_settings is not None and fips_mode_setting(raw_general_settings) is True:
+            exclude_rsa_key_exchange_and_chacha20(True)
 
         self._initialize_secret_manager_from_raw_config(config=config, config_file_path=config_file_path)
 
@@ -7656,6 +7673,9 @@ class ProxyConfig:
                         is_enforced=router_fallback_budget_check.is_enforced,
                         team_member_model_budget_limiter=model_max_budget_limiter,
                     ),
+                    fallback_rate_limit_check=RouterFallbackRateLimitCheck(
+                        limiter=lambda: proxy_logging_obj.get_proxy_hook("parallel_request_limiter"),
+                    ),
                     auto_router_capability_limit=_license_check.auto_router_capability_limit,
                 )
             )
@@ -7892,7 +7912,7 @@ class ProxyConfig:
             else:
                 raise ValueError("Invalid Key Management System selected")
 
-            from litellm.rust_bridge.host.secret_manager import capture_secret_manager
+            from litellm.secret_managers.native_config import capture_secret_manager
 
             if litellm.secret_manager_client is not previous_client:
                 capture_secret_manager(litellm.secret_manager_client, key_management_system)
@@ -8161,6 +8181,9 @@ class ProxyConfig:
                                 fallback_budget_check=RouterFallbackBudgetCheck(
                                     is_enforced=router_fallback_budget_check.is_enforced,
                                     team_member_model_budget_limiter=model_max_budget_limiter,
+                                ),
+                                fallback_rate_limit_check=RouterFallbackRateLimitCheck(
+                                    limiter=lambda: proxy_logging_obj.get_proxy_hook("parallel_request_limiter"),
                                 ),
                                 auto_router_capability_limit=_license_check.auto_router_capability_limit,
                             )
@@ -9012,9 +9035,8 @@ class ProxyConfig:
         proxy_logging_obj: ProxyLogging,
     ) -> ReconcileOutcome:
         """add_deployment's body, minus the locking. DB_RECONCILE_LOCK MUST already
-        be held. Split out for the one caller that has to hold the lock across more than
-        this reconcile -- clear_cache, which un-serves every db model before calling it
-        and would deadlock on a re-acquire."""
+        be held. Split out for clear_cache, which already holds the lock and would
+        deadlock on a re-acquire."""
         global llm_router, llm_model_list, master_key, general_settings
 
         still_desired_ids: frozenset[str] | None = None
@@ -10303,23 +10325,34 @@ def _get_streaming_fallback_metadata(
     return True, None, fallback_errors
 
 
+_FALLBACK_METADATA_ID: Final = "litellm-fallback-metadata"
+_RESPONSES_FALLBACK_METADATA_EVENT_TYPE: Final = "litellm.fallback_metadata"
+
+
 def _format_fallback_metadata_sse_event(
     *,
     fallback_model: str | None,
     fallback_errors: list[dict[str, object]],
+    responses_stream: bool,
+    return_raw_model_name: bool,
 ) -> str:
-    import time
-
+    litellm_fallback: Final = {"fallback_model": fallback_model, "errors": fallback_errors}
+    if responses_stream:
+        stamped_model: Final = None if return_raw_model_name else fallback_model
+        event: Final = {
+            "type": _RESPONSES_FALLBACK_METADATA_EVENT_TYPE,
+            "id": _FALLBACK_METADATA_ID,
+            **({"model": stamped_model} if stamped_model else {}),
+            "litellm_fallback": litellm_fallback,
+        }
+        return f"data: {json.dumps(event)}\n\n"
     payload: Final = {
-        "id": "litellm-fallback-metadata",
+        "id": _FALLBACK_METADATA_ID,
         "object": "chat.completion.chunk",
         "created": int(time.time()),
         "model": fallback_model or "",
         "choices": [],
-        "litellm_fallback": {
-            "fallback_model": fallback_model,
-            "errors": fallback_errors,
-        },
+        "litellm_fallback": litellm_fallback,
     }
     return f"data: {json.dumps(payload)}\n\n"
 
@@ -10328,7 +10361,7 @@ def _restamp_streaming_chunk_model(
     *,
     chunk: object,
     requested_model_from_client: str,
-    request_data: dict,
+    request_data: Mapping[str, object],
     model_mismatch_logged: bool,
     fallback_was_attempted: bool = False,
     fallback_model_from_metadata: str | None = None,
@@ -10906,6 +10939,7 @@ async def async_data_generator(
         model_mismatch_logged = False
         fallback_metadata_event_sent = False
         include_fallback_errors: Final = _should_include_fallback_errors(request_data)
+        return_raw_model_name: Final = should_return_raw_model_name(request_data)
         # Use a running string instead of list + join to avoid O(n^2) overhead.
         # Previously "".join(str_so_far_parts) was called every chunk, re-joining
         # the entire accumulated response. String += is O(n) amortized total.
@@ -11003,6 +11037,8 @@ async def async_data_generator(
                     yield _format_fallback_metadata_sse_event(
                         fallback_model=fallback_model_from_metadata,
                         fallback_errors=fallback_errors,
+                        responses_stream=error_state is not None,
+                        return_raw_model_name=return_raw_model_name,
                     )
                     fallback_metadata_event_sent = True
                 continue
@@ -11059,6 +11095,8 @@ async def async_data_generator(
                 yield _format_fallback_metadata_sse_event(
                     fallback_model=fallback_model_from_metadata,
                     fallback_errors=fallback_errors,
+                    responses_stream=error_state is not None,
+                    return_raw_model_name=return_raw_model_name,
                 )
                 fallback_metadata_event_sent = True
 
@@ -12430,7 +12468,7 @@ class ProxyStartupEvent:
                 _scheduled_weekly_spend_report,
                 "interval",
                 days=days,
-                next_run_time=datetime.now() + timedelta(seconds=10 + random.randint(0, 300)),
+                next_run_time=datetime.now(timezone.utc) + timedelta(seconds=10 + random.randint(0, 300)),
                 id=WEEKLY_SPEND_REPORT_JOB_ID,
                 replace_existing=True,
                 misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
@@ -13232,6 +13270,70 @@ def _blocked_response_usage(original_response: object | None) -> "litellm.Usage"
     return litellm.Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
 
 
+def _passthrough_block_response(e: ModifyResponseException) -> ModelResponse:
+    return ModelResponse(
+        model=e.model,
+        choices=[Choices(message=Message(content=e.message), finish_reason="content_filter")],
+        usage=_blocked_response_usage(e.original_response),
+    )
+
+
+async def _record_passthrough_block(e: ModifyResponseException, user_api_key_dict: UserAPIKeyAuth) -> None:
+    await proxy_logging_obj.post_call_failure_hook(
+        user_api_key_dict=user_api_key_dict,
+        original_exception=e,
+        request_data=e.request_data,
+    )
+
+
+async def _stream_chat_passthrough_block(
+    e: ModifyResponseException, user_api_key_dict: UserAPIKeyAuth, request: Request
+) -> StreamingResponse:
+    # Read before post_call_failure_hook, which pops it from the request data.
+    logging_obj: Final = e.request_data.get("litellm_logging_obj")
+    await _record_passthrough_block(e, user_api_key_dict)
+    streaming_response: Final = litellm.CustomStreamWrapper(
+        completion_stream=litellm.utils.ModelResponseIterator(
+            model_response=_passthrough_block_response(e), convert_to_delta=True
+        ),
+        model=e.model,
+        custom_llm_provider="cached_response",
+        logging_obj=logging_obj,
+    )
+    return StreamingResponse(
+        select_data_generator(
+            response=streaming_response,
+            user_api_key_dict=user_api_key_dict,
+            request_data=e.request_data,
+            request=request,
+        ),
+        media_type="text/event-stream",
+        status_code=200,
+    )
+
+
+async def _stream_text_completion_passthrough_block(
+    e: ModifyResponseException, user_api_key_dict: UserAPIKeyAuth, request: Request
+) -> StreamingResponse:
+    await _record_passthrough_block(e, user_api_key_dict)
+    streaming_response: Final = litellm.TextCompletionStreamWrapper(
+        completion_stream=litellm.utils.ModelResponseIterator(
+            model_response=_passthrough_block_response(e), convert_to_delta=True
+        ),
+        model=e.model,
+    )
+    return StreamingResponse(
+        select_data_generator(
+            response=streaming_response,
+            user_api_key_dict=user_api_key_dict,
+            request_data=e.request_data,
+            request=request,
+        ),
+        media_type="text/event-stream",
+        status_code=200,
+    )
+
+
 @router.post(
     "/v1/chat/completions",
     dependencies=[Depends(user_api_key_auth)],
@@ -13321,50 +13423,17 @@ async def chat_completion(
             user_max_tokens=user_max_tokens,
             user_api_base=user_api_base,
             version=version,
+            on_passthrough_block=lambda block: _stream_chat_passthrough_block(block, user_api_key_dict, request),
         )
         if isinstance(result, BaseModel):
             return model_dump_with_preserved_fields(result, exclude_unset=True)
         else:
             return result
     except ModifyResponseException as e:
-        # Guardrail flagged content in passthrough mode - return 200 with violation message
-        _data = e.request_data
-        # Capture logging_obj before post_call_failure_hook pops it from _data.
-        _logging_obj: Final = _data.get("litellm_logging_obj")
-        await proxy_logging_obj.post_call_failure_hook(
-            user_api_key_dict=user_api_key_dict,
-            original_exception=e,
-            request_data=_data,
-        )
-        _chat_response = litellm.ModelResponse()
-        _chat_response.model = e.model
-        _chat_response.choices[0].message.content = e.message
-        _chat_response.choices[0].finish_reason = "content_filter"
-        # Report the blocked LLM response's real usage (set before the stream
-        # branch so both paths carry it); zero for pre-call blocks.
-        _chat_response.usage = _blocked_response_usage(e.original_response)
-
-        if data.get("stream", None) is not None and data["stream"] is True:
-            _iterator = litellm.utils.ModelResponseIterator(model_response=_chat_response, convert_to_delta=True)
-            _streaming_response = litellm.CustomStreamWrapper(
-                completion_stream=_iterator,
-                model=e.model,
-                custom_llm_provider="cached_response",
-                logging_obj=_logging_obj,
-            )
-            selected_data_generator = select_data_generator(
-                response=_streaming_response,
-                user_api_key_dict=user_api_key_dict,
-                request_data=_data,
-                request=request,
-            )
-
-            return StreamingResponse(
-                selected_data_generator,
-                media_type="text/event-stream",
-                status_code=200,  # Return 200 for passthrough mode
-            )
-        return _chat_response
+        if data.get("stream") is True:
+            return await _stream_chat_passthrough_block(e, user_api_key_dict, request)
+        await _record_passthrough_block(e, user_api_key_dict)
+        return _passthrough_block_response(e)
     except RejectedRequestError as e:
         _data = e.request_data
         await proxy_logging_obj.post_call_failure_hook(
@@ -13478,49 +13547,20 @@ async def completion(
             user_max_tokens=user_max_tokens,
             user_api_base=user_api_base,
             version=version,
+            on_passthrough_block=lambda block: _stream_text_completion_passthrough_block(
+                block, user_api_key_dict, request
+            ),
         )
     except ModifyResponseException as e:
-        # Guardrail flagged content in passthrough mode - return 200 with violation message
-        _data = e.request_data
-        await proxy_logging_obj.post_call_failure_hook(
-            user_api_key_dict=user_api_key_dict,
-            original_exception=e,
-            request_data=_data,
-        )
-
-        if _data.get("stream", None) is not None and _data["stream"] is True:
-            _text_response: Final = litellm.ModelResponse()
-            # Set text attribute dynamically for text completion format
-            setattr(_text_response.choices[0], "text", e.message)
-            _text_response.model = e.model
-            _usage = _blocked_response_usage(e.original_response)
-            # Set usage attribute dynamically (ModelResponse accepts usage in __init__ but it's not in type definition)
-            setattr(_text_response, "usage", _usage)
-            _iterator = litellm.utils.ModelResponseIterator(model_response=_text_response, convert_to_delta=True)
-            _streaming_response = litellm.TextCompletionStreamWrapper(
-                completion_stream=_iterator,
-                model=e.model,
-            )
-
-            selected_data_generator = select_data_generator(
-                response=_streaming_response,
-                user_api_key_dict=user_api_key_dict,
-                request_data=_data,
-                request=request,
-            )
-
-            return StreamingResponse(
-                selected_data_generator,
-                media_type="text/event-stream",
-                status_code=200,  # Return 200 for passthrough mode
-            )
-        else:
-            _response = litellm.TextCompletionResponse()
-            _response.choices[0].text = e.message
-            _response.model = e.model
-            _usage = _blocked_response_usage(e.original_response)
-            _response.usage = _usage
-            return _response
+        if e.request_data.get("stream") is True:
+            return await _stream_text_completion_passthrough_block(e, user_api_key_dict, request)
+        await _record_passthrough_block(e, user_api_key_dict)
+        text_completion_response: Final = litellm.TextCompletionResponse()
+        text_completion_response.choices[0].text = e.message
+        text_completion_response.choices[0].finish_reason = "content_filter"
+        text_completion_response.model = e.model
+        text_completion_response.usage = _blocked_response_usage(e.original_response)
+        return text_completion_response
     except RejectedRequestError as e:
         _data = e.request_data
         await proxy_logging_obj.post_call_failure_hook(
@@ -13771,7 +13811,7 @@ async def moderations(
             llm_router=llm_router,
             user_model=user_model,
         )
-        response: Final = await llm_call
+        response: Final = _UNTYPED_VALUE.validate_python(await llm_call)
 
         ### ALERTING ###
         asyncio.create_task(proxy_logging_obj.update_request_status(litellm_call_id=litellm_call_id, status="success"))
@@ -13821,14 +13861,20 @@ async def moderations(
         )
 
 
+class _SpeechBytes(Protocol):
+    def aiter_bytes(self, chunk_size: int | None = None) -> Awaitable[AsyncIterator[bytes]]: ...
+
+
 async def _audio_speech_chunk_generator(
-    _response: HttpxBinaryResponseContent,
+    _response: object,
 ) -> AsyncGenerator[bytes, None]:
     # chunk_size has a big impact on latency, it can't be too small or too large
     # too small: latency is high
     # too large: latency is low, but memory usage is high
     # 8192 is a good compromise
-    _generator: Final = await _response.aiter_bytes(chunk_size=AUDIO_SPEECH_CHUNK_SIZE)
+    _generator: Final = await require_attributes(_response, _SpeechBytes, "aiter_bytes").aiter_bytes(
+        chunk_size=AUDIO_SPEECH_CHUNK_SIZE
+    )
     async for chunk in _generator:
         yield chunk
 
@@ -13889,7 +13935,7 @@ async def audio_speech(
             llm_router=llm_router,
             user_model=user_model,
         )
-        response: Final = await llm_call
+        response: Final = _UNTYPED_VALUE.validate_python(await llm_call)
 
         ### ALERTING ###
         asyncio.create_task(proxy_logging_obj.update_request_status(litellm_call_id=litellm_call_id, status="success"))
@@ -14053,7 +14099,7 @@ async def audio_transcriptions(
                 llm_router=llm_router,
                 user_model=user_model,
             )
-            response: Final = await llm_call
+            response: Final = _UNTYPED_VALUE.validate_python(await llm_call)
         except Exception as e:
             raise e
         finally:
@@ -14630,7 +14676,7 @@ async def get_assistants(
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
         if llm_router is None:
             raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value})
-        response: Final = await llm_router.aget_assistants(**data)
+        response: Final = _UNTYPED_VALUE.validate_python(await llm_router.aget_assistants(**data))
 
         ### ALERTING ###
         asyncio.create_task(
@@ -14706,7 +14752,7 @@ async def create_assistant(
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
         if llm_router is None:
             raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value})
-        response: Final = await llm_router.acreate_assistants(**data)
+        response: Final = _UNTYPED_VALUE.validate_python(await llm_router.acreate_assistants(**data))
 
         ### ALERTING ###
         asyncio.create_task(
@@ -14781,7 +14827,9 @@ async def delete_assistant(
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
         if llm_router is None:
             raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value})
-        response: Final = await llm_router.adelete_assistant(assistant_id=assistant_id, **data)
+        response: Final = _UNTYPED_VALUE.validate_python(
+            await llm_router.adelete_assistant(assistant_id=assistant_id, **data)
+        )
 
         ### ALERTING ###
         asyncio.create_task(
@@ -14856,7 +14904,7 @@ async def create_threads(
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
         if llm_router is None:
             raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value})
-        response: Final = await llm_router.acreate_thread(**data)
+        response: Final = _UNTYPED_VALUE.validate_python(await llm_router.acreate_thread(**data))
 
         ### ALERTING ###
         asyncio.create_task(
@@ -14929,7 +14977,7 @@ async def get_thread(
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
         if llm_router is None:
             raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value})
-        response: Final = await llm_router.aget_thread(thread_id=thread_id, **data)
+        response: Final = _UNTYPED_VALUE.validate_python(await llm_router.aget_thread(thread_id=thread_id, **data))
 
         ### ALERTING ###
         asyncio.create_task(
@@ -15006,7 +15054,7 @@ async def add_messages(
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
         if llm_router is None:
             raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value})
-        response: Final = await llm_router.a_add_message(thread_id=thread_id, **data)
+        response: Final = _UNTYPED_VALUE.validate_python(await llm_router.a_add_message(thread_id=thread_id, **data))
 
         ### ALERTING ###
         asyncio.create_task(
@@ -15079,7 +15127,7 @@ async def get_messages(
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
         if llm_router is None:
             raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value})
-        response: Final = await llm_router.aget_messages(thread_id=thread_id, **data)
+        response: Final = _UNTYPED_VALUE.validate_python(await llm_router.aget_messages(thread_id=thread_id, **data))
 
         ### ALERTING ###
         asyncio.create_task(
@@ -15159,7 +15207,9 @@ async def run_thread(
         if "stream" in data and data["stream"] is True:  # use generate_responses to stream responses
 
             async def produce_run_stream() -> StreamingResponse | JSONResponse:
-                run_stream: Final = await router.arun_thread(thread_id=thread_id, **data)
+                run_stream: Final = _UNTYPED_VALUE.validate_python(
+                    await router.arun_thread(thread_id=thread_id, **data)
+                )
                 return await create_response(
                     generator=async_assistants_data_generator(
                         user_api_key_dict=user_api_key_dict,
@@ -15187,7 +15237,7 @@ async def run_thread(
                 on_late_failure=audit_late_failure,
             )
 
-        response: Final = await router.arun_thread(thread_id=thread_id, **data)
+        response: Final = _UNTYPED_VALUE.validate_python(await router.arun_thread(thread_id=thread_id, **data))
 
         ### ALERTING ###
         asyncio.create_task(
@@ -15236,7 +15286,7 @@ from litellm.llms.anthropic.count_tokens.token_counter import AnthropicTokenCoun
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
-from litellm.repositories.config_repository import ConfigRepository
+from litellm.repositories.config_repository import CONFIG_PARAM_LOCK_SQL, ConfigRepository
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.table_repositories import (
     AccessGroupRepository,
@@ -15325,7 +15375,12 @@ def _provider_count_outcome(
     if result is not None and result.error is True:
         return ProviderCountFailure(
             status_code=result.status_code or 500,
-            message=result.error_message or "Token counting failed",
+            message=result.error_message
+            or (
+                "Token counting failed"
+                if result.status_code is None
+                else f"The provider's count API answered {result.status_code} with no error message"
+            ),
             rejected_before_provider_call=result.rejected_before_provider_call,
         )
     return result
@@ -15794,6 +15849,14 @@ def _token_count_settings_model(deployment: _TokenCountDeployment, request_model
 _PROVIDERS_COUNTING_WITHOUT_MESSAGES: Final = frozenset(
     {litellm.LlmProviders.GEMINI.value, litellm.LlmProviders.VERTEX_AI.value}
 )
+_CHAT_MODES: Final = frozenset({"chat", "responses"})
+
+
+def _serves_chat(deployment: _TokenCountDeployment, cost_map_row: Mapping[str, object]) -> bool:
+    mode: Final = _non_empty_str(deployment.get("model_info", {}).get("mode")) or _non_empty_str(
+        cost_map_row.get("mode")
+    )
+    return mode is None or mode in _CHAT_MODES
 
 
 _ESTIMABLE_GOOGLE_PART_KEYS: Final = frozenset({"text", "functionCall", "functionResponse", "thoughtSignature"})
@@ -16030,19 +16093,30 @@ def _system_message(system: object) -> ChatCompletionSystemMessage | None:
 )
 async def token_counter(
     request: TokenCountRequest,
+    http_request: Request,
+    fastapi_response: Response,
     call_endpoint: bool = False,
     litellm_call_id: Annotated[str | None, Header(alias=LITELLM_CALL_ID_HEADER)] = None,
 ):
     """
+    Returns:
+        TokenCountResponse
+
     Args:
         request: TokenCountRequest
         call_endpoint: bool - When set to "True" it will call the token counting endpoint - e.g Anthropic or Google AI Studio Token Counting APIs.
         litellm_call_id: the x-litellm-call-id header, logged with the count so it joins the inference call's logs
-
-    Returns:
-        TokenCountResponse
+        \f
+        http_request: carries the call id to the error handler when the count fails
+        fastapi_response: answers the x-litellm-call-id header the count's log line names
     """
-    return await count_request_tokens(request=request, call_endpoint=call_endpoint, litellm_call_id=litellm_call_id)
+    call_id: Final = resolve_litellm_call_id(litellm_call_id)
+    return await answered_with_litellm_call_id(
+        count_request_tokens(request=request, call_endpoint=call_endpoint, litellm_call_id=call_id),
+        call_id,
+        http_request,
+        fastapi_response,
+    )
 
 
 async def count_request_tokens(
@@ -16104,6 +16178,12 @@ async def _routed_count_deployment(
         return None
 
 
+def _with_chat_timeout(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
+    if llm_router is None:
+        return litellm_params
+    return {**litellm_params, "timeout": llm_router.settings().timeout_for(litellm_params)}
+
+
 async def _count_request_tokens(
     request: TokenCountRequest,
     routed: Mapping[str, object] | None,
@@ -16121,20 +16201,20 @@ async def _count_request_tokens(
     tools: Final = request.tools
     system: Final = request.system
 
-    deployment: dict[str, Any] | None = None if routed is None else dict(routed)
+    deployment: dict[str, object] | None = None if routed is None else dict(routed)
     litellm_model_name = None
     model_info: Final = None if routed is None else routed.get("model_info", {})
     if deployment is not None:
-        litellm_model_name = deployment.get("litellm_params", {}).get("model")
+        litellm_model_name = _with_get(deployment.get("litellm_params", _EMPTY_MAPPING)).get("model")
         deployment = {  # rebind-ok: merge the named credential into a copy
             **deployment,
-            "litellm_params": with_named_credential(
-                _LITELLM_PARAMS_COPY.validate_python(deployment.get("litellm_params", {}))
+            "litellm_params": _with_chat_timeout(
+                with_named_credential(_LITELLM_PARAMS_COPY.validate_python(deployment.get("litellm_params", {})))
             ),
         }
         # remove the custom_llm_provider_prefix in the litellm_model_name
-        if "/" in litellm_model_name:
-            litellm_model_name = litellm_model_name.split("/", 1)[1]
+        if json_contains(litellm_model_name, "/"):
+            litellm_model_name = _split_once(litellm_model_name, "/")[1]
 
     model_to_use: str = (
         litellm_model_name if isinstance(litellm_model_name, str) and litellm_model_name else request.model
@@ -16142,9 +16222,10 @@ async def _count_request_tokens(
     deployment_view: Final = _TOKEN_COUNT_DEPLOYMENT.validate_python(
         deployment or _model_group_deployment(llm_router, request.model) or {}
     )
+    cost_map_row: Final = await asyncify(cost_map_entry)(*_token_count_settings_model(deployment_view, request.model))
     settings: Final = await asyncify(resolve_token_count_settings)(
         configured=deployment_view.get("model_info", {}),
-        default=await asyncify(cost_map_entry)(*_token_count_settings_model(deployment_view, request.model)),
+        default=cost_map_row,
         deployment_region=partial(_deployment_aws_region, deployment_view),
     )
 
@@ -16169,6 +16250,15 @@ async def _count_request_tokens(
             code=400,
         )
     prompt_only: Final = bool(prompt) and conversation_empty
+    prompt_as_turn: Final = (
+        prompt_only
+        and provider_counter is not None
+        and provider_counter.should_use_token_counting_api(custom_llm_provider=custom_llm_provider)
+        and _serves_chat(deployment_view, cost_map_row)
+    )
+    prompt_as_message: Final = prompt_as_turn or (
+        prompt_only and custom_llm_provider in _PROVIDERS_COUNTING_WITHOUT_MESSAGES
+    )
     request_messages: Final = _counted_request_messages(messages, messages_format, count_deployment)
     local_count_error: Final = malformed_tool_result_count_error(request_messages, messages_format, count_deployment)
     malformed_messages: Final = (
@@ -16205,7 +16295,6 @@ async def _count_request_tokens(
     )
     inference_system: Final = system if edited_request is None else edited_request.system
     contents_estimable: Final = not contents or (bool(messages) and _estimable_contents(contents))
-    prompt_as_message: Final = prompt_only and custom_llm_provider in _PROVIDERS_COUNTING_WITHOUT_MESSAGES
     routed_deployment: Final = _ROUTED_DEPLOYMENT.validate_python(deployment)
     routed_request: Final = (
         None if responses_request is None else with_provider_file_ids(responses_request, routed_deployment)
@@ -16306,7 +16395,7 @@ async def _count_request_tokens(
             _with_get(model_info).get("custom_tokenizer", None),
         )
     system_message: Final = _system_message(local_system)
-    prompt_turn: Final = prompt_only and not (system_message is None and not tools)
+    prompt_turn: Final = prompt_as_turn or (prompt_only and not (system_message is None and not tools))
     typed_messages: Final = cast(  # cast-ok: request messages are raw chat-shaped dicts that token_counter normalizes
         Sequence[AllMessageValues] | None,
         [{"role": "user", "content": prompt}] if prompt_turn else (None if prompt_only else local_messages),
@@ -16468,7 +16557,9 @@ async def model_info_lookup(model: str, custom_llm_provider: str | None = None):
     dependencies=[Depends(user_api_key_auth)],
     response_model=RawRequestTypedDict,
 )
-async def transform_request(request: TransformRequestBody):
+async def transform_request(
+    request: TransformRequestBody, user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]
+):
     from litellm.utils import return_raw_request
 
     try:
@@ -16477,6 +16568,7 @@ async def transform_request(request: TransformRequestBody):
             general_settings=general_settings,
             llm_router=llm_router,
             model=request.request_body.get("model", ""),
+            team_id=user_api_key_dict.team_id,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail={"error": str(e)})
@@ -17005,6 +17097,14 @@ class _SupportsLower(Protocol):
     def lower(self) -> object: ...
 
 
+class _SupportsSplit(Protocol):
+    def split(self, sep: str, maxsplit: int, /) -> Sequence[object]: ...
+
+
+def _split_once(value: object, sep: str) -> Sequence[object]:
+    return require_attributes(value, _SupportsSplit, "split").split(sep, 1)
+
+
 def _lowered(value: object) -> object:
     return require_attributes(value, _SupportsLower, "lower").lower()
 
@@ -17173,18 +17273,19 @@ async def _apply_search_filter_to_models(
     def _is_byok_outside_caller_teams(model_info_dict: object) -> bool:
         return _byok_row_outside_caller_teams(model_info_dict, allowed_team_ids)
 
-    def _model_matches_search(m: dict[str, Any]) -> bool:
+    def _model_matches_search(m: Mapping[str, object]) -> bool:
         # Team BYOK models persist an internal `model_name`
         # (e.g. `model_name_{team_id}_{uuid}`) and expose the user-facing
         # name via `model_info.team_public_model_name`. Match both so the
         # name shown in the UI is searchable.
-        if search_lower in (m.get("model_name") or "").lower():
+        if json_contains(_lowered(m.get("model_name") or ""), search_lower):
             return True
-        team_public_model_name: Final = (m.get("model_info") or {}).get("team_public_model_name") or ""
-        if search_lower in team_public_model_name.lower():
+        team_public_model_name: Final = (
+            _with_get(m.get("model_info") or _EMPTY_MAPPING).get("team_public_model_name") or ""
+        )
+        if json_contains(_lowered(team_public_model_name), search_lower):
             return True
-        litellm_params: Final[Mapping[str, object]] = m.get("litellm_params") or MappingProxyType({})
-        litellm_model: Final = litellm_params.get("model")
+        litellm_model: Final = _with_get(m.get("litellm_params") or _EMPTY_MAPPING).get("model")
         return isinstance(litellm_model, str) and search_lower in litellm_model.lower()
 
     # Filter models in router by search term, dropping BYOK rows that
@@ -19415,7 +19516,7 @@ async def async_queue_request(
                 return StreamingResponse(
                     async_data_generator(
                         user_api_key_dict=user_api_key_dict,
-                        response=await router.schedule_acompletion(**data),
+                        response=_UNTYPED_VALUE.validate_python(await router.schedule_acompletion(**data)),
                         request_data=data,
                         request=request,
                     ),
@@ -19434,7 +19535,7 @@ async def async_queue_request(
                 on_late_failure=audit_late_failure,
             )
 
-        response: Final = await router.schedule_acompletion(**data)
+        response: Final = _UNTYPED_VALUE.validate_python(await router.schedule_acompletion(**data))
         fastapi_response.headers.update({"x-litellm-priority": str(queued_priority)})
         return response
     except Exception as e:
@@ -20081,7 +20182,7 @@ async def claim_onboarding_link(data: InvitationClaim, request: Request):
         )
 
     if user_obj and hasattr(user_obj, "__dict__"):
-        user_obj.__dict__.pop("password", None)
+        vars(user_obj).pop("password", None)
 
     # The password just changed via an invitation/reset link; any UI session
     # minted under the old password may be in hostile hands. Revoke them all —

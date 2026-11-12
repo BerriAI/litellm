@@ -19,7 +19,11 @@ if TYPE_CHECKING:
     from prisma import models as prisma_models
     from prisma.types import HttpConfig
 
+    from litellm.proxy.db.prisma_client import PrismaBatchSession, PrismaTransactionManager
     from litellm.repositories.prisma_protocols import TableActions
+
+    _DEFAULT_TX_MAX_WAIT: Final = timedelta(seconds=2)
+    _DEFAULT_TX_TIMEOUT: Final = timedelta(seconds=5)
 
 # Per-model action methods that read from the database. These are routed to
 # the read replica when one is configured.
@@ -310,6 +314,12 @@ class RoutingPrismaWrapper:
         async def execute_raw(self, query: str, *args: object) -> int: ...
 
         async def query_first(self, query: str, *args: object) -> Mapping[str, object] | None: ...
+
+        def tx(
+            self, *, max_wait: int | timedelta = _DEFAULT_TX_MAX_WAIT, timeout: int | timedelta = _DEFAULT_TX_TIMEOUT
+        ) -> PrismaTransactionManager: ...
+
+        def batch_(self) -> PrismaBatchSession: ...
 
         @property
         def litellm_deprecatedverificationtoken(

@@ -61,7 +61,7 @@ ui/litellm-dashboard/next-env.d.ts
 *.tsbuildinfo
 ui/litellm-dashboard/package.json
 ui/litellm-dashboard/package-lock.json
-helm/litellm-helm/*.tgz
+helm/litellm/charts/*.tgz
 helm/*.tgz
 litellm/proxy/vertex_key.json
 **/.vim/

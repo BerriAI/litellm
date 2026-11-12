@@ -20,7 +20,7 @@ import secrets
 import traceback
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
-from types import MappingProxyType
+from types import MappingProxyType, TracebackType
 from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeVar, cast
 
 import fastapi
@@ -84,7 +84,7 @@ from litellm.proxy.common_utils.config_sync_pubsub import (
 )
 from litellm.proxy.common_utils.openai_error_payload import openai_error_param, proxy_exception_for
 from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_keys
-from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time, keeps_due_budget_reset
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache, is_user_key_cache_key
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import build_model_max_budget_usage
@@ -245,13 +245,20 @@ class _UserRowLike(Protocol):
 
 
 class _TxTables(Protocol):
-    litellm_proxymodeltable: TableActions[object]
+    @property
+    def litellm_proxymodeltable(self) -> TableActions[object]: ...
 
 
 class _ModelReencryptTransaction(Protocol):
     async def __aenter__(self) -> _TxTables: ...
 
-    async def __aexit__(self, *exc_info: object) -> None: ...
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+        /,
+    ) -> None: ...
 
 
 class _ModelParamsUpdate(TypedDict):
@@ -3116,11 +3123,11 @@ async def prepare_key_update_data(
             non_default_values["budget_duration"] = None
             non_default_values["budget_reset_at"] = None
         elif isinstance(budget_duration, str) and len(budget_duration) > 0:
-            from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-
-            key_reset_at: Final = get_budget_reset_time(budget_duration=budget_duration)
-            non_default_values["budget_reset_at"] = key_reset_at
             non_default_values["budget_duration"] = budget_duration
+            if not keeps_due_budget_reset(
+                budget_duration, existing_key_row.budget_duration, existing_key_row.budget_reset_at
+            ):
+                non_default_values["budget_reset_at"] = get_budget_reset_time(budget_duration=budget_duration)
 
     if "budget_limits" in non_default_values:
         requested_windows: Final = _budget_limit_windows(data.budget_limits)
