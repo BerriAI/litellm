@@ -2356,7 +2356,7 @@ _MODEL_ACCESS_GROUP_ENTITY: Final = "Model access group"
 
 
 def _per_token_prices(llm_router: Router, model: str) -> tuple[float, float] | None:
-    info: Final = llm_router.get_model_group_info(model_group=model)
+    info: Final = llm_router.registry().group(model)
     if info is None:
         return None
     try:

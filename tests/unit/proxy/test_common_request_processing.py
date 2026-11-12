@@ -8498,7 +8498,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
 
         mock_router = route_entry_points_to_stubs(MagicMock())
         mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo", "claude-3-haiku"]}]
-        mock_router.get_model_group_info = priced_group
+        mock_router.registry.return_value.group = priced_group
 
         with patch.object(processor, "common_processing_pre_call_logic", side_effect=mock_pre_call_logic):
             data, _ = await processor._pre_call_with_fallbacks(
@@ -8545,7 +8545,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         )
         mock_router = route_entry_points_to_stubs(MagicMock())
         mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo", "claude-3-haiku"]}]
-        mock_router.get_model_group_info = lambda model_group, **kwargs: ModelGroupInfo(
+        mock_router.registry.return_value.group = lambda model_group, **kwargs: ModelGroupInfo(
             model_group=model_group, providers=["openai"], input_cost_per_token=1e-6, output_cost_per_token=1e-6
         )
         reserved_against_primary = {"entries": [{"entity_type": "Model access group", "entity_id": "primary-group"}]}
