@@ -1134,10 +1134,10 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         # All-or-nothing: if any enforced descriptor would exceed its limit,
         # no counter is modified and the response carries "OVER_LIMIT".
         team_share: Final = self._borrowing_team_share(model=model, user_api_key_dict=user_api_key_dict)
-        get_or_create_request_stash().borrowing_team_model_limit = None if team_share is None else team_share.share
         if team_share is not None:
             descriptors_to_check.append(team_share.share)
         enforced_team_share: Final = None if team_share is None else team_share.enforced(should_enforce_priority)
+        get_or_create_request_stash().borrowing_team_model_limit = enforced_team_share
 
         enforced_descriptors: Final[list[RateLimitDescriptor]] = [model_wide_descriptor]
         if priority_descriptors and should_enforce_priority:
@@ -1268,26 +1268,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             _reserved_window(atomic_response, enforced_team_share) if team_reservation else None
         )
         self._cap_admitted_output(enforced_team_share, team_reservation, data, call_type)
-        if team_share is not None and enforced_team_share is None:
-            await self.v3_limiter.atomic_check_and_increment_by_n(
-                descriptors=[team_share.share],
-                increments=[per_request_increment],
-                parent_otel_span=user_api_key_dict.parent_otel_span,
-            )
         if priority_descriptors and share is not None and not should_enforce_priority:
-            tracking_only: Final = tuple(
-                RateLimitDescriptor(
-                    key=descriptor["key"],
-                    value=descriptor["value"],
-                    rate_limit=model_wide_descriptor["rate_limit"],
-                )
-                for descriptor in priority_descriptors
-            )
-            await self.v3_limiter.atomic_check_and_increment_by_n(
-                descriptors=list(tracking_only),
-                increments=[per_request_increment for _ in tracking_only],
-                parent_otel_span=user_api_key_dict.parent_otel_span,
-            )
             get_or_create_request_stash().rate_limit_response = atomic_response
         elif priority_descriptors and not should_enforce_priority:
             priority_tracking_response: Final = await self.v3_limiter.should_rate_limit(

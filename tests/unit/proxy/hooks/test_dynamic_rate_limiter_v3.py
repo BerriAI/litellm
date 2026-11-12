@@ -2161,7 +2161,7 @@ def _borrowing_handler(
 
 
 async def _admit_then_settle(handler: _PROXY_DynamicRateLimitHandlerV3, auth: UserAPIKeyAuth, tokens: int) -> None:
-    await _check(handler, auth, saturation=0.0)
+    await _check(handler, auth, saturation=0.5)
     await _settle_tokens(handler, tokens)
 
 
@@ -2274,12 +2274,38 @@ async def test_team_past_its_model_tpm_limit_is_held_to_it_once_the_model_satura
 
 
 @pytest.mark.asyncio
+async def test_a_borrowers_usage_while_the_model_was_idle_is_forgiven_once_it_saturates(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _borrowing_handler(monkeypatch, borrows=True)
+    await _check(handler, _team_key(), saturation=0.0)
+    await _settle_tokens(handler, 150)
+    assert await _team_tokens_remaining(handler) == 100
+    await _admit_then_settle(handler, _team_key(), 30)
+    assert await _team_tokens_remaining(handler) == 70
+    await _check(handler, _team_key("team-b"), saturation=0.5)
+    assert await _team_tokens_remaining(handler, _team_key("team-b")) == 100
+
+
+@pytest.mark.asyncio
+async def test_a_borrower_that_spends_its_share_under_saturation_is_held_while_a_newcomer_is_admitted(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _borrowing_handler(monkeypatch, borrows=True)
+    await _admit_then_settle(handler, _team_key(), 150)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _team_key(), saturation=0.5)
+    _held_to_team_limit(exc.value, "tokens", "model_tpm_limit")
+    await _check(handler, _team_key("team-b"), saturation=0.5)
+
+
+@pytest.mark.asyncio
 async def test_team_past_its_model_rpm_limit_is_held_to_it_once_the_model_saturates(monkeypatch: pytest.MonkeyPatch):
     handler = _borrowing_handler(monkeypatch, borrows=True)
     auth: Final = _team_key(team_limits={"model_rpm_limit": {"shared-model": 2}})
-    await _check(handler, auth, saturation=0.0)
-    await _check(handler, auth, saturation=0.0)
     await _check(handler, auth, saturation=0.49)
+    await _check(handler, auth, saturation=0.5)
+    await _check(handler, auth, saturation=0.5)
     with pytest.raises(ProxyRateLimitError) as exc:
         await _check(handler, auth, saturation=0.5)
     _held_to_team_limit(exc.value, "requests", "model_rpm_limit")
@@ -2297,7 +2323,7 @@ async def test_requests_admitted_below_saturation_count_only_their_settled_token
 @pytest.mark.asyncio
 async def test_an_embedding_responses_tokens_count_against_the_team_limit(monkeypatch: pytest.MonkeyPatch):
     handler = _borrowing_handler(monkeypatch, borrows=True)
-    await _check(handler, _team_key(), saturation=0.0)
+    await _check(handler, _team_key(), saturation=0.5)
     await _settle_tokens(
         handler,
         150,
@@ -2313,7 +2339,7 @@ async def test_an_embedding_responses_tokens_count_against_the_team_limit(monkey
 @pytest.mark.asyncio
 async def test_a_responses_api_calls_tokens_count_against_the_team_limit(monkeypatch: pytest.MonkeyPatch):
     handler = _borrowing_handler(monkeypatch, borrows=True)
-    await _check(handler, _team_key(), saturation=0.0)
+    await _check(handler, _team_key(), saturation=0.5)
     await _settle_tokens(
         handler,
         150,
@@ -2337,7 +2363,7 @@ async def test_a_responses_api_calls_tokens_count_against_the_team_limit(monkeyp
 @pytest.mark.asyncio
 async def test_a_null_auth_metadata_still_settles_the_teams_tokens(monkeypatch: pytest.MonkeyPatch):
     handler = _borrowing_handler(monkeypatch, borrows=True)
-    await _check(handler, _team_key(), saturation=0.0)
+    await _check(handler, _team_key(), saturation=0.5)
     await handler.async_log_success_event(
         kwargs={
             "litellm_params": {"metadata": {"model_group": "shared-model"}},
@@ -2401,7 +2427,7 @@ async def test_an_exempt_keys_tokens_are_not_charged_to_its_teammates(monkeypatc
 @pytest.mark.asyncio
 async def test_an_alias_request_counts_against_the_same_team_share_as_its_target(monkeypatch: pytest.MonkeyPatch):
     handler = _borrowing_handler(monkeypatch, borrows=True, model_group_alias={"alias-model": "shared-model"})
-    await _check(handler, _team_key(), saturation=0.0, model="alias-model")
+    await _check(handler, _team_key(), saturation=0.5, model="alias-model")
     await _settle_tokens(handler, 150)
     with pytest.raises(ProxyRateLimitError) as exc:
         await _check(handler, _team_key(), saturation=0.5)
@@ -2430,7 +2456,7 @@ async def test_a_nested_calls_tokens_are_not_charged_to_the_requests_team_share(
 
     handler = _borrowing_handler(monkeypatch, borrows=True)
     claim_request_stash_for_data({"litellm_call_id": "outer-call"})
-    await _check(handler, _team_key(), saturation=0.0)
+    await _check(handler, _team_key(), saturation=0.5)
     await _settle_tokens(handler, 60, call_id="llm-judge-call")
     assert await _team_tokens_remaining(handler) == 100
     await _settle_tokens(handler, 60, call_id="outer-call")
@@ -2440,7 +2466,7 @@ async def test_a_nested_calls_tokens_are_not_charged_to_the_requests_team_share(
 @pytest.mark.asyncio
 async def test_a_websocket_turns_tokens_count_against_the_team_limit(monkeypatch: pytest.MonkeyPatch):
     handler = _borrowing_handler(monkeypatch, borrows=True)
-    await _check(handler, _team_key(), saturation=0.0)
+    await _check(handler, _team_key(), saturation=0.5)
     await _settle_tokens(
         handler,
         150,
@@ -2804,8 +2830,9 @@ async def _burn(
     priority: str | None,
     tokens: int,
     model: str = "shared-model",
+    saturation: float = 1.0,
 ):
-    await _check(handler, auth, saturation=0.0, priority=priority, model=model)
+    await _check(handler, auth, saturation=saturation, priority=priority, model=model)
     await handler.async_log_success_event(
         kwargs={
             "litellm_params": {"metadata": {"model_group": model}},
@@ -3246,7 +3273,7 @@ async def test_a_team_id_spelled_like_a_pool_marker_still_counts_as_a_team(monke
 
 
 @pytest.mark.asyncio
-async def test_requests_sent_while_the_share_was_not_enforced_all_count_once_the_share_grows(
+async def test_requests_sent_while_the_share_was_not_enforced_are_forgiven_once_the_model_saturates(
     monkeypatch: pytest.MonkeyPatch,
 ):
     handler = _borrowing_handler(monkeypatch, borrows=False, splits=True)
@@ -3254,9 +3281,7 @@ async def test_requests_sent_while_the_share_was_not_enforced_all_count_once_the
     for _ in range(70):
         await _check(handler, _class_team("team-a"), saturation=0.0, priority="interactive")
     await _check(handler, _class_team("team-b", "batch"), saturation=0.0, priority="batch")
-    with pytest.raises(ProxyRateLimitError) as exc:
-        await _check(handler, _class_team("team-a"), saturation=0.6, priority="interactive")
-    assert "Active teams in class: 1, Active classes: 2, " in str(exc.value.detail)
+    await _check(handler, _class_team("team-a"), saturation=0.6, priority="interactive")
 
 
 @pytest.mark.asyncio
