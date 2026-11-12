@@ -15,10 +15,11 @@ interface BubbleTooltipProps {
   payload?: ReadonlyArray<{ payload?: unknown }>;
 }
 
-const bubbleOf = (value: unknown): { name: string; countLabel: string } | null =>
-  typeof value === "object" && value !== null && "name" in value && "countLabel" in value
-    ? { name: String(value.name), countLabel: String(value.countLabel) }
-    : null;
+const bubbleOf = (value: unknown): { name: string; countLabel: string } | null => {
+  if (typeof value !== "object" || value === null) return null;
+  if (!("name" in value) || !("countLabel" in value)) return null;
+  return { name: String(value.name), countLabel: String(value.countLabel) };
+};
 
 function BubbleTooltip({ active, payload }: BubbleTooltipProps) {
   const { t } = useTranslation();
