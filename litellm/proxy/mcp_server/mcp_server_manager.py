@@ -58,7 +58,7 @@ from mcp.types import (
     ResourceTemplate,
 )
 from mcp.types import Tool as MCPTool
-from pydantic import AnyUrl, Field, SecretStr, TypeAdapter, ValidationError
+from pydantic import AnyUrl, BaseModel, ConfigDict, Field, SecretStr, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, Self, assert_never
 
 import litellm
@@ -1900,24 +1900,25 @@ def _mcp_discovery_cache_ttl() -> float:
 _TOOL_LIST_ENTRY_LIMIT_KB: Final = 1024
 
 
-def _is_whole_tool_listing(page: ListToolsResult) -> bool:
-    return not page.next_cursor
+class _UpstreamToolListing(BaseModel):
+    model_config = ConfigDict(frozen=True)
 
-
-class _UpstreamToolListing(ListToolsResult):
-    upstream_instructions: str | None = None
+    page: ListToolsResult
+    ttl_ms: int
+    upstream_instructions: str | None
 
     @classmethod
     def fetched_by(cls, client: MCPClient, page: ListToolsResult) -> Self:
         declared: Final[object] = getattr(client, "_last_initialize_instructions", None)
-        return cls(
-            **{name: getattr(page, name) for name in page.model_fields_set},
-            upstream_instructions=declared if isinstance(declared, str) else None,
-        )
+        return cls(page=page, ttl_ms=page.ttl_ms, upstream_instructions=declared if isinstance(declared, str) else None)
 
-    def without_instructions(self) -> ListToolsResult:
-        set_on_the_page: Final = self.model_fields_set & ListToolsResult.model_fields.keys()
-        return ListToolsResult(**{name: getattr(self, name) for name in set_on_the_page})
+    def is_whole(self) -> bool:
+        return not self.page.next_cursor
+
+    def page_to_serve(self) -> ListToolsResult:
+        if self.ttl_ms == self.page.ttl_ms:
+            return self.page
+        return self.page.model_copy(update={"ttl_ms": self.ttl_ms})
 
 
 def _tool_page_cursor(params: PaginatedRequestParams | None) -> tuple[str | None] | None:
@@ -2093,7 +2094,7 @@ class MCPServerManager:
             discovery_clock,
             TypeAdapter(_UpstreamToolListing),
             max_entry_kb=_TOOL_LIST_ENTRY_LIMIT_KB,
-            storable=_is_whole_tool_listing,
+            storable=_UpstreamToolListing.is_whole,
         )
         self._list_caching_enabled = discovery_ttl > 0
         self._tools_list_cache_ttl = _mcp_tools_list_cache_ttl()
@@ -4763,7 +4764,7 @@ class MCPServerManager:
             server, client, params, key_for_credential, fetch, use_cache
         )
         self._remember_instructions_if_missing(server, listing.upstream_instructions)
-        return listing.without_instructions()
+        return listing.page_to_serve()
 
     def _remember_instructions_if_missing(self, server: MCPServer, seen_by_this_caller: str | None) -> None:
         if seen_by_this_caller and not self._upstream_initialize_instructions_by_server_id.get(server.server_id):
@@ -4790,7 +4791,7 @@ class MCPServerManager:
 
         async def fetch_with_admin_ttl() -> _UpstreamToolListing:
             listing: Final = await fetch()
-            return listing if listing.next_cursor else listing.model_copy(update={"ttl_ms": admin_ttl * 1000})
+            return listing.model_copy(update={"ttl_ms": admin_ttl * 1000}) if listing.is_whole() else listing
 
         if admin_ttl <= 0:
             return await fetch_with_admin_ttl()
@@ -4806,7 +4807,7 @@ class MCPServerManager:
             return await self._tool_discovery_cache.get(await cache_key(), fetch)
         invalidations_before: Final = self._tool_discovery_cache.invalidations
         listing: Final = await fetch()
-        if not self._list_caching_enabled or listing.ttl_ms <= 0 or listing.next_cursor:
+        if not self._list_caching_enabled or listing.ttl_ms <= 0 or not listing.is_whole():
             return listing
         key: Final = await cache_key()
         if self._tool_discovery_cache.invalidations == invalidations_before:

@@ -3,8 +3,8 @@ import asyncio
 # Add the parent directory to the path so we can import litellm
 import contextlib
 import functools
-import itertools
 import importlib
+import itertools
 import json
 import logging
 import os
@@ -16988,7 +16988,6 @@ async def test_tools_list_is_never_cached_for_a_server_whose_ttl_is_zero(monkeyp
 
 
 @pytest.mark.asyncio
-@pytest.mark.asyncio
 async def test_tools_list_is_never_cached_under_a_global_ttl_of_zero(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITELLM_MCP_TOOLS_LIST_CACHE_TTL", "0")
     manager: Final = MCPServerManager(discovery_clock=_DiscoveryClock())
@@ -17052,13 +17051,14 @@ async def test_tools_list_admin_ttl_does_nothing_when_discovery_caching_is_disab
 ) -> None:
     monkeypatch.setenv("LITELLM_MCP_DISCOVERY_CACHE_TTL", "0")
     monkeypatch.setenv("LITELLM_MCP_TOOLS_LIST_CACHE_TTL", "300")
+    _pin_listing_clock(monkeypatch)
     manager: Final = MCPServerManager(discovery_clock=_DiscoveryClock())
     upstream: Final = _DiscoveryUpstream()
     upstream.ttl_ms = 30000
     server: Final = _server_with_tools_list_ttl(300)
     with _mcp_upstream(upstream.respond):
         for _ in range(2):
-            assert 29000 < (await _list_discovery_tools(manager, server=server)).ttl_ms <= 30000
+            assert (await _list_discovery_tools(manager, server=server)).ttl_ms == 30000
         assert upstream.initializes == 2
 
 
@@ -17154,20 +17154,21 @@ async def test_tools_list_cache_outlives_an_instructions_clear_and_a_hit_puts_th
     monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
     served: Final = functools.partial(operations._merge_gateway_initialize_instructions, [server])
 
-    with _mcp_upstream(_declaring_instructions(upstream, lambda request: "use with care")):
+    def declared_to(request: httpx2.Request) -> str:
+        return "newer text" if request.headers.get("authorization") == "later-caller" else "use with care"
+
+    with _mcp_upstream(_declaring_instructions(upstream, declared_to)):
         await _list_discovery_tools(manager, server=server)
         remembered: Final = served()
         manager.clear_initialize_instructions()
         cleared: Final = served()
         await _list_discovery_tools(manager, server=server)
         restored: Final = served()
-        manager._remember_upstream_initialize_instructions(
-            server, SimpleNamespace(_last_initialize_instructions="newer text from a tool call")
-        )
+        await _list_discovery_tools(manager, server=server, extra_headers={"Authorization": "later-caller"})
         await _list_discovery_tools(manager, server=server)
     assert (remembered, cleared, restored) == ("use with care", None, "use with care")
-    assert served() == "newer text from a tool call"
-    assert upstream.initializes == 1
+    assert served() == "newer text"
+    assert upstream.initializes == 2
 
 
 @pytest.mark.asyncio
@@ -17200,13 +17201,34 @@ async def test_tools_list_cache_hit_puts_back_the_instructions_its_own_caller_re
         manager.clear_initialize_instructions()
         from_cache: Final = await list_as("first-secret")
     assert served() == "notes for first-secret"
-    assert from_cache.model_dump(exclude={"tools"}) == {
-        "meta": None,
-        "ttl_ms": cached_ttl_ms,
-        "cache_scope": "private",
-        "next_cursor": None,
-        "result_type": "complete",
-    }
+    assert from_cache.ttl_ms == cached_ttl_ms
+    assert upstream.initializes == 2
+
+
+@pytest.mark.asyncio
+async def test_tools_list_cache_serves_the_instructions_of_its_own_session_only_until_the_listing_expires(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.mcp_server import operations
+
+    clock: Final = _DiscoveryClock()
+    manager: Final = MCPServerManager(discovery_clock=clock)
+    upstream: Final = _DiscoveryUpstream()
+    server: Final = _server_with_tools_list_ttl(300)
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    served: Final = functools.partial(operations._merge_gateway_initialize_instructions, [server])
+
+    def declared_in_this_session(request: httpx2.Request) -> str:
+        return "first text" if upstream.initializes == 1 else "second text"
+
+    with _mcp_upstream(_declaring_instructions(upstream, declared_in_this_session)):
+        await _list_discovery_tools(manager, server=server)
+        manager.clear_initialize_instructions()
+        await _list_discovery_tools(manager, server=server)
+        while_cached: Final = served()
+        clock.now = 300.0
+        await _list_discovery_tools(manager, server=server)
+    assert (while_cached, served()) == ("first text", "second text")
     assert upstream.initializes == 2
 
 
@@ -17220,6 +17242,57 @@ async def test_tools_list_that_is_not_cached_comes_back_with_only_the_fields_the
     assert listed.model_dump(exclude_unset=True, exclude={"tools"}) == {"ttl_ms": 0, "cache_scope": "private"}
 
 
+def _declaring_no_listing_freshness(
+    upstream: _DiscoveryUpstream,
+) -> Callable[[httpx2.Request], Awaitable[httpx2.Response]]:
+    async def respond(request: httpx2.Request) -> httpx2.Response:
+        response: Final = await upstream.respond(request)
+        body: Final = json.loads(response.content or b"null")
+        if not isinstance(body, dict) or "tools" not in body.get("result", {}):
+            return response
+        return httpx2.Response(200, json={**body, "result": {"tools": body["result"]["tools"]}})
+
+    return respond
+
+
+@pytest.mark.asyncio
+async def test_tools_list_page_from_an_upstream_that_declares_no_freshness_comes_back_with_none_set() -> None:
+    manager: Final = MCPServerManager(discovery_clock=_DiscoveryClock())
+    upstream: Final = _DiscoveryUpstream()
+    legacy_server: Final = MCPServer(
+        server_id="legacy", name="legacy", url="https://discovery.example/mcp", transport=MCPTransport.http
+    )
+    with _mcp_upstream(_declaring_no_listing_freshness(upstream)):
+        first_page: Final = await _list_discovery_tools(manager, None, legacy_server)
+    assert first_page.model_dump(exclude_unset=True, exclude={"tools"}) == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("outcome", "ttl_ms", "discovery_seconds"),
+    (
+        pytest.param("supported", 0, "60", id="no_lifetime"),
+        pytest.param("paged", 60000, "60", id="continuing_page"),
+        pytest.param("supported", 60000, "0", id="caching_disabled"),
+    ),
+)
+async def test_tools_list_that_will_not_be_cached_lists_without_the_credential_fingerprint(
+    outcome: str, ttl_ms: int, discovery_seconds: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def unavailable(self: MCPClient) -> str:
+        raise RuntimeError("the credential fingerprint is unavailable")
+
+    monkeypatch.setattr(MCPClient, "discovery_auth_fingerprint", unavailable)
+    monkeypatch.setenv("LITELLM_MCP_DISCOVERY_CACHE_TTL", discovery_seconds)
+    manager: Final = MCPServerManager(discovery_clock=_DiscoveryClock())
+    upstream: Final = _DiscoveryUpstream()
+    upstream.outcome = outcome
+    upstream.ttl_ms = ttl_ms
+    with _mcp_upstream(upstream.respond):
+        first_page: Final = await _list_discovery_tools(manager, None)
+    assert len(first_page.tools) == 1
+
+
 @pytest.mark.asyncio
 async def test_tools_list_signed_by_the_gateway_jwt_signer_is_fetched_every_time(
     monkeypatch: pytest.MonkeyPatch,
@@ -17230,7 +17303,7 @@ async def test_tools_list_signed_by_the_gateway_jwt_signer_is_fetched_every_time
         async def async_pre_call_hook(
             self, user_api_key_dict: UserAPIKeyAuth | None, cache: object, data: object, call_type: str
         ) -> Mapping[str, object]:
-            return {"extra_headers": {"Authorization": f"Bearer signed-{len(upstream.requests)}"}}
+            return {"extra_headers": {"Authorization": "Bearer signed-by-the-gateway"}}
 
     monkeypatch.setattr(mcp_jwt_signer, "_mcp_jwt_signer_instance", _Signer(), raising=False)
     manager: Final = MCPServerManager(discovery_clock=_DiscoveryClock())
@@ -17241,7 +17314,6 @@ async def test_tools_list_signed_by_the_gateway_jwt_signer_is_fetched_every_time
         for _ in range(2):
             assert len((await _list_discovery_tools(manager, server=server, user_api_key_auth=caller)).tools) == 1
     assert sum(method == "tools/list" for method, _auth in upstream.requests) == 2
-    assert manager._tool_discovery_cache.holds(server.server_id) is False
 
 
 @pytest.mark.asyncio

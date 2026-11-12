@@ -15,11 +15,12 @@ from dataclasses import dataclass, replace
 from functools import partial, wraps
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Generic, ParamSpec, TypeAlias, TypeVar, cast
+from typing import TYPE_CHECKING, Final, Generic, ParamSpec, Protocol, TypeAlias, TypeVar, cast
 
 from mcp.shared.exceptions import MCPError
 from mcp.types import CacheableResult
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
+from typing_extensions import Self
 
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -1342,7 +1343,14 @@ def combine_optional_catalog(
     )
 
 
-_DiscoveryPage = TypeVar("_DiscoveryPage", bound=CacheableResult)
+class _Expiring(Protocol):
+    @property
+    def ttl_ms(self) -> int: ...
+
+    def model_copy(self, *, update: Mapping[str, object] | None = None, deep: bool = False) -> Self: ...
+
+
+_DiscoveryPage = TypeVar("_DiscoveryPage", bound=_Expiring)
 _DiscoveryKey: TypeAlias = tuple[str, str | None]
 _DISCOVERY_CACHE_LIMIT: Final = 1024
 _DISCOVERY_ENTRY: Final = TypeAdapter(tuple[float, bytes])
