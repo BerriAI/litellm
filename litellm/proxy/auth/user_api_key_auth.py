@@ -2937,6 +2937,7 @@ async def user_api_key_auth_builder(
                     llm_router=llm_router,
                     request_model=request_data.get("model"),
                     route=route,
+                    key_metadata=valid_token.metadata,
                 )
 
         ### CHECK IF ADMIN ###

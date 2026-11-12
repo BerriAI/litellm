@@ -247,3 +247,30 @@ async def test_resolution_enforces_budget_on_model_routes_but_not_on_info_routes
         route="/key/info",
     )
     assert hierarchy.customer_member_id == "member-1"
+
+
+@pytest.mark.asyncio
+async def test_a_key_pinned_to_another_organization_cannot_act_for_the_member() -> None:
+    cache: Final = UserApiKeyCache(DualCache())
+    prisma: Final = _Prisma(_MemberTable({"member-1": _row(template={"max_budget": 10.0})}))
+    with pytest.raises(ProxyException) as denied:
+        await resolve_customer_hierarchy(
+            customer_member_id="member-1",
+            prisma_client=prisma,  # pyright: ignore[reportArgumentType]  # test double
+            user_api_key_cache=cache,
+            llm_router=None,
+            request_model="gpt-4o",
+            route="/chat/completions",
+            key_metadata={"customer_org_id": "some-other-org"},
+        )
+    assert denied.value.code == "403"
+    hierarchy: Final = await resolve_customer_hierarchy(
+        customer_member_id="member-1",
+        prisma_client=prisma,  # pyright: ignore[reportArgumentType]  # test double
+        user_api_key_cache=cache,
+        llm_router=None,
+        request_model="gpt-4o",
+        route="/chat/completions",
+        key_metadata={"customer_org_id": "org-1"},
+    )
+    assert hierarchy.customer_org_id == "org-1"
