@@ -105,6 +105,21 @@ class TestSagemakerCohereEmbeddingConfig:
         )
         assert result["texts"] == ["hello"]
 
+    def test_transform_request_keeps_max_tokens_and_priority(self):
+        result = self.config.transform_embedding_request(
+            model="cohere-embed-v4",
+            input=["hello"],
+            optional_params={"max_tokens": 16, "priority": 5, "truncate": "END"},
+            headers={},
+        )
+        assert result == {
+            "texts": ["hello"],
+            "input_type": "search_document",
+            "max_tokens": 16,
+            "priority": 5,
+            "truncate": "END",
+        }
+
     def test_map_openai_params_dimensions_to_output_dimension(self):
         params = self.config.map_openai_params(
             non_default_params={"dimensions": 512, "encoding_format": "float"},
