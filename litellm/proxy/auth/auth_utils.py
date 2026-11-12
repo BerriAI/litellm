@@ -806,11 +806,13 @@ def _check_banned_params(
             # Proxy-wide opt-in: every banned param is permitted, exit
             # entirely so the rest of the loop doesn't waste work.
             return
+        proxy_clientside_auth_params = general_settings.get("configurable_clientside_auth_params")
         if (
-            _is_param_allowed(
+            isinstance(proxy_clientside_auth_params, list)
+            and _is_param_allowed(
                 param=param,
                 request_body_value=body[param],
-                configurable_clientside_auth_params=general_settings.get("configurable_clientside_auth_params"),
+                configurable_clientside_auth_params=proxy_clientside_auth_params,
             )
             is True
         ):
