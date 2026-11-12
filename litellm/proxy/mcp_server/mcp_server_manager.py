@@ -29,7 +29,7 @@ from dataclasses import dataclass, replace
 from functools import lru_cache
 from itertools import chain, groupby
 from types import EllipsisType, MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypedDict, cast
 from urllib.parse import ParseResult, urlparse
 
 import anyio
@@ -73,6 +73,7 @@ from litellm.constants import (
     MCP_UPSTREAM_SESSION_SHUTDOWN_TIMEOUT_SECONDS,
 )
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
+from litellm.litellm_core_utils.core_helpers import as_object_list, decoded_json_object
 from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.mcp_client.client import (
@@ -467,14 +468,6 @@ class MCPServerConfig(TypedDict, total=False):
     timeout: float
     max_concurrent_requests: int
     rpm: ReadOnly[int | None]
-
-
-class _ProtectedResourceMetadataPayload(TypedDict, total=False):
-    """The RFC 9728 protected-resource metadata document fields this gateway reads."""
-
-    authorization_servers: Sequence[object]
-    scopes_supported: Sequence[str]
-    scopes: Sequence[str]
 
 
 class _AuthorizationServerMetadataPayload(TypedDict, total=False):
@@ -1206,8 +1199,10 @@ def should_strip_caller_authorization(
       admission credential — a virtual key, an IdP JWT, or an SSO / OIDC /
       session token whose ``api_key`` is ``None`` — and must never reach
       the upstream, so it is stripped regardless of the ``api_key`` value.
-    - **Every other auth-enabled mode**: strip when ``Authorization`` is the
-      credential admission validated.
+    - **true_passthrough**: strip when ``Authorization`` is the credential
+      admission validated.
+    - **Every other mode**: forward. The caller's ``Authorization`` only reaches
+      the upstream because the admin listed it in ``extra_headers``.
     """
     if (
         user_api_key_auth is not None
@@ -1233,6 +1228,8 @@ def should_strip_caller_authorization(
         mcp_server.auth_type == MCPAuth.oauth2 and mcp_server.delegate_auth_to_upstream
     )
     if not (mcp_server.is_oauth_passthrough or is_delegated_oauth):
+        if not mcp_server.is_client_forwarded_token:
+            return False
         from litellm.proxy.auth.user_api_key_auth import is_no_auth_dev_mode
         from litellm.proxy.proxy_server import (
             general_settings,  # pyright: ignore[reportUnknownVariableType]  # legacy global is declared as a bare dict
@@ -1403,7 +1400,7 @@ def _openapi_forwarded_extra_headers(
     )
     forwarded: Final[dict[str, str]] = {}
     for header_name in mcp_server.extra_headers:
-        if not isinstance(header_name, str) or header_name.lower() == "x-litellm-api-key":
+        if not isinstance(header_name, str):
             continue
         if skip_caller_authorization and header_name.lower() == "authorization":
             continue
@@ -1904,6 +1901,10 @@ def _listing_task_was_cancelled(error: asyncio.CancelledError) -> bool:
     teardown outlives its budget while the listing task keeps running. That one is the server's fault,
     anything else is a real cancellation."""
     return error.args != (SESSION_CLEANUP_TIMEOUT_MESSAGE,)
+
+
+class _InternalNetworkSettings(Protocol):
+    def get(self, key: Literal["mcp_internal_ip_ranges"], /) -> list[str] | None: ...
 
 
 class MCPServerManager:
@@ -5365,7 +5366,7 @@ class MCPServerManager:
         try:
             response: Final = await self._fetch_oauth_discovery_url(resource_metadata_url, server_url)
             response.raise_for_status()
-            data: Final[_ProtectedResourceMetadataPayload] = response.json()
+            decoded: Final = _UNTYPED_VALUE.validate_python(response.json())
         except SSRFError as exc:
             verbose_logger.warning(
                 "MCP OAuth discovery: refusing to fetch resource metadata from %s "
@@ -5383,11 +5384,13 @@ class MCPServerManager:
             )
             return [], None
 
-        raw_servers: Final = data.get("authorization_servers")
-        if isinstance(raw_servers, list):
-            authorization_servers = [entry for entry in raw_servers if isinstance(entry, str) and entry.strip() != ""]
-        else:
-            authorization_servers = []
+        data: Final = decoded_json_object(decoded)
+        raw_servers: Final = as_object_list(data.get("authorization_servers"))
+        authorization_servers: Final = (
+            [entry for entry in raw_servers if isinstance(entry, str) and entry.strip() != ""]
+            if raw_servers is not None
+            else []
+        )
 
         scopes: Final = self._extract_scopes(data.get("scopes_supported") or data.get("scopes"))
 
@@ -5627,13 +5630,14 @@ class MCPServerManager:
             "aws_session_name": credentials_dict.get("aws_session_name"),
         }
 
-    def _extract_scopes(self, scopes_value: str | Sequence[object] | None) -> list[str] | None:
+    def _extract_scopes(self, scopes_value: object) -> list[str] | None:
         if isinstance(scopes_value, str):
             scopes = [s.strip() for s in scopes_value.split() if s.strip()]
             return scopes or None
-        if isinstance(scopes_value, list):
-            scopes = [s for s in scopes_value if isinstance(s, str) and s.strip()]
-            return scopes or None
+        scope_entries: Final = as_object_list(scopes_value)
+        if scope_entries is not None:
+            listed_scopes: Final = [s for s in scope_entries if isinstance(s, str) and s.strip()]
+            return listed_scopes or None
         return None
 
     async def _fetch_tools_with_timeout(
@@ -6241,7 +6245,7 @@ class MCPServerManager:
         )
 
         caller_bearer: Final = (
-            MCPRequestHandler.get_incoming_bearer_token(raw_headers or {})
+            MCPRequestHandler.guardrail_bearer_from_raw_headers(raw_headers, user_api_key_auth)
             if incoming_bearer_token is ...
             else incoming_bearer_token
         )
@@ -6640,7 +6644,7 @@ class MCPServerManager:
                 # For M2M OAuth servers, Authorization must come from token fetch.
                 extra_headers = None
             else:
-                extra_headers = oauth2_headers
+                extra_headers = dict(oauth2_headers) if oauth2_headers else None
                 # Migrated authorization_code: the v2 resolver injects the stored per-user
                 # token, so drop the caller-forwarded Authorization (apply-if-absent would
                 # otherwise let it shadow the resolved token). Delegate keeps it. Centralized
@@ -6673,7 +6677,7 @@ class MCPServerManager:
             )
 
             for header in mcp_server.extra_headers:
-                if not isinstance(header, str) or header.lower() == "x-litellm-api-key":
+                if not isinstance(header, str):
                     continue
                 if header.lower() == "authorization" and strip_caller_authorization:
                     continue
@@ -7350,7 +7354,7 @@ class MCPServerManager:
                 servers.append(server)
         return servers
 
-    def _get_general_settings(self) -> dict[str, Any]:
+    def _get_general_settings(self) -> _InternalNetworkSettings:
         """Get general_settings, importing lazily to avoid circular imports."""
         try:
             from litellm.proxy.proxy_server import (

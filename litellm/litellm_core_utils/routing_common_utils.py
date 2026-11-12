@@ -1,6 +1,7 @@
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeVar
 
@@ -13,10 +14,12 @@ import litellm
 from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.constants import ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
 from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
 from litellm.llms.sagemaker.common_utils import deployment_inference_component
+from litellm.secret_managers.main import str_to_bool
 from litellm.types.router import (
     CredentialLiteLLMParams,
     Deployment,
@@ -35,7 +38,6 @@ _V = TypeVar("_V")
 
 MID_STREAM_CONTINUATION_KWARG: Final = "_mid_stream_continuation"
 ROUTER_ONLY_CALL_KWARGS: Final = frozenset({"silent_model", "include_fallback_errors", MID_STREAM_CONTINUATION_KWARG})
-_OBJECT_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
 _DEPLOYMENT_ROWS_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = TypeAdapter(
     tuple[Mapping[str, object], ...]
 )
@@ -60,6 +62,74 @@ def with_admin_api_key_secret_reference(deployment: Deployment) -> Deployment:
 
 def without_router_only_kwargs(kwargs: Mapping[str, _V]) -> dict[str, _V]:
     return {key: value for key, value in kwargs.items() if key not in ROUTER_ONLY_CALL_KWARGS}
+
+
+_ROUTER_OWNED_METADATA_KEYS: Final = frozenset({"caching_groups", "redis_namespace"})
+_PRIVATE_SETTING_BY_FLAG: Final = MappingProxyType({"mask_input": True, "mask_output": True, "trace_public": False})
+_JOINED_LIST_METADATA_KEYS: Final = frozenset({"tags", "guardrails"})
+
+
+def metadata_defaults_under_request(
+    defaults: Mapping[str, object], request_metadata: Mapping[str, object]
+) -> Mapping[str, object]:
+    return {
+        key: _default_under_request(key=key, default=default, requested=request_metadata.get(key))
+        for key, default in defaults.items()
+    }
+
+
+def _default_under_request(key: str, default: object, requested: object) -> object:
+    if key in _ROUTER_OWNED_METADATA_KEYS or callable(default):
+        return default
+    if _PRIVATE_SETTING_BY_FLAG.get(key) is _is_flag_on(default):
+        return default
+    if key in _JOINED_LIST_METADATA_KEYS:
+        return _request_items_then_default_items(default=default, requested=requested)
+    return _request_value_over_default(default=default, requested=requested)
+
+
+def _is_flag_on(value: object) -> bool:
+    parsed: Final = str_to_bool(value) if isinstance(value, str) else None
+    return bool(value) if parsed is None else parsed
+
+
+def _request_items_then_default_items(default: object, requested: object) -> object:
+    default_items: Final = as_object_list(default)
+    if default_items is None:
+        return _request_value_over_default(default=default, requested=requested)
+    default_names: Final = frozenset(chain.from_iterable(_entry_names(item) for item in default_items))
+    request_items: Final = tuple(
+        chain.from_iterable(_without_entries_named(item, default_names) for item in as_object_list(requested) or ())
+    )
+    return [*request_items, *(item for item in default_items if item not in request_items)]
+
+
+def _entry_names(entry: object) -> frozenset[str]:
+    mapping: Final = as_str_mapping(entry)
+    if mapping is not None:
+        return frozenset(mapping)
+    return frozenset((entry,)) if isinstance(entry, str) else frozenset()
+
+
+def _without_entries_named(entry: object, names: frozenset[str]) -> tuple[object, ...]:
+    mapping: Final = as_str_mapping(entry)
+    if mapping is None or names.isdisjoint(mapping):
+        return (entry,)
+    if names.issuperset(mapping):
+        return ()
+    return ({key: value for key, value in mapping.items() if key not in names},)
+
+
+def _request_value_over_default(default: object, requested: object) -> object:
+    if requested is None:
+        return default
+    default_mapping: Final = as_str_mapping(default)
+    if default_mapping is None:
+        return requested
+    requested_mapping: Final = as_str_mapping(requested)
+    if requested_mapping is None:
+        return default
+    return {**default_mapping, **requested_mapping}
 
 
 def as_retry_skipped_deployment_ids(value: object) -> tuple[str, ...]:
@@ -144,30 +214,6 @@ def resolve_model_group_alias(model_group_alias: object, model: str) -> str | No
     return target
 
 
-def resolve_served_model(
-    model: str,
-    model_alias_map: object,
-    key_aliases: object,
-    model_group_alias: object,
-) -> str:
-    """Model the request preparation serves for `model`.
-
-    Apply the global alias map, then key aliases, then `router_settings.model_group_alias`.
-    """
-    global_aliases: Final = (
-        _OBJECT_MAPPING_ADAPTER.validate_python(model_alias_map) if isinstance(model_alias_map, Mapping) else None
-    )
-    global_target: Final = global_aliases.get(model) if global_aliases is not None else None
-    after_global: Final = global_target if isinstance(global_target, str) else model
-    key_alias_mapping: Final = (
-        _OBJECT_MAPPING_ADAPTER.validate_python(key_aliases) if isinstance(key_aliases, Mapping) else None
-    )
-    key_target: Final = key_alias_mapping.get(after_global) if key_alias_mapping is not None else None
-    after_key: Final = key_target if isinstance(key_target, str) else after_global
-    router_target: Final = resolve_model_group_alias(model_group_alias, after_key)
-    return router_target if router_target is not None else after_key
-
-
 def truncate_fallback_error_detail(detail: str) -> str:
     """
     Bound a fallback failure detail before it is logged or appended to an exception message.
@@ -228,9 +274,13 @@ def format_fallback_outcome_message(
     over_budget_targets: Final = tuple(
         dict.fromkeys(target.target for target in skipped if target.reason is FallbackSkipReason.OVER_BUDGET)
     )
+    rate_limited_targets: Final = tuple(
+        dict.fromkeys(target.target for target in skipped if target.reason is FallbackSkipReason.RATE_LIMITED)
+    )
     attempted_text: Final = ", ".join(str(mask_sensitive_structure(target)) for target in attempted_targets)
     not_authorized_text: Final = ", ".join(str(mask_sensitive_structure(target)) for target in not_authorized_targets)
     over_budget_text: Final = ", ".join(str(mask_sensitive_structure(target)) for target in over_budget_targets)
+    rate_limited_text: Final = ", ".join(str(mask_sensitive_structure(target)) for target in rate_limited_targets)
     attempted_failure: Final = (
         (f"Fallback to {attempted_text} also failed: {fallback_failure_detail}",)
         if fallback_failure_detail and attempted_targets
@@ -252,7 +302,15 @@ def format_fallback_outcome_message(
         if over_budget_targets
         else ()
     )
-    sentences: Final = attempted_failure + not_authorized_sentence + over_budget_sentence
+    rate_limited_sentence: Final = (
+        (
+            f"Fallback to {rate_limited_text} was skipped because the caller is over its per-model rate limit for "
+            f"{'it' if len(rate_limited_targets) == 1 else 'them'}.",
+        )
+        if rate_limited_targets
+        else ()
+    )
+    sentences: Final = attempted_failure + not_authorized_sentence + over_budget_sentence + rate_limited_sentence
     if sentences:
         return f"{lead} {' '.join(sentences)}"
 
@@ -378,7 +436,8 @@ def filter_team_based_models(
 
     ids_to_remove: Final = set()
     if isinstance(healthy_deployments, dict):
-        return healthy_deployments
+        # A deployment asked for by id is filtered like any other: another team's is not served.
+        return [] if _owner_team(healthy_deployments) not in (None, request_team_id) else healthy_deployments  # pyright: ignore[reportUnknownArgumentType, reportUnknownVariableType]  # the legacy untyped deployment dict
     for deployment in healthy_deployments:
         _model_info = deployment.get("model_info") or {}
         model_team_id = _model_info.get("team_id")
@@ -408,7 +467,7 @@ def deployments_the_caller_may_use(
         return ()
 
 
-_WEB_SEARCH_TOOL_TYPES: Final = frozenset({"web_search", "web_search_preview"})
+_WEB_SEARCH_TOOL_KEYS: Final = frozenset({"googleSearch", "google_search"})
 
 
 def _deployment_supports_web_search(deployment: dict) -> bool:
@@ -431,6 +490,23 @@ def _deployment_supports_web_search(deployment: dict) -> bool:
     return True
 
 
+def is_web_search_request(request_kwargs: Mapping[str, object]) -> bool:
+    """OpenAI ``web_search`` / ``web_search_preview``, Anthropic ``web_search_<version>``, Gemini
+    ``googleSearch`` / ``google_search``."""
+    tools: Final[object] = request_kwargs.get("tools")
+    return isinstance(tools, (list, tuple)) and any(
+        isinstance(tool, dict)
+        and (
+            any(key in tool for key in _WEB_SEARCH_TOOL_KEYS)
+            or (
+                isinstance(tool_type := tool.get("type"), str)
+                and (tool_type == "web_search" or tool_type.startswith("web_search_"))
+            )
+        )
+        for tool in tools
+    )
+
+
 def filter_web_search_deployments(
     healthy_deployments: list[dict] | dict,
     request_kwargs: dict | None = None,
@@ -445,14 +521,7 @@ def filter_web_search_deployments(
     if isinstance(healthy_deployments, dict):
         return healthy_deployments
 
-    tools: Final[object] = request_kwargs.get("tools")
-    is_web_search_request: Final = isinstance(tools, (list, tuple)) and any(
-        isinstance(tool, dict)
-        and isinstance(tool_type := tool.get("type"), str)
-        and tool_type in _WEB_SEARCH_TOOL_TYPES
-        for tool in tools
-    )
-    if not is_web_search_request:
+    if not is_web_search_request(request_kwargs):
         return healthy_deployments
 
     # Filter out deployments that don't support web search
@@ -607,3 +676,9 @@ def warn_on_provider_credential_mismatch(model_name: str, litellm_params: Mappin
     )
     verbose_router_logger.warning(warning)
     return warning
+
+
+def _owner_team(deployment: Mapping[str, object]) -> object:
+    """The team a deployment belongs to (``model_info.team_id``), or None."""
+    model_info: Final = deployment.get("model_info")
+    return model_info.get("team_id") if isinstance(model_info, Mapping) else None  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # a deployment dict's model_info

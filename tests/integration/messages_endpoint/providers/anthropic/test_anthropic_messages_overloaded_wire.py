@@ -140,6 +140,16 @@ def _assert_internal_server_error(response: httpx.Response) -> None:
     assert "InternalServerError" in string_value(error["message"]), response.text
 
 
+def _assert_openai_overloaded(response: httpx.Response) -> None:
+    assert response.status_code == 503, response.text
+    error: Final = _openai_error(response)
+    assert set(error) == {"message", "type", "param", "code"}, response.text
+    assert string_value(error["message"]), response.text
+    assert error["type"] == "service_unavailable_error", response.text
+    assert error["param"] is None, response.text
+    assert error["code"] == "server_is_overloaded", response.text
+
+
 def _one_post(wire: Wire, target: str) -> None:
     assert [(request.method, unquote(request.target)) for request in wire.drain()] == [("POST", target)]
 
@@ -361,7 +371,7 @@ def test_messages_overloaded_frame_before_content_without_a_retry_budget_is_rela
         ]
 
 
-def test_chat_completions_overloaded_frame_before_content_answers_500(gateway: Gateway) -> None:
+def test_chat_completions_overloaded_frame_before_content_answers_503(gateway: Gateway) -> None:
     prompt: Final = _prompt()
     with wire_server(_always(_overloaded_before_content(prompt))) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_API_KEY)
@@ -370,24 +380,24 @@ def test_chat_completions_overloaded_frame_before_content_answers_500(gateway: G
             "/v1/chat/completions",
             {"model": model, "messages": [{"role": "user", "content": prompt}], "stream": True, "num_retries": 0},
         )
-        _assert_internal_server_error(response)
+        _assert_openai_overloaded(response)
         _one_post(wire, "/v1/messages")
 
 
-def test_chat_completions_529_answers_500_to_the_sync_sdk(gateway: Gateway) -> None:
+def test_chat_completions_529_answers_503_to_the_sync_sdk(gateway: Gateway) -> None:
     with wire_server(_always(status_reply(529))) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_API_KEY)
         with pytest.raises(openai.APIStatusError) as caught:
             _openai_sdk(gateway).chat.completions.create(
                 model=model, messages=[{"role": "user", "content": _prompt()}], extra_body={"num_retries": 0}
             )
-        assert caught.value.status_code == 500, caught.value.response.text
-        _assert_internal_server_error(caught.value.response)
+        assert caught.value.status_code == 503, caught.value.response.text
+        _assert_openai_overloaded(caught.value.response)
         _one_post(wire, "/v1/messages")
-        _assert_logged_failure(model, rows=1, error_class="InternalServerError", code="500")
+        _assert_logged_failure(model, rows=1, error_class="InternalServerError", code="503")
 
 
-async def test_chat_completions_stream_529_answers_500_to_the_async_sdk(gateway: Gateway) -> None:
+async def test_chat_completions_stream_529_answers_503_to_the_async_sdk(gateway: Gateway) -> None:
     with wire_server(_always(status_reply(529))) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_API_KEY)
         with pytest.raises(openai.APIStatusError) as caught:
@@ -397,19 +407,31 @@ async def test_chat_completions_stream_529_answers_500_to_the_async_sdk(gateway:
                 stream=True,
                 extra_body={"num_retries": 0},
             )
-        assert caught.value.status_code == 500, caught.value.response.text
-        _assert_internal_server_error(caught.value.response)
+        assert caught.value.status_code == 503, caught.value.response.text
+        _assert_openai_overloaded(caught.value.response)
+        _one_post(wire, "/v1/messages")
+
+
+def test_completions_529_answers_503(gateway: Gateway) -> None:
+    with wire_server(_always(status_reply(529))) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_API_KEY)
+        response: Final = gateway.request(
+            "POST",
+            "/v1/completions",
+            {"model": model, "prompt": _prompt(), "max_tokens": 16, "num_retries": 0},
+        )
+        _assert_openai_overloaded(response)
         _one_post(wire, "/v1/messages")
 
 
 @pytest.mark.parametrize("shape", ("non-stream", "stream"))
-def test_responses_529_answers_500(gateway: Gateway, shape: Shape) -> None:
+def test_responses_529_answers_503(gateway: Gateway, shape: Shape) -> None:
     with wire_server(_always(status_reply(529))) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_API_KEY)
         response: Final = gateway.request(
             "POST", "/v1/responses", {"model": model, "input": _prompt(), "stream": shape == "stream", "num_retries": 0}
         )
-        _assert_internal_server_error(response)
+        _assert_openai_overloaded(response)
         _one_post(wire, "/v1/messages")
 
 

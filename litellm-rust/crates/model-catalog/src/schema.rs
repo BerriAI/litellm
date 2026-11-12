@@ -104,9 +104,18 @@ pub fn registry_json_schema() -> Schema {
         "title".into(),
         "LiteLLM model prices and context window registry".into(),
     );
+    definitions.insert(
+        "aliasRow".into(),
+        json!({
+            "type": "object",
+            "required": ["alias_of"],
+            "properties": {"alias_of": {"type": "string"}},
+            "additionalProperties": false,
+        }),
+    );
     root.insert(
         "additionalProperties".into(),
-        json!({"$ref": "#/$defs/modelEntry"}),
+        json!({"anyOf": [{"$ref": "#/$defs/modelEntry"}, {"$ref": "#/$defs/aliasRow"}]}),
     );
     root.insert("$defs".into(), Value::Object(definitions));
     Schema::from(root.clone())
@@ -153,6 +162,7 @@ fn decorate_model_entry(schema: &mut Value) {
     let rates = json!({FLAT_KEY_PATTERN: {"type": "number", "minimum": 0}});
     let object = schema.as_object_mut().unwrap();
     object.insert("required".into(), json!(["litellm_provider"]));
+    object.insert("not".into(), json!({"required": ["alias_of"]}));
     object.insert("additionalProperties".into(), Value::Bool(true));
     object.insert(
         "patternProperties".into(),

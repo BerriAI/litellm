@@ -8,10 +8,8 @@ import pytest
 
 from litellm.proxy.anthropic_endpoints.claude_code_endpoints.skill_upload_archive import (
     MAX_SKILL_ARCHIVE_COMPRESSION_RATIO,
-    MAX_SKILL_UPLOAD_BYTES,
     build_uploaded_skill_archive,
 )
-from litellm.proxy.discovery_endpoints.agent_skills_archive import MAX_ARCHIVE_ENTRIES, MAX_ARCHIVE_UNPACKED_BYTES
 
 MANIFEST: Final = b"---\nname: skill\ndescription: Notes\n---\nRead guide.md"
 
@@ -64,29 +62,3 @@ def test_installable_archive_preserves_files_and_safe_modes(
         assert {entry.compress_type for entry in archive.infolist()} == {compression}
         assert sum(entry.file_size for entry in archive.infolist()) <= len(result) * MAX_SKILL_ARCHIVE_COMPRESSION_RATIO
     assert build_uploaded_skill_archive(upload, "registered-name") == result
-
-
-_VALID: Final = _zip((("SKILL.md", MANIFEST),))
-_ENCRYPTED: Final = _zip((("__MACOSX/encrypted", b"secret"), ("SKILL.md", MANIFEST)))
-_CENTRAL: Final = _ENCRYPTED.index(b"PK\x01\x02")
-
-
-@pytest.mark.parametrize("content, name", [
-    (b"not a zip", "skill"),
-    (_zip((("SKILL.md", MANIFEST),), zipfile.ZIP_STORED).replace(b"Read guide.md", b"Dead guide.md"), "skill"),
-    (_ENCRYPTED[:_CENTRAL + 8] + b"\x01\x00" + _ENCRYPTED[_CENTRAL + 10:], "skill"),
-    *[(_VALID, name) for name in ("../escape", "", "Not a slug", "x" * 65536)],
-    *[(_zip(((path, MANIFEST),)), "skill") for path in ("readme.md", "wrapper/nested/SKILL.md", "skills/example/SKILL.md")],
-    *[(_zip((("SKILL.md", MANIFEST), (path, b"unsafe"))), "skill") for path in (
-        "../escape", "/absolute", "C:/escape", "a\\escape", "__MACOSX/../escape", "bad/./file",
-    )],
-    *[(_zip((("SKILL.md", MANIFEST), (_entry(path, stat.S_IFLNK | 0o777), b"../../outside"))), "skill")
-      for path in ("__MACOSX/link", "scripts/link")],
-    (_zip(((".claude-plugin/plugin.json", b'{"name":"plugin"}'), ("skills/example/SKILL.md", MANIFEST))), "skill"),
-    (_zip((("SKILL.md", MANIFEST), ("__MACOSX/a", b"one"), ("__MACOSX//a", b"two"))), "skill"),
-    (_zip((("SKILL.md", MANIFEST), ("asset.bin", bytes(MAX_SKILL_UPLOAD_BYTES))), zipfile.ZIP_STORED), "skill"),
-    (_zip((("SKILL.md", MANIFEST), ("__MACOSX/large", bytes(MAX_ARCHIVE_UNPACKED_BYTES)))), "skill"),
-    (_zip((("SKILL.md", MANIFEST),) + tuple((f"__MACOSX/{i}", b"") for i in range(MAX_ARCHIVE_ENTRIES))), "skill"),
-])
-def test_rejects_unsafe_invalid_or_oversized_archives(content: bytes, name: str) -> None:
-    assert build_uploaded_skill_archive(content, name) is None

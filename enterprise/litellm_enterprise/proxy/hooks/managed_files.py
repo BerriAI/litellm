@@ -49,6 +49,7 @@ from litellm.constants import (
 )
 from litellm.files.types import FileRetrieveCallOptions, FileRetrieveProvider
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.cloud_storage_security import stored_s3_bucket_kwargs
 from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.litellm_core_utils.internal_call_metadata import requests_background
@@ -78,6 +79,7 @@ from litellm.proxy.litellm_pre_call_utils import (
 from litellm.proxy.openai_files_endpoints.common_utils import (
     BATCH_CREATE_HIDDEN_PARAM,
     FILE_LIST_CONTINUATION_CHUNK_SIZE,
+    TeamProviderDeployment,
     _is_base64_encoded_unified_file_id,
     apply_unified_file_ids,
     decode_model_from_file_id,
@@ -127,7 +129,6 @@ class _ManagedFileRetrieve(Protocol):
         self,
         *,
         file_id: str,
-        _litellm_internal_model_credentials: Mapping[str, object] | None = None,
         **kwargs: Unpack[FileRetrieveCallOptions],
     ) -> OpenAIFileObject: ...
 
@@ -396,11 +397,12 @@ class _CursorPageArgs(TypedDict, total=False):
 class _RouterFileCallKwargs(TypedDict, total=False):
     client: ReadOnly[AsyncOpenAI | None]
     custom_llm_provider: ReadOnly[str | None]
+    stored_s3_bucket_name: ReadOnly[str]
 
 
 _MODEL_FILE_ID_MAPPING: Final = TypeAdapter(dict[str, str])
 _FILE_UPLOAD_ONLY_FIELDS: Final = frozenset({"file", "purpose", "expires_after", "extra_body"})
-_FILE_DELETE_RESERVED_FIELDS: Final = frozenset({"model", "file_id", "_litellm_internal_model_credentials"})
+_FILE_DELETE_RESERVED_FIELDS: Final = frozenset({"model", "file_id"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -459,19 +461,11 @@ async def _delete_provider_file(
     provider_file_id: str,
     request_data: Mapping[str, object],
 ) -> None:
-    credentials: Final = llm_router.registry().credentials(model_id, form="with_provider")
-    delete_data: Final = {
-        **{k: v for k, v in request_data.items() if k not in _FILE_DELETE_RESERVED_FIELDS},
-        **(
-            {"_litellm_internal_model_credentials": MappingProxyType(dict(credentials))}
-            if credentials is not None
-            else {}
-        ),
-    }
+    delete_data: Final = {k: v for k, v in request_data.items() if k not in _FILE_DELETE_RESERVED_FIELDS}
     await llm_router.afile_delete(
         model=model_id,
         file_id=provider_file_id,
-        **cast(_RouterFileCallKwargs, delete_data),
+        **cast(_RouterFileCallKwargs, {**delete_data, **stored_s3_bucket_kwargs(provider_file_id)}),
     )
 
 
@@ -1160,26 +1154,19 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         *,
         provider_file_id: str,
         call_options: Mapping[str, object],
-        internal_model_credentials: Mapping[str, object] | None = None,
     ) -> OpenAIFileObject:
         """Retrieve provider file details with transient retries and SDK retries disabled."""
         retrieve_file: Final = cast(_ManagedFileRetrieve, litellm.afile_retrieve)
         retrieve_options: Final = cast(
             FileRetrieveCallOptions,
-            {**call_options, "max_retries": 0},
+            {**call_options, **stored_s3_bucket_kwargs(provider_file_id), "max_retries": 0},
         )
         for attempt in range(len(_PROVIDER_FILE_RETRIEVE_RETRY_DELAYS_SECONDS) + 1):
             if attempt > 0:
                 await self._sleep(_PROVIDER_FILE_RETRIEVE_RETRY_DELAYS_SECONDS[attempt - 1])
             try:
-                if internal_model_credentials is None:
-                    return await retrieve_file(
-                        file_id=provider_file_id,
-                        **retrieve_options,
-                    )
                 return await retrieve_file(
                     file_id=provider_file_id,
-                    _litellm_internal_model_credentials=MappingProxyType(dict(internal_model_credentials)),
                     **retrieve_options,
                 )
             except Exception as error:
@@ -1221,7 +1208,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     self._afile_retrieve_with_retries(
                         provider_file_id=provider_file_id,
                         call_options=router_credentials,
-                        internal_model_credentials=router_credentials,
                     ),
                     timeout=BATCH_OUTPUT_FILE_LOOKUP_TIMEOUT_SECONDS,
                 )
@@ -1442,6 +1428,43 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             model_mappings={model_id: provider_file_id} if model_id else {},
             user_api_key_dict=owner,
         )
+
+    async def register_provider_file(
+        self,
+        *,
+        provider_file_id: str,
+        content_type: str,
+        deployment: TeamProviderDeployment,
+        owner: UserAPIKeyAuth,
+        llm_router: Router | None,
+    ) -> str | None:
+        unified_file_id: Final = self.get_unified_output_file_id(
+            provider_file_id, deployment.deployment_id, deployment.public_model_name, file_type=content_type
+        )
+        provider_file_object, _ = await self._fetch_provider_file_object(
+            unified_file_id=unified_file_id,
+            provider_file_id=provider_file_id,
+            model_id=deployment.deployment_id,
+            model_name=None,
+            llm_router=llm_router,
+        )
+        if provider_file_object is None:
+            return None
+        try:
+            await self.store_unified_file_id(
+                file_id=unified_file_id,
+                file_object=provider_file_object,
+                litellm_parent_otel_span=None,
+                model_mappings={deployment.deployment_id: provider_file_id},
+                user_api_key_dict=owner,
+            )
+        except Exception as error:  # noqa: BLE001  # the upload succeeded, so the caller keeps the provider id
+            verbose_logger.warning(
+                f"Failed to register provider_file_id={sanitize_for_log(provider_file_id)} as a managed file: "
+                f"{type(error).__name__} {sanitize_for_log(error)}"
+            )
+            return None
+        return unified_file_id
 
     async def list_user_batches(
         self,
@@ -1774,8 +1797,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             if potential_file_id and "llm_output_file_id," in potential_file_id:
                 model_id = self.get_model_id_from_unified_file_id(potential_file_id)
                 if model_id:
+                    provider_file_id: Final = self.get_output_file_id_from_unified_file_id(potential_file_id)
                     data["model"] = model_id
-                    data["file_id"] = self.get_output_file_id_from_unified_file_id(potential_file_id)
+                    data["file_id"] = provider_file_id
+                    data.update(stored_s3_bucket_kwargs(provider_file_id))
         elif call_type == CallTypes.acreate_batch.value:
             input_file_id = cast(Optional[str], data.get("input_file_id"))
             if input_file_id:
@@ -2270,10 +2295,12 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         unified_batch_id = SpecialEnums.LITELLM_MANAGED_BATCH_COMPLETE_STR.value.format(model_id, batch_id)
         return base64.urlsafe_b64encode(unified_batch_id.encode()).decode().rstrip("=")
 
-    def get_unified_output_file_id(self, output_file_id: str, model_id: str, model_name: Optional[str]) -> str:
+    def get_unified_output_file_id(
+        self, output_file_id: str, model_id: str, model_name: Optional[str], file_type: str = "application/json"
+    ) -> str:
         deterministic_uuid: Final = uuid5(uuid5(NAMESPACE_URL, model_id), output_file_id)
         unified_output_file_id = SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
-            "application/json",
+            file_type,
             str(deterministic_uuid),
             model_name or "",
             output_file_id,
@@ -2866,21 +2893,22 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             exception_dict = {}
             for model_id, provider_file_id in specific_model_file_id_mapping.items():
                 try:
-                    # Cloud-storage providers (e.g. Bedrock S3) validate file ids
-                    # against the deployment's configured bucket, which they only
-                    # trust from this immutable server-side snapshot, never from
-                    # request params.
-                    credentials = llm_router.registry().credentials(model_id, form="with_provider")
-                    if credentials is not None:
-                        data["_litellm_internal_model_credentials"] = cast(Dict, MappingProxyType(dict(credentials)))
-                    else:
-                        data.pop("_litellm_internal_model_credentials", None)
                     return cast(
                         HttpxBinaryResponseContent,
                         await llm_router.afile_content(
                             model=model_id,
                             file_id=provider_file_id,
-                            **cast(_RouterFileCallKwargs, data),
+                            **cast(
+                                _RouterFileCallKwargs,
+                                {
+                                    **data,
+                                    **(
+                                        stored_s3_bucket_kwargs(provider_file_id)
+                                        if isinstance(provider_file_id, str)
+                                        else {}
+                                    ),
+                                },
+                            ),
                         ),
                     )
                 except Exception as e:

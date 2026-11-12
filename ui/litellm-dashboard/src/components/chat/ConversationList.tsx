@@ -19,6 +19,7 @@ import {
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import dayjs from "dayjs";
+import type { ParseKeys } from "i18next";
 import { useTranslation } from "react-i18next";
 import { Conversation } from "./types";
 
@@ -31,6 +32,7 @@ interface Props {
   searchOpen?: boolean;
   onSearchOpenChange?: (open: boolean) => void;
   hideSearchButton?: boolean;
+  enableSearchShortcut?: boolean;
 }
 
 type DateGroup = "Recents" | "Yesterday" | "Last 7 Days" | "Older";
@@ -45,6 +47,13 @@ const getDateGroup = (timestamp: number): DateGroup => {
 };
 
 const DATE_GROUP_ORDER: DateGroup[] = ["Recents", "Yesterday", "Last 7 Days", "Older"];
+
+const DATE_GROUP_LABEL_KEYS: Readonly<Record<DateGroup, ParseKeys>> = {
+  Recents: "chat.conversationList.recent",
+  Yesterday: "chat.conversationList.yesterday",
+  "Last 7 Days": "chat.conversationList.lastSevenDays",
+  Older: "chat.conversationList.older",
+};
 
 interface GroupedConversations {
   group: DateGroup;
@@ -116,7 +125,7 @@ const ConversationRow: React.FC<ConversationRowProps> = ({ conv, isActive, onSel
 
   return (
     <div
-      className={`chat-conversation-row group flex items-center rounded-lg transition-colors min-h-9 relative ${
+      className={`chat-conversation-row group flex items-center rounded-md transition-colors min-h-9 relative ${
         isActive ? "bg-sidebar-accent text-sidebar-accent-foreground" : "hover:bg-sidebar-accent"
       }`}
     >
@@ -138,7 +147,7 @@ const ConversationRow: React.FC<ConversationRowProps> = ({ conv, isActive, onSel
             onClick={() => onSelect(conv.id)}
             aria-label={conv.title}
             aria-current={isActive ? "page" : undefined}
-            className={`min-w-0 flex-1 justify-start text-[13px] hover:bg-sidebar-accent ${
+            className={`h-auto min-h-11 min-w-0 flex-1 justify-start text-[13px] hover:bg-sidebar-accent ${
               isActive ? "font-medium" : ""
             }`}
             title={conv.title}
@@ -260,7 +269,7 @@ const SearchModal: React.FC<SearchModalProps> = ({ open, conversations, onSelect
           <Input
             autoFocus
             aria-label={t("chat.conversationList.searchLabel")}
-            placeholder="Search conversations\u2026"
+            placeholder={t("chat.conversationList.searchPlaceholder")}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             className="pl-9"
@@ -303,6 +312,7 @@ const ConversationList: React.FC<Props> = ({
   searchOpen,
   onSearchOpenChange,
   hideSearchButton = false,
+  enableSearchShortcut = true,
 }) => {
   const { t } = useTranslation();
   const [localSearchOpen, setLocalSearchOpen] = useState(false);
@@ -311,7 +321,8 @@ const ConversationList: React.FC<Props> = ({
 
   const handleGlobalKeyDown = useCallback(
     (e: KeyboardEvent) => {
-      if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
+      const isSearchShortcut = e.key.toLowerCase() === "k" && (e.metaKey || e.ctrlKey);
+      if (isSearchShortcut && !e.shiftKey) {
         e.preventDefault();
         setSearchModalOpen(!searchModalOpen);
       }
@@ -320,9 +331,10 @@ const ConversationList: React.FC<Props> = ({
   );
 
   useEffect(() => {
+    if (!enableSearchShortcut) return;
     document.addEventListener("keydown", handleGlobalKeyDown);
     return () => document.removeEventListener("keydown", handleGlobalKeyDown);
-  }, [handleGlobalKeyDown]);
+  }, [handleGlobalKeyDown, enableSearchShortcut]);
 
   const grouped = groupConversations(conversations);
 
@@ -342,37 +354,24 @@ const ConversationList: React.FC<Props> = ({
           </div>
         )}
         <ScrollArea className="flex-1 h-0 px-1.5 pt-2">
-          {grouped.length === 0 ? (
-            <div>
-              <div className="moyai-chat-history-heading flex items-center gap-2 text-xs text-sidebar-foreground">
+          {grouped.map(({ group, items }) => (
+            <div key={group} className="mb-2">
+              <div className="moyai-chat-history-heading flex items-center gap-2 px-2 pt-2 pb-1 text-xs font-normal text-sidebar-foreground">
                 <Clock3 className="size-3.5" aria-hidden="true" />
-                <span className="flex-1">{t("chat.conversationList.recent")}</span>
-                <span>0</span>
+                {t(DATE_GROUP_LABEL_KEYS[group])}
               </div>
-              <p className="moyai-chat-empty-history text-xs text-muted-foreground">
-                {t("chat.conversationList.empty")}
-              </p>
+              {items.map((conv) => (
+                <ConversationRow
+                  key={conv.id}
+                  conv={conv}
+                  isActive={conv.id === activeConversationId}
+                  onSelect={onSelect}
+                  onDelete={onDelete}
+                  onRename={onRename}
+                />
+              ))}
             </div>
-          ) : (
-            grouped.map(({ group, items }) => (
-              <div key={group} className="mb-2">
-                <div className="moyai-chat-history-heading flex items-center gap-2 px-2 pt-2 pb-1 text-xs font-normal text-sidebar-foreground">
-                  <Clock3 className="size-3.5" aria-hidden="true" />
-                  {group === "Recents" ? t("chat.conversationList.recent") : group}
-                </div>
-                {items.map((conv) => (
-                  <ConversationRow
-                    key={conv.id}
-                    conv={conv}
-                    isActive={conv.id === activeConversationId}
-                    onSelect={onSelect}
-                    onDelete={onDelete}
-                    onRename={onRename}
-                  />
-                ))}
-              </div>
-            ))
-          )}
+          ))}
         </ScrollArea>
       </div>
 

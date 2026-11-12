@@ -15,6 +15,8 @@ import PublishModal from "./PublishModal";
 import DotpromptViewTab from "./DotpromptViewTab";
 import VersionHistorySidePanel from "./VersionHistorySidePanel";
 
+const versionedPromptId = (promptId: string, version: number) => `${promptId}.v${version}`;
+
 const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess, accessToken, initialPromptData }) => {
   const { t } = useTranslation();
   const getInitialPrompt = (): PromptType => {
@@ -283,7 +285,7 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
                   const loadedPrompt = parseExistingPrompt(response);
                   setPrompt({ ...loadedPrompt, environment: env });
                   const versionNum = response.prompt_spec.version || 1;
-                  setActiveVersionId(`${response.prompt_spec.prompt_id}.v${versionNum}`);
+                  setActiveVersionId(versionedPromptId(response.prompt_spec.prompt_id, versionNum));
                 }
               } catch {
                 // No version in this environment yet — keep current content, just change env

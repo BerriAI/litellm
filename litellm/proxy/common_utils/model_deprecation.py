@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
@@ -9,12 +10,14 @@ from typing import TYPE_CHECKING, Final, TypeAlias
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry, GetModelCostMap
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+from litellm.litellm_core_utils.model_cost_table import AliasedCostEntry
 from litellm.types.proxy.model_deprecation import (
     DEFAULT_DEPRECATION_WARN_DAYS,
     DeprecationStatus,
     ModelDeprecationInfo,
     ModelDeprecationResponse,
+    SuccessorModelSource,
 )
 
 if TYPE_CHECKING:
@@ -33,6 +36,7 @@ class _ResolvedDeprecation:
     litellm_provider: str | None
     copied_from_another_row: bool = False
     successor_model: str | None = None
+    deprecation_source: str | None = None
 
 
 def _parse_deprecation_date(raw_value: object) -> date | None:
@@ -48,8 +52,8 @@ def _parse_deprecation_date(raw_value: object) -> date | None:
         return None
 
 
-def _successor_model(raw_value: object) -> str | None:
-    """A non-empty successor name, or None when the field is missing, blank, or not a string"""
+def _non_empty_string(raw_value: object) -> str | None:
+    """A non-empty trimmed string, or None for missing, blank, or non-string fields"""
     return raw_value.strip() or None if isinstance(raw_value, str) else None
 
 
@@ -71,7 +75,8 @@ def _cost_map_lookup(model_key: str | None, catalog: Mapping[str, object]) -> _R
         copied_from_another_row=isinstance(entry, AliasedCostEntry)
         and "deprecation_date" not in entry.registered_fields
         and model_key not in catalog,
-        successor_model=_successor_model(fields.get("successor_model")),
+        successor_model=_non_empty_string(fields.get("successor_model")),
+        deprecation_source=_non_empty_string(fields.get("deprecation_source")),
     )
 
 
@@ -155,6 +160,7 @@ def _resolve_deployment_deprecation(
         litellm_model=model_key,
         litellm_provider=override_provider if isinstance(override_provider, str) else None,
         successor_model=from_catalog.successor_model if from_catalog is not None else None,
+        deprecation_source=from_catalog.deprecation_source if from_catalog is not None else None,
     )
 
 
@@ -166,14 +172,20 @@ def _classify(days_until: int, warn_within_days: int) -> DeprecationStatus:
     return "upcoming"
 
 
-def _checked_successor(model_name: str, model_info: Mapping[str, object], llm_router: Router) -> str | None:
+def _checked_successor(
+    model_name: str,
+    model_info: Mapping[str, object],
+    llm_router: Router,
+    successor_log_level: int,
+) -> str | None:
     """The deployment's successor_model as set, with a warning when no model in its team scope matches it"""
-    successor: Final = _successor_model(model_info.get("successor_model"))
+    successor: Final = _non_empty_string(model_info.get("successor_model"))
     if successor is None:
         return None
     team_id: Final = model_info.get("team_id")
     if not llm_router.registry().deployments(successor, team_id=team_id if isinstance(team_id, str) else None):
-        verbose_logger.warning(
+        verbose_logger.log(
+            successor_log_level,
             "model_deprecation: %s names successor %s, which matches no model group, alias, or wildcard route here",
             model_name,
             successor,
@@ -187,6 +199,7 @@ def _build_info(
     today: date,
     warn_within_days: int,
     catalog: Mapping[str, object],
+    successor_log_level: int,
 ) -> _DeploymentInfo | None:
     model_name: Final = deployment.get("model_name")
     if not isinstance(model_name, str) or not model_name:
@@ -197,16 +210,32 @@ def _build_info(
         return None
 
     days_until: Final = (resolved.deprecation_date - today).days
-    configured: Final = _checked_successor(model_name, _mapping_field(deployment, "model_info"), llm_router)
+    model_info: Final = _mapping_field(deployment, "model_info")
+    configured: Final = _checked_successor(model_name, model_info, llm_router, successor_log_level)
+    team_public_model_name_value: Final = model_info.get("team_public_model_name")
+    team_public_model_name: Final = (
+        team_public_model_name_value
+        if isinstance(team_public_model_name_value, str) and team_public_model_name_value.strip()
+        else None
+    )
     return _DeploymentInfo(
         info=ModelDeprecationInfo(
             model_name=model_name,
+            team_public_model_name=team_public_model_name,
             litellm_model=resolved.litellm_model,
             deprecation_date=resolved.deprecation_date,
             days_until_deprecation=days_until,
             status=_classify(days_until, warn_within_days),
             litellm_provider=resolved.litellm_provider,
             successor_model=configured or resolved.successor_model,
+            successor_model_source=(
+                SuccessorModelSource.DEPLOYMENT_CONFIG
+                if configured is not None
+                else SuccessorModelSource.MODEL_COST_MAP
+                if resolved.successor_model
+                else None
+            ),
+            deprecation_source=resolved.deprecation_source,
         ),
         configured_successor=configured is not None,
     )
@@ -218,13 +247,13 @@ class _DeploymentInfo:
     configured_successor: bool
 
 
-def _merge_group(group: Sequence[_DeploymentInfo]) -> ModelDeprecationInfo:
+def _merge_group(group: Sequence[_DeploymentInfo], successor_log_level: int) -> ModelDeprecationInfo:
     """Keep the group's first deployment in config order, naming the first successor any of its deployments names,
     a successor configured in model_info ahead of one the cost map supplies"""
     first: Final = group[0].info
     tiers: Final = tuple(
         tuple(
-            deployment.info.successor_model
+            deployment.info
             for deployment in group
             if deployment.configured_successor is configured and deployment.info.successor_model is not None
         )
@@ -233,23 +262,33 @@ def _merge_group(group: Sequence[_DeploymentInfo]) -> ModelDeprecationInfo:
     successors: Final = next((tier for tier in tiers if tier), ())
     if not successors:
         return first
-    if len(frozenset(successors)) > 1:
-        verbose_logger.warning(
+    selected: Final = successors[0]
+    names: Final = frozenset(info.successor_model for info in successors if info.successor_model is not None)
+    if len(names) > 1:
+        verbose_logger.log(
+            successor_log_level,
             "model_deprecation: %s names several successors %s, reporting %s",
             first.model_name,
-            sorted(frozenset(successors)),
-            successors[0],
+            sorted(names),
+            selected.successor_model,
         )
-    return first.model_copy(update={"successor_model": successors[0]})
+    return first.model_copy(
+        update={
+            "successor_model": selected.successor_model,
+            "successor_model_source": selected.successor_model_source,
+            "deprecation_source": selected.deprecation_source,
+        }
+    )
 
 
 def _dedupe(
     models: Sequence[_DeploymentInfo],
+    successor_log_level: int,
 ) -> tuple[ModelDeprecationInfo, ...]:
     """Report a model group carrying the same date on several deployments once"""
     ordered: Final = sorted(models, key=lambda model: (model.info.model_name, model.info.deprecation_date))
     return tuple(
-        _merge_group(tuple(group))
+        _merge_group(tuple(group), successor_log_level)
         for _, group in groupby(ordered, key=lambda model: (model.info.model_name, model.info.deprecation_date))
     )
 
@@ -264,11 +303,18 @@ def _bucket(models: Sequence[ModelDeprecationInfo], status: DeprecationStatus) -
 
 
 def _collect_from_router(
-    llm_router: Router, today: date, warn_within_days: int, catalog: Mapping[str, object]
+    llm_router: Router,
+    today: date,
+    warn_within_days: int,
+    catalog: Mapping[str, object],
+    successor_log_level: int,
 ) -> tuple[ModelDeprecationInfo, ...]:
     deployments: Final = llm_router.registry().deployments() or ()
-    infos: Final = (_build_info(deployment, llm_router, today, warn_within_days, catalog) for deployment in deployments)
-    deduped: Final = _dedupe(tuple(info for info in infos if info is not None))
+    infos: Final = (
+        _build_info(deployment, llm_router, today, warn_within_days, catalog, successor_log_level)
+        for deployment in deployments
+    )
+    deduped: Final = _dedupe(tuple(info for info in infos if info is not None), successor_log_level)
 
     verbose_logger.debug(
         "model_deprecation: %d/%d deployments carry a deprecation date",
@@ -283,12 +329,13 @@ def collect_model_deprecations(
     warn_within_days: int = DEFAULT_DEPRECATION_WARN_DAYS,
     today: date | None = None,
     loaded_catalog: LoadedCatalog = GetModelCostMap.loaded_model_cost_map,
+    successor_log_level: int = logging.WARNING,
 ) -> ModelDeprecationResponse:
     """Bucket every deployment carrying a deprecation date by how urgent it is"""
     snapshot_time: Final = datetime.now(timezone.utc)
     effective_today: Final = today or snapshot_time.date()
     deduped: Final = (
-        _collect_from_router(llm_router, effective_today, warn_within_days, loaded_catalog())
+        _collect_from_router(llm_router, effective_today, warn_within_days, loaded_catalog(), successor_log_level)
         if llm_router is not None
         else ()
     )

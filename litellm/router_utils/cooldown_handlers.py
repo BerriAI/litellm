@@ -16,9 +16,7 @@ from typing import TYPE_CHECKING, Any, Final
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
-from litellm._internal_context import service_target
 from litellm._logging import verbose_router_logger
-from litellm.caching.dual_cache import DualCache
 from litellm.constants import (
     DEFAULT_COOLDOWN_TIME_SECONDS,
     DEFAULT_FAILURE_THRESHOLD_MINIMUM_REQUESTS,
@@ -26,12 +24,13 @@ from litellm.constants import (
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD,
 )
-from litellm.exceptions import MidStreamFallbackError
+from litellm.exceptions import MidStreamFallbackError, MissingMessageRoleError
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import mask_api_base_credentials
 from litellm.router_deprecated import renamed_router_param
-from litellm.router_utils.cooldown_cache import ROUTER_COOLDOWNS_TARGET, CooldownCacheValue
+from litellm.router_utils.cooldown_cache import CooldownCacheValue
 from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
+from litellm.types.llms.anthropic import MESSAGE_THREAD_NOT_FOUND_ERROR_CODE
 from litellm.types.router import Deployment
 from litellm.types.utils import (
     BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
@@ -84,8 +83,10 @@ def mark_deployment_selection_failure(exception: BaseException) -> None:
 
 
 def is_failure_outside_selected_deployment(exception: BaseException | None) -> bool:
-    return is_advisor_orchestration_failure(exception) or bool(
-        getattr(exception, _DEPLOYMENT_SELECTION_FAILURE_ATTR, False)
+    return (
+        is_advisor_orchestration_failure(exception)
+        or isinstance(exception, MissingMessageRoleError)
+        or bool(getattr(exception, _DEPLOYMENT_SELECTION_FAILURE_ATTR, False))
     )
 
 
@@ -108,6 +109,32 @@ def is_video_lookup_not_found(exception: object, failure_kwargs: Mapping[str, ob
     return getattr(exception, "status_code", None) == 404 and failure_kwargs.get("call_type") in VIDEO_ID_CALL_TYPES
 
 
+def is_message_thread_not_found(exception: object) -> bool:
+    """Whether a message-thread continue failed with Anthropic's 404 ``thread_not_found``: the caller's
+    ``previous_message_id`` is stale and the SDK replays the conversation, the deployment is healthy."""
+    return getattr(exception, "status_code", None) == 404 and MESSAGE_THREAD_NOT_FOUND_ERROR_CODE in str(exception)
+
+
+# The calls on an existing response id. ``compact_responses`` is left out: it sends a model and input,
+# so its 404 can mean a missing model rather than a missing response.
+RESPONSE_ID_CALL_TYPES: Final = frozenset(
+    {
+        "aget_responses",
+        "get_responses",
+        "adelete_responses",
+        "delete_responses",
+        "acancel_responses",
+        "cancel_responses",
+        "alist_input_items",
+    }
+)
+
+
+def is_response_lookup_not_found(exception: object, failure_kwargs: Mapping[str, object]) -> bool:
+    """Whether a call on an existing response id failed with a provider 404: the response is not on that account."""
+    return getattr(exception, "status_code", None) == 404 and failure_kwargs.get("call_type") in RESPONSE_ID_CALL_TYPES
+
+
 _EXCEPTION_POLICY_FIELDS: Final[tuple[tuple[type, str], ...]] = (
     # ContentPolicyViolationError subclasses BadRequestError, so it must be checked first.
     (litellm.ContentPolicyViolationError, "ContentPolicyViolationErrorAllowedFails"),
@@ -122,15 +149,16 @@ _EXCEPTION_POLICY_FIELDS: Final[tuple[tuple[type, str], ...]] = (
 )
 
 
-def _first_present(*sources: Mapping[str, Any] | None, key: str) -> int | float | None:
+def _first_present(*sources: Mapping[str, object] | None, key: str) -> int | float | None:
     """Return *key* from the first source mapping where it's set, so callers can
     support a setting living in more than one deployment config location. Sources
-    are checked in order from most to least specific to that setting."""
+    are checked in order from most to least specific to that setting. Only a number
+    counts: a bool or a string is skipped, so the router default applies."""
     for source in sources:
         if source is None:
             continue
         value = source.get(key)
-        if value is not None:
+        if isinstance(value, int | float) and not isinstance(value, bool):
             return value
     return None
 
@@ -748,7 +776,7 @@ def should_cooldown_based_on_allowed_fails_policy(
     When *allowed_fails_override* / *cooldown_time_override* are supplied they
     take precedence over the router-level values (used by deployment-level overrides).
 
-    The counter lives in the router's shared ``DualCache`` (Redis when configured), so
+    The counter lives in the cooldown store (Redis when configured), so
     every worker process increments the same key and the threshold applies fleet-wide.
 
     When *cache_key_suffix* is supplied the fail counter is keyed as
@@ -771,24 +799,10 @@ def should_cooldown_based_on_allowed_fails_policy(
         else (ctx.settings().cooldown_time or DEFAULT_COOLDOWN_TIME_SECONDS)
     )
 
-    base_key: Final = f"deployment:{deployment}:allowed_fails"
-    cache_key: Final = f"{base_key}:{cache_key_suffix}" if cache_key_suffix else base_key
-    updated_fails: Final = _increment_allowed_fails(cache=ctx.health().store, cache_key=cache_key, ttl=cooldown_time)
+    updated_fails: Final = ctx.health().cooldowns.cooldown_store.increment_allowed_fails(
+        deployment, cache_key_suffix, cooldown_time
+    )
     return updated_fails > allowed_fails
-
-
-def _increment_allowed_fails(cache: DualCache, cache_key: str, ttl: float) -> int:
-    """
-    Return the fleet-wide fail count. ``DualCache.increment_cache`` bumps the in-memory tier
-    before Redis and re-raises a Redis error, so a Redis outage degrades to this worker's own count.
-    """
-    with service_target(ROUTER_COOLDOWNS_TARGET):
-        try:
-            return cache.increment_cache(key=cache_key, value=1, ttl=ttl)
-        except Exception as e:  # noqa: BLE001  # a Redis outage must not stop failing deployments from cooling down
-            verbose_router_logger.warning("allowed_fails counter fell back to this worker's in-memory count: %s", e)
-            local_fails: Final = cache.get_cache(key=cache_key, local_only=True)
-            return local_fails if isinstance(local_fails, int) else 0
 
 
 def _is_allowed_fails_set_on_router(
@@ -811,7 +825,7 @@ def _is_allowed_fails_set_on_router(
     return False
 
 
-def cast_exception_status_to_int(exception_status: str | int) -> int:
+def cast_exception_status_to_int(exception_status: object) -> int:
     if isinstance(exception_status, str):
         try:
             exception_status = int(exception_status)
@@ -820,6 +834,13 @@ def cast_exception_status_to_int(exception_status: str | int) -> int:
                 "Unable to cast exception status to int %s. Defaulting to status=500.", exception_status
             )
             exception_status = 500
+    # A bool or a number no HTTP status can be is read as a 500, as the Rust router core reads it.
+    if (
+        isinstance(exception_status, bool)
+        or not isinstance(exception_status, int)
+        or not 0 <= exception_status <= 65535
+    ):
+        return 500
     return exception_status
 
 

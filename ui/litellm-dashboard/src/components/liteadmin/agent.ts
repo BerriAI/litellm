@@ -3,6 +3,7 @@ import type { ChatMessage } from "@/components/chat/types";
 import { EndpointType, isModeCompatibleWithEndpoint } from "@/components/chat_ui/mode_endpoint_mapping";
 import type { ModelGroup } from "@/components/llm_calls/fetch_models";
 import { createGatewayClient } from "@/components/llm_calls/gateway_client";
+import i18n from "@/i18n/i18n";
 import { createLiteAdminOperations, type AriaAccess, type OperationContext } from "./operations";
 
 export const MAX_INPUT_LENGTH = 8_000;
@@ -53,7 +54,7 @@ export function resolveInferenceTarget(candidate: string, managementBaseUrl: str
   const invalid: InferenceTarget = {
     baseUrl: null,
     requiresConsent: false,
-    error: "The gateway must be a valid HTTP(S) URL without credentials, a query, or a fragment.",
+    error: i18n.t("aria.inferenceTarget.invalid"),
   };
   try {
     const page = new URL(pageUrl);
@@ -65,7 +66,7 @@ export function resolveInferenceTarget(candidate: string, managementBaseUrl: str
       return {
         baseUrl: null,
         requiresConsent: false,
-        error: "Inference must use HTTPS when the dashboard or management gateway uses HTTPS.",
+        error: i18n.t("aria.inferenceTarget.httpsRequired"),
       };
     }
     return { baseUrl: target.href, requiresConsent: target.origin !== management.origin, error: null };
@@ -140,10 +141,8 @@ export async function runLiteAdmin(options: LiteAdminOptions, client?: OpenAI): 
   active();
   const message = completion.choices[0]?.message;
   if (message?.tool_calls?.length) {
-    options.onMessage(
-      "I reached the step limit. Any completed actions remain applied; check the relevant page before continuing.",
-    );
+    options.onMessage(i18n.getFixedT("en")("aria.agent.stepLimit"));
   } else if (!message?.content && !message?.refusal) {
-    options.onMessage("The model returned no answer. Try another request or model.");
+    options.onMessage(i18n.getFixedT("en")("aria.agent.noAnswer"));
   }
 }

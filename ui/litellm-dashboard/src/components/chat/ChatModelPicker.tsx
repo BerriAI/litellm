@@ -80,7 +80,7 @@ export default function ChatModelPicker({
                 ["all", t("chat.modelPicker.filters.all")],
                 ["chat", t("chat.modelPicker.filters.chat")],
                 ["image", t("chat.modelPicker.filters.images")],
-              ] as const
+              ] satisfies ReadonlyArray<readonly ["all" | ChatMode, string]>
             ).map(([value, label]) => (
               <Button
                 key={value}

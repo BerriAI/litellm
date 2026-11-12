@@ -2,6 +2,7 @@
 
 import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
+import { useTranslation } from "react-i18next";
 
 import PublicAiHub from "@/components/publicModelHub/PublicAiHub";
 
@@ -11,8 +12,13 @@ function PublicAiHubPage() {
 }
 
 export default function PublicModelHub() {
+  const { t } = useTranslation();
   return (
-    <Suspense fallback={<div className="flex min-h-screen items-center justify-center">Loading...</div>}>
+    <Suspense
+      fallback={
+        <div className="flex min-h-screen items-center justify-center">{t("publicModelHub.modelHubPage.loading")}</div>
+      }
+    >
       <PublicAiHubPage />
     </Suspense>
   );

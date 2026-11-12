@@ -1,4 +1,6 @@
-import asyncio, base64, importlib, uuid
+import asyncio
+import base64
+import importlib
 import json
 import logging
 import os
@@ -6,8 +8,10 @@ import re
 import sys
 import time
 import types
+import uuid
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
+from datetime import datetime
 from typing import Final, List, TypeAlias, cast
 from unittest.mock import MagicMock, patch
 
@@ -16,62 +20,49 @@ import pytest
 import respx
 
 import litellm
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    get_completion_messages,
+)
 from litellm.litellm_core_utils.prompt_templates.factory import (
-    BEDROCK_DOCUMENT_PLACEHOLDER_TEXT,
     _EMPTY_TEXT_PLACEHOLDER,
+    BEDROCK_DOCUMENT_PLACEHOLDER_TEXT,
+    THOUGHT_SIGNATURE_SEPARATOR,
     BedrockConverseMessagesProcessor,
     BedrockImageProcessor,
     _bedrock_converse_messages_pt,
     _bedrock_tools_pt,
-    _rename_duplicate_bedrock_document_names,
     _convert_to_bedrock_tool_call_invoke,
-    sanitize_anthropic_tool_use_id,
     _convert_to_bedrock_tool_call_result,
+    _rename_duplicate_bedrock_document_names,
     anthropic_messages_pt,
-    convert_to_anthropic_tool_result,
-    convert_to_gemini_tool_call_result,
-    convert_to_ollama_image,
-    encode_tool_call_id_with_signature,
-    function_call_prompt,
-    get_thought_signature_from_tool,
-    get_tool_calls_from_response,
-    make_valid_bedrock_tool_name,
-    ollama_pt,
-    parse_mime_type,
-    sanitize_messages_for_tool_calling,
-    THOUGHT_SIGNATURE_SEPARATOR,
-)
-from litellm.types.llms.openai import ChatCompletionAssistantMessage, ChatCompletionToolMessage
-from litellm.types.utils import ChatCompletionMessageToolCall, Function
-from litellm.utils import (
-    _invalidate_model_cost_lowercase_map,
-    function_setup,
-    Rules,
-    validate_and_fix_openai_messages,
-)
-from datetime import datetime
-from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from litellm.litellm_core_utils.prompt_templates.factory import (
     anthropic_pt,
     claude_2_1_pt,
     convert_generic_image_chunk_to_openai_image_obj,
     convert_to_anthropic_image_obj,
     convert_to_anthropic_tool_invoke,
+    convert_to_anthropic_tool_result,
+    convert_to_gemini_tool_call_result,
+    convert_to_ollama_image,
     convert_url_to_base64,
     create_anthropic_image_param,
+    encode_tool_call_id_with_signature,
+    function_call_prompt,
+    get_thought_signature_from_tool,
+    get_tool_calls_from_response,
     has_tool_with_name,
     llama_2_chat_pt,
+    make_valid_bedrock_tool_name,
+    ollama_pt,
+    parse_mime_type,
     prompt_factory,
+    response_schema_prompt,
+    sanitize_anthropic_tool_use_id,
+    sanitize_messages_for_tool_calling,
 )
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     encrypted_reasoning_signature,
-    get_completion_messages,
 )
-from litellm.llms.vertex_ai.gemini.transformation import gemini_convert_messages_with_history
-from litellm.types.llms.bedrock import BedrockConverseReasoningContentBlock
-from litellm.types.llms.openai import AllMessageValues
-from litellm.litellm_core_utils.prompt_templates.factory import response_schema_prompt
 from litellm.llms.anthropic.completion.transformation import AnthropicTextConfig
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import AmazonInvokeConfig
 from litellm.llms.codestral.completion.handler import CodestralTextCompletion
@@ -79,10 +70,24 @@ from litellm.llms.ollama.completion.transformation import OllamaConfig
 from litellm.llms.petals.completion import handler as petals_handler
 from litellm.llms.predibase.chat.transformation import PredibaseConfig
 from litellm.llms.sagemaker.completion.transformation import SagemakerConfig
+from litellm.llms.vertex_ai.gemini.transformation import gemini_convert_messages_with_history
 from litellm.llms.vllm.completion import handler as vllm_handler
 from litellm.llms.watsonx.common_utils import _convert_watsonx_messages_core
-from litellm.types.utils import ModelResponse, TextCompletionResponse
-
+from litellm.types.llms.bedrock import BedrockConverseReasoningContentBlock
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionAssistantMessage,
+    ChatCompletionToolMessage,
+    ChatCompletionUserMessage,
+)
+from litellm.types.utils import ChatCompletionMessageToolCall, Function, ModelResponse, TextCompletionResponse
+from litellm.utils import (
+    Rules,
+    function_setup,
+    validate_and_fix_openai_messages,
+)
+from litellm.litellm_core_utils.model_cost_table import publish
+from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 READ_FILE: Final[list[object]] = [{"name": "read_file", "description": "Read the contents of a file."}]
 USER_TURN: Final[dict[str, object]] = {"role": "user", "content": "Read the file."}
@@ -432,6 +437,46 @@ def test_anthropic_messages_pt_drops_the_stream_index_from_replayed_thinking_blo
         {"type": "thinking", "thinking": "Step 1.", "signature": "sig-a"},
         {"type": "redacted_thinking", "data": "EmwKAhgB"},
         {"type": "text", "text": "Paris"},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_content"),
+    (
+        (
+            "global.anthropic.claude-haiku-5-5",
+            [
+                {"reasoningContent": {"reasoningText": {"text": "pondering", "signature": "signed-reasoning"}}},
+                {"text": "hello"},
+            ],
+        ),
+        ("global.zai.glm-5.3", [{"text": "hello"}]),
+        ("amazon.nova-pro-v1:0", [{"text": "hello"}]),
+        ("converse/us.openai.gpt-6-luna", [{"text": "hello"}]),
+    ),
+)
+def test_bedrock_converse_replays_signed_thinking_only_to_claude(
+    model: str, expected_content: Sequence[Mapping[str, object]]
+) -> None:
+    body: Final = litellm.AmazonConverseConfig().transform_request(
+        model=model,
+        messages=[
+            ChatCompletionUserMessage(role="user", content="hi"),
+            ChatCompletionAssistantMessage(
+                role="assistant",
+                content="hello",
+                thinking_blocks=[{"type": "thinking", "thinking": "pondering", "signature": "signed-reasoning"}],
+            ),
+            ChatCompletionUserMessage(role="user", content="continue"),
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    assert body["messages"] == [
+        {"role": "user", "content": [{"text": "hi"}]},
+        {"role": "assistant", "content": expected_content},
+        {"role": "user", "content": [{"text": "continue"}]},
     ]
 
 
@@ -1030,6 +1075,192 @@ async def test_bedrock_converse_keeps_dropping_redacted_thinking_for_non_claude_
 
     assistant_content: Final = next(m["content"] for m in result if m["role"] == "assistant")
     assert assistant_content == [{"text": "hello"}]
+
+
+_HIDDEN_MODEL_ARN: Final = "arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/abc123"
+
+
+async def _converse_messages(
+    messages: list[dict[str, object]],
+    model: str,
+    base_model: str | None,
+    use_async: bool,
+    assistant_continue_message: str | None = None,
+) -> list[dict[str, object]]:
+    return (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages,
+            model=model,
+            llm_provider="bedrock",
+            base_model=base_model,
+            assistant_continue_message=assistant_continue_message,
+        )
+        if use_async
+        else _bedrock_converse_messages_pt(
+            messages=messages,
+            model=model,
+            llm_provider="bedrock",
+            base_model=base_model,
+            assistant_continue_message=assistant_continue_message,
+        )
+    )
+
+
+def _assistant_with_thinking(placement: str, block: dict[str, object]) -> dict[str, object]:
+    return (
+        {"role": "assistant", "content": "hello", "thinking_blocks": [block]}
+        if placement == "thinking_blocks"
+        else {"role": "assistant", "content": [block, {"type": "text", "text": "hello"}]}
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("placement", ["thinking_blocks", "content"])
+@pytest.mark.parametrize(
+    "signature", ["claude-signature", encrypted_reasoning_signature("gAAAA_1")], ids=["claude", "encrypted"]
+)
+@pytest.mark.parametrize(
+    ("model", "base_model"),
+    [
+        ("converse/us.openai.gpt-6-luna", None),
+        ("us.amazon.nova-pro-v1:0", None),
+        ("us.amazon.nova-pro-v1:0", "anthropic.claude-sonnet-4-6"),
+        (_HIDDEN_MODEL_ARN, "openai.gpt-oss-120b-1:0"),
+    ],
+)
+async def test_bedrock_converse_drops_signed_thinking_for_a_known_non_claude_target(
+    use_async: bool, placement: str, signature: str, model: str, base_model: str | None
+):
+    block: Final = {"type": "thinking", "thinking": "private plan", "signature": signature}
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        _assistant_with_thinking(placement, block),
+        {"role": "user", "content": "again"},
+    ]
+
+    assert await _converse_messages(messages, model, base_model, use_async) == [
+        {"role": "user", "content": [{"text": "hi"}]},
+        {"role": "assistant", "content": [{"text": "hello"}]},
+        {"role": "user", "content": [{"text": "again"}]},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("placement", ["thinking_blocks", "content"])
+@pytest.mark.parametrize(
+    ("model", "base_model"),
+    [
+        ("us.anthropic.claude-sonnet-4-6", None),
+        ("ca.anthropic.claude-haiku-5-5", None),
+        ("converse/in.anthropic.claude-sonnet-5", None),
+        ("claude-sonnet-4-6", None),
+        (_HIDDEN_MODEL_ARN, None),
+        (_HIDDEN_MODEL_ARN, "anthropic.claude-sonnet-4-6"),
+    ],
+)
+async def test_bedrock_converse_keeps_signed_thinking_for_a_target_that_may_be_claude(
+    use_async: bool, placement: str, model: str, base_model: str | None
+):
+    block: Final = {"type": "thinking", "thinking": "private plan", "signature": "claude-signature"}
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        _assistant_with_thinking(placement, block),
+        {"role": "user", "content": "again"},
+    ]
+
+    result: Final = await _converse_messages(messages, model, base_model, use_async)
+
+    assistant_content: Final = next(m["content"] for m in result if m["role"] == "assistant")
+    assert assistant_content == [
+        {"reasoningContent": {"reasoningText": {"text": "private plan", "signature": "claude-signature"}}},
+        {"text": "hello"},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_keeps_the_tool_call_when_dropping_signed_thinking(use_async: bool):
+    messages: Final = [
+        {"role": "user", "content": "weather?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "thinking_blocks": [{"type": "thinking", "thinking": "private plan", "signature": "claude-signature"}],
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+    ]
+
+    result: Final = await _converse_messages(messages, "converse/us.openai.gpt-6-luna", None, use_async)
+
+    assert [m["role"] for m in result] == ["user", "assistant", "user"]
+    assert [list(part) for part in result[1]["content"]] == [["toolUse"]]
+    assert result[1]["content"][0]["toolUse"]["toolUseId"] == "call_1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize(
+    ("assistant_continue_message", "expected"),
+    [
+        (None, [{"role": "user", "content": [{"text": "hi"}, {"text": "again"}]}]),
+        (
+            "Please continue.",
+            [
+                {"role": "user", "content": [{"text": "hi"}]},
+                {"role": "assistant", "content": [{"text": "Please continue."}]},
+                {"role": "user", "content": [{"text": "again"}]},
+            ],
+        ),
+    ],
+    ids=["merged_into_one_user_turn", "split_by_the_continue_message"],
+)
+async def test_bedrock_converse_drops_a_turn_that_held_only_signed_thinking(
+    use_async: bool, assistant_continue_message: str | None, expected: list[dict[str, object]]
+):
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": None,
+            "thinking_blocks": [{"type": "thinking", "thinking": "private plan", "signature": "claude-signature"}],
+        },
+        {"role": "user", "content": "again"},
+    ]
+
+    result: Final = await _converse_messages(
+        messages, "converse/us.openai.gpt-6-luna", None, use_async, assistant_continue_message
+    )
+
+    assert result == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_drops_the_cache_point_of_a_dropped_signed_thinking_block(use_async: bool):
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "thinking",
+                    "thinking": "private plan",
+                    "signature": "claude-signature",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        {"role": "user", "content": "again"},
+    ]
+
+    result: Final = await _converse_messages(messages, "converse/us.amazon.nova-2-lite-v1:0", None, use_async)
+
+    assert result == [{"role": "user", "content": [{"text": "hi"}, {"text": "again"}]}]
 
 
 @pytest.mark.parametrize(
@@ -3460,8 +3691,8 @@ def test_bedrock_tools_unpack_defs_no_oom_with_nested_refs():
     This test creates a schema with multiple nested $defs that reference each other
     to verify the fix prevents memory explosion while still correctly resolving refs.
     """
-    import sys
     import copy
+    import sys
 
     from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
 
@@ -5959,7 +6190,7 @@ def isolate_litellm_state():
     for attr, original_value in original_state.items():
         if hasattr(litellm, attr):
             setattr(litellm, attr, original_value)
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 _SCALAR_DEFAULTS = {
@@ -7852,7 +8083,7 @@ def test_anthropic_messages_pt_with_bash_tool_result_in_provider_specific_fields
 
 def test_parse_tool_call_arguments_valid_json():
     """Test that valid JSON is parsed correctly."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         parse_tool_call_arguments,
     )
 
@@ -7862,7 +8093,7 @@ def test_parse_tool_call_arguments_valid_json():
 
 def test_parse_tool_call_arguments_empty_input():
     """Test that None/empty input returns empty dict."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         parse_tool_call_arguments,
     )
 
@@ -7872,7 +8103,7 @@ def test_parse_tool_call_arguments_empty_input():
 
 def test_parse_tool_call_arguments_malformed_json():
     """Test that malformed JSON raises ValueError with context."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         parse_tool_call_arguments,
     )
 
@@ -7918,7 +8149,7 @@ def test_convert_to_anthropic_tool_invoke_malformed_json():
 
 def test_attempt_json_repair_missing_closing_brace():
     """Repair JSON truncated with a missing closing brace (issue #22312)."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         _attempt_json_repair,
     )
 
@@ -7934,7 +8165,7 @@ def test_attempt_json_repair_missing_closing_brace():
 
 def test_attempt_json_repair_missing_bracket_and_brace():
     """Repair JSON truncated with both missing ] and }."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         _attempt_json_repair,
     )
 
@@ -7946,7 +8177,7 @@ def test_attempt_json_repair_missing_bracket_and_brace():
 
 def test_attempt_json_repair_trailing_comma():
     """Repair JSON with a trailing comma before missing close."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         _attempt_json_repair,
     )
 
@@ -7958,7 +8189,7 @@ def test_attempt_json_repair_trailing_comma():
 
 def test_attempt_json_repair_returns_none_for_unterminated_string():
     """Cannot repair an unterminated string — returns None."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         _attempt_json_repair,
     )
 
@@ -7967,7 +8198,7 @@ def test_attempt_json_repair_returns_none_for_unterminated_string():
 
 def test_attempt_json_repair_returns_none_for_valid_json():
     """Valid JSON has no unmatched brackets — returns None (no repair needed)."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         _attempt_json_repair,
     )
 
@@ -7976,7 +8207,7 @@ def test_attempt_json_repair_returns_none_for_valid_json():
 
 def test_attempt_json_repair_returns_none_for_empty():
     """Empty / whitespace input returns None."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         _attempt_json_repair,
     )
 
@@ -7986,7 +8217,7 @@ def test_attempt_json_repair_returns_none_for_empty():
 
 def test_attempt_json_repair_interleaved_nesting():
     """Repair JSON with interleaved {} and [] nesting."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         _attempt_json_repair,
     )
 
@@ -7998,7 +8229,7 @@ def test_attempt_json_repair_interleaved_nesting():
 
 def test_attempt_json_repair_deeply_nested():
     """Repair deeply nested truncated JSON."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         _attempt_json_repair,
     )
 
@@ -8010,7 +8241,7 @@ def test_attempt_json_repair_deeply_nested():
 
 def test_parse_tool_call_arguments_whitespace_only():
     """Whitespace-only input returns empty dict."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         parse_tool_call_arguments,
     )
 
@@ -8020,7 +8251,7 @@ def test_parse_tool_call_arguments_whitespace_only():
 
 def test_parse_tool_call_arguments_non_object_json():
     """Non-object JSON (list, string, number) is returned as-is (no wrapping)."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         parse_tool_call_arguments,
     )
 
@@ -8030,7 +8261,7 @@ def test_parse_tool_call_arguments_non_object_json():
 
 def test_parse_tool_call_arguments_repairs_truncated_json():
     """parse_tool_call_arguments should repair truncated JSON instead of raising."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         parse_tool_call_arguments,
     )
 
@@ -8041,7 +8272,7 @@ def test_parse_tool_call_arguments_repairs_truncated_json():
 
 def test_parse_tool_call_arguments_still_raises_for_unrepairable():
     """parse_tool_call_arguments raises ValueError when repair also fails."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         parse_tool_call_arguments,
     )
 

@@ -2,7 +2,6 @@
 Unit tests for ToolDiscoveryQueue.
 """
 
-
 import pytest
 
 from litellm.proxy.db.db_transaction_queue.tool_discovery_queue import (
@@ -63,3 +62,19 @@ def test_aggregate_sums_call_counts_across_workers_flushes():
         {"tool_name": "get_weather", "origin": "user_defined", "call_count": 5},
         {"tool_name": "search", "call_count": 1},
     )
+
+
+def test_requeued_rows_go_ahead_of_and_merge_with_sightings_since_the_flush(queue: ToolDiscoveryQueue) -> None:
+    queue.add_update({"tool_name": "get_weather", "origin": "mcp_server"})
+    queue.add_update({"tool_name": "search", "origin": "user_defined"})
+    failed_write = queue.flush()
+    queue.add_update({"tool_name": "translate", "origin": "user_defined"})
+    queue.add_update({"tool_name": "search", "origin": "user_defined"})
+
+    queue.requeue(failed_write)
+
+    assert queue.flush() == [
+        {"tool_name": "get_weather", "origin": "mcp_server", "call_count": 1},
+        {"tool_name": "search", "origin": "user_defined", "call_count": 2},
+        {"tool_name": "translate", "origin": "user_defined", "call_count": 1},
+    ]
