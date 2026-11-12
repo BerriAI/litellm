@@ -13509,15 +13509,16 @@ async def test_chat_completion_pass_through_endpoint_refuses_an_s3_image_in_an_u
 
 
 @pytest.mark.asyncio
-async def test_chat_completion_pass_through_endpoint_forwards_an_s3_image_in_a_listed_bucket(
+async def test_chat_completion_pass_through_endpoint_routes_an_s3_image_in_a_listed_bucket(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    proxy_logging: Final = _stub_adapter_proxy(monkeypatch)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache()))
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.general_settings", {"allowed_client_side_s3_buckets": ["private-bucket"]}
     )
-    request: Final = MagicMock(spec=Request)
-    request.body = AsyncMock(return_value=_ADAPTER_BODY_WITH_S3_IMAGE)
+    request: Final = _request_with_body("application/json", _ADAPTER_BODY_WITH_S3_IMAGE)
 
     with pytest.raises(ProxyException) as raised:
         await chat_completion_pass_through_endpoint(
@@ -13527,8 +13528,8 @@ async def test_chat_completion_pass_through_endpoint_forwards_an_s3_image_in_a_l
             user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
         )
 
-    assert raised.value.code != "403"
-    proxy_logging.pre_call_hook.assert_awaited_once()
+    assert raised.value.code == "400"
+    assert raised.value.message == str(ProxyModelNotFoundError(route="completion", model_name="unknown-model"))
 
 
 @pytest.mark.asyncio
