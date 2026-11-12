@@ -22,7 +22,7 @@ from prisma.errors import (
 
 import litellm
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
-from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler, db_write_never_sent
 
 
 # Test is_database_connection_error method
@@ -951,3 +951,182 @@ def test_is_lock_timeout_error_recognises_a_statement_cancelled_under_lock_timeo
 )
 def test_is_lock_timeout_error_excludes_other_failures(error: Exception) -> None:
     assert PrismaDBExceptionHandler.is_lock_timeout_error(error) is False
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (_lock_timeout_error(message="canceling statement due to statement timeout", code="57014"), True),
+        (_lock_timeout_error(message="canceling statement due to statement timeout", code=None), True),
+        (_lock_timeout_error(), False),
+        (_capacity_error("sorry, too many clients already"), False),
+        (RuntimeError("canceling statement due to statement timeout"), False),
+    ],
+    ids=["meta_57014", "message_only", "lock_timeout_55P03", "capacity_53300", "not_prisma"],
+)
+def test_is_statement_timeout_error(error: Exception, expected: bool) -> None:
+    assert PrismaDBExceptionHandler.is_statement_timeout_error(error) is expected
+
+
+@pytest.mark.parametrize(
+    ("body", "retryable"),
+    [
+        ('{"error_code":"P1017","message":"Server has closed the connection."}', True),
+        ('{"error_code":"P1000","message":"Authentication failed."}', False),
+        ('{"error_code":"P2021","message":"Table does not exist."}', False),
+        ('{"error_code":"P9999","message":"Unknown engine failure."}', False),
+        ("invalid engine response", False),
+    ],
+)
+def test_engine_connection_closure_is_recoverable_without_allowing_unverified_auth(
+    body: str,
+    retryable: bool,
+) -> None:
+    from prisma.http import Response
+
+    error: Final = EngineRequestError(Response(httpx.Response(500)), body)
+    assert PrismaDBExceptionHandler.is_database_transport_error(error) is retryable
+    assert PrismaDBExceptionHandler.is_permanent_database_fault(error) is not retryable
+    assert PrismaDBExceptionHandler.is_database_connection_error(error) is False
+
+
+def test_connection_closure_code_survives_prisma_data_error_wrapping() -> None:
+    error: Final = DataError(
+        data={"user_facing_error": {"error_code": "P1017", "message": "Server has closed the connection."}}
+    )
+    assert PrismaDBExceptionHandler.is_database_transport_error(error) is True
+    assert PrismaDBExceptionHandler.is_permanent_database_fault(error) is False
+
+
+def _connector_error(message: str) -> DataError:
+    return DataError(
+        data={"user_facing_error": {"message": f"Error in connector: Error querying the database: FATAL: {message}"}}
+    )
+
+
+def _batched_postgres_error(sqlstate: str, message: str) -> DataError:
+    return DataError(
+        data={
+            "user_facing_error": {
+                "message": "Error occurred during query execution: ConnectorError(ConnectorError { user_facing_error: "
+                f'None, kind: QueryError(PostgresError {{ code: "{sqlstate}", message: "{message}", severity: "FATAL" }}) }})'
+            }
+        }
+    )
+
+
+def _localized_error(sqlstate: str) -> DataError:
+    return DataError(data={"user_facing_error": {"message": "FATAL: Datenbank", "meta": {"code": sqlstate}}})
+
+
+_NOT_ACCEPTING_CONNECTIONS: Final = (
+    _connector_error("the database system is starting up"),
+    _connector_error("the database system is shutting down"),
+    _connector_error("the database system is not yet accepting connections"),
+    _connector_error("the database system is not accepting connections"),
+    _connector_error("the database system is in recovery mode"),
+    _localized_error("57P03"),
+    _batched_postgres_error("57P03", "the database system is starting up"),
+    EngineRequestError(
+        MagicMock(status=500),
+        '{"is_panic":false,"message":"Error in connector: Error querying the database: FATAL: the database system is '
+        'starting up","backtrace":null}',
+    ),
+    RawQueryError(
+        data={
+            "user_facing_error": {
+                "message": "Raw query failed. Code: `57P03`. Message: `db error: FATAL: the database system is starting up`",
+                "meta": {"code": "57P03", "message": "FATAL: the database system is starting up"},
+                "error_code": "P2010",
+            }
+        }
+    ),
+)
+_SERVER_TERMINATED: Final = (
+    _connector_error("terminating connection due to administrator command"),
+    _connector_error("terminating connection due to immediate shutdown command"),
+    _connector_error("terminating connection because of unexpected SIGQUIT signal"),
+    _connector_error("terminating connection because of crash of another server process"),
+    _connector_error("terminating connection due to idle-session timeout"),
+    _localized_error("57P01"),
+    _localized_error("57P02"),
+    _localized_error("57P05"),
+    _batched_postgres_error("57P01", "terminating connection due to administrator command"),
+)
+
+
+@pytest.mark.parametrize(
+    ("error", "connection_error"),
+    [
+        *((error, True) for error in _NOT_ACCEPTING_CONNECTIONS),
+        *((error, False) for error in _SERVER_TERMINATED),
+    ],
+)
+def test_postgres_lifecycle_errors_mean_the_database_is_unavailable(error: Exception, connection_error: bool) -> None:
+    """A server that is restarting, shutting down or cutting sessions is a transient outage:
+    auth answers 503 rather than 401, and the spend-log writer must not take the rows for poison.
+    Only a server refusing connections opens the ``allow_requests_on_db_unavailable`` fallback,
+    one terminated session does not prove the database is down."""
+    assert {
+        "lifecycle": PrismaDBExceptionHandler.is_database_lifecycle_error(error),
+        "service_unavailable": PrismaDBExceptionHandler.is_database_service_unavailable_error(error),
+        "connection_error": PrismaDBExceptionHandler.is_database_connection_error(error),
+        "permanent": PrismaDBExceptionHandler.is_permanent_database_fault(error),
+    } == {
+        "lifecycle": True,
+        "service_unavailable": True,
+        "connection_error": connection_error,
+        "permanent": False,
+    }
+
+
+@pytest.mark.parametrize(
+    ("error", "never_sent"),
+    [
+        *((error, True) for error in _NOT_ACCEPTING_CONNECTIONS),
+        *((error, False) for error in _SERVER_TERMINATED),
+        (DataError(data={"user_facing_error": {"message": "Can't reach database server at `db`:`5432`"}}), True),
+        (DataError(data={"user_facing_error": {"error_code": "P1001", "message": "unreachable"}}), True),
+        (_capacity_error("sorry, too many clients already"), True),
+        (_localized_error("53300"), True),
+        (
+            DataError(
+                data={
+                    "user_facing_error": {
+                        "error_code": "P2024",
+                        "message": "Timed out fetching a new connection from the connection pool",
+                    }
+                }
+            ),
+            True,
+        ),
+        (httpx.ReadTimeout("read timed out"), False),
+        (_localized_error("57014"), False),
+    ],
+)
+def test_db_write_never_sent_only_for_failures_before_any_statement_ran(error: Exception, never_sent: bool) -> None:
+    """A refused, unreachable or full server provably applied nothing, while a terminated session
+    or a timeout may have committed before the failure, so only the former lets a non-idempotent
+    write be replayed."""
+    assert db_write_never_sent(error) is never_sent
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        _localized_error("57P04"),
+        _localized_error("57014"),
+        _localized_error("23505"),
+        DataError(data={"user_facing_error": {"message": "invalid byte sequence for encoding UTF8: 0x00"}}),
+        RuntimeError("the database system is starting up"),
+    ],
+)
+def test_other_failures_are_not_postgres_lifecycle_errors(error: Exception) -> None:
+    assert PrismaDBExceptionHandler.is_database_lifecycle_error(error) is False
+    assert db_write_never_sent(error) is False
+
+
+def test_lifecycle_error_is_seen_through_a_wrapping_exception() -> None:
+    wrapped: Final = RuntimeError("spend flush failed")
+    wrapped.__cause__ = _connector_error("the database system is starting up")
+    assert PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(wrapped) is True

@@ -2,6 +2,7 @@
 
 import { Fragment } from "react";
 import { useHotkeysContext } from "react-hotkeys-hook";
+import { useTranslation } from "react-i18next";
 
 import { Kbd } from "@/components/ui/kbd";
 import { cn } from "@/lib/cva.config";
@@ -62,12 +63,13 @@ export function shortcutHints(shortcuts: readonly BoundShortcut[]): readonly Sho
 
 /** The shortcuts active right now, read from what is bound rather than typed by hand. */
 export function ShortcutHints({ className }: { className?: string }) {
+  const { t } = useTranslation();
   const { hotkeys } = useHotkeysContext();
   const hints = shortcutHints(hotkeys);
   if (hints.length === 0) return null;
   return (
     <div
-      aria-label="Keyboard shortcuts"
+      aria-label={t("shared.shortcutHints.label")}
       data-slot="shortcut-hints"
       className={cn("flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground", className)}
     >

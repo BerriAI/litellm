@@ -1,7 +1,11 @@
 
+import logging
+from typing import Final
+
 import pytest
 
 import litellm
+from litellm._logging import verbose_logger
 
 
 from litellm.llms.fireworks_ai.completion.transformation import (
@@ -204,3 +208,36 @@ def test_transform_text_completion_request_keeps_sdk_rejected_keys_in_extra_body
     assert "chat_template_kwargs" not in data["extra_body"]
     assert "best_of" not in data["extra_body"]
     assert "response_format" not in data
+
+
+def _warnings_naming(caplog: pytest.LogCaptureFixture, param: str) -> tuple[str, ...]:
+    return tuple(
+        r.getMessage() for r in caplog.records if r.levelno == logging.WARNING and f"Dropping {param}=" in r.getMessage()
+    )
+
+
+def test_chat_template_kwargs_effort_dropped_for_non_reasoning_model_warns_once(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        FireworksAITextCompletionConfig().map_extra_body_params(
+            {"extra_body": {"chat_template_kwargs": {"reasoning_budget": 512}}},
+            _NON_REASONING_MODEL,
+        )
+
+    warnings: Final = _warnings_naming(caplog, "chat_template_kwargs")
+    assert len(warnings) == 1
+    assert "'reasoning_budget': 512" in warnings[0]
+    assert "llama-v3-70b-instruct" in warnings[0]
+
+
+def test_chat_template_kwargs_thinking_off_for_non_reasoning_model_does_not_warn(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        FireworksAITextCompletionConfig().map_extra_body_params(
+            {"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}},
+            _NON_REASONING_MODEL,
+        )
+
+    assert _warnings_naming(caplog, "chat_template_kwargs") == ()

@@ -16,6 +16,15 @@ pub enum TlsSource {
 #[error(transparent)]
 pub struct Error(Arc<Repr>);
 
+// A streamed body the connection ended early, after the response head arrived; `expected` is
+// the declared `content-length`, `None` for a chunked body.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BodyCut {
+    pub received: u64,
+    pub expected: Option<u64>,
+    pub reset: bool,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Repr {
     #[error("could not read {}", path.display())]
@@ -56,10 +65,28 @@ pub(crate) enum Repr {
     Connect(#[source] reqwest::Error),
     #[error("upstream network error")]
     Network(#[source] reqwest::Error),
+    #[error("upstream network error")]
+    BodyCut {
+        #[source]
+        source: reqwest::Error,
+        cut: BodyCut,
+    },
     #[error("upstream request timed out")]
     Timeout(#[source] reqwest::Error),
+    /// No bytes arrived within the read timeout, which the caller enforces per read; `body` says
+    /// the response head had already arrived.
+    #[error("upstream request timed out")]
+    ReadTimeout {
+        #[source]
+        elapsed: Elapsed,
+        body: bool,
+    },
     #[error("upstream request failed with status {status}: {body}")]
-    Status { status: u16, body: UpstreamBody },
+    Status {
+        status: u16,
+        body: UpstreamBody,
+        headers: Vec<(String, String)>,
+    },
 
     #[error("invalid WebSocket URL")]
     WebSocketUrl(#[source] url::ParseError),
@@ -136,15 +163,96 @@ impl Repr {
 
 impl Error {
     pub fn upstream(status: u16, body: String) -> Self {
+        Self::upstream_with_headers(status, body, Vec::new())
+    }
+
+    /// An upstream failure that keeps the provider's response headers (`retry-after`,
+    /// `request-id`) for the caller.
+    pub fn upstream_with_headers(
+        status: u16,
+        body: String,
+        headers: Vec<(String, String)>,
+    ) -> Self {
         Repr::Status {
             status,
             body: UpstreamBody(body),
+            headers,
         }
         .into()
     }
 
+    /// The provider's response headers on an upstream failure; empty for every other error.
+    pub fn upstream_headers(&self) -> &[(String, String)] {
+        match &*self.0 {
+            Repr::Status { headers, .. } => headers,
+            _ => &[],
+        }
+    }
+
+    /// A timeout reached before the connection was established, as opposed to while reading.
+    pub fn is_connect_timeout(&self) -> bool {
+        matches!(&*self.0, Repr::Timeout(error) if error.is_connect())
+    }
+
+    /// A read the caller timed itself (httpx's per-read timeout) ran out.
+    pub fn read_timeout(elapsed: Elapsed) -> Self {
+        Repr::ReadTimeout {
+            elapsed,
+            body: false,
+        }
+        .into()
+    }
+
+    /// A read of the response body the caller timed itself ran out, after the head arrived.
+    pub fn body_read_timeout(elapsed: Elapsed) -> Self {
+        Repr::ReadTimeout {
+            elapsed,
+            body: true,
+        }
+        .into()
+    }
+
+    pub fn is_body_read_timeout(&self) -> bool {
+        matches!(&*self.0, Repr::ReadTimeout { body: true, .. })
+    }
+
+    pub fn body_read(error: reqwest::Error, received: u64, expected: Option<u64>) -> Self {
+        let mut source: Option<&(dyn std::error::Error + 'static)> = Some(&error);
+        let kind = std::iter::from_fn(|| {
+            let current = source?;
+            source = current.source();
+            Some(current)
+        })
+        .find_map(|cause| cause.downcast_ref::<io::Error>().map(io::Error::kind));
+        let reset = match kind {
+            Some(io::ErrorKind::UnexpectedEof) => false,
+            Some(io::ErrorKind::ConnectionReset) => true,
+            _ => return error.into(),
+        };
+        Repr::BodyCut {
+            source: error.without_url(),
+            cut: BodyCut {
+                received,
+                expected,
+                reset,
+            },
+        }
+        .into()
+    }
+
+    pub fn body_cut(&self) -> Option<BodyCut> {
+        match &*self.0 {
+            Repr::BodyCut { cut, .. } => Some(*cut),
+            _ => None,
+        }
+    }
+
     pub fn computed_header(name: impl Into<String>) -> Self {
         Repr::ComputedHeader(name.into()).into()
+    }
+
+    pub fn request_body(error: serde_json::Error) -> Self {
+        Repr::RequestBody(error).into()
     }
 
     pub fn unsignable_body() -> Self {
@@ -168,7 +276,9 @@ impl Error {
     pub fn dispatched(&self) -> bool {
         match &*self.0 {
             Repr::Network(_)
+            | Repr::BodyCut { .. }
             | Repr::Timeout(_)
+            | Repr::ReadTimeout { .. }
             | Repr::Status { .. }
             | Repr::Handshake(_)
             | Repr::HandshakeTimeout(_)
@@ -226,7 +336,9 @@ impl Error {
             | Repr::Signature(_)
             | Repr::Connect(_)
             | Repr::Network(_)
+            | Repr::BodyCut { .. }
             | Repr::Timeout(_)
+            | Repr::ReadTimeout { .. }
             | Repr::Status { .. }
             | Repr::Handshake(_)
             | Repr::HandshakeTimeout(_)
@@ -258,7 +370,9 @@ impl Error {
             | Repr::Signature(_)
             | Repr::Connect(_)
             | Repr::Network(_)
+            | Repr::BodyCut { .. }
             | Repr::Timeout(_)
+            | Repr::ReadTimeout { .. }
             | Repr::Status { .. }
             | Repr::WebSocketUrl(_)
             | Repr::WebSocketScheme(_)
@@ -294,7 +408,9 @@ impl Error {
             | Repr::Signature(_)
             | Repr::Connect(_)
             | Repr::Network(_)
+            | Repr::BodyCut { .. }
             | Repr::Timeout(_)
+            | Repr::ReadTimeout { .. }
             | Repr::Status { .. }
             | Repr::WebSocketUrl(_)
             | Repr::WebSocketScheme(_)
@@ -332,7 +448,9 @@ impl Error {
             | Repr::UnsignableHeader(_)
             | Repr::Signature(_)
             | Repr::Network(_)
+            | Repr::BodyCut { .. }
             | Repr::Timeout(_)
+            | Repr::ReadTimeout { .. }
             | Repr::Status { .. }
             | Repr::WebSocketUrl(_)
             | Repr::WebSocketScheme(_)
@@ -356,7 +474,10 @@ impl Error {
 
     pub fn is_timeout(&self) -> bool {
         match &*self.0 {
-            Repr::Timeout(_) | Repr::HandshakeTimeout(_) | Repr::DownloadTimeout(_) => true,
+            Repr::Timeout(_)
+            | Repr::ReadTimeout { .. }
+            | Repr::HandshakeTimeout(_)
+            | Repr::DownloadTimeout(_) => true,
             Repr::Read { .. }
             | Repr::InvalidPem { .. }
             | Repr::Client(_)
@@ -371,6 +492,7 @@ impl Error {
             | Repr::Signature(_)
             | Repr::Connect(_)
             | Repr::Network(_)
+            | Repr::BodyCut { .. }
             | Repr::Status { .. }
             | Repr::WebSocketUrl(_)
             | Repr::WebSocketScheme(_)
@@ -392,7 +514,7 @@ impl Error {
 
     pub fn upstream_response(&self) -> Option<(u16, &str)> {
         match &*self.0 {
-            Repr::Status { status, body } => Some((*status, &body.0)),
+            Repr::Status { status, body, .. } => Some((*status, &body.0)),
             Repr::Read { .. }
             | Repr::InvalidPem { .. }
             | Repr::Client(_)
@@ -407,7 +529,9 @@ impl Error {
             | Repr::Signature(_)
             | Repr::Connect(_)
             | Repr::Network(_)
+            | Repr::BodyCut { .. }
             | Repr::Timeout(_)
+            | Repr::ReadTimeout { .. }
             | Repr::WebSocketUrl(_)
             | Repr::WebSocketScheme(_)
             | Repr::WebSocketSchemeRewrite(_)
@@ -431,7 +555,7 @@ impl Error {
     pub fn status(&self) -> Option<u16> {
         match &*self.0 {
             Repr::Status { status, .. } | Repr::DownloadStatus(status) => Some(*status),
-            Repr::Timeout(_) | Repr::DownloadTimeout(_) => Some(408),
+            Repr::Timeout(_) | Repr::ReadTimeout { .. } | Repr::DownloadTimeout(_) => Some(408),
             Repr::Read { .. }
             | Repr::InvalidPem { .. }
             | Repr::Client(_)
@@ -446,6 +570,7 @@ impl Error {
             | Repr::Signature(_)
             | Repr::Connect(_)
             | Repr::Network(_)
+            | Repr::BodyCut { .. }
             | Repr::WebSocketUrl(_)
             | Repr::WebSocketScheme(_)
             | Repr::WebSocketSchemeRewrite(_)
@@ -481,7 +606,9 @@ impl Error {
             | Repr::Signature(_)
             | Repr::Connect(_)
             | Repr::Network(_)
+            | Repr::BodyCut { .. }
             | Repr::Timeout(_)
+            | Repr::ReadTimeout { .. }
             | Repr::Status { .. }
             | Repr::WebSocketUrl(_)
             | Repr::WebSocketScheme(_)
@@ -673,5 +800,54 @@ mod tests {
         assert!(!format!("{error:#?}").contains("private-tail"));
         assert_eq!(error.upstream_response(), Some((429, body.as_str())));
         assert_eq!(error.status(), Some(429));
+    }
+
+    #[rstest]
+    #[case::chunked("transfer-encoding: chunked\r\n\r\n5\r\nhello\r\n", None)]
+    #[case::content_length("content-length: 100\r\n\r\nhello", Some(100))]
+    #[tokio::test]
+    async fn a_connection_that_ends_mid_body_is_a_body_cut(
+        #[case] tail: &'static str,
+        #[case] expected: Option<u64>,
+    ) {
+        use std::io::{Read as _, Write as _};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let address = listener.local_addr().expect("address");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request).expect("request");
+            stream
+                .write_all(format!("HTTP/1.1 200 OK\r\n{tail}").as_bytes())
+                .expect("response");
+        });
+        let mut response = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("client")
+            .get(format!("http://{address}/"))
+            .send()
+            .await
+            .expect("head");
+        server.join().expect("server");
+        let mut received = 0_u64;
+        let error = loop {
+            match response.chunk().await {
+                Ok(Some(chunk)) => received += chunk.len() as u64,
+                Ok(None) => panic!("the body must end with an error"),
+                Err(error) => break crate::Error::body_read(error, received, expected),
+            }
+        };
+        assert_eq!(
+            error.body_cut(),
+            Some(super::BodyCut {
+                received: 5,
+                expected,
+                reset: false,
+            })
+        );
+        assert!(error.dispatched());
+        assert_eq!(error.to_string(), "upstream network error");
     }
 }

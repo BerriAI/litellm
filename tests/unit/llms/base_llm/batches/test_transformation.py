@@ -9,13 +9,13 @@ one abstract property), so the only concrete behavior to regression-lock is:
     subclass missing any abstract member also cannot be instantiated; a
     subclass implementing all of them can.
   - get_config(): a classmethod that reflects over ``cls.__dict__`` and returns
-    the class-level config attributes, filtering out dunders, ``_abc`` internals,
+    the class-level config attributes, filtering out every underscore-prefixed name,
     callables (function/builtin/classmethod/staticmethod), and ``None`` values.
 
 These tests assert the exact dict get_config() produces for hand-built
 subclasses, so a change to the filter predicate (e.g. dropping the ``None``
-filter, dropping the staticmethod/classmethod filter, or widening the prefix
-filter to all single-underscore names) makes a test fail.
+filter, dropping the staticmethod/classmethod filter, or narrowing the prefix
+filter so single-underscore names leak back in) makes a test fail.
 """
 
 
@@ -38,7 +38,7 @@ class _ConcreteBatchesConfig(BaseBatchesConfig):
     int_attr = 42
     list_attr = [1, 2, 3]
     none_attr = None
-    _single_underscore = "kept"
+    _single_underscore = "private"
 
     @property
     def custom_llm_provider(self) -> LlmProviders:
@@ -136,8 +136,7 @@ def test_subclass_missing_any_abstract_member_cannot_instantiate(missing_member)
 
 def test_get_config_returns_class_level_non_none_data_attrs():
     """Exact contents: only class-level data attributes that are not None,
-    not dunders, not callables. Single-underscore names ARE kept (only ``__``
-    and ``_abc`` prefixes are filtered). The ``custom_llm_provider`` property
+    not underscore-prefixed, not callables. The ``custom_llm_provider`` property
     object also survives the filter (a property is neither a function nor None),
     matching how real provider subclasses define it."""
     config = _ConcreteBatchesConfig.get_config()
@@ -147,7 +146,6 @@ def test_get_config_returns_class_level_non_none_data_attrs():
         "string_attr": "hello",
         "int_attr": 42,
         "list_attr": [1, 2, 3],
-        "_single_underscore": "kept",
     }
 
 

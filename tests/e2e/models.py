@@ -45,8 +45,6 @@ class KeyLoggingCallbackVars(BaseModel):
     langfuse_public_key: str | None = Field(default=None, repr=False)
     langfuse_secret_key: str | None = Field(default=None, repr=False)
     langfuse_host: str | None = Field(default=None, repr=False)
-    wandb_api_key: str | None = Field(default=None, repr=False)
-    weave_project_id: str | None = None
 
 
 class KeyLoggingCallback(BaseModel):
@@ -653,6 +651,35 @@ class ResponsesStreamBody(BaseModel):
     stream: bool = True
     max_output_tokens: int | None = None
     cache: dict[str, bool] | None = {"no-cache": True}
+
+
+class ResponsesFunctionTool(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    type: Literal["function"] = "function"
+    name: str
+    description: str | None = None
+    parameters: ToolInputSchema
+
+
+class ResponsesToolBody(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    model: str
+    input: str
+    tools: list[ResponsesFunctionTool]
+    tool_choice: Literal["required"] | None = None
+    guardrails: list[str]
+    max_output_tokens: int = 128
+
+
+class ResponsesOutputItem(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    type: str
+    name: str | None = None
+
+
+class ResponsesToolOutput(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    output: list[ResponsesOutputItem]
 
 
 class CountTokensBody(BaseModel):
@@ -1264,27 +1291,6 @@ class CostMap(RootModel[dict[str, CostMapEntry]]):
     pass
 
 
-class ConfigPatchResponse(BaseModel):
-    status: str
-    values: dict[str, float | dict[str, float]]
-
-
-class CostDiscountConfig(RootModel[dict[str, float]]):
-    pass
-
-
-class CostMarginConfig(RootModel[dict[str, float | dict[str, float]]]):
-    pass
-
-
-class CostDiscountConfigResponse(BaseModel):
-    values: dict[str, float]
-
-
-class CostMarginConfigResponse(BaseModel):
-    values: dict[str, float | dict[str, float]]
-
-
 class BedrockGuardrailParams(BaseModel):
     guardrail: Literal["bedrock"] = "bedrock"
     mode: Literal["pre_call"] = "pre_call"
@@ -1363,6 +1369,7 @@ class LiteLLMParamsBody(BaseModel):
     realtime_protocol: str | None = None
     allowed_openai_params: list[str] | None = None
     drop_params: bool | None = None
+    thought_signature_in_tool_call_id: bool | None = None
     aws_access_key_id: str | None = Field(default=None, repr=False)
     aws_secret_access_key: str | None = Field(default=None, repr=False)
     aws_region_name: str | None = None

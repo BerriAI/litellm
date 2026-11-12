@@ -117,6 +117,7 @@ async fn the_same_route_entrypoint_reports_facts_with_or_without_caching(
             assert!(caching);
             assert!(!key.is_empty());
         }
+        ResultSource::Host => panic!("the host never answers a chat call"),
     }
     let summaries = traces.summaries("litellm.route");
     assert_eq!(summaries.len(), 2);
@@ -140,7 +141,7 @@ impl litellm_secrets::source::SecretSource for ChangingSecrets {
         name: &'a str,
     ) -> futures_util::future::BoxFuture<
         'a,
-        Result<Option<litellm_secrets::SecretValue>, litellm_secrets::Error>,
+        Result<Option<litellm_secret_value::SecretValue>, litellm_secrets::Error>,
     > {
         Box::pin(async move {
             let revision = self.revision.load(Ordering::SeqCst);
@@ -154,7 +155,7 @@ impl litellm_secrets::source::SecretSource for ChangingSecrets {
             } else {
                 None
             };
-            Ok(value.map(litellm_secrets::SecretValue::new))
+            Ok(value.map(litellm_secret_value::SecretValue::new))
         })
     }
 }

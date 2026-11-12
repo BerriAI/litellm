@@ -1,7 +1,10 @@
 "use client";
 
 import React from "react";
+import { useTranslation } from "react-i18next";
 import { Server } from "lucide-react";
+import { Combobox as ComboboxPrimitive } from "@base-ui/react/combobox";
+import { Button } from "@/components/ui/button";
 import {
   Combobox,
   ComboboxContent,
@@ -15,6 +18,7 @@ import { useWorker } from "@/hooks/useWorker";
 
 interface WorkerDropdownProps {
   onWorkerSwitch: (workerId: string) => void;
+  compact?: boolean;
 }
 
 interface WorkerOption {
@@ -23,7 +27,8 @@ interface WorkerOption {
   disabled: boolean;
 }
 
-const WorkerDropdown: React.FC<WorkerDropdownProps> = ({ onWorkerSwitch }) => {
+const WorkerDropdown: React.FC<WorkerDropdownProps> = ({ onWorkerSwitch, compact = false }) => {
+  const { t } = useTranslation();
   const { isControlPlane, selectedWorker, workers } = useWorker();
 
   if (!isControlPlane || !selectedWorker) return null;
@@ -45,13 +50,30 @@ const WorkerDropdown: React.FC<WorkerDropdownProps> = ({ onWorkerSwitch }) => {
         }
       }}
     >
-      <ComboboxInput className="min-w-[180px]" aria-label="Worker">
-        <InputGroupAddon align="inline-start">
-          <Server className="size-4" />
-        </InputGroupAddon>
-      </ComboboxInput>
-      <ComboboxContent>
-        <ComboboxEmpty>No matching workers</ComboboxEmpty>
+      {compact ? (
+        <ComboboxPrimitive.Trigger
+          render={<Button variant="ghost" size="icon" className="text-muted-foreground" />}
+          aria-label={t("shell.workerDropdown.trigger", { worker: selectedWorker.name })}
+          title={selectedWorker.name}
+        >
+          <Server className="size-4" aria-hidden />
+        </ComboboxPrimitive.Trigger>
+      ) : (
+        <ComboboxInput className="min-w-[180px]" aria-label={t("shell.workerDropdown.label")}>
+          <InputGroupAddon align="inline-start">
+            <Server className="size-4" />
+          </InputGroupAddon>
+        </ComboboxInput>
+      )}
+      <ComboboxContent align={compact ? "end" : "start"} className={compact ? "w-64" : undefined}>
+        {compact && (
+          <ComboboxInput
+            aria-label={t("shell.workerDropdown.searchLabel")}
+            placeholder={t("shell.workerDropdown.searchPlaceholder")}
+            showTrigger={false}
+          />
+        )}
+        <ComboboxEmpty>{t("shell.workerDropdown.empty")}</ComboboxEmpty>
         <ComboboxList>
           {(option: WorkerOption) => (
             <ComboboxItem key={option.value} value={option} disabled={option.disabled}>

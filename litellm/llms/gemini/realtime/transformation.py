@@ -218,7 +218,7 @@ def _system_instruction_text(system_instruction: HttpxContentType | None) -> str
 class GeminiRealtimeConfig(BaseRealtimeConfig):
     _TOOL_CALL_ID_TO_NAME_MAX = 256  # LRU cap for call_id→name mapping
 
-    def __init__(self, drop_params: bool = False):
+    def __init__(self, drop_params: bool = False) -> None:
         super().__init__()
         self.drop_params = drop_params
         self._tool_call_id_to_name: OrderedDict[str, str] = OrderedDict()
