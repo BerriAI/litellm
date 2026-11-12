@@ -17515,8 +17515,9 @@
       "githubApp": {
         "label": "GitHub App",
         "description": "Authenticate a service with a GitHub App installation. Usage is billed to the organization. LiteLLM refreshes installation tokens automatically.",
-        "keySetup": "First store the PEM in your configured secret manager or mount it read-only on every proxy worker. Enter its secret name or oidc/file/ reference above. The path is on the proxy server, not your computer. The browser saves only this reference.",
-        "keySetupLink": "Private-key setup instructions"
+        "uploadHelp": "Upload your GitHub App PEM below. LiteLLM encrypts it in its credential database and only shows a saved-key status. Use HTTPS and protect your proxy encryption key. No Enterprise license is required.",
+        "invalidFile": "Choose a .pem file no larger than 16 KiB.",
+        "keyProvided": "Private key supplied. Upload a replacement to change it."
       }
     },
     "classificationMethodConfig": {

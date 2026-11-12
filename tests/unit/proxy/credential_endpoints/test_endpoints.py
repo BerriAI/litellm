@@ -3523,3 +3523,58 @@ def test_update_github_app_validates_merged_values_before_storage(credential_sto
     )
     assert rotated.status_code == 200, rotated.text
     update.assert_awaited_once()
+
+
+@pytest.fixture
+def app_pem():
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    return (
+        rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        .private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+        .decode()
+    )
+
+
+def test_uploaded_app_key_is_encrypted_at_rest_and_masked_on_read(credential_store, app_pem):
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+
+    create: Final = AsyncMock()
+    credential_store(create=create)
+    values: Final = {key: value for key, value in _github_app_values().items() if not key.endswith("_ref")}
+    response: Final = _create_credential(
+        {
+            "credential_name": "copilot-upload",
+            "credential_values": {**values, "github_copilot_app_private_key": app_pem},
+            "credential_info": {"custom_llm_provider": "github_copilot"},
+        }
+    )
+    assert response.status_code == 200, response.text
+    encrypted: Final = json.loads(create.call_args.kwargs["data"]["credential_values"])[
+        "github_copilot_app_private_key"
+    ]
+    assert app_pem not in encrypted
+    assert decrypt_value_helper(encrypted, "github_copilot_app_private_key") == app_pem
+    listed: Final = _list_credentials()
+    assert listed.status_code == 200
+    assert app_pem not in listed.text
+    assert app_pem.splitlines()[1] not in listed.text
+    assert "****" in listed.json()["credentials"][0]["credential_values"]["github_copilot_app_private_key"]
+
+
+@pytest.mark.parametrize("pem", ["not-a-private-key", "x" * 16385, "-----BEGIN PRIVATE KEY----- secret-invalid"])
+def test_invalid_uploaded_app_key_is_rejected_without_echoing_it(credential_store, pem):
+    create: Final = AsyncMock()
+    credential_store(create=create)
+    values: Final = {key: value for key, value in _github_app_values().items() if not key.endswith("_ref")}
+    response: Final = _create_credential(
+        {
+            "credential_name": "copilot-upload",
+            "credential_values": {**values, "github_copilot_app_private_key": pem},
+            "credential_info": {"custom_llm_provider": "github_copilot"},
+        }
+    )
+    assert response.status_code == 400
+    assert pem not in response.text
+    create.assert_not_awaited()

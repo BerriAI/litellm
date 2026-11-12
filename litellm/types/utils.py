@@ -4479,6 +4479,7 @@ github_copilot_oauth_litellm_params: Final = (
     "github_copilot_app_id",
     "github_copilot_app_installation_id",
     "github_copilot_app_private_key_ref",
+    "github_copilot_app_private_key",
 )
 OIDC_SECRET_REFERENCE_PREFIX: Final = "oidc/"
 API_KEY_SECRET_REFERENCE_REJECTION: Final = (

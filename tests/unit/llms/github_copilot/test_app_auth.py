@@ -292,8 +292,14 @@ def test_clientside_override_cannot_disable_app_auth(override: Mapping[str, str]
         ("embeddings", True),
     ],
 )
+@pytest.mark.parametrize("uploaded", [False, True])
 async def test_public_calls_pin_app_identity_and_keep_credentials_out_of_body(
-    private_key: str, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, surface: str, async_call: bool
+    private_key: str,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    surface: str,
+    async_call: bool,
+    uploaded: bool,
 ) -> None:
     clock: Final = Clock()
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -301,11 +307,30 @@ async def test_public_calls_pin_app_identity_and_keep_credentials_out_of_body(
     monkeypatch.setenv("TEST_APP_KEY", private_key)
     token_route: Final = respx_mock.post(_CONFIG.token_url).respond(201, json=token_payload())
     upstream: Final = respx_mock.post(host="api.githubcopilot.com").respond(200, json=_model_payload(surface))
-    kwargs: Final = {
+    auth_fields: Final = {
         "github_copilot_auth_type": "github_app",
         "github_copilot_app_id": _CONFIG.app_id,
-        "github_copilot_app_installation_id": _CONFIG.installation_id,
-        "github_copilot_app_private_key_ref": _CONFIG.private_key_ref,
+        "github_copilot_app_installation_id": str(_CONFIG.installation_id),
+        **(
+            {"github_copilot_app_private_key": private_key}
+            if uploaded
+            else {"github_copilot_app_private_key_ref": _CONFIG.private_key_ref}
+        ),
+    }
+    if uploaded:
+        monkeypatch.setattr(
+            litellm,
+            "credential_list",
+            [
+                CredentialItem(
+                    credential_name="uploaded",
+                    credential_values=auth_fields,
+                    credential_info={"custom_llm_provider": "github_copilot"},
+                )
+            ],
+        )
+    kwargs: Final = {
+        **({"litellm_credential_name": "uploaded"} if uploaded else auth_fields),
         "api_base": "https://attacker.example",
         "api_key": "attacker-key",
         "extra_headers": {"aUtHoRiZaTiOn": "Bearer attacker", "Copilot-Integration-ID": "attacker", "x-keep": "ok"},
@@ -581,3 +606,67 @@ def test_session_serialization_redacts_bearer_token(is_app: bool) -> None:
     assert "sensitive-bearer" not in repr(session)
     assert "sensitive-bearer" not in str(params.model_dump())
     assert "sensitive-bearer" not in params.model_dump_json()
+
+
+def test_uploaded_key_is_kept_out_of_model_kwargs_and_used_for_signing(private_key, monkeypatch):
+    from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+    from litellm.utils import with_named_credential
+
+    values: Final = {
+        "github_copilot_auth_type": "github_app",
+        "github_copilot_app_id": "test-client",
+        "github_copilot_app_installation_id": "123",
+        "github_copilot_app_private_key": private_key,
+    }
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="uploaded",
+                credential_values=values,
+                credential_info={"custom_llm_provider": "github_copilot"},
+            )
+        ],
+    )
+    assert "github_copilot_app_private_key" not in CredentialAccessor.get_credential_values("uploaded")
+    assert "github_copilot_app_private_key" not in with_named_credential({"litellm_credential_name": "uploaded"})
+    config: Final = app_config({"litellm_credential_name": "uploaded"})
+    assert config is not None
+    assert private_key not in repr(config)
+    assert config.private_key_ref == ""
+    with pytest.raises(BadRequestError):
+        app_config(values)
+    app_config(values, validate_stored_key=True)
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        jwt.decode(
+            request.headers["Authorization"].split()[1],
+            serialization.load_pem_private_key(private_key.encode(), None).public_key(),
+            algorithms=["RS256"],
+            options={"verify_exp": False, "verify_iat": False},
+        )
+        return httpx.Response(201, json=token_payload())
+
+    assert manager("unused", respond, Clock()).resolve(config).token == "installation-token"
+
+
+@pytest.mark.parametrize("kind", ["weak-rsa", "ec", "encrypted"])
+def test_uploaded_key_rejects_unsupported_key_types(kind):
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    key: Final = (
+        ec.generate_private_key(ec.SECP256R1())
+        if kind == "ec"
+        else rsa.generate_private_key(public_exponent=65537, key_size=1024 if kind == "weak-rsa" else 2048)
+    )
+    pem: Final = key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.BestAvailableEncryption(b"test-password")
+        if kind == "encrypted"
+        else serialization.NoEncryption(),
+    ).decode()
+    with pytest.raises(BadRequestError, match="unencrypted RSA PEM") as error:
+        app_auth.validate_private_key(pem)
+    assert pem not in str(error.value)

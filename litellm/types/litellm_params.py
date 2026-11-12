@@ -99,6 +99,7 @@ class ProviderConnection:
     github_copilot_app_id: str | None = None
     github_copilot_app_installation_id: str | int | None = None
     github_copilot_app_private_key_ref: str | None = None
+    github_copilot_app_private_key: str | None = None
     github_copilot_user_session: object | None = None
     token_exchange_endpoint: str | None = None
     token_exchange_profile: str | None = None

@@ -114,13 +114,16 @@ def _validate_github_app_values(values: Mapping[str, object], info: Mapping[str,
     from litellm.llms.github_copilot.app_auth import app_config
 
     try:
-        app_config({key: value for key, value in values.items() if key != "litellm_credential_name"})
+        app_config(
+            {key: value for key, value in values.items() if key != "litellm_credential_name"},
+            validate_stored_key=True,
+        )
     except BadRequestError:
         raise HTTPException(
             status_code=400,
             detail=(
                 "Invalid GitHub App configuration. Use an App/client ID, positive installation ID, "
-                "and private-key secret reference."
+                "and a valid RSA PEM private key or private-key secret reference."
             ),
         ) from None
 

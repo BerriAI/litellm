@@ -93,6 +93,7 @@ describe("provider auth types", () => {
       "github_copilot_app_id",
       "github_copilot_app_installation_id",
       "github_copilot_app_private_key_ref",
+      "github_copilot_app_private_key",
     ]);
     expect(hiddenAuthFieldKeys(authTypes, "shared_device_login")).toEqual([
       "github_copilot_auth_type",
@@ -100,6 +101,7 @@ describe("provider auth types", () => {
       "github_copilot_app_id",
       "github_copilot_app_installation_id",
       "github_copilot_app_private_key_ref",
+      "github_copilot_app_private_key",
     ]);
   });
 });

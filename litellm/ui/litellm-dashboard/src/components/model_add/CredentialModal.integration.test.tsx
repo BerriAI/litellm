@@ -71,6 +71,7 @@ vi.mock("../networking", async () => {
         provider_display_name: Providers.GITHUB_COPILOT,
         litellm_provider: "github_copilot",
         credential_fields: [
+          { key: "github_copilot_app_private_key", label: "Private key (PEM)", field_type: "upload" },
           { key: "github_copilot_app_id", label: "App client ID", field_type: "text" },
           { key: "github_copilot_app_installation_id", label: "Installation ID", field_type: "text" },
           { key: "github_copilot_app_private_key_ref", label: "Private key secret reference", field_type: "text" },
@@ -608,32 +609,57 @@ describe("CredentialModal with GitHub Copilot auth types", () => {
     );
   });
 
-  it("saves a GitHub App secret reference and changes the shared auth discriminator", async () => {
+  it("uploads a PEM through the shared credential file control without displaying its contents", async () => {
     const user = userEvent.setup();
     const onSubmit = renderModal({ initialProvider: "GITHUB_COPILOT" });
     await screen.findByRole("combobox", { name: "Auth Type:" });
-    await chooseOption(user, /^Auth Type:/, "Per-user GitHub OAuth");
     await chooseOption(user, /^Auth Type:/, "GitHub App");
-    fill("Credential Name:", "copilot-service");
-    await user.click(screen.getByRole("button", { name: "Add Credential" }));
-    expect(onSubmit).not.toHaveBeenCalled();
+    fill("Credential Name:", "copilot-upload");
     fill("App client ID", "test-client");
     fill("Installation ID", "123");
-    fill("Private key secret reference", "oidc/file//run/secrets/copilot-app.pem");
-    expect(screen.queryByLabelText("API Key")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("API Base")).not.toBeInTheDocument();
+    const pem = "-----BEGIN PRIVATE KEY-----\nsynthetic-upload-content\n-----END PRIVATE KEY-----";
+    await user.upload(
+      screen.getByLabelText("Private key (PEM)"),
+      new File([pem], "app.pem", { type: "application/x-pem-file" }),
+    );
+    expect(await screen.findByText("Private key supplied. Upload a replacement to change it.")).toBeInTheDocument();
+    expect(screen.queryByText(pem)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Private key secret reference")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Add Credential" }));
     expect(onSubmit).toHaveBeenCalledWith(
       {
-        credential_name: "copilot-service",
+        credential_name: "copilot-upload",
         custom_llm_provider: "GITHUB_COPILOT",
         credential_values: {
           github_copilot_auth_type: "github_app",
           github_copilot_app_id: "test-client",
           github_copilot_app_installation_id: "123",
-          github_copilot_app_private_key_ref: "oidc/file//run/secrets/copilot-app.pem",
+          github_copilot_app_private_key: pem,
         },
       },
+      [],
+    );
+  });
+
+  it("preserves a masked uploaded key on edit", async () => {
+    const user = userEvent.setup();
+    const onSubmit = renderModal({
+      mode: "edit",
+      existingCredential: {
+        credential_name: "copilot-upload",
+        credential_info: { custom_llm_provider: "GITHUB_COPILOT" },
+        credential_values: {
+          github_copilot_auth_type: "github_app",
+          github_copilot_app_id: "test-client",
+          github_copilot_app_installation_id: "123",
+          github_copilot_app_private_key: "--****--",
+        },
+      },
+    });
+    await screen.findByText("Private key supplied. Upload a replacement to change it.");
+    await user.click(screen.getByRole("button", { name: "Update Credential" }));
+    expect(onSubmit).toHaveBeenLastCalledWith(
+      { credential_name: "copilot-upload", custom_llm_provider: "GITHUB_COPILOT", credential_values: {} },
       [],
     );
   });

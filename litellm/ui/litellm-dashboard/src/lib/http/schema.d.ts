@@ -37077,6 +37077,8 @@ export interface components {
             github_copilot_app_id?: string | null;
             /** Github Copilot App Installation Id */
             github_copilot_app_installation_id?: string | number | null;
+            /** Github Copilot App Private Key */
+            github_copilot_app_private_key?: string | null;
             /** Github Copilot App Private Key Ref */
             github_copilot_app_private_key_ref?: string | null;
             /** Google Maps Grounding Cost Per Query */
@@ -53371,6 +53373,8 @@ export interface components {
             github_copilot_app_id?: string | null;
             /** Github Copilot App Installation Id */
             github_copilot_app_installation_id?: string | number | null;
+            /** Github Copilot App Private Key */
+            github_copilot_app_private_key?: string | null;
             /** Github Copilot App Private Key Ref */
             github_copilot_app_private_key_ref?: string | null;
             /** Google Maps Grounding Cost Per Query */

@@ -859,7 +859,7 @@ def _get_openai_compatible_provider_info(
         user_session: Final = github_copilot_user_session_from(
             cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
         )
-        github_app: Final = app_config(litellm_params)
+        github_app: Final = app_config(litellm_params) if user_session is None else None
         if user_session is not None:
             api_base = user_session.api_base  # rebind-ok: resolves provider args in place
             dynamic_api_key = user_session.token  # rebind-ok: resolves provider args in place

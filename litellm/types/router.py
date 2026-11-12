@@ -498,6 +498,7 @@ class CredentialLiteLLMParams(LiteLLMBaseModel):
     github_copilot_app_id: str | None = None
     github_copilot_app_installation_id: str | int | None = None
     github_copilot_app_private_key_ref: str | None = None
+    github_copilot_app_private_key: str | None = None
 
 
 def _api_key_secret_reference(fields: Mapping[str, object]) -> tuple[str, ...]:

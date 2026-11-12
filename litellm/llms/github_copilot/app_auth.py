@@ -20,10 +20,12 @@ from .github_host import github_host_endpoints, normalized_github_host
 from .per_user_auth import GithubCopilotUserSession
 
 APP_AUTH_TYPE: Final = "github_app"
+APP_PRIVATE_KEY: Final = "github_copilot_app_private_key"
 APP_FIELDS: Final = (
     "github_copilot_app_id",
     "github_copilot_app_installation_id",
     "github_copilot_app_private_key_ref",
+    APP_PRIVATE_KEY,
 )
 _REFRESH_MARGIN: Final = 120
 _CACHE_SIZE: Final = 128
@@ -35,6 +37,7 @@ class AppConfig:
     installation_id: int
     private_key_ref: str = field(repr=False)
     host: str = "github.com"
+    credential_name: str | None = field(default=None, repr=False)
 
     @property
     def token_url(self) -> str:
@@ -52,7 +55,7 @@ def _value(source: object, key: str) -> object:
     return getattr(source, key, None)
 
 
-def app_config(source: object) -> AppConfig | None:
+def app_config(source: object, *, validate_stored_key: bool = False) -> AppConfig | None:
     name: Final = _value(source, "litellm_credential_name")
     credential: Final = CredentialAccessor.find_credential(name) if isinstance(name, str) else None
     values: Final = credential.credential_values if credential is not None else source
@@ -63,6 +66,18 @@ def app_config(source: object) -> AppConfig | None:
     app_id: Final = _value(values, APP_FIELDS[0])
     installation: Final = _value(values, APP_FIELDS[1])
     key_ref: Final = _value(values, APP_FIELDS[2])
+    stored_key: Final = _value(values, APP_PRIVATE_KEY)
+    stored_key_selected: Final = isinstance(stored_key, str) and bool(stored_key)
+    valid_key_source: Final = (
+        stored_key_selected and not key_ref and (credential is not None or validate_stored_key)
+    ) or (
+        stored_key is None
+        and isinstance(key_ref, str)
+        and bool(key_ref.strip())
+        and "-----BEGIN" not in key_ref
+        and not any(c.isspace() for c in key_ref)
+        and (not key_ref.startswith("oidc/") or key_ref.startswith("oidc/file/"))
+    )
     host: Final = normalized_github_host(_value(values, "github_copilot_host"))
     installation_text: Final = str(installation) if isinstance(installation, (str, int)) else ""
     if (
@@ -72,20 +87,50 @@ def app_config(source: object) -> AppConfig | None:
         or not installation_text.isascii()
         or not installation_text.isdecimal()
         or int(installation_text) <= 0
-        or not isinstance(key_ref, str)
-        or not key_ref.strip()
-        or "-----BEGIN" in key_ref
-        or any(c.isspace() for c in key_ref)
-        or (key_ref.startswith("oidc/") and not key_ref.startswith("oidc/file/"))
+        or not valid_key_source
         or host is None
     ):
         raise BadRequestError(
             message="GitHub App authentication requires github_app auth type, an App/client ID, a positive "
-            "installation ID, a private-key secret reference, and a supported GitHub host.",
+            "installation ID, a stored credential private key or secret reference, and a supported GitHub host.",
             llm_provider="github_copilot",
             model="",
         )
-    return AppConfig(app_id.strip(), int(installation_text), key_ref, host)
+    if stored_key_selected and validate_stored_key:
+        validate_private_key(stored_key)
+    return AppConfig(
+        app_id.strip(),
+        int(installation_text),
+        key_ref if isinstance(key_ref, str) else "",
+        host,
+        credential.credential_name if stored_key_selected and credential is not None else None,
+    )
+
+
+def validate_private_key(value: object) -> None:
+    """Validate uploaded keys without echoing their contents in errors."""
+    from cryptography.exceptions import UnsupportedAlgorithm
+    from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
+    from cryptography.hazmat.primitives.serialization import load_pem_private_key
+
+    try:
+        if not isinstance(value, str) or len(value) > 16384:
+            raise ValueError("Invalid key size")
+        key: Final = load_pem_private_key(value.encode(), password=None)
+        if not isinstance(key, RSAPrivateKey) or key.key_size < 2048:
+            raise ValueError("Unsupported key")
+    except (ValueError, TypeError, UnsupportedAlgorithm):
+        raise BadRequestError(
+            message="Upload an unencrypted RSA PEM private key of at least 2048 bits, no larger than 16 KiB.",
+            llm_provider="github_copilot",
+            model="",
+        ) from None
+
+
+def _stored_private_key(name: str) -> str | None:
+    credential: Final = CredentialAccessor.find_credential(name)
+    value: Final = credential.credential_values.get(APP_PRIVATE_KEY) if credential is not None else None
+    return value if isinstance(value, str) else None
 
 
 class _InstallationToken(BaseModel):
@@ -144,7 +189,11 @@ class AppTokenManager:
 
     def resolve(self, config: AppConfig) -> GithubCopilotUserSession:
         try:
-            private_key: Final = self._secret_reader(config.private_key_ref)
+            private_key: Final = (
+                _stored_private_key(config.credential_name)
+                if config.credential_name is not None
+                else self._secret_reader(config.private_key_ref)
+            )
         except Exception:  # noqa: BLE001  # secret backends can raise arbitrary errors containing credentials
             raise AuthenticationError(
                 message="Unable to read the GitHub App private-key secret.", llm_provider="github_copilot", model=""
@@ -157,7 +206,14 @@ class AppTokenManager:
             )
         cache_key: Final = hashlib.sha256(
             json.dumps(
-                (config.host, config.app_id, config.installation_id, config.private_key_ref, private_key)
+                (
+                    config.host,
+                    config.app_id,
+                    config.installation_id,
+                    config.private_key_ref,
+                    config.credential_name,
+                    private_key,
+                )
             ).encode()
         ).hexdigest()
         with self._locks[int(cache_key[:8], 16) % len(self._locks)]:

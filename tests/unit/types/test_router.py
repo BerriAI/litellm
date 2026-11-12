@@ -367,6 +367,7 @@ def test_server_owned_registry_includes_anthropic_openai_and_oauth_token_exchang
         "github_copilot_app_id",
         "github_copilot_app_installation_id",
         "github_copilot_app_private_key_ref",
+        "github_copilot_app_private_key",
     )
     assert server_owned_wif_litellm_params == (
         anthropic_wif_litellm_params

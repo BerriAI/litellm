@@ -821,7 +821,7 @@ def _named_credential_values(kwargs: Mapping[str, object]) -> Mapping[str, objec
         {
             key: copy.deepcopy(value)
             for key, value in credential_api_key_secret_reference(credential.credential_values).items()
-            if key not in kwargs
+            if key not in kwargs and key != "github_copilot_app_private_key"
         }
     )
 
