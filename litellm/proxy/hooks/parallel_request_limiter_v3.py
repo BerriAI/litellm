@@ -201,7 +201,10 @@ def inherited_team_model_limit(
 
 
 TEAM_MODEL_LIMIT_MAX_BORROW_MULTIPLE: Final = "team_model_limit_max_borrow_multiple"
-_MAX_BORROW_MULTIPLE: Final[TypeAdapter[float]] = TypeAdapter(Annotated[float, Field(ge=1)])
+MAX_BORROW_MULTIPLE_CEILING: Final = 1_000_000
+_MAX_BORROW_MULTIPLE: Final[TypeAdapter[float]] = TypeAdapter(
+    Annotated[float, Field(ge=1, le=MAX_BORROW_MULTIPLE_CEILING, allow_inf_nan=False)]
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,10 +239,11 @@ def team_model_limit_max_borrow_multiple(user_api_key_dict: UserAPIKeyAuth) -> f
         return _MAX_BORROW_MULTIPLE.validate_python(raw)
     except ValidationError:
         verbose_proxy_logger.warning(
-            "Ignoring %s=%r on team %s: expected a number of at least 1, so the team borrows up to the model limit",
+            "Ignoring %s=%r on team %s: expected a number from 1 to %d, so the team borrows up to the model limit",
             TEAM_MODEL_LIMIT_MAX_BORROW_MULTIPLE,
             raw,
             user_api_key_dict.team_id,
+            MAX_BORROW_MULTIPLE_CEILING,
         )
         return None
 

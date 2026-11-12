@@ -2177,7 +2177,11 @@ async def test_another_teams_borrowing_does_not_count_against_a_teams_max_borrow
     await _check(handler, _capped_team_key(2), saturation=0.0)
 
 
-@pytest.mark.parametrize("multiple", [0.5, 0, -2, "two", None], ids=["below-one", "zero", "negative", "text", "null"])
+@pytest.mark.parametrize(
+    "multiple",
+    [0.5, 0, -2, "two", None, "Infinity", float("inf"), 1e308],
+    ids=["below-one", "zero", "negative", "text", "null", "infinity-text", "infinity", "overflows-the-share"],
+)
 @pytest.mark.asyncio
 async def test_an_unusable_max_borrow_multiple_is_ignored_so_the_team_borrows_up_to_the_model_limit(
     monkeypatch: pytest.MonkeyPatch, multiple: object
