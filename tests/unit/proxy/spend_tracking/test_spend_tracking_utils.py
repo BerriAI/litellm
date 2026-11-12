@@ -1628,9 +1628,12 @@ _TOKEN_SHAPED_SECRETS: Final = (
 
 
 @pytest.mark.parametrize("secret", _TOKEN_SHAPED_SECRETS)
-@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
-def test_stored_request_masks_a_token_returned_in_an_anthropic_tool_result(mock_should_store, secret: str):
-    mock_should_store.return_value = True
+def test_stored_request_masks_a_token_returned_in_an_anthropic_tool_result(monkeypatch, secret: str):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(
+        proxy_server, "general_settings", {"store_prompts_in_spend_logs": True, "redact_tokens_in_spend_logs": True}
+    )
     tool_output: Final = json.dumps({"stdout": f"export TOKEN={secret}\ndone"})
     request_body: Final = {
         "model": "claude-sonnet-5-5",
@@ -1648,9 +1651,12 @@ def test_stored_request_masks_a_token_returned_in_an_anthropic_tool_result(mock_
     ]
 
 
-@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
-def test_stored_response_masks_a_token_in_a_tool_call_argument(mock_should_store):
-    mock_should_store.return_value = True
+def test_stored_response_masks_a_token_in_a_tool_call_argument(monkeypatch):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(
+        proxy_server, "general_settings", {"store_prompts_in_spend_logs": True, "redact_tokens_in_spend_logs": True}
+    )
     payload: Final = cast(
         StandardLoggingPayload,
         {
@@ -1669,7 +1675,10 @@ def test_stored_response_masks_a_token_in_a_tool_call_argument(mock_should_store
     assert stored["content"][1]["input"]["cmd"] == "git clone https://REDACTED_BY_LITELM@github.com/o/r"
 
 
-def test_stored_request_masks_a_token_kept_in_the_head_of_a_truncated_string():
+def test_stored_request_masks_a_token_kept_in_the_head_of_a_truncated_string(monkeypatch):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"redact_tokens_in_spend_logs": True})
     long_text: Final = f"{_GITHUB_TOKEN} " + "x" * 10_000
 
     stored: Final = _sanitize_request_body_for_spend_logs_payload({"text": long_text}, max_string_length_prompt_in_db=200)
@@ -1687,10 +1696,29 @@ def test_stored_request_masks_a_token_kept_in_the_head_of_a_truncated_string():
         "A" * 5000,
     ),
 )
-def test_stored_request_keeps_text_that_only_resembles_credentials(text: str):
+def test_stored_request_keeps_text_that_only_resembles_credentials(monkeypatch, text: str):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"redact_tokens_in_spend_logs": True})
     stored: Final = _sanitize_request_body_for_spend_logs_payload({"text": text}, max_string_length_prompt_in_db=10_000)
 
     assert stored["text"] == text
+
+
+@pytest.mark.parametrize("redaction_settings", ({}, {"redact_tokens_in_spend_logs": False}))
+def test_stored_request_preserves_a_token_in_a_tool_result_without_redaction(monkeypatch, redaction_settings):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(
+        proxy_server, "general_settings", {"store_prompts_in_spend_logs": True, **redaction_settings}
+    )
+    request_body: Final = {
+        "messages": [{"role": "tool", "tool_call_id": "call_1", "content": f"TOKEN={_GITHUB_TOKEN}\ndone"}]
+    }
+
+    stored: Final = _sanitize_request_body_for_spend_logs_payload(request_body)
+
+    assert stored == request_body
 
 
 @patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")

@@ -2928,6 +2928,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="If True, stores request messages and responses in spend logs. Default is False.",
     )
+    redact_tokens_in_spend_logs: bool = Field(
+        False,
+        description="If True, masks token-shaped secrets in stored spend log request and response content. Default is False.",
+    )
     spend_logs_prompt_storage: Literal["latest_turn"] | None = Field(
         None,
         description="With store_prompts_in_spend_logs on, 'latest_turn' stores only the current turn of a stateless request (/chat/completions, /v1/messages, and /v1/responses without previous_response_id): the model and the latest user message, with the system prompt, tool definitions and earlier turns dropped. Requests that continue a stored conversation and the response are stored as they are today. Unset stores the full request.",
