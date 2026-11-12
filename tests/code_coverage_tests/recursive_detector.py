@@ -8,6 +8,7 @@ NON_SDK_SOURCE_DIRS: Final = frozenset(
 )
 
 IGNORE_FUNCTIONS = [
+    "check_opaque_inference_controls",  # DEFAULT_MAX_RECURSE_DEPTH bound, rejects unchecked nesting with HTTP 403.
     "_json_cost",  # bounded at depth 32 and consumed under byte/node limits.
     "detached",  # router_config: copies only the plain containers of the router's own constructor arguments, once per build or changeset
     "_format_type",

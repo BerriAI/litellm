@@ -11,6 +11,7 @@ load_dotenv()
 
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from copy import deepcopy
+from functools import reduce
 from types import SimpleNamespace
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -44,6 +45,7 @@ import litellm.proxy.common_utils.auth_cache_invalidation_pubsub as pubsub_modul
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy.auth.auth_checks import (
     can_team_access_model,
+    check_opaque_inference_controls,
     delete_cache_key_objects,
     is_model_cost_zero,
     virtual_key_soft_budget_check,
@@ -53,6 +55,33 @@ from litellm.proxy.auth.auth_checks import (
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging
 from litellm.proxy.utils import CallInfo
 from litellm.types.passthrough_endpoints.pass_through_endpoints import LITELLM_PASS_THROUGH_ENDPOINT_MARKER
+
+
+@pytest.mark.parametrize("container", ["mapping", "list"])
+@pytest.mark.parametrize("at_limit", [False, True])
+def test_opaque_controls_reject_unchecked_nesting(container: str, at_limit: bool) -> None:
+    from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+
+    def wrap(value: object, _: int) -> object:
+        return {"metadata": value} if container == "mapping" else [value]
+
+    depth: Final = DEFAULT_MAX_RECURSE_DEPTH if at_limit else DEFAULT_MAX_RECURSE_DEPTH - 1
+    controls: Final = reduce(wrap, range(depth), "unrestricted")
+    if not at_limit:
+        assert check_opaque_inference_controls(controls) is None
+        return
+    with pytest.raises(HTTPException) as denied:
+        check_opaque_inference_controls(controls)
+    assert denied.value.status_code == 403
+    assert "nesting" in denied.value.detail
+
+
+@pytest.mark.parametrize("control", [{"models": ["restricted-model"]}, {"guardrails": ["required-guardrail"]}])
+def test_opaque_controls_reject_restrictions_nested_in_lists_and_mappings(control: dict[str, object]) -> None:
+    with pytest.raises(HTTPException) as denied:
+        check_opaque_inference_controls({"metadata": [{"budget": control}]})
+    assert denied.value.status_code == 403
+    assert "cannot enforce" in denied.value.detail
 
 
 @pytest.mark.asyncio

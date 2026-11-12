@@ -1150,11 +1150,13 @@ def request_skips_budget_checks(
     return is_model_cost_zero(model=model, llm_router=llm_router)
 
 
-def check_opaque_inference_controls(value: object) -> None:
+def check_opaque_inference_controls(value: object, *, depth: int = 0) -> None:
+    if depth >= DEFAULT_MAX_RECURSE_DEPTH:
+        raise HTTPException(status_code=403, detail="Opaque inference cannot verify control nesting beyond the limit")
     fields: Final = as_str_mapping(value)
     if fields is None:
         for item in as_object_list(value) or ():
-            check_opaque_inference_controls(item)
+            check_opaque_inference_controls(item, depth=depth + 1)
         return
     for name, control in fields.items():
         if control in (None, {}, [], ()):
@@ -1170,7 +1172,7 @@ def check_opaque_inference_controls(value: object) -> None:
             "policies",
         }:
             raise HTTPException(status_code=403, detail=f"Opaque inference cannot enforce {name}")
-        check_opaque_inference_controls(control)
+        check_opaque_inference_controls(control, depth=depth + 1)
 
 
 async def common_checks(
