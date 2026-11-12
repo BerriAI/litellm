@@ -900,6 +900,11 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                 )
             )
         )
+        connection_stash: Final = get_request_stash()
+        if connection_stash is not None:
+            connection_stash.priority_class_share = next(
+                (d for d in share_descriptors if d["key"] == PRIORITY_CLASS_SHARE_AT_SATURATION), None
+            )
         borrowing: Final = self._borrowing_team_share(model=requested_model, user_api_key_dict=user_api_key_dict)
         if not share_descriptors and borrowing is None:
             return

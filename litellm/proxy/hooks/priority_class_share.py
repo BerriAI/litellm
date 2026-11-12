@@ -94,15 +94,24 @@ class ActiveTeamRegistry:
 
     @with_service_target(RATE_LIMITS_TARGET)
     async def touch(self, model: str, team_id: str, priority: str, window: int) -> Mapping[str, str]:
-        """Record ``team_id`` as active on ``model`` and return every team active on it, the caller included."""
+        """Record ``team_id`` as active on ``model`` and return every team active on it, the caller included. The
+        caller is always listed under ``priority``, whatever class another worker's clock last saw it in."""
         key: Final = f"{ACTIVE_TEAMS_KEY_PREFIX}{model}"
         member: Final = f"{team_id}{MEMBER_SEPARATOR}{priority}"
         now: Final = self._now()
         redis_cache: Final = self._dual_cache.redis_cache
-        if redis_cache is None:
-            return self._touch_in_memory(key, member, now, window)
-        touch: Final = redis_cache.async_register_script(_TOUCH_LUA)
-        return _members(_MEMBERS.validate_python(await touch(keys=(key,), args=(now - window, now, member, window))))
+        seen: Final = (
+            self._touch_in_memory(key, member, now, window)
+            if redis_cache is None
+            else _members(
+                _MEMBERS.validate_python(
+                    await redis_cache.async_register_script(_TOUCH_LUA)(
+                        keys=(key,), args=(now - window, now, member, window)
+                    )
+                )
+            )
+        )
+        return MappingProxyType({**seen, team_id: priority})
 
     def _touch_in_memory(self, key: str, member: str, now: float, window: int) -> Mapping[str, str]:
         """Prunes by each member's own last-seen time, so the map lives exactly as long as its newest member."""

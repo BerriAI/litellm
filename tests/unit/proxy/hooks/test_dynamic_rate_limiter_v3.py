@@ -2854,3 +2854,38 @@ async def test_requests_sent_while_the_share_was_not_enforced_all_count_once_the
     with pytest.raises(ProxyRateLimitError) as exc:
         await _check(handler, _class_team("team-a"), saturation=0.6, priority="interactive")
     assert "Active teams in class: 1, Active classes: 2, " in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_a_websocket_turn_settles_on_the_team_share_once_the_registry_recovers(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=False, splits=True, saturation_threshold=0.1)
+    await _burn(handler, _class_team("team-b"), "interactive", 20)
+    registry: Final = handler.active_teams
+    handler.active_teams = _UnavailableRegistry()  # pyright: ignore[reportAttributeAccessIssue]  # registry down at connect
+    await _check(handler, _class_team("team-a"), saturation=0.0, priority="interactive")
+    handler.active_teams = registry
+    await handler.enforce_token_limits_for_frame(
+        user_api_key_dict=_class_team("team-a"), requested_model="shared-model"
+    )
+    await handler.async_log_success_event(
+        kwargs={
+            "call_type": "_aresponses_websocket",
+            "litellm_params": {"metadata": {"model_group": "shared-model"}},
+            "standard_logging_object": {
+                "metadata": {
+                    "user_api_key_team_id": "team-a",
+                    "user_api_key_auth_metadata": {"priority": "interactive"},
+                }
+            },
+        },
+        response_obj=litellm.ModelResponse(
+            usage=litellm.Usage(prompt_tokens=550, completion_tokens=0, total_tokens=550)
+        ),
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await handler.enforce_token_limits_for_frame(
+            user_api_key_dict=_class_team("team-a"), requested_model="shared-model"
+        )
+    _held_to_class_share(exc.value)

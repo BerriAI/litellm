@@ -111,6 +111,18 @@ async def test_registry_keeps_a_teams_newest_class_when_it_changed_class_mid_win
 
 
 @pytest.mark.asyncio
+async def test_registry_lists_the_caller_under_the_class_it_just_sent_with_even_when_another_worker_wrote_later():
+    clock: Final = _Clock()
+    registry: Final = ActiveTeamRegistry(DualCache(), time_provider=clock)
+    clock.now += 5
+    await registry.touch("m", "a", "batch", window=60)
+    clock.now -= 5
+    members: Final = await registry.touch("m", "a", "interactive", window=60)
+    assert dict(members) == {"a": "interactive"}
+    assert team_share("interactive", members, WEIGHTS, 1.0).fraction == 1.0
+
+
+@pytest.mark.asyncio
 async def test_registry_keeps_a_team_id_that_contains_the_separator_whole():
     registry: Final = ActiveTeamRegistry(DualCache(), time_provider=_Clock())
     members: Final = await registry.touch("m", "owned\x1fextra", "batch", window=60)
