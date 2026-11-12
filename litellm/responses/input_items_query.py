@@ -15,6 +15,9 @@ class InputItemsQuery:
     order: Literal["asc", "desc"]
 
 
+DEFAULT_INPUT_ITEMS_QUERY: Final = InputItemsQuery(after=None, before=None, include=(), limit=20, order="desc")
+
+
 @dataclass(frozen=True, slots=True)
 class InvalidInputItemsQuery:
     param: Literal["after", "before", "include", "limit", "order"]

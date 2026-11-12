@@ -118,7 +118,12 @@ if TYPE_CHECKING:
 else:
     MCPTool = Any
 
-from .input_items_query import InputItemsQuery, InvalidInputItemsQuery, parse_input_items_query
+from .input_items_query import (
+    DEFAULT_INPUT_ITEMS_QUERY,
+    InputItemsQuery,
+    InvalidInputItemsQuery,
+    parse_input_items_query,
+)
 from .retrieve_stream_query import (
     RETRIEVE_INCLUDE_QUERY_KEYS,
     InvalidRetrieveStreamQuery,
@@ -2306,21 +2311,28 @@ def get_responses(
         )
 
 
+def _raise_invalid_input_items_query(invalid: InvalidInputItemsQuery, custom_llm_provider: str) -> NoReturn:
+    raise litellm.BadRequestError(
+        message=invalid.message,
+        model=None,
+        llm_provider=custom_llm_provider,
+        body={"message": invalid.message, "type": "invalid_request_error", "param": invalid.param},
+    )
+
+
 def _requested_input_items_query(
-    defaults: InputItemsQuery,
+    arguments: Mapping[str, object],
     extra_query: Mapping[str, object] | None,
     custom_llm_provider: str,
     drop_malformed: bool,
 ) -> InputItemsQuery:
-    parsed: Final = parse_input_items_query(extra_query or {}, defaults, drop_malformed=drop_malformed)
-    if isinstance(parsed, InvalidInputItemsQuery):
-        raise litellm.BadRequestError(
-            message=parsed.message,
-            model=None,
-            llm_provider=custom_llm_provider,
-            body={"message": parsed.message, "type": "invalid_request_error", "param": parsed.param},
-        )
-    return parsed
+    called_with: Final = parse_input_items_query(arguments, DEFAULT_INPUT_ITEMS_QUERY, drop_malformed=drop_malformed)
+    if isinstance(called_with, InvalidInputItemsQuery):
+        _raise_invalid_input_items_query(called_with, custom_llm_provider)
+    requested: Final = parse_input_items_query(extra_query or {}, called_with, drop_malformed=drop_malformed)
+    if isinstance(requested, InvalidInputItemsQuery):
+        _raise_invalid_input_items_query(requested, custom_llm_provider)
+    return requested
 
 
 @client
@@ -2329,8 +2341,8 @@ async def alist_input_items(
     after: str | None = None,
     before: str | None = None,
     include: list[str] | None = None,
-    limit: int = 20,
-    order: Literal["asc", "desc"] = "desc",
+    limit: int | None = 20,
+    order: Literal["asc", "desc"] | None = "desc",
     extra_headers: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
@@ -2387,8 +2399,8 @@ def list_input_items(
     after: str | None = None,
     before: str | None = None,
     include: list[str] | None = None,
-    limit: int = 20,
-    order: Literal["asc", "desc"] = "desc",
+    limit: int | None = 20,
+    order: Literal["asc", "desc"] | None = "desc",
     extra_headers: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
@@ -2423,9 +2435,7 @@ def list_input_items(
             raise ValueError(f"list_input_items is not supported for {custom_llm_provider}")
 
         query: Final = _requested_input_items_query(
-            defaults=InputItemsQuery(
-                after=after, before=before, include=tuple(include or ()), limit=limit, order=order
-            ),
+            arguments={"after": after, "before": before, "include": include, "limit": limit, "order": order},
             extra_query=extra_query,
             custom_llm_provider=custom_llm_provider,
             drop_malformed=drops_unsupported_params(litellm_params.drop_params),

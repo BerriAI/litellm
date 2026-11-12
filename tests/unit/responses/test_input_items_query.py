@@ -50,6 +50,24 @@ def test_sdk_extra_query_under_drop_params_falls_back_to_the_callers_own_argumen
     assert forwarded == ((("limit", "3"), ("order", "asc")), 1)
 
 
+@pytest.mark.parametrize(("limit", "order"), ((None, "desc"), (20, None)))
+def test_sdk_none_limit_or_order_asks_for_the_default_page(
+    limit: int | None, order: Literal["asc", "desc"] | None
+) -> None:
+    with respx.mock() as mock_router:
+        route: Final = mock_router.get(_ITEMS_URL).mock(return_value=httpx.Response(200, json=_EMPTY_PAGE))
+        litellm.list_input_items(
+            response_id="resp_sdk",
+            custom_llm_provider="openai",
+            api_key="sk-test",
+            api_base=_API_BASE,
+            limit=limit,
+            order=order,
+        )
+
+    assert sorted(route.calls.last.request.url.params.multi_items()) == [("limit", "20"), ("order", "desc")]
+
+
 @pytest.mark.parametrize(
     ("extra_query", "param"),
     (

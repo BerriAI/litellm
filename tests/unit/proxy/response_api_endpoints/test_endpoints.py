@@ -1704,6 +1704,7 @@ async def _list_items_through_proxy(
     query: tuple[tuple[str, str], ...],
     drop_params: bool = False,
     routing_order: int | None = None,
+    body: Mapping[str, object] | None = None,
 ) -> tuple[httpx.Response, tuple[httpx.Request, ...]]:
     import litellm.proxy.proxy_server as ps
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -1732,8 +1733,8 @@ async def _list_items_through_proxy(
             return_value=httpx.Response(200, json={"object": "list", "data": [], "has_more": False})
         )
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://testserver") as client:
-            result: Final = await client.get(
-                f"/v1/responses/{_proxy_issued_id('resp_read')}/input_items", params=list(query)
+            result: Final = await client.request(
+                "GET", f"/v1/responses/{_proxy_issued_id('resp_read')}/input_items", params=list(query), json=body
             )
         return result, tuple(call.request for call in route.calls)
 
@@ -1797,6 +1798,8 @@ async def test_a_deployment_routing_order_never_becomes_the_input_items_order(
     [
         ((("limit", "abc"),), "limit"),
         ((("limit", "-1"),), "limit"),
+        ((("limit", "\u00b2"),), "limit"),
+        ((("limit", "1" * 20),), "limit"),
         ((("order", "sideways"),), "order"),
         ((("after", "item_a"), ("after", "item_b")), "after"),
         ((("before", "item_a"), ("before", "item_b")), "before"),
@@ -1810,6 +1813,20 @@ async def test_a_malformed_input_items_query_through_the_proxy_is_a_400(
     assert result.status_code == 400, result.text
     assert bad_param in result.json()["error"]["message"]
     assert upstream_requests == ()
+
+
+@pytest.mark.asyncio
+async def test_an_input_items_query_param_wins_over_the_same_key_in_a_body_extra_query(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    result, upstream_requests = await _list_items_through_proxy(
+        monkeypatch, (("limit", "2"),), body={"extra_query": {"limit": 5, "order": "asc"}}
+    )
+
+    assert result.status_code == 200, result.text
+    assert [sorted(request.url.params.multi_items()) for request in upstream_requests] == [
+        [("limit", "2"), ("order", "asc")]
+    ]
 
 
 @pytest.mark.asyncio
