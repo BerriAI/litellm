@@ -294,6 +294,19 @@ const eslintConfig = [
       "jest-dom/prefer-to-have-text-content": "error",
     },
   },
+  {
+    files: ["src/components/ui/**/*.{ts,tsx}"],
+    ignores: ["src/**/*.test.{ts,tsx}"],
+    rules: { "local/no-large-inline-object-arg": "off" },
+  },
+  {
+    files: ["src/components/ui/sidebar.tsx"],
+    rules: { "local/no-ad-hoc-z-index": "off" },
+  },
+  {
+    files: ["src/hooks/use-mobile.ts"],
+    rules: { "react-hooks/set-state-in-effect": "off" },
+  },
 ];
 
 export default eslintConfig;

@@ -11,6 +11,7 @@ import userEvent from "@testing-library/user-event";
 import { Fragment, useEffect, type ComponentType } from "react";
 import SidebarAccountMenu from "@/components/SidebarAccountMenu/SidebarAccountMenu";
 import UserDropdown from "@/components/Navbar/UserDropdown/UserDropdown";
+import { SidebarProvider } from "@/components/ui/sidebar";
 import { AriaUsageTrigger, LiteAdminFrame, LiteAdminPage, AriaSidebarLink } from "./LiteAdmin";
 import { MAX_INPUT_LENGTH } from "./agent";
 import type { ModelGroup } from "@/components/llm_calls/fetch_models";
@@ -121,7 +122,9 @@ function renderWidget(
           {Menu && <Menu onLogout={() => undefined} />}
           <LiteAdminFrame>
             <Page />
-            <AriaSidebarLink active={page} />
+            <SidebarProvider>
+              <AriaSidebarLink active={page} />
+            </SidebarProvider>
             {page && <LiteAdminPage />}
             {usage && (
               <>

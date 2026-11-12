@@ -2,7 +2,6 @@
 
 import React, { Suspense, useState, useRef, useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 import { DashboardHeader } from "@/components/DashboardHeader";
 import Navbar from "@/components/navbar";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
@@ -12,7 +11,7 @@ import { useCurrentUser } from "@/app/(dashboard)/hooks/currentUser/useCurrentUs
 import { redirectToLogin } from "@/app/(dashboard)/hooks/redirectToLogin";
 import { clearTokenCookies } from "@/utils/cookieUtils";
 import { decodeToken } from "@/utils/jwtUtils";
-import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
+import AppSidebar from "@/app/(dashboard)/components/AppSidebar";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   createDeploymentHealthHandle,
@@ -27,10 +26,9 @@ import { routeSegmentForPathname, uiHref } from "@/utils/uiHref";
 import { PluginModeProvider, usePluginMode } from "@/contexts/PluginModeContext";
 import { createApiClient } from "@/lib/http/client";
 import { getProxyBaseUrl } from "@/components/networking";
-import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
-import { Button } from "@/components/ui/button";
-import { Menu } from "lucide-react";
-import { useMediaQuery } from "usehooks-ts";
+import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
+import { MobileSidebarTrigger, useCloseMobileSidebarOn } from "@/components/shared/MobileSidebar";
+import { sidebarWidthStyle } from "@/components/shared/sidebarStyles";
 import { CommandPaletteProvider } from "@/components/CommandPalette/CommandPaletteProvider";
 import { recordUiEvent } from "@/lib/telemetry/uiEvents";
 import TelemetryEnvBanner from "@/app/(dashboard)/telemetry/_components/TelemetryEnvBanner";
@@ -116,6 +114,11 @@ export function AgentControlPlaneView() {
 }
 
 const FULL_BLEED_SEGMENTS = new Set(["logs"]);
+
+function CloseMobileSidebarOnNavigation({ navigationKey }: { navigationKey: string }) {
+  useCloseMobileSidebarOn(navigationKey);
+  return null;
+}
 const CUSTOMER_PORTAL_SEGMENTS = new Set(["customers", "chargebacks"]);
 
 function DashboardShell({ children }: { children: React.ReactNode }) {
@@ -134,19 +137,12 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
   }, [routeSegment]);
   const searchParams = useSearchParams();
   const navigationKey = `${pathname}?${searchParams.toString()}`;
-  const isDesktop = useMediaQuery("(min-width: 768px)", { initializeWithValue: false });
-  const [mobileNavigationKey, setMobileNavigationKey] = useState<string | null>(null);
-  const [mobileNavigationHandle] = useState(() => DialogPrimitive.createHandle());
   const [deploymentHealthHandle] = useState(createDeploymentHealthHandle);
-  if (mobileNavigationKey !== null && (isDesktop || mobileNavigationKey !== navigationKey)) {
-    setMobileNavigationKey(null);
-  }
-  const mobileNavigationOpen = !isDesktop && mobileNavigationKey === navigationKey;
   const isFullBleed = FULL_BLEED_SEGMENTS.has(routeSegment);
   // A manual toggle holds only for the route it was made on; full-bleed routes default to collapsed.
   const [sidebarOverride, setSidebarOverride] = useState<{ segment: string; collapsed: boolean } | null>(null);
   const sidebarCollapsed = sidebarOverride?.segment === routeSegment ? sidebarOverride.collapsed : isFullBleed;
-  const toggleSidebar = () => setSidebarOverride({ segment: routeSegment, collapsed: !sidebarCollapsed });
+  const setSidebarOpen = (open: boolean) => setSidebarOverride({ segment: routeSegment, collapsed: !open });
 
   const isGateway = mode === "ai-gateway" || mode === "customer-portal";
 
@@ -178,53 +174,26 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
   // so the page can't be dragged past the end of the nav.
   return (
     <LiteAdminFrame>
-      <div className="flex h-screen overflow-hidden bg-background max-md:h-dvh">
-        <div className="hidden h-full md:flex">
-          <SidebarProvider sidebarCollapsed={sidebarCollapsed} onToggleCollapsed={toggleSidebar} />
-        </div>
-        <Sheet
-          handle={mobileNavigationHandle}
-          open={mobileNavigationOpen}
-          onOpenChange={(open) => setMobileNavigationKey(open ? navigationKey : null)}
-        >
-          <SheetContent
-            side="left"
-            showCloseButton={false}
-            className="gap-0 p-0 data-[side=left]:w-[min(280px,calc(100vw-3rem))] [&_[data-slot=sidebar]]:w-full"
-            onClickCapture={(event) => {
-              if (event.target instanceof Element && event.target.closest("a[href]")) setMobileNavigationKey(null);
-            }}
-          >
-            <SheetTitle className="sr-only">{t("shell.dashboardShell.navigation")}</SheetTitle>
-            <SidebarProvider sidebarCollapsed={false} onToggleCollapsed={() => setMobileNavigationKey(null)} />
-          </SheetContent>
-        </Sheet>
+      <SidebarProvider
+        open={!sidebarCollapsed}
+        onOpenChange={setSidebarOpen}
+        style={sidebarWidthStyle}
+        className="h-screen overflow-hidden bg-background max-md:h-dvh"
+      >
+        <CloseMobileSidebarOnNavigation navigationKey={navigationKey} />
+        <AppSidebar />
         <CommandPaletteProvider>
-          <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+          <SidebarInset className="min-w-0 overflow-hidden">
             <DashboardHeader
               accessToken={accessToken}
-              navigationTrigger={
-                <SheetTrigger
-                  handle={mobileNavigationHandle}
-                  render={
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="size-11 md:hidden"
-                      aria-label={t("shell.dashboardShell.openNavigation")}
-                    />
-                  }
-                >
-                  <Menu />
-                </SheetTrigger>
-              }
+              navigationTrigger={<MobileSidebarTrigger label={t("shell.dashboardShell.openNavigation")} />}
               deploymentHealth={<DeploymentHealthIcon handle={deploymentHealthHandle} />}
               deploymentHealthLink={<DeploymentHealthLink handle={deploymentHealthHandle} />}
             />
             <DeploymentHealthBanner handle={deploymentHealthHandle} />
             <DeploymentHealthPanel handle={deploymentHealthHandle} />
             <UserBanner accessToken={accessToken} />
-            <main
+            <div
               className={
                 routeSegment === "aria"
                   ? "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
@@ -233,10 +202,10 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
             >
               <TelemetryEnvBanner />
               {children}
-            </main>
-          </div>
+            </div>
+          </SidebarInset>
         </CommandPaletteProvider>
-      </div>
+      </SidebarProvider>
     </LiteAdminFrame>
   );
 }
