@@ -156,6 +156,59 @@ describe("AgentInfoView update payload", () => {
       .mockResolvedValue({} as never);
   });
 
+  it("keeps an Okta binding when the agent is renamed", async () => {
+    const user = setup();
+    const issuer = "https://example.okta.com/oauth2/aus1agents";
+    const identity = { provider: "okta", issuer, client_id: "0oa1AgentClient", required_scopes: ["agents:invoke"] };
+    vi.mocked(networking.getAgentInfo).mockResolvedValue({
+      ...A2A_AGENT,
+      identity: { ...identity, agent_id: "agent-1", tenant_id: issuer, revision: "rev", active: true },
+      identity_managed: true,
+      execution_mode: "autonomous",
+      enabled: true,
+    } as never);
+    vi.mocked(networking.apiClient.get).mockImplementation(async (path) =>
+      path.includes("/identity/providers") ? [issuer] : { last_authenticated_at: null },
+    );
+    renderView();
+    expect(await screen.findByRole("heading", { name: "Agent Identity: Okta" })).toBeInTheDocument();
+    await openEditor(user);
+    expect(screen.getByRole("combobox", { name: "Identity Provider" })).toHaveTextContent("Okta");
+    expect(screen.getByLabelText("Client ID")).toHaveValue("0oa1AgentClient");
+    await waitFor(() =>
+      expect(networking.apiClient.get).toHaveBeenCalledWith("/v1/agents/identity/providers/okta", {
+        accessToken: "tok",
+      }),
+    );
+    fireEvent.change(screen.getByLabelText("Agent Name"), { target: { value: "Renamed agent" } });
+    await save(user);
+    expect(patchedPayload().identity).toEqual(identity);
+    expect(patchedPayload().execution_mode).toBe("autonomous");
+  });
+
+  it("unbinds an Okta agent when the admin picks no identity provider", async () => {
+    const user = setup();
+    const issuer = "https://example.okta.com/oauth2/aus1agents";
+    const identity = { provider: "okta", issuer, client_id: "0oa1AgentClient", required_scopes: ["agents:invoke"] };
+    vi.mocked(networking.getAgentInfo).mockResolvedValue({
+      ...A2A_AGENT,
+      identity: { ...identity, agent_id: "agent-1", tenant_id: issuer, revision: "rev", active: true },
+      identity_managed: true,
+      execution_mode: "autonomous",
+      enabled: true,
+    } as never);
+    vi.mocked(networking.apiClient.get).mockImplementation(async (path) =>
+      path.includes("/identity/providers") ? [issuer] : { last_authenticated_at: null },
+    );
+    renderView();
+    expect(await screen.findByRole("heading", { name: "Agent Identity: Okta" })).toBeInTheDocument();
+    await openEditor(user);
+    await user.click(screen.getByRole("combobox", { name: "Identity Provider" }));
+    await user.click(await screen.findByRole("option", { name: "No explicit identity binding" }));
+    await save(user);
+    expect(patchedPayload().identity).toBeNull();
+  });
+
   it.each([
     { card: "complete", editCard: false },
     { card: "empty", editCard: false },
@@ -180,7 +233,7 @@ describe("AgentInfoView update payload", () => {
       access_group_ids: ["ag-entra"],
     } as never);
     vi.mocked(networking.apiClient.get).mockImplementation(async (path) =>
-      path.endsWith("/providers")
+      path.includes("/identity/providers")
         ? [`https://login.microsoftonline.com/${identity.tenant_id}/v2.0`]
         : { last_authenticated_at: null },
     );
