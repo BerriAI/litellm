@@ -22,12 +22,13 @@ pub struct Deployment {
 impl Deployment {
     pub fn shaping_for(&self, request: &Map<String, Value>) -> MessagesShaping {
         let settings = &self.shaping.settings;
+        let requested = request.get("drop_params").map(requests_drop);
         MessagesShaping {
             settings: MessagesSettings {
                 drop_params: self.drops_params_globally
-                    || request
-                        .get("drop_params")
-                        .map_or(settings.drop_params, requests_drop),
+                    || requested.unwrap_or(settings.drop_params),
+                drops_unsupported_params: self.drops_params_globally
+                    || requested.unwrap_or(settings.drops_unsupported_params),
                 additional_drop_params: request
                     .get("additional_drop_params")
                     .map_or_else(|| settings.additional_drop_params.clone(), drop_paths),

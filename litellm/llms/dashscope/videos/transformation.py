@@ -22,6 +22,7 @@ from litellm.llms.base_llm.videos.async_task_utils import (
     input_reference_url,
     polled_video_models,
     routed_video_models,
+    unsupported_video_fields,
 )
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.custom_httpx.http_handler import (
@@ -37,6 +38,8 @@ from litellm.types.videos.utils import (
     extract_original_video_id,
 )
 from litellm.utils import get_model_info
+
+from ..common_utils import resolve_dashscope_endpoints
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -206,6 +209,9 @@ def _parse_task_response(raw_response: httpx.Response) -> _TaskResponse:
 
 
 def _normalized_api_base(api_base: str) -> str:
+    endpoints: Final = resolve_dashscope_endpoints(api_base)
+    if endpoints is not None:
+        return endpoints.origin
     trimmed: Final = api_base.rstrip("/")
     if trimmed.endswith(DASHSCOPE_COMPATIBLE_MODE_PATH):
         return trimmed[: -len(DASHSCOPE_COMPATIBLE_MODE_PATH)]
@@ -553,6 +559,13 @@ class DashScopeVideoConfig(BaseVideoConfig):
         model: str,
         drop_params: bool,
     ) -> dict[str, object]:  # mutable-ok: BaseVideoConfig contract
+        excluded_openrouter: Final = unsupported_video_fields(
+            video_create_optional_params,
+            model,
+            "dashscope",
+            drop_params,
+            frozenset({"duration", "seed", "aspect_ratio", "generate_audio"}),
+        )
         unsupported: Final = next(
             (
                 key
@@ -573,7 +586,7 @@ class DashScopeVideoConfig(BaseVideoConfig):
             {
                 key: value
                 for key, value in video_create_optional_params.items()
-                if value is not None and key not in _MAPPED_ELSEWHERE
+                if value is not None and key not in _MAPPED_ELSEWHERE and key not in excluded_openrouter
             }
         )
         mapped_params: Final[dict[str, object]] = {  # mutable-ok: BaseVideoConfig contract; extra_body merges into it

@@ -422,6 +422,9 @@ impl CallHooks<PythonRuntime> for SyntheticHooks {
             PythonCallEvent::Execution(ExecutionEvent::ProviderResponseReceived { raw }) => {
                 format!("response:{}", raw.body)
             }
+            PythonCallEvent::Execution(ExecutionEvent::ProviderRequestRetried { retry }) => {
+                format!("retried:{}", retry.body)
+            }
             PythonCallEvent::Succeeded { response, .. } => {
                 format!("succeeded:{}", response.bind(py))
             }
@@ -467,7 +470,7 @@ pub fn success_machine() -> MachineFactory {
                     .before_provider_request(wire(), context())
                     .await?;
                 host.interceptors
-                    .after_provider_response(RawResponse { body: "raw".into() })
+                    .after_provider_response(RawResponse::new("raw".into()))
                     .await?;
                 Ok(format!("{projected}|{signed}|{}", wire.url))
             })

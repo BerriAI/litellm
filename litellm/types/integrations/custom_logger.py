@@ -74,12 +74,16 @@ class AgenticLoopSafetyError(ValueError):
     Covers both rails: the bounded-loop cap (``max_agentic_loops``) and the
     repeated tool-call fingerprint cycle break. Subclasses ``ValueError`` so
     callers that already catch the broader type keep working.
-
-    Only the anthropic messages loop raises this today. The chat completions
-    loop in ``litellm_core_utils/chat_completion_agentic_loop.py`` still raises
-    a plain ``ValueError`` from its own copy of the same rails, so catching
-    this type alone will not cover that surface until it is moved over.
     """
+
+
+class AgenticLoopLimitError(AgenticLoopSafetyError):
+    pass
+
+
+class AgenticLoopToolChoiceError(AgenticLoopSafetyError):
+    def __init__(self, model: str) -> None:
+        super().__init__(f"The allowed_tools tool_choice excludes a tool call the model made, model={model}")
 
 
 class StandardCustomLoggerInitParams(LiteLLMBaseModel):
@@ -97,9 +101,9 @@ class AgenticLoopRequestPatch(LiteLLMBaseModel):
 
     model: str | None = None
     messages: list[dict[str, Any]] | None = None
-    tools: list[dict[str, Any]] | None = None
+    tools: list[dict[str, object]] | None = None
     max_tokens: int | None = None
-    optional_params: dict[str, Any] = Field(default_factory=dict)
+    optional_params: dict[str, object] = Field(default_factory=dict)
     kwargs: dict[str, Any] = Field(default_factory=dict)
 
 

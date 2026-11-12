@@ -1,17 +1,20 @@
+use litellm_host::raw_json;
 use litellm_llms_types::{
     formats::{
         chat_completions::ReasoningEffort,
         messages::{
-            EffortLevel, MessagesOptionalParams, MessagesRequest, OutputConfig, ThinkingConfig,
-            ThinkingDisplay,
+            AdaptiveThinking, DisabledThinking, EffortLevel, EnabledThinking,
+            MessagesOptionalParams, MessagesRequest, OutputConfig, ThinkingConfig, ThinkingDisplay,
         },
     },
     recognized::Recognized,
 };
-use litellm_python_compat::{json::from_json, repr::repr, truthy::truthy};
+use litellm_python_compat::{
+    Value as PythonValue, json::from_json, repr::repr, reprlib::reprlib, truthy::truthy,
+};
 use serde_json::Value;
-use strum::VariantArray;
 
+use super::scalar::{is_one, python_number, python_str, python_value};
 use crate::base_llm::messages::context::{
     MessagesModelCapabilities, ThinkingBudgets, ThinkingContext,
 };
@@ -36,16 +39,17 @@ fn budget_for_effort(budgets: &ThinkingBudgets, effort: ReasoningEffort) -> Opti
 
 fn effort_for_budget(
     budgets: &ThinkingBudgets,
-    budget_tokens: u64,
+    budget_tokens: i64,
     capabilities: &MessagesModelCapabilities,
 ) -> EffortLevel {
-    if budget_tokens >= budgets.xhigh && capabilities.effort_tiers.xhigh {
+    let reaches = |tier: u64| i128::from(budget_tokens) >= i128::from(tier);
+    if reaches(budgets.xhigh) && capabilities.effort_tiers.xhigh {
         return EffortLevel::Xhigh;
     }
-    if budget_tokens >= budgets.high {
+    if reaches(budgets.high) {
         return EffortLevel::High;
     }
-    if budget_tokens >= budgets.medium {
+    if reaches(budgets.medium) {
         return EffortLevel::Medium;
     }
     EffortLevel::Low
@@ -55,11 +59,59 @@ fn unmapped_effort(effort: &Value) -> Error {
     Error::InvalidRequest(crate::ErrorDetail::InvalidChoice {
         field: "reasoning effort",
         actual: repr(&from_json(effort.clone())),
-        choices: ReasoningEffort::VARIANTS
-            .iter()
-            .map(|effort| <&'static str>::from(*effort))
-            .collect(),
+        choices: vec!["minimal", "low", "medium", "high", "xhigh", "max", "none"],
     })
+}
+
+fn invalid_adaptive_effort(effort: &Value) -> Error {
+    Error::InvalidRequest(crate::ErrorDetail::InvalidReasoningEffort {
+        actual: repr(&from_json(effort.clone())),
+    })
+}
+
+const NON_STRING_EFFORT_REASON: &str = "it is not a string. Send reasoning_effort as a level name such as 'high' to set a reasoning level.";
+const NON_NUMERIC_BUDGET_REASON: &str =
+    "it is not a number. Send budget_tokens as an integer to set a reasoning level.";
+
+fn warn_dropped_reasoning(
+    param: &str,
+    value: &PythonValue,
+    model: &str,
+    reason: &str,
+    drop_params_gated: bool,
+) {
+    let gate = if drop_params_gated {
+        " (drop_params=True)"
+    } else {
+        ""
+    };
+    litellm_tracing::warn!(
+        "Dropping {param}={} for model={}{gate} because {reason}",
+        reprlib(value),
+        repr(&PythonValue::Str(model.to_owned()))
+    );
+}
+
+fn warn_non_string_reasoning_effort(effort: &Value, model: &str) {
+    let value = python_value(effort);
+    let requested = match &value {
+        PythonValue::Str(_) => return,
+        PythonValue::Dict(entries) => entries
+            .iter()
+            .find(|(key, _)| *key == PythonValue::Str("effort".to_owned()))
+            .map(|(_, level)| level),
+        other => Some(other),
+    };
+    if matches!(requested, None | Some(PythonValue::None)) {
+        return;
+    }
+    warn_dropped_reasoning(
+        "reasoning_effort",
+        &value,
+        model,
+        NON_STRING_EFFORT_REASON,
+        false,
+    );
 }
 
 fn unsupported_effort(level: EffortLevel, model: &str) -> Error {
@@ -81,11 +133,56 @@ fn output_effort(effort: ReasoningEffort) -> Option<EffortLevel> {
     }
 }
 
-fn fit_budget_to_max_tokens(budget_tokens: u64, max_tokens: Option<u64>) -> Option<u64> {
-    let Some(max_tokens) = max_tokens else {
-        return Some(budget_tokens);
+/// `cap_thinking_budget_to_max_tokens`, whose first comparison (`max_tokens <= 1024`) raises
+/// `TypeError` for a `max_tokens` Python cannot order against an int, such as a string.
+fn fit_budget_to_max_tokens(
+    budget_tokens: u64,
+    max_tokens: Option<&Recognized<u64>>,
+) -> Result<Option<Recognized<u64>>, Error> {
+    let max_tokens = match max_tokens {
+        None => return Ok(Some(Recognized::Known(budget_tokens))),
+        Some(Recognized::Known(max_tokens)) => *max_tokens,
+        Some(Recognized::Unrecognized(other)) => {
+            return fit_budget_to_python_number(budget_tokens, other);
+        }
     };
-    (max_tokens > ANTHROPIC_MIN_THINKING_BUDGET_TOKENS).then(|| budget_tokens.min(max_tokens - 1))
+    Ok((max_tokens > ANTHROPIC_MIN_THINKING_BUDGET_TOKENS)
+        .then(|| Recognized::Known(budget_tokens.min(max_tokens - 1))))
+}
+
+fn enabled_thinking(budget_tokens: Recognized<u64>) -> ThinkingConfig {
+    ThinkingConfig::Enabled(EnabledThinking {
+        budget_tokens: Some(budget_tokens),
+        ..EnabledThinking::default()
+    })
+}
+
+fn fit_budget_to_python_number(
+    budget_tokens: u64,
+    max_tokens: &Value,
+) -> Result<Option<Recognized<u64>>, Error> {
+    let Some(max_tokens) = python_number(max_tokens) else {
+        if max_tokens.is_null() {
+            return Ok(Some(Recognized::Known(budget_tokens)));
+        }
+        return Err(Error::InvalidRequest(
+            crate::ErrorDetail::UnorderableTypes {
+                op: "<=",
+                left: python_type_name(max_tokens),
+                right: "int",
+            },
+        ));
+    };
+    if max_tokens <= ANTHROPIC_MIN_THINKING_BUDGET_TOKENS as f64 {
+        return Ok(None);
+    }
+    if (budget_tokens as f64) < max_tokens {
+        return Ok(Some(Recognized::Known(budget_tokens)));
+    }
+    Ok(Some(Recognized::Unrecognized(
+        serde_json::Number::from_f64(max_tokens - 1.0)
+            .map_or_else(|| Value::String(raw_json::encode("NaN")), Value::Number),
+    )))
 }
 
 fn known_thinking(request: &MessagesRequest) -> Option<&ThinkingConfig> {
@@ -160,10 +257,17 @@ fn translate_reasoning_effort(
     };
     let effort = match reasoning_effort {
         Recognized::Known(effort) => effort,
-        Recognized::Unrecognized(value @ Value::String(_)) => {
-            return Err(unmapped_effort(&value));
+        Recognized::Unrecognized(value) if matches!(python_value(&value), PythonValue::Str(_)) => {
+            return Err(if context.capabilities.supports_adaptive_thinking {
+                invalid_adaptive_effort(&value)
+            } else {
+                unmapped_effort(&value)
+            });
         }
-        Recognized::Unrecognized(_) => return Ok(request),
+        Recognized::Unrecognized(value) => {
+            warn_non_string_reasoning_effort(&value, &request.model);
+            return Ok(request);
+        }
     };
     let (Some(level), Some(budget)) = (
         output_effort(effort),
@@ -171,7 +275,11 @@ fn translate_reasoning_effort(
     ) else {
         return Ok(MessagesRequest {
             params: MessagesOptionalParams {
-                thinking: None,
+                thinking: (context.capabilities.thinking_on_by_default
+                    && !context.capabilities.thinking_always_on)
+                    .then(|| {
+                        Recognized::Known(ThinkingConfig::Disabled(DisabledThinking::default()))
+                    }),
                 output_config: None,
                 ..request.params
             },
@@ -198,10 +306,20 @@ fn translate_reasoning_effort(
             ..request
         });
     }
-    let Some(budget) = fit_budget_to_max_tokens(budget, request.params.max_tokens) else {
+    let Some(budget) = fit_budget_to_max_tokens(budget, request.params.max_tokens.as_ref())? else {
+        litellm_tracing::warn!(
+            "Dropping `thinking` mapped from reasoning_effort={} for model={}: max_tokens={} is too small to fit the minimum thinking budget.",
+            <&'static str>::from(effort),
+            request.model,
+            request
+                .params
+                .max_tokens
+                .as_ref()
+                .map_or_else(|| "None".to_owned(), python_str)
+        );
         return Ok(request);
     };
-    let enabled = ThinkingConfig::enabled(budget);
+    let enabled = enabled_thinking(budget);
     Ok(MessagesRequest {
         params: MessagesOptionalParams {
             thinking: Some(
@@ -231,32 +349,138 @@ fn drop_disabled_thinking(request: MessagesRequest, context: &ThinkingContext) -
     }
 }
 
+/// `_numeric_budget_tokens`: Python reads any int, float (truncated) or int-parseable string
+/// as a budget, and nothing else.
+fn numeric_budget_tokens(budget: &Recognized<u64>) -> Option<i64> {
+    let value = match budget {
+        Recognized::Known(budget) => return Some(i64::try_from(*budget).unwrap_or(i64::MAX)),
+        Recognized::Unrecognized(value) => value,
+    };
+    match value {
+        Value::Number(number) => number
+            .as_i64()
+            .or_else(|| number.as_f64().map(|float| float.trunc() as i64)),
+        Value::String(text) => python_int(text),
+        Value::Null | Value::Bool(_) | Value::Array(_) | Value::Object(_) => None,
+    }
+}
+
+/// Python's `int(str)`: surrounding whitespace, a sign, and single underscores between digits.
+fn python_int(text: &str) -> Option<i64> {
+    let trimmed = text.trim();
+    let digits = trimmed.trim_start_matches(['+', '-']);
+    let well_formed = trimmed.len() - digits.len() <= 1
+        && !digits.is_empty()
+        && !digits.starts_with('_')
+        && !digits.ends_with('_')
+        && !digits.contains("__")
+        && digits.chars().all(|ch| ch.is_ascii_digit() || ch == '_');
+    if !well_formed {
+        return None;
+    }
+    let cleaned: String = trimmed.chars().filter(|ch| *ch != '_').collect();
+    cleaned.parse::<i64>().ok().or_else(|| {
+        Some(if cleaned.starts_with('-') {
+            i64::MIN
+        } else {
+            i64::MAX
+        })
+    })
+}
+
+fn python_type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "NoneType",
+        Value::Bool(_) => "bool",
+        Value::Number(number) if number.is_f64() => "float",
+        Value::Number(_) => "int",
+        Value::String(_) => "str",
+        Value::Array(_) => "list",
+        Value::Object(_) => "dict",
+    }
+}
+
+fn kept_display(
+    display: Option<&Recognized<ThinkingDisplay>>,
+    context: &ThinkingContext,
+) -> Option<Recognized<ThinkingDisplay>> {
+    match display? {
+        Recognized::Known(ThinkingDisplay::Summarized | ThinkingDisplay::Omitted) => {
+            display.cloned()
+        }
+        Recognized::Known(ThinkingDisplay::Updates) if context.keeps_display_updates => {
+            display.cloned()
+        }
+        Recognized::Known(ThinkingDisplay::Updates) | Recognized::Unrecognized(_) => None,
+    }
+}
+
+/// Keys Python's `carried_thinking_keys` keeps on the rebuilt adaptive config: the adaptive
+/// keys always, and any other key unless `drop_params` is set.
+fn carried_thinking_keys(
+    extra: &serde_json::Map<String, Value>,
+    context: &ThinkingContext,
+) -> serde_json::Map<String, Value> {
+    extra
+        .iter()
+        .filter(|(key, _)| key.as_str() == "block_binding" || !context.drop_params)
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
+}
+
+/// `AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model_silently`.
 fn translate_legacy_thinking_for_adaptive_model(
     request: MessagesRequest,
     context: &ThinkingContext,
-) -> MessagesRequest {
+) -> Result<MessagesRequest, Error> {
     let capabilities = &context.capabilities;
     if !capabilities.supports_adaptive_thinking || capabilities.supports_legacy_thinking {
-        return request;
+        return Ok(request);
     }
     let Some(ThinkingConfig::Enabled(enabled)) = known_thinking(&request) else {
-        return request;
+        return Ok(request);
     };
-    let budget = enabled
-        .budget_tokens
-        .as_ref()
-        .and_then(Recognized::known)
-        .copied()
-        .unwrap_or(0);
-    let level = effort_for_budget(&context.budgets, budget, capabilities);
-    MessagesRequest {
+    let budget = match &enabled.budget_tokens {
+        None => Some(0),
+        Some(budget) => numeric_budget_tokens(budget),
+    };
+    if budget.is_none() && !context.drop_params {
+        let actual = match &enabled.budget_tokens {
+            Some(Recognized::Unrecognized(value)) => python_type_name(value),
+            Some(Recognized::Known(_)) | None => "int",
+        };
+        return Err(Error::InvalidRequest(
+            crate::ErrorDetail::NonNumericThinkingBudget { actual },
+        ));
+    }
+    if let (None, Some(Recognized::Unrecognized(dropped))) = (budget, &enabled.budget_tokens) {
+        warn_dropped_reasoning(
+            "thinking.budget_tokens",
+            &python_value(dropped),
+            &request.model,
+            NON_NUMERIC_BUDGET_REASON,
+            true,
+        );
+    }
+    let thinking = ThinkingConfig::Adaptive(AdaptiveThinking {
+        display: kept_display(enabled.display.as_ref(), context),
+        extra: carried_thinking_keys(&enabled.extra, context),
+    });
+    let output_config = match budget {
+        Some(budget) => with_default_effort(
+            request.params.output_config,
+            effort_for_budget(&context.budgets, budget, capabilities),
+        ),
+        None => request.params.output_config,
+    };
+    Ok(MessagesRequest {
         params: MessagesOptionalParams {
-            thinking: Some(Recognized::Known(ThinkingConfig::adaptive(None))),
-            output_config: with_default_effort(request.params.output_config, level),
+            thinking: Some(Recognized::Known(thinking)),
+            output_config,
             ..request.params
         },
         ..request
-    }
+    })
 }
 
 fn translate_adaptive_effort_for_non_adaptive_model(
@@ -294,11 +518,20 @@ fn translate_adaptive_effort_for_non_adaptive_model(
     } else {
         None
     };
+    let thinking = match budget {
+        Some(budget) => fit_budget_to_max_tokens(budget, request.params.max_tokens.as_ref())?
+            .map(|budget| Recognized::Known(enabled_thinking(budget))),
+        None => None,
+    };
+    if thinking.is_none() {
+        litellm_tracing::warn!(
+            "Dropping adaptive `thinking`/`output_config.effort` for model={}: the model does not support extended thinking, or max_tokens is too small to fit the minimum thinking budget.",
+            request.model
+        );
+    }
     Ok(MessagesRequest {
         params: MessagesOptionalParams {
-            thinking: budget
-                .and_then(|budget| fit_budget_to_max_tokens(budget, request.params.max_tokens))
-                .map(|budget| Recognized::Known(ThinkingConfig::enabled(budget))),
+            thinking,
             output_config: without_effort(request.params.output_config),
             ..request.params
         },
@@ -316,7 +549,8 @@ fn drop_incompatible_temperature_for_thinking(
     let pinned = request
         .params
         .temperature
-        .is_some_and(|temperature| temperature != 1.0);
+        .as_ref()
+        .is_some_and(|temperature| !is_one(temperature));
     let thinking_enabled = matches!(known_thinking(&request), Some(ThinkingConfig::Enabled(_)));
     let effort_enabled = known_effort(&request).is_some();
     if !pinned || !(thinking_enabled || effort_enabled) {
@@ -337,7 +571,7 @@ pub fn translate_thinking(
 ) -> Result<MessagesRequest, Error> {
     let request = translate_reasoning_effort(request, context)?;
     let request = drop_disabled_thinking(request, context);
-    let request = translate_legacy_thinking_for_adaptive_model(request, context);
+    let request = translate_legacy_thinking_for_adaptive_model(request, context)?;
     let request = translate_adaptive_effort_for_non_adaptive_model(request, context)?;
     Ok(drop_incompatible_temperature_for_thinking(request, context))
 }
@@ -349,7 +583,7 @@ mod tests {
     use super::*;
     use crate::base_llm::messages::context::SupportedEffortTiers;
 
-    const EFFORT_CHOICES: &str = "'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'";
+    const EFFORT_CHOICES: &str = "'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'none'";
 
     fn request(fields: Value) -> MessagesRequest {
         let mut body = serde_json::json!({"model": "claude", "messages": [{"role": "user", "content": "Hello"}]});
@@ -363,6 +597,7 @@ mod tests {
         ThinkingContext {
             capabilities,
             budgets: ThinkingBudgets::default(),
+            ..ThinkingContext::default()
         }
     }
 
@@ -650,6 +885,33 @@ mod tests {
     }
 
     #[rstest]
+    #[case::default_thinking(true, false, Some(serde_json::json!({"type": "disabled"}))) ]
+    #[case::legacy(false, false, None)]
+    #[case::always_on(true, true, None)]
+    fn none_disables_only_optional_default_thinking(
+        #[case] thinking_on_by_default: bool,
+        #[case] thinking_always_on: bool,
+        #[case] thinking: Option<Value>,
+    ) {
+        let capabilities = MessagesModelCapabilities {
+            thinking_on_by_default,
+            thinking_always_on,
+            ..opus_4_7()
+        };
+        let expected = match thinking {
+            Some(thinking) => serde_json::json!({"max_tokens": 1024, "thinking": thinking}),
+            None => serde_json::json!({"max_tokens": 1024}),
+        };
+        assert_eq!(
+            translate(
+                capabilities,
+                serde_json::json!({"max_tokens": 1024, "reasoning_effort": "none"})
+            ),
+            Ok(request(expected))
+        );
+    }
+
+    #[rstest]
     #[case::adaptive_model(opus_4_7())]
     #[case::effort_capable_model(opus_4_5())]
     #[case::budget_model(haiku_4_5())]
@@ -689,17 +951,17 @@ mod tests {
     #[case::invalid_on_adaptive_model(
         opus_4_7(),
         serde_json::json!({"max_tokens": 1024, "reasoning_effort": "invalid"}),
-        format!("Unmapped reasoning effort: 'invalid'. Must be one of: {EFFORT_CHOICES}.")
+        format!("Invalid reasoning_effort: 'invalid'. Must be one of: {EFFORT_CHOICES}")
     )]
     #[case::disabled_on_adaptive_model(
         opus_4_7(),
         serde_json::json!({"max_tokens": 1024, "reasoning_effort": "disabled"}),
-        format!("Unmapped reasoning effort: 'disabled'. Must be one of: {EFFORT_CHOICES}.")
+        format!("Invalid reasoning_effort: 'disabled'. Must be one of: {EFFORT_CHOICES}")
     )]
     #[case::empty_on_adaptive_model(
         opus_4_7(),
         serde_json::json!({"max_tokens": 1024, "reasoning_effort": ""}),
-        format!("Unmapped reasoning effort: ''. Must be one of: {EFFORT_CHOICES}.")
+        format!("Invalid reasoning_effort: ''. Must be one of: {EFFORT_CHOICES}")
     )]
     #[case::xhigh_without_xhigh_tier_on_4_6(
         sonnet_4_6(),
@@ -1239,10 +1501,130 @@ mod tests {
         let context = ThinkingContext {
             capabilities,
             budgets: overridden_budgets(overrides),
+            ..ThinkingContext::default()
         };
         assert_eq!(
             translate_thinking(request(input), &context),
             Ok(request(expected))
+        );
+    }
+
+    use serde_json::json;
+
+    fn legacy_context(drop_params: bool, keeps_display_updates: bool) -> ThinkingContext {
+        ThinkingContext {
+            drop_params,
+            keeps_display_updates,
+            ..context(opus_4_7())
+        }
+    }
+
+    #[rstest]
+    #[case::float_budget(json!(8192.0), "xhigh")]
+    #[case::float_below_a_tier(json!(1023.9), "low")]
+    #[case::string_budget(json!(" 16_000 "), "xhigh")]
+    #[case::negative_budget(json!(-5), "low")]
+    fn legacy_budgets_read_like_python_numbers(#[case] budget: Value, #[case] effort: &str) {
+        let translated = translate_thinking(
+            request(
+                json!({"max_tokens": 64000, "thinking": {"type": "enabled", "budget_tokens": budget}}),
+            ),
+            &legacy_context(false, false),
+        );
+        assert_eq!(
+            translated,
+            Ok(request(json!({
+                "max_tokens": 64000,
+                "thinking": {"type": "adaptive"},
+                "output_config": {"effort": effort},
+            })))
+        );
+    }
+
+    #[rstest]
+    #[case::text(json!("lots"), "str")]
+    #[case::list(json!([1]), "list")]
+    #[case::null(Value::Null, "NoneType")]
+    #[case::boolean(json!(true), "bool")]
+    fn a_non_numeric_legacy_budget_is_rejected_unless_dropped(
+        #[case] budget: Value,
+        #[case] actual: &'static str,
+    ) {
+        let fields =
+            json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": budget}});
+        assert_eq!(
+            translate_thinking(request(fields.clone()), &legacy_context(false, false)),
+            Err(Error::InvalidRequest(
+                crate::ErrorDetail::NonNumericThinkingBudget { actual }
+            ))
+        );
+        assert_eq!(
+            translate_thinking(request(fields), &legacy_context(true, false)),
+            Ok(request(
+                json!({"max_tokens": 8192, "thinking": {"type": "adaptive"}})
+            ))
+        );
+    }
+
+    #[rstest]
+    #[case::reasoning_effort(json!({"max_tokens": "8192", "reasoning_effort": "high"}), "str")]
+    #[case::caller_thinking(
+        json!({"max_tokens": "8192", "reasoning_effort": "low", "thinking": {"type": "enabled", "budget_tokens": 2048}}),
+        "str"
+    )]
+    #[case::adaptive_interface(
+        json!({"max_tokens": "8192", "thinking": {"type": "adaptive"}, "output_config": {"effort": "high"}}),
+        "str"
+    )]
+    #[case::list(json!({"max_tokens": [8192], "reasoning_effort": "high"}), "list")]
+    fn an_unorderable_max_tokens_raises_python_type_error_while_capping_the_budget(
+        haiku_4_5: MessagesModelCapabilities,
+        #[case] fields: Value,
+        #[case] left: &'static str,
+    ) {
+        assert_eq!(
+            translate(haiku_4_5, fields),
+            Err(Error::InvalidRequest(
+                crate::ErrorDetail::UnorderableTypes {
+                    op: "<=",
+                    left,
+                    right: "int",
+                }
+            ))
+        );
+    }
+
+    #[rstest]
+    #[case::summarized("summarized", false, Some("summarized"))]
+    #[case::updates_kept("updates", true, Some("updates"))]
+    #[case::updates_dropped("updates", false, None)]
+    #[case::unknown("verbose", true, None)]
+    fn legacy_display_survives_only_where_python_keeps_it(
+        #[case] display: &str,
+        #[case] keeps_display_updates: bool,
+        #[case] kept: Option<&str>,
+    ) {
+        let translated = translate_thinking(
+            request(json!({"max_tokens": 4096, "thinking": {"type": "enabled", "budget_tokens": 2048, "display": display}})),
+            &legacy_context(false, keeps_display_updates),
+        )
+        .unwrap();
+        let thinking = serde_json::to_value(translated.params.thinking).unwrap();
+        assert_eq!(thinking.get("display").and_then(Value::as_str), kept);
+    }
+
+    #[rstest]
+    #[case::kept(false, json!({"type": "adaptive", "block_binding": "strict", "note": "x"}))]
+    #[case::dropped(true, json!({"type": "adaptive", "block_binding": "strict"}))]
+    fn legacy_extra_keys_follow_drop_params(#[case] drop_params: bool, #[case] expected: Value) {
+        let translated = translate_thinking(
+            request(json!({"max_tokens": 4096, "thinking": {"type": "enabled", "budget_tokens": 2048, "block_binding": "strict", "note": "x"}})),
+            &legacy_context(drop_params, false),
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(translated.params.thinking).unwrap(),
+            expected
         );
     }
 }

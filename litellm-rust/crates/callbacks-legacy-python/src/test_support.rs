@@ -53,7 +53,7 @@ def setup(call_type, args, kwargs, start, asynchronous):
 
 FAKES = {
     'setup': setup,
-    'finalize': lambda response, logger, kwargs, start, end: logger.record('finalize', response),
+    'finalize': lambda response, logger, kwargs, start, end, cache_hit: logger.record('finalize', response),
     'update_logging': lambda logger, kwargs, model, optional_params, litellm_params, provider: logger.update_from_kwargs(
         kwargs=kwargs,
         model=model,
@@ -62,11 +62,27 @@ FAKES = {
         custom_llm_provider=provider,
     ),
     'pre_call': lambda logger, input, api_key, additional_args: logger.pre_call(input, api_key, additional_args),
+    'messages_input': lambda body, kwargs: [{'role': 'user', 'content': json.dumps(body)}],
     'post_call': lambda logger, original_response, api_key, additional_args: logger.post_call(
         original_response, api_key, additional_args
     ),
+    'record_response': lambda logger, status, headers, body, sent: logger.model_call_details.update(
+        response_headers=dict(headers)
+    ),
+    'retried_request': lambda logger, logged_body, body, reasons: (
+        logger.record('retried_request', (logged_body, body, reasons)),
+        'awaitable',
+    )[1],
+    'record_api_window': lambda logger, start, end: logger.model_call_details.update(
+        llm_api_duration_ms=(end - start) * 1000
+    ),
+    'times_provider_exchange': lambda client, timeout: client is None,
     'defers_async_logging': lambda logger: bool(getattr(logger, '_defer_async_logging', False)),
-    'defer_success': lambda logger, pending: setattr(logger, '_native_pending_logging', pending),
+    'claim_async_success_log': lambda logger: logger.claim_async_success_log(),
+    'defer_success': lambda logger, pending, response, start, end: (
+        setattr(logger, 'deferred_success_result', (response, start, end)),
+        setattr(logger, 'enqueue_deferred_logging', pending),
+    ),
     'sync_success_for_async_call': lambda logger, response, start, end: logger.handle_sync_success_callbacks_for_async_calls(
         response, start, end
     ),
@@ -75,6 +91,8 @@ FAKES = {
     )(error, ''.join(traceback.format_exception(error)), start, end),
     'submit_success': lambda logger, response, start, end: logger.record('submit', (response, start, end)),
     'async_success_handler': lambda logger, response, start, end: logger.async_success_handler(response, start, end),
+    'cache_hit_success': lambda logger, response, start, end: logger.record('cache_hit_success', response),
+    'mark_async_success_enqueued': lambda logger: logger.record('mark_async_success_enqueued', None),
     'enqueue_logging': lambda coroutine: coroutine.enqueue(),
     'restore_context': lambda logger: logger.record('restore', None),
     'custom_pricing_fields': lambda: ('ocr_cost_per_page',),
@@ -84,8 +102,9 @@ FAKES = {
         'success', response, call_type
     ),
     'after_deployment_failure': lambda kwargs, error, call_type: kwargs['logger'].hook('failure', error, call_type),
-    'stream_opened': lambda logger, head: logger.record('stream_opened', head),
-    'stream_success': lambda logger, url_route, endpoint_type, request_body, chunks, start, end, first_chunk: logger.record(
+    'stream_opened': lambda logger, head, keeps_requested: logger.record('stream_opened', head),
+    'stamp_stream_head': lambda head, logger, kwargs, start, end, cache_hit: logger.record('stamp_stream_head', head),
+    'stream_success': lambda logger, url_route, endpoint_type, request_body, chunks, start, end, first_chunk, stream_teardown: logger.record(
         'stream_success', list(chunks)
     ),
     'stream_failure': lambda logger, endpoint_type, request_body, chunks, error: logger.record('stream_failure', error),
@@ -122,6 +141,7 @@ class StubCoroutine:
 class StubLogger:
     def __init__(self):
         self.calls = []
+        self.model_call_details = {}
         self.hooks = {}
         self.on_enqueue = lambda coroutine: None
 
@@ -148,6 +168,10 @@ class StubLogger:
     def async_success_handler(self, response, start, end):
         self.record('async_success_handler', response)
         return StubCoroutine(self)
+
+    def claim_async_success_log(self):
+        claimed, self.claimed = getattr(self, 'claimed', False), True
+        return not claimed
 
     def handle_sync_success_callbacks_for_async_calls(self, response, start, end):
         self.record('sync_success_for_async_call', response)

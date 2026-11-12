@@ -71,6 +71,12 @@ impl Router {
             .model_list
             .iter()
             .map(|model| {
+                let drop_params = drops_params_globally
+                    || model
+                        .litellm_params
+                        .drop_params
+                        .as_ref()
+                        .is_some_and(|flag| is_on(flag, env));
                 (
                     model.model_name.clone(),
                     Deployment {
@@ -86,12 +92,8 @@ impl Router {
                         drops_params_globally,
                         shaping: MessagesShaping {
                             settings: MessagesSettings {
-                                drop_params: drops_params_globally
-                                    || model
-                                        .litellm_params
-                                        .drop_params
-                                        .as_ref()
-                                        .is_some_and(|flag| is_on(flag, env)),
+                                drop_params,
+                                drops_unsupported_params: drop_params,
                                 reasoning_auto_summary,
                                 additional_drop_params: model
                                     .litellm_params
@@ -100,6 +102,7 @@ impl Router {
                                     .map(deployment::drop_paths)
                                     .unwrap_or_default(),
                                 request_timeout,
+                                ..MessagesSettings::default()
                             },
                             ..MessagesShaping::default()
                         },
@@ -180,12 +183,13 @@ mod tests {
         #[case] deployment: &str,
         #[case] expected: bool,
     ) {
+        let settings = configured(settings, deployment, &[("DROP_PARAMS_FLAG", " Yes ")])
+            .shaping
+            .settings;
+
         assert_eq!(
-            configured(settings, deployment, &[("DROP_PARAMS_FLAG", " Yes ")])
-                .shaping
-                .settings
-                .drop_params,
-            expected
+            (settings.drop_params, settings.drops_unsupported_params),
+            (expected, expected)
         );
     }
 
@@ -216,13 +220,17 @@ mod tests {
             .collect();
         let deployment = configured(settings, "", &env);
 
+        let requested_off = deployment
+            .shaping_for(&request(json!({"drop_params": false})))
+            .settings;
+
         assert_eq!(deployment.shaping.settings.drop_params, expected);
         assert_eq!(
-            deployment
-                .shaping_for(&request(json!({"drop_params": false})))
-                .settings
-                .drop_params,
-            expected
+            (
+                requested_off.drop_params,
+                requested_off.drops_unsupported_params
+            ),
+            (expected, expected)
         );
     }
 
@@ -334,12 +342,13 @@ mod tests {
         #[case] body: Value,
         #[case] expected: bool,
     ) {
+        let shaped = configured(settings, params, &[])
+            .shaping_for(&request(body))
+            .settings;
+
         assert_eq!(
-            configured(settings, params, &[])
-                .shaping_for(&request(body))
-                .settings
-                .drop_params,
-            expected
+            (shaped.drop_params, shaped.drops_unsupported_params),
+            (expected, expected)
         );
     }
 

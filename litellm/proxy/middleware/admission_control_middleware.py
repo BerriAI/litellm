@@ -3,13 +3,14 @@ import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Annotated, Final, Protocol, TypeAlias, runtime_checkable
+from typing import Annotated, Final, Literal, Protocol, TypeAlias, runtime_checkable
 
 from pydantic import Field, TypeAdapter, ValidationError
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy.common_utils.anthropic_error_payload import route_error_content
 
 ADMISSION_LEASE_SCOPE_KEY: Final = "litellm.admission_lease"
 
@@ -132,6 +133,12 @@ class AdmissionControlState:
         return self._metrics
 
 
+class _RoutedScope(Protocol):
+    def __getitem__(self, key: Literal["path"], /) -> str: ...
+
+    def get(self, key: Literal["root_path"], default: str, /) -> str: ...
+
+
 class _AdmissionLease:
     def __init__(self, state: AdmissionControlState) -> None:
         self.state: Final = state
@@ -175,7 +182,7 @@ class AdmissionControlMiddleware:
             state.record_admission()
         elif state.get_stats().queued >= settings.max_queued_requests:
             state.record_rejection("queue_full")
-            await _overloaded_response(state)(scope, receive, send)
+            await _overloaded_response(state, scope)(scope, receive, send)
             return
         else:
             state.record_queue()
@@ -187,7 +194,7 @@ class AdmissionControlMiddleware:
             except asyncio.TimeoutError:
                 state.record_dequeue()
                 state.record_rejection("queue_timeout")
-                await _overloaded_response(state)(scope, receive, send)
+                await _overloaded_response(state, scope)(scope, receive, send)
                 return
             except asyncio.CancelledError:
                 state.record_dequeue()
@@ -206,7 +213,7 @@ class AdmissionControlMiddleware:
             state.record_release()
 
 
-def _get_route_path(scope: Scope) -> str:
+def _get_route_path(scope: _RoutedScope) -> str:
     """Strip the ASGI root_path (SERVER_ROOT_PATH) the same way Starlette does before route matching."""
     path: Final[str] = scope["path"]
     root_path: Final[str] = scope.get("root_path", "")
@@ -313,18 +320,16 @@ def get_admission_control_settings(settings: Mapping[str, object]) -> AdmissionC
     )
 
 
-def _overloaded_response(state: AdmissionControlState) -> JSONResponse:
+def _overloaded_response(state: AdmissionControlState, scope: Scope) -> JSONResponse:
     stats: Final = state.get_stats()
+    message: Final = f"Worker at capacity: {stats.admitted} in-flight, {stats.queued} queued requests. Retry later."
     return JSONResponse(
         status_code=503,
         headers={"retry-after": "1"},
-        content={
-            "error": {
-                "message": (
-                    f"Worker at capacity: {stats.admitted} in-flight, {stats.queued} queued requests. Retry later."
-                ),
-                "type": "overloaded_error",
-                "code": "503",
-            }
-        },
+        content=route_error_content(
+            scope,
+            "overloaded_error",
+            message,
+            {"error": {"message": message, "type": "overloaded_error", "code": "503"}},
+        ),
     )

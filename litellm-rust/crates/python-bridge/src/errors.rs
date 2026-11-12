@@ -3,7 +3,7 @@ use std::error::Error as StdError;
 use litellm_error::Report;
 use litellm_inference::Error;
 use pyo3::{
-    exceptions::{PyRuntimeError, PyValueError},
+    exceptions::{PyRuntimeError, PyTypeError, PyValueError},
     prelude::*,
 };
 use reqwest::header::HeaderMap;
@@ -23,6 +23,50 @@ pyo3::create_exception!(
 );
 
 const MESSAGES_REQUEST_ERROR: &str = "messages_request_error";
+/// The rejection is a parameter the model does not support, which Python raises as
+/// `UnsupportedParamsError`.
+const MESSAGES_UNSUPPORTED_PARAM: &str = "messages_unsupported_param";
+/// The phase label (`Connection` or `Read`) of a timed-out call, for Python's timeout text, or
+/// `Body` for a streamed body read that timed out after the head arrived.
+const MESSAGES_TIMEOUT: &str = "messages_timeout";
+// `(received, expected, reset)` of a streamed body the connection ended early.
+const MESSAGES_BODY_CUT: &str = "messages_body_cut";
+/// No credential reached the provider, which Python raises as `AuthenticationError`.
+const MESSAGES_MISSING_CREDENTIAL: &str = "messages_missing_credential";
+/// Python refuses the request only once its logger knows the resolved model and provider (the
+/// provider config's request transform), so the failure logs them.
+const MESSAGES_LATE_REJECTION: &str = "messages_late_rejection";
+/// Python's request transform raises a builtin exception (`TypeError`) that its handler does not
+/// map, so the caller gets the native exception as it is.
+const MESSAGES_PYTHON_RAISED: &str = "messages_python_raised";
+/// The text of a refusal Python's provider config raises from its request transform, which its
+/// HTTP handler maps as a provider error.
+const MESSAGES_PROVIDER_REJECTION: &str = "messages_provider_rejection";
+
+fn provider_rejection(rejection: &(dyn StdError + 'static)) -> Option<String> {
+    match rejection.downcast_ref::<litellm_llms::Error>() {
+        Some(litellm_llms::Error::MissingField("max_tokens")) => {
+            return Some("max_tokens is required for Anthropic /v1/messages API".to_owned());
+        }
+        Some(_) => return None,
+        None => {}
+    }
+    match rejection.downcast_ref::<litellm_llms::ErrorDetail>() {
+        Some(
+            detail @ litellm_llms::ErrorDetail::InvalidChoice {
+                field: "reasoning effort",
+                ..
+            },
+        ) => Some(format!("litellm.BadRequestError: {detail}")),
+        Some(
+            detail @ (litellm_llms::ErrorDetail::InvalidReasoningEffort { .. }
+            | litellm_llms::ErrorDetail::UnsupportedValue {
+                field: "effort", ..
+            }),
+        ) => Some(detail.to_string()),
+        _ => None,
+    }
+}
 
 pub(crate) fn upstream_error(
     py: Python<'_>,
@@ -77,18 +121,79 @@ pub(crate) fn route_failure(
     if let Some(raised) = crate::secrets::python_error(py, &error) {
         return Ok(raised);
     }
+    if let Some(raised) = crate::routes::messages::workload_identity::python_error(py, &error) {
+        return Ok(raised);
+    }
     if let Some((status, body)) = error.upstream_response() {
-        return public(upstream_error(py, status, body, &HeaderMap::new())?);
+        let headers = error
+            .upstream_headers()
+            .iter()
+            .filter_map(|(name, value)| {
+                Some((
+                    reqwest::header::HeaderName::from_bytes(name.as_bytes()).ok()?,
+                    reqwest::header::HeaderValue::from_str(value).ok()?,
+                ))
+            })
+            .collect::<HeaderMap>();
+        return public(upstream_error(py, status, body, &headers)?);
     }
     let native = match (marker, error.rejected_request()) {
-        (RequestMarker::Messages, Some(rejection)) => {
-            let native = PyValueError::new_err(Report::new(rejection).to_string());
-            native.value(py).setattr(MESSAGES_REQUEST_ERROR, true)?;
+        (RequestMarker::Messages, Some(rejection))
+            if matches!(
+                rejection.downcast_ref::<litellm_llms::ErrorDetail>(),
+                Some(litellm_llms::ErrorDetail::UnorderableTypes { .. })
+            ) =>
+        {
+            let native = PyTypeError::new_err(rejection.to_string());
+            let value = native.value(py);
+            value.setattr(MESSAGES_LATE_REJECTION, true)?;
+            value.setattr(MESSAGES_PYTHON_RAISED, true)?;
             native
         }
-        (RequestMarker::Messages, None) | (RequestMarker::Unmarked, _) => {
-            by_fault(error.is_request(), &error)
+        (RequestMarker::Messages, Some(rejection)) => {
+            let native = PyValueError::new_err(Report::new(rejection).to_string());
+            let value = native.value(py);
+            value.setattr(MESSAGES_REQUEST_ERROR, true)?;
+            if matches!(
+                rejection.downcast_ref::<litellm_llms::ErrorDetail>(),
+                Some(
+                    litellm_llms::ErrorDetail::UnsupportedParameter { .. }
+                        | litellm_llms::ErrorDetail::NonNumericThinkingBudget { .. }
+                )
+            ) {
+                value.setattr(MESSAGES_UNSUPPORTED_PARAM, true)?;
+            }
+            if matches!(
+                rejection.downcast_ref::<litellm_llms::ErrorDetail>(),
+                Some(litellm_llms::ErrorDetail::NonNumericThinkingBudget { .. })
+            ) {
+                value.setattr(MESSAGES_LATE_REJECTION, true)?;
+            }
+            if let Some(text) = provider_rejection(rejection) {
+                value.setattr(MESSAGES_PROVIDER_REJECTION, text)?;
+            }
+            native
         }
+        (RequestMarker::Messages, None) => {
+            let native = by_fault(error.is_request(), &error);
+            let value = native.value(py);
+            if let Some(connect) = error.timeout() {
+                let phase = match (connect, error.body_read_timeout()) {
+                    (true, _) => "Connection",
+                    (false, true) => "Body",
+                    (false, false) => "Read",
+                };
+                value.setattr(MESSAGES_TIMEOUT, phase)?;
+            }
+            if let Some(cut) = error.body_cut() {
+                value.setattr(MESSAGES_BODY_CUT, (cut.received, cut.expected, cut.reset))?;
+            }
+            if error.is_missing_credential() {
+                value.setattr(MESSAGES_MISSING_CREDENTIAL, true)?;
+            }
+            native
+        }
+        (RequestMarker::Unmarked, _) => by_fault(error.is_request(), &error),
     };
     public(native)
 }
@@ -265,6 +370,72 @@ mod tests {
             let failure = route_error_to_pyerr(error);
             assert_eq!(failure.value(py).to_string(), report);
             assert!(report.contains("hook backend down"), "{report}");
+        });
+    }
+
+    #[rstest::rstest]
+    #[case::missing_max_tokens(
+        litellm_llms::Error::MissingField("max_tokens").into(),
+        Some("max_tokens is required for Anthropic /v1/messages API")
+    )]
+    #[case::unmapped_effort(
+        Error::invalid_request(litellm_llms::ErrorDetail::InvalidChoice {
+            field: "reasoning effort",
+            actual: "'ultra'".into(),
+            choices: vec!["low", "none"],
+        }),
+        Some("litellm.BadRequestError: Unmapped reasoning effort: 'ultra'. Must be one of: 'low', 'none'.")
+    )]
+    #[case::other_missing_field(litellm_llms::Error::MissingField("model").into(), None)]
+    #[case::unsupported_param(
+        Error::invalid_request(litellm_llms::ErrorDetail::UnsupportedParameter {
+            model: "claude".into(),
+            param: "top_k".into(),
+            value: "5".into(),
+            hint: String::new(),
+        }),
+        None
+    )]
+    fn provider_config_rejections_carry_python_text(
+        #[case] error: Error,
+        #[case] expected: Option<&str>,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let native = route_failure(py, error, RequestMarker::Messages, Ok).unwrap();
+            let text = native
+                .value(py)
+                .getattr_opt(MESSAGES_PROVIDER_REJECTION)
+                .unwrap()
+                .map(|value| value.extract::<String>().unwrap());
+            assert_eq!(text.as_deref(), expected);
+        });
+    }
+
+    #[test]
+    fn an_unorderable_comparison_raises_python_type_error_as_it_is() {
+        Python::initialize();
+        Python::attach(|py| {
+            let error = Error::invalid_request(litellm_llms::ErrorDetail::UnorderableTypes {
+                op: "<=",
+                left: "str",
+                right: "int",
+            });
+            let native = route_failure(py, error, RequestMarker::Messages, Ok).unwrap();
+            assert!(native.is_instance_of::<PyTypeError>(py));
+            let value = native.value(py);
+            assert_eq!(
+                value.str().unwrap().to_string(),
+                "'<=' not supported between instances of 'str' and 'int'"
+            );
+            assert!(value.getattr_opt(MESSAGES_PYTHON_RAISED).unwrap().is_some());
+            assert!(
+                value
+                    .getattr_opt(MESSAGES_LATE_REJECTION)
+                    .unwrap()
+                    .is_some()
+            );
+            assert!(value.getattr_opt(MESSAGES_REQUEST_ERROR).unwrap().is_none());
         });
     }
 
