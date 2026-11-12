@@ -1,3 +1,4 @@
+import { formatCurrency } from "@/i18n/formats";
 import i18n from "@/i18n/i18n";
 import { toast } from "@/lib/toast";
 
@@ -62,8 +63,17 @@ export const getSpendString = (value: number | null | undefined, decimals: numbe
   return `$${formatNumberWithCommas(value, decimals, false, false)}`;
 };
 
+const PER_MILLION_COST_FORMAT: Intl.NumberFormatOptions = {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+  useGrouping: false,
+};
+
+export const formatPerMillionCost = (cost: string): string =>
+  formatCurrency(Number(cost), "en-US", PER_MILLION_COST_FORMAT);
+
 export const formatPerSecondCost = (cost: number): string =>
-  `$${cost.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 6 })}/s`;
+  `${formatCurrency(cost, "en-US", { minimumFractionDigits: 2, maximumFractionDigits: 6 })}/s`;
 
 export const copyToClipboard = async (
   text: string | null | undefined,

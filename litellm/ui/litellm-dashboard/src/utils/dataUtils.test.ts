@@ -5,6 +5,7 @@ import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import {
   copyToClipboard,
   formatNumberWithCommas,
+  formatPerMillionCost,
   formatPerSecondCost,
   getSpendString,
   updateExistingKeys,
@@ -149,6 +150,13 @@ describe("dataUtils", () => {
       it("still reports spend that rounds to zero as below the threshold", () => {
         expect(getSpendString(0.0000004, 6)).toBe("< $0.000001");
       });
+    });
+  });
+
+  describe("formatPerMillionCost", () => {
+    it("should keep the two decimals and the ungrouped digits the cost string has", () => {
+      expect(formatPerMillionCost("2.50")).toBe("$2.50");
+      expect(formatPerMillionCost("1234.57")).toBe("$1234.57");
     });
   });
 

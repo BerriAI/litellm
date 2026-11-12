@@ -1,9 +1,11 @@
 #### Analytics Endpoints #####
 import os
+import re
 from typing import Final
 
 from fastapi import APIRouter
 
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy.common_utils.claude_code_marketplace_auth import marketplace_auth_required
 from litellm.proxy.common_utils.html_forms.default_credentials_hint import should_hide_default_credentials_hint
 from litellm.proxy.mcp_server.stdio_gate import is_mcp_stdio_enabled
@@ -12,6 +14,22 @@ from litellm.types.proxy.discovery_endpoints.ui_discovery_endpoints import (
 )
 
 router: Final = APIRouter()
+
+DEFAULT_UI_CURRENCY: Final = "USD"
+
+
+def _ui_currency() -> str:
+    raw: Final = os.getenv("LITELLM_UI_CURRENCY", "").strip()
+    if not raw:
+        return DEFAULT_UI_CURRENCY
+    if re.fullmatch("[A-Za-z]{3}", raw):
+        return raw.upper()
+    verbose_proxy_logger.warning(
+        "LITELLM_UI_CURRENCY=%r is not a 3-letter ISO 4217 code, the Admin UI shows %s instead",
+        raw,
+        DEFAULT_UI_CURRENCY,
+    )
+    return DEFAULT_UI_CURRENCY
 
 
 @router.get("/.well-known/litellm-ui-config", response_model=UiDiscoveryEndpoints)
@@ -52,5 +70,6 @@ async def get_ui_config():
         workers=proxy_config.worker_registry if is_control_plane else [],
         mcp_stdio_enabled=is_mcp_stdio_enabled(),
         use_si_terminology=use_si_terminology,
+        currency=_ui_currency(),
         claude_code_marketplace_auth_required=marketplace_auth_required(),
     )

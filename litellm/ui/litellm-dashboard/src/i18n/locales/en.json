@@ -19880,8 +19880,8 @@
     "followsCostMap": "Follows the model cost map",
     "customPricing": "Custom pricing",
     "overridesCostMap": "Overrides the model cost map for {{fields}}",
-    "inputPerMillion": "Input: ${{cost}}/1M tokens",
-    "outputPerMillion": "Output: ${{cost}}/1M tokens",
+    "inputPerMillion": "Input: {{cost}}/1M tokens",
+    "outputPerMillion": "Output: {{cost}}/1M tokens",
     "outputPerSecond": "Output: {{cost}}",
     "outputPerSecondTier": "Output ({{resolution}}): {{cost}}"
   },

@@ -4,6 +4,7 @@ import { getProxyBaseUrl } from "@/components/networking";
 import type { AgentCard, ModelGroupInfo } from "@/components/PublicModelHubTableColumns";
 import { getProviderLogoAndName } from "@/components/provider_info_helpers";
 import { displayMode } from "@/lib/decisionModels";
+import { formatCurrency } from "@/i18n/formats";
 import i18n from "@/i18n/i18n";
 
 export const SECTION_TITLE = "text-[15px] leading-[22px] font-semibold";
@@ -40,18 +41,14 @@ export const formatTokens = (tokens: number | null | undefined): string => {
 };
 
 const PER_MILLION_FORMAT: Intl.NumberFormatOptions = {
-  style: "currency",
-  currency: "USD",
   minimumFractionDigits: 2,
   maximumFractionDigits: 4,
   useGrouping: false,
 };
 
-const PER_MILLION = new Intl.NumberFormat("en-US", PER_MILLION_FORMAT);
-
 export const formatPerMillion = (cost: number | null | undefined): string => {
   if (cost === 0) return i18n.t("publicModelHub.format.free");
-  return cost ? PER_MILLION.format(cost * 1_000_000) : "-";
+  return cost ? formatCurrency(cost * 1_000_000, "en-US", PER_MILLION_FORMAT) : "-";
 };
 
 export const providerName = (provider: string): string =>

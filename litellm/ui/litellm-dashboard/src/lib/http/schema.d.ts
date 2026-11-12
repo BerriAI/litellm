@@ -50507,6 +50507,11 @@ export interface components {
              * @default false
              */
             claude_code_marketplace_auth_required: boolean;
+            /**
+             * Currency
+             * @default USD
+             */
+            currency: string;
             /** Gateway Base Url */
             gateway_base_url?: string | null;
             /**

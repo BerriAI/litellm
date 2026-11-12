@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { cachedFormat } from "./formats";
+import { cachedFormat, formatCurrency, setDisplayCurrency } from "./formats";
 import i18n from "./i18n";
 import en from "./locales/en.json";
 
@@ -23,6 +23,7 @@ const useLanguage = async (language: string) => {
 };
 
 afterEach(async () => {
+  setDisplayCurrency(undefined);
   await i18n.changeLanguage("en");
   ["de", "zh-CN", "ja", "fr", "en-GB"].forEach((language) => i18n.removeResourceBundle(language, "translation"));
 });
@@ -127,5 +128,35 @@ describe("format keys in another UI language", () => {
     expect(shown).not.toBe(
       new Intl.NumberFormat(language, { style: "currency", currency: localCurrency }).format(1234.5),
     );
+  });
+});
+
+describe("display currency set by the proxy", () => {
+  it("shows US dollars when the proxy names no currency", () => {
+    expect(i18n.t("format.usd", { val: 1234.5 })).toBe("$1,234.50");
+    expect(formatCurrency(0.5, "en-US", {})).toBe("$0.50");
+  });
+
+  it.each(["EUR", "eur"])("shows euros everywhere money is formatted once %s is configured", (code) => {
+    expect(i18n.t("format.usd", { val: 1234.5 })).toBe("$1,234.50");
+    setDisplayCurrency(code);
+    expect(i18n.t("format.usd", { val: 1234.5 })).toBe("€1,234.50");
+    expect(i18n.t("format.number", { val: 1234.5, style: "currency", currency: "USD" })).toBe("€1,234.50");
+    expect(i18n.t("format.compactNumber", { val: 1_234_567, style: "currency" })).toBe("€1.2M");
+    expect(formatCurrency(0.5, "en-US", {})).toBe("€0.50");
+  });
+
+  it("formats the configured currency the way the selected UI language writes it", async () => {
+    setDisplayCurrency("EUR");
+    await useLanguage("de");
+    expect(i18n.t("format.usd", { val: 1234.5 })).toBe(
+      new Intl.NumberFormat("de", { style: "currency", currency: "EUR" }).format(1234.5),
+    );
+  });
+
+  it.each(["EURO", "€", "E1", "", null, undefined])("falls back to US dollars for %j", (code) => {
+    setDisplayCurrency("EUR");
+    setDisplayCurrency(code);
+    expect(i18n.t("format.usd", { val: 1234.5 })).toBe("$1,234.50");
   });
 });

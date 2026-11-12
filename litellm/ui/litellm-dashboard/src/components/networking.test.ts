@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { clearTokenCookies } from "@/utils/cookieUtils";
 import * as Networking from "./networking";
+import { formatCurrency, setDisplayCurrency } from "@/i18n/formats";
 import { uiHref } from "@/utils/uiHref";
 
 vi.mock("@/utils/cookieUtils", () => ({
@@ -334,6 +335,22 @@ describe("UI config and public endpoints", () => {
     expect(publicEndpointCall).toBeDefined();
     const calledUrl = publicEndpointCall![0] as string;
     expect(calledUrl).toBe("https://example.com/api/v1/public/mcp_hub");
+  });
+
+  it("shows money in the currency the proxy reports, and in US dollars when it reports none", async () => {
+    try {
+      setupMockFetch([
+        { url: "/litellm/.well-known/litellm-ui-config", data: { server_root_path: "/", currency: "EUR" } },
+      ]);
+      await Networking.getUiConfig();
+      expect(formatCurrency(1, "en-US", {})).toBe("€1.00");
+
+      setupMockFetch([{ url: "/litellm/.well-known/litellm-ui-config", data: { server_root_path: "/" } }]);
+      await Networking.getUiConfig();
+      expect(formatCurrency(1, "en-US", {})).toBe("$1.00");
+    } finally {
+      setDisplayCurrency(undefined);
+    }
   });
 
   it("should not include server_root_path when it is root path", async () => {

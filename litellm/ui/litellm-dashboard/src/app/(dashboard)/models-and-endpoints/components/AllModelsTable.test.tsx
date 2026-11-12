@@ -1,8 +1,9 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ModelData } from "@/components/model_dashboard/types";
+import { setDisplayCurrency } from "@/i18n/formats";
 
 import { AllModelsTable } from "./AllModelsTable";
 
@@ -11,8 +12,8 @@ const makeModel = (overrides: Partial<ModelData> = {}): ModelData =>
     model_name: "gpt-4-public",
     litellm_model_name: "openai/gpt-4",
     provider: "openai",
-    input_cost: "30",
-    output_cost: "60",
+    input_cost: "30.00",
+    output_cost: "60.00",
     max_tokens: 8192,
     max_input_tokens: 8192,
     litellm_params: { model: "openai/gpt-4" },
@@ -240,8 +241,8 @@ describe("AllModelsTable", () => {
 
   it("renders input and output costs and a dash when both are missing", () => {
     const { rerender } = render(<AllModelsTable {...baseProps} />);
-    expect(screen.getByText("$30")).toBeInTheDocument();
-    expect(screen.getByText("$60")).toBeInTheDocument();
+    expect(screen.getByText("$30.00")).toBeInTheDocument();
+    expect(screen.getByText("$60.00")).toBeInTheDocument();
     expect(screen.getByRole("cell", { name: /\$30/ })).toHaveClass("text-right");
     expect(screen.getByRole("columnheader", { name: /costs/i })).toHaveClass("text-right");
 
@@ -280,6 +281,26 @@ describe("AllModelsTable", () => {
     expect(screen.getByText("$0.60")).toBeInTheDocument();
     expect(screen.getByText("$0.015/s")).toBeInTheDocument();
     expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
+  });
+
+  describe("with a display currency set by the proxy", () => {
+    afterEach(() => setDisplayCurrency(undefined));
+
+    it("shows token and per-second costs in that currency, with the same amounts", () => {
+      setDisplayCurrency("EUR");
+      const { rerender } = render(<AllModelsTable {...baseProps} />);
+      expect(screen.getByText("€30.00")).toBeInTheDocument();
+      expect(screen.getByText("€60.00")).toBeInTheDocument();
+
+      rerender(
+        <AllModelsTable
+          {...baseProps}
+          data={[makeModel({ input_cost: "0.00", output_cost: "0.00", output_cost_per_second: 0.4 })]}
+        />,
+      );
+      expect(screen.getByText("€0.40/s")).toBeInTheDocument();
+      expect(screen.queryByText(/\$/)).not.toBeInTheDocument();
+    });
   });
 
   it("collapses extra access groups behind a +N more badge", () => {
