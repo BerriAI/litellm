@@ -2242,13 +2242,12 @@ async def _reject_from_headers_before_reading_body(
     """
     if not RouteChecks.is_llm_api_route(route=route):
         return
+    from litellm.proxy import proxy_server
     from litellm.proxy.common_request_processing import proxy_exception_from_http_exception
     from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
-    from litellm.proxy.proxy_server import general_settings, prisma_client, proxy_logging_obj, user_api_key_cache
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
 
-    configured_header: Final = _GENERAL_SETTINGS_ADAPTER.validate_python(general_settings).get(
-        "litellm_key_header_name"
-    )
+    configured_header: Final = proxy_server.general_settings_view().get("litellm_key_header_name")
     bearer_token: Final = (
         get_api_key_from_custom_header(request=request, custom_litellm_key_header_name=configured_header)
         if isinstance(configured_header, str) and configured_header in request.headers
@@ -2308,9 +2307,7 @@ async def _reject_from_headers_before_reading_body(
         failure: Final = transformed if transformed is not None else rejection
         if isinstance(failure, ProxyException):
             raise failure
-        if isinstance(failure, HTTPException):
-            raise proxy_exception_from_http_exception(failure, dict(failure.headers or {}))
-        raise failure
+        raise proxy_exception_from_http_exception(failure, dict(failure.headers or {}))
 
 
 async def _record_unparsable_body_failure(
