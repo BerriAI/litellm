@@ -553,6 +553,21 @@ def _effective_complexity_router_config(
     ).effective
 
 
+def _encrypted_litellm_params(
+    dumped: Mapping[str, object],
+    incoming_params: GenericLiteLLMParams | None,
+    existing_params: GenericLiteLLMParams | None,
+) -> Mapping[str, object]:
+    return {
+        name: (
+            _effective_complexity_router_config(incoming_params, existing_params)
+            if name == "complexity_router_config"
+            else encrypt_value_helper(value)
+        )
+        for name, value in dumped.items()
+    }
+
+
 def _dump_without_none(model: BaseModel) -> Mapping[str, object]:
     return model.model_dump(exclude_none=True)
 
@@ -1511,14 +1526,11 @@ def update_db_model(
     # update litellm params
     if updated_patch.litellm_params:
         # Encrypt any sensitive values
-        encrypted_params: Final = {
-            k: (
-                _effective_complexity_router_config(updated_patch.litellm_params, db_model.litellm_params)
-                if k == "complexity_router_config"
-                else encrypt_value_helper(v)
-            )
-            for k, v in updated_patch.litellm_params.model_dump(exclude_none=True, exclude_unset=True).items()
-        }
+        encrypted_params: Final = _encrypted_litellm_params(
+            updated_patch.litellm_params.model_dump(exclude_none=True, exclude_unset=True),
+            updated_patch.litellm_params,
+            db_model.litellm_params,
+        )
 
         merged_litellm_params.update(encrypted_params)
 
@@ -3471,14 +3483,9 @@ async def update_model(
 
             ### ENCRYPT PARAMS ###
             encrypted_params: Final = MappingProxyType(
-                {
-                    k: (
-                        _effective_complexity_router_config(model_params.litellm_params, deployment.litellm_params)
-                        if k == "complexity_router_config"
-                        else encrypt_value_helper(value=v)
-                    )
-                    for k, v in _new_litellm_params_dict.items()
-                }
+                _encrypted_litellm_params(
+                    _new_litellm_params_dict, model_params.litellm_params, deployment.litellm_params
+                )
             )
 
             ### MERGE WITH EXISTING DATA ###

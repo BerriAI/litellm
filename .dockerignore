@@ -1,6 +1,5 @@
 docs
-cookbook
-.circleci
+litellm/proxy/discovery_endpoints/skill_scanner_adapter
 .github
 tests
 .git

@@ -56,6 +56,7 @@ const TABLE_OPTIONS: readonly FilterOption[] = [
   { labelKey: "logs.audit.tableNames.organizations", value: "LiteLLM_OrganizationTable" },
   { labelKey: "logs.audit.tableNames.models", value: "LiteLLM_ProxyModelTable" },
   { labelKey: "logs.audit.tableNames.agents", value: "LiteLLM_AgentsTable" },
+  { labelKey: "logs.audit.tableNames.guardrails", value: "LiteLLM_GuardrailsTable" },
 ];
 
 const ACTION_FILTER_ITEMS: readonly FilterOption[] = [

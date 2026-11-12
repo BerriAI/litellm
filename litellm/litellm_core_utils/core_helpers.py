@@ -102,7 +102,7 @@ _LAX_BOOL: Final = TypeAdapter(bool)
 
 
 def as_str_mapping(value: object) -> Mapping[str, object] | None:
-    return value if isinstance(value, Mapping) else None
+    return value if isinstance(value, (dict, Mapping)) else None
 
 
 def as_object_list(value: object) -> Sequence[object] | None:
@@ -180,7 +180,24 @@ def require_attributes(value: object, shape: type[_Shape], *names: str) -> _Shap
     raise AttributeError(f"'{type(value).__name__}' object has no attribute '{missing}'", name=missing, obj=value)
 
 
+class KeywordArguments(Protocol):
+    def keys(self) -> Iterable[str]: ...
+
+    def __getitem__(self, key: str, /) -> object: ...
+
+
+def keyword_arguments(value: object, target: type[object]) -> KeywordArguments:
+    if has_attributes(value, KeywordArguments, "keys"):
+        return value
+    raise TypeError(
+        f"{target.__module__}.{target.__qualname__}() argument after ** must be a mapping, not {type(value).__name__}"
+    )
+
+
 def iter_items(value: object) -> Iterable[object]:
+    listed: Final = as_object_list(value)
+    if listed is not None:
+        return listed
     if isinstance(value, _SupportsIter):
         return value
     if isinstance(value, _SupportsGetItem):
@@ -746,17 +763,22 @@ def process_response_headers(
     return {**additional_headers, **({"request-id": request_id} if request_id is not None else {})}
 
 
-def preserve_upstream_non_openai_attributes(
-    model_response: "ModelResponseStream", original_chunk: "ModelResponseStream"
-):
+def preserve_upstream_non_openai_attributes(model_response: "ModelResponseStream", original_chunk: object):
     """
     Preserve non-OpenAI attributes from the original chunk.
     """
     # Access model_fields on the class, not the instance, to avoid Pydantic 2.11+ deprecation warnings
     expected_keys: Final = frozenset(type(model_response).model_fields) | frozenset({"usage"})
+    chunk_model: Final = original_chunk if isinstance(original_chunk, BaseModel) else None
+    if chunk_model is None:
+        raise AttributeError(
+            f"type object '{type(original_chunk).__name__}' has no attribute 'model_fields'",
+            name="model_fields",
+            obj=type(original_chunk),
+        )
     candidate_keys: Final = tuple(
         key
-        for key in (*type(original_chunk).model_fields, *(original_chunk.__pydantic_extra__ or {}))
+        for key in (*type(chunk_model).model_fields, *(chunk_model.__pydantic_extra__ or {}))
         if key not in expected_keys
     )
     if not candidate_keys:
@@ -766,7 +788,7 @@ def preserve_upstream_non_openai_attributes(
             key,
             cast(  # cast-ok: Pydantic extras are scalar-checked before assignment
                 object,
-                getattr(original_chunk, key),
+                getattr(chunk_model, key),
             ),
         )
         for key in candidate_keys
@@ -774,7 +796,7 @@ def preserve_upstream_non_openai_attributes(
     if all(value is None or isinstance(value, (str, int, float, bool)) for _, value in candidate_values):
         _assign_attributes(model_response, candidate_values)
         return
-    _assign_attributes(model_response, original_chunk.model_dump(include=frozenset(candidate_keys)).items())
+    _assign_attributes(model_response, chunk_model.model_dump(include=set(candidate_keys)).items())
 
 
 def _assign_attributes(target: BaseModel, values: Iterable[tuple[str, object]]) -> None:

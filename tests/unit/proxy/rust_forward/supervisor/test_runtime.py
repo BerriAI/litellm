@@ -1,19 +1,15 @@
-import asyncio
-import os
 import signal
 import subprocess
 import sys
-from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 
 import anyio
-import anyio.lowlevel
 import pytest
 
-from litellm.proxy.rust_forward.platform import Platform, current_platform
+from litellm.proxy.rust_forward.platform import ChildProcess, Platform, current_platform
 from litellm.proxy.rust_forward.platform.windows import WindowsPlatform
 from litellm.proxy.rust_forward.supervisor import supervise
 from litellm.proxy.rust_forward.supervisor.children import ChildSpec
@@ -27,7 +23,7 @@ from litellm.proxy.rust_forward.supervisor.lifecycle import (
     Send,
     Spawn,
 )
-from litellm.proxy.rust_forward.supervisor.runtime import SpawnFailed, drive, exit_like, open_children
+from litellm.proxy.rust_forward.supervisor.runtime import SpawnFailed, drive, exit_like, open_children, spawn_subprocess
 from tests.unit.proxy.rust_forward.supervisor._support import python_server
 
 
@@ -133,60 +129,80 @@ def _children(argv: tuple[str, ...]) -> MappingProxyType[Child, ChildSpec]:
     return MappingProxyType({Child.PYTHON: spec, Child.RUST: spec})
 
 
-@dataclass
-class _ChildThatExitsOnceStopped:
-    stopped: anyio.Event
-    waiting: anyio.Event
-    pid: int = 424242
+@dataclass(slots=True)
+class HeldChild:
+    exits: anyio.Event
+    waiting: int = 0
     stdin: None = None
-    returncode: int | None = None
+
+    @property
+    def pid(self) -> int:
+        raise NotImplementedError
+
+    def send_signal(self, signum: int, /) -> None:
+        raise NotImplementedError
 
     async def wait(self) -> int:
-        self.waiting.set()
-        await self.stopped.wait()
-        self.returncode = 0
+        self.waiting += 1
+        try:
+            await self.exits.wait()
+        finally:
+            self.waiting -= 1
         return 0
 
 
-@POSIX_ONLY
-@pytest.mark.timeout(60)
-async def test_a_cancelled_supervisor_still_waits_for_the_child_it_stops(monkeypatch: pytest.MonkeyPatch) -> None:
-    child: Final = _ChildThatExitsOnceStopped(anyio.Event(), anyio.Event())
+@dataclass(frozen=True, slots=True)
+class StopRecorder:
+    stopped: list[ChildProcess] = field(default_factory=list)
 
-    async def create_subprocess_exec(
-        *argv: str,
-        stdin: int,
-        env: Mapping[str, str],
-        pass_fds: tuple[int, ...],
-        start_new_session: bool,
-        creationflags: int,
-    ) -> _ChildThatExitsOnceStopped:
+    def signal_child(self, process: ChildProcess, signum: signal.Signals) -> None:
+        raise NotImplementedError
+
+    def stop_group(self, process: ChildProcess) -> None:
+        self.stopped.append(process)
+
+
+async def test_a_cancelled_supervisor_still_waits_for_the_child_it_stops() -> None:
+    child: Final = HeldChild(anyio.Event())
+    control: Final = StopRecorder()
+    supervisor: Final = anyio.CancelScope()
+    returned: Final = anyio.Event()
+
+    async def spawn(_spec: ChildSpec) -> HeldChild:
         return child
 
-    def killpg(pgid: int, signum: int) -> None:
-        assert (pgid, signum) == (child.pid, signal.SIGTERM)
-        child.stopped.set()
+    async def supervise_one_child() -> None:
+        with supervisor:
+            async with open_children(control, spawn, _children(("held",)), 1) as children:
+                assert await children.spawn(Child.RUST) is None
+                await anyio.sleep_forever()
+        returned.set()
 
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_subprocess_exec)
-    monkeypatch.setattr(os, "killpg", killpg)
-    with anyio.CancelScope() as scope:
-        async with open_children(current_platform(), _children(("held-child",)), 1) as children:
-            assert await children.spawn(Child.RUST) is None
-            await child.waiting.wait()
-            scope.cancel()
-            await anyio.lowlevel.checkpoint()
-    assert child.returncode == 0
+    async with anyio.create_task_group() as tasks:
+        tasks.start_soon(supervise_one_child)
+        await anyio.wait_all_tasks_blocked()
+        supervisor.cancel()
+        await anyio.wait_all_tasks_blocked()
+        while_child_runs: Final = (tuple(control.stopped), child.waiting, returned.is_set())
+        child.exits.set()
+        await anyio.wait_all_tasks_blocked()
+        once_child_exits: Final = returned.is_set()
+    assert (while_child_runs, once_child_exits) == (((child,), 1, False), True)
 
 
 async def test_exiting_children_are_reported_as_events() -> None:
-    async with open_children(current_platform(), _children((sys.executable, "-c", "exit(7)")), 1) as children:
+    async with open_children(
+        current_platform(), spawn_subprocess, _children((sys.executable, "-c", "exit(7)")), 1
+    ) as children:
         assert await children.spawn(Child.RUST) is None
         with anyio.fail_after(5):
             assert await children.next_event() == ChildExited(Child.RUST, 7)
 
 
 async def test_a_child_that_cannot_start_is_returned_as_a_failure(tmp_path: Path) -> None:
-    async with open_children(current_platform(), _children((str(tmp_path / "missing"),)), 1) as children:
+    async with open_children(
+        current_platform(), spawn_subprocess, _children((str(tmp_path / "missing"),)), 1
+    ) as children:
         outcome: Final = await children.spawn(Child.RUST)
     assert isinstance(outcome, SpawnFailed)
     assert isinstance(outcome.error, FileNotFoundError)

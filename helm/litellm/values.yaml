@@ -407,6 +407,8 @@ gateway:
     # Empty scrapes the release namespace.
     namespaceSelector:
       matchNames: []
+    scheme: http
+    tlsConfig: {}
   # Opt-in `collector` sidecar (same image, `python -m litellm.proxy.collector`)
   # that runs the post-response spend pipeline (cost calculation, spend logs,
   # spend counters, budget reservation reconciliation) so the uvicorn workers

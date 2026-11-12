@@ -54,7 +54,10 @@ from litellm.integrations.custom_guardrail import merged_guardrail_entries, with
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     attribute_or_none,
+    decoded_json_object,
     is_codex_user_agent,
+    iter_items,
+    keyword_arguments,
     normalize_drop_params,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
@@ -1251,6 +1254,10 @@ def convert_key_logging_metadata_to_callback(
     return team_callback_settings_obj
 
 
+class _CallbackModelFields(TypedDict, total=False, extra_items=object):
+    pass
+
+
 def get_validated_callback_metadata(item: object, *, source: str) -> AddTeamCallback | None:
     if not isinstance(item, Mapping):
         raise TypeError(f"{source} metadata.logging must be a list of objects, got an item of {type(item).__name__}")
@@ -1280,9 +1287,9 @@ class KeyAndTeamLoggingSettings:
         return None
 
     @staticmethod
-    def get_team_dynamic_logging_settings(user_api_key_dict: UserAPIKeyAuth):
+    def get_team_dynamic_logging_settings(user_api_key_dict: UserAPIKeyAuth) -> object:
         if user_api_key_dict.team_metadata is not None and "logging" in user_api_key_dict.team_metadata:
-            return decrypt_callback_vars(user_api_key_dict.team_metadata).get("logging")
+            return decoded_json_object(decrypt_callback_vars(user_api_key_dict.team_metadata)).get("logging")
         return None
 
 
@@ -1291,14 +1298,14 @@ def get_dynamic_logging_metadata(
 ) -> TeamCallbackMetadata | None:
     callback_settings_obj: TeamCallbackMetadata | None = None
     key_dynamic_logging_settings: Final = KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(user_api_key_dict)
-    team_dynamic_logging_settings: Final[dict | None] = KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(
+    team_dynamic_logging_settings: Final = KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(
         user_api_key_dict
     )
     #########################################################################################
     # Key-based callbacks
     #########################################################################################
     if key_dynamic_logging_settings is not None:
-        for item in key_dynamic_logging_settings:
+        for item in iter_items(key_dynamic_logging_settings):
             callback = get_validated_callback_metadata(item=item, source="key-level")
             if callback is None:
                 continue
@@ -1310,7 +1317,7 @@ def get_dynamic_logging_metadata(
     # Team-based callbacks
     #########################################################################################
     elif team_dynamic_logging_settings is not None:
-        for item in team_dynamic_logging_settings:
+        for item in iter_items(team_dynamic_logging_settings):
             callback = get_validated_callback_metadata(item=item, source="team-level")
             if callback is None:
                 continue
@@ -1331,9 +1338,11 @@ def get_dynamic_logging_metadata(
         }
         }
         """
-        team_metadata: Final = decrypt_callback_vars(user_api_key_dict.team_metadata)
+        team_metadata: Final = decoded_json_object(decrypt_callback_vars(user_api_key_dict.team_metadata))
         callback_settings: Final = team_metadata.get("callback_settings", None) or {}
-        callback_settings_obj = TeamCallbackMetadata(**callback_settings)
+        callback_settings_obj = TeamCallbackMetadata(
+            **_CallbackModelFields(**keyword_arguments(callback_settings, TeamCallbackMetadata))
+        )
         verbose_proxy_logger.debug("Team callback settings activated: %s", callback_settings_obj)
     #########################################################################################
     # Enter here when configured on the config.yaml file.
@@ -1465,7 +1474,7 @@ def resolve_tenant_otel_destinations(
     disabled: Final = _dynamically_disabled_backends(user_api_key_dict, request_headers)
     callbacks: Final = tuple(
         callback
-        for item in entries
+        for item in iter_items(entries)
         if (callback := get_validated_callback_metadata(item=item, source="otel-destination")) is not None
         if callback.callback_name.lower() not in disabled
     )
