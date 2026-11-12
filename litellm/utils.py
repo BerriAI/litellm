@@ -11073,6 +11073,10 @@ class ProviderConfigManager:
             )
 
             return get_fal_ai_image_generation_config(model)
+        elif LlmProviders.REPLICATE == provider:
+            from litellm.llms.replicate.image_generation.transformation import ReplicateImageGenerationConfig
+
+            return ReplicateImageGenerationConfig()
         elif LlmProviders.STABILITY == provider:
             from litellm.llms.stability.image_generation import (
                 get_stability_image_generation_config,
@@ -11174,6 +11178,10 @@ class ProviderConfigManager:
             from litellm.llms.fal_ai.videos.transformation import FalAIVideoConfig
 
             return FalAIVideoConfig()
+        elif LlmProviders.REPLICATE == provider:
+            from litellm.llms.replicate.videos.transformation import ReplicateVideoConfig
+
+            return ReplicateVideoConfig()
         elif LlmProviders.HOSTED_VLLM == provider:
             from litellm.llms.hosted_vllm.videos import get_hosted_vllm_video_config
 
@@ -11558,6 +11566,10 @@ class ProviderConfigManager:
             )
 
             return MistralTextToSpeechConfig()
+        elif litellm.LlmProviders.REPLICATE == provider:
+            from litellm.llms.replicate.text_to_speech.transformation import ReplicateTextToSpeechConfig
+
+            return ReplicateTextToSpeechConfig()
         elif litellm.LlmProviders.AWS_POLLY == provider:
             from litellm.llms.aws_polly.text_to_speech.transformation import (
                 AWSPollyTextToSpeechConfig,
