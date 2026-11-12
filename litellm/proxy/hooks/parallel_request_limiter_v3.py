@@ -630,6 +630,7 @@ class RequestRateLimiterStash:
     borrowing_team_model_fallback_limits: Mapping[str, BorrowingTeamModelHold] = field(
         default_factory=lambda: MappingProxyType({})
     )
+    priority_class_share: RateLimitDescriptor | None = None
     reservation_released: bool = False
     io_reservation_released: bool = False
     tpm_limited_tags: frozenset[str] = field(default_factory=frozenset)
