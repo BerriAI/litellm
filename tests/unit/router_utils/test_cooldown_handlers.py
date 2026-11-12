@@ -15,6 +15,7 @@ from litellm import Router
 from litellm._internal_context import current_service_target
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.exceptions import PreviousResponseNotReplayableError
 from litellm.router_utils.cooldown_cache import CooldownCache, CooldownCacheValue
 from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
 from litellm.router_utils.cooldown_handlers import (
@@ -1841,6 +1842,32 @@ def test_should_run_cooldown_logic_explicit_deployment_level_policy_overrides_co
     deployment_dict = single_deployment_router.get_model_info(id="dep-1")
     deployment_dict["model_info"]["allowed_fails_policy"] = {"ContentPolicyViolationErrorAllowedFails": 0}
     assert _should_run_cooldown_logic(single_deployment_router, "dep-1", 400, exc) is True
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize(
+    ("exception_type", "expected_cooldown"),
+    (
+        (litellm.MalformedRequestFieldError, False),
+        (PreviousResponseNotReplayableError, False),
+        (litellm.BadRequestError, True),
+    ),
+)
+def test_pre_call_rejection_preserves_cooldown_exclusion_with_bad_request_policy(
+    exception_type: type[litellm.BadRequestError], expected_cooldown: bool
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "chat",
+                "litellm_params": {"model": "openai/gpt-5.6", "api_key": "not-needed"},
+                "model_info": {"id": "deployment", "allowed_fails_policy": {"BadRequestErrorAllowedFails": 0}},
+            }
+        ]
+    )
+    exception: Final = exception_type(message="Request failed", model="gpt-5.6", llm_provider="openai")
+
+    assert _should_run_cooldown_logic(router, "deployment", exception.status_code, exception) is expected_cooldown
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
