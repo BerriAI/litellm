@@ -767,8 +767,8 @@ async def rag_query(
         general_settings,
         llm_router,
         proxy_config,
-        select_data_generator,
         proxy_logging_obj,
+        select_data_generator,
         version,
     )
 
