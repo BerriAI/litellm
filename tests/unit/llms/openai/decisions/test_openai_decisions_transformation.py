@@ -4,7 +4,7 @@ from typing import Final
 
 import httpx
 import pytest
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 from litellm.llms.base_llm.decisions.transformation import (
     DecisionsResponseValidationError,
@@ -386,3 +386,86 @@ def test_openai_probabilities_preserve_missing_entries_and_explicit_zeros(
 
     assert response.answers[1].model_dump(mode="json")["probabilities"] == list(choice_probabilities)
     assert response.answers[2].model_dump(mode="json")["probabilities"] == list(score_probabilities)
+
+
+_CACHE_REQUEST: Final[Mapping[str, object]] = {
+    "input": [
+        {
+            "type": "message",
+            "role": "developer",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": "Categories stay here.",
+                    "prompt_cache_breakpoint": {"mode": "explicit"},
+                }
+            ],
+        },
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_image",
+                    "image_url": "https://example.com/a.png",
+                    "prompt_cache_breakpoint": {"mode": "explicit"},
+                }
+            ],
+        },
+        {"type": "message", "role": "system", "content": "Also text."},
+        {"type": "message", "role": "user", "content": "Sim."},
+    ],
+    "questions": [{"type": "predicate", "name": "ok", "instructions": "Is it allowed?"}],
+    "prompt_cache_key": "mora-moderation",
+    "prompt_cache_options": {"mode": "explicit", "ttl": "30m"},
+}
+
+
+def test_prompt_cache_controls_reach_openai_unchanged() -> None:
+    assert ir_to_openai_request("gpt-6-luna", _openai_ir(_CACHE_REQUEST)) == {
+        "model": "gpt-6-luna",
+        **_CACHE_REQUEST,
+    }
+
+
+def test_a_breakpoint_rejects_a_ttl() -> None:
+    with pytest.raises(ValidationError):
+        _OPENAI_BODY.validate_python(
+            {
+                "input": [
+                    {
+                        "type": "message",
+                        "role": "developer",
+                        "content": [
+                            {
+                                "type": "input_text",
+                                "text": "Categories stay here.",
+                                "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"},
+                            }
+                        ],
+                    }
+                ],
+                "questions": _CACHE_REQUEST["questions"],
+            }
+        )
+
+
+def test_decisions_cache_ttl_rejects_12h() -> None:
+    with pytest.raises(ValidationError):
+        _OPENAI_BODY.validate_python({**_CACHE_REQUEST, "prompt_cache_options": {"mode": "explicit", "ttl": "12h"}})
+
+
+def test_a_developer_message_rejects_an_image() -> None:
+    with pytest.raises(ValidationError, match="developer messages only accept input text"):
+        _OPENAI_BODY.validate_python(
+            {
+                "input": [
+                    {
+                        "type": "message",
+                        "role": "developer",
+                        "content": [{"type": "input_image", "image_url": "https://example.com/a.png"}],
+                    }
+                ],
+                "questions": _CACHE_REQUEST["questions"],
+            }
+        )

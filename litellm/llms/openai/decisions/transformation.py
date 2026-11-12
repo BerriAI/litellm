@@ -103,6 +103,8 @@ def openai_request_to_ir(request: OpenAIDecisionRequestBody) -> DecisionsIRReque
         videos=request.videos,
         questions=tuple(_ir_question(question) for question in request.questions),
         safety_identifier=request.safety_identifier,
+        prompt_cache_key=request.prompt_cache_key,
+        prompt_cache_options=request.prompt_cache_options,
     )
 
 
@@ -197,6 +199,17 @@ def _has_one_option(question: DecisionsIRQuestion) -> bool:
             return False
 
 
+def _prompt_cache_fields(request: DecisionsIRRequest) -> Mapping[str, object]:
+    sent: dict[str, object] = {}
+    if request.prompt_cache_key is not None:
+        sent["prompt_cache_key"] = request.prompt_cache_key
+    if request.prompt_cache_options is not None:
+        options = request.prompt_cache_options.model_dump(mode="json", exclude_none=True)
+        if options:
+            sent["prompt_cache_options"] = options
+    return sent
+
+
 def ir_to_openai_request(model: str, request: DecisionsIRRequest) -> Mapping[str, object] | UnsupportedDecisionsRequest:
     if request.audio or request.videos:
         return UnsupportedDecisionsRequest(reason="audio/video input is not supported by this Decisions provider")
@@ -207,6 +220,7 @@ def ir_to_openai_request(model: str, request: DecisionsIRRequest) -> Mapping[str
         "input": _openai_input(request.input),
         "questions": [_openai_question(question) for question in request.questions],
         **_text_field("safety_identifier", request.safety_identifier),
+        **_prompt_cache_fields(request),
     }
 
 

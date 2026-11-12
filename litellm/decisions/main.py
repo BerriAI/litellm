@@ -31,6 +31,7 @@ _OPENAI_QUESTIONS_ADAPTER: Final[TypeAdapter[OpenAIDecisionQuestions | None]] = 
     OpenAIDecisionQuestions | None
 )
 _SYSTEMONE_FIELDS: Final = frozenset({"state", "images", "assets"})
+_OPENAI_CACHE_FIELDS: Final = frozenset({"prompt_cache_key", "prompt_cache_options"})
 
 
 def _request_fields(
@@ -48,6 +49,8 @@ def _request_fields(
             questions=_OPENAI_QUESTIONS_ADAPTER.validate_python(questions),
             audio=audio,
             videos=videos,
+            prompt_cache_key=kwargs.get("prompt_cache_key"),
+            prompt_cache_options=kwargs.get("prompt_cache_options"),
         )
     warnings.warn(
         "litellm.decisions(state=...) is deprecated, call litellm.systemone for the System One request format",
@@ -86,7 +89,7 @@ def _prepare_decisions_call(
             "questions": questions,
             "audio": audio,
             "videos": videos,
-            **{key: kwargs[key] for key in _SYSTEMONE_FIELDS if key in kwargs},
+            **{key: kwargs[key] for key in _SYSTEMONE_FIELDS | _OPENAI_CACHE_FIELDS if key in kwargs},
         },
     )
     return prepare_call(

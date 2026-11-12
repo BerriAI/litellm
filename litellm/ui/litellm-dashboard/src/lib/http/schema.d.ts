@@ -61175,11 +61175,18 @@ export interface operations {
                     })[];
                     /**
                      * Input
-                     * @description The text being judged, or user messages whose content mixes input_text and input_image parts
+                     * @description The text being judged, or user, developer, and system messages. Developer and system messages are input text. User messages can mix input text and images.
                      */
                     input: string | {
                         /** Content */
                         content: string | ({
+                            prompt_cache_breakpoint?: {
+                                /**
+                                 * Mode
+                                 * @constant
+                                 */
+                                mode: "explicit";
+                            } | null;
                             /** Text */
                             text: string;
                             /**
@@ -61192,6 +61199,13 @@ export interface operations {
                             detail?: string | null;
                             /** Image Url */
                             image_url: string;
+                            prompt_cache_breakpoint?: {
+                                /**
+                                 * Mode
+                                 * @constant
+                                 */
+                                mode: "explicit";
+                            } | null;
                             /**
                              * Type
                              * @constant
@@ -61201,9 +61215,9 @@ export interface operations {
                         /**
                          * Role
                          * @default user
-                         * @constant
+                         * @enum {string}
                          */
-                        role?: "user";
+                        role?: "user" | "developer" | "system";
                         /**
                          * Type
                          * @default message
@@ -61216,6 +61230,17 @@ export interface operations {
                      * @description A decision model from the proxy model_list
                      */
                     model: string;
+                    /**
+                     * Prompt Cache Key
+                     * @description Partitions prompt-cache reuse. Sent to OpenAI and ignored by other providers
+                     */
+                    prompt_cache_key?: string | null;
+                    prompt_cache_options?: {
+                        /** Mode */
+                        mode?: ("implicit" | "explicit") | null;
+                        /** Ttl */
+                        ttl?: "30m" | null;
+                    } | null;
                     /**
                      * Questions
                      * @description Predicate, choice and score questions. Answers come back in the same order
@@ -83072,11 +83097,18 @@ export interface operations {
                     })[];
                     /**
                      * Input
-                     * @description The text being judged, or user messages whose content mixes input_text and input_image parts
+                     * @description The text being judged, or user, developer, and system messages. Developer and system messages are input text. User messages can mix input text and images.
                      */
                     input: string | {
                         /** Content */
                         content: string | ({
+                            prompt_cache_breakpoint?: {
+                                /**
+                                 * Mode
+                                 * @constant
+                                 */
+                                mode: "explicit";
+                            } | null;
                             /** Text */
                             text: string;
                             /**
@@ -83089,6 +83121,13 @@ export interface operations {
                             detail?: string | null;
                             /** Image Url */
                             image_url: string;
+                            prompt_cache_breakpoint?: {
+                                /**
+                                 * Mode
+                                 * @constant
+                                 */
+                                mode: "explicit";
+                            } | null;
                             /**
                              * Type
                              * @constant
@@ -83098,9 +83137,9 @@ export interface operations {
                         /**
                          * Role
                          * @default user
-                         * @constant
+                         * @enum {string}
                          */
-                        role?: "user";
+                        role?: "user" | "developer" | "system";
                         /**
                          * Type
                          * @default message
@@ -83113,6 +83152,17 @@ export interface operations {
                      * @description A decision model from the proxy model_list
                      */
                     model: string;
+                    /**
+                     * Prompt Cache Key
+                     * @description Partitions prompt-cache reuse. Sent to OpenAI and ignored by other providers
+                     */
+                    prompt_cache_key?: string | null;
+                    prompt_cache_options?: {
+                        /** Mode */
+                        mode?: ("implicit" | "explicit") | null;
+                        /** Ttl */
+                        ttl?: "30m" | null;
+                    } | null;
                     /**
                      * Questions
                      * @description Predicate, choice and score questions. Answers come back in the same order

@@ -181,6 +181,8 @@ class OpenAIDecisionRequestFields:
     questions: OpenAIDecisionQuestions | None
     audio: DecisionsAudioClips | None = None
     videos: DecisionsVideoClips | None = None
+    prompt_cache_key: object = None
+    prompt_cache_options: object = None
 
     def validate(self, *, safety_identifier: str | None, drops_params: bool) -> OpenAIDecisionRequestBody:
         return _OPENAI_REQUEST_ADAPTER.validate_python(
@@ -190,6 +192,8 @@ class OpenAIDecisionRequestFields:
                 "safety_identifier": safety_identifier,
                 "audio": self.audio,
                 "videos": self.videos,
+                "prompt_cache_key": self.prompt_cache_key,
+                "prompt_cache_options": self.prompt_cache_options,
             }
         )
 
