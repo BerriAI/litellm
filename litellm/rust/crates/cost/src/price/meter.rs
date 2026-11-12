@@ -50,6 +50,7 @@ pub enum OutputUnit {
     Pixel,
     Second(Option<Resolution>),
     VideoSecond,
+    Video,
     BillableUnit,
 }
 
