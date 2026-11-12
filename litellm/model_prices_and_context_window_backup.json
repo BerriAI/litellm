@@ -86827,6 +86827,15 @@
         "output_cost_per_token": 1e-05,
         "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
     },
+    "gmi/google/gemini-4-carbon": {
+        "cache_read_input_token_cost": 1e-07,
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
     "gmi/google/gemma-4-26b-a4b-it": {
         "input_cost_per_token": 1.3e-07,
         "litellm_provider": "gmi",
@@ -87156,6 +87165,15 @@
         "input_cost_per_token": 2e-06,
         "litellm_provider": "gmi",
         "max_input_tokens": 2000000,
+        "mode": "chat",
+        "output_cost_per_token": 6e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/xai/grok4.7": {
+        "cache_read_input_token_cost": 5e-07,
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 500000,
         "mode": "chat",
         "output_cost_per_token": 6e-06,
         "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
