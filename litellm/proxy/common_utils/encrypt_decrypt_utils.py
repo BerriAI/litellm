@@ -237,10 +237,11 @@ def _open_aes_gcm(sealed: bytes, signing_key: str, aad: bytes | None) -> str:
 def _encrypt_aes_gcm(value: str, signing_key: str) -> str:
     """Encrypt under AES-256-GCM and return the versioned ``v2:gcm:`` string. With general_settings.fips_mode on, the
     key comes from the FIPS provider's KBKDF over the salt key and the nonce from the provider itself."""
-    if fips_mode_active():
-        sealed = _fips_seal_aes_gcm(_fips_at_rest_key(signing_key), value.encode("utf-8"))
-    else:
-        sealed = _seal_aes_gcm(value=value, signing_key=signing_key, aad=None)
+    sealed: Final = (
+        _fips_seal_aes_gcm(_fips_at_rest_key(signing_key), value.encode("utf-8"))
+        if fips_mode_active()
+        else _seal_aes_gcm(value=value, signing_key=signing_key, aad=None)
+    )
     return V2_GCM_PREFIX + base64.urlsafe_b64encode(sealed).decode("utf-8")
 
 
