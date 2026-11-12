@@ -66,6 +66,8 @@ include = [
     "litellm/proxy/common_utils/codex_bedrock_runtime_models_0.166.0.json",
 ]
 exclude = [
+    "litellm/deploy",
+    "litellm/deploy/**",
     "litellm/proxy/_experimental/out",
     "litellm/proxy/_experimental/out/**",
     "litellm/proxy/enterprise",
