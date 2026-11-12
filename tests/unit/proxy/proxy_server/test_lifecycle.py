@@ -26,11 +26,13 @@ import subprocess
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from fastapi import FastAPI
 from pydantic import BaseModel
 from typing_extensions import TypedDict
 
@@ -53,6 +55,7 @@ from litellm.proxy.proxy_server import (
     save_worker_config,
 )
 from litellm.proxy.utils import PrismaClient
+from tests._master_key import MASTER_KEY
 
 from .conftest import normalize
 
@@ -1021,6 +1024,61 @@ async def test_proxy_startup_event_honors_disable_model_info_refresh(
     assert (job is not None) is job_scheduled, (
         f"disable_model_info_refresh={disable_model_info_refresh} but refresh_model_info job is {job}"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "environment_name",
+    (None, "LITELLM_LENS_URL", "LITELLM_LENS_PUBLIC_URL", "LITELLM_LENS_SERVICE_TOKEN", "LENS_GATEWAY_SECRET"),
+    ids=("yaml", "url", "public-url", "service-token", "gateway-secret"),
+)
+async def test_proxy_startup_warns_for_retired_lens_settings_without_disclosing_values(
+    environment_name: str | None,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    sentinel: Final = "https://private-lens-config-sentinel.invalid"
+    secret: Final = "private-lens-secret-sentinel"
+    tracing_yaml: Final = (
+        f"  tracing:\n    store:\n      type: lens\n      url: {sentinel}\n      token: {secret}\n"
+        if environment_name is None
+        else ""
+    )
+    config_file: Final = tmp_path / "config.yaml"
+    config_file.write_text(
+        "model_list: []\ngeneral_settings:\n  disable_model_info_refresh: true\n" + tracing_yaml,
+        encoding="utf-8",
+    )
+    environment: Final = (
+        {environment_name: sentinel if environment_name.endswith("URL") else secret}
+        if environment_name is not None
+        else {}
+    )
+    monkeypatch.setattr(ps, "proxy_config", ps.ProxyConfig())
+    with (
+        patch.dict(
+            os.environ,
+            {
+                "CONFIG_FILE_PATH": str(config_file),
+                "LITELLM_MASTER_KEY": MASTER_KEY,
+                "LITELLM_LOCAL_MODEL_COST_MAP": "True",
+                "PYTHON_DOTENV_DISABLED": "1",
+                **environment,
+            },
+            clear=True,
+        ),
+        caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"),
+    ):
+        async with proxy_startup_event(FastAPI()):
+            assert (
+                "LiteLLM Proxy",
+                logging.WARNING,
+                "The Lens integration has been removed. general_settings.tracing, LITELLM_LENS_* and "
+                "LENS_GATEWAY_SECRET are ignored. Remove these obsolete settings from your configuration.",
+            ) in caplog.record_tuples
+            assert sentinel not in caplog.text
+            assert secret not in caplog.text
 
 
 @pytest.mark.asyncio
