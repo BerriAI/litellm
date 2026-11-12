@@ -123,7 +123,7 @@ from litellm.proxy.rust_forward.server import Listener, PythonServer, Server
 from litellm.proxy.rust_forward.supervisor import supervise
 
 workers, port, scripts = sys.argv[1], int(sys.argv[2]), Path(sys.argv[3])
-server = PythonServer(Server.UVICORN, Listener.TCP, "127.0.0.1", port, 5, 30.0, "127.0.0.1")
+server = PythonServer(Server.UVICORN, Listener.TCP, "127.0.0.1", port, 5, 30.0, "127.0.0.1", None)
 result = supervise(server, (sys.executable, str(scripts / "serve.py"), workers, str(port)), scripts_dir=str(scripts))
 raise SystemExit(result if isinstance(result, int) else 3)
 """

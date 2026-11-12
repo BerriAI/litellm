@@ -15,6 +15,7 @@ serde.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util", "sync"] }
 tokio-util = { version = "0.7", features = ["rt"] }
+tower = { version = "0.5", features = ["util"] }
 tower-service = "0.3.3"
 tracing.workspace = true
 

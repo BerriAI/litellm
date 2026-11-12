@@ -20,6 +20,34 @@ impl CredentialExtractor for Bearer {
     }
 }
 
+/// The `Authorization: Bearer` key exactly as `get_api_key` in `user_api_key_auth.py` reads it, and
+/// no key at all for a request Python would read another way, so its caller hands that request to
+/// Python instead of authenticating a key Python would not have picked.
+pub struct PythonBearer;
+
+const LITELLM_API_KEY: &str = "x-litellm-api-key";
+const BEARER: &str = "Bearer ";
+
+impl CredentialExtractor for PythonBearer {
+    fn extract(&self, parts: &Parts) -> Result<Credential, Error> {
+        // TODO: `x-litellm-api-key`, the other schemes and the provider key headers, which Python
+        // reads in `get_api_key` and this leaves to Python
+        if parts.headers.contains_key(LITELLM_API_KEY) {
+            return Err(Error::InvalidToken);
+        }
+        parts
+            .headers
+            .get(AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .filter(|value| value.starts_with(BEARER))
+            // Python strips with `str.replace`, so every occurrence of the scheme goes, not only the prefix.
+            .map(|value| value.replace(BEARER, ""))
+            .filter(|token| !token.is_empty())
+            .map(|token| Credential::Token(Token::new(token)))
+            .ok_or(Error::InvalidToken)
+    }
+}
+
 fn bearer(parts: &Parts) -> Result<Token, Error> {
     let mut values = parts.headers.get_all(AUTHORIZATION).iter();
     let value = values.next().ok_or(Error::InvalidToken)?;
@@ -86,5 +114,61 @@ impl FromRequestParts<Auth> for RequireMasterKey {
         }
         parts.extensions.insert(identity);
         Ok(Self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::http::{HeaderName, HeaderValue, Request};
+    use rstest::rstest;
+
+    use super::*;
+
+    fn parts(headers: &[(&'static str, &[u8])]) -> Parts {
+        let (mut parts, ()) = Request::new(()).into_parts();
+        headers.iter().for_each(|(name, value)| {
+            parts.headers.append(
+                HeaderName::from_static(name),
+                HeaderValue::from_bytes(value).unwrap(),
+            );
+        });
+        parts
+    }
+
+    fn token(parts: &Parts) -> Option<Token> {
+        match PythonBearer.extract(parts) {
+            Ok(Credential::Token(token)) => Some(token),
+            Ok(Credential::Transport) | Err(_) => None,
+        }
+    }
+
+    #[rstest]
+    #[case::bearer(&[("authorization", "Bearer sk-1")], Some("sk-1"))]
+    #[case::every_occurrence_stripped(&[("authorization", "Bearer sk-Bearer 1")], Some("sk-1"))]
+    #[case::first_of_duplicates(&[("authorization", "Bearer sk-1"), ("authorization", "Bearer sk-2")], Some("sk-1"))]
+    #[case::lowercase_scheme(&[("authorization", "bearer sk-1")], None)]
+    #[case::basic(&[("authorization", "Basic sk-1")], None)]
+    #[case::no_scheme(&[("authorization", "sk-1")], None)]
+    #[case::empty_token(&[("authorization", "Bearer ")], None)]
+    #[case::litellm_header_wins_in_python(&[("authorization", "Bearer sk-1"), ("x-litellm-api-key", "sk-2")], None)]
+    #[case::provider_header_only(&[("x-api-key", "sk-1")], None)]
+    #[case::missing(&[], None)]
+    fn reads_only_the_bearer_key_python_would_read(
+        #[case] headers: &[(&'static str, &'static str)],
+        #[case] expected: Option<&str>,
+    ) {
+        let headers: Vec<_> = headers
+            .iter()
+            .map(|(name, value)| (*name, value.as_bytes()))
+            .collect();
+        assert_eq!(
+            token(&parts(&headers)).as_ref().map(Token::expose),
+            expected
+        );
+    }
+
+    #[rstest]
+    fn a_value_that_is_not_ascii_is_no_key() {
+        assert_eq!(token(&parts(&[("authorization", b"Bearer sk-\xe9")])), None);
     }
 }
