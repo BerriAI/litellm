@@ -136,7 +136,7 @@ def _freshness(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
             sys.executable,
             "-c",
             "import sys; from pathlib import Path; "
-            "from ci_cd.run_migration import _check_branch_freshness; "
+            "from scripts.ci_cd.run_migration import _check_branch_freshness; "
             "_check_branch_freshness(Path(sys.argv[1]), sys.argv[2] if len(sys.argv) > 2 else None)",
             str(repo),
             *args,

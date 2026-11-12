@@ -29,7 +29,7 @@ on:
       - ui/litellm-dashboard/package-lock.json
       - ui/nginx.conf
       - .github/workflows/image-scan.yml
-      - .grype.yaml
+      - .github/grype.yaml
   schedule:
     - cron: "41 6 * * *"
   workflow_dispatch:
@@ -201,7 +201,7 @@ jobs:
           GRYPE_MATCH_PYTHON_USING_CPES: "true"
         run: |
           "$RUNNER_TEMP/grype" "$IMAGE" \
-            --config .grype.yaml \
+            --config .github/grype.yaml \
             --only-fixed \
             --fail-on high \
             --output table

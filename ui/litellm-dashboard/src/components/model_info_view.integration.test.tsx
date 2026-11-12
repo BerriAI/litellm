@@ -1,9 +1,11 @@
+import { NuqsTestingAdapter } from "nuqs/adapters/testing";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React, { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import ModelInfoView from "./model_info_view";
+import { EMPTY_DAILY_ACTIVITY_RESPONSE } from "./UsagePage/dailyActivityApi";
 import { toast } from "@/lib/toast";
 import * as networking from "./networking";
 import { useUserLookup } from "@/app/(dashboard)/hooks/users/useUsers";
@@ -20,6 +22,7 @@ vi.mock("../../utils/dataUtils", () => ({
 }));
 
 vi.mock("./networking", () => ({
+  dailyActivityAggregatedCall: vi.fn(),
   credentialGetCall: vi.fn(),
   credentialListCall: vi.fn(),
   getGuardrailsList: vi.fn(),
@@ -195,8 +198,46 @@ describe("ModelInfoView", () => {
     mockCredentialCreateCall.mockResolvedValue({});
   });
 
-  const wrapper = ({ children }: { children: ReactNode }) =>
-    React.createElement(QueryClientProvider, { client: queryClient }, children);
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <NuqsTestingAdapter hasMemory>
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    </NuqsTestingAdapter>
+  );
+
+  it("loads Activity for the underlying model only when its tab is opened", async () => {
+    vi.mocked(networking.dailyActivityAggregatedCall).mockReset().mockResolvedValue(EMPTY_DAILY_ACTIVITY_RESPONSE);
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+    const activityTab = await screen.findByRole("tab", { name: "Activity" });
+    expect(networking.dailyActivityAggregatedCall).not.toHaveBeenCalled();
+
+    fireEvent.click(activityTab);
+
+    expect(await screen.findByText("No daily details available")).toBeInTheDocument();
+    expect(networking.dailyActivityAggregatedCall).toHaveBeenCalledWith(
+      "user",
+      expect.objectContaining({ model: defaultModelData.litellm_params.model }),
+    );
+    vi.stubGlobal("requestIdleCallback", (callback: () => void) => {
+      callback();
+      return 0;
+    });
+    fireEvent.click(screen.getByRole("button", { name: /\d.* - .*\d/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Last 7 Days/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(networking.dailyActivityAggregatedCall).toHaveBeenCalledTimes(2));
+    const selected = vi.mocked(networking.dailyActivityAggregatedCall).mock.calls.at(-1)![1];
+    fireEvent.click(screen.getByRole("tab", { name: "Overview" }));
+    fireEvent.click(activityTab);
+    await waitFor(() => expect(networking.dailyActivityAggregatedCall).toHaveBeenCalledTimes(3));
+    expect(networking.dailyActivityAggregatedCall).toHaveBeenLastCalledWith(
+      "user",
+      expect.objectContaining({
+        startTime: selected.startTime,
+        endTime: selected.endTime,
+      }),
+    );
+    vi.unstubAllGlobals();
+  });
 
   it("should render", async () => {
     render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Install the repo's git hooks by pointing core.hooksPath at .githooks.
+# Install the repo's git hooks by pointing core.hooksPath at scripts/githooks.
 #
 # Idempotent: re-running just reaffirms the config and refreshes chmod bits.
 # Run from anywhere inside the repo.
@@ -13,7 +13,7 @@ if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
 fi
 
 repo_root=$(git rev-parse --show-toplevel)
-hooks_dir="$repo_root/.githooks"
+hooks_dir="$repo_root/scripts/githooks"
 
 if [ ! -d "$hooks_dir" ]; then
     echo "install_git_hooks: $hooks_dir does not exist" >&2
@@ -24,11 +24,11 @@ fi
 # filesystems sometimes lose the exec bit; this normalizes it.
 chmod +x "$hooks_dir"/* 2>/dev/null || true
 
-git config core.hooksPath .githooks
+git config core.hooksPath scripts/githooks
 
 cat <<EOF
 ✓ Git hooks installed.
-  core.hooksPath = .githooks
+  core.hooksPath = scripts/githooks
   active hooks:  $(ls "$hooks_dir" | tr '\n' ' ')
 
 These hooks enforce Conventional Commits.
