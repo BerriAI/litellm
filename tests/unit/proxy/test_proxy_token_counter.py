@@ -1682,6 +1682,75 @@ async def test_anthropic_count_tokens_on_a_claude_deployment_drops_a_malformed_t
     assert sent["messages"][2]["content"][0]["content"] == [{"type": "text", "text": "build ok"}]
 
 
+def _weather_tool(description: str) -> dict[str, object]:
+    return {
+        "name": "get_weather",
+        "description": description,
+        "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+    }
+
+
+@pytest.mark.asyncio
+async def test_anthropic_count_tokens_falls_back_to_a_local_estimate_that_counts_mid_conversation_tool_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "claude-framed",
+                    "litellm_params": {"model": "anthropic/claude-sonnet-5-5", "api_key": "sk-ant-test"},
+                    "model_info": {"token_count_framing": 100},
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    brief: Final = _weather_tool("Weather.")
+    detailed: Final = _weather_tool("Current weather, temperature and wind for a city in any country.")
+
+    def conversation(tool: Mapping[str, object]) -> list[dict[str, object]]:
+        return [
+            {"role": "user", "content": "What is the weather in Paris?"},
+            {"role": "system", "content": [{"type": "tool_addition", "tool": tool}]},
+            {"role": "user", "content": "Never mind."},
+            {
+                "role": "system",
+                "content": [{"type": "tool_removal", "tool": {"type": "tool_reference", "name": "get_weather"}}],
+            },
+        ]
+
+    async def estimate(tool: Mapping[str, object], tools: list[dict[str, object]] | None) -> TokenCountResponse:
+        return await count_request_tokens(
+            request=TokenCountRequest(model="claude-framed", messages=conversation(tool), tools=tools),
+            call_endpoint=True,
+            messages_format="anthropic",
+        )
+
+    by_reference: Final = {"type": "tool_reference", "name": "get_weather"}
+    with respx.mock:
+        route: Final = respx.post("https://api.anthropic.com/v1/messages/count_tokens").mock(
+            return_value=httpx.Response(
+                404, json={"type": "error", "error": {"type": "not_found_error", "message": "count unavailable"}}
+            )
+        )
+        inline_brief: Final = await estimate({"type": "tool_definition", "definition": brief}, None)
+        inline_detailed: Final = await estimate({"type": "tool_definition", "definition": detailed}, None)
+        declared_brief: Final = await estimate(by_reference, [brief])
+        declared_detailed: Final = await estimate(by_reference, [detailed])
+
+    inline_delta: Final = inline_detailed.total_tokens - inline_brief.total_tokens
+    declared_delta: Final = declared_detailed.total_tokens - declared_brief.total_tokens
+    assert route.called
+    assert {inline_brief.count_source, inline_detailed.count_source} == {"local_estimate"}
+    assert declared_delta > 0
+    assert inline_delta == declared_delta
+
+
 class _ScriptedCounter(BaseTokenCounter):
     def __init__(self, replies: dict[str, TokenCountResponse], burst: int = 1) -> None:
         self._replies = replies

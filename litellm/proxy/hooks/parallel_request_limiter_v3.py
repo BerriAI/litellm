@@ -572,9 +572,13 @@ class CallTypeRateLimiter(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class BorrowingTeamModelHold:
-    """A router fallback target's team share with the tokens held on it, settled to actual usage or given back."""
+    """A router fallback target's team share with the tokens held on it, settled to actual usage or given back.
 
-    descriptor: RateLimitDescriptor
+    An idle target holds no descriptor: its usage is not charged to the share, and settlement still finds the hold so
+    the admitting model's reservation is given back instead of taking the target's tokens.
+    """
+
+    descriptor: RateLimitDescriptor | None
     reserved_tokens: int = 0
     window: ReservationWindowIdentity | None = None
 
@@ -630,6 +634,7 @@ class RequestRateLimiterStash:
         default_factory=lambda: MappingProxyType({})
     )
     priority_class_share: RateLimitDescriptor | None = None
+    dynamic_limiter_priority: str | None = None
     reservation_released: bool = False
     io_reservation_released: bool = False
     tpm_limited_tags: frozenset[str] = field(default_factory=frozenset)
@@ -3948,6 +3953,26 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             *self.create_organization_rate_limit_descriptor(user_api_key_dict, requested_model),
             *await self._create_tag_rate_limit_descriptors(data),
         ]
+
+    async def raise_if_over_limit_before_body(self, user_api_key_dict: UserAPIKeyAuth) -> None:
+        """Refuse a request from its headers alone once a limit that needs no body is exhausted.
+
+        Counters are only read, never incremented, so an admitted request is still charged by
+        ``async_pre_call_hook`` after its body is parsed. Limits that need the model are not checked here.
+        """
+        descriptors: Final = await self._build_request_rate_limit_descriptors(
+            user_api_key_dict=user_api_key_dict, data={}, call_type=None
+        )
+        if not descriptors:
+            return
+        response: Final = await self.should_rate_limit(
+            descriptors=descriptors,
+            parent_otel_span=user_api_key_dict.parent_otel_span,
+            read_only=True,
+            skip_tpm_check=self.tpm_reservation_enabled,
+        )
+        if response["overall_code"] == "OVER_LIMIT":
+            self._handle_rate_limit_error(response=response, descriptors=descriptors)
 
     async def _release_request_capacity_when_admitted(
         self,

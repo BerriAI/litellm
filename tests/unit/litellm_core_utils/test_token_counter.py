@@ -2,6 +2,7 @@
 #    This tests litellm.token_counter.token_counter() function
 import asyncio
 import base64
+import copy
 import importlib
 import io
 import json
@@ -37,14 +38,18 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.token_counter import (
+    UnsupportedContentTypeError,
+    _count_content_list,
     _encoding_count,
     _get_exact_count_function,
     _get_extrapolating_count_function,
     _get_tiktoken_count_function,
     calculate_img_tokens,
     estimate_image_tokens,
+    has_only_text_content,
     high_detail_image_token_upper_bound,
     is_openai_model,
+    messages_reach_token_count,
     offload_token_count,
 )
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
@@ -2170,6 +2175,127 @@ def test_count_content_list_rejects_unknown_type():
     assert "tool_reference" in message
 
 
+_CLAUDE: Final = "anthropic/claude-sonnet-5-5"
+_REMOVE_WEATHER: Final = {"type": "tool_removal", "tool": {"type": "tool_reference", "name": "get_weather"}}
+
+
+def _weather_tool(description: str, *extra_properties: str) -> dict[str, object]:
+    return {
+        "name": "get_weather",
+        "description": description,
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "city": {"type": "string", "description": "City name"},
+                "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                **{name: {"type": "string"} for name in extra_properties},
+            },
+            "required": ["city"],
+        },
+    }
+
+
+def _add_definition(definition: Mapping[str, object]) -> dict[str, object]:
+    return {"type": "tool_addition", "tool": {"type": "tool_definition", "definition": definition}}
+
+
+def _conversation(*system_blocks: Mapping[str, object]) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "What is the weather in Paris?"},
+        {"role": "system", "content": [{"type": "text", "text": "Your tools changed."}, *system_blocks]},
+    ]
+
+
+def _then_remove_weather(messages: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [*messages, {"role": "user", "content": "Never mind."}, {"role": "system", "content": [_REMOVE_WEATHER]}]
+
+
+def test_tool_addition_counts_an_inline_definition_like_the_same_tool_declared_in_tools() -> None:
+    brief: Final = _weather_tool("Weather.")
+    detailed: Final = _weather_tool("Current weather, temperature and wind for a city.", "country", "date")
+    add_by_reference: Final = {"type": "tool_addition", "tool": {"type": "tool_reference", "name": "get_weather"}}
+    by_reference: Final = _conversation(add_by_reference)
+
+    inline_delta: Final = token_counter_new(model=_CLAUDE, messages=_conversation(_add_definition(detailed))) - (
+        token_counter_new(model=_CLAUDE, messages=_conversation(_add_definition(brief)))
+    )
+    declared_delta: Final = token_counter_new(model=_CLAUDE, messages=by_reference, tools=[detailed]) - (
+        token_counter_new(model=_CLAUDE, messages=by_reference, tools=[brief])
+    )
+
+    assert declared_delta > 0
+    assert inline_delta == declared_delta
+
+
+@pytest.mark.parametrize("change", ["tool_addition", "tool_removal"])
+@pytest.mark.parametrize(
+    ("target", "referenced_names"),
+    [
+        ({"type": "tool_reference", "name": "get_weather"}, ("get_weather",)),
+        ({"type": "mcp_tool_reference", "server_name": "calendar", "name": "list_events"}, ("calendar", "list_events")),
+        ({"type": "mcp_toolset_reference", "server_name": "calendar"}, ("calendar",)),
+    ],
+    ids=["tool_reference", "mcp_tool_reference", "mcp_toolset_reference"],
+)
+def test_tool_change_by_reference_counts_the_referenced_names(
+    change: str, target: dict[str, object], referenced_names: tuple[str, ...]
+) -> None:
+    counted: Final = _count_content_list(len, [{"type": change, "tool": target}], False, None)
+
+    assert counted == sum(map(len, referenced_names))
+
+
+def test_tool_removal_never_subtracts_an_earlier_inline_definition() -> None:
+    with_definition: Final = _conversation(_add_definition(_weather_tool("Current weather for a city.")))
+    without_definition: Final = _conversation()
+
+    removal_with_definition: Final = token_counter_new(
+        model=_CLAUDE, messages=_then_remove_weather(with_definition)
+    ) - token_counter_new(model=_CLAUDE, messages=with_definition)
+    removal_without_definition: Final = token_counter_new(
+        model=_CLAUDE, messages=_then_remove_weather(without_definition)
+    ) - token_counter_new(model=_CLAUDE, messages=without_definition)
+
+    assert removal_with_definition > 0
+    assert removal_with_definition == removal_without_definition
+
+
+def test_messages_reach_token_count_agrees_with_token_counter_across_tool_changes() -> None:
+    messages: Final = _then_remove_weather(_conversation(_add_definition(_weather_tool("Current weather for a city."))))
+    total: Final = token_counter_new(model=_CLAUDE, messages=messages)
+
+    reached: Final = (
+        messages_reach_token_count(model=_CLAUDE, messages=messages, threshold=total),
+        messages_reach_token_count(model=_CLAUDE, messages=messages, threshold=total + 1),
+    )
+
+    assert reached == (True, False)
+
+
+def test_counting_tool_changes_leaves_the_messages_unchanged() -> None:
+    messages: Final = _then_remove_weather(_conversation(_add_definition(_weather_tool("Current weather for a city."))))
+    sent: Final = copy.deepcopy(messages)
+
+    token_counter_new(model=_CLAUDE, messages=messages)
+    messages_reach_token_count(model=_CLAUDE, messages=messages, threshold=1)
+
+    assert messages == sent
+
+
+@pytest.mark.parametrize(
+    "tool_change",
+    [
+        {"type": "tool_addition", "tool": {"type": "future_reference", "name": "get_weather"}},
+        {"type": "tool_addition", "tool": {"type": "tool_definition", "definition": "get_weather"}},
+        {"type": "tool_removal"},
+    ],
+    ids=["unknown_target_type", "definition_not_an_object", "missing_target"],
+)
+def test_tool_change_with_an_unrecognized_target_stays_unsupported(tool_change: dict[str, object]) -> None:
+    with pytest.raises(UnsupportedContentTypeError, match="Invalid tool change target type"):
+        _count_content_list(len, [tool_change], False, None)
+
+
 @pytest.mark.parametrize(
     "source",
     [
@@ -3804,3 +3930,35 @@ def test_openai_model_check_holds_while_openai_models_are_registered_concurrentl
             registering.result()
     finally:
         litellm.open_ai_chat_completion_models.difference_update(registered)
+
+
+@pytest.mark.parametrize(
+    ("messages", "text_only"),
+    [
+        ([{"role": "user", "content": "hi"}, {"role": "assistant", "content": None}], True),
+        ([{"role": "user", "content": ["part", {"type": "text", "text": "hi"}, {"type": "thinking"}]}], True),
+        ([{"role": "user", "content": "hi"}, "a bare string message"], False),
+        ([{"role": "user", "content": "hi"}, 42], False),
+        ([None], False),
+        ([{"role": "user", "content": {"type": "text", "text": "hi"}}], False),
+        (
+            [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}}]}],
+            False,
+        ),
+        ([{"role": "user", "content": [{"type": ["text"], "text": "hi"}]}], False),
+        ([{"role": "user", "content": [{"text": "hi"}]}], False),
+    ],
+    ids=[
+        "string_and_empty_content",
+        "text_blocks",
+        "string_message",
+        "number_message",
+        "none_message",
+        "mapping_content",
+        "image_block",
+        "non_string_block_type",
+        "untyped_block",
+    ],
+)
+def test_has_only_text_content_accepts_only_plain_text_chat_messages(messages: list[object], text_only: bool) -> None:
+    assert has_only_text_content(messages) is text_only

@@ -296,6 +296,26 @@ def test_body_params_forward_the_thread_like_the_python_handler(
     assert messages_host.body_params(request, asynchronous=True).get("thread") == expected
 
 
+@pytest.mark.parametrize(
+    ("metadata", "expected"),
+    (
+        ({"user_id": "u-1", "user_api_key_auth": object(), "pillar_flagged": False}, {"user_id": "u-1"}),
+        ({"user_api_key_auth": object()}, {}),
+        (["u-1"], ["u-1"]),
+    ),
+    ids=("litellm-keys-dropped", "only-litellm-keys", "not-an-object-left-for-rust-to-reject"),
+)
+def test_body_params_forward_only_the_metadata_anthropic_accepts(metadata: object, expected: object) -> None:
+    request: Final[dict[str, object]] = {
+        "model": "claude-sonnet-4-5",
+        "messages": [],
+        "max_tokens": 8,
+        "metadata": metadata,
+    }
+
+    assert messages_host.body_params(request, asynchronous=True)["metadata"] == expected
+
+
 def _marked(phase: str | None = None, *args: object) -> ValueError:
     error: Final = ValueError(*args)
     if phase is not None:

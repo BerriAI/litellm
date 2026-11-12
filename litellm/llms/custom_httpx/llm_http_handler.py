@@ -6188,6 +6188,7 @@ class BaseLLMHTTPHandler:
                 **kwargs_for_followup,
             }
         )
+        logging_obj.record_served_agentic_follow_up()
 
         if callback is not None:
             try:

@@ -11,6 +11,11 @@ generator client {
 
 // Budget / Rate Limits for an org
 model LiteLLM_BudgetTable {
+  customer_organization_defaults LiteLLM_CustomerOrganizationTable[] @relation("CustomerOrganizationDefaultBudget")
+  customer_organizations LiteLLM_CustomerOrganizationTable[] @relation("CustomerOrganizationBudget")
+  customer_member_templates LiteLLM_CustomerMemberTable[] @relation("CustomerMemberTemplate")
+  customer_teams LiteLLM_CustomerTeamTable[] @relation("CustomerTeamBudget")
+  customer_members LiteLLM_CustomerMemberTable[] @relation("CustomerMemberBudget")
   budget_id String @id @default(uuid())
   max_budget Float?
   soft_budget Float?
@@ -38,6 +43,61 @@ model LiteLLM_BudgetTable {
   model_access_groups LiteLLM_ModelAccessGroupBudgetTable[] // multiple model access groups can have the same budget
   team_membership LiteLLM_TeamMembership[] // budgets of Users within a Team 
   organization_membership LiteLLM_OrganizationMembership[] // budgets of Users within a Organization
+}
+
+model LiteLLM_CustomerOrganizationTable {
+  spend Float @default(0.0)
+  budget_reset_at DateTime?
+  budget_ids String[] @default([])
+  budget_names Json @default("{}")
+  budget_id String?
+  budget LiteLLM_BudgetTable? @relation("CustomerOrganizationBudget", fields: [budget_id], references: [budget_id])
+  customer_org_id String @id @default(uuid())
+  alias String?
+  default_budget_id String?
+  default_budget LiteLLM_BudgetTable? @relation("CustomerOrganizationDefaultBudget", fields: [default_budget_id], references: [budget_id])
+  teams LiteLLM_CustomerTeamTable[]
+  created_at DateTime @default(now())
+  created_by String
+  updated_at DateTime @default(now()) @updatedAt
+  updated_by String
+}
+
+model LiteLLM_CustomerTeamTable {
+  spend Float @default(0.0)
+  budget_reset_at DateTime?
+  customer_team_id String @id @default(uuid())
+  alias String?
+  parent_org_id String
+  parent_org LiteLLM_CustomerOrganizationTable @relation(fields: [parent_org_id], references: [customer_org_id])
+  budget_id String?
+  budget LiteLLM_BudgetTable? @relation("CustomerTeamBudget", fields: [budget_id], references: [budget_id])
+  members LiteLLM_CustomerMemberTable[]
+  created_at DateTime @default(now())
+  created_by String
+  updated_at DateTime @default(now()) @updatedAt
+  updated_by String
+  @@index([parent_org_id])
+}
+
+model LiteLLM_CustomerMemberTable {
+  spend Float @default(0.0)
+  budget_reset_at DateTime?
+  customer_member_id String @id @default(uuid())
+  alias String?
+  parent_team_id String
+  parent_team LiteLLM_CustomerTeamTable @relation(fields: [parent_team_id], references: [customer_team_id])
+  budget_id String?
+  budget LiteLLM_BudgetTable? @relation("CustomerMemberBudget", fields: [budget_id], references: [budget_id], onDelete: Restrict)
+  budget_template_id String?
+  budget_template LiteLLM_BudgetTable? @relation("CustomerMemberTemplate", fields: [budget_template_id], references: [budget_id], onDelete: Restrict)
+  budget_override_expires_at DateTime?
+  created_at DateTime @default(now())
+  created_by String
+  updated_at DateTime @default(now()) @updatedAt
+  updated_by String
+  @@index([parent_team_id])
+  @@index([budget_template_id])
 }
 
 // Models on proxy
@@ -1630,6 +1690,7 @@ model LiteLLM_AccessGroupTable {
   mcp_tool_permissions    Json?
   access_agent_ids        String[] @default([])
   access_skill_names      String[] @default([])
+  access_vector_store_ids String[] @default([])
 
   assigned_team_ids         String[] @default([])
   assigned_key_ids          String[] @default([])

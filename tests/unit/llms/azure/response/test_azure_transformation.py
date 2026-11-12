@@ -1309,6 +1309,30 @@ def test_responses_api_version_routes_a_dated_chat_deployment_to_its_own_respons
 
 
 @pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize(
+    "model",
+    ["azure/gpt5_series/my-deployment", "azure/responses/gpt5_series/my-deployment", "azure/my-deployment"],
+)
+def test_responses_sends_the_bare_deployment_name_without_the_gpt5_series_marker(
+    respx_mock: respx.MockRouter, model: str
+) -> None:
+    route: Final = respx_mock.post(
+        "https://example-resource.openai.azure.com/openai/responses", params={"api-version": "2025-04-01-preview"}
+    ).mock(return_value=httpx.Response(200, json=_COMPLETED_RESPONSE))
+
+    litellm.responses(
+        model=model,
+        input="hi",
+        api_base="https://example-resource.openai.azure.com",
+        api_key="azure-test-key",
+        api_version="2025-04-01-preview",
+    )
+
+    assert route.call_count == 1
+    assert TypeAdapter(dict[str, JsonValue]).validate_json(route.calls[0].request.content)["model"] == "my-deployment"
+
+
+@pytest.mark.respx(assert_all_called=True)
 def test_responses_api_version_reaches_the_url_when_chat_completion_bridges_to_responses(
     respx_mock: respx.MockRouter,
 ) -> None:

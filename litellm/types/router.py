@@ -870,6 +870,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     cost_per_second: ReadOnly[float | None]
     input_cost_per_second: float | None
     input_cost_per_text_message: ReadOnly[float | None]
+    output_cost_per_video: ReadOnly[float | None]
     output_cost_per_second: float | None
     output_cost_per_second_480p: ReadOnly[float | None]
     output_cost_per_second_720p: ReadOnly[float | None]

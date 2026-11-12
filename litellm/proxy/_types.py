@@ -724,6 +724,14 @@ class LiteLLMRoutes(enum.Enum):
             "/jwt/key/mapping/delete",
             "/jwt/key/mapping/list",
             "/jwt/key/mapping/info",
+            "/management/v1/customer_organizations",
+            "/management/v1/customer_organizations/{customer_org_id}",
+            "/management/v1/customer_organizations/{customer_org_id}/default_budgets",
+            "/management/v1/customer_organizations/{customer_org_id}/default_budgets/{budget_id}",
+            "/management/v1/customer_teams",
+            "/management/v1/customer_teams/{customer_team_id}",
+            "/management/v1/customer_members",
+            "/management/v1/customer_members/{customer_member_id}",
         ]
         + key_management_routes
         + mcp_management_routes
@@ -2937,6 +2945,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     store_prompts_in_spend_logs: bool | None = Field(
         None,
         description="If True, stores request messages and responses in spend logs. Default is False.",
+    )
+    redact_tokens_in_spend_logs: bool = Field(
+        True,
+        description="Masks token-shaped secrets in stored spend log request and response content by default. Set False to opt out.",
     )
     spend_logs_prompt_storage: Literal["latest_turn"] | None = Field(
         None,
