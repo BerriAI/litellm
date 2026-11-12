@@ -66,6 +66,13 @@ def _peer_card(url: str, name: str) -> dict[str, JsonValue]:
         "description": "Synthetic peer",
         "version": "1.0.0",
         "url": url + "/",
+        "supportedInterfaces": [
+            {
+                "url": url + "/",
+                "protocolBinding": "JSONRPC",
+                "protocolVersion": "0.3",
+            }
+        ],
         "capabilities": {"streaming": True},
         "defaultInputModes": ["text"],
         "defaultOutputModes": ["text"],
@@ -73,10 +80,15 @@ def _peer_card(url: str, name: str) -> dict[str, JsonValue]:
     }
 
 
-def _register_agent(gateway: Gateway, scenario: Scenario, name: str, url: str) -> str:
-    created: Final = gateway.request(
-        "POST", "/v1/agents", {"agent_name": name, "agent_card_params": _peer_card(url, name)}
-    )
+def _register_agent(
+    gateway: Gateway,
+    scenario: Scenario,
+    name: str,
+    url: str,
+    agent_card: dict[str, JsonValue] | None = None,
+) -> str:
+    card: Final = _peer_card(url, name) if agent_card is None else agent_card
+    created: Final = gateway.request("POST", "/v1/agents", {"agent_name": name, "agent_card_params": card})
     assert created.status_code == 200, created.text
     identity: Final = created.json()["agent_id"]
 
@@ -416,3 +428,68 @@ def test_legacy_agent_json_card_path_applies_agent_permissions_to_non_admin_keys
         )
         assert (denied_legacy.status_code, denied_legacy.text) == (403, refusal(denied)), denied_legacy.text
         assert wire.drain() == ()
+
+
+def test_agent_list_and_detail_cards_use_proxy_urls_for_scoped_keys(gateway: Gateway) -> None:
+    marker: Final = "a2acardurl" + uuid.uuid4().hex[:12]
+
+    def upstream(request: Request) -> Reply:
+        assert request.method == "GET", request.method
+        return Reply(body=json.dumps(_peer_card(wire.url, marker)).encode())
+
+    with wire_server(upstream) as wire, gateway.scenario() as scenario:
+        backend_url: Final = wire.url + "/"
+        peer_card: Final = _peer_card(wire.url, marker)
+        peer_interfaces: Final = peer_card["supportedInterfaces"]
+        assert isinstance(peer_interfaces, list)
+        agent_card: Final = {
+            **peer_card,
+            "additionalInterfaces": [{"url": backend_url, "transport": "GRPC"}],
+            "supportedInterfaces": [
+                *peer_interfaces,
+                {
+                    "url": backend_url,
+                    "protocolBinding": "GRPC",
+                    "protocolVersion": "0.3",
+                },
+            ],
+        }
+        agent_id: Final = _register_agent(gateway, scenario, marker, wire.url, agent_card)
+        user_id: Final = scenario.user(user_role="internal_user")
+        scoped_key: Final = scenario.key(user_id=user_id, object_permission={"agents": [agent_id]})
+
+        public_card: Final = gateway.request(
+            "GET",
+            f"/a2a/{agent_id}/.well-known/agent-card.json",
+            key=scoped_key,
+        )
+        listed: Final = gateway.request("GET", "/v1/agents", key=scoped_key)
+        detailed: Final = gateway.request("GET", f"/v1/agents/{agent_id}", key=scoped_key)
+
+        assert public_card.status_code == 200, public_card.text
+        assert listed.status_code == 200, listed.text
+        assert detailed.status_code == 200, detailed.text
+        assert wire.url not in listed.text
+        assert wire.url not in detailed.text
+        assert "additionalInterfaces" not in listed.text
+        assert "additionalInterfaces" not in detailed.text
+        public_urls: Final = (
+            public_card.json()["url"],
+            public_card.json()["supportedInterfaces"][0]["url"],
+        )
+        listed_agent: Final = next(item for item in listed.json() if item["agent_id"] == agent_id)
+        for body in (listed_agent, detailed.json()):
+            card: Final = body["agent_card_params"]
+            assert (card["url"], card["supportedInterfaces"][0]["url"]) == public_urls
+            assert card["supportedInterfaces"] == [
+                {
+                    "url": public_urls[1],
+                    "protocolBinding": "JSONRPC",
+                    "protocolVersion": "0.3",
+                }
+            ]
+
+        admin_listed: Final = gateway.request("GET", "/v1/agents")
+        assert admin_listed.status_code == 200, admin_listed.text
+        admin_agent: Final = next(item for item in admin_listed.json() if item["agent_id"] == agent_id)
+        assert admin_agent["agent_card_params"]["url"] == backend_url

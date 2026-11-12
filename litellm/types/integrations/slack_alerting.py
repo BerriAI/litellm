@@ -188,6 +188,7 @@ class AlertType(str, Enum):
     cooldown_deployment = "cooldown_deployment"
     new_model_added = "new_model_added"
     model_deprecation_warnings = "model_deprecation_warnings"
+    performance_alerts = "performance_alerts"
 
     # Outage alerts
     outage_alerts = "outage_alerts"

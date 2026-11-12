@@ -12,7 +12,6 @@ The A2A SDK can point to LiteLLM's URL and invoke agents registered with LiteLLM
 
 import json
 from collections.abc import AsyncGenerator, Callable, Coroutine, Mapping
-from copy import deepcopy
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 from urllib.parse import urlparse
@@ -24,11 +23,13 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, keyword_arguments
 from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.llms.a2a.common_utils import resolve_a2a_hop_auth_header
+from litellm.llms.azure.common_utils import caused_by_entra_rejection
 from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy.a2a.agent_card import point_agent_card_at_proxy
 from litellm.proxy.a2a.version_convert import (
     A2AVersion,
     normalize_agent_card,
@@ -147,19 +148,20 @@ def _to_jsonrpc_object(chunk: object) -> object:
     return chunk
 
 
-def _build_message_send_params(params: dict[str, Any]) -> "MessageSendParams":
+def _build_message_send_params(params: object) -> "MessageSendParams":
     """Build MessageSendParams from wire (0.3) or A2A 1.0 JSON-RPC params."""
     from a2a.compat.v0_3.types import MessageSendParams
 
+    fields: Final = dict(**keyword_arguments(params, MessageSendParams))
     try:
-        return MessageSendParams(**params)
+        return MessageSendParams.model_validate(fields)
     except ValidationError:
         from a2a.compat.v0_3.conversions import pb2_v10, to_compat_send_message_request
         from google.protobuf.json_format import ParseDict, ParseError
 
         pb: Final = pb2_v10.SendMessageRequest()
         try:
-            ParseDict(params, pb, ignore_unknown_fields=True)
+            ParseDict(fields, pb, ignore_unknown_fields=True)
         except ParseError as e:
             raise ValueError(f"Invalid message/send params: {e}") from e
         return to_compat_send_message_request(pb, "").params
@@ -764,16 +766,12 @@ async def get_agent_card(
             )
 
         proxy_url: Final = get_custom_url(str(request.base_url), route=f"a2a/{agent_id}")
-        agent_card = deepcopy(agent.agent_card_params)
-        agent_card["url"] = proxy_url
-        interfaces: Final = agent_card.get("supportedInterfaces")
-        if isinstance(interfaces, list) and interfaces:
-            interfaces[0]["url"] = proxy_url
+        agent_card: Final = point_agent_card_at_proxy(agent.agent_card_params, proxy_url)
         served_version: Final = _served_version(agent, request)
-        agent_card = normalize_agent_card(agent_card, served_version)
+        normalized_agent_card: Final = normalize_agent_card(agent_card, served_version)
 
         verbose_proxy_logger.debug("Returning agent card for '%s' with proxy URL: %s", agent_id, proxy_url)
-        return JSONResponse(content=agent_card)
+        return JSONResponse(content=normalized_agent_card)
 
     except HTTPException:
         raise
@@ -1044,7 +1042,7 @@ async def invoke_agent_a2a(
             from a2a.compat.v0_3.types import SendMessageRequest
 
             try:
-                message_send_params: Final = _build_message_send_params(params)
+                message_send_params: Final = _build_message_send_params(_DECODED_JSON.validate_python(params))
             except (ValidationError, ValueError) as e:
                 return _jsonrpc_error(request_id, -32602, f"Invalid params: {e}")
 
@@ -1223,6 +1221,8 @@ async def invoke_agent_a2a(
             pass
         if isinstance(e, litellm.BadRequestError):
             return _jsonrpc_error(body.get("id"), -32602, e.message, 400)
+        if isinstance(e, litellm.AuthenticationError) and caused_by_entra_rejection(e):
+            return _jsonrpc_error(body.get("id"), -32000, e.message, 401)
         return _jsonrpc_error(body.get("id"), -32603, f"Internal error: {e}", 500)
 
 

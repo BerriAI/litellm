@@ -10,7 +10,7 @@ from contextlib import aclosing
 from dataclasses import dataclass
 from functools import partial
 from types import MappingProxyType
-from typing import IO, Any, Final, TypedDict
+from typing import IO, Final, TypedDict
 from urllib.parse import quote, unquote
 
 import httpx
@@ -35,7 +35,7 @@ from litellm.litellm_core_utils.cloud_storage_security import (
 )
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, iter_items
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
+from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     extract_file_data,
     extract_file_metadata,
 )
@@ -827,7 +827,7 @@ def _openai_batch_jsonl_entry_to_vertex_anthropic_row(
 
 
 def _openai_batch_jsonl_entry_to_vertex_rows(
-    openai_entry: dict[str, Any],
+    openai_entry: Mapping[str, object],
     map_openai_to_vertex_params: Callable[[dict[str, object]], dict[str, object]],
     batch_model: str | None = None,
     deployment_params: Mapping[str, object] = MappingProxyType({}),
@@ -842,7 +842,7 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
     Example Vertex jsonl
     {"request":{"contents": [{"role": "user", "parts": [{"text": "What is the relation between the following video and image samples?"}, {"fileData": {"fileUri": "gs://cloud-samples-data/generative-ai/video/animals.mp4", "mimeType": "video/mp4"}}, {"fileData": {"fileUri": "gs://cloud-samples-data/generative-ai/image/cricket.jpeg", "mimeType": "image/jpeg"}}]}]}}
     """
-    entry_body: Final = openai_entry.get("body")
+    entry_body: Final = as_str_mapping(openai_entry.get("body"))
     model: Final = batch_model or (str(entry_body.get("model") or "") if isinstance(entry_body, dict) else "")
     is_anthropic_model: Final = is_vertex_anthropic_batch_model(model)
     if _is_embeddings_batch_entry(openai_entry):
@@ -855,11 +855,10 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
 
     if not isinstance(entry_body, dict):
         raise TypeError("`body` on batch requests must be a JSON object, but was missing or not an object")
-    openai_request_body: Final = openai_entry["body"]
     chat_request_body: Final = (
-        responses_batch_body_to_chat_body(openai_request_body, custom_llm_provider="vertex_ai")
+        responses_batch_body_to_chat_body(entry_body, custom_llm_provider="vertex_ai")
         if _is_responses_batch_entry(openai_entry)
-        else openai_request_body
+        else entry_body
     )
     chat_messages: Final = map_developer_role_to_system_role(chat_request_body.get("messages", []))
     if is_anthropic_model:
@@ -1299,7 +1298,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
 
     def _map_openai_to_vertex_params(
         self,
-        openai_request_body: dict[str, Any],
+        openai_request_body: dict[str, object],
         deployment_drop_params: object = None,
     ) -> dict[str, object]:
         """
