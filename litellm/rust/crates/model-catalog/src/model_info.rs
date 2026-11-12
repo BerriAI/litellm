@@ -122,6 +122,7 @@ pub struct ModelInfoFields {
     pub output_cost_per_second_4k: Option<f64>,
     pub output_cost_per_video_per_second: Option<f64>,
     pub output_cost_per_image: Option<f64>,
+    pub output_cost_per_billable_unit: Option<f64>,
     pub output_cost_per_pixel: Option<f64>,
     pub output_cost_per_image_token: Option<f64>,
     pub output_cost_per_image_token_batches: Option<f64>,
