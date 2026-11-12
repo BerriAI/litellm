@@ -110,8 +110,24 @@ _SCHEMA: Final[dict[str, object]] = {"type": "object", "properties": {}}  # muta
                 "strict": False,
             },
         ),
+        (
+            {
+                "type": "custom",
+                "name": "lookup",
+                "description": "Find a record",
+                "input_schema": _SCHEMA,
+                "custom": {"eager_input_streaming": True},
+            },
+            {
+                "type": "function",
+                "name": "lookup",
+                "description": "Find a record",
+                "parameters": _SCHEMA,
+                "strict": False,
+            },
+        ),
     ),
-    ids=("anthropic", "anthropic-strict", "anthropic-custom-type"),
+    ids=("anthropic", "anthropic-strict", "anthropic-custom-type", "anthropic-custom-options"),
 )
 def test_transform_anthropic_tool_shapes(tool: dict[str, object], expected: dict[str, object]) -> None:
     result: Final = OpenAICountTokensConfig().transform_request_to_count_tokens(
@@ -225,6 +241,79 @@ def test_messages_to_responses_input_reads_a_tool_call_that_forwards_its_fields(
         "name": "get_weather",
         "arguments": '{"city": "Paris"}',
     }
+
+
+def test_messages_to_responses_input_maps_custom_tool_calls_and_their_outputs():
+    messages: Final = [
+        {"role": "user", "content": "Run it"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "call_custom", "type": "custom", "custom": {"name": "code_exec", "input": "print(2+3)"}},
+                {"id": "call_fn", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}},
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_custom", "content": "5"},
+        {"role": "tool", "tool_call_id": "call_fn", "content": "sunny"},
+    ]
+
+    input_items, _ = OpenAICountTokensConfig.messages_to_responses_input(messages)
+
+    assert input_items[1:] == [
+        {"type": "custom_tool_call", "call_id": "call_custom", "name": "code_exec", "input": "print(2+3)"},
+        {"type": "function_call", "call_id": "call_fn", "name": "get_weather", "arguments": "{}"},
+        {"type": "custom_tool_call_output", "call_id": "call_custom", "output": "5"},
+        {"type": "function_call_output", "call_id": "call_fn", "output": "sunny"},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("tool_call", "expected"),
+    (
+        (
+            {"id": "call_1", "type": "custom", "custom": None},
+            {"type": "custom_tool_call", "call_id": "call_1", "name": "", "input": ""},
+        ),
+        (
+            {"id": "call_1", "type": "function", "function": None},
+            {"type": "function_call", "call_id": "call_1", "name": "", "arguments": ""},
+        ),
+    ),
+    ids=("custom", "function"),
+)
+def test_messages_to_responses_input_maps_null_tool_call_payloads_to_empty_calls(
+    tool_call: dict[str, object], expected: dict[str, object]
+) -> None:
+    input_items, _ = OpenAICountTokensConfig.messages_to_responses_input(
+        [{"role": "user", "content": "Run it"}, {"role": "assistant", "content": None, "tool_calls": [tool_call]}]
+    )
+
+    assert input_items[1:] == [expected]
+
+
+def test_transform_custom_tool_uses_the_flat_responses_shape():
+    tool: Final = {
+        "type": "custom",
+        "custom": {
+            "name": "code_exec",
+            "description": "Run python",
+            "format": {"type": "grammar", "grammar": {"syntax": "lark", "definition": "start: /.+/"}},
+        },
+    }
+
+    result: Final = OpenAICountTokensConfig().transform_request_to_count_tokens(
+        model="gpt-4o", input="Run it", tools=[tool]
+    )
+
+    assert result["tools"] == [
+        {
+            "type": "custom",
+            "name": "code_exec",
+            "description": "Run python",
+            "format": {"type": "grammar", "syntax": "lark", "definition": "start: /.+/"},
+        }
+    ]
 
 
 def test_messages_to_responses_input_preserves_images():

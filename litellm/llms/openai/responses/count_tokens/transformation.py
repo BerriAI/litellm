@@ -5,14 +5,17 @@ This module handles the transformation of requests to OpenAI's /v1/responses/inp
 """
 
 import copy
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Final, Literal, Protocol, TypeAlias
 
 from openai.types.responses.input_token_count_params import InputTokenCountParams
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
-from litellm.litellm_core_utils.core_helpers import iter_items, require_attributes
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items, require_attributes
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    convert_custom_tool_format_to_responses_shape,
+)
 from litellm.litellm_core_utils.tool_fields import DropPolicy
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.messages.convertible_blocks import malformed_tool_result_text_error
@@ -23,7 +26,7 @@ from litellm.llms.anthropic.messages.responses_adapters.transformation import (
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.anthropic import AnthropicMessagesRequest, AnthropicOutputSchema
 from litellm.types.llms.openai import ResponsesAPIRequestParams, replayable_responses_input
-from litellm.types.utils import all_litellm_params
+from litellm.types.utils import all_litellm_params, is_custom_tool_call_dict
 
 
 class ResponsesInputTextPart(TypedDict):
@@ -80,6 +83,47 @@ def _field_reader(value: object) -> _FieldReader:
 
 def _function_fields(value: object) -> _FunctionFields:
     return require_attributes(value, _FunctionFields, "get", "__contains__", "__getitem__")
+
+
+def _is_custom_tool_call(tool_call: _FieldReader) -> bool:
+    return is_custom_tool_call_dict({"type": tool_call.get("type"), "custom": tool_call.get("custom")})
+
+
+def _assistant_tool_calls(messages: Sequence[Mapping[str, object]]) -> Iterable[_FieldReader]:
+    for msg in messages:
+        tool_calls = msg.get("tool_calls")
+        if msg.get("role") == "assistant" and tool_calls:
+            yield from (_field_reader(tool_call) for tool_call in iter_items(tool_calls))
+
+
+def _responses_tool_call_item(tool_call: _FieldReader) -> Mapping[str, object]:
+    call_id: Final = tool_call.get("id", "")
+    if _is_custom_tool_call(tool_call):
+        custom: Final = _field_reader(tool_call.get("custom") or {})
+        return {
+            "type": "custom_tool_call",
+            "call_id": call_id,
+            "name": custom.get("name", ""),
+            "input": custom.get("input", ""),
+        }
+    function: Final = _field_reader(tool_call.get("function") or {})
+    return {
+        "type": "function_call",
+        "call_id": call_id,
+        "name": function.get("name", ""),
+        "arguments": function.get("arguments", ""),
+    }
+
+
+def _responses_custom_tool(custom: Mapping[str, object]) -> Mapping[str, object]:
+    description: Final = custom.get("description")
+    format_obj: Final = as_str_mapping(custom.get("format"))
+    return {
+        "type": "custom",
+        "name": custom.get("name", ""),
+        **({"description": description} if description is not None else {}),
+        **({"format": convert_custom_tool_format_to_responses_shape(format_obj)} if format_obj is not None else {}),
+    }
 
 
 _ANTHROPIC_OUTPUT_SCHEMA: Final = TypeAdapter(AnthropicOutputSchema)
@@ -249,6 +293,8 @@ class OpenAICountTokensConfig:
                         "strict": bool(tool.get("strict")),
                     }
                 )
+            elif tool.get("type") == "custom" and (custom := as_str_mapping(tool.get("custom"))) is not None:
+                transformed.append(dict(_responses_custom_tool(custom)))
             else:
                 # Pass through non-function tools (e.g., web_search, file_search)
                 transformed.append(tool)
@@ -267,6 +313,9 @@ class OpenAICountTokensConfig:
         """
         input_items: Final[list[dict[str, object]]] = []
         instructions_parts: Final[list[str]] = []
+        custom_tool_call_ids: Final = frozenset(
+            tool_call.get("id") for tool_call in _assistant_tool_calls(messages) if _is_custom_tool_call(tool_call)
+        )
 
         for msg in messages:
             role = msg.get("role", "")
@@ -297,26 +346,20 @@ class OpenAICountTokensConfig:
                 if content:
                     input_items.append({"role": "assistant", "content": content})
                 if tool_calls:
-                    for tc in iter_items(tool_calls):
-                        tool_call = _field_reader(tc)
-                        function = tool_call.get("function", {})
-                        call_id = tool_call.get("id", "")
-                        function_fields = _field_reader(function)
-                        input_items.append(
-                            {
-                                "type": "function_call",
-                                "call_id": call_id,
-                                "name": function_fields.get("name", ""),
-                                "arguments": function_fields.get("arguments", ""),
-                            }
-                        )
+                    input_items.extend(
+                        dict(_responses_tool_call_item(_field_reader(tool_call)))
+                        for tool_call in iter_items(tool_calls)
+                    )
                 elif not content:
                     input_items.append({"role": "assistant", "content": content})
             elif role == "tool":
+                tool_call_id = msg.get("tool_call_id", "")
                 input_items.append(
                     {
-                        "type": "function_call_output",
-                        "call_id": msg.get("tool_call_id", ""),
+                        "type": "custom_tool_call_output"
+                        if tool_call_id in custom_tool_call_ids
+                        else "function_call_output",
+                        "call_id": tool_call_id,
                         "output": content if isinstance(content, str) else str(content),
                     }
                 )
