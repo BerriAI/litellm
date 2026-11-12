@@ -932,7 +932,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return cls._raise_invalid_reasoning_effort(model, value, llm_provider)
 
     def get_supported_openai_params(self, model: str):
-        sampling_params: Final = ("temperature", "top_p") if self._supports_sampling_params(model) else ()
+        resolved_model: Final = AnthropicModelInfo.get_base_model(model) or model
+        # temperature=1 stays listed so _apply_sampling_param can accept it. top_p does not.
+        sampling_params: Final = (
+            ("temperature", "top_p") if self._supports_sampling_params(resolved_model) else ("temperature",)
+        )
         params: Final = [
             "stream",
             "stop",

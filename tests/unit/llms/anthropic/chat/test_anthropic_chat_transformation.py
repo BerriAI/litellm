@@ -11675,13 +11675,13 @@ def test_get_supported_params_reports_sampling_params_only_when_the_request_keep
     local_model_cost_map, model: str
 ):
     """What get_supported_openai_params says about temperature/top_p must match what
-    map_openai_params does with them under drop_params, so a caller that pre-flights
-    from the list is never told a param is fine that the request path then drops."""
+    map_openai_params keeps for a value the model accepts. Fixed-sampling models
+    accept temperature=1 and drop every top_p, so that is the pair checked."""
     config = AnthropicConfig()
 
     supported = config.get_supported_openai_params(model=model)
     sent = config.map_openai_params(
-        non_default_params={"temperature": 0.1, "top_p": 0.5},
+        non_default_params={"temperature": 1, "top_p": 0.5},
         optional_params={},
         model=model,
         drop_params=True,
@@ -11689,3 +11689,85 @@ def test_get_supported_params_reports_sampling_params_only_when_the_request_keep
 
     assert ("temperature" in supported) == ("temperature" in sent), (model, supported, sent)
     assert ("top_p" in supported) == ("top_p" in sent), (model, supported, sent)
+
+
+_FIXED_SAMPLING_COMPLETION_MODELS: Final = (
+    "claude-sonnet-5-5",
+    "anthropic/claude-opus-4-8",
+    "vertex_ai/claude-sonnet-5-5",
+    "azure_ai/claude-opus-4-8",
+)
+
+
+def _fixed_sampling_completion(
+    model: str, *, temperature: float | None = None, drop_params: bool | None = None
+) -> ModelResponse:
+    response: Final = litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        temperature=temperature,
+        drop_params=drop_params,
+        mock_response="ok",
+        api_key="sk-test",
+    )
+    assert isinstance(response, ModelResponse)
+    return response
+
+
+@pytest.mark.parametrize("model", _FIXED_SAMPLING_COMPLETION_MODELS)
+def test_temperature_one_is_accepted_for_fixed_sampling_claude_models(
+    model: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    response: Final = _fixed_sampling_completion(model, temperature=1)
+
+    assert response.choices[0].message.content == "ok"
+
+
+@pytest.mark.parametrize("model", _FIXED_SAMPLING_COMPLETION_MODELS)
+def test_non_default_temperature_names_the_only_accepted_value(model: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="Only temperature=1 is supported"):
+        _fixed_sampling_completion(model, temperature=0.5)
+
+
+@pytest.mark.parametrize("model", _FIXED_SAMPLING_COMPLETION_MODELS)
+def test_drop_params_drops_non_default_temperature_for_fixed_sampling_models(
+    model: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    response: Final = _fixed_sampling_completion(model, temperature=0.5, drop_params=True)
+    sent: Final = AnthropicConfig().map_openai_params(
+        non_default_params={"temperature": 0.5},
+        optional_params={},
+        model=model,
+        drop_params=True,
+    )
+
+    assert response.choices[0].message.content == "ok"
+    assert "temperature" not in sent
+
+
+@pytest.mark.parametrize("model", ["claude-sonnet-5-5", "claude-opus-4-8"])
+def test_fixed_sampling_supported_params_agree_for_bare_and_anthropic_names(model: str) -> None:
+    bare: Final = litellm.get_supported_openai_params(model=model)
+    prefixed: Final = litellm.get_supported_openai_params(model=f"anthropic/{model}")
+
+    assert bare is not None
+    assert prefixed is not None
+    assert ("temperature" in bare) == ("temperature" in prefixed)
+    assert "temperature" in bare
+    assert "top_p" not in bare
+    assert "top_p" not in prefixed
+
+
+@pytest.mark.parametrize("model", ["claude-sonnet-4-6", "anthropic/claude-sonnet-4-6"])
+def test_models_that_keep_sampling_still_list_temperature_and_top_p(model: str) -> None:
+    params: Final = litellm.get_supported_openai_params(model=model)
+
+    assert params is not None
+    assert "temperature" in params
+    assert "top_p" in params
