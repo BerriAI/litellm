@@ -431,9 +431,7 @@ class OpenAIDecisionRequestBody(DecisionsMediaBody):
     ] = None
     prompt_cache_key: Annotated[
         str | None,
-        Field(
-            description="Partitions prompt-cache reuse. Sent to OpenAI; other providers reject it unless drop_params is set"
-        ),
+        Field(description="Partitions prompt-cache reuse. Sent to OpenAI and dropped for other providers"),
     ] = None
     prompt_cache_options: OpenAIDecisionPromptCacheOptions | None = None
 

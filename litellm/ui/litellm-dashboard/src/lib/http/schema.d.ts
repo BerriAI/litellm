@@ -61232,7 +61232,7 @@ export interface operations {
                     model: string;
                     /**
                      * Prompt Cache Key
-                     * @description Partitions prompt-cache reuse. Sent to OpenAI; other providers reject it unless drop_params is set
+                     * @description Partitions prompt-cache reuse. Sent to OpenAI and dropped for other providers
                      */
                     prompt_cache_key?: string | null;
                     prompt_cache_options?: {
@@ -83154,7 +83154,7 @@ export interface operations {
                     model: string;
                     /**
                      * Prompt Cache Key
-                     * @description Partitions prompt-cache reuse. Sent to OpenAI; other providers reject it unless drop_params is set
+                     * @description Partitions prompt-cache reuse. Sent to OpenAI and dropped for other providers
                      */
                     prompt_cache_key?: string | null;
                     prompt_cache_options?: {

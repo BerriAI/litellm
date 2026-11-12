@@ -11894,7 +11894,7 @@
                           "type": "null"
                         }
                       ],
-                      "description": "Partitions prompt-cache reuse. Sent to OpenAI; other providers reject it unless drop_params is set",
+                      "description": "Partitions prompt-cache reuse. Sent to OpenAI and dropped for other providers",
                       "title": "Prompt Cache Key"
                     },
                     "prompt_cache_options": {
@@ -13401,7 +13401,7 @@
                           "type": "null"
                         }
                       ],
-                      "description": "Partitions prompt-cache reuse. Sent to OpenAI; other providers reject it unless drop_params is set",
+                      "description": "Partitions prompt-cache reuse. Sent to OpenAI and dropped for other providers",
                       "title": "Prompt Cache Key"
                     },
                     "prompt_cache_options": {

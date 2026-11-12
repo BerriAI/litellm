@@ -26,18 +26,15 @@ from litellm.llms.base_llm.decisions.transformation import (
     BaseDecisionsConfig,
     DecisionsResponseValidationError,
     catalog_mode,
-    has_prompt_cache_breakpoint,
     image_media_type,
     image_param,
     input_images,
-    instruction_roles,
     ir_to_systemone_request,
     ir_to_systemone_response,
     remote_image_urls,
     systemone_request_to_ir,
     with_images_where,
     with_inlined_images,
-    without_instruction_messages,
     without_prompt_cache_breakpoints,
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
@@ -385,6 +382,24 @@ def _fields_without_unsupported_media(
     )
 
 
+def _fields_without_unsupported_prompt_cache(
+    fields: RequestFields, provider_config: BaseDecisionsConfig
+) -> RequestFields:
+    match fields:
+        case OpenAIDecisionRequestFields() if not provider_config.supports_prompt_cache:
+            return replace(fields, prompt_cache_key=None, prompt_cache_options=None)
+        case _:
+            return fields
+
+
+def _without_unsupported_breakpoints(
+    ir_request: DecisionsIRRequest, provider_config: BaseDecisionsConfig
+) -> DecisionsIRRequest:
+    if provider_config.supports_prompt_cache:
+        return ir_request
+    return replace(ir_request, input=without_prompt_cache_breakpoints(ir_request.input))
+
+
 @dataclass(frozen=True, slots=True)
 class _UnsupportedParams:
     names: tuple[str, ...]
@@ -417,10 +432,6 @@ def _unsupported_params(
     refuses_box_questions: Final = _has_box_question(ir_request.questions) and not support.box_questions
     refuses_audio: Final = bool(ir_request.audio) and not support.audio
     refuses_videos: Final = bool(ir_request.videos) and not support.videos
-    refused_prompt_cache_params: Final = (
-        () if provider_config.supports_prompt_cache else _prompt_cache_params(ir_request)
-    )
-    refused_roles: Final = () if provider_config.supports_instruction_messages else instruction_roles(ir_request.input)
     return (
         *(("safety_identifier",) if refuses_safety_identifier else ()),
         *(() if refused_image_param is None else (refused_image_param,)),
@@ -428,16 +439,6 @@ def _unsupported_params(
         *(("box questions",) if refuses_box_questions else ()),
         *(("audio",) if refuses_audio else ()),
         *(("videos",) if refuses_videos else ()),
-        *refused_prompt_cache_params,
-        *(f"{role} messages" for role in refused_roles),
-    )
-
-
-def _prompt_cache_params(ir_request: DecisionsIRRequest) -> tuple[str, ...]:
-    return (
-        *(("prompt_cache_key",) if ir_request.prompt_cache_key is not None else ()),
-        *(("prompt_cache_options",) if ir_request.prompt_cache_options is not None else ()),
-        *(("prompt_cache_breakpoint",) if has_prompt_cache_breakpoint(ir_request.input) else ()),
     )
 
 
@@ -449,26 +450,6 @@ def _is_not_box_question(question: DecisionsIRQuestion) -> bool:
     return not isinstance(question, DecisionsIRBoxQuestion)
 
 
-def _supported_input(
-    decision_input: DecisionsIRState | DecisionsIRMessages,
-    provider_config: BaseDecisionsConfig,
-    headers: Mapping[str, str],
-) -> DecisionsIRState | DecisionsIRMessages:
-    with_images: Final = (
-        decision_input
-        if provider_config.supports_images_in(decision_input, headers)
-        else with_images_where(decision_input, _no_image)
-    )
-    with_breakpoints: Final = (
-        with_images if provider_config.supports_prompt_cache else without_prompt_cache_breakpoints(with_images)
-    )
-    return (
-        with_breakpoints
-        if provider_config.supports_instruction_messages
-        else without_instruction_messages(with_breakpoints)
-    )
-
-
 def _without_unsupported_params(
     ir_request: DecisionsIRRequest,
     provider_config: BaseDecisionsConfig,
@@ -477,10 +458,12 @@ def _without_unsupported_params(
 ) -> DecisionsIRRequest:
     return replace(
         ir_request,
-        input=_supported_input(ir_request.input, provider_config, headers),
+        input=(
+            ir_request.input
+            if provider_config.supports_images_in(ir_request.input, headers)
+            else with_images_where(ir_request.input, _no_image)
+        ),
         safety_identifier=ir_request.safety_identifier if provider_config.supports_safety_identifier else None,
-        prompt_cache_key=ir_request.prompt_cache_key if provider_config.supports_prompt_cache else None,
-        prompt_cache_options=ir_request.prompt_cache_options if provider_config.supports_prompt_cache else None,
         assets=ir_request.assets if provider_config.supports_assets(headers) else MappingProxyType({}),
         questions=(
             ir_request.questions if support.box_questions else tuple(filter(_is_not_box_question, ir_request.questions))
@@ -598,9 +581,9 @@ def prepare_call(
         headers: Final = decisions_outbound_headers(extra_headers, provider, kwargs)
         support: Final = _resolved_support(provider_config, canonical_model, provider, headers, kwargs, fields)
         request_safety_identifier: Final = _request_safety_identifier(safety_identifier, provider_config, kwargs)
-        request: Final = _fields_without_unsupported_media(fields, support, kwargs).validate(
-            safety_identifier=request_safety_identifier, drops_params=_drops_params(kwargs)
-        )
+        request: Final = _fields_without_unsupported_prompt_cache(
+            _fields_without_unsupported_media(fields, support, kwargs), provider_config
+        ).validate(safety_identifier=request_safety_identifier, drops_params=_drops_params(kwargs))
     except ValidationError as error:
         raise litellm.BadRequestError(
             message=f"Invalid Decisions request: {error}",
@@ -629,7 +612,8 @@ def prepare_call(
         )
 
     caller_ir_request: Final = _without_malformed_images(
-        _ir_request(request, request_safety_identifier), _drops_params(kwargs)
+        _without_unsupported_breakpoints(_ir_request(request, request_safety_identifier), provider_config),
+        _drops_params(kwargs),
     )
     if isinstance(caller_ir_request, _MalformedImages):
         raise litellm.BadRequestError(
@@ -982,25 +966,6 @@ def reject_images_next_to_input(*, model: str, kwargs: Mapping[str, object]) -> 
         message=(
             "images belongs to the System One format; with input (OpenAI format), "
             "send images as input_image content parts"
-        ),
-        model=model,
-        llm_provider="",
-    )
-
-
-def reject_prompt_cache_next_to_state(
-    *,
-    model: str,
-    kwargs: Mapping[str, object],
-    prompt_cache_key: str | None,
-    prompt_cache_options: DecisionsPromptCacheOptions | None,
-) -> None:
-    if (prompt_cache_key is None and prompt_cache_options is None) or _drops_params(kwargs):
-        return
-    raise litellm.BadRequestError(
-        message=(
-            "prompt_cache_key and prompt_cache_options belong to the OpenAI format; "
-            "send input instead of state to use them"
         ),
         model=model,
         llm_provider="",

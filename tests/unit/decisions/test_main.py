@@ -2236,65 +2236,13 @@ async def test_prompt_cache_controls_reach_openai_on_the_wire(
     }
 
 
-_UNSUPPORTED_PROMPT_CACHE_REQUESTS: Final[tuple[tuple[str, Mapping[str, object]], ...]] = (
-    ("prompt_cache_key", MappingProxyType({"input": _SCREEN_TEXT, "prompt_cache_key": "defect-review"})),
-    ("prompt_cache_options", MappingProxyType({"input": _SCREEN_TEXT, "prompt_cache_options": {"mode": "explicit"}})),
-    (
-        "prompt_cache_breakpoint",
-        MappingProxyType(
-            {
-                "input": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "input_text",
-                                "text": _SCREEN_TEXT,
-                                "prompt_cache_breakpoint": {"mode": "explicit"},
-                            }
-                        ],
-                    }
-                ]
-            }
-        ),
-    ),
-    (
-        "developer messages",
-        MappingProxyType({"input": [{"role": "developer", "content": _REVIEW_POLICY}, _REVIEW_MESSAGE]}),
-    ),
-    (
-        "system messages",
-        MappingProxyType({"input": [{"role": "system", "content": _REVIEW_POLICY}, _REVIEW_MESSAGE]}),
-    ),
-)
-
-
-@pytest.mark.parametrize(
-    ("param", "request_kwargs"),
-    _UNSUPPORTED_PROMPT_CACHE_REQUESTS,
-    ids=tuple(param for param, _ in _UNSUPPORTED_PROMPT_CACHE_REQUESTS),
-)
-def test_prompt_cache_and_instruction_messages_are_refused_before_http_when_the_provider_cannot_take_them(
-    param: str, request_kwargs: Mapping[str, object], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(litellm, "drop_params", False)
-    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
-
-    with pytest.raises(litellm.UnsupportedParamsError, match=rf"\['{param}'\].*drop_params") as caught:
-        litellm.decisions(
-            model="perplexity/pplx-decider-v1-27b",
-            api_key="caller-key",
-            questions=_PREDICATE_QUESTIONS,
-            **request_kwargs,
-        )
-
-    assert caught.value.status_code == 400
-    assert not route.called
+_SUPPORT_TEAM_NOTE: Final = "Answer for the support team."
 
 
 @pytest.mark.asyncio
-async def test_prompt_cache_and_instruction_messages_are_dropped_from_the_wire_under_drop_params(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("drop_params", (False, True), ids=("strict", "drop_params"))
+async def test_prompt_cache_controls_are_ignored_by_a_provider_without_prompt_cache(
+    drop_params: bool, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
@@ -2304,7 +2252,7 @@ async def test_prompt_cache_and_instruction_messages_are_dropped_from_the_wire_u
         api_key="caller-key",
         input=[
             _CACHED_POLICY_MESSAGE,
-            {"role": "system", "content": _REVIEW_POLICY},
+            {"role": "system", "content": _SUPPORT_TEAM_NOTE},
             {
                 "role": "user",
                 "content": [
@@ -2313,8 +2261,36 @@ async def test_prompt_cache_and_instruction_messages_are_dropped_from_the_wire_u
             },
         ],
         questions=_PREDICATE_QUESTIONS,
-        drop_params=True,
+        drop_params=drop_params,
         **_PROMPT_CACHE_KWARGS,
+    )
+
+    assert json.loads(route.calls[0].request.content) == {
+        "model": "pplx-decider-v1-27b",
+        "state": f"{_REVIEW_POLICY}\n\n{_SUPPORT_TEAM_NOTE}\n\n{_SCREEN_TEXT}",
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+
+
+_IGNORED_PROMPT_CACHE_VALUES: Final[tuple[Mapping[str, object], ...]] = (
+    MappingProxyType({"prompt_cache_key": 7}),
+    MappingProxyType({"prompt_cache_options": {"mode": "explicit", "ttl": "1h"}}),
+)
+
+
+@pytest.mark.parametrize("prompt_cache_kwargs", _IGNORED_PROMPT_CACHE_VALUES, ids=("non_string_key", "unknown_ttl"))
+def test_prompt_cache_values_are_not_validated_for_a_provider_without_prompt_cache(
+    prompt_cache_kwargs: Mapping[str, object], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
+
+    litellm.decisions(
+        model="perplexity/pplx-decider-v1-27b",
+        api_key="caller-key",
+        input=_SCREEN_TEXT,
+        questions=_PREDICATE_QUESTIONS,
+        **prompt_cache_kwargs,
     )
 
     assert json.loads(route.calls[0].request.content) == {
@@ -2324,43 +2300,26 @@ async def test_prompt_cache_and_instruction_messages_are_dropped_from_the_wire_u
     }
 
 
-@pytest.mark.asyncio
-async def test_dropping_the_only_instruction_messages_is_rejected_before_http(
+def test_prompt_cache_controls_next_to_state_are_ignored(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
 
-    with pytest.raises(litellm.BadRequestError, match=r"\['developer messages'\].*leaves no input") as caught:
-        await litellm.adecisions(
-            model="perplexity/pplx-decider-v1-27b",
-            api_key="caller-key",
-            input=[{"role": "developer", "content": _REVIEW_POLICY}],
-            questions=_PREDICATE_QUESTIONS,
-            drop_params=True,
-        )
-
-    assert caught.value.status_code == 400
-    assert not route.called
-
-
-def test_prompt_cache_next_to_state_is_rejected_before_http(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(litellm, "drop_params", False)
-    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
-
-    with pytest.raises(litellm.BadRequestError, match="belong to the OpenAI format") as caught:
+    with pytest.warns(UserWarning, match="deprecated"):
         litellm.decisions(
             model="perplexity/pplx-decider-v1-27b",
             api_key="caller-key",
             state=_SCREEN_TEXT,
             questions=_SYSTEMONE_PREDICATE,
-            prompt_cache_key="defect-review",
+            **_PROMPT_CACHE_KWARGS,
         )
 
-    assert caught.value.status_code == 400
-    assert not route.called
+    assert json.loads(route.calls[0].request.content) == {
+        "model": "pplx-decider-v1-27b",
+        "state": _SCREEN_TEXT,
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
 
 
 _MALFORMED_IMAGE_ENTRIES: Final[tuple[Mapping[str, object] | str, ...]] = (

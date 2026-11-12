@@ -352,7 +352,6 @@ class OpenAIDecisionsConfig(BaseDecisionsConfig):
     path = "/v1/decisions"
     supports_safety_identifier = True
     supports_prompt_cache = True
-    supports_instruction_messages = True
     supports_images = True
 
     def get_default_api_base(self) -> str | None:

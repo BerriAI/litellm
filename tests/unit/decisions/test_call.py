@@ -66,24 +66,25 @@ def test_systemone_logs_every_request_field_the_caller_sent():
     assert set(logged) == {"state", "questions"}
 
 
-def test_prompt_cache_fields_are_logged_even_when_the_provider_refuses_them():
+def test_prompt_cache_fields_are_logged_even_when_the_provider_ignores_them():
     logging_obj: Final = _logging_obj("adecisions")
 
-    with pytest.raises(litellm.UnsupportedParamsError):
-        _prepare_decisions_call(
-            **CONNECTION,
-            decision_input="My card was charged twice.",
-            questions=[{"type": "predicate", "instructions": QUESTION_TEXT}],
-            audio=None,
-            videos=None,
-            prompt_cache_key="billing-triage",
-            prompt_cache_options={"mode": "explicit", "ttl": "30m"},
-            kwargs={"litellm_logging_obj": logging_obj},
-        )
+    call: Final = _prepare_decisions_call(
+        **CONNECTION,
+        decision_input="My card was charged twice.",
+        questions=[{"type": "predicate", "instructions": QUESTION_TEXT}],
+        audio=None,
+        videos=None,
+        prompt_cache_key="billing-triage",
+        prompt_cache_options={"mode": "explicit", "ttl": "30m"},
+        kwargs={"litellm_logging_obj": logging_obj},
+    )
 
     logged: Final = _logged_request(logging_obj)
     assert logged["prompt_cache_key"] == "billing-triage"
     assert logged["prompt_cache_options"] == {"mode": "explicit", "ttl": "30m"}
+    assert call.ir_request.prompt_cache_key is None
+    assert call.ir_request.prompt_cache_options is None
 
 
 def test_decisions_logs_every_request_field_the_caller_sent():

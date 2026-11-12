@@ -21,7 +21,6 @@ from litellm.decisions.call import (
     log_caller_request,
     prepare_call,
     reject_images_next_to_input,
-    reject_prompt_cache_next_to_state,
     send,
 )
 from litellm.types.decisions import DecisionsJSON, DecisionsResponse, OpenAIDecisionInput, OpenAIDecisionResponse
@@ -56,9 +55,6 @@ def _request_fields(
             prompt_cache_key=prompt_cache_key,
             prompt_cache_options=prompt_cache_options,
         )
-    reject_prompt_cache_next_to_state(
-        model=model, kwargs=kwargs, prompt_cache_key=prompt_cache_key, prompt_cache_options=prompt_cache_options
-    )
     warnings.warn(
         "litellm.decisions(state=...) is deprecated, call litellm.systemone for the System One request format",
         UserWarning,
