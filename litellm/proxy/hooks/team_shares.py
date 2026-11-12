@@ -14,7 +14,7 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Annotated, Final, Literal, Protocol, TypeAlias, cast
+from typing import Annotated, Final, Literal, Protocol, TypeAlias, runtime_checkable
 
 from pydantic import Field, TypeAdapter, ValidationError
 
@@ -36,6 +36,7 @@ _BURST_MULTIPLIER: Final[TypeAdapter[float]] = TypeAdapter(Annotated[float, Fiel
 _MEMBER_SEPARATOR: Final = "\x1f"
 
 
+@runtime_checkable
 class _SortedSetCommands(Protocol):
     """The sorted-set commands the registry uses, present on both the Redis and RedisCluster async clients."""
 
@@ -166,8 +167,9 @@ class TeamShareRegistry:
         key: Final = self.key(model)
         cutoff: Final = now - self._window_size
         try:
-            # the cluster client stubs omit the sorted-set mixin both clients implement
-            client: Final = cast(_SortedSetCommands, redis.init_async_client())
+            client = redis.init_async_client()
+            if not isinstance(client, _SortedSetCommands):
+                raise TypeError("redis client has no sorted-set commands")
             await client.zremrangebyscore(key, "-inf", cutoff)
             await client.zadd(key, {f"{team_id}{_MEMBER_SEPARATOR}{priority}": now})
             await client.expire(key, self._window_size)
