@@ -14,11 +14,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.common_utils import context_management_betas, context_management_with_edits
-from litellm.llms.anthropic.count_tokens.transformation import (
-    ChatCountTranslationError,
-    anthropic_count_fields,
-    malformed_message_error,
-)
+from litellm.llms.anthropic.count_tokens.transformation import ChatCountTranslationError, anthropic_count_fields
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.bedrock.common_utils import (
     BEDROCK_INVOKE_CONTEXT_MANAGEMENT_EDIT_BETAS,
@@ -207,7 +203,6 @@ class BedrockTokenCounter(BaseTokenCounter):
         resolved_model: Final = get_bedrock_base_model(counted_model)
         primary_tokenizer: Final = MANTLE_TOKENIZER_TYPE if use_mantle else RUNTIME_TOKENIZER_TYPE
         litellm_params: Final = (deployment or {}).get("litellm_params", {})
-        claude: Final = is_mantle_claude_model(resolved_model)
         translated: Final = (
             await anthropic_count_fields(
                 counted_model,
@@ -218,15 +213,14 @@ class BedrockTokenCounter(BaseTokenCounter):
                 _claude_count_translator(litellm_params),
                 chat_params,
             )
-            if claude
+            if is_mantle_claude_model(resolved_model)
             else None
         )
         if isinstance(translated, ChatCountTranslationError):
             return translated.response(request_model, model_to_use, primary_tokenizer)
-        malformed: Final = malformed_message_error(messages) if (claude or use_mantle) and translated is None else None
-        if malformed is not None:
-            return malformed.response(request_model, model_to_use, primary_tokenizer)
-        native_context_management: Final = _invoke_context_management(context_management if claude else None)
+        native_context_management: Final = _invoke_context_management(
+            context_management if is_mantle_claude_model(resolved_model) else None
+        )
         counted_messages: Final = messages if translated is None else translated.messages
         runtime_request: Final = {
             **_request_data(
