@@ -15,6 +15,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 const memorySchema = z.object({
   key: z.string().min(1, { error: () => i18n.t("memory.editModal.errors.keyRequired") }),
@@ -131,7 +132,13 @@ export const MemoryEditModal: React.FC<MemoryEditModalProps> = ({ open, mode, in
                 )}
               >
                 {({ ref, ...field }) => (
-                  <Textarea {...field} ref={ref} rows={4} placeholder='{"tags": ["example"]}' className="font-mono" />
+                  <Textarea
+                    {...field}
+                    ref={ref}
+                    rows={4}
+                    placeholder={codeSamples.memory.metadataJson}
+                    className="font-mono"
+                  />
                 )}
               </FormField>
             </FieldGroup>

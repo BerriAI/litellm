@@ -1,7 +1,6 @@
 Do not write comments unless they are any of:
 - absolutely necessary to explain some very complex business logic (in which case, keep it concise and clear)
 - used as an input for tools to read and act on. For example:
-  - entries in `.git-blame-ignore-revs` saying which commit is excluded from git blame
   - a lint or type checker suppression like `# mutable-ok` or `# pyright: ignore[reportArgumentType]  # <reason>` when introducing a truly unavoidable violation
 - a TODO or FIXME
   - Not great to have those, but if it's unavoidable, make sure to include a strong, concise reason for why it's there or, better yet, link to a GitHub issue for the follow-up work
@@ -45,14 +44,13 @@ Run QA proxies with `python litellm/proxy/proxy_cli.py --config litellm/proxy/de
 
 Simple PRs may skip before/after e2e when the full diff is mechanical and focused checks completely prove it, such as #49030 restoring an existing helper name. Trace affected callers and run relevant tests/static checks at the tip. For a bug fix, establish that the regression catches the original defect. Size alone never qualifies. New behavior, API/provider semantics, auth, billing, persistence, concurrency or uncertain integration risk need live e2e. In Screenshots / Proof of Fix, record `E2E exception at <tip SHA>`, scope, rationale, commands and results. Tests count as proof only for this exception. Reassess changed diffs, retain CI/bot gates, and honor explicit e2e requests (2026-10-28, unnecessary live QA for #49030)
 
-For other PRs, proof must show the end user's real flow before and after, with commands and output against a live proxy and real provider calls where applicable. Pytest alone is insufficient. For UI or interactive coding-tool flows, drive that surface and embed before/after screenshots, with URLs, clicks and input fields a reviewer can reproduce
+For other PRs, proof must show the end user's real flow before and after, with commands and output against a live proxy and real provider calls where applicable. The body alone must let a reviewer rerun it, with the proxy command, config, env var names and client code exactly as run, and long blocks collapsed in <details>. Pytest alone is insufficient. For UI or interactive coding-tool flows, drive that surface and embed before/after screenshots, with URLs, clicks and input fields a reviewer can reproduce
 
 If you ever write any human-facing text (pull requests, issues, commit messages, discussion posts, github comments, release notes, docs, etc.), always follow these guidelines to sound less AI-y:
 - don't use emojis
 - don't use "—". Don't use ";" or ":" unless it would be nonsensical not to. Instead, reach for ",", ".", conjunction words, etc. in descending order of preference: vary among them, weighted toward the front of the list, and skip "," where it would cause a comma splice or the sentence is getting long. Overusing any one of them also feels AI-y. A word cap does not penalize you for adding more sentences
 - don't use the pattern "It's not X, it's Y", "You're not X, you're Y", etc.
 - unless explicitly asked, don't use bulleted or numbered lists unless it would be nonsensical not to. Instead, prefer prose
-- don't add a trailing "." at the end of paragraphs (just like this file). That means every paragraph, not just the last one (of the markdown file, PR description, GitHub comment, etc.). Rule of thumb: if you're adding new line(s) before the next sentence, don't add a ".". Exception is that docs (i.e., litellm-docs) should have trailing "."
 - don't use →. Instead, prefer not to use arrows, and if need be, use -> instead
 - use plain, simple, everyday engineering language: the common phrase engineers actually say over rare compact phrasing, in grammatically complete sentences. When explicitly asked to use bullets or ordered lists and structure legitimately helps the reader, prefer nested bullets (any depth is fine) over dense lines in a flat structure
 
@@ -70,7 +68,7 @@ If you're trying to create a new function that relies on untyped stuff, instead 
 
 If you get an LIT001 fail, refactor the code to follow functional programming best practices rather than introducing mutable data structures. For example, build values in one shot with comprehensions or generators wrapped in `tuple()` / `MappingProxyType()` / `frozenset()` instead of seeding an empty `list`/`dict`/`set` and mutating it over time. Ideally, `# mutable-ok` is never used. Reach for it only as a genuine last resort when an immutable rewrite is truly impossible, and always pair it with a real reason
 
-Every lint or type suppression must name the exact rule inside brackets and carry a reason comment, e.g. `# pyright: ignore[reportArgumentType]  # stubs lack async overload` or `# noqa: TID251  # <reason>`. `# type: ignore` is banned (LIT009): pyrightconfig.json sets `enableTypeIgnoreComments` to false, so it silently does nothing
+Every lint or type suppression must name the exact rule inside brackets and carry a reason comment, e.g. `# pyright: ignore[reportArgumentType]  # stubs lack async overload` or `# noqa: TID251  # <reason>`. `# type: ignore` is banned (LIT009): `[tool.pyright]` in pyproject.toml sets `enableTypeIgnoreComments` to false, so it silently does nothing
 
 Commit and push your work when you're done without asking
 

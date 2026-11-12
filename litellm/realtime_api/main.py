@@ -21,7 +21,7 @@ from litellm.constants import (
     request_timeout,
 )
 from litellm.exceptions import BadRequestError
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, keyword_arguments
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.base_llm.realtime.http_transformation import BaseRealtimeHTTPConfig
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
@@ -149,7 +149,7 @@ def _build_litellm_metadata(kwargs: Mapping[str, object]) -> dict[str, object]:
 _GUARDRAIL_OPT_OUT_METADATA_KEYS: Final = ("user_api_key_metadata", "user_api_key_team_metadata")
 
 
-def _translation_litellm_metadata(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+def _session_litellm_metadata(kwargs: Mapping[str, object]) -> Mapping[str, object]:
     request_metadata: Final = _OBJECT_MAPPING.validate_python(kwargs.get("metadata") or {})
     guardrail_opt_outs: Final = {
         key: request_metadata[key] for key in _GUARDRAIL_OPT_OUT_METADATA_KEYS if key in request_metadata
@@ -218,7 +218,7 @@ def _translation_rejection_error(
 
 def _raise_if_http_translation_rejected(custom_llm_provider: str, model: str, kwargs: Mapping[str, object]) -> None:
     rejection: Final = _translation_rejection(
-        custom_llm_provider, _HTTP_TRANSLATION_PROVIDERS, _translation_litellm_metadata(kwargs)
+        custom_llm_provider, _HTTP_TRANSLATION_PROVIDERS, _session_litellm_metadata(kwargs)
     )
     if rejection is None:
         return
@@ -394,7 +394,7 @@ async def acreate_realtime_client_secret(
 async def acreate_realtime_translation_client_secret(
     model: str | None = None,
     session: Mapping[str, Any] | None = None,
-    expires_after: Mapping[str, Any] | None = None,
+    expires_after: Mapping[str, object] | None = None,
     timeout: float | None = None,
     **kwargs: object,  # kwargs-ok: public API preserves provider-specific request options
 ) -> httpx.Response:
@@ -409,7 +409,11 @@ async def acreate_realtime_translation_client_secret(
     req: Final = RealtimeClientSecretRequest(
         model=requested_model_name,
         session=session_config,
-        expires_after=RealtimeExpiresAfter(**expires_after) if expires_after else None,
+        expires_after=RealtimeExpiresAfter(
+            **_ExpiresAfterFields(**keyword_arguments(expires_after, RealtimeExpiresAfter))
+        )
+        if expires_after
+        else None,
     )
     litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
     if not isinstance(litellm_logging_obj, LiteLLMLogging):
@@ -488,10 +492,18 @@ def _deployment_base_model(kwargs: Mapping[str, object], custom_llm_provider: st
     return None if base_model is None else base_model.removeprefix(f"{custom_llm_provider}/")
 
 
+class _ExpiresAfterFields(TypedDict, total=False, extra_items=object):
+    pass
+
+
+class _TranscriptionSessionFields(TypedDict, total=False, extra_items=object):
+    pass
+
+
 @wrapper_client
 async def acreate_realtime_transcription_session(
     model: str | None = None,
-    transcription_session: dict[str, Any] | None = None,
+    transcription_session: Mapping[str, object] | None = None,
     timeout: float | None = None,
     **kwargs,
 ):
@@ -506,7 +518,9 @@ async def acreate_realtime_transcription_session(
     """
     req: Final = RealtimeTranscriptionSessionRequest(
         model=model,
-        **(transcription_session or {}),
+        **_TranscriptionSessionFields(
+            **keyword_arguments(transcription_session or {}, RealtimeTranscriptionSessionRequest)
+        ),
     )
     model_name = req.resolved_model() or "gpt-realtime-whisper"
     litellm_logging_obj: Final[LiteLLMLogging] = kwargs.get("litellm_logging_obj")
@@ -626,7 +640,7 @@ async def arealtime_translation_calls(
     openai_ephemeral_key: str,
     sdp_body: bytes,
     model: str | None = None,
-    session: Mapping[str, Any] | None = None,
+    session: Mapping[str, object] | None = None,
     timeout: float | None = None,
     **kwargs: object,  # kwargs-ok: public API preserves provider-specific request options
 ) -> httpx.Response:
@@ -858,9 +872,7 @@ async def _arealtime(
     )
 
     session_litellm_metadata: Final = (
-        dict(_translation_litellm_metadata(kwargs))
-        if realtime_mode == "translation"
-        else _build_litellm_metadata(kwargs)
+        _build_litellm_metadata(kwargs) if live_session_start is not None else dict(_session_litellm_metadata(kwargs))
     )
     translation_rejection: Final = (
         _translation_rejection(_custom_llm_provider, _WEBSOCKET_TRANSLATION_PROVIDERS, session_litellm_metadata)
@@ -1014,6 +1026,8 @@ async def _arealtime(
             aws_external_id=aws_external_id,
             aws_session_tags=aws_session_tags,
             drop_params=drop_params,
+            user_api_key_dict=kwargs.get("user_api_key_dict"),
+            litellm_metadata=session_litellm_metadata,
         )
     elif _custom_llm_provider == "xai":
         api_base = (

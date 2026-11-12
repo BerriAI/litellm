@@ -70,7 +70,7 @@ function ModelInformationCell({ model, displayName }: { model: ModelData; displa
         }
       >
         {model.provider ? (
-          <ProviderLogo provider={model.provider} className="size-6 shrink-0" />
+          <ProviderLogo provider={model.provider} logoUrl={model.model_info.logo_url} className="size-6 shrink-0" />
         ) : (
           <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-muted text-xs text-muted-foreground">
             -
@@ -88,7 +88,9 @@ function ModelInformationCell({ model, displayName }: { model: ModelData; displa
       <HoverCardContent align="start" className="w-80">
         <div className="flex flex-col gap-3">
           <div className="flex items-center gap-2">
-            {model.provider ? <ProviderLogo provider={model.provider} className="size-4 shrink-0" /> : null}
+            {model.provider ? (
+              <ProviderLogo provider={model.provider} logoUrl={model.model_info.logo_url} className="size-4 shrink-0" />
+            ) : null}
             <span className="truncate text-xs text-muted-foreground">
               {model.provider || t("modelsAndEndpoints.modelsTableColumns.unknownProvider")}
             </span>

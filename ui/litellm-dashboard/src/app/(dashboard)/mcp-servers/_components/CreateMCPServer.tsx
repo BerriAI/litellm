@@ -758,7 +758,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                   >
                     {(control) => (
                       <Select
-                        items={TRANSPORT_ITEMS}
+                        items={TRANSPORT_ITEMS.map((item) => ({ ...item, label: t(item.label) }))}
                         value={(control.value as string | undefined) ?? null}
                         onValueChange={handleTransportSelected(control.onChange)}
                       >
@@ -879,14 +879,17 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                           }}
                         >
                           {(control) => (
-                            <Select {...selectControl<string>(control)} items={AUTH_TYPE_ITEMS}>
+                            <Select
+                              {...selectControl<string>(control)}
+                              items={AUTH_TYPE_ITEMS.map((item) => ({ ...item, label: t(item.label) }))}
+                            >
                               <SelectTrigger {...selectTriggerControl(control)} className="w-full rounded-lg">
                                 <SelectValue placeholder={t("mcpServers.createMcpServer.auth.typePlaceholder")} />
                               </SelectTrigger>
                               <SelectContent>
                                 {AUTH_TYPE_ITEMS.map((item) => (
                                   <SelectItem key={item.value} value={item.value}>
-                                    {item.label}
+                                    {t(item.label)}
                                   </SelectItem>
                                 ))}
                               </SelectContent>

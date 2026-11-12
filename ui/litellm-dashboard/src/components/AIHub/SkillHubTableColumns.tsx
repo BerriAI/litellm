@@ -1,5 +1,7 @@
 "use client";
 
+import { getSkillMetadataColumns } from "@/components/claude_code_plugins/SkillMetadataColumns";
+
 import { ColumnDef } from "@tanstack/react-table";
 import { Copy, ExternalLink, Info, MoreHorizontal } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -159,6 +161,7 @@ export const getSkillHubTableColumns = ({ onSkillClick }: SkillHubTableColumnsDe
       />
     ),
   },
+  ...getSkillMetadataColumns<Plugin>(),
   {
     id: "actions",
     meta: { className: "text-right", headerClassName: "text-right" },

@@ -95,13 +95,17 @@ export const agentCapabilities = (agent: AgentCard): string[] =>
 
 export type HealthTone = "success" | "error" | "neutral";
 
-const HEALTH: Record<string, { tone: HealthTone; label: string }> = {
-  healthy: { tone: "success", label: "Healthy" },
-  unhealthy: { tone: "error", label: "Unhealthy" },
+const HEALTH: Record<string, { tone: HealthTone; label: ParseKeys }> = {
+  healthy: { tone: "success", label: "publicModelHub.format.health.healthy" },
+  unhealthy: { tone: "error", label: "publicModelHub.format.health.unhealthy" },
 };
 
-export const healthOf = (model: ModelGroupInfo): { tone: HealthTone; label: string } =>
-  HEALTH[model.health_status ?? ""] ?? { tone: "neutral", label: i18n.t("publicModelHub.format.notChecked") };
+export const healthOf = (model: ModelGroupInfo): { tone: HealthTone; label: string } => {
+  const status = model.health_status ?? "";
+  return Object.hasOwn(HEALTH, status)
+    ? { tone: HEALTH[status].tone, label: i18n.t(HEALTH[status].label) }
+    : { tone: "neutral", label: i18n.t("publicModelHub.format.notChecked") };
+};
 
 export const relativeTime = (iso: string | null | undefined, now: number = Date.now()): string => {
   const then = iso ? new Date(iso).getTime() : NaN;

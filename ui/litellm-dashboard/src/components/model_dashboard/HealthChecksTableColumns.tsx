@@ -1,7 +1,7 @@
 "use client";
 
 import { ColumnDef } from "@tanstack/react-table";
-import type { TFunction } from "i18next";
+import type { ParseKeys, TFunction } from "i18next";
 import { Info, Play, RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -53,10 +53,23 @@ const CHECK_IN_PROGRESS = "Check in progress...";
 const NEVER_SUCCEEDED = "Never succeeded";
 const NONE = "None";
 
+const SENTINEL_LABEL_KEYS: Readonly<Record<string, ParseKeys>> = {
+  [NONE]: "modelDashboard.healthChecksTableColumns.sentinels.none",
+};
+
+const sentinelLabel = (value: string, t: TFunction): string =>
+  Object.hasOwn(SENTINEL_LABEL_KEYS, value) ? t(SENTINEL_LABEL_KEYS[value]) : value;
+
+const checkTimeLabel = (value: string, t: TFunction): string => {
+  const checkedAt = new Date(value);
+  return Number.isNaN(checkedAt.getTime()) ? sentinelLabel(value, t) : checkedAt.toLocaleString();
+};
+
 function HealthStatusBadge({ status }: { status: string }) {
+  const { t } = useTranslation();
   const tone = HEALTH_STATUS_TONES[status];
   if (!tone) {
-    return <StatusBadge tone="neutral" label="unknown" />;
+    return <StatusBadge tone="neutral" label={t("modelDashboard.healthChecksTableColumns.unknownStatus")} />;
   }
   return <StatusBadge tone={tone} label={status} />;
 }
@@ -418,7 +431,9 @@ export const getHealthChecksTableColumns = (
     },
     cell: ({ row }) => (
       <span className="text-sm text-muted-foreground">
-        {row.original.health_loading ? CHECK_IN_PROGRESS : row.original.last_check}
+        {row.original.health_loading
+          ? t("modelDashboard.healthChecksTableColumns.sentinels.checkInProgress")
+          : checkTimeLabel(row.original.last_check, t)}
       </span>
     ),
   },
@@ -444,7 +459,7 @@ export const getHealthChecksTableColumns = (
     cell: ({ row }) => {
       const modelId = row.original.model_info?.id ?? "";
       const lastSuccess = modelHealthStatuses[modelId]?.lastSuccess || NONE;
-      return <span className="text-sm text-muted-foreground">{lastSuccess}</span>;
+      return <span className="text-sm text-muted-foreground">{checkTimeLabel(lastSuccess, t)}</span>;
     },
   },
   {

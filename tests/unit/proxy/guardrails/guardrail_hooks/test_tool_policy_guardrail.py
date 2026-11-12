@@ -2,13 +2,16 @@
 Unit tests for ToolPolicyGuardrail.
 """
 
-from typing import Any
+from collections.abc import Mapping, Sequence
+from types import SimpleNamespace
+from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
 
+from litellm.proxy.db import tool_registry_writer
 from litellm.proxy.guardrails.guardrail_hooks.tool_policy.tool_policy_guardrail import (
     ToolPolicyGuardrail,
 )
@@ -222,3 +225,104 @@ async def test_blocked_tool_loaded_by_a_replayed_tool_search_raises_next_to_allo
             )
     assert exc_info.value.status_code == 400
     assert exc_info.value.detail["blocked_tools"] == ["run_shell"]
+
+
+async def _install_tool_policies(monkeypatch: pytest.MonkeyPatch, input_policies: Mapping[str, str]) -> None:
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_tooltable.find_many = AsyncMock(
+        return_value=[
+            SimpleNamespace(tool_name=name, input_policy=policy, output_policy="untrusted")
+            for name, policy in input_policies.items()
+        ]
+    )
+    prisma_client.db.litellm_objectpermissiontable.find_many = AsyncMock(return_value=[])
+    registry = tool_registry_writer.ToolPolicyRegistry()
+    await registry.sync_tool_policy_from_db(prisma_client)
+    monkeypatch.setattr(tool_registry_writer, "_tool_policy_registry", registry)
+
+
+def _responses_request(
+    tools: Sequence[Mapping[str, object]], item_tools: Sequence[Mapping[str, object]]
+) -> dict[str, object]:
+    return {
+        "user_api_key_request_route": "/v1/responses",
+        "tools": tools,
+        "input": [
+            {"type": "additional_tools", "role": "developer", "tools": item_tools},
+            {"role": "user", "content": "clean up the disk"},
+        ],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_data",
+    [
+        _responses_request(
+            [{"type": "function", "name": "get_weather"}],
+            [{"type": "function", "name": "drop_database"}],
+        ),
+        _responses_request(
+            [{"type": "function", "name": "get_weather"}],
+            [
+                {
+                    "type": "namespace",
+                    "name": "mcp__db",
+                    "tools": [{"type": "function", "name": "drop_database"}],
+                }
+            ],
+        ),
+        _responses_request(
+            [
+                {"type": "function", "name": "get_weather"},
+                {"type": "mcp", "server_label": "drop_database"},
+            ],
+            [],
+        ),
+        _responses_request(
+            [
+                {"type": "function", "name": "get_weather"},
+                {"type": "namespace", "name": "mcp__db", "tools": [{"type": "function", "name": "drop_database"}]},
+            ],
+            [],
+        ),
+    ],
+    ids=["additional_tools_item", "namespace_in_item", "top_level_mcp", "top_level_namespace"],
+)
+async def test_blocked_tool_raises_next_to_a_top_level_function_tool(
+    guardrail: ToolPolicyGuardrail, request_data: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _install_tool_policies(monkeypatch, {"get_weather": "untrusted", "drop_database": "blocked"})
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.apply_guardrail(
+            inputs=_tool_request_inputs(["get_weather"]),
+            request_data=request_data,
+            input_type="request",
+        )
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail["blocked_tools"] == ["drop_database"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", [["drop_database"], {"name": "drop_database"}], ids=["list", "dict"])
+async def test_function_tool_name_that_is_not_a_string_is_left_for_the_provider_to_refuse(
+    guardrail: ToolPolicyGuardrail, name: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _install_tool_policies(monkeypatch, {"get_weather": "untrusted"})
+    inputs: Final = {"tools": [{"type": "function", "function": {"name": name}}]}
+    assert await guardrail.apply_guardrail(inputs=inputs, request_data={}, input_type="request") == inputs
+
+
+@pytest.mark.asyncio
+async def test_blocked_tool_defined_at_the_top_level_and_in_an_item_is_named_once(
+    guardrail: ToolPolicyGuardrail, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tool = {"type": "function", "name": "drop_database"}
+    await _install_tool_policies(monkeypatch, {"drop_database": "blocked"})
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.apply_guardrail(
+            inputs=_tool_request_inputs(["drop_database"]),
+            request_data=_responses_request([tool], [tool]),
+            input_type="request",
+        )
+    assert exc_info.value.detail["blocked_tools"] == ["drop_database"]

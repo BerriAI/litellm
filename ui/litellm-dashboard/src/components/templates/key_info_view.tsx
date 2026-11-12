@@ -1,3 +1,5 @@
+import { useUrlTab } from "@/hooks/useUrlTab";
+import ResourceActivity from "@/components/UsagePage/ResourceActivity";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useModelAccessGroupNames } from "@/app/(dashboard)/hooks/models/useModels";
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
@@ -5,6 +7,7 @@ import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings"
 import { useApplyUserBudgetToTeamKeys } from "@/app/(dashboard)/hooks/uiSettings/useApplyUserBudgetToTeamKeys";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import { formatBudgetResetTime } from "@/utils/budgetUtils";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
 import { ArrowLeft, Info } from "lucide-react";
@@ -74,6 +77,7 @@ interface KeyInfoViewProps {
   onDelete?: () => void;
   teams: any[] | null;
   backButtonText?: string;
+  tabParam?: string;
 }
 
 // Premium fields (from LiteLLM_ManagementEndpoint_MetadataFields_Premium in
@@ -104,11 +108,17 @@ export default function KeyInfoView({
   onKeyDataUpdate,
   onDelete,
   backButtonText = i18n.t("keyDetail.keyInfoView.backToKeys"),
+  tabParam = "detail_tab",
 }: KeyInfoViewProps) {
   const { t } = useTranslation();
   const { accessToken, userId: userID, userRole, premiumUser } = useAuthorized();
   const accessGroupNames = useModelAccessGroupNames();
   const activityDateRange = useActivityDateRange();
+  const [activeTab, setActiveTab] = useUrlTab(
+    ["overview", "activity", "savings", "auto-router-usage", "settings"],
+    "overview",
+    tabParam,
+  );
   const queryClient = useQueryClient();
   const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
   const { teams: teamsData } = useTeams();
@@ -452,7 +462,7 @@ export default function KeyInfoView({
         ...prevData,
         ...updatedKeyData, // This should include the new token (key-id)
         // Update the created_at to show when it was regenerated
-        created_at: regeneratedAt.toLocaleString(),
+        created_at: regeneratedAt.toISOString(),
       };
       return newData;
     });
@@ -463,7 +473,7 @@ export default function KeyInfoView({
 
     setKeyDataUpdateHeldUntilModalClose({
       ...updatedKeyData,
-      created_at: regeneratedAt.toLocaleString(),
+      created_at: regeneratedAt.toISOString(),
     });
   };
 
@@ -579,6 +589,7 @@ export default function KeyInfoView({
     return t("keyDetail.keyInfoView.budget.unlimited");
   })();
   const inheritedGates = hasOwnBudget ? [] : inheritedBudgetGates(parentTeam, parentOrg, ownerUser, memberGate);
+  const budgetResetTime = formatBudgetResetTime(currentKeyData.budget_reset_at);
 
   return (
     <div className="w-full h-full overflow-y-auto p-4">
@@ -739,10 +750,13 @@ export default function KeyInfoView({
         </DialogContent>
       </Dialog>
 
-      <Tabs defaultValue="overview">
+      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(String(value) as typeof activeTab)}>
         <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
           <TabsTrigger value="overview" className="flex-none rounded-none px-4 py-2">
             {t("keyDetail.keyInfoView.tabs.overview")}
+          </TabsTrigger>
+          <TabsTrigger value="activity" className="flex-none rounded-none px-4 py-2">
+            {t("shared.resourceActivity.title")}
           </TabsTrigger>
           <TabsTrigger value="savings" className="flex-none rounded-none px-4 py-2">
             {t("keyDetail.keyInfoView.tabs.savings")}
@@ -782,10 +796,10 @@ export default function KeyInfoView({
                       : t("keyDetail.keyInfoView.overview.ofBudget", { budget: budgetDisplay })}
                     <InheritedBudgetHint gates={inheritedGates} />
                   </p>
-                  {currentKeyData.budget_reset_at && (
+                  {budgetResetTime && (
                     <p className="text-sm">
                       {t("keyDetail.keyInfoView.overview.resets")}
-                      {formatTimestamp(currentKeyData.budget_reset_at)}
+                      {budgetResetTime}
                     </p>
                   )}
                   <p className="text-sm mt-2" data-testid="key-lifetime-spend">
@@ -946,6 +960,10 @@ export default function KeyInfoView({
                 variant="card"
               />
             </div>
+          </TabsContent>
+
+          <TabsContent value="activity">
+            <ResourceActivity scope="key" id={currentKeyData.token} activity={activityDateRange} />
           </TabsContent>
 
           {/* Savings Panel. No keepMounted: this tab sweeps the daily rollup, and staying mounted
@@ -1111,8 +1129,8 @@ export default function KeyInfoView({
                   <div>
                     <p className="text-sm font-medium">{t("keyDetail.keyInfoView.settings.budgetReset")}</p>
                     <p data-testid="budget-reset-value" className="text-sm">
-                      {currentKeyData.budget_reset_at
-                        ? `${currentKeyData.budget_duration ? t("keyDetail.keyInfoView.settings.budgetResetEvery", { duration: currentKeyData.budget_duration }) : ""}${formatTimestamp(currentKeyData.budget_reset_at)}`
+                      {budgetResetTime
+                        ? `${currentKeyData.budget_duration ? t("keyDetail.keyInfoView.settings.budgetResetEvery", { duration: currentKeyData.budget_duration }) : ""}${budgetResetTime}`
                         : t("keyDetail.keyInfoView.settings.never")}
                     </p>
                   </div>

@@ -11,6 +11,7 @@ import { DEFAULT_PAGE_SIZE_OPTIONS } from "@/components/shared/DataTable";
 import { Button } from "@/components/ui/button";
 import { AutoRouterModelGroupsProvider } from "@/components/shared/table_cells";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
+import { useResetDetailState } from "@/hooks/useUrlTab";
 import type { KeyResponse } from "../../key_team_helpers/key_list";
 import { keyInfoV1Call, uiSpendLogsCall } from "../../networking";
 import KeyInfoView from "../../templates/key_info_view";
@@ -49,6 +50,7 @@ interface RequestLogsPanelProps {
 
 export default function RequestLogsPanel({ accessToken, token, userRole, userID, isActive }: RequestLogsPanelProps) {
   const { t } = useTranslation();
+  const resetDetailState = useResetDetailState();
   const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: PAGE_SIZE });
   const [sorting, setSorting] = useState<SortingState>(DEFAULT_LOGS_SORTING);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
@@ -281,9 +283,13 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
     [selectLog, displaySessionId],
   );
 
-  const handleKeyHashClick = useCallback((keyHash: string) => {
-    setSelectedKeyIdInfoView(keyHash);
-  }, []);
+  const handleKeyHashClick = useCallback(
+    (keyHash: string) => {
+      resetDetailState();
+      setSelectedKeyIdInfoView(keyHash);
+    },
+    [resetDetailState],
+  );
 
   if (selectedKeyInfo && selectedKeyIdInfoView && selectedKeyInfo.api_key === selectedKeyIdInfoView) {
     return (
@@ -291,7 +297,10 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
         keyId={selectedKeyIdInfoView}
         keyData={selectedKeyInfo}
         teams={allTeams ?? []}
-        onClose={() => setSelectedKeyIdInfoView(null)}
+        onClose={() => {
+          resetDetailState();
+          setSelectedKeyIdInfoView(null);
+        }}
         backButtonText={t("logs.request.panel.backToLogs")}
       />
     );

@@ -14,15 +14,16 @@ import { keyInfoV1Call } from "../../../networking";
 import KeyInfoView from "../../../templates/key_info_view";
 import { TagUsage } from "../../types";
 import { storedKeyId } from "../../keyActivityData";
+import { useResetDetailState } from "@/hooks/useUrlTab";
 
 const TOP_KEYS_LIMITS = [5, 10, 25, 50] as const;
 const LIMIT_OPTIONS = TOP_KEYS_LIMITS.map((limit) => ({ value: String(limit), label: String(limit) }));
 
 type ViewMode = "table" | "chart";
 const VIEW_OPTIONS = [
-  { value: "table", label: "Table View" },
-  { value: "chart", label: "Chart View" },
-] as const satisfies readonly { value: ViewMode; label: string }[];
+  { value: "table", labelKey: "usage.topKeys.viewOptions.table" },
+  { value: "chart", labelKey: "usage.topKeys.viewOptions.chart" },
+] as const satisfies readonly { value: ViewMode; labelKey: ParseKeys }[];
 
 const BAR_COLOR = "#2b3fd6";
 const QUIET_HEADER = { headerClassName: "font-normal" };
@@ -51,6 +52,7 @@ interface TopKeyViewProps {
 const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = false, topKeysLimit, setTopKeysLimit }) => {
   const { t } = useTranslation();
   const { accessToken } = useAuthorized();
+  const resetDetailState = useResetDetailState();
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [keyData, setKeyData] = useState<any | undefined>(undefined);
@@ -77,6 +79,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
       const keyInfo = await keyInfoV1Call(accessToken, keyId);
       const transformedKeyData = transformKeyInfo(keyInfo);
 
+      resetDetailState();
       setKeyData(transformedKeyData);
       setSelectedKey(keyId);
       setIsModalOpen(true); // Open modal when key is clicked
@@ -85,11 +88,12 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
     }
   };
 
-  const handleClose = () => {
+  const handleClose = React.useCallback(() => {
+    resetDetailState();
     setIsModalOpen(false);
     setSelectedKey(null);
     setKeyData(undefined);
-  };
+  }, [resetDetailState]);
 
   // Handle clicking outside the modal
   const handleOutsideClick = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -108,7 +112,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
 
     document.addEventListener("keydown", handleEscapeKey);
     return () => document.removeEventListener("keydown", handleEscapeKey);
-  }, [isModalOpen]);
+  }, [isModalOpen, handleClose]);
 
   // Define columns for the table view
   const baseColumns = [
@@ -226,7 +230,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
         <Segmented
           label={t("usage.topKeys.viewLabel")}
           value={viewMode}
-          options={VIEW_OPTIONS}
+          options={VIEW_OPTIONS.map(({ value, labelKey }) => ({ value, label: t(labelKey) }))}
           onChange={setViewMode}
         />
       </div>

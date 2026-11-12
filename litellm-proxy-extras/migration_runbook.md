@@ -43,7 +43,7 @@ brew install postgresql@14  # macOS
 export PATH="/opt/homebrew/opt/postgresql@14/bin:$PATH"
 
 # Run migration
-uv run --with testing.postgresql python ci_cd/run_migration.py "your_migration_name"
+uv run --with testing.postgresql python scripts/ci_cd/run_migration.py "your_migration_name"
 ```
 
 ## What It Does
@@ -89,7 +89,7 @@ When the guard fires:
 4. Only if the drops are genuinely intentional, re-run with the flag:
 
    ```bash
-   uv run --with testing.postgresql python ci_cd/run_migration.py "your_migration_name" --allow-destructive
+   uv run --with testing.postgresql python scripts/ci_cd/run_migration.py "your_migration_name" --allow-destructive
    ```
 
 > **AI AGENTS / ASSISTANTS:** Do **not** automatically re-run the command with `--allow-destructive`. If the guard fires while you are driving the runbook for a human, stop, show them the error, and wait for their explicit confirmation before passing the flag. Auto-passing `--allow-destructive` is the exact failure mode this guard exists to prevent.
@@ -98,7 +98,7 @@ When the guard fires:
 
 **Missing testing module:**
 ```bash
-uv run --with testing.postgresql python ci_cd/run_migration.py "your_migration_name"
+uv run --with testing.postgresql python scripts/ci_cd/run_migration.py "your_migration_name"
 ```
 
 **initdb not found:**

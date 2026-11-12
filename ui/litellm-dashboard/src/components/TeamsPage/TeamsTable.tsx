@@ -7,6 +7,7 @@ import {
   DataTable,
   DataTableFilterDrawer,
   DataTableFilterField,
+  type FilterDraft,
   DataTableToolbar,
 } from "@/components/shared/DataTable";
 import { SearchSelect } from "@/components/shared/SearchSelect";
@@ -206,7 +207,7 @@ export function TeamsTable({ userRole, userID, onSelectTeam, onEditTeam, onDelet
             title={t("teams.table.filters.title")}
             description={t("teams.table.filters.description")}
           >
-            {({ get, set }) => (
+            {({ get, set }: FilterDraft<"org_id" | "team_id" | "alias">) => (
               <>
                 <DataTableFilterField label={t("teams.table.filters.organization")}>
                   <SearchSelect

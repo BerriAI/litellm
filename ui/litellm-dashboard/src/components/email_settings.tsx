@@ -8,6 +8,8 @@ import { toast } from "@/lib/toast";
 import { serviceHealthCheck, setCallbacksCall } from "./networking";
 import { EmailEventSettings } from "./email_events";
 
+const EMAIL_SERVICE = "email";
+
 interface EmailSettingsProps {
   accessToken: string | null;
   premiumUser: boolean;
@@ -21,6 +23,7 @@ const REQUIRED_MARKER = (
 );
 
 const FIELD_HELP: Record<string, React.ReactNode> = {
+  PROXY_BASE_URL: <Trans i18nKey="loggingAndAlerts.emailSettings.help.proxyBaseUrl" />,
   SMTP_HOST: (
     <>
       <Trans i18nKey="loggingAndAlerts.emailSettings.help.smtpHost" />
@@ -154,11 +157,14 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser,
                           ✨ {key}
                         </a>
                       ) : (
-                        <p className="text-sm">{key}</p>
+                        <p className="text-sm">
+                          {key === "PROXY_BASE_URL" ? t("loggingAndAlerts.emailSettings.gatewayUrl") : key}
+                        </p>
                       )}
                       <InputGroup className="max-w-100">
                         <InputGroupInput
                           name={key}
+                          aria-label={key === "PROXY_BASE_URL" ? t("loggingAndAlerts.emailSettings.gatewayUrl") : key}
                           defaultValue={value as string}
                           type={isSensitive && !isVisible ? "password" : "text"}
                           disabled={isLocked}
@@ -193,7 +199,7 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser,
               onClick={async () => {
                 if (!accessToken) return;
                 try {
-                  await serviceHealthCheck(accessToken, "email");
+                  await serviceHealthCheck(accessToken, EMAIL_SERVICE);
                   toast.success(t("loggingAndAlerts.emailSettings.toasts.testTriggered"));
                 } catch (error) {
                   toast.fromError(error);

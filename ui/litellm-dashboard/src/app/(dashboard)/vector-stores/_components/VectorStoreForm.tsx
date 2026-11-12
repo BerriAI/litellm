@@ -38,6 +38,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { credentialOptions } from "@/components/shared/credentialOptions";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 const EMBEDDING_MODEL_RENAME_PROVIDERS = new Set(["milvus", "valkey", "mongodb", "opensearch"]);
 
@@ -521,7 +522,7 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
                   rows={4}
                   value={metadataJson}
                   onChange={(event) => setMetadataJson(event.target.value)}
-                  placeholder='{"key": "value"}'
+                  placeholder={codeSamples.vectorStores.metadataJson}
                 />
               </div>
             </FieldGroup>
@@ -553,6 +554,7 @@ interface ProviderFieldProps {
 const ProviderField: React.FC<ProviderFieldProps> = ({ field, control, modelInfo }) => {
   const { t } = useTranslation();
   const label = labelWithHint(t(field.label), t(field.tooltip));
+  const placeholder = field.placeholderKey ? t(field.placeholderKey) : field.placeholder;
 
   if (field.type === "select") {
     const selectOptions =
@@ -581,7 +583,7 @@ const ProviderField: React.FC<ProviderFieldProps> = ({ field, control, modelInfo
               id={id}
               aria-invalid={ariaInvalid}
               aria-describedby={ariaDescribedBy}
-              placeholder={field.placeholder}
+              placeholder={placeholder}
               className="w-full"
             />
             <ComboboxContent>
@@ -604,9 +606,9 @@ const ProviderField: React.FC<ProviderFieldProps> = ({ field, control, modelInfo
     <FormField control={control} name={field.name} label={label}>
       {({ ref, value, ...controlProps }) =>
         field.type === "password" ? (
-          <PasswordInput {...controlProps} ref={ref} value={value ?? ""} placeholder={field.placeholder} />
+          <PasswordInput {...controlProps} ref={ref} value={value ?? ""} placeholder={placeholder} />
         ) : (
-          <Input {...controlProps} ref={ref} value={value ?? ""} type="text" placeholder={field.placeholder} />
+          <Input {...controlProps} ref={ref} value={value ?? ""} type="text" placeholder={placeholder} />
         )
       }
     </FormField>

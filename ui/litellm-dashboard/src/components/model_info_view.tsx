@@ -1,3 +1,5 @@
+import ResourceActivity from "@/components/UsagePage/ResourceActivity";
+import { useActivityDateRange } from "@/app/(dashboard)/cost-optimization/_components/useDailyActivityRange";
 import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
 import { useModelHub, useModelsInfo } from "@/app/(dashboard)/hooks/models/useModels";
 import { useQueryClient } from "@tanstack/react-query";
@@ -31,8 +33,7 @@ import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import EditAutoRouterModal from "./edit_auto_router/edit_auto_router_modal";
 import ReuseCredentialsModal from "./model_add/reuse_credentials";
-import { credentialLabelsByName } from "./shared/credentialOptions";
-import { CredentialIdentity } from "./shared/CredentialIdentity";
+import { ExistingCredentialDialog } from "./model_info/ExistingCredentialDialog";
 import { toast } from "@/lib/toast";
 import {
   CredentialItem,
@@ -45,7 +46,7 @@ import {
   tagListCall,
   testConnectionRequest,
 } from "./networking";
-import { Logo } from "@/components/molecules/logo/Logo";
+import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
 import { ModelPricingSummary } from "@/components/molecules/models/ModelPricingSummary";
 import UpdateModelCredentialsModal from "./update_model_credentials_modal";
 import ModelInfoEditForm, { type ModelEditSubmitValues, type TouchedPricingField } from "./ModelInfoEditForm";
@@ -53,6 +54,7 @@ import { Tag } from "./tag_management/types";
 import { getDisplayModelName } from "./view_model/model_name_display";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import KubernetesPodsCard from "./model_info/KubernetesPodsCard";
+import { modelKeys } from "@/app/(dashboard)/hooks/models/useModels";
 
 interface ModelInfoViewProps {
   modelId: string;
@@ -77,6 +79,7 @@ export default function ModelInfoView({
 }: ModelInfoViewProps) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
+  const activityDateRange = useActivityDateRange();
   const [localModelData, setLocalModelData] = useState<any>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
@@ -402,7 +405,7 @@ export default function ModelInfoView({
       setIsEditing(false);
     } catch (error) {
       console.error("Error updating model:", error);
-      toast.fromError(t("modelInfoView.toasts.updateFailed"));
+      toast.fromError(error);
     } finally {
       setIsSaving(false);
     }
@@ -614,6 +617,9 @@ export default function ModelInfoView({
           <TabsTrigger value="overview" className="flex-none rounded-none px-4 py-2">
             {t("modelInfoView.tabs.overview")}
           </TabsTrigger>
+          <TabsTrigger value="activity" className="flex-none rounded-none px-4 py-2">
+            {t("shared.resourceActivity.title")}
+          </TabsTrigger>
           <TabsTrigger value="raw" className="flex-none rounded-none px-4 py-2">
             {t("modelInfoView.tabs.rawJson")}
           </TabsTrigger>
@@ -626,7 +632,13 @@ export default function ModelInfoView({
               <Card className="block p-6">
                 <p className="text-sm">{t("modelInfoView.overview.provider")}</p>
                 <div className="mt-2 flex items-center space-x-2">
-                  {modelData.provider && <Logo provider={modelData.provider} className="w-4 h-4" />}
+                  {modelData.provider && (
+                    <ProviderLogo
+                      provider={modelData.provider}
+                      logoUrl={modelData.model_info.logo_url}
+                      className="w-4 h-4"
+                    />
+                  )}
                   <h3 className="text-lg font-medium">{modelData.provider || t("modelInfoView.notSet")}</h3>
                 </div>
               </Card>
@@ -744,6 +756,10 @@ export default function ModelInfoView({
             </Card>
           </TabsContent>
 
+          <TabsContent value="activity">
+            <ResourceActivity scope="model" id={modelData.litellm_model_name} activity={activityDateRange} />
+          </TabsContent>
+
           <TabsContent value="raw" keepMounted>
             <Card className="block p-6">
               <pre className="bg-muted p-4 rounded-sm text-xs overflow-auto">
@@ -796,25 +812,12 @@ export default function ModelInfoView({
           setIsCredentialModalOpen={setIsCredentialModalOpen}
         />
       ) : (
-        <Dialog open={isCredentialModalOpen} onOpenChange={(open) => !open && setIsCredentialModalOpen(false)}>
-          <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle>{t("modelInfoView.existingCredentialDialog.title")}</DialogTitle>
-            </DialogHeader>
-            <CredentialIdentity
-              className="text-sm"
-              credentialName={modelData.litellm_params.litellm_credential_name ?? ""}
-              label={credentialLabelsByName(credentialsList).get(
-                modelData.litellm_params.litellm_credential_name ?? "",
-              )}
-            />
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setIsCredentialModalOpen(false)}>
-                {t("modelInfoView.existingCredentialDialog.cancel")}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+        <ExistingCredentialDialog
+          open={isCredentialModalOpen}
+          onClose={() => setIsCredentialModalOpen(false)}
+          credentialName={modelData.litellm_params.litellm_credential_name ?? ""}
+          credentials={credentialsList}
+        />
       )}
 
       {isUpdateCredentialsModalOpen && accessToken && (
@@ -824,7 +827,7 @@ export default function ModelInfoView({
           accessToken={accessToken}
           modelId={modelId}
           onUpdated={() => {
-            queryClient.invalidateQueries({ queryKey: ["models", "list"] });
+            queryClient.invalidateQueries({ queryKey: modelKeys.lists() });
           }}
         />
       )}

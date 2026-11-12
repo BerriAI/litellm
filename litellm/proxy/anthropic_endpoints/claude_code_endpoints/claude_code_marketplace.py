@@ -27,14 +27,22 @@ from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Annotated, Final, Protocol, TypedDict, get_args
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 from pydantic import Json, TypeAdapter
-from typing_extensions import ReadOnly
+from typing_extensions import ReadOnly, assert_never
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.url_utils import is_https_url_with_host
-from litellm.models.plugin_upload import PluginUpload
+from litellm.models.plugin_upload import (
+    PluginDownloader,
+    PluginDownloadResult,
+    PluginDownloadsResponse,
+    PluginPublication,
+    PluginPublicationBase,
+    PluginPublicationError,
+    has_agent_skill_metadata,
+)
 from litellm.proxy._types import CommonProxyErrors, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_skill_access import (
     SkillVisibility,
@@ -52,6 +60,7 @@ from litellm.proxy.common_utils.claude_code_marketplace_auth import (
 )
 from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 from litellm.proxy.deps.repositories import PluginUploadRepositoryDep
+from litellm.repositories.plugin_publication import read_plugin_publisher, read_plugin_review
 from litellm.repositories.table_repositories import ClaudeCodePluginRepository
 from litellm.types.proxy.auth.special_headers import SpecialHeaders
 from litellm.types.proxy.claude_code_endpoints import (
@@ -125,7 +134,23 @@ async def get_prisma_client() -> object:
 _get_prisma_client: Final = get_prisma_client
 
 
-async def _header_key_caller(request: Request) -> UserAPIKeyAuth:
+def plugin_archive_url(request: Request, name: str, digest: str) -> str:
+    from litellm.proxy.utils import get_custom_url
+
+    return get_custom_url(
+        request_base_url=str(request.base_url), route=f"claude-code/plugins/{name}/archive/{digest}.zip"
+    )
+
+
+def plugin_archive_source_matches(
+    request: Request, name: str, source: Mapping[str, str], digest: str, *, has_agent_skill_metadata: bool
+) -> bool:
+    if has_agent_skill_metadata:
+        return source.get("source") == "archive" and source.get("sha256") == digest
+    return source == {"source": "archive", "url": plugin_archive_url(request, name, digest), "sha256": digest}
+
+
+async def header_key_caller(request: Request) -> UserAPIKeyAuth:
     try:
         caller: Final = await user_api_key_auth(
             request=request,
@@ -154,7 +179,7 @@ async def _header_key_caller(request: Request) -> UserAPIKeyAuth:
 
 async def _marketplace_caller(request: Request, key: str | None) -> UserAPIKeyAuth | None:
     if marketplace_auth_required():
-        return await _header_key_caller(request)
+        return await header_key_caller(request)
     if key:
         return await user_api_key_auth(request=request, api_key=f"Bearer {key}")
     return None
@@ -173,8 +198,6 @@ async def upload_plugin(
     metadata: Annotated[Json[UploadPluginRequest], Form(description="JSON skill metadata without a source URL")],
 ) -> RegisterPluginResponse:
     """Create a skill and its uploaded ZIP atomically. Duplicate names return 409."""
-    from litellm.proxy.utils import get_custom_url
-
     _require_proxy_admin(user_api_key_dict)
     if uploads is None:
         raise _error_response(500, CommonProxyErrors.db_not_connected_error.value)
@@ -189,16 +212,13 @@ async def upload_plugin(
     digest: Final = hashlib.sha256(archive).hexdigest()
     source: Final = {
         "source": "archive",
-        "url": get_custom_url(
-            request_base_url=str(request.base_url),
-            route=f"claude-code/plugins/{metadata.name}/archive/{digest}.zip",
-        ),
+        "url": plugin_archive_url(request, metadata.name, digest),
         "sha256": digest,
     }
     spec: Final = RegisterPluginRequest.model_validate({**metadata.model_dump(), "source": source})
     _validate_installation_preference(spec)
-    plugin_id: Final = await uploads.create(
-        PluginUpload(
+    published: Final = await uploads.publish(
+        PluginPublication(
             name=spec.name,
             version=spec.version,
             description=spec.description,
@@ -207,20 +227,41 @@ async def upload_plugin(
             created_by=user_api_key_dict.user_id,
         )
     )
-    if plugin_id is None:
-        raise _name_conflict_error(spec.name)
+    if isinstance(published, PluginPublicationError):
+        raise _publication_error(published)
     return RegisterPluginResponse(
         status="success",
         action="created",
         plugin=PluginResponse(
-            id=plugin_id,
+            id=published.id,
             name=spec.name,
-            version=spec.version,
+            version=published.version,
             description=spec.description,
             source=source,
             installation_preference=spec.installation_preference,
             enabled=True,
         ),
+    )
+
+
+def require_download_recorded(result: PluginDownloadResult) -> None:
+    match result:
+        case PluginDownloadResult.RECORDED:
+            return
+        case PluginDownloadResult.SKILL_NOT_FOUND:
+            raise _error_response(404, "Skill archive not found")
+        case _:
+            assert_never(result)
+
+
+def plugin_downloader(caller: UserAPIKeyAuth | None) -> PluginDownloader:
+    return PluginDownloader(
+        authenticated=caller is not None,
+        user_id=caller.user_id if caller is not None else None,
+        user_email=caller.user_email if caller is not None else None,
+        key_alias=caller.key_alias if caller is not None else None,
+        team_id=caller.team_id if caller is not None else None,
+        team_alias=caller.team_alias if caller is not None else None,
     )
 
 
@@ -237,10 +278,8 @@ async def download_plugin_archive(
     uploads: PluginUploadRepositoryDep,
 ) -> Response:
     """Download an uploaded ZIP under the same visibility policy as its skill."""
-    from litellm.proxy.utils import get_custom_url
-
     caller: Final = (
-        await _header_key_caller(request)
+        await header_key_caller(request)
         if marketplace_key_header_present(request)
         else await _marketplace_caller(request, None)
     )
@@ -248,18 +287,18 @@ async def download_plugin_archive(
     if uploads is None:
         raise _error_response(500, CommonProxyErrors.db_not_connected_error.value)
     archive: Final = await uploads.get_metadata(plugin_name)
-    expected_url: Final = get_custom_url(
-        request_base_url=str(request.base_url), route=f"claude-code/plugins/{plugin_name}/archive/{digest}.zip"
-    )
     if (
         archive is None
         or not visibility.allows(archive)
-        or archive.source != {"source": "archive", "url": expected_url, "sha256": digest}
+        or not plugin_archive_source_matches(
+            request, plugin_name, archive.source, digest, has_agent_skill_metadata=archive.has_agent_skill_metadata
+        )
     ):
         raise _error_response(404, "Skill archive not found")
     content: Final = await uploads.get_content(archive)
     if content is None:
         raise _error_response(404, "Skill archive not found")
+    require_download_recorded(await uploads.record_download(archive, digest, plugin_downloader(caller)))
     return Response(
         content=content,
         media_type="application/zip",
@@ -269,6 +308,35 @@ async def download_plugin_archive(
             "X-Content-Type-Options": "nosniff",
         },
     )
+
+
+@router.get(
+    "/claude-code/plugins/{plugin_name}/downloads",
+    tags=["Claude Code Marketplace"],
+    response_model=PluginDownloadsResponse,
+)
+async def get_plugin_downloads(
+    plugin_name: str,
+    uploads: PluginUploadRepositoryDep,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    limit: Annotated[int, Query(ge=1, le=100, description="Maximum number of download events")] = 25,
+    cursor: Annotated[str | None, Query(pattern=r"^[1-9][0-9]{0,18}$", description="Previous next_cursor")] = None,
+) -> PluginDownloadsResponse:
+    """Admin-only ZIP download totals and authenticated downloader history.
+
+    Anonymous downloads contribute only to totals. Counts include repeat requests and client prefetches,
+    starting when tracking is deployed. External sources and installation completion are not observed.
+    """
+    _require_proxy_admin(user_api_key_dict)
+    if uploads is None:
+        raise _error_response(500, CommonProxyErrors.db_not_connected_error.value)
+    before: Final = int(cursor) if cursor is not None else None
+    if before is not None and before > 9223372036854775807:
+        raise _error_response(422, "Invalid download cursor")
+    result: Final = await uploads.downloads(plugin_name, limit, before)
+    if result is None:
+        raise _error_response(404, "Plugin not found")
+    return result
 
 
 @router.get(
@@ -464,10 +532,14 @@ def _error_response(status_code: int, message: str) -> HTTPException:
     return HTTPException(status_code=status_code, detail={"error": message})
 
 
-def _name_conflict_error(name: str) -> HTTPException:
-    return _error_response(
-        409, f"A skill named '{name}' already exists. Update the existing skill instead of adding it again."
-    )
+def _publication_error(error: PluginPublicationError) -> HTTPException:
+    match error.kind:
+        case "invalid_version":
+            return _error_response(400, error.message)
+        case "not_found":
+            return _error_response(404, error.message)
+        case "conflict":
+            return _error_response(409, error.message)
 
 
 def _require_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> None:
@@ -490,6 +562,7 @@ def _require_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> None:
 )
 async def register_plugin(
     request: RegisterPluginRequest,
+    uploads: PluginUploadRepositoryDep,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -532,12 +605,11 @@ async def register_plugin(
           }'
         ```
     """
-    from prisma.errors import UniqueViolationError
-
     try:
         _require_proxy_admin(user_api_key_dict)
 
-        prisma_client: Final = await get_prisma_client()
+        if uploads is None:
+            raise _error_response(500, CommonProxyErrors.db_not_connected_error.value)
 
         if not re.match(r"^[a-z0-9-]+$", request.name):
             raise HTTPException(
@@ -548,30 +620,19 @@ async def register_plugin(
         _validate_plugin_source(request.source)
         _validate_installation_preference(request)
 
-        existing: Final[_PluginRecord | None] = await ClaudeCodePluginRepository(prisma_client).table.find_unique(
-            where={"name": request.name}
-        )
-        if existing:
-            raise _name_conflict_error(request.name)
-
         manifest: Final[Mapping[str, object]] = _build_plugin_manifest(request.name, request)
 
-        try:
-            plugin: Final[_PluginRecord] = await ClaudeCodePluginRepository(prisma_client).table.create(
-                data={
-                    "name": request.name,
-                    "version": request.version,
-                    "description": request.description,
-                    "manifest_json": json.dumps(manifest),
-                    "files_json": "{}",
-                    "enabled": True,
-                    "created_at": datetime.now(timezone.utc),
-                    "updated_at": datetime.now(timezone.utc),
-                    "created_by": user_api_key_dict.user_id,
-                }
+        plugin: Final = await uploads.publish(
+            PluginPublication(
+                name=request.name,
+                version=request.version,
+                description=request.description,
+                manifest=manifest,
+                created_by=user_api_key_dict.user_id,
             )
-        except UniqueViolationError:
-            raise _name_conflict_error(request.name)
+        )
+        if isinstance(plugin, PluginPublicationError):
+            raise _publication_error(plugin)
 
         verbose_proxy_logger.info("Plugin %s created successfully", request.name)
 
@@ -582,7 +643,7 @@ async def register_plugin(
                 id=plugin.id,
                 name=plugin.name,
                 version=plugin.version,
-                description=plugin.description,
+                description=request.description,
                 source=request.source,
                 installation_preference=request.installation_preference,
                 enabled=plugin.enabled,
@@ -606,9 +667,10 @@ async def register_plugin(
     response_model=ListPluginsResponse,
 )
 async def list_plugins(
+    uploads: PluginUploadRepositoryDep,
     enabled_only: bool = False,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
+) -> ListPluginsResponse:
     """
     List all plugins in the marketplace.
 
@@ -618,6 +680,17 @@ async def list_plugins(
     Returns:
         List of plugins with their metadata.
     """
+    catalog: Final = await list_visible_plugins(enabled_only, user_api_key_dict)
+    if uploads is None:
+        raise _error_response(500, CommonProxyErrors.db_not_connected_error.value)
+    counts: Final = await uploads.download_counts(tuple(plugin.id for plugin in catalog.plugins))
+    return ListPluginsResponse(
+        plugins=[plugin.model_copy(update={"download_count": counts.get(plugin.id, 0)}) for plugin in catalog.plugins],
+        count=catalog.count,
+    )
+
+
+async def list_visible_plugins(enabled_only: bool, user_api_key_dict: UserAPIKeyAuth) -> ListPluginsResponse:
     try:
         prisma_client: Final = await get_prisma_client()
 
@@ -633,13 +706,19 @@ async def list_plugins(
             # Parse manifest to get additional fields
             manifest = json.loads(p.manifest_json) if p.manifest_json else {}
 
+            review = read_plugin_review(MANIFEST_FIELDS.validate_python(manifest))
             plugin_list.append(
                 PluginListItem(
                     id=p.id,
+                    created_by=p.created_by,
+                    approved_by=review.approved_by if review else None,
+                    published_by=read_plugin_publisher(MANIFEST_FIELDS.validate_python(manifest)),
+                    security_scan_passed=review.security_scan_passed if review else False,
                     name=p.name,
                     version=p.version,
                     description=p.description,
                     source=manifest.get("source", {}),
+                    has_agent_skill_metadata=has_agent_skill_metadata(MANIFEST_FIELDS.validate_python(manifest)),
                     author=manifest.get("author"),
                     homepage=manifest.get("homepage"),
                     keywords=manifest.get("keywords"),
@@ -746,6 +825,7 @@ async def get_plugin(
 async def update_plugin(
     plugin_name: str,
     request: UpdatePluginRequest,
+    uploads: PluginUploadRepositoryDep,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ):
     """
@@ -754,7 +834,8 @@ async def update_plugin(
     The plugin is identified by its name in the path, which is the resource
     identity and cannot be changed here. This is a full replace, not a merge:
     the manifest is rebuilt from the request body, so any optional field left
-    out is reset to its default (e.g. an omitted version is cleared, not kept).
+    out is reset to its default, except version which automatically increments
+    the published patch version when omitted or null.
     Send the full desired state.
 
     Returns 404 if no plugin with the given name exists; use
@@ -792,6 +873,8 @@ async def update_plugin(
 
     try:
         _require_proxy_admin(user_api_key_dict)
+        if uploads is None:
+            raise _error_response(500, CommonProxyErrors.db_not_connected_error.value)
 
         prisma_client: Final = await get_prisma_client()
 
@@ -799,26 +882,35 @@ async def update_plugin(
         existing: Final[_PluginRecord | None] = await repository.table.find_unique(where={"name": plugin_name})
         if not existing:
             raise _error_response(404, f"Plugin '{plugin_name}' not found")
+        if request.expected_updated_at is not None and request.expected_updated_at != existing.updated_at:
+            raise _error_response(409, "The published skill changed. Reload it before publishing an update")
 
         current_manifest: Final = MANIFEST_FIELDS.validate_json(existing.manifest_json or "{}")
         if request.source != current_manifest.get("source"):
             _validate_plugin_source(request.source)
         _validate_installation_preference(request)
 
-        manifest: Final[Mapping[str, object]] = _build_plugin_manifest(plugin_name, request)
+        manifest: Final[Mapping[str, object]] = {
+            **_build_plugin_manifest(plugin_name, request),
+            **(
+                {"agent_skill": current_manifest["agent_skill"]}
+                if "agent_skill" in current_manifest and request.source == current_manifest.get("source")
+                else {}
+            ),
+        }
 
-        plugin: Final[_PluginRecord | None] = await repository.table.update(
-            where={"name": plugin_name},
-            data={
-                "version": request.version,
-                "description": request.description,
-                "manifest_json": json.dumps(manifest),
-                "files_json": "{}",
-                "updated_at": datetime.now(timezone.utc),
-            },
+        plugin: Final = await uploads.publish(
+            PluginPublication(
+                name=plugin_name,
+                version=request.version,
+                description=request.description,
+                manifest=manifest,
+                created_by=user_api_key_dict.user_id,
+            ),
+            PluginPublicationBase(existing.id, existing.updated_at),
         )
-        if plugin is None:
-            raise _error_response(404, f"Plugin '{plugin_name}' not found")
+        if isinstance(plugin, PluginPublicationError):
+            raise _publication_error(plugin)
 
         verbose_proxy_logger.info("Plugin %s updated successfully", plugin_name)
 
@@ -829,7 +921,7 @@ async def update_plugin(
                 id=plugin.id,
                 name=plugin.name,
                 version=plugin.version,
-                description=plugin.description,
+                description=request.description,
                 source=request.source,
                 installation_preference=request.installation_preference,
                 enabled=plugin.enabled,

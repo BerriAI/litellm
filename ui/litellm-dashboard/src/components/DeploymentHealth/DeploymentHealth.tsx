@@ -94,7 +94,7 @@ export const DeploymentHealthBanner = ({ handle }: { handle: DeploymentHealthHan
       variant={critical ? "error" : "warning"}
       role={critical ? "alert" : "status"}
       aria-label={t("shell.deploymentHealth.banner.label")}
-      className="min-h-10 shrink-0 items-center *:[svg]:text-warning data-[variant=error]:*:[svg]:text-destructive rounded-none border-x-0 border-t-0 border-b-warning/25 bg-warning/10 px-4 py-2 text-[13px] leading-5 text-foreground data-[variant=error]:border-b-destructive/25 data-[variant=error]:bg-destructive/10"
+      className="min-h-10 shrink-0 items-center *:[svg]:row-span-1 *:[svg]:translate-y-0 *:[svg]:text-warning data-[variant=error]:*:[svg]:text-destructive rounded-none border-x-0 border-t-0 border-b-warning/25 bg-warning/10 px-4 py-2 text-[13px] leading-5 text-foreground data-[variant=error]:border-b-destructive/25 data-[variant=error]:bg-destructive/10"
     >
       <Icon aria-hidden />
       <AlertTitle className="flex flex-wrap items-center gap-x-2">

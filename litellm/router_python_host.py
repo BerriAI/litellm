@@ -19,6 +19,7 @@ from typing import (
     cast,  # noqa: TID251  # untyped litellm globals: the live config view and the callback lists
 )
 
+from pydantic import TypeAdapter
 from typing_extensions import overload
 
 import litellm
@@ -31,6 +32,8 @@ if TYPE_CHECKING:
     from litellm.caching.dual_cache import DualCache
     from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.redis.stores.connection import RedisStores
+    from litellm.redis.stores.router_usage import RouterUsage
     from litellm.text_completions.streaming_iterator import TextCompletionStreamWrapper
     from litellm.types.llms.openai import HttpxBinaryResponseContent, OpenAIFileObject
     from litellm.types.rerank import RerankResponse
@@ -50,6 +53,8 @@ CallbackList: TypeAlias = Literal[
 ]
 
 Endpoint: TypeAlias = Callable[..., object]
+
+_LITELLM_GLOBAL: Final = TypeAdapter(object)
 
 
 class PythonHost:
@@ -124,7 +129,7 @@ class PythonHost:
         return litellm.logging_callback_manager
 
     def callback_list(self, name: CallbackList) -> list[object]:  # mutable-ok: the process callback list itself
-        value: Final[object] = getattr(litellm, name)  # pyright: ignore[reportAny]  # an untyped litellm global
+        value: Final = _LITELLM_GLOBAL.validate_python(getattr(litellm, name))
         return cast(list[object], value)  # cast-ok: the process callback list is an untyped litellm global
 
     def set_callback_list(self, name: CallbackList, value: list[object]) -> None:  # mutable-ok: assigned as given
@@ -146,6 +151,12 @@ class PythonHost:
         from litellm.caching.caching import DualCache, InMemoryCache
 
         return DualCache(redis_cache=redis_cache_for(config), in_memory_cache=InMemoryCache())
+
+    def router_usage(self, redis: "RedisStores") -> "RouterUsage":
+        """The per-minute tpm/rpm counters a router counts its deployments' calls in, on ``redis``."""
+        from litellm.redis.stores.router_usage import RouterUsageStore
+
+        return RouterUsageStore(redis.router_usage())
 
 
 def redis_cache_for(config: RouterConfig) -> "RedisCache | None":

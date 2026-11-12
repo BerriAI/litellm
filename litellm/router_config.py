@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
+from pydantic import TypeAdapter
+
 import litellm
 
 if TYPE_CHECKING:
@@ -45,6 +47,7 @@ class RouterDynamicConfig:
     context_window_fallbacks: Sequence[object] | None
     content_policy_fallbacks: Sequence[object] | None
     drop_params: bool | None
+    disable_token_counter: bool
     provider_list: Sequence[str]
     expose_router_debug_in_errors: bool
     redact_user_api_key_info: bool | None
@@ -102,6 +105,7 @@ def current_dynamic_config() -> RouterDynamicConfig:
         context_window_fallbacks=litellm.context_window_fallbacks,
         content_policy_fallbacks=litellm.content_policy_fallbacks,
         drop_params=litellm.drop_params,
+        disable_token_counter=litellm.disable_token_counter,
         provider_list=litellm.provider_list,
         expose_router_debug_in_errors=litellm.expose_router_debug_in_errors,
         redact_user_api_key_info=litellm.redact_user_api_key_info,
@@ -118,6 +122,7 @@ def current_dynamic_config() -> RouterDynamicConfig:
     )
 
 
+_LIVE_VALUE: Final = TypeAdapter(object)
 _LIVE_SOURCES: Final = MappingProxyType(
     {
         "num_retries": "num_retries",
@@ -130,6 +135,7 @@ _LIVE_SOURCES: Final = MappingProxyType(
         "context_window_fallbacks": "context_window_fallbacks",
         "content_policy_fallbacks": "content_policy_fallbacks",
         "drop_params": "drop_params",
+        "disable_token_counter": "disable_token_counter",
         "provider_list": "provider_list",
         "expose_router_debug_in_errors": "expose_router_debug_in_errors",
         "redact_user_api_key_info": "redact_user_api_key_info",
@@ -156,7 +162,7 @@ class LiveDynamicConfig:
         source: Final = _LIVE_SOURCES.get(name)
         if source is None:
             raise AttributeError(name)
-        return getattr(litellm, source)
+        return _LIVE_VALUE.validate_python(getattr(litellm, source))
 
 
 live_dynamic_config: Final = LiveDynamicConfig()

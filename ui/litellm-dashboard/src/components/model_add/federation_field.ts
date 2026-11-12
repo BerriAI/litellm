@@ -1,10 +1,12 @@
+import type { ParseKeys } from "i18next";
 import i18n from "@/i18n/i18n";
 import { isMaskedSecret } from "@/utils/maskedSecretUtils";
 
 export interface FederationField {
   readonly key: string;
-  readonly label: string;
-  readonly tooltip: string;
+  readonly labelKey: ParseKeys;
+  readonly tooltipKey: ParseKeys;
+  readonly tooltipValues?: Readonly<Record<string, number>>;
   readonly placeholder?: string;
   readonly required: boolean;
   readonly control: "text" | "integer" | "select";

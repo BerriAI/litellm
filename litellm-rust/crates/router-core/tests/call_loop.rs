@@ -5,7 +5,7 @@ use std::{collections::VecDeque, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use litellm_router_core::{
-    Attempt, AttemptError, Deployment, Error, FailureKind, FailureReport, Host,
+    Attempt, AttemptError, CallbackFiltered, Deployment, Error, FailureKind, FailureReport, Host,
     InMemoryRouterCache, Op, Output, Payload, Router, RouterCache, RouterConfig,
     RouterDynamicConfig, RouterEvent, RouterRequest, RoutingContext, SeededRandomness, SelectStage,
     SuccessReport,
@@ -17,7 +17,7 @@ use litellm_router_core::{
 };
 use parking_lot::Mutex;
 use rstest::{fixture, rstest};
-use serde_json::json;
+use serde_json::{Value, json};
 
 #[derive(Default)]
 struct ScriptedHost {
@@ -37,6 +37,9 @@ struct ScriptedHost {
     pick_failures: Mutex<VecDeque<AttemptError>>,
     /// The next attempt's failure, whatever group it serves.
     first_failure: Mutex<Option<AttemptError>>,
+    /// The callback filters pin to this deployment until an attempt of the request failed on it,
+    /// as `encrypted_content_affinity` does.
+    pinned: Option<&'static str>,
 }
 
 impl ScriptedHost {
@@ -110,6 +113,24 @@ impl Host for ScriptedHost {
             Some(failure) => Err(failure.into()),
             None => Ok(candidates),
         }
+    }
+
+    async fn callback_filters(
+        &self,
+        ctx: &RoutingContext<'_>,
+        candidates: Vec<Arc<Deployment>>,
+    ) -> Result<CallbackFiltered, Error> {
+        let kept = match self.pinned {
+            Some(pin) if !ctx.skipped_ids.iter().any(|id| id == pin) => {
+                candidates.into_iter().filter(|d| d.id == pin).collect()
+            }
+            Some(pin) => candidates.into_iter().filter(|d| d.id != pin).collect(),
+            None => candidates,
+        };
+        Ok(CallbackFiltered {
+            kept,
+            preferred: None,
+        })
     }
 
     async fn allow_fallback(
@@ -220,6 +241,32 @@ async fn a_rate_limit_retries_in_the_same_group(config: RouterConfig) {
             response.attempted_fallbacks
         ),
         ("primary", 1, 0)
+    );
+}
+
+#[rstest]
+#[case::server_error(server_error())]
+#[case::rate_limit(failure(FailureKind::RateLimit, 429))]
+#[case::connection_error(AttemptError::new(FailureKind::ApiConnection, None))]
+#[tokio::test]
+async fn a_retry_leaves_a_pinned_deployment_that_failed_the_request(
+    mut config: RouterConfig,
+    #[case] origin_failure: AttemptError,
+) {
+    config.callback_filters = true;
+    let host = Arc::new(ScriptedHost {
+        first_failure: Mutex::new(Some(origin_failure)),
+        pinned: Some("a1"),
+        ..ScriptedHost::default()
+    });
+    let router = router(config, json!({"num_retries": 3}), host.clone());
+    let response = router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap();
+    assert_eq!(
+        (host.selected(), response.attempted_retries),
+        (vec!["a1".to_owned(), "a2".to_owned()], 1)
     );
 }
 
@@ -945,6 +992,56 @@ async fn a_stream_retry_is_reported_before_its_attempt(config: RouterConfig) {
     assert_eq!((response.attempted_retries, host.retries()), (1, 1));
 }
 
+fn pinned_to_a1() -> Arc<ScriptedHost> {
+    Arc::new(ScriptedHost {
+        pinned: Some("a1"),
+        ..ScriptedHost::default()
+    })
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_stream_retry_leaves_the_pinned_deployment_the_stream_failed_on(
+    mut config: RouterConfig,
+) {
+    config.callback_filters = true;
+    let host = pinned_to_a1();
+    let router = router(config, json!({}), host.clone());
+    let origin = StreamOrigin {
+        deployment_id: Some("a1".to_owned()),
+        ..stream_origin()
+    };
+    router
+        .retry_stream(
+            Op::from("acompletion"),
+            stream_request(),
+            origin,
+            server_error(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(host.selected(), vec!["a2".to_owned()]);
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_stream_retry_leaves_a_pinned_deployment_a_retry_failed_on(mut config: RouterConfig) {
+    config.callback_filters = true;
+    let host = pinned_to_a1();
+    *host.first_failure.lock() = Some(server_error());
+    let router = router(config, json!({}), host.clone());
+    router
+        .retry_stream(
+            Op::from("acompletion"),
+            stream_request(),
+            stream_origin(),
+            server_error(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(host.selected(), vec!["a1".to_owned(), "a2".to_owned()]);
+}
+
 fn fallback_list(value: serde_json::Value) -> Fallbacks {
     serde_json::from_value(value).unwrap()
 }
@@ -1146,6 +1243,169 @@ async fn a_served_fallback_and_a_disabled_walk_report_no_failure(config: RouterC
         .await
         .unwrap_err();
     assert_eq!(fallbacks_failed(&host), vec![]);
+}
+
+fn azure_chat_and_batch_tiers() -> RouterConfig {
+    serde_json::from_value(json!({
+        "model_list": [
+            {"model_name": "primary", "litellm_params": {"model": "azure/chat", "order": 1}, "model_info": {"id": "c1", "mode": "chat"}},
+            {"model_name": "primary", "litellm_params": {"model": "azure/batch-a", "order": 2}, "model_info": {"id": "b2", "mode": "batch"}},
+            {"model_name": "primary", "litellm_params": {"model": "azure/batch-b", "order": 3}, "model_info": {"id": "b3", "mode": "batch"}},
+        ]
+    }))
+    .unwrap()
+}
+
+fn azure_chat_tiers() -> RouterConfig {
+    serde_json::from_value(json!({
+        "model_list": [
+            {"model_name": "primary", "litellm_params": {"model": "azure/chat-a", "order": 1}, "model_info": {"id": "c1", "mode": "chat"}},
+            {"model_name": "primary", "litellm_params": {"model": "azure/chat-b", "order": 2}, "model_info": {"id": "c2", "mode": "chat"}},
+        ]
+    }))
+    .unwrap()
+}
+
+#[rstest]
+#[case::batch_create_moves_past_the_level_it_used(azure_chat_and_batch_tiers(), true, vec!["b2", "b3"])]
+#[case::other_calls_walk_every_level(azure_chat_and_batch_tiers(), false, vec!["c1", "b2"])]
+#[case::batch_create_without_a_batch_deployment_walks_every_level(azure_chat_tiers(), true, vec!["c1", "c2"])]
+#[tokio::test]
+async fn a_failed_order_level_falls_back_to_the_next_level_its_pick_can_use(
+    #[case] config: RouterConfig,
+    #[case] batch_create: bool,
+    #[case] expected: Vec<&str>,
+) {
+    let host = Arc::new(ScriptedHost::failing("primary", vec![server_error()]));
+    let router = router(config, json!({"num_retries": 0}), host.clone());
+    let request = RouterRequest {
+        batch_create,
+        ..request()
+    };
+    router
+        .call(Op::from("acreate_batch"), request)
+        .await
+        .unwrap();
+    assert_eq!(host.selected(), expected);
+}
+
+fn azure_chat_then_batch() -> RouterConfig {
+    serde_json::from_value(json!({
+        "model_list": [
+            {"model_name": "primary", "litellm_params": {"model": "azure/chat", "order": 1}, "model_info": {"id": "c1", "mode": "chat"}},
+            {"model_name": "primary", "litellm_params": {"model": "azure/batch", "order": 2}, "model_info": {"id": "b2", "mode": "batch"}},
+        ]
+    }))
+    .unwrap()
+}
+
+#[rstest]
+#[case::a_batch_upload_finds_no_deployment(true, vec![])]
+#[case::a_batch_create_falls_back_to_chat(false, vec!["c1"])]
+#[tokio::test]
+async fn while_the_batch_deployment_cools_down_a_batch_upload_finds_no_healthy_deployment(
+    #[case] batch_upload: bool,
+    #[case] expected: Vec<&str>,
+) {
+    let host = Arc::new(ScriptedHost::failing(
+        "primary",
+        vec![failure(FailureKind::RateLimit, 429)],
+    ));
+    let router = router(
+        azure_chat_then_batch(),
+        json!({"num_retries": 0}),
+        host.clone(),
+    );
+    let create = RouterRequest {
+        batch_create: true,
+        ..request()
+    };
+    router
+        .call(Op::from("acreate_file"), create.clone())
+        .await
+        .unwrap_err();
+    let upload = RouterRequest {
+        batch_upload,
+        ..create
+    };
+    let healthy: Vec<String> = router
+        .healthy(&Op::from("acreate_file"), &upload)
+        .await
+        .map(|candidates| {
+            candidates
+                .healthy
+                .iter()
+                .map(|d| d.id.to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    assert_eq!(host.selected(), vec!["b2"]);
+    assert_eq!(healthy, expected);
+}
+
+#[rstest]
+#[case::a_batch_upload_finds_no_deployment(true, vec![])]
+#[case::a_batch_create_falls_back_to_chat(false, vec!["c1"])]
+#[tokio::test]
+async fn while_the_batch_deployment_is_paused_a_batch_upload_finds_no_healthy_deployment(
+    #[case] batch_upload: bool,
+    #[case] expected: Vec<&str>,
+) {
+    let config: RouterConfig = serde_json::from_value(json!({
+        "model_list": [
+            {"model_name": "primary", "litellm_params": {"model": "azure/chat", "order": 1}, "model_info": {"id": "c1", "mode": "chat"}},
+            {"model_name": "primary", "litellm_params": {"model": "azure/batch", "order": 2}, "model_info": {"id": "b2", "mode": "batch", "blocked": true}},
+        ]
+    }))
+    .unwrap();
+    let router = router(config, json!({}), Arc::new(ScriptedHost::default()));
+    let upload = RouterRequest {
+        batch_create: true,
+        batch_upload,
+        ..request()
+    };
+    let healthy: Vec<String> = router
+        .healthy(&Op::from("acreate_file"), &upload)
+        .await
+        .map(|candidates| {
+            candidates
+                .healthy
+                .iter()
+                .map(|d| d.id.to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    assert_eq!(healthy, expected);
+}
+
+#[rstest]
+#[case::a_rate_limit(FailureKind::RateLimit, 429)]
+#[case::a_wrong_key(FailureKind::Authentication, 401)]
+#[tokio::test]
+async fn a_batch_upload_the_batch_deployment_refuses_keeps_its_error_with_retries_on(
+    #[case] kind: FailureKind,
+    #[case] status: u16,
+) {
+    let host = Arc::new(ScriptedHost::failing(
+        "primary",
+        (0..3).map(|_| failure(kind, status)).collect(),
+    ));
+    let router = router(
+        azure_chat_then_batch(),
+        json!({"num_retries": 2}),
+        host.clone(),
+    );
+    let upload = RouterRequest {
+        batch_create: true,
+        batch_upload: true,
+        ..request()
+    };
+    let error = router
+        .call(Op::from("acreate_file"), upload)
+        .await
+        .unwrap_err();
+    assert_eq!(host.selected(), vec!["b2"]);
+    assert!(matches!(error, Error::Attempt(refused) if refused.kind == kind));
 }
 
 #[tokio::test]
@@ -1754,4 +2014,110 @@ async fn a_listed_pass_through_pick_names_the_group_an_alias_resolves_to(config:
         refused,
         Error::NoPassThroughDeployments { model } if model == "primary"
     ));
+}
+
+struct StoppedClock(u64);
+
+impl litellm_router_core::health::Clock for StoppedClock {
+    fn now(&self) -> std::time::SystemTime {
+        std::time::UNIX_EPOCH + Duration::from_secs(self.0)
+    }
+}
+
+fn utc_hour(hour: u64) -> u64 {
+    1_767_225_600 + hour * 3_600
+}
+
+#[rstest]
+#[case::inside_the_window(utc_hour(10), vec!["open"])]
+#[case::outside_the_window(utc_hour(20), vec!["open", "reserved"])]
+#[tokio::test]
+async fn access_windows_follow_the_routers_clock(#[case] now: u64, #[case] expected: Vec<&str>) {
+    let config: RouterConfig = serde_json::from_value(json!({
+        "model_list": [
+            {"model_name": "chat", "litellm_params": {"model": "openai/a"}, "model_info": {"id": "open"}},
+            {"model_name": "chat", "litellm_params": {"model": "openai/b"}, "model_info": {
+                "id": "reserved",
+                "access_windows": [{"start": "09:00", "end": "17:00", "timezone": "UTC", "team_ids": ["batch"]}],
+            }},
+        ]
+    }))
+    .unwrap();
+    let router = Router::builder(
+        config,
+        RouterDynamicConfig::default(),
+        Arc::new(ScriptedHost::default()),
+    )
+    .randomness(Arc::new(SeededRandomness::new(7)))
+    .clock(Arc::new(StoppedClock(now)))
+    .build()
+    .unwrap();
+    let mut picked = std::collections::BTreeSet::new();
+    for _ in 0..40 {
+        let deployment = router
+            .select(&Op::from("acompletion"), &request_for("chat"))
+            .await
+            .unwrap();
+        picked.insert(deployment.id.clone());
+    }
+    assert_eq!(picked.into_iter().collect::<Vec<_>>(), expected);
+}
+
+fn request_for(model: &str) -> RouterRequest {
+    RouterRequest {
+        model: model.to_owned(),
+        ..RouterRequest::default()
+    }
+}
+
+#[rstest]
+#[tokio::test]
+async fn every_event_of_a_retried_and_fallen_back_call_serializes_tagged_by_its_name(
+    config: RouterConfig,
+) {
+    let host = Arc::new(ScriptedHost::failing(
+        "primary",
+        vec![failure(FailureKind::RateLimit, 429); 3],
+    ));
+    let router = router(
+        config,
+        json!({"num_retries": 1, "fallbacks": [{"primary": ["backup"]}]}),
+        host.clone(),
+    );
+    router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap();
+    let tags: Value = host
+        .events
+        .lock()
+        .iter()
+        .map(|event| serde_json::to_value(event).unwrap()["event"].clone())
+        .collect();
+    assert_eq!(
+        tags,
+        json!([
+            "RetriesOpened",
+            "PickStarted",
+            "Selected",
+            "AttemptFailed",
+            "CooldownSet",
+            "RetryBudget",
+            "RetryLogged",
+            "Retry",
+            "PickStarted",
+            "Selected",
+            "AttemptFailed",
+            "CooldownSet",
+            "RetryLogged",
+            "FallingBack",
+            "RetryLogged",
+            "Fallback",
+            "RetriesOpened",
+            "PickStarted",
+            "Selected",
+            "Succeeded",
+            "FallbackDone",
+        ])
+    );
 }

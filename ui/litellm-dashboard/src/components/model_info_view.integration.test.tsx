@@ -1,9 +1,11 @@
+import { NuqsTestingAdapter } from "nuqs/adapters/testing";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React, { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import ModelInfoView from "./model_info_view";
+import { EMPTY_DAILY_ACTIVITY_RESPONSE } from "./UsagePage/dailyActivityApi";
 import { toast } from "@/lib/toast";
 import * as networking from "./networking";
 import { useUserLookup } from "@/app/(dashboard)/hooks/users/useUsers";
@@ -20,6 +22,7 @@ vi.mock("../../utils/dataUtils", () => ({
 }));
 
 vi.mock("./networking", () => ({
+  dailyActivityAggregatedCall: vi.fn(),
   credentialGetCall: vi.fn(),
   credentialListCall: vi.fn(),
   getGuardrailsList: vi.fn(),
@@ -195,14 +198,68 @@ describe("ModelInfoView", () => {
     mockCredentialCreateCall.mockResolvedValue({});
   });
 
-  const wrapper = ({ children }: { children: ReactNode }) =>
-    React.createElement(QueryClientProvider, { client: queryClient }, children);
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <NuqsTestingAdapter hasMemory>
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    </NuqsTestingAdapter>
+  );
+
+  it("loads Activity for the underlying model only when its tab is opened", async () => {
+    vi.mocked(networking.dailyActivityAggregatedCall).mockReset().mockResolvedValue(EMPTY_DAILY_ACTIVITY_RESPONSE);
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+    const activityTab = await screen.findByRole("tab", { name: "Activity" });
+    expect(networking.dailyActivityAggregatedCall).not.toHaveBeenCalled();
+
+    fireEvent.click(activityTab);
+
+    expect(await screen.findByText("No daily details available")).toBeInTheDocument();
+    expect(networking.dailyActivityAggregatedCall).toHaveBeenCalledWith(
+      "user",
+      expect.objectContaining({ model: defaultModelData.litellm_params.model }),
+    );
+    vi.stubGlobal("requestIdleCallback", (callback: () => void) => {
+      callback();
+      return 0;
+    });
+    fireEvent.click(screen.getByRole("button", { name: /\d.* - .*\d/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Last 7 Days/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(networking.dailyActivityAggregatedCall).toHaveBeenCalledTimes(2));
+    const selected = vi.mocked(networking.dailyActivityAggregatedCall).mock.calls.at(-1)![1];
+    fireEvent.click(screen.getByRole("tab", { name: "Overview" }));
+    fireEvent.click(activityTab);
+    await waitFor(() => expect(networking.dailyActivityAggregatedCall).toHaveBeenCalledTimes(3));
+    expect(networking.dailyActivityAggregatedCall).toHaveBeenLastCalledWith(
+      "user",
+      expect.objectContaining({
+        startTime: selected.startTime,
+        endTime: selected.endTime,
+      }),
+    );
+    vi.unstubAllGlobals();
+  });
 
   it("should render", async () => {
     render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
     await waitFor(() => {
       expect(screen.getByText("Model Settings")).toBeInTheDocument();
     });
+  });
+
+  it("should display the model metadata logo in the provider details", async () => {
+    const logoUrl = "https://cdn.example.com/gateway.svg";
+    mockUseModelsInfo.mockReturnValue({
+      data: {
+        data: [{ ...defaultModelData, model_info: { ...defaultModelData.model_info, logo_url: logoUrl } }],
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    expect(await screen.findByRole("img", { name: "openai logo" })).toHaveAttribute("src", logoUrl);
+    expect(screen.getByRole("heading", { name: "openai" })).toBeInTheDocument();
   });
 
   it("shows Kubernetes pods for discovery-enabled models", async () => {
@@ -583,6 +640,18 @@ describe("ModelInfoView", () => {
     expect(screen.getByText("Output (1080p): $0.12/s")).toBeInTheDocument();
     expect(screen.getByText("Output (4k): $0.30/s")).toBeInTheDocument();
     expect(screen.queryByText(/\$0\.00\/1M tokens/)).not.toBeInTheDocument();
+  });
+
+  it("shows the server's reason when saving the model settings is rejected", async () => {
+    const rejection = new Error("A strategy router cannot route to itself");
+    mockModelPatchUpdateCall.mockRejectedValueOnce(rejection);
+    const user = userEvent.setup();
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(mockToast.fromError).toHaveBeenCalledWith(rejection));
   });
 
   it("should display edit settings button when user can edit model", async () => {

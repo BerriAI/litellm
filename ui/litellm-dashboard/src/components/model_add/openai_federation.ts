@@ -6,25 +6,22 @@ const OPENAI_API_HOST = "api.openai.com";
 export const OPENAI_FEDERATION_FIELDS: readonly FederationField[] = [
   {
     key: "openai_identity_provider_id",
-    label: "Identity Provider ID",
-    tooltip:
-      "The workload identity provider registered in your OpenAI organization that trusts the token's issuer. Leave empty when the proxy sets OPENAI_IDENTITY_PROVIDER_ID in its environment.",
+    labelKey: "modelAdd.openaiFederation.fields.identityProviderId.label",
+    tooltipKey: "modelAdd.openaiFederation.fields.identityProviderId.tooltip",
     required: false,
     control: "text",
   },
   {
     key: "openai_service_account_id",
-    label: "Service Account ID",
-    tooltip:
-      "The OpenAI service account the verified identity acts as. Its project decides what the model can reach. Leave empty when the proxy sets OPENAI_SERVICE_ACCOUNT_ID in its environment.",
+    labelKey: "modelAdd.openaiFederation.fields.serviceAccountId.label",
+    tooltipKey: "modelAdd.openaiFederation.fields.serviceAccountId.tooltip",
     required: false,
     control: "text",
   },
   {
     key: "openai_identity_token_file",
-    label: "Identity Token File",
-    tooltip:
-      "Absolute path on the proxy host of a file holding the identity token, for example a projected Kubernetes service account token. Leave empty when the proxy sets OPENAI_IDENTITY_TOKEN_FILE in its environment.",
+    labelKey: "modelAdd.openaiFederation.fields.identityTokenFile.label",
+    tooltipKey: "modelAdd.openaiFederation.fields.identityTokenFile.tooltip",
     placeholder: "/var/run/secrets/kubernetes.io/serviceaccount/token",
     required: false,
     control: "text",

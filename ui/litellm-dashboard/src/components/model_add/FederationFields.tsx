@@ -91,7 +91,7 @@ function FederationFieldInput({ field, storedValue, validators }: FederationFiel
   const { t } = useTranslation();
   return (
     <MountedFormField
-      label={labelWithHint(field.label, field.tooltip)}
+      label={labelWithHint(t(field.labelKey), t(field.tooltipKey, { ...field.tooltipValues }))}
       name={field.key}
       required={field.required}
       rules={{

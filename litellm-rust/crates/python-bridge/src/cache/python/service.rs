@@ -45,6 +45,7 @@ pub(crate) enum CacheCall {
     },
     Store {
         value: Value,
+        unary: bool,
         reply: Reply<Result<(), Error>>,
     },
 }
@@ -54,11 +55,12 @@ struct PythonCacheService<P: Protocol> {
     config: ResponseCacheConfig,
 }
 
-pub(in crate::cache) fn service<P: Protocol<HostCall = CacheCall>>(
+pub(in crate::cache) fn service<P: Protocol>(
     services: HostServices<P>,
     namespace: String,
 ) -> std::sync::Arc<dyn ResponseCacheService>
 where
+    P::HostCall: From<CacheCall>,
     P::Error: From<MachineFault> + std::error::Error,
 {
     std::sync::Arc::new(PythonCacheService {
@@ -70,12 +72,17 @@ where
     })
 }
 
-impl<P: Protocol<HostCall = CacheCall>> ResponseCacheService for PythonCacheService<P>
+impl<P: Protocol> ResponseCacheService for PythonCacheService<P>
 where
+    P::HostCall: From<CacheCall>,
     P::Error: From<MachineFault> + std::error::Error,
 {
     fn config(&self) -> &ResponseCacheConfig {
         &self.config
+    }
+
+    fn keyed_by_caller(&self) -> bool {
+        true
     }
 
     fn lookup<'a>(
@@ -85,7 +92,7 @@ where
     ) -> Pin<Box<dyn Future<Output = Result<Option<Value>, Error>> + Send + 'a>> {
         Box::pin(async move {
             self.services
-                .call(|reply| CacheCall::Lookup { reply })
+                .call(|reply| CacheCall::Lookup { reply }.into())
                 .await
                 .map_err(Error::unavailable)??
                 .map(from_python)
@@ -101,8 +108,16 @@ where
     ) -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send + 'a>> {
         Box::pin(async move {
             let value = to_python(value)?;
+            let unary = value.get(STREAM_EVENTS_KEY).is_none();
             self.services
-                .call(|reply| CacheCall::Store { value, reply })
+                .call(|reply| {
+                    CacheCall::Store {
+                        value,
+                        unary,
+                        reply,
+                    }
+                    .into()
+                })
                 .await
                 .map_err(Error::unavailable)?
         })

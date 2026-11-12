@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 
 export default function UsageTags({
@@ -12,10 +13,11 @@ export default function UsageTags({
   loading: boolean;
   failed: boolean;
 }) {
+  const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
-  if (loading) return <span className="text-xs text-muted-foreground">Loading tags…</span>;
-  if (failed) return <span className="text-xs text-muted-foreground">Tags unavailable</span>;
-  if (tags.length === 0) return <span className="text-xs text-muted-foreground">No recorded tags</span>;
+  if (loading) return <span className="text-xs text-muted-foreground">{t("alerts.usageTags.loading")}</span>;
+  if (failed) return <span className="text-xs text-muted-foreground">{t("alerts.usageTags.failed")}</span>;
+  if (tags.length === 0) return <span className="text-xs text-muted-foreground">{t("alerts.usageTags.none")}</span>;
   const visible = expanded ? tags : tags.slice(0, 5);
   return (
     <div className="flex max-w-72 flex-wrap items-center gap-1">
@@ -29,10 +31,12 @@ export default function UsageTags({
           type="button"
           className="text-xs text-primary hover:underline"
           aria-expanded={expanded}
-          aria-label={expanded ? "Show fewer usage tags" : `Show ${tags.length - 5} more usage tags`}
+          aria-label={
+            expanded ? t("alerts.usageTags.showFewer") : t("alerts.usageTags.showMore", { hidden: tags.length - 5 })
+          }
           onClick={() => setExpanded(!expanded)}
         >
-          {expanded ? "Show less" : `+${tags.length - 5} more`}
+          {expanded ? t("alerts.usageTags.showLess") : t("alerts.usageTags.more", { hidden: tags.length - 5 })}
         </button>
       )}
     </div>

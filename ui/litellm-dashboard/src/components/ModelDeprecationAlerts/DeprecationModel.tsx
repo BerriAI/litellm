@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
 import type { DeprecationAlert } from "./deprecationAlerts";
 import { migrationHref } from "./migrationRoute";
@@ -17,10 +18,11 @@ export function DeprecationModel({ alert }: { alert: DeprecationAlert }) {
 }
 
 export function DeprecationTiming({ alert }: { alert: DeprecationAlert }) {
+  const { t } = useTranslation();
   const days = alert.model.days_until_deprecation;
-  let label = `Deprecates in ${days} ${days === 1 ? "day" : "days"}`;
-  if (days === 0) label = "Deprecates today";
-  if (days < 0) label = `Deprecated ${Math.abs(days)} ${days === -1 ? "day" : "days"} ago`;
+  let label = t("alerts.timing.deprecatesIn", { count: days });
+  if (days === 0) label = t("alerts.timing.today");
+  if (days < 0) label = t("alerts.timing.deprecatedAgo", { count: Math.abs(days) });
   return (
     <span
       className={days < 0 ? "text-destructive" : "text-amber-700 dark:text-amber-400"}

@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Table, TableHeader, TableHead, TableBody, TableRow, TableCell } from "@/components/ui/table";
 import ModelSelector from "./ModelSelector";
 import { toast } from "@/lib/toast";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 interface ModelAliasManagerProps {
   accessToken: string;
@@ -196,7 +197,7 @@ const ModelAliasManager: React.FC<ModelAliasManagerProps> = ({
         </div>
       </div>
 
-      <p className="mb-2 text-sm font-medium text-foreground">Manage Existing Aliases</p>
+      <p className="mb-2 text-sm font-medium text-foreground">{t("modelAliasManager.manageExistingTitle")}</p>
       <div className="relative mb-6 rounded-lg border">
         <div className="overflow-x-auto">
           <Table className="[&_td]:py-0.5 [&_th]:py-1">
@@ -302,7 +303,7 @@ const ModelAliasManager: React.FC<ModelAliasManagerProps> = ({
               {Object.keys(aliasObject).length === 0 ? (
                 <span className="text-muted-foreground">
                   <br />
-                  &nbsp;&nbsp;# No aliases configured yet
+                  {codeSamples.models.noAliasesYamlComment}
                 </span>
               ) : (
                 Object.entries(aliasObject).map(([key, value]) => (

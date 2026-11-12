@@ -1,4 +1,15 @@
 {
+  "format": {
+    "number": "{{val, number}}",
+    "compactNumber": "{{val, compact}}",
+    "usd": "{{val, usd}}",
+    "relativeTime": "{{val, relativetime}}",
+    "date": "{{val, date}}",
+    "monthDay": "{{val, monthday}}",
+    "monthDayTime": "{{val, monthdaytime}}",
+    "timestamp": "{{val, timestamp}}",
+    "numericDateTime": "{{val, numericdatetime}}"
+  },
   "agents": {
     "killSwitchConfig": {
       "authTypes": {
@@ -150,6 +161,70 @@
       "noMatchingOptions": "No matching options"
     },
     "formConfig": {
+      "fields": {
+        "name": {
+          "label": "Display Name",
+          "placeholder": "e.g., Customer Support Agent"
+        },
+        "description": {
+          "label": "Description",
+          "placeholder": "Describe what this agent does..."
+        },
+        "url": {
+          "label": "URL",
+          "tooltip": "Base URL where the agent is hosted (optional)"
+        },
+        "version": {
+          "label": "Version"
+        },
+        "protocolVersion": {
+          "label": "Protocol Version",
+          "tooltip": "The A2A protocol version LiteLLM serves to clients for this agent. LiteLLM converts the upstream agent's responses to this version, so clients always see the version you pick here regardless of the original agent's version."
+        },
+        "skills": {
+          "label": "Skills"
+        },
+        "streaming": {
+          "label": "Streaming"
+        },
+        "pushNotifications": {
+          "label": "Push Notifications"
+        },
+        "stateTransitionHistory": {
+          "label": "State Transition History"
+        },
+        "iconUrl": {
+          "label": "Icon URL"
+        },
+        "documentationUrl": {
+          "label": "Documentation URL"
+        },
+        "supportsAuthenticatedExtendedCard": {
+          "label": "Supports Authenticated Extended Card"
+        },
+        "model": {
+          "label": "Model (Optional)"
+        },
+        "makePublic": {
+          "label": "Make Public"
+        },
+        "costPerQuery": {
+          "label": "Cost Per Query ($)",
+          "tooltip": "Fixed cost per query"
+        },
+        "inputCostPerToken": {
+          "label": "Input Cost Per Token ($)",
+          "tooltip": "Cost per input token"
+        },
+        "outputCostPerToken": {
+          "label": "Output Cost Per Token ($)",
+          "tooltip": "Cost per output token"
+        },
+        "enableTracing": {
+          "label": "Enable Tracing",
+          "tooltip": "Enable request tracing for this agent"
+        }
+      },
       "basic": {
         "title": "Basic Information",
         "protocolVersionHelp": "LiteLLM serves this version to clients and converts the upstream agent's responses to match it, regardless of the original agent's version."
@@ -651,6 +726,12 @@
       }
     },
     "documents": {
+      "statuses": {
+        "uploading": "Uploading",
+        "ready": "Ready",
+        "error": "Error",
+        "removed": "Removed"
+      },
       "empty": {
         "title": "No documents uploaded yet",
         "description": "Upload documents above to get started."
@@ -956,6 +1037,9 @@
       }
     },
     "providerFields": {
+      "placeholders": {
+        "sidecarApiKey": "Enter sidecar API key"
+      },
       "labels": {
         "apiBase": "API Base",
         "apiKey": "API Key",
@@ -1597,10 +1681,32 @@
     }
   },
   "skills": {
+    "install": {
+      "action": "Install / Share",
+      "title": "Install {{name}}",
+      "description": "Choose your coding agent and copy the command to your terminal",
+      "agent": "Coding agent",
+      "scope": "Install location",
+      "project": "Current project",
+      "global": "All projects",
+      "method": "Install method",
+      "authenticated": "Authenticated",
+      "public": "Public command",
+      "authenticatedHint": "Enter your own LiteLLM key at the terminal prompt. The gateway checks your access before downloading the skill",
+      "publicHint": "This skill is listed in the gateway's public index and can be installed without a key",
+      "command": "Install command",
+      "authenticatedRequirements": "Requires macOS or Linux with Bash, curl, unzip, Node.js 22.20 or later, and npm. Run from your project directory for a project install",
+      "publicRequirements": "Requires macOS or Linux with Node.js 22.20 or later and npm. Run from your project directory for a project install",
+      "shareHint": "Share this command with teammates. It contains no key",
+      "copy": "Copy install command",
+      "copied": "Copied",
+      "copyFailed": "Could not copy the command. Select and copy it manually",
+      "unavailable": "An install command is unavailable for this gateway URL. Authenticated installs require HTTPS or a localhost gateway"
+    },
     "panel": {
-      "title": "Skills",
-      "intro": "Register Claude Code skills. Published skills appear in the Skill Hub for all users and are served via <endpoint/>.",
-      "addButton": "+ Add Skill",
+      "title": "Skills Hub",
+      "intro": "Register and share reusable skills for Codex, Claude Code, and other agents that support the open Agent Skills format.",
+      "addButton": "+ Register your skill",
       "deleteDialog": {
         "title": "Delete Skill",
         "confirm": "Are you sure you want to delete skill: <name/>?",
@@ -1611,12 +1717,20 @@
       "toasts": {
         "deleted": "Skill \"{{name}}\" deleted successfully",
         "deleteFailed": "Failed to delete skill"
-      }
+      },
+      "editButton": "Edit Skill",
+      "tabs": {
+        "skills": "Published skills",
+        "submissions": "Submissions",
+        "mySubmissions": "My submissions"
+      },
+      "loadFailed": "Could not refresh published skills. The last loaded list may be out of date",
+      "detailFailed": "Could not load the latest skill details. Retry before editing"
     },
     "table": {
       "empty": {
-        "title": "No skills found",
-        "description": "Add one to get started."
+        "title": "No skills registered yet",
+        "description": "Register your first skill to get started."
       },
       "loading": "Loading skills…",
       "uncategorized": "Uncategorized",
@@ -1636,12 +1750,22 @@
         "description": "Description",
         "category": "Category",
         "public": "Public",
-        "createdAt": "Created At",
-        "actions": "Actions"
-      }
+        "createdAt": "Created",
+        "actions": "Actions",
+        "domain": "Domain",
+        "updatedAt": "Last updated",
+        "downloads": "Downloads",
+        "tags": "Tags",
+        "createdBy": "Created by",
+        "publishedBy": "Published by",
+        "approvedBy": "Approved by",
+        "securityScan": "Security scan"
+      },
+      "notRecorded": "Not recorded",
+      "scanHelp": "Yes means this published version has a completed scan with no findings and a risk score of 0. No means it has not passed a recorded scan."
     },
     "addForm": {
-      "title": "Add New Skill",
+      "title": "Register your skill",
       "sourceOptions": {
         "url": "Source URL",
         "upload": "Upload ZIP"
@@ -1658,22 +1782,22 @@
         "namespace": "Namespace (Optional)",
         "description": "Description (Optional)",
         "category": "Category (Optional)",
-        "keywords": "Keywords (Optional)",
+        "keywords": "Tags (Optional)",
         "version": "Version (Optional)",
         "authorName": "Author Name (Optional)",
         "authorEmail": "Author Email (Optional)"
       },
       "hints": {
         "archive": "Choose a ZIP from your computer, up to 10 MiB. Include SKILL.md at the root or inside one skill folder, along with any supporting files. The skill will use the same visibility settings as skills added by URL.",
-        "sourceUrl": "Paste an HTTPS git repository URL from GitHub, GitLab, Bitbucket, or a self-hosted host (e.g. github.com/org/repo or github.com/org/repo/tree/main/my-skill), or an HTTPS link to a .zip archive of the skill hosted on S3 or any static file server. For a private repository use its SSH clone URL (git@ghe.example.com:org/repo.git) so Claude Code clones it with your own SSH key.",
-        "subPath": "Path within the repository where the skill lives (e.g., plugins/my-skill). Leave empty if the skill is at the repo root.",
-        "sha256": "Hex digest of the zip file. Claude Code refuses to install the archive if its checksum does not match.",
+        "sourceUrl": "Link to a Git repository, a skill folder, or a ZIP archive containing SKILL.md and any supporting files. For private repositories, use an SSH clone URL with access configured in your agent.",
+        "subPath": "Path within the repository where the skill lives (e.g., skills/my-skill). Leave empty if the skill is at the repo root.",
+        "sha256": "Optional SHA-256 digest for verifying the ZIP archive’s integrity.",
         "name": "Unique identifier in kebab-case format (e.g., my-skill)",
-        "domain": "Top-level grouping in the Skill Hub (e.g., Productivity)",
+        "domain": "Top-level grouping in the Skills Hub (e.g., Productivity)",
         "namespace": "Sub-grouping within domain (e.g., workflows)",
         "description": "Brief description of what the skill does",
         "category": "Select a category or enter a custom one",
-        "keywords": "Comma-separated list of keywords for search",
+        "keywords": "Comma-separated list of tags for search",
         "version": "Semantic version (e.g., 1.0.0)",
         "authorName": "Name of the skill author or organization",
         "authorEmail": "Contact email for the skill author"
@@ -1694,17 +1818,18 @@
       "detected": "Detected: {{source}}",
       "noCategories": "No matching categories",
       "cancel": "Cancel",
-      "adding": "Adding...",
-      "submit": "Add Skill",
+      "adding": "Registering...",
+      "submit": "Register skill",
       "errors": {
         "zipRequired": "Please choose a .zip file",
         "zipTooLarge": "The ZIP file must be 10 MiB or smaller",
         "urlRequired": "Please enter a repository or zip archive URL",
-        "subPathInvalid": "Subfolder must be a relative path like plugins/my-skill (letters, numbers, dots, hyphens, underscores)",
+        "subPathInvalid": "Subfolder must be a relative path like skills/my-skill (letters, numbers, dots, hyphens, underscores)",
         "sha256Invalid": "SHA-256 must be a 64-character hex digest",
         "nameRequired": "Please enter skill name",
         "nameInvalid": "Name must be kebab-case (lowercase, numbers, hyphens only)",
-        "emailInvalid": "Please enter a valid email"
+        "emailInvalid": "Please enter a valid email",
+        "descriptionTooLong": "Description must be 1024 characters or fewer"
       },
       "toasts": {
         "noToken": "No access token available",
@@ -1713,8 +1838,129 @@
         "invalidVersion": "Version must be in semantic versioning format (e.g., 1.0.0)",
         "invalidEmail": "Invalid email format",
         "registered": "Skill registered successfully",
-        "registerFailed": "Failed to register skill"
+        "registerFailed": "Failed to register skill",
+        "submitted": "Submitted for admin approval. The published skill is unchanged",
+        "updated": "Skill updated successfully"
+      },
+      "editTitle": "Edit Skill",
+      "approvalNotice": "Your changes will be submitted for admin approval. Published skills stay unchanged until approval",
+      "submitReview": "Submit for approval",
+      "save": "Save changes",
+      "versionOverride": "Version override (optional)",
+      "versionContext": "Current version {{version}}. Leave blank for the next patch version, or enter a higher version",
+      "automaticVersion": "Automatic next patch",
+      "versionOverrideHint": "Leave blank to assign the next patch version when this change is published",
+      "modes": {
+        "upload": "Upload ZIP",
+        "import": "Import URL",
+        "metadata": "Edit metadata"
+      },
+      "neutralLabels": {
+        "url": "Source URL",
+        "skill": "Skill selector (optional)",
+        "ref": "Git ref (optional)",
+        "path": "Path (optional)",
+        "domain": "Domain (optional)",
+        "namespace": "Namespace (optional)",
+        "keywords": "Tags (optional)"
+      },
+      "uploadHint": "Choose a ZIP up to 10 MiB containing SKILL.md. Its frontmatter supplies the skill name and description.",
+      "replacementHint": "The replacement SKILL.md supplies the description. Domain, namespace, and keywords are preserved.",
+      "importHint": "Enter the original source URL. Use a skill selector or path when the repository contains several skills. Leave the ref blank to use HEAD.",
+      "saving": "Saving..."
+    },
+    "scanning": {
+      "title": "Security scan",
+      "scan": "Scan for threats",
+      "running": "Scanning…",
+      "advisory": "Scanning is optional. You can approve or reject this submission at any time.",
+      "loading": "Loading scan status…",
+      "unconfigured": "Security scanning is not configured. Ask your gateway administrator to connect a scanner.",
+      "loadFailed": "Could not load the scan status.",
+      "requestedBy": "Requested by {{name}}",
+      "archiveDigest": "Scanned archive SHA-256: {{digest}}",
+      "mutableSource": "This scan uses an external source that may change after scanning.",
+      "summary": "{{count}} findings · Risk score {{score}}/100 · SkillSpector {{version}}",
+      "semantic": "Static and semantic analysis",
+      "static": "Static analysis only",
+      "incomplete": "Analysis was incomplete. This report does not establish that the skill is safe.",
+      "noFindings": "No findings were reported in the analyzed content.",
+      "status": {
+        "running": "In progress",
+        "completed": "Completed",
+        "failed": "Failed"
       }
+    },
+    "submissions": {
+      "adminIntro": "Review submitted skills and changes before publishing them",
+      "authorIntro": "Your submissions and review outcomes. Pending changes are not published",
+      "loading": "Loading submissions...",
+      "loadFailed": "Could not refresh submissions. Previously loaded details may be out of date",
+      "retry": "Retry",
+      "empty": "No submissions yet",
+      "emptyPage": "No submissions on this page",
+      "page": "Page {{page}}",
+      "previous": "Previous",
+      "next": "Next",
+      "review": "Review",
+      "details": "View details",
+      "reviewTitle": "Submission for {{name}}",
+      "field": "Field",
+      "current": "Currently published",
+      "proposed": "Proposed",
+      "notSet": "Not set",
+      "noCurrent": "No currently published skill is available for comparison",
+      "pendingNotice": "Awaiting admin approval. The published skill remains unchanged",
+      "submittedBy": "Submitted by {{name}}",
+      "reviewedBy": "Reviewed by {{name}} on {{date}}",
+      "rejectionReason": "Rejection reason: {{reason}}",
+      "reasonLabel": "Rejection reason (optional)",
+      "approve": "Approve and publish",
+      "reject": "Reject",
+      "approved": "Submission approved and published",
+      "rejected": "Submission rejected. Published skills are unchanged",
+      "actionFailed": "Could not review this submission",
+      "download": "Download submitted ZIP",
+      "downloading": "Downloading...",
+      "downloadFailed": "Could not download the submitted ZIP",
+      "status": {
+        "pending_review": "Pending review",
+        "approved": "Approved",
+        "rejected": "Rejected"
+      },
+      "operation": {
+        "create": "New skill",
+        "update": "Skill update"
+      },
+      "fields": {
+        "name": "Name",
+        "version": "Version",
+        "description": "Description",
+        "source": "Source",
+        "author": "Author",
+        "homepage": "Homepage",
+        "keywords": "Tags",
+        "category": "Category",
+        "domain": "Domain",
+        "namespace": "Namespace",
+        "installation_preference": "Installation preference",
+        "agent_skill": "Portable skill descriptor"
+      },
+      "nextPatchVersion": "Next patch version on approval",
+      "descriptorUnavailable": "The current portable descriptor is not included in this response"
+    },
+    "detail": {
+      "subtitle": "Published skill metadata and portable archive",
+      "private": "Private"
+    },
+    "filters": {
+      "allTags": "All tags",
+      "tag": "Filter by tag",
+      "allScans": "All scan statuses",
+      "scanned": "Security scan: Yes",
+      "notScanned": "Security scan: No",
+      "search": "Search skills, tags, or people…",
+      "clear": "Clear filters"
     }
   },
   "claudeCodePlugins": {
@@ -1728,10 +1974,56 @@
       "unknown": "Unknown source"
     },
     "skillDetail": {
-      "back": "Skills",
+      "history": {
+        "title": "Version history",
+        "explanation": "Published metadata and retained uploads. Updates automatically increment the patch version unless a higher version is specified.",
+        "loading": "Loading versions…",
+        "failed": "Could not load version history.",
+        "empty": "No recorded releases yet. Existing skills start recording history on their next published update.",
+        "legacy": "Legacy version",
+        "retained": "Uploaded ZIP retained and verified against its source digest.",
+        "reference": "Source reference only. External files may change and are not retained by LiteLLM.",
+        "metadata": "Published metadata",
+        "download": "Download retained ZIP",
+        "downloadFailed": "Could not download this version.",
+        "newer": "Newer",
+        "older": "Older",
+        "restore": "Restore this version",
+        "restoreTitle": "Restore version {{version}}",
+        "restoreDescription": "Publish this version's files and metadata as a new release. Existing versions, access permissions, and public or private status are preserved.",
+        "newVersion": "New version (optional)",
+        "versionHint": "Leave blank to increment the current patch version, or enter a higher semantic version. Legacy versions require an explicit version.",
+        "confirmRestore": "Restore as new version",
+        "restoring": "Restoring…",
+        "restoreFailed": "Could not restore this version. Reload the skill and try again."
+      },
+      "back": "Skills Hub",
       "tabs": {
         "overview": "Overview",
-        "usage": "How to Use"
+        "usage": "How to Use",
+        "downloads": "Downloads"
+      },
+      "downloads": {
+        "title": "Download history",
+        "description": "ZIP downloads served by this gateway, including repeat downloads and client prefetches. Counts do not confirm installations. External downloads are not tracked.",
+        "attributionNote": "History identifies authenticated callers or shared-key owners. Anonymous downloads are included in totals without individual history.",
+        "total": "Total downloads",
+        "anonymousTotal": "Anonymous downloads",
+        "downloadedAt": "Downloaded at",
+        "downloader": "User or key owner",
+        "key": "Key alias",
+        "team": "Team",
+        "version": "Version",
+        "anonymous": "Anonymous",
+        "unidentified": "Authenticated, no user identity",
+        "unavailable": "Not recorded",
+        "loading": "Loading download history…",
+        "loadFailed": "Could not load download history. Try refreshing.",
+        "empty": "No authenticated download history yet.",
+        "refresh": "Refresh",
+        "refreshing": "Refreshing download history…",
+        "loadMore": "Load more",
+        "loadingMore": "Loading more downloads…"
       },
       "properties": {
         "category": "Category",
@@ -1759,14 +2051,14 @@
       "copy": "Copy",
       "copied": "Copied",
       "usage": {
-        "title": "Using this skill",
+        "title": "Use with Claude Code",
         "intro": "Once your proxy is set as a marketplace, enable this skill in Claude Code with one command:",
         "staleCatalog": "If you see \"Plugin {{name}} not found in marketplace\", update the catalog first:",
         "notConfigured": "Don't have the marketplace configured yet?",
         "seeSetup": "See one-time setup →"
       },
       "setup": {
-        "title": "One-time marketplace setup",
+        "title": "Claude Code marketplace setup",
         "removeFirst": "If you added this marketplace before without a key, remove it first in Claude Code. Removing it also uninstalls the plugins you installed from it, so install them again from /plugin after you add the snippet:",
         "requiresKey": "This proxy requires a LiteLLM key to read the marketplace. Add this to <settings/> and replace <placeholder/> with your key:",
         "runCommand": "Run this command in Claude Code to register the marketplace:",
@@ -1774,7 +2066,7 @@
       }
     },
     "makePublic": {
-      "title": "Publish to Skill Hub",
+      "title": "Publish to Skills Hub",
       "steps": {
         "select": "Select Skills",
         "confirm": "Confirm"
@@ -1782,15 +2074,15 @@
       "step1": {
         "title": "Select Skills to Publish",
         "selectAll": "Select All ({{total}})",
-        "description": "Selected skills will be visible to all users in the Skill Hub. Deselected skills will be unpublished.",
+        "description": "Selected skills will be visible to all users in the Skills Hub. Deselected skills will be unpublished.",
         "empty": "No skills registered yet.",
         "public": "Public",
         "selectedCount_one": "<strong>{{count}}</strong> skill will be published",
         "selectedCount_other": "<strong>{{count}}</strong> skills will be published"
       },
       "step2": {
-        "title": "Confirm Publish to Skill Hub",
-        "note": "<strong>Note:</strong> Published skills will be visible to all users in the Skill Hub tab. Skills not in the list below will be unpublished.",
+        "title": "Confirm Publish to Skills Hub",
+        "note": "<strong>Note:</strong> Published skills will be visible to all users in the Skills Hub tab. Skills not in the list below will be unpublished.",
         "listTitle": "Skills to be published:",
         "total_one": "Total: <strong>{{count}}</strong> skill will be published",
         "total_other": "Total: <strong>{{count}}</strong> skills will be published"
@@ -1803,8 +2095,8 @@
       },
       "toasts": {
         "selectAtLeastOne": "Please select at least one skill",
-        "published_one": "Skill Hub updated — {{count}} skill(s) published",
-        "published_other": "Skill Hub updated — {{count}} skill(s) published",
+        "published_one": "Skills Hub updated — {{count}} skill(s) published",
+        "published_other": "Skills Hub updated — {{count}} skill(s) published",
         "publishFailed": "Failed to update skills. Please try again."
       }
     }
@@ -2091,6 +2383,8 @@
       }
     },
     "estimatedOutputTokens": {
+      "invalidPerModel": "Enter a JSON object of positive integers, e.g. {\"gpt-4\": 4096}",
+      "invalidPositive": "Enter a positive integer",
       "adminOnlyTooltip": "Only a proxy admin can change this. It sets how many output tokens the rate limiter reserves for a request that omits max_tokens, which is charged against the team and organization TPM windows.",
       "estimateTooltip": "Expected output tokens reserved for TPM limiting when a request omits max_tokens. Overrides the built-in estimate for this {{entity}}.",
       "perModelTooltip": "Per-model expected output tokens reserved for TPM limiting when a request omits max_tokens. Takes precedence over the {{entity}}-wide estimate."
@@ -2112,6 +2406,10 @@
   },
   "apiKeys": {
     "keyTableColumns": {
+      "sortFields": {
+        "spend": "Spend",
+        "budget": "Budget"
+      },
       "status": {
         "deleted": "Deleted",
         "deletedTooltip": "Deleted {{date}}{{deletedBy}}. Kept for audit and spend history; requests using this key are rejected.",
@@ -2153,6 +2451,20 @@
       }
     },
     "virtualKeysTable": {
+      "filterLabels": {
+        "team": "Team",
+        "organization": "Organization",
+        "userId": "User ID",
+        "keyId": "Key ID",
+        "status": "Status"
+      },
+      "statuses": {
+        "all": "All statuses",
+        "active": "Active",
+        "expired": "Expired",
+        "revoked": "Revoked (blocked)",
+        "deleted": "Deleted"
+      },
       "loadingKey": "Loading key...",
       "title": "Virtual Keys",
       "description": "Every key that authenticates requests to the gateway.",
@@ -2490,6 +2802,15 @@
       "allProviderModels": "All {{provider}} models"
     },
     "modelMaxBudgetEditor": {
+      "periods": {
+        "hourly": "Hourly",
+        "daily": "Daily",
+        "weekly": "Weekly",
+        "monthly": "Monthly",
+        "calendarMonth": "Calendar month"
+      },
+      "modelPattern": "Model pattern",
+      "premiumHint": "Premium feature - Upgrade to set per-model budgets",
       "blurb": "Cap spend per model over its own window. A budget set on the bare model name also covers the provider-prefixed spelling of that model. Pick an access group, or type a pattern like claude-opus*, to share one budget across every model it covers.",
       "addModelBudget": "Add Model Budget",
       "removeModelBudget": "Remove model budget",
@@ -2514,6 +2835,24 @@
       "triedInOrder": "Tried in order; first model still within its own budget is used"
     },
     "budgetWindowsEditor": {
+      "options": {
+        "hourly": {
+          "label": "Hourly",
+          "resetHint": "Resets every hour"
+        },
+        "daily": {
+          "label": "Daily",
+          "resetHint": "Resets daily at midnight UTC"
+        },
+        "weekly": {
+          "label": "Weekly",
+          "resetHint": "Resets every Sunday at midnight UTC"
+        },
+        "monthly": {
+          "label": "Monthly",
+          "resetHint": "Resets on the 1st of every month at midnight UTC"
+        }
+      },
       "maxSpend": "Max spend ($)",
       "addWindow": "+ Add Budget Window"
     },
@@ -2590,6 +2929,10 @@
     "copy": "Copy"
   },
   "routerSettingsForm": {
+    "configOwned": {
+      "hint": "Set in config.yaml. Edit the file to change it.",
+      "sourceUnknown": "Could not load which settings config.yaml owns. Reload the page to make changes."
+    },
     "page": {
       "updated": "router settings updated successfully",
       "updateFailed": "Failed to update router settings: ",
@@ -2632,6 +2975,7 @@
     "loading": "Loading..."
   },
   "modelAliasManager": {
+    "manageExistingTitle": "Manage Existing Aliases",
     "toasts": {
       "missingFields": "Please provide both alias name and target model",
       "duplicate": "An alias with this name already exists",
@@ -2745,6 +3089,10 @@
     "empty": "No teams found",
     "loading": "Loading teams…"
   },
+  "storePromptsToggle": {
+    "label": "Store prompts in spend logs",
+    "description": "Turn off to exclude prompts and responses from spend logs. Global and team restrictions still apply."
+  },
   "accessGroupSelector": {
     "placeholder": "Select access groups",
     "label": "Access Group",
@@ -2754,6 +3102,27 @@
   "passThroughRoutesSelector": {
     "placeholder": "Select pass through routes",
     "empty": "No pass through routes found"
+  },
+  "callbackInfo": {
+    "descriptions": {
+      "arize": "Arize Logging Integration",
+      "braintrust": "Braintrust Logging Integration",
+      "customCallbackApi": "Custom Callback API Logging Integration",
+      "galileo": "Galileo AI Observability Integration",
+      "datadog": "Datadog Logging Integration",
+      "newrelic": "New Relic Logging Integration",
+      "lago": "Lago Billing Logging Integration",
+      "langfuse": "Langfuse v2 Logging Integration",
+      "langfuseOtel": "Langfuse v3 OTEL Logging Integration",
+      "langsmith": "Langsmith Logging Integration",
+      "openmeter": "OpenMeter Logging Integration",
+      "otel": "OpenTelemetry Logging Integration",
+      "pointfive": "PointFive Logging Integration",
+      "zerobus": "Databricks Zerobus Ingest Logging Integration",
+      "s3": "S3 Bucket (AWS) Logging Integration",
+      "signoz": "SigNoz Logging Integration. Setup: https://signoz.io/docs/litellm-observability/",
+      "sqs": "SQS Queue (AWS) Logging Integration"
+    }
   },
   "projects": {
     "page": {
@@ -2882,6 +3251,11 @@
         "add": "Add Key-Value Pair"
       },
       "errors": {
+        "missingModel": "Missing model",
+        "projectNameRequired": "Please enter a project name",
+        "teamRequired": "Please select a team",
+        "missingKey": "Missing key",
+        "missingValue": "Missing value",
         "duplicateModel": "Duplicate model",
         "duplicateKey": "Duplicate key"
       }
@@ -2906,6 +3280,13 @@
     }
   },
   "budgets": {
+    "durationFilterOptions": {
+      "hourly": "hourly",
+      "daily": "daily",
+      "weekly": "weekly",
+      "monthly": "monthly",
+      "notSet": "Not set"
+    },
     "panel": {
       "title": "Budgets",
       "description": "Spend, TPM and RPM limits you can assign to customers.",
@@ -2938,6 +3319,11 @@
       }
     },
     "table": {
+      "filterLabels": {
+        "reset": "Reset",
+        "maxBudget": "Max Budget",
+        "created": "Created"
+      },
       "loading": "Loading budgets…",
       "searchPlaceholder": "Search by budget ID…",
       "emptyState": {
@@ -2993,6 +3379,15 @@
       }
     },
     "form": {
+      "errors": {
+        "budgetIdRequired": "Enter a budget ID"
+      },
+      "resetOptions": {
+        "inTotal": "in total",
+        "perDay": "per day",
+        "perWeek": "per week",
+        "perMonth": "per month"
+      },
       "noLimit": "No limit",
       "optional": "Optional",
       "spendLimit": "Spend limit",
@@ -3028,6 +3423,10 @@
   },
   "costTracking": {
     "settings": {
+      "docsLinks": {
+        "customPricing": "Custom pricing for models",
+        "spendTracking": "Spend tracking"
+      },
       "removal": {
         "discount": {
           "title": "Remove Provider Discount",
@@ -3134,6 +3533,7 @@
     },
     "addMarginForm": {
       "provider": {
+        "global": "Global (All Providers)",
         "label": "Provider",
         "hint": "Select 'Global' to apply margin to all providers, or select a specific provider",
         "placeholder": "Select provider or 'Global'",
@@ -3692,6 +4092,12 @@
       "loadFailed": "Existing evaluations could not be loaded. Refresh the page to retry.",
       "loading": "Loading evaluations...",
       "start": {
+        "directionOptions": {
+          "forward": "Adoption check: key's traffic vs the router",
+          "reverse": "Regression check: router's picks vs a baseline"
+        },
+        "durationDays_one": "{{count}} day",
+        "durationDays_other": "{{count}} days",
         "description": {
           "forward": "Duplicates a sampled slice of the selected targets' traffic (keys, teams, or users) through the auto-router and has an LLM judge compare both answers blind. Each target gets its own spend budget. The router's answers are never served to users; judge calls bill to the sampled traffic's own identity.",
           "reverse": "Duplicates a sampled slice of the traffic the auto-router already serves against a fixed baseline model and has an LLM judge compare both answers blind. Each target gets its own spend budget. The baseline's answers are never served to users; judge calls bill to the sampled traffic's own identity."
@@ -3915,6 +4321,7 @@
       }
     },
     "policyTable": {
+      "unnamed": "(unnamed)",
       "loading": "Loading policies…",
       "empty": {
         "title": "No policies found",
@@ -4315,6 +4722,7 @@
         "sameAsOnFail": "{{action}} (same as on fail)"
       },
       "testPanel": {
+        "close": "x",
         "title": "Test Pipeline",
         "sourceLabel": "Test with",
         "sources": {
@@ -4340,6 +4748,7 @@
         "result": "Result",
         "customResponse": "Response: {{message}}",
         "compliance": {
+          "errorResult": "error",
           "title": "Compliance dataset",
           "matchedSummary": "{{matched}} / {{total}} matched expected",
           "expected": "expected: {{result}}",
@@ -4839,6 +5248,7 @@
       }
     },
     "pageVisibility": {
+      "noDescription": "No description available",
       "title": "Internal User Page Visibility",
       "selectedCount_one": "{{count}} page selected",
       "selectedCount_other": "{{count}} pages selected",
@@ -5215,6 +5625,399 @@
       "managedByConfig": "Managed by your config file. Update its background polling setting to change this.",
       "dbConfigRequired": "Enable database-backed configuration to save this setting.",
       "autoApply": "Changes apply automatically when the proxy refreshes its configuration."
+    }
+  },
+  "aria": {
+    "page": {
+      "unavailable": "Aria is not available for this session."
+    },
+    "usageTrigger": {
+      "ask": "Ask Aria"
+    },
+    "destination": {
+      "loadingSettings": "Loading gateway settings",
+      "settingsError": "Could not load gateway settings.",
+      "retry": "Retry",
+      "consentTitle": "Connect to the configured gateway",
+      "consentBody": "This gateway uses a different address. Aria will send your existing session credential to the address shown above.",
+      "useConfigured": "Use configured gateway"
+    },
+    "inferenceTarget": {
+      "invalid": "The gateway must be a valid HTTP(S) URL without credentials, a query, or a fragment.",
+      "httpsRequired": "Inference must use HTTPS when the dashboard or management gateway uses HTTPS."
+    },
+    "chat": {
+      "startOver": "Start over"
+    },
+    "composer": {
+      "tooLong": "Keep your message within {{limit}} characters.",
+      "placeholder": "Ask Aria…"
+    },
+    "modelPicker": {
+      "loading": "Loading models",
+      "ariaLabel": "{{agent}} model",
+      "placeholder": "Choose a chat model",
+      "noMatch": "No matching models",
+      "noModels": "No available models"
+    },
+    "modelStatus": {
+      "loadError": "Could not load models.",
+      "retry": "Retry"
+    },
+    "start": {
+      "title": "What would you like to know?",
+      "descriptionAdmin": "Manage your gateway · Changes require approval",
+      "descriptionUser": "Ask about your usage",
+      "descriptionGateway": "Ask about gateway usage",
+      "suggestedQuestions": "Suggested questions",
+      "questions": {
+        "spendOverview": {
+          "label": "Spend overview",
+          "question": "How much have I spent this week?"
+        },
+        "costByModel": {
+          "label": "Cost by model",
+          "question": "Which models are costing the most?"
+        },
+        "findSavings": {
+          "label": "Find savings",
+          "question": "How can I reduce my spend?"
+        }
+      }
+    },
+    "conversation": {
+      "ariaLabel": "{{agent}} conversation",
+      "yourQuestion": "Your question",
+      "workingLabel": "{{agent}} is working",
+      "working": "Working…",
+      "jumpToLatest": "Jump to latest",
+      "status": {
+        "review": "Review change",
+        "applying": "Applying…",
+        "completed": "Completed",
+        "cancelled": "Cancelled",
+        "unknown": "Check result"
+      },
+      "details": "Details",
+      "copyGeneratedKey": "Copy generated key",
+      "keyNotice": "Copy this key now. It stays only in this chat session.",
+      "cancel": "Cancel",
+      "confirmChange": "Confirm change"
+    },
+    "actions": {
+      "keyCreate": "Create a virtual key",
+      "keyUpdate": "Update a virtual key",
+      "keyDetachFromTeam": "Remove a virtual key from its team without deleting the key",
+      "keyDelete": "Delete virtual keys",
+      "keyBlock": "Block a virtual key",
+      "keyUnblock": "Unblock a virtual key",
+      "teamCreate": "Create a team",
+      "teamUpdate": "Update a team",
+      "teamDelete": "Delete teams",
+      "teamMemberAdd": "Add a team member",
+      "teamMemberUpdate": "Update a team member",
+      "teamMemberDelete": "Remove a team member",
+      "userCreate": "Create a user without a key",
+      "userUpdate": "Update a user",
+      "userDelete": "Delete users",
+      "budgetCreate": "Create a budget",
+      "budgetUpdate": "Update a budget",
+      "budgetDelete": "Delete a budget",
+      "unverified": "The change could not be verified. Check the resource before trying again."
+    },
+    "session": {
+      "interruptedWrite": "A submitted change may have completed. Check the relevant page before trying again.",
+      "completedChangesShown": "Completed changes are shown above."
+    },
+    "agent": {
+      "stepLimit": "I reached the step limit. Any completed actions remain applied; check the relevant page before continuing.",
+      "noAnswer": "The model returned no answer. Try another request or model."
+    },
+    "answer": {
+      "exportDocumentTitle": "{{agent}} answer",
+      "ariaLabel": "{{agent}} answer",
+      "export": "Export answer",
+      "exportFailed": "Could not open the PDF print dialog. Please try again.",
+      "printPreview": "{{agent}} print preview"
+    },
+    "chart": {
+      "valuesLabel": "{{title}} values",
+      "category": "Category",
+      "valuesUnavailable": "Values unavailable for: {{labels}}.",
+      "unavailable": "Unavailable",
+      "titles": {
+        "dailySpend": "Daily spend",
+        "dailyRequests": "Daily requests",
+        "dailyTokens": "Daily tokens",
+        "spendByModel": "Spend by model",
+        "spendByProvider": "Spend by provider",
+        "tokenBreakdown": "Token breakdown"
+      },
+      "scopes": {
+        "gateway": "Gateway usage",
+        "allTeams": "All teams",
+        "allTags": "All tags",
+        "yours": "Your usage"
+      },
+      "labels": {
+        "unknown": "Unknown",
+        "other": "Other",
+        "prompt": "Prompt",
+        "completion": "Completion",
+        "cacheRead": "Cache read",
+        "cacheCreation": "Cache creation"
+      },
+      "notes": {
+        "otherRemainder": "Up to six leading entries. Other includes remaining recorded spend.",
+        "cacheSeparate": "Cache counts are reported separately. Do not add them to total tokens."
+      }
+    }
+  },
+  "betaBadge": {
+    "label": "Beta"
+  },
+  "chatComposer": {
+    "stopRequest": "Stop request",
+    "sendMessage": "Send message",
+    "codeInterpreterEnabled": "Code Interpreter enabled (click to disable)",
+    "enableCodeInterpreter": "Enable Code Interpreter"
+  },
+  "userBanner": {
+    "dismiss": "Dismiss banner"
+  },
+  "alerts": {
+    "unified": {
+      "title": "Alerts",
+      "saveError": "Could not save status. Please try again.",
+      "resourceHeading": "This alert is tied to the following resource",
+      "migrationDetails": "View migration details",
+      "loading": "Loading alerts…",
+      "adminRequired": "Only gateway admins can view alerts.",
+      "back": "Back to Alerts",
+      "loadError": "Could not load this alert. It may have been removed or you may no longer have access.",
+      "unavailable": "This alert is no longer available.",
+      "typeFilter": "Alert type",
+      "refresh": "Refresh",
+      "deprecationsError": "Could not load model deprecations.",
+      "performanceError": "Could not load performance alerts.",
+      "loadingMore": "Loading…",
+      "loadMore": "Load more",
+      "empty": {
+        "open": "No open alerts.",
+        "resolved": "No resolved alerts.",
+        "dismissed": "No dismissed alerts."
+      },
+      "types": {
+        "all": "All alerts",
+        "performance": "Performance",
+        "spend": "Spend",
+        "traffic": "Traffic",
+        "latency": "Latency",
+        "reliability": "Reliability"
+      },
+      "retiredTitle": "{{name}} retired on {{date}}",
+      "retiresTitle": "{{name}} retires on {{date}}",
+      "deprecationDescription": "{{requests}} recorded requests. Last used {{date}} UTC.",
+      "retired": "Retired",
+      "retires": "Retires",
+      "lastUsed": "Last used",
+      "keyFallback": "Key {{id}}",
+      "deprecation": "Model deprecation",
+      "metrics": {
+        "spend": "Spend",
+        "traffic": "Traffic",
+        "latency": "Mean response time",
+        "reliability": "Error rate",
+        "model_deprecation": "Usage"
+      },
+      "comparison": {
+        "fell": "{{label}} on {{name}} fell to {{ratio}}× its baseline",
+        "rose": "{{label}} on {{name}} rose to {{ratio}}× its baseline"
+      },
+      "value": {
+        "fell": "{{label}} on {{name}} fell to {{value}}",
+        "rose": "{{label}} on {{name}} rose to {{value}}"
+      },
+      "description": "{{value}} on {{date}} UTC, compared with the usual {{baseline}}.",
+      "links": {
+        "gateway": "View Usage",
+        "model": "View model routing",
+        "key": "View key activity",
+        "team": "View team activity",
+        "user": "View user activity"
+      },
+      "observed": "Observed",
+      "firstDetected": "First detected",
+      "chart": {
+        "unavailable": "Daily history is unavailable. The saved alert comparison is shown above.",
+        "baseline": "Dashed line: saved baseline of {{value}}. ",
+        "missingDays": "Missing days are left blank.",
+        "currentUsage": " Bars show current Usage, which may have changed since detection.",
+        "values": "{{title}} values",
+        "date": "Date",
+        "value": "Value",
+        "titles": {
+          "usd": "Daily spend",
+          "requests": "Daily requests",
+          "milliseconds": "Mean response time per day",
+          "ratio": "Daily error rate"
+        }
+      }
+    },
+    "page": {
+      "tabs": {
+        "modelDeprecations": "Model deprecations"
+      }
+    },
+    "panel": {
+      "title": "Model deprecations",
+      "adminRequired": "Gateway admin access is required to view affected keys and teams.",
+      "back": "← Model deprecations",
+      "loadError": "Could not load alerts. No alert status has been changed.",
+      "retry": "Retry",
+      "loadingAlert": "Loading alert…",
+      "missingAlert": "No matching model alert was found in the last 30 days."
+    },
+    "status": {
+      "open": "open",
+      "resolved": "resolved",
+      "dismissed": "dismissed"
+    },
+    "inbox": {
+      "columns": {
+        "model": "Model",
+        "deprecation": "Deprecation",
+        "requests": "Requests · 30d",
+        "lastSeen": "Last seen (UTC)"
+      },
+      "empty": {
+        "open": "No open model deprecations in the last 30 days.",
+        "resolved": "No resolved model deprecations in the last 30 days.",
+        "dismissed": "No dismissed model deprecations in the last 30 days."
+      },
+      "reviewImpact": "Review impact →",
+      "loading": "Loading model deprecations…",
+      "searchPlaceholder": "Search models…"
+    },
+    "timing": {
+      "deprecatesIn_one": "Deprecates in {{count}} day",
+      "deprecatesIn_other": "Deprecates in {{count}} days",
+      "today": "Deprecates today",
+      "deprecatedAgo_one": "Deprecated {{count}} day ago",
+      "deprecatedAgo_other": "Deprecated {{count}} days ago"
+    },
+    "recommendation": {
+      "sources": {
+        "modelCostMap": "LiteLLM model cost map",
+        "deploymentConfig": "Deployment configuration"
+      },
+      "notProvided": "Not provided",
+      "recommendedModel": "Recommended new model:",
+      "source": "Source:",
+      "providerNotice": "Provider deprecation notice ↗"
+    },
+    "alertItem": {
+      "deprecatedTitle": "{{model}} is deprecated",
+      "retiresTitle": "{{model}} retires in {{days}} days",
+      "usage": "{{requests}} requests in the last 30 days · Last seen {{date}} UTC",
+      "reviewMigration": "Review migration"
+    },
+    "emailSetup": {
+      "steps": {
+        "connect": {
+          "title": "Connect email delivery",
+          "description": "Add your SMTP settings and public gateway URL in Email Settings. Send a test email to verify delivery."
+        },
+        "enable": {
+          "title": "Enable model deprecation emails",
+          "description": "In Email events, turn on Model Deprecations and save. This is off by default."
+        },
+        "reminders": {
+          "title": "Owners get two reminders",
+          "description": "Affected key owners and team admins receive a reminder 30 days before retirement, and one final reminder 1 day before. Recipients are based on actual usage in the last 30 days. Dates are checked in UTC."
+        }
+      },
+      "summary": "Give affected owners time to migrate. Email reminders at 30 days and 1 day.",
+      "trigger": "Set up email reminders",
+      "title": "Set up model deprecation emails",
+      "description": "Help key owners and team admins act before a provider retires a model. Only their affected usage is included.",
+      "openSettings": "Open Email Settings"
+    },
+    "migrationDetail": {
+      "headings": {
+        "resolved": "Migration marked resolved",
+        "dismissed": "Model deprecation dismissed",
+        "deprecated": "Migration needed: model is deprecated",
+        "due": "Migration due {{date}}"
+      },
+      "columns": {
+        "key": "Virtual key",
+        "team": "Team",
+        "owner": "Owner",
+        "tags": "Usage tags",
+        "requests": "Requests · 30d",
+        "spend": "Spend · 30d"
+      },
+      "summary": {
+        "teamKeys": "Keys in this team",
+        "affectedKeys": "Affected keys",
+        "teams": "Teams using this model",
+        "deprecation": "Deprecation"
+      },
+      "keysTable": {
+        "title": "Affected keys",
+        "description": "Keys and owners that used this model in the last 30 days. Tags show actual usage with this model.",
+        "teamFilter": "Filter affected keys by team",
+        "allTeams": "All teams",
+        "teamOption": "{{team}} · {{keys}} keys",
+        "loadError": "Could not load affected keys.",
+        "retry": "Retry"
+      },
+      "unnamedKey": "Unnamed key",
+      "noTeam": "No team",
+      "notRecorded": "Not recorded",
+      "followUpCopied": "Follow-up copied",
+      "lastSeen": "Last seen {{date}} UTC · {{requests}} requests in the last 30 days",
+      "copyFollowUp": "Copy follow-up",
+      "markResolved": "Mark resolved",
+      "dismiss": "Dismiss",
+      "reopen": "Reopen",
+      "modelRouting": "Model routing",
+      "resolveHint": "Resolve across all teams once owners confirm migration. New traffic reopens the alert.",
+      "saveError": "Could not save alert status. Please retry.",
+      "teamsError": "Could not load team filters. The keys table still includes all matching teams."
+    },
+    "usageChart": {
+      "keyFallback": "Key · {{id}}",
+      "loadError": "Could not load daily requests.",
+      "retry": "Retry",
+      "showFewer": "Show fewer key labels",
+      "showAll": "Show all key labels",
+      "title": "Daily requests",
+      "subtitleTeam": "Requests to this model, stacked by key · Selected team",
+      "subtitleAll": "Requests to this model, stacked by key · All teams",
+      "footnote": "Last 30 days · UTC · Includes zero-usage days. Today is partial."
+    },
+    "usageTags": {
+      "loading": "Loading tags…",
+      "failed": "Tags unavailable",
+      "none": "No recorded tags",
+      "showFewer": "Show fewer usage tags",
+      "showMore": "Show {{hidden}} more usage tags",
+      "showLess": "Show less",
+      "more": "+{{hidden}} more"
+    },
+    "monitoring": {
+      "title": "Performance monitoring",
+      "loading": "Loading monitoring settings…",
+      "allowance": "{{used}} of {{limit}} free alerts used.",
+      "enterprise": "On with Enterprise.",
+      "off": "Off. Saved alerts remain available.",
+      "exhausted": "You’ve used all 5 free alerts. New performance alerts are paused.",
+      "disabledByConfig": "Disabled in proxy settings.",
+      "upgrade": "Upgrade to Enterprise",
+      "loadError": "Could not load monitoring settings.",
+      "saveError": "Could not save monitoring settings. Try again."
     }
   },
   "caching": {
@@ -5785,10 +6588,12 @@
       }
     },
     "emailSettings": {
+      "gatewayUrl": "Gateway URL",
       "title": "Email Server Settings",
       "docsLink": "LiteLLM Docs: email alerts",
       "required": " Required * ",
       "help": {
+        "proxyBaseUrl": "Public HTTP(S) gateway URL. Required for model deprecation emails so owners can review their usage.",
         "smtpHost": "Enter the SMTP host address, e.g. `smtp.resend.com`",
         "smtpPort": "Enter the SMTP port number, e.g. `587`",
         "smtpUsername": "Enter the SMTP username, e.g. `username`",
@@ -5810,6 +6615,7 @@
       "title": "Email Notifications",
       "description": "Select which events should trigger email notifications.",
       "descriptions": {
+        "modelDeprecations": "Email affected key owners and team admins 30 days and 1 day before model deprecation. Uses requests from the last 30 days. Off by default.",
         "virtualKeyCreated": "An email will be sent to the user when a new virtual key is created with their user ID",
         "newUserInvitation": "An email will be sent to the email address of the user when a new user is created",
         "generic": "Receive an email notification when {{event}}"
@@ -6003,13 +6809,17 @@
         "maxBudget": "Max Budget (USD)",
         "maxBudgetHint": "Maximum amount in USD this tag can spend. When reached, requests with this tag will be blocked",
         "resetBudget": "Reset Budget",
-        "resetBudgetHint": "How often the budget should reset. For example, setting 'daily' will reset the budget every 24 hours"
+        "resetBudgetHint": "How often the budget should reset. For example, setting 'daily' will reset the budget every 24 hours",
+        "tpmLimit": "TPM Limit",
+        "tpmLimitHint": "Maximum tokens per minute across every key and team that sends this tag. Requests over the limit get a 429",
+        "rpmLimit": "RPM Limit",
+        "rpmLimitHint": "Maximum requests per minute across every key and team that sends this tag. Requests over the limit get a 429"
       },
       "budgetSection": "Budget & Rate Limits (Optional)",
-      "rateLimitsNotice": "TPM/RPM limits for tags are not currently supported. If you need this feature, please <issue>create a GitHub issue</issue>.",
       "submit": "Create Tag",
       "validation": {
-        "nameRequired": "Please input a tag name"
+        "nameRequired": "Please input a tag name",
+        "limitNonnegativeInteger": "Enter a whole number of 0 or more"
       }
     },
     "info": {
@@ -6051,15 +6861,19 @@
         "maxBudget": "Max Budget (USD)",
         "maxBudgetDescription": "Maximum amount in USD this tag can spend",
         "resetBudget": "Reset Budget",
-        "resetBudgetDescription": "How often the budget should reset"
+        "resetBudgetDescription": "How often the budget should reset",
+        "tpmLimit": "TPM Limit",
+        "tpmLimitDescription": "Maximum tokens per minute for this tag, shared across all keys and teams",
+        "rpmLimit": "RPM Limit",
+        "rpmLimitDescription": "Maximum requests per minute for this tag, shared across all keys and teams"
       },
       "budgetSection": "Budget & Rate Limits",
-      "rateLimitsNotice": "TPM/RPM limits for tags are not currently supported. If you need this feature, please <issue>create a GitHub issue</issue>.",
       "cancel": "Cancel",
       "save": "Save Changes",
       "validation": {
         "nameRequired": "Please input a tag name",
-        "budgetNonnegative": "Enter a nonnegative budget"
+        "budgetNonnegative": "Enter a nonnegative budget",
+        "limitNonnegativeInteger": "Enter a whole number of 0 or more"
       }
     }
   },
@@ -6304,6 +7118,10 @@
     }
   },
   "metadataKeyValueFields": {
+    "errors": {
+      "duplicateKey": "Duplicate key",
+      "missingKey": "Missing key"
+    },
     "keyPlaceholder": "Key",
     "valuePlaceholder": "Value",
     "removePair": "Remove key-value pair",
@@ -6438,7 +7256,7 @@
         "models": "Model Hub",
         "agents": "Agent Hub",
         "mcp": "MCP Hub",
-        "skills": "Skill Hub"
+        "skills": "Skills Hub"
       },
       "models": {
         "title": "Available Models",
@@ -6514,7 +7332,8 @@
         "rpm": "Requests per Minute:",
         "openaiParams": "Supported OpenAI Parameters",
         "usageExample": "Usage Example",
-        "copyToClipboard": "Copy to clipboard"
+        "copyToClipboard": "Copy to clipboard",
+        "pricingByDeployment": "Pricing by Deployment:"
       },
       "agentDialog": {
         "fallbackTitle": "Agent Details",
@@ -6601,7 +7420,7 @@
         "models": "Model Hub",
         "agents": "Agent Hub",
         "mcp": "MCP Hub",
-        "skills": "Skill Hub"
+        "skills": "Skills Hub"
       },
       "models": {
         "chatTitle": "Models",
@@ -6667,7 +7486,8 @@
         "usageExample": "Usage Example",
         "decisionNote": "Decision models answer on <code>/v1/decisions</code> and <code>/v1/systemone</code>, not <code>/chat/completions</code>.",
         "howToCall": "How to call decision models",
-        "tryPlayground": "Try it in the Playground"
+        "tryPlayground": "Try it in the Playground",
+        "pricingByDeployment": "Pricing by Deployment:"
       },
       "agentDialog": {
         "fallbackTitle": "Agent Details",
@@ -7024,7 +7844,7 @@
       "agents": "Agents",
       "mcpShort": "MCP",
       "mcpServers": "MCP servers",
-      "skills": "Skills"
+      "skills": "Skills Hub"
     },
     "header": {
       "title": "AI Hub",
@@ -7046,6 +7866,10 @@
       "lastChecked": "Last checked"
     },
     "format": {
+      "health": {
+        "healthy": "Healthy",
+        "unhealthy": "Unhealthy"
+      },
       "modes": {
         "chat": "Chat",
         "completion": "Completion",
@@ -7198,7 +8022,8 @@
         "title": "Wildcard model",
         "description": "Call it as <example/>, with any model name this provider offers"
       },
-      "capabilities": "Capabilities"
+      "capabilities": "Capabilities",
+      "pricingByDeployment": "Pricing by deployment"
     },
     "agentInspector": {
       "copyName": "Copy agent name",
@@ -7261,6 +8086,161 @@
     }
   },
   "shell": {
+    "nav": {
+      "groups": {
+        "aiGateway": "AI GATEWAY",
+        "observability": "OBSERVABILITY",
+        "accessControl": "ACCESS CONTROL",
+        "developerTools": "DEVELOPER TOOLS",
+        "settings": "SETTINGS",
+        "customerPortal": "CUSTOMER PORTAL"
+      },
+      "sections": {
+        "aiGateway": "AI Gateway",
+        "observability": "Observability",
+        "accessControl": "Access Control",
+        "developerTools": "Developer Tools",
+        "settings": "Settings",
+        "customerPortal": "Customer Portal"
+      },
+      "items": {
+        "home": "Home",
+        "virtualKeys": "Virtual Keys",
+        "playground": "Playground",
+        "modelsAndEndpoints": "Models + Endpoints",
+        "agentic": "Agentic",
+        "agents": "Agents",
+        "workflowRuns": "Workflow Runs",
+        "memory": "Memory",
+        "mcpServers": "MCP Servers",
+        "skills": "Skills Hub",
+        "guardrails": "Guardrails",
+        "policies": "Policies",
+        "tools": "Tools",
+        "searchTools": "Search Tools",
+        "vectorStores": "Vector Stores",
+        "toolPolicies": "Tool Policies",
+        "usage": "Usage",
+        "alerts": "Alerts",
+        "modelLeaderboard": "Model Leaderboard",
+        "costOptimization": "Cost Optimization",
+        "logs": "Logs",
+        "lens": "Lens",
+        "guardrailsMonitor": "Guardrails Monitor",
+        "teams": "Teams",
+        "projects": "Projects",
+        "internalUsers": "Internal Users",
+        "organizations": "Organizations",
+        "accessGroups": "Access Groups",
+        "budgets": "Budgets",
+        "aiHub": "AI Hub",
+        "responseCache": "Response Cache",
+        "experimental": "Experimental",
+        "prompts": "Prompts",
+        "apiPlayground": "API Playground",
+        "tagManagement": "Tag Management",
+        "settings": "Settings",
+        "routerSettings": "Router Settings",
+        "loggingAndAlerts": "Logging & Alerts",
+        "adminSettings": "Admin Settings",
+        "costTracking": "Cost Tracking",
+        "uiTheme": "UI Theme",
+        "telemetry": "Telemetry",
+        "customers": "Customers",
+        "chargebacks": "Chargebacks"
+      },
+      "homeLink": "LiteLLM home"
+    },
+    "pageDescriptions": {
+      "home": "Usage at a glance, recent launches and blog updates",
+      "apiKeys": "Manage virtual keys for API access and authentication",
+      "llmPlayground": "Interactive playground for testing LLM requests",
+      "models": "Configure and manage LLM models and endpoints",
+      "agents": "Create and manage AI agents",
+      "agentic": "Manage agentic resources: agents, workflow runs, and memory",
+      "workflows": "Track and inspect durable workflow run history",
+      "mcpServers": "Configure Model Context Protocol servers",
+      "memory": "Inspect and manage agent memory entries stored under /v1/memory",
+      "guardrails": "Set up content moderation and safety guardrails",
+      "policies": "Define access control and usage policies",
+      "searchTools": "Configure RAG search and retrieval tools",
+      "toolPolicies": "Configure tool use policies and permissions",
+      "vectorStores": "Manage vector databases for embeddings",
+      "newUsage": "View usage analytics and metrics",
+      "alerts": "Review and resolve model deprecation alerts across keys and teams",
+      "costOptimization": "Track and configure cost-saving features: prompt compression, caching, and auto routing",
+      "modelInsights": "Model Leaderboard: compare usage, spend, tokens, and task mix across this gateway",
+      "logs": "Access request and response logs",
+      "lens": "Review agent activity and investigate patterns with supporting evidence",
+      "guardrailsMonitor": "Monitor guardrail performance and view logs",
+      "users": "Manage internal user accounts and permissions",
+      "teams": "Create and manage teams for access control",
+      "organizations": "Manage organizations and their members",
+      "projects": "Manage projects within teams",
+      "accessGroups": "Manage access groups for role-based permissions",
+      "budgets": "Set and monitor spending budgets",
+      "modelHubTable": "Explore available AI models and providers",
+      "caching": "Configure response caching and coordination Redis settings",
+      "transformRequest": "Set up request transformation rules",
+      "costTracking": "Track and analyze API costs",
+      "uiTheme": "Customize dashboard appearance",
+      "tagManagement": "Organize resources with tags",
+      "prompts": "Manage and version prompt templates",
+      "skills": "Register and share reusable agent skills in the Skills Hub",
+      "routerSettings": "Configure routing and load balancing settings",
+      "telemetry": "Choose which anonymous usage telemetry this proxy collects and see the last report",
+      "loggingAndAlerts": "Set up logging and alert configurations",
+      "adminPanel": "Access admin panel and settings"
+    },
+    "sidebarAccountMenu": {
+      "toggles": {
+        "newBadge": {
+          "label": "Hide New Feature Indicators",
+          "ariaLabel": "Toggle hide new feature indicators"
+        },
+        "prompts": {
+          "label": "Hide All Prompts",
+          "ariaLabel": "Toggle hide all prompts"
+        },
+        "blogPosts": {
+          "label": "Hide Blog Posts",
+          "ariaLabel": "Toggle hide blog posts"
+        },
+        "bouncingIcon": {
+          "label": "Hide Bouncing Icon",
+          "ariaLabel": "Toggle hide bouncing icon"
+        }
+      },
+      "triggerLabel": "Account menu — {{role}} — signed in as {{identity}}",
+      "unknownRole": "Unknown role",
+      "unknownIdentity": "unknown",
+      "thanks": "Thanks for using LiteLLM!",
+      "tier": "Tier",
+      "premium": "Premium",
+      "upgradeHint": "Upgrade to Premium for advanced features",
+      "standard": "Standard",
+      "role": "Role",
+      "email": "Email",
+      "copyEmail": "Copy email",
+      "userId": "User ID",
+      "copyUserId": "Copy user ID",
+      "hideAria": "Hide <name/>",
+      "toggleHideAria": "Toggle hide {{name}}",
+      "language": {
+        "label": "Language",
+        "fallbackNote": "Missing translations show in English. <githubLink>Help translate</githubLink>"
+      },
+      "changePassword": "Change Password",
+      "logout": "Logout"
+    },
+    "sidebarUsageCard": {
+      "title": "Enterprise usage",
+      "activePlan": "Active plan",
+      "loading": "Loading…",
+      "seats": "Seats",
+      "teams": "Teams",
+      "meterValue": "{{used}} of {{total}}"
+    },
     "navbar": {
       "expandSidebar": "Expand sidebar",
       "collapseSidebar": "Collapse sidebar",
@@ -7306,6 +8286,11 @@
       "logout": "Logout"
     },
     "notifications": {
+      "autoRouter": {
+        "title": "LiteLLM Auto Router",
+        "description": "Route every request to the cheapest model that can handle it, no prompt changes needed.",
+        "link": "Read the docs"
+      },
       "release": {
         "newFeatures_one": "{{count}} new feature",
         "newFeatures_other": "{{count}} new features",
@@ -7317,15 +8302,21 @@
       "upgrade": {
         "title": "LiteLLM v{{version}} is available",
         "description": "{{summary}}. Your current version is v{{current}}",
+        "descriptionWithoutCounts": "Your current version is v{{current}}",
         "link": "View release notes"
       },
       "announcement": {
         "markAsRead": "Mark as read"
       },
       "bell": {
+        "triggerAlerts": "Notifications, alerts need attention",
+        "seeAll": "See all",
+        "comparison": "{{value}} vs. {{baseline}} usual",
+        "noOpenAlerts": "No open alerts.",
+        "announcementsHeading": "Announcements",
         "trigger": "Notifications",
         "triggerUnread": "Notifications, {{unread}} unread",
-        "title": "What's new"
+        "title": "Notifications"
       }
     },
     "dashboardCommunityLinks": {
@@ -7335,6 +8326,11 @@
       "github": "LiteLLM on GitHub"
     },
     "dashboardResources": {
+      "links": {
+        "docs": "Docs",
+        "releases": "Releases",
+        "blog": "Blog"
+      },
       "latestPosts": "Latest posts",
       "loadingPosts": "Loading posts…",
       "retryPosts": "Retry loading posts",
@@ -7431,12 +8427,15 @@
     },
     "deploymentWarnings": {
       "envCredentialLogin": {
+        "title": "Environment-credential login is enabled",
         "fix": "Anyone with <username/>/<password/> (or the master key, when <password/> is unset) can sign in as a proxy admin with a shared static secret. Create a regular admin account with its own password, then set <setting/>"
       },
       "noRedis": {
+        "title": "No Redis configured",
         "fix": "This proxy runs more than one worker (or the worker count could not be verified). Without Redis, rate limits, budgets, router state and cache invalidation are per worker, so limits are enforced once per worker and spend can overshoot"
       },
       "detailedDebug": {
+        "title": "Detailed debug logging is on",
         "fix": "<loglevel/> logs extensive diagnostic information and significantly slows the proxy. Use it only while troubleshooting and turn it off in production"
       },
       "license": {
@@ -7649,20 +8648,6 @@
       "empty": "No posts yet"
     }
   },
-  "apiReference": {
-    "page": {
-      "featureName": "The API Reference tab"
-    },
-    "view": {
-      "title": "OpenAI Compatible Proxy: API Reference",
-      "description": "LiteLLM is OpenAI Compatible. This means your API Key works with the OpenAI SDK. Just replace the base_url to point to your litellm proxy. Example Below"
-    },
-    "docLink": {
-      "title": "Open documentation in a new tab",
-      "label": "API Reference Docs",
-      "newTab": "(opens in a new tab)"
-    }
-  },
   "uiTheme": {
     "settings": {
       "toasts": {
@@ -7721,6 +8706,75 @@
     }
   },
   "shared": {
+    "resourceActivity": {
+      "title": "Activity",
+      "ownUsage": "Showing your usage only.",
+      "teamScope": "Showing usage for the team keys you have permission to view.",
+      "modelScope": "Usage for {{model}} across deployments of this model."
+    },
+    "credentialOptions": {
+      "none": "None"
+    },
+    "dateRangePresets": {
+      "today": "Today",
+      "last7Days": "Last 7 days",
+      "last30Days": "Last 30 days",
+      "monthToDate": "Month to date",
+      "yearToDate": "Year to date"
+    },
+    "searchBox": {
+      "operators": {
+        "equals": "equals",
+        "notEquals": "not equals",
+        "wildcardMatch": "wildcard match",
+        "doesNotContain": "does not contain"
+      },
+      "loadingResults": "Loading results",
+      "suggestions": "Search suggestions",
+      "loadingValues": "Loading values…",
+      "navigate": "Navigate",
+      "select": "Select",
+      "copyCommand": {
+        "copy": "Copy as curl",
+        "copied": "Copied",
+        "failed": "Copy failed"
+      },
+      "comparisonOperators": "Comparison operators"
+    },
+    "inspector": {
+      "shortcutClose": "close",
+      "resizePanel": "Resize {{noun}} panel",
+      "close": "Close (Esc)",
+      "next": "Next {{noun}} (J)",
+      "previous": "Previous {{noun}} (K)",
+      "enterFullScreen": "Enter full screen",
+      "exitFullScreen": "Exit full screen",
+      "closeNoun": "Close {{noun}} (Esc)"
+    },
+    "inspectorTable": {
+      "collapse": "Collapse",
+      "expand": "Expand"
+    },
+    "timeline": {
+      "tooltip": {
+        "range": "{{start}} to {{end}}",
+        "failed_one": ", {{count}} failed",
+        "failed_other": ", {{count}} failed",
+        "dragToZoom": "drag to zoom"
+      },
+      "clearZoom": "Clear time zoom"
+    },
+    "durationInput": {
+      "units": {
+        "minutes": "minutes",
+        "hours": "hours",
+        "days": "days"
+      },
+      "unitLabel": "{{label}} unit"
+    },
+    "shortcutHints": {
+      "label": "Keyboard shortcuts"
+    },
     "advancedDatePicker": {
       "selectTimeRange": "Select Time Range",
       "invalidDateFormat": "Invalid date format",
@@ -7747,6 +8801,9 @@
       "resetInterval": "Reset interval: {{interval}}"
     },
     "charts": {
+      "chartTooltip": {
+        "notAvailable": "N/A"
+      },
       "areaChart": {
         "noData": "No data"
       },
@@ -7835,6 +8892,12 @@
       "unknownError": "An unknown error occurred"
     },
     "inheritedBudgetHint": {
+      "scopes": {
+        "team": "Team",
+        "teamMember": "Team member",
+        "organization": "Organization",
+        "user": "User"
+      },
       "memberAlias": "{{member}} in {{team}}",
       "intro": "This key has no budget of its own, but its spend still counts toward:"
     },
@@ -7906,6 +8969,22 @@
       "infoLabel": "How {{label}} is calculated"
     },
     "tableCells": {
+      "dateCell": {
+        "months": {
+          "jan": "Jan",
+          "feb": "Feb",
+          "mar": "Mar",
+          "apr": "Apr",
+          "may": "May",
+          "jun": "Jun",
+          "jul": "Jul",
+          "aug": "Aug",
+          "sep": "Sep",
+          "oct": "Oct",
+          "nov": "Nov",
+          "dec": "Dec"
+        }
+      },
       "autoRouterTag": {
         "title": "Routed by auto-router \"{{modelGroup}}\""
       },
@@ -7978,6 +9057,10 @@
     }
   },
   "networking": {
+    "connectionTestFailed": "Connection test failed: {{status}} {{statusText}}",
+    "mcpToolsFetchFailed": "Failed to fetch MCP tools",
+    "mcpToolsParseFailed": "Failed to parse MCP tools response",
+    "mcpToolsListFailed": "MCP tools list failed: {{status}} {{statusText}}",
     "sessionExpired": "UI Session Expired. Logging out.",
     "modelCreated": "Model {{modelName}} created successfully",
     "noModelsExist": "No Models Exist. Click Add Model to get started.",
@@ -8003,6 +9086,30 @@
     }
   },
   "utils": {
+    "ptuValidation": {
+      "countRange": "PTU Count must be a whole number between 1 and {{max}}",
+      "rateRange": "Cost per PTU / Hour must be between 0 and {{max}}",
+      "countAndRateTogether": "PTU Count and Cost per PTU / Hour must be set together",
+      "reservedCapacityCost": "A PTU deployment bills by reserved capacity, so this cost must be 0 or blank",
+      "effectiveFromRequired": "PTU Effective From is required when PTU Count is set",
+      "effectiveToAfterFrom": "PTU Effective To must be after PTU Effective From"
+    },
+    "licenseUtils": {
+      "noExpiration": "No expiration",
+      "expired": "Expired {{date}}",
+      "expires": "Expires {{date}}"
+    },
+    "roles": {
+      "undefinedRole": "Undefined Role",
+      "appOwner": "App Owner",
+      "admin": "Admin",
+      "adminViewer": "Admin Viewer",
+      "orgAdmin": "Org Admin",
+      "internalUser": "Internal User",
+      "internalViewer": "Internal Viewer",
+      "appUser": "App User",
+      "unknownRole": "Unknown Role"
+    },
     "dataUtils": {
       "copiedToClipboard": "Copied to clipboard",
       "copyFailed": "Failed to copy to clipboard"
@@ -8013,6 +9120,10 @@
   },
   "codeBlock": {
     "copyCode": "Copy code"
+  },
+  "keyScope": {
+    "management": "Management",
+    "readOnly": "Read-only"
   },
   "chat": {
     "page": {
@@ -8104,6 +9215,9 @@
       "sheetDescription": "Conversations and chat workspace navigation"
     },
     "conversationList": {
+      "yesterday": "Yesterday",
+      "lastSevenDays": "Last 7 Days",
+      "older": "Older",
       "conversationTitle": "Conversation title",
       "renameConversation": "Rename {{title}}",
       "rename": "Rename",
@@ -8812,6 +9926,10 @@
     },
     "compliance": {
       "library": {
+        "customFramework": "Custom",
+        "customCategory": "Custom Prompts",
+        "csvFramework": "CSV Upload",
+        "csvCategory": "Uploaded Prompts",
         "customCategoryDescription": "Custom prompts added this session.",
         "title": "Test Prompts",
         "searchPlaceholder": "Search prompts...",
@@ -8925,6 +10043,22 @@
       }
     },
     "compare": {
+      "endpoints": {
+        "chatCompletions": {
+          "selectorLabel": "Model",
+          "selectorPlaceholder": "Select a model",
+          "inputPlaceholder": "Send a prompt to compare models",
+          "loadingMessage": "Gathering responses from all models...",
+          "validationMessage": "Select a model before sending a message."
+        },
+        "a2aAgents": {
+          "selectorLabel": "Agent",
+          "selectorPlaceholder": "Select an agent",
+          "inputPlaceholder": "Send a message to compare agents",
+          "loadingMessage": "Gathering responses from all agents...",
+          "validationMessage": "Select an agent before sending a message."
+        }
+      },
       "selector": {
         "loading": "Loading {{noun}}s...",
         "empty": "No {{noun}}s available"
@@ -8983,6 +10117,7 @@
     },
     "chatUi": {
       "a2aMetrics": {
+        "secondsSuffix": "s",
         "header": "A2A Metadata",
         "totalLatency": "Total latency",
         "ttft": "TTFT: {{seconds}}s",
@@ -9334,6 +10469,39 @@
       }
     },
     "systemOne": {
+      "presets": {
+        "bugTriage": "Triage a bug report",
+        "supportRouting": "Route a support ticket",
+        "moderation": "Moderate a forum comment",
+        "leadScoring": "Score a sales lead"
+      },
+      "schemas": {
+        "choiceOptionCount": "Choice criteria must contain between 1 and {{max}} options.",
+        "noulNeedsInstructionsOrCriteria": "A yes / no question requires instructions or criteria.",
+        "modelNonEmpty": "Model must be a non-empty string.",
+        "questionCount": "Questions must contain between 1 and 128 entries.",
+        "instructionsMissing": "Required property 'instructions' is missing.",
+        "instructionsType": "Instructions must be a string.",
+        "choiceDescriptionType": "Choice descriptions must be strings.",
+        "choiceCriteriaType": "Choice criteria must be an object mapping labels to descriptions.",
+        "noulTrueType": "Noul true criteria must be a string.",
+        "noulFalseType": "Noul false criteria must be a string.",
+        "noulCriteriaType": "Noul criteria, when provided, must be an object.",
+        "scoreLevelType": "Score levels must be strings.",
+        "scoreCriteriaType": "Score criteria must be an array of levels.",
+        "scoreLevelCount": "Score criteria must contain at least 2 levels.",
+        "stateMissing": "Required property 'state' is missing.",
+        "questionsMissing": "Required property 'questions' is missing.",
+        "questionsType": "Questions must be a non-empty object.",
+        "questionRequired": "At least one question is required.",
+        "payloadType": "Payload must be a JSON object.",
+        "questionType": "Question type must be choice, noul, or score.",
+        "questionObject": "Question must be an object."
+      },
+      "openAIDecisions": {
+        "uniqueChoices": "Choice values must be unique, including their string representations.",
+        "modelRequired": "Model must be a non-empty string."
+      },
       "curlPreview": {
         "title": "cURL request",
         "fixIssues_one": "Fix {{count}} issue on the Form tab before copying",
@@ -9531,12 +10699,292 @@
       }
     }
   },
+  "compliancePrompts": {
+    "sharedDescriptions": {
+      "codeExecutionSafety": "Requests that ask the assistant to execute code, run commands, access the filesystem/network, or otherwise perform runtime actions should be blocked; static explanation/analysis is allowed."
+    },
+    "frameworks": {
+      "topicBlocking": "Topic Blocking",
+      "canadianPiiPipeda": "Canadian PII (PIPEDA)",
+      "canadianPiiFippa": "Canadian PII (FIPPA)",
+      "codeExecutionSafety": "Code Execution Safety",
+      "claimsAssistant": "Claims Assistant",
+      "euAiAct": "EU AI Act",
+      "gdpr": "GDPR",
+      "airlineBrandProtection": "Airline Brand Protection"
+    },
+    "categories": {
+      "insultsAndPersonalAttacks": {
+        "name": "Insults & Personal Attacks",
+        "description": "Detects insults, name-calling, and personal attacks directed at the chatbot, staff, or other people"
+      },
+      "financialAdvice": {
+        "name": "Financial Advice",
+        "description": "Blocks requests for personalized financial advice, investment recommendations, or financial planning that should be provided by licensed financial advisors"
+      },
+      "directExecutionRequest": {
+        "name": "Direct Execution Request"
+      },
+      "filesystemAccess": {
+        "name": "Filesystem Access"
+      },
+      "networkAccess": {
+        "name": "Network Access"
+      },
+      "shellingOutSubprocess": {
+        "name": "Shelling Out / Subprocess"
+      },
+      "dynamicEvalRuntimeExecution": {
+        "name": "Dynamic Eval / Runtime Execution"
+      },
+      "sandboxEscapePrivilegeEscalation": {
+        "name": "Sandbox Escape / Privilege Escalation"
+      },
+      "socialEngineeringExecution": {
+        "name": "Social Engineering Execution"
+      },
+      "staticAnalysisAllowed": {
+        "name": "Static Analysis Allowed"
+      },
+      "codeGenerationWithoutRunning": {
+        "name": "Code Generation Without Running"
+      },
+      "ambiguousRuntimeClaim": {
+        "name": "Ambiguous Runtime Claim"
+      },
+      "requiresRuntimeAction": {
+        "name": "Requires Runtime Action"
+      },
+      "socialInsuranceNumber": {
+        "name": "Social Insurance Number (SIN)",
+        "description": "Detects Canadian Social Insurance Numbers — 9-digit federal identifiers protected under the Privacy Act and PIPEDA."
+      },
+      "ontarioHealthInsurance": {
+        "name": "Ontario Health Insurance (OHIP)",
+        "description": "Detects Ontario Health Insurance Plan numbers — protected under PHIPA (Personal Health Information Protection Act)."
+      },
+      "ontarioDriversLicence": {
+        "name": "Ontario Driver's Licence",
+        "description": "Detects Ontario driver's licence numbers — protected under the Highway Traffic Act and PIPEDA."
+      },
+      "canadianPassport": {
+        "name": "Canadian Passport",
+        "description": "Detects Canadian passport numbers — protected under the Canadian Passport Order and PIPEDA."
+      },
+      "irccImmigrationDocuments": {
+        "name": "IRCC Immigration Documents",
+        "description": "Detects Canadian immigration document numbers (UCI, work/study permits, IMM forms) — protected under IRPA and PIPEDA."
+      },
+      "canadianBankAccount": {
+        "name": "Canadian Bank Account",
+        "description": "Detects Canadian bank account routing information (transit-institution-account format) — protected under the Bank Act and PIPEDA."
+      },
+      "canadianPostalCode": {
+        "name": "Canadian Postal Code",
+        "description": "Detects Canadian postal codes (A1A 1A1 format) — considered PII when combined with other identifiers under PIPEDA."
+      },
+      "uoftStudentEmployeeNumber": {
+        "name": "UofT Student/Employee Number",
+        "description": "Detects University of Toronto student and employee numbers (10-digit, prefix '10') — protected under Ontario FIPPA."
+      },
+      "utoridLogin": {
+        "name": "UTORid Login",
+        "description": "Detects University of Toronto UTORid login identifiers — protected under Ontario FIPPA."
+      },
+      "tcardCampusId": {
+        "name": "TCard Campus ID",
+        "description": "Detects University of Toronto TCard campus ID card numbers (16-digit) — protected under Ontario FIPPA."
+      },
+      "claimSubmissionHelp": {
+        "name": "Claim Submission Help",
+        "description": "User is submitting an out-of-network claim and wants help filling fields or understanding what to enter."
+      },
+      "documentQualityAndExtraction": {
+        "name": "Document Quality & Extraction",
+        "description": "User provides messy, partial, or low-quality documents; assistant should ask clarifying questions or give upload tips."
+      },
+      "coverageAndProcessQuestions": {
+        "name": "Coverage & Process Questions",
+        "description": "User asks general questions about claim process; assistant can explain at a high level without revealing PHI."
+      },
+      "ambiguousInputs": {
+        "name": "Ambiguous Inputs (Needs Clarification)",
+        "description": "User message is ambiguous; assistant should ask a minimal set of clarifying questions, not refuse."
+      },
+      "unauthorizedPhiAccountAccess": {
+        "name": "Unauthorized PHI / Account Access",
+        "description": "User attempts to access claim status/details for someone else or without proper verification; assistant must refuse and route to verification."
+      },
+      "fraudFabricationOrMisrepresentation": {
+        "name": "Fraud, Fabrication, or Misrepresentation",
+        "description": "User asks for help committing insurance fraud (altering amounts, fake services, misrepresenting accident, forging docs). Must refuse."
+      },
+      "codeOptimizationUpcodingRequests": {
+        "name": "Code Optimization / Upcoding Requests",
+        "description": "User requests guidance to select codes/wording to maximize reimbursement rather than accurately reflect care. Must refuse or provide compliant redirection."
+      },
+      "promptInjectionPolicyOverride": {
+        "name": "Prompt Injection / Policy Override",
+        "description": "User tries to override instructions, request hidden policies, or force approvals. Must refuse and follow secure workflow."
+      },
+      "bulkDataRequestsEnumeration": {
+        "name": "Bulk Data Requests / Enumeration",
+        "description": "User requests aggregated/bulk sensitive data, scraping, or enumeration. Must refuse."
+      },
+      "medicalAdviceTriage": {
+        "name": "Medical Advice & Triage (Out of Scope)",
+        "description": "User asks for medical diagnosis/treatment decisions. Claims assistant should not provide medical advice; refuse or redirect to clinician."
+      },
+      "selfHarmCrisis": {
+        "name": "Self-Harm / Crisis",
+        "description": "User expresses self-harm ideation or crisis. Assistant should not proceed with claims flow; must provide crisis support and escalation path."
+      },
+      "maliciousPhishingCredentialTheft": {
+        "name": "Malicious / Phishing / Credential Theft",
+        "description": "User requests hacking, phishing, or credential theft related to claims systems. Must refuse."
+      },
+      "legitButSensitive": {
+        "name": "Legit but Sensitive (Allowed)",
+        "description": "User asks legitimate questions that could resemble fraud but are benign; assistant should answer safely and avoid overblocking."
+      },
+      "bypassVerificationAttempts": {
+        "name": "Bypass Verification Attempts",
+        "description": "User tries to bypass identity verification steps; must refuse and provide proper recovery path."
+      },
+      "potentiallyNonCoveredServices": {
+        "name": "Potentially Non-Covered Services (Education)",
+        "description": "User asks about services that might not be covered; assistant can explain generally and suggest checking plan docs or contacting support."
+      },
+      "resubmissionAndCorrections": {
+        "name": "Resubmission & Corrections (Legit)",
+        "description": "User needs to resubmit or correct a claim; assistant should help with process without enabling fraud."
+      },
+      "privacySafeSubmissionGuidance": {
+        "name": "Privacy-Safe Submission Guidance",
+        "description": "User asks how to submit safely, redact sensitive info, or minimize data; assistant should comply."
+      },
+      "subliminalTechniques": {
+        "name": "Subliminal or Manipulative Techniques",
+        "description": "AI that tries to subtly influence decisions or behaviour beyond a person's conscious awareness is prohibited."
+      },
+      "exploitingVulnerabilities": {
+        "name": "Exploiting Vulnerabilities",
+        "description": "AI must not take advantage of vulnerabilities due to age, disability, economic or social status in ways that distort behaviour and cause harm."
+      },
+      "socialScoring": {
+        "name": "Social Scoring & Classification",
+        "description": "AI systems that evaluate or score people based on social behaviour or personal traits — leading to unfavourable treatment — are prohibited."
+      },
+      "criminalityRiskAssessment": {
+        "name": "Risk Assessment for Predicting Criminality",
+        "description": "AI cannot make risk predictions about whether a person might commit a crime based solely on profiling or personality traits."
+      },
+      "facialImageScraping": {
+        "name": "Facial Image Scraping for Databases",
+        "description": "AI may not create or expand biometric databases by scraping images from the internet or CCTV footage."
+      },
+      "emotionRecognition": {
+        "name": "Emotion Recognition in Workplace & Education",
+        "description": "AI systems that infer people's emotions in workplaces or schools are forbidden (except medical/safety cases)."
+      },
+      "biometricCategorisation": {
+        "name": "Biometric Categorisation of Sensitive Traits",
+        "description": "AI must not categorise individuals based on race, religion, sexual orientation, etc., from biometric data."
+      },
+      "rightToErasure": {
+        "name": "Right to Erasure",
+        "description": "Individuals have the right to request deletion of their personal data when it is no longer necessary for the purpose it was collected."
+      },
+      "consentLawfulBasis": {
+        "name": "Consent & Lawful Basis",
+        "description": "Processing personal data requires a lawful basis such as consent, which must be freely given, specific, informed, and unambiguous."
+      },
+      "dataMinimisation": {
+        "name": "Data Minimisation",
+        "description": "Personal data collected must be adequate, relevant, and limited to what is necessary for the stated purpose."
+      },
+      "automatedDecisionMaking": {
+        "name": "Automated Decision-Making",
+        "description": "Individuals have the right not to be subject to decisions based solely on automated processing that produce legal or similarly significant effects."
+      },
+      "destinationIntent": {
+        "name": "Destination Intent",
+        "description": "User is asking about a travel destination, not a competitor airline."
+      },
+      "competitorComparison": {
+        "name": "Competitor Comparison",
+        "description": "Direct comparison between airlines."
+      },
+      "ambiguousEntity": {
+        "name": "Ambiguous Entity",
+        "description": "Could refer to airline or country."
+      }
+    }
+  },
+  "chatUi": {
+    "responseMetrics": {
+      "labels": {
+        "timeToFirstToken": "TTFT",
+        "responseCache": "Response Cache",
+        "responseCacheHit": "Hit",
+        "cacheRead": "Cache Read",
+        "cacheWrite": "Cache Write",
+        "totalLatency": "Total Latency",
+        "in": "In",
+        "out": "Out",
+        "reasoning": "Reasoning",
+        "total": "Total",
+        "cost": "Cost",
+        "tool": "Tool"
+      },
+      "tooltips": {
+        "responseCache": "This response was replayed from LiteLLM's response cache. The request never reached the provider, so it did not read from or write to the provider's own prompt cache.",
+        "timeToFirstToken": "Time to first token",
+        "totalLatency": "Total latency",
+        "promptTokens": "Prompt tokens",
+        "completionTokens": "Completion tokens",
+        "reasoningTokens": "Reasoning tokens",
+        "totalTokens": "Total tokens",
+        "cost": "Cost",
+        "toolUsed": "Tool used"
+      }
+    },
+    "mcpEvents": {
+      "listTools": "List tools",
+      "toolCall": "Tool call",
+      "request": "Request",
+      "approved": "Approved",
+      "response": "Response"
+    },
+    "reasoning": {
+      "hide": "Hide reasoning",
+      "show": "Show reasoning"
+    }
+  },
+  "modelFilters": {
+    "searchLabel": "Search models",
+    "searchPlaceholder": "Search model names...",
+    "modelType": "Model type",
+    "allTypes": "All types",
+    "modelCapability": "Model capability",
+    "allCapabilities": "All capabilities",
+    "clearFilters": "Clear Filters",
+    "searchModels": "Search Models:",
+    "provider": "Provider:",
+    "allProviders": "All Providers",
+    "mode": "Mode:",
+    "allModes": "All Modes",
+    "features": "Features:",
+    "allFeatures": "All Features"
+  },
   "llmCalls": {
     "responsesApi": {
       "requestFailed": "Error occurred while generating model response. Please try again. Error: {{error}}"
     }
   },
   "mcpToolArguments": {
+    "booleanTrue": "True",
+    "booleanFalse": "False",
     "stringSchemaRequired": "Please enter input for this tool",
     "enterJsonObject": "Please enter a JSON object",
     "enterJsonArray": "Please enter a JSON array",
@@ -9569,6 +11017,7 @@
       "partnerDescription": "Third-party guardrail integrations from leading AI security providers."
     },
     "gardenCard": {
+      "f1Label": "F1: ",
       "testCases": "test cases"
     },
     "gardenDetail": {
@@ -10676,6 +12125,7 @@
       }
     },
     "modeDisplay": {
+      "tagBased": "{{modes}} (tag-based)",
       "mode": "Mode",
       "defaultOn": "Default On",
       "defaultOff": "Default Off",
@@ -12704,6 +14154,28 @@
     }
   },
   "mcpTools": {
+    "authTypes": {
+      "none": "None",
+      "apiKey": "API Key",
+      "bearerToken": "Bearer Token",
+      "token": "Token",
+      "basic": "Basic Auth",
+      "authorization": "Authorization (raw header)",
+      "oauth2": "OAuth",
+      "oauth2TokenExchange": "OAuth Token Exchange (OBO)",
+      "oauth2IdJag": "ID-JAG (Okta Cross App Access)",
+      "awsSigv4": "AWS SigV4 (Bedrock AgentCore MCPs)",
+      "truePassthrough": "True Passthrough (no LiteLLM auth)",
+      "oauthDelegate": "OAuth Delegate (client-supplied upstream token)"
+    },
+    "transports": {
+      "http": "Streamable HTTP (Recommended)",
+      "sse": "Server-Sent Events (SSE)",
+      "stdio": "Standard Input/Output (stdio)",
+      "openapi": "OpenAPI Spec"
+    },
+    "reachableDescription": "Server responded. Authentication and tools were not checked",
+    "previewForbidden": "Tool preview is not available for submissions. Tools will be verified by an admin during review.",
     "byokCredentialModal": {
       "errors": {
         "connectFailed": "Failed to connect"
@@ -12735,6 +14207,28 @@
       }
     },
     "crudPermissionPanel": {
+      "groups": {
+        "read": {
+          "label": "Read",
+          "description": "Safe operations — fetch, list, search. No side effects."
+        },
+        "create": {
+          "label": "Create",
+          "description": "Add new resources — insert, upload, register."
+        },
+        "update": {
+          "label": "Update",
+          "description": "Modify existing resources — edit, patch, rename."
+        },
+        "delete": {
+          "label": "Delete",
+          "description": "Destructive operations — remove, purge, destroy."
+        },
+        "unknown": {
+          "label": "Other",
+          "description": "Operations that could not be automatically classified."
+        }
+      },
       "risk": {
         "high": "High Risk",
         "medium": "Medium Risk",
@@ -12810,6 +14304,37 @@
   },
   "logs": {
     "common": {
+      "errorCodes": {
+        "badRequest": "400 - Bad Request",
+        "invalidAuthentication": "401 - Invalid Authentication",
+        "permissionDenied": "403 - Permission Denied",
+        "notFound": "404 - Not Found",
+        "requestTimeout": "408 - Request Timeout",
+        "unprocessableEntity": "422 - Unprocessable Entity",
+        "rateLimited": "429 - Rate Limited",
+        "internalServerError": "500 - Internal Server Error",
+        "badGateway": "502 - Bad Gateway",
+        "serviceUnavailable": "503 - Service Unavailable",
+        "overloaded": "529 - Overloaded"
+      },
+      "spanTypes": {
+        "llm": "LLM",
+        "agent": "Agent",
+        "mcp": "MCP",
+        "batch": "Batch"
+      },
+      "credentials": {
+        "clientOauthToken": "Client OAuth token",
+        "configuredKey": "Configured key"
+      },
+      "quickSelect": {
+        "lastMinute": "Last Minute",
+        "last15Minutes": "Last 15 Minutes",
+        "lastHour": "Last Hour",
+        "last4Hours": "Last 4 Hours",
+        "last24Hours": "Last 24 Hours",
+        "last7Days": "Last 7 Days"
+      },
       "podRouting": {
         "roundRobin": "Round robin",
         "sessionAffinity": "Session affinity",
@@ -12817,7 +14342,18 @@
       }
     },
     "detail": {
+      "prettyMessages": {
+        "imagePlaceholder": "[Image]",
+        "filePlaceholder": "[File]",
+        "audioPlaceholder": "[Audio]"
+      },
       "drawer": {
+        "secondsSuffix": "s",
+        "agentCountSuffix": " Agent",
+        "shortcuts": {
+          "close": "close",
+          "log": "log"
+        },
         "title": "Request details",
         "titleWithId": "Request {{id}} details",
         "session": "Session",
@@ -12872,6 +14408,7 @@
         "maskedCount": "{{count}} masked"
       },
       "metrics": {
+        "secondsSuffix": " s",
         "title": "Metrics",
         "inputTokens": "Input Tokens",
         "outputTokens": "Output Tokens",
@@ -13072,6 +14609,17 @@
         }
       },
       "bedrock": {
+        "policyChips": {
+          "word": "word",
+          "content": "content",
+          "topic": "topic",
+          "sensitiveInformation": "sensitive-info",
+          "contextualGrounding": "contextual-grounding",
+          "automatedReasoning": "automated-reasoning"
+        },
+        "unnamedRegex": "regex",
+        "unnamedTopic": "topic",
+        "notAvailable": "N/A",
         "detected": "detected",
         "notDetected": "not detected",
         "textGuarded": "text guarded {{guarded}}/{{total}}",
@@ -13111,6 +14659,7 @@
         "rawResponse": "Raw Bedrock Guardrail Response"
       },
       "contentFilter": {
+        "unknown": "unknown",
         "error": "Error",
         "noDetections": "No detections found",
         "totalDetections": "Total Detections:",
@@ -13215,6 +14764,7 @@
         "note": "Note: This will only affect new requests after the configuration change."
       },
       "tools": {
+        "fallbackName": "Tool {{index}}",
         "title": "Tools",
         "summary": "{{provided}} provided, {{called}} called",
         "called": "called",
@@ -13231,6 +14781,7 @@
         "calledWith": "Called With"
       },
       "realtime": {
+        "unknownStatus": "unknown",
         "noEvents": "No recognized realtime events found",
         "session": "Session",
         "turnCount_one": "{{count}} turn",
@@ -13347,6 +14898,15 @@
         "filtersDescription": "Narrow down request logs"
       },
       "filters": {
+        "search": "Search",
+        "statusOptions": {
+          "success": "Success",
+          "failure": "Failure"
+        },
+        "cacheOptions": {
+          "hit": "Cache Hit",
+          "miss": "Cache Miss"
+        },
         "teamId": "Team ID",
         "teamPlaceholder": "Search or select a team",
         "noTeams": "No teams found",
@@ -13416,6 +14976,7 @@
         "keyHash": "Key Hash",
         "keyAlias": "Key Alias",
         "model": "Model",
+        "moreModelsNotShown": "More models not shown",
         "tokens": "Tokens",
         "internalUser": "Internal User",
         "endUser": "End User",
@@ -13427,6 +14988,13 @@
       }
     },
     "audit": {
+      "actionOptions": {
+        "created": "Created",
+        "updated": "Updated",
+        "deleted": "Deleted",
+        "rotated": "Rotated",
+        "killSwitchFired": "Kill switch fired"
+      },
       "panel": {
         "enterpriseTitle": "✨ Enterprise Feature.",
         "enterpriseDescription": "This is a LiteLLM Enterprise feature, and requires a valid key to use.",
@@ -13469,9 +15037,11 @@
         "users": "Users",
         "organizations": "Organizations",
         "models": "Models",
-        "agents": "Agents"
+        "agents": "Agents",
+        "guardrails": "Guardrails"
       },
       "drawer": {
+        "notAvailable": "N/A",
         "title": "Audit log details",
         "copyJson": "Copy JSON",
         "noDifferingFields": "No differing fields detected",
@@ -13811,6 +15381,14 @@
       "weekOf": "Wk of {{date}}"
     },
     "breakdownChart": {
+      "granularityOptions": {
+        "day": "Daily",
+        "week": "Weekly"
+      },
+      "scaleOptions": {
+        "linear": "Linear",
+        "log": "Log"
+      },
       "metricNoun": {
         "spend": "spend",
         "tokens": "tokens",
@@ -13828,12 +15406,27 @@
       "loadingTopModels": "Loading top models"
     },
     "breakdown": {
+      "metricOptions": {
+        "spend": "Spend",
+        "tokens": "Tokens",
+        "requests": "Requests"
+      },
+      "dimensionOptions": {
+        "modelGroups": "Model",
+        "models": "Deployment",
+        "providers": "Provider"
+      },
       "metricLabel": "Metric",
       "groupByLabel": "Group by",
       "empty": "No usage in this range",
       "byProvider": "by {{provider}}"
     },
     "topAgents": {
+      "metricOptions": {
+        "tokens": "Tokens",
+        "spend": "Spend",
+        "requests": "Requests"
+      },
       "viewActivity": "View activity",
       "tokens": "{{tokens}} tokens",
       "viewAgentUsage": "View {{agent}} usage",
@@ -13844,6 +15437,9 @@
       "metricLabel": "Agent metric"
     },
     "agentCatalog": {
+      "labels": {
+        "claudeUnspecified": "Claude (unspecified)"
+      },
       "descriptions": {
         "claudeDesktop": "Anthropic's desktop assistant",
         "claudeCode": "Anthropic's coding agent",
@@ -13871,6 +15467,28 @@
       }
     },
     "errors": {
+      "entityLabels": {
+        "key": {
+          "singular": "Virtual key",
+          "plural": "Virtual keys"
+        },
+        "team": {
+          "singular": "Team",
+          "plural": "Teams"
+        },
+        "user": {
+          "singular": "User",
+          "plural": "Users"
+        },
+        "model": {
+          "singular": "Model",
+          "plural": "Models"
+        }
+      },
+      "rateViews": {
+        "total": "Total",
+        "status": "By status code"
+      },
       "entities": {
         "title": "Failures by identity",
         "subtitle": "Keys, teams, users and models ranked by failed requests",
@@ -14003,6 +15621,17 @@
       }
     },
     "entitySummary": {
+      "titles": {
+        "ptuHours": "PTU Hours",
+        "totalCost": "Total Cost",
+        "totalSpend": "Total Spend",
+        "totalRequests": "Total Requests",
+        "successfulRequests": "Successful Requests",
+        "failedRequests": "Failed Requests",
+        "totalTokens": "Total Tokens",
+        "requestCost": "Request Cost",
+        "flatCost": "Flat Cost"
+      },
       "tooltips": {
         "totalCost": "Request cost plus flat cost for reserved capacity. Select this tile to see the breakdown.",
         "requestCost": "Usage-based cost of the requests this entity sent during the selected period, priced per token.",
@@ -14012,6 +15641,14 @@
     },
     "entityUsage": {
       "chart": {
+        "granularityOptions": {
+          "day": "Daily",
+          "week": "Weekly"
+        },
+        "scaleOptions": {
+          "linear": "Linear",
+          "log": "Log"
+        },
         "flatCostSeries": "Flat cost",
         "metricTitle": {
           "spend": "Spend",
@@ -14063,6 +15700,7 @@
       "agentLoadFailed": "Failed to load agent data"
     },
     "providerSpend": {
+      "unknownProvider": "unknown",
       "columns": {
         "provider": "Provider",
         "spend": "Spend",
@@ -14077,6 +15715,11 @@
       "showZeroSpend": "Show Zero Spend",
       "showUnknown": "Show Unknown",
       "showUnknownHint": "Requests that failed to route to a provider"
+    },
+    "customerTeamSpend": {
+      "title": "Spend by team",
+      "attributionNote": "Uses each key's current team, or its last team when deleted. This is not historical team ownership.",
+      "noData": "No customer spend for this period"
     },
     "teamUserSpend": {
       "columns": {
@@ -14097,6 +15740,10 @@
       "noUser": "(no user)"
     },
     "topModelView": {
+      "viewOptions": {
+        "table": "Table View",
+        "chart": "Chart View"
+      },
       "columns": {
         "model": "Model",
         "spendUsd": "Spend (USD)",
@@ -14124,6 +15771,8 @@
         "noData": "No endpoint usage data"
       },
       "barChart": {
+        "successful": "Successful",
+        "failed": "Failed",
         "title": "Success vs Failed Requests by Endpoint"
       },
       "lineChart": {
@@ -14134,6 +15783,7 @@
       "unknownModel": "Unknown model",
       "unknownProvider": "Unknown provider",
       "errors": {
+        "narrowRange": "Narrow the date range to fewer than 1,000 requests to see complete client usage",
         "selectUserOrTeam": "Select a user or team to view client usage",
         "incompleteData": "The proxy returned incomplete client usage data",
         "outsideUser": "The proxy returned usage outside the selected user",
@@ -14199,6 +15849,10 @@
       "loadMoreFailed": "Could not load more keys."
     },
     "topKeys": {
+      "viewOptions": {
+        "table": "Table View",
+        "chart": "Chart View"
+      },
       "keyNotInDatabase": "This key is no longer in the database (deleted, or a CLI/SSO session key), so its details can't be opened",
       "columns": {
         "keyId": "Key ID",
@@ -14272,6 +15926,14 @@
     },
     "export": {
       "modal": {
+        "entities": {
+          "user": "User",
+          "team": "Team",
+          "tag": "Tag",
+          "organization": "Organization",
+          "customer": "Customer",
+          "agent": "Agent"
+        },
         "title": "Export {{entity}} Usage",
         "success": "{{entity}} usage data exported successfully as {{format}}",
         "failed": "Failed to export data",
@@ -14392,6 +16054,10 @@
       }
     },
     "userAgentActivity": {
+      "viewOptions": {
+        "activeUsers": "Active users",
+        "perUser": "Per user"
+      },
       "noActiveUsers": "No active users in this period",
       "weekLabel": "Week {{number}}",
       "monthLabel": "Month {{number}}",
@@ -14532,6 +16198,10 @@
         "helps": "Which pages and tabs get used"
       }
     }
+  },
+  "promptCacheUsage": {
+    "readTooltip": "Input tokens read from the LLM provider's prompt cache (e.g. Anthropic / OpenAI), billed at a discounted rate. Reported by the provider.",
+    "creationTooltip": "Input tokens written to the LLM provider's prompt cache for reuse by later requests."
   },
   "organizations": {
     "view": {
@@ -14732,6 +16402,14 @@
   },
   "teams": {
     "teamInfo": {
+      "tabs": {
+        "overview": "Overview",
+        "myUser": "My User",
+        "virtualKeys": "Virtual Keys",
+        "members": "Members",
+        "memberPermissions": "Member Permissions",
+        "settings": "Settings"
+      },
       "toasts": {
         "mcpUnresolvable": "Cannot save MCP tool permissions because {{reason}}. Retry once the page has finished loading",
         "loadFailed": "Failed to load team information",
@@ -14757,6 +16435,8 @@
         "tpmOrRpmRequired": "Set at least one of TPM or RPM"
       },
       "mcpLookup": {
+        "teamGroupsReloadFailed": "the team's access groups could not be reloaded",
+        "teamGroupsLoadFailed": "the team's access groups could not be loaded",
         "serversFailed": "the MCP server list could not be loaded",
         "toolsetsFailed": "the MCP toolset list could not be loaded",
         "accessGroupsFailed": "the access group list could not be loaded",
@@ -15077,6 +16757,23 @@
       }
     },
     "memberPermissions": {
+      "descriptions": {
+        "autoRouterManage": "Member can create auto routers for this team and edit their own router configurations",
+        "keyGenerate": "Member can generate a virtual key for this team",
+        "keyServiceAccountGenerate": "Member can generate a service account key (not belonging to any user) for this team",
+        "keyUpdate": "Member can update a virtual key belonging to this team",
+        "keyDelete": "Member can delete a virtual key belonging to this team",
+        "keyInfo": "Member can get info about a virtual key belonging to this team",
+        "keyRegenerate": "Member can regenerate a virtual key belonging to this team",
+        "keyIdRegenerate": "Member can regenerate a virtual key belonging to this team",
+        "keyList": "Member can list virtual keys belonging to this team",
+        "keyBlock": "Member can block a virtual key belonging to this team",
+        "keyUnblock": "Member can unblock a virtual key belonging to this team",
+        "keyAccessGroupAssignment": "Member can assign access groups to virtual keys for this team",
+        "teamDailyActivity": "Member can view all team usage data (not just their own)",
+        "spendLogs": "Member can view spend logs for the entire team (not just their own)",
+        "fallback": "Access {{permission}}"
+      },
       "toasts": {
         "loadFailed": "Failed to load permissions",
         "updated": "Permissions updated successfully",
@@ -15436,9 +17133,14 @@
           "description": "Teams created without an explicit organization are assigned to this organization.",
           "placeholder": "Select an organization"
         },
+        "accessGroups": {
+          "label": "Access Groups",
+          "description": "Access groups attached to teams created without explicit access groups. Use this to manage model access for all new teams in one place.",
+          "placeholder": "Select access groups"
+        },
         "models": {
           "label": "Models",
-          "description": "Default list of models that new teams can access."
+          "description": "Default list of models for teams auto-created from SSO groups. Teams created from the UI or /team/new are not affected."
         },
         "permissions": {
           "label": "Team Member Permissions",
@@ -15705,6 +17407,103 @@
     }
   },
   "addModel": {
+    "switchyardConfigFields": {
+      "heuristic": "Heuristic",
+      "stageRouter": "Stage Router",
+      "bias": "Bias",
+      "biasOptions": {
+        "costFirst": "Cost-first",
+        "qualityFirst": "Quality-first (experimental)"
+      },
+      "qualityFirstWarning": "Switchyard has not benchmarked this bias, so it has no calibrated confidence thresholds.",
+      "capableModel": "Capable model",
+      "efficientModel": "Efficient model",
+      "selectModel": "Select a model",
+      "classifier": "Classifier",
+      "classifierDescription": "Ask a judge model when the tool history does not give a confident routing decision.",
+      "classifierType": "Classifier type",
+      "classifierKinds": {
+        "llm": "LLM judge",
+        "decision": "Decision model"
+      },
+      "decisionModel": "Decision model",
+      "judgeModel": "Judge model",
+      "selectDecisionModel": "Select a decision model",
+      "selectJudgeModel": "Select a judge model",
+      "confidenceThreshold": "Confidence threshold",
+      "fallbackToJudge": "Below this confidence, use the judge model. Critical errors can still select the capable model.",
+      "fallbackToDefault": "Below this confidence, use the bias’s default model. Critical errors can still select the capable model.",
+      "advancedSettings": "Advanced settings",
+      "sections": {
+        "stage": "Stage",
+        "decisionModel": "Decision model",
+        "classifier": "Classifier"
+      },
+      "recentWindow": "Recent window",
+      "libraryDefault": "Library default",
+      "toolSemantics": "Tool semantics",
+      "advantageCutoff": "Advantage cutoff",
+      "advantageCutoffHelp": "Route to the capable model when the decision model’s advantage probability is above this value.",
+      "decisionInstructions": "Decision instructions",
+      "decisionInstructionsPlaceholder": "Use Switchyard’s built-in instructions",
+      "llmFields": {
+        "capabilityThreshold": "Capability threshold",
+        "thresholdStep": "Threshold step",
+        "maxOutputTokens": "Maximum output tokens",
+        "recentTurnWindow": "Recent turn window"
+      },
+      "responseFormat": "Response format",
+      "responseFormats": {
+        "jsonSchema": "JSON schema",
+        "jsonObject": "JSON object"
+      },
+      "classifierPrompt": "Classifier prompt",
+      "classifierPromptPlaceholder": "Use Switchyard’s built-in prompt"
+    },
+    "switchyardRouterForm": {
+      "modelFields": {
+        "description": "Route between a capable and an efficient model using the conversation’s tool history.",
+        "modelsLoadFailed": "Unable to load available models."
+      },
+      "routerName": "Router name",
+      "saving": "Saving…",
+      "saveChanges": "Save changes"
+    },
+    "addModelModes": {
+      "chat": "Chat - /chat/completions",
+      "completion": "Completion - /completions",
+      "embedding": "Embedding - /embeddings",
+      "audioSpeech": "Audio Speech - /audio/speech",
+      "audioTranscription": "Audio Transcription - /audio/transcriptions",
+      "imageGeneration": "Image Generation - /images/generations",
+      "imageEdit": "Image Edit - /images/edits",
+      "videoGeneration": "Video Generation - /videos",
+      "rerank": "Rerank - /rerank",
+      "realtime": "Realtime - /realtime",
+      "batch": "Batch - /batch",
+      "anthropicMessages": "Anthropic Messages - /v1/messages",
+      "ocr": "OCR - /ocr",
+      "decisions": "Decisions - /v1/decisions",
+      "extraction": "Extraction - /v1/extraction"
+    },
+    "providerAuthTypes": {
+      "sharedDeviceLogin": {
+        "label": "Shared device login",
+        "description": "One GitHub device login on the proxy host, stored in its token file, is used for every caller of models on this credential."
+      },
+      "perUserOauth": {
+        "label": "Per-user GitHub OAuth",
+        "description": "Each LiteLLM user connects their own GitHub account from LLM Credentials, and their requests use their own GitHub Copilot access. Users who have not connected get a 401."
+      },
+      "oauthTokenExchange": {
+        "label": "OAuth token exchange (on-behalf-of)",
+        "description": "LiteLLM exchanges each caller's IdP-issued JWT at your IdP's token endpoint for a delegated token. Microsoft Graph only accepts Microsoft Entra tokens, so for Microsoft 365 Copilot the token endpoint must be Entra and callers must send an Entra-issued JWT for this app. Users can still sign in through any IdP federated with Entra."
+      },
+      "staticToken": {
+        "label": "Static delegated access token",
+        "description": "Sends one pre-acquired delegated Microsoft Graph token for every caller."
+      }
+    },
     "classificationMethodConfig": {
       "explanations": {
         "defaultScoring": "The router scores each request across 7 built-in dimensions: token count, code presence, reasoning markers, technical terms, simple indicators, multi-step patterns, and question complexity, plus any custom dimensions you add. The weighted score determines the tier:",
@@ -15808,12 +17607,13 @@
       "menu": {
         "unlimited": "Unlimited"
       },
-      "title": "Choose your classifier",
-      "titleTooltip": "Choose how requests are evaluated and routed to your tiers",
-      "aboutClassifiers": "About classifiers",
+      "title": "Choose your routing strategy",
+      "titleTooltip": "Choose how each request is evaluated and which model it is routed to",
+      "aboutClassifiers": "About routing strategies",
       "families": {
+        "switchyardDescription": "Route by the conversation’s tool history.",
         "heuristics": "Heuristics",
-        "heuristicsDescription": "Classify locally, with no API call",
+        "heuristicsDescription": "Default. Classify locally, with no API call",
         "llmDescription": "Use a judge model to choose a solver",
         "decisionModel": "Decisions Model",
         "decisionModelDescription": "Use a decision model to choose a tier"
@@ -16078,6 +17878,7 @@
       "help": "Time budget for the plugin call. On expiry the fallback path decides the tier."
     },
     "compressionControls": {
+      "noneOption": "None (no compression)",
       "routing": {
         "title": "Routing decision",
         "tooltip": "Compression applied to the classifier's own call that picks a tier, separate from the model the request routes to.",
@@ -16183,6 +17984,24 @@
       }
     },
     "complexityRouterConfig": {
+      "rubrics": {
+        "legacy": {
+          "label": "Legacy (uncalibrated)",
+          "description": "The rubric as it shipped before calibration examples, with no worked examples at all. Routers created before this setting existed use it, so their tier decisions and spend are unchanged. It over-routes ordinary engineering to the most expensive tier."
+        },
+        "agentic": {
+          "label": "Agentic",
+          "description": "Anchors routine installs, builds, multi-file edits, and standard debugging at Medium, so ordinary engineering does not route to your most expensive tier. Suits agent, terminal, and coding-assistant traffic, and mixed traffic."
+        },
+        "chat": {
+          "label": "Chat",
+          "description": "Drops the engineering examples, for a router serving only conversational traffic that never sees those requests."
+        },
+        "business": {
+          "label": "Business",
+          "description": "Business and sales examples plus business-oriented tier definitions: routine drafting and summarizing stay at Medium, data-determined analysis is Complex, and only decisions under conflicting tradeoffs reach Reasoning. Suits sales, support, and go-to-market traffic."
+        }
+      },
       "rowOrigin": {
         "builtIn": "built-in",
         "custom": "custom"
@@ -16220,22 +18039,27 @@
       },
       "tiers": {
         "nonReasoning": {
+          "label": "Non-reasoning",
           "description": "Operational relay work: passing information along with no judgment about it",
           "examples": "\"Reformat this tool output\", \"Acknowledge the write succeeded\""
         },
         "simple": {
+          "label": "Simple",
           "description": "Basic questions, greetings, simple factual queries",
           "examples": "\"Hello!\", \"What is Python?\", \"Thanks!\""
         },
         "medium": {
+          "label": "Medium",
           "description": "Standard queries requiring some reasoning or explanation",
           "examples": "\"Explain how REST APIs work\", \"Debug this error\""
         },
         "complex": {
+          "label": "Complex",
           "description": "Technical, multi-part requests requiring deep knowledge",
           "examples": "\"Design a microservices architecture\", \"Implement a rate limiter\""
         },
         "reasoning": {
+          "label": "Reasoning",
           "description": "Chain-of-thought, analysis, explicit reasoning requests",
           "examples": "\"Think step by step...\", \"Analyze the pros and cons...\""
         }
@@ -16373,6 +18197,10 @@
       "tierDistancePenaltyHelp": "Score penalty applied per tier-step away from the classified tier."
     },
     "customDimensionRows": {
+      "scoringModes": {
+        "binary": "Binary",
+        "matchCount": "Match count"
+      },
       "legend": "Custom dimension {{number}}",
       "removeAria": "Remove custom dimension {{number}}",
       "remove": "Remove",
@@ -16388,6 +18216,11 @@
       "matchersHelp": "Keywords match the current ask. Regex scans its first 2,048 characters and permits bounded single-character repeats up to 64. The proxy validates patterns on save."
     },
     "autoSetup": {
+      "goals": {
+        "cheapest": "Cheapest",
+        "balanced": "Balanced",
+        "quality": "Best quality"
+      },
       "mixedFamiliesNotice": "A complete pair is unavailable in one family. Using two model families.",
       "closestPairNotice": "Using the closest available pair in this family.",
       "loadingModels": "Loading deployed models",
@@ -16395,6 +18228,17 @@
       "selectTwoModels": "Select two different deployed models"
     },
     "tierRows": {
+      "restrictions": {
+        "displayNames": "Display names rename the built-in tiers, which your tier set replaces. Name each tier directly",
+        "escalation": "Escalation bumps a request along the built-in tier ladder, which your tier set replaces",
+        "stallEscalation": "Stall escalation bumps a request along the built-in tier ladder, which your tier set replaces",
+        "adaptive": "Adaptive routing scores models along the built-in tier ladder, which your tier set replaces",
+        "sessionAffinity": "Session pinning escalates along the built-in tier ladder, which your tier set replaces",
+        "heuristicClassifier": "The heuristic scorer only produces the built-in tiers, so an edited set needs the LLM or JEV classifier. Heuristic first and hybrid are out for the same reason: their local scorer decides the traffic it is sure of",
+        "heuristicScoring": "The heuristic scorer never runs under an edited tier set, so its inputs have no effect",
+        "classificationRubric": "The preset calibration examples are written against the built-in tiers, which your tier set replaces",
+        "classifierFallback": "Fallback Tier is where an edited tier set routes when the classifier fails"
+      },
       "tierCountRange": "A tier set needs {{min}} to {{max}} tiers",
       "nameEveryTier": "Name every tier",
       "uniqueNames": "Tier names must be unique, ignoring case",
@@ -16417,6 +18261,15 @@
       "timeoutHelp": "Keep the original route if the comparison takes too long. Leave blank to use the default of 2000 ms."
     },
     "heuristicScoringKnobs": {
+      "dimensions": {
+        "codePresence": "Code presence",
+        "reasoningMarkers": "Reasoning markers",
+        "technicalTerms": "Technical terms",
+        "tokenCount": "Token count",
+        "simpleIndicators": "Simple indicators",
+        "multiStepPatterns": "Multi-step patterns",
+        "questionComplexity": "Question complexity"
+      },
       "loadDefaultsFirst": "Load the shipped defaults before changing weights",
       "invalidExistingWeights": "Existing weights must be finite and nonnegative; custom weights must be greater than 0 and at most 1",
       "dimensionUnavailable": "The dimension is no longer available",
@@ -16595,6 +18448,12 @@
       "close": "Close"
     },
     "advancedSettings": {
+      "ptuCountPlaceholder": "e.g. 15",
+      "ptuRatePlaceholder": "e.g. 2.00",
+      "pricingModels": {
+        "perToken": "Per Million Tokens",
+        "perSecond": "Per Second"
+      },
       "invalidPositiveNumber": "Please enter a valid positive number",
       "title": "Advanced Settings",
       "customPricing": "Custom Pricing",
@@ -16688,6 +18547,16 @@
       "azureHelp": "Your deployment name will be saved as the public model name, and LiteLLM will use 'azure/deployment-name' internally"
     },
     "cacheControlSettings": {
+      "label": "Cache Control Injection Points",
+      "tooltip": "Tell litellm where to inject cache control checkpoints. You can specify either by role (to apply to all messages of that role) or by specific message index.",
+      "locations": {
+        "message": "Message"
+      },
+      "roles": {
+        "user": "User",
+        "system": "System",
+        "assistant": "Assistant"
+      },
       "description": "Providers like Anthropic, Bedrock API require users to specify where to inject cache control checkpoints, litellm can automatically add them for you as a cost saving feature.",
       "roleHint": "LiteLLM will mark all messages of this role as cacheable",
       "indexHint": "(Optional) If set litellm will mark the message at this index as cacheable",
@@ -16770,9 +18639,9 @@
       "hardDescription": "Your stronger model",
       "roleModel": "{{label}} model",
       "selectModel": "Select a deployed model",
-      "needTwoModels": "Two deployed models are needed. Add a model or use Advanced configuration.",
+      "needTwoModels": "Two deployed models are needed. Add a model or customize tiers and keywords.",
       "chooseTwoModels": "Choose two models to get started.",
-      "advancedConfiguration": "Advanced configuration"
+      "advancedConfiguration": "Customize tiers and keywords"
     },
     "routerConfigBuilder": {
       "removeUtterance": "Remove {{utterance}}",
@@ -16811,6 +18680,7 @@
       "retry": "Retry"
     },
     "autoRouterConnectionTest": {
+      "embeddingSuffix": " (embedding)",
       "ossNotReached": "OSS classifier was not reached successfully (routing cause: {{cause}})",
       "nothingToTest": "No complexity tiers are configured yet, so there is nothing to test.",
       "intro": "Test Connection sends a minimal request to every configured tier, classifier, default, and embedding model. The classifier probe includes its reasoning effort override.",
@@ -16854,12 +18724,89 @@
   },
   "modelAdd": {
     "anthropicFederation": {
+      "fields": {
+        "federationRuleId": {
+          "label": "Federation Rule ID",
+          "tooltip": "The fdrl_ id of the federation rule, from Settings > Workload identity in the Claude Console. Leave empty when the proxy sets ANTHROPIC_FEDERATION_RULE_ID in its environment."
+        },
+        "organizationId": {
+          "label": "Organization ID",
+          "tooltip": "The Anthropic organization the federation rule belongs to, shown on the rule's detail page. Leave empty when the proxy sets ANTHROPIC_ORGANIZATION_ID in its environment."
+        },
+        "serviceAccountId": {
+          "label": "Service Account ID",
+          "tooltip": "The svac_ id the federation rule targets. Anthropic's reference lists it as required."
+        },
+        "workspaceId": {
+          "label": "Workspace ID",
+          "tooltip": "Set this when the federation rule is enabled in more than one workspace: the wrkspc_ id to mint tokens for, or 'default'."
+        },
+        "identityTokenFile": {
+          "label": "Identity Token File",
+          "tooltip": "Absolute path on the proxy host of a file holding the identity token, for example a projected Kubernetes service account token. It must sit under an allowed credential directory."
+        },
+        "identityTokenReference": {
+          "label": "Identity Token Reference",
+          "tooltip": "An oidc/ secret reference the proxy resolves on each exchange, such as oidc/env/VAR_NAME, oidc/github/<audience>, or oidc/google/<audience>. Raw tokens are not accepted."
+        },
+        "issuerUrl": {
+          "label": "Issuer URL",
+          "tooltip": "The issuer registered on the federation rule. The proxy puts it in the token's iss claim."
+        },
+        "issuerSubject": {
+          "label": "Subject",
+          "tooltip": "The sub claim the federation rule matches."
+        },
+        "issuerAudience": {
+          "label": "Audience",
+          "tooltip": "Optional aud claim, when the federation rule checks one."
+        },
+        "issuerTtlSeconds": {
+          "label": "Token Lifetime (seconds)",
+          "tooltip": "Optional. How long each signed token is valid, from 1 to {{max}} seconds. The proxy uses its default when this is empty."
+        },
+        "issuerSigningKeyRef": {
+          "label": "Signing Key Reference",
+          "tooltip": "A secret reference to the PEM private key the proxy signs with, such as os.environ/VAR_NAME. Enter the reference, never the key itself."
+        },
+        "keycloakTokenUrl": {
+          "label": "Keycloak Token URL",
+          "tooltip": "The realm's token endpoint the proxy requests an identity token from."
+        },
+        "keycloakClientId": {
+          "label": "Keycloak Client ID",
+          "tooltip": "The client the proxy authenticates as."
+        },
+        "keycloakClientSecretRef": {
+          "label": "Client Secret Reference",
+          "tooltip": "A secret reference to the client secret, such as os.environ/VAR_NAME. Enter the reference, never the secret itself."
+        },
+        "keycloakAuthMethod": {
+          "label": "Client Authentication Method",
+          "tooltip": "Optional. How the client secret is sent to Keycloak. The proxy uses client_secret_basic when unset."
+        },
+        "keycloakScope": {
+          "label": "Scope",
+          "tooltip": "Optional scope to request with the token."
+        }
+      },
+      "sources": {
+        "tokenFile": "Identity token file",
+        "secretReference": "Identity token secret reference",
+        "internalIssuer": "Token signed by LiteLLM (internal issuer)",
+        "keycloak": "Keycloak client credentials",
+        "environment": "Proxy environment variables"
+      },
       "storedSource": "Stored: {{source}}",
       "storedValueRequired": "Enter at least one of these ids, or pick an identity source that stores a token. The proxy rejects a credential with no values",
       "invalidTokenReference": "Enter an oidc/ secret reference such as oidc/env/VAR_NAME. Raw tokens and oidc/env_path/ references are not accepted",
       "invalidTtl": "Enter a whole number of seconds from 1 to {{max}}"
     },
     "credentialModal": {
+      "authMethods": {
+        "apiKey": "API key",
+        "federation": "Workload identity federation"
+      },
       "editTitle": "Edit Credential",
       "addTitle": "Add New Credential",
       "credentialName": "Credential Name:",
@@ -16959,6 +18906,20 @@
       "submit": "Reuse Credentials"
     },
     "openaiFederation": {
+      "fields": {
+        "identityProviderId": {
+          "label": "Identity Provider ID",
+          "tooltip": "The workload identity provider registered in your OpenAI organization that trusts the token's issuer. Leave empty when the proxy sets OPENAI_IDENTITY_PROVIDER_ID in its environment."
+        },
+        "serviceAccountId": {
+          "label": "Service Account ID",
+          "tooltip": "The OpenAI service account the verified identity acts as. Its project decides what the model can reach. Leave empty when the proxy sets OPENAI_SERVICE_ACCOUNT_ID in its environment."
+        },
+        "identityTokenFile": {
+          "label": "Identity Token File",
+          "tooltip": "Absolute path on the proxy host of a file holding the identity token, for example a projected Kubernetes service account token. Leave empty when the proxy sets OPENAI_IDENTITY_TOKEN_FILE in its environment."
+        }
+      },
       "apiBaseNotOpenAI": "Workload identity federation only reaches the OpenAI API. Enter https://{{host}}/v1 or a regional *.{{host}} URL, or leave this empty"
     },
     "internalIssuerJwks": {
@@ -16987,7 +18948,6 @@
   "updateModelCredentialsModal": {
     "apiKeyRequired": "Enter a new API key",
     "updated": "API key updated",
-    "updateFailed": "Failed to update API key",
     "title": "Update API Key",
     "description": "Update this model's API key. Only the new key is sent; the rest of the deployment configuration is left untouched.",
     "apiKeyOnlyWarning": "Only the API key is rotated here. Models that authenticate with an Azure AD token, AWS credentials, or a Vertex service-account JSON aren't supported yet; update those from the model's LiteLLM Params for now.",
@@ -17001,6 +18961,12 @@
   },
   "editAutoRouter": {
     "editAutoRouterModal": {
+      "switchyardTitle": "Edit Switchyard router",
+      "errors": {
+        "nameRequired": "Auto router name is required",
+        "defaultModelRequired": "Default model is required",
+        "embeddingModelRequired": "Embedding model is required"
+      },
       "selectTierModel": "Please select at least one model for a complexity tier",
       "loadFailed": "Error loading auto router configuration",
       "noDefaultDestination": "Add a model to the Simple or Medium tier, or pin a default model, so requests have somewhere to route.",
@@ -17030,6 +18996,21 @@
     "dismiss": "Dismiss banner"
   },
   "modelsAndEndpoints": {
+    "autoRouterRows": {
+      "types": {
+        "llm": "LLM Classifier",
+        "oss": "OSS Classifier",
+        "capability": "Capability",
+        "fuseV2": "Fuse v2",
+        "heuristicFirst": "Heuristic first",
+        "hybrid": "Hybrid",
+        "custom": "Custom classifier",
+        "heuristic": "Heuristic",
+        "semantic": "Semantic",
+        "adaptive": "Adaptive",
+        "quality": "Quality"
+      }
+    },
     "autoRoutersPanel": {
       "deleted": "Deleted auto router: {{name}}",
       "deleteFailed": "Failed to delete auto router: {{error}}",
@@ -17106,6 +19087,11 @@
       }
     },
     "allModelsTable": {
+      "filterLabels": {
+        "publicModelName": "Public Model Name",
+        "modelAccessGroup": "Model Access Group",
+        "status": "Status"
+      },
       "allProxyModels": "All Proxy Models",
       "wildcardModels": "Wildcard Models (*)",
       "allAccessGroups": "All Model Access Groups",
@@ -17559,6 +19545,11 @@
       }
     },
     "healthChecksTableColumns": {
+      "unknownStatus": "unknown",
+      "sentinels": {
+        "none": "None",
+        "checkInProgress": "Check in progress..."
+      },
       "columns": {
         "modelId": "Model ID",
         "modelName": "Model Name",
@@ -17814,7 +19805,6 @@
       "invalidLitellmParams": "LiteLLM Params must be a valid JSON object",
       "invalidModelInfo": "Invalid JSON in Model Info",
       "updateSuccess": "Model settings updated successfully",
-      "updateFailed": "Failed to update model settings",
       "noComplexityTiers": "No complexity tiers are configured yet, so there is nothing to test.",
       "testingConnection": "Testing connection...",
       "connectionSuccess": "Connection test successful!",
@@ -18155,6 +20145,9 @@
         "docsLink": "Learn how to set up email notifications"
       },
       "fields": {
+        "supplyUserId": "Supply custom User ID",
+        "userId": "User ID",
+        "userIdDescription": "A unique ID for this user. Leave the checkbox unchecked to generate one automatically.",
         "userEmail": "User Email",
         "userRole": "User Role",
         "globalRole": "Global Proxy Role",
@@ -18509,6 +20502,194 @@
         "cancel": "Cancel",
         "save": "Save Changes"
       }
+    }
+  },
+  "deploymentPricing": {
+    "deploymentCount_one": "This model has {{count}} deployment. Each request is billed at the prices of the deployment that served it.",
+    "deploymentCount_other": "This model has {{count}} deployments. Each request is billed at the prices of the deployment that served it.",
+    "requestAdjustments": "These are list prices. Adjustments made per request, like off-peak discounts, regional or data residency surcharges, and some providers' own pricing rules, aren't included.",
+    "providerPricing": "{{provider}} pricing",
+    "chargeColumn": "Charge",
+    "basePrices": "Base prices",
+    "aboveThreshold": "Above {{threshold}} tokens",
+    "blankCells": "Blank cells aren't priced separately for this deployment.",
+    "tieredPricing": "Prices by request size, per 1M tokens",
+    "tierRange": "{{low}}–{{high}} tokens: {{prices}}",
+    "tierPrice": "{{price}} {{charge}}",
+    "tierPricePerUnit": "{{price}} {{charge}} per {{unit}}",
+    "free": "Free",
+    "rowLabel": "{{charge}} / {{unit}}",
+    "withModality": "{{modality}} {{charge}}",
+    "withCacheDuration": "{{charge}} ({{duration}})",
+    "fallbackCost": "Cost",
+    "tiers": {
+      "standard": "Standard",
+      "flex": "Flex",
+      "balanced": "Balanced",
+      "priority": "Priority",
+      "ultrafast": "Ultrafast",
+      "batches": "Batch"
+    },
+    "charges": {
+      "input": "Input",
+      "cacheRead": "Cache read",
+      "explicitCacheRead": "Explicit cache read",
+      "cacheWrite": "Cache write",
+      "output": "Output"
+    },
+    "chargesInline": {
+      "input": "input",
+      "cacheRead": "cache read",
+      "explicitCacheRead": "explicit cache read",
+      "cacheWrite": "cache write",
+      "output": "output"
+    },
+    "modalities": {
+      "text": "Text",
+      "image": "Image",
+      "audio": "Audio",
+      "video": "Video",
+      "reasoning": "Reasoning"
+    },
+    "modalitiesInline": {
+      "text": "text",
+      "image": "image",
+      "audio": "audio",
+      "video": "video",
+      "reasoning": "reasoning"
+    },
+    "units": {
+      "token": "1M tokens",
+      "second": "second",
+      "image": "image",
+      "pixel": "pixel",
+      "character": "character",
+      "query": "query",
+      "request": "request"
+    }
+  },
+  "routerWeights": {
+    "title": "Deployment Weights",
+    "description": "Split a model group's traffic across its deployments. A deployment with no weight gets no traffic once any weight in its group is set. Weights only apply with the simple-shuffle routing strategy.",
+    "ignoredForStrategy": "Weights are ignored with {{strategy}}. Select simple-shuffle to use them.",
+    "addGroup": "Add a model group",
+    "addGroupPlaceholder": "Select a model group to weight",
+    "noModels": "No model groups found",
+    "noDeployments": "No deployments found for this model group",
+    "unknownDeployment": "Deployment no longer exists",
+    "weightFor": "Weight for {{deployment}}",
+    "share": "{{percent}}% of traffic",
+    "noPositiveWeight": "Set at least one weight above 0, or remove this model group.",
+    "removeGroup": "Remove weights for {{group}}",
+    "summary": "Deployment Weights:",
+    "loadFailed": "Could not load this model group's deployments. Saved weights are kept."
+  },
+  "customerPortal": {
+    "switcher": {
+      "label": "Customer Portal",
+      "description": "End customers, budgets and chargebacks"
+    },
+    "status": {
+      "active": "Active",
+      "overBudget": "Over budget",
+      "blocked": "Blocked"
+    },
+    "common": {
+      "noBudget": "No budget",
+      "cancel": "Cancel",
+      "save": "Save",
+      "block": "Block",
+      "blockHint": "Block and Unblock change the customer record. The proxy only rejects a blocked customer's requests when the blocked_user_check callback is enabled in litellm_settings.callbacks.",
+      "unblock": "Unblock",
+      "edit": "Edit",
+      "total": "Total",
+      "loading": "Loading..."
+    },
+    "toasts": {
+      "blocked": "Customer blocked",
+      "unblocked": "Customer unblocked",
+      "created": "Created {{name}}",
+      "updated": "Customer updated",
+      "createFailed": "Failed to create customer: {{error}}",
+      "updateFailed": "Failed to update customer: {{error}}"
+    },
+    "list": {
+      "title": "Customers",
+      "subtitle": "End users of your product, identified by customer id on every request.",
+      "create": "Create Customer",
+      "searchPlaceholder": "Search by customer id or alias",
+      "columns": {
+        "customer": "Customer",
+        "spend": "Spend this month",
+        "budget": "Budget",
+        "keys": "Keys",
+        "status": "Status"
+      },
+      "loading": "Loading customers...",
+      "empty": "No customers yet. Create one to start tracking spend.",
+      "budgetUsage": "{{spend}} / {{max}}"
+    },
+    "detail": {
+      "spendThisMonth": "Spend this month",
+      "ofBudget": "of {{max}} budget",
+      "noBudget": "no budget",
+      "tpm": "{{val}} TPM",
+      "rpm": "{{val}} RPM",
+      "keysTitle": "Keys",
+      "keysSubtitle": "Keys that sent requests as this customer this month.",
+      "keysEmpty": "No traffic from this customer this month.",
+      "columns": {
+        "key": "Key",
+        "requests": "Requests",
+        "tokens": "Tokens",
+        "spend": "Spend"
+      },
+      "unnamedKey": "Unnamed key",
+      "back": "Back to customers"
+    },
+    "createDialog": {
+      "title": "Create customer",
+      "description": "A customer is an end user of your product. Pass its id as `user` on every request to track spend and apply its limits.",
+      "customerId": "Customer id",
+      "customerIdPlaceholder": "e.g. acme-corp",
+      "alias": "Alias",
+      "aliasPlaceholder": "Optional display name",
+      "maxBudget": "Monthly budget (USD)",
+      "maxBudgetPlaceholder": "Leave empty for no budget",
+      "tpm": "TPM limit",
+      "rpm": "RPM limit",
+      "noLimit": "No limit",
+      "limitsHelp": "Budget and limits apply to this customer across every key it uses.",
+      "submit": "Create"
+    },
+    "editDialog": {
+      "title": "Edit customer",
+      "alias": "Alias",
+      "maxBudget": "Max budget (USD)",
+      "maxBudgetPlaceholder": "Leave empty for no budget",
+      "sharedBudgetWarning": "This customer is on budget {{budgetId}}. Changing the budget here changes it for every customer on that budget."
+    },
+    "chargebacks": {
+      "title": "Chargebacks",
+      "subtitle": "Spend per customer for a month, from the daily spend rollup.",
+      "groupBy": {
+        "customer": "Group by customer",
+        "key": "Customer and key",
+        "model": "Customer and model"
+      },
+      "dimension": {
+        "key": "Key",
+        "model": "Model"
+      },
+      "exportCsv": "Export CSV",
+      "columns": {
+        "customer": "Customer",
+        "requests": "Requests",
+        "inputTokens": "Input tokens",
+        "outputTokens": "Output tokens",
+        "spend": "Spend"
+      },
+      "empty": "No customer traffic in {{month}}."
     }
   }
 }
