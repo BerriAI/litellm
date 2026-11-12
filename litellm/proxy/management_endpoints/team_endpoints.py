@@ -18,7 +18,7 @@ import traceback
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from itertools import chain
 from types import MappingProxyType
 from typing import (
@@ -142,6 +142,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     team_membership_reservation_cache_key,
 )
 from litellm.proxy.db.db_span import db_span
+from litellm.proxy.guardrails.guardrail_helpers import validate_guardrail_names
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import (
     RoutedModels,
@@ -228,6 +229,7 @@ from litellm.proxy.management_helpers.utils import (
     management_endpoint_wrapper,
 )
 from litellm.proxy.spend_tracking.committed_spend import drop_committed_spend
+from litellm.proxy.spend_tracking.spend_log_api_key_scope import spend_log_api_keys_for_teams
 from litellm.proxy.utils import (
     PrismaClient,
     ProxyLogging,
@@ -1916,6 +1918,13 @@ async def new_team(
             user_api_key_dict,
             metadata_sent="metadata" in data.model_fields_set,
         )
+        await validate_guardrail_names(
+            data.guardrails,
+            data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+            None,
+            prisma_client,
+            license_first=True,
+        )
 
         if isinstance(data.metadata, dict):
             TeamMemberBudgetHandler.strip_system_managed_metadata_keys(data.metadata)
@@ -2635,6 +2644,13 @@ async def update_team(
             user_api_key_dict,
             metadata_sent="metadata" in data.model_fields_set,
             existing_metadata=_existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,  # pyright: ignore[reportUnknownArgumentType]  # existing_team_row.metadata is a bare dict
+        )
+        await validate_guardrail_names(
+            data.guardrails,
+            data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+            _existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,  # pyright: ignore[reportUnknownArgumentType]  # existing_team_row.metadata is a bare dict
+            prisma_client,
+            license_first=True,
         )
 
         if data.soft_budget is not None:
@@ -7463,9 +7479,11 @@ def aggregated_date_range_error(start_date: str | None, end_date: str | None) ->
     return None
 
 
-def _team_user_spend_sql(*, team_count: int, restrict_to_user: bool) -> str:
+def _team_user_spend_sql(*, team_count: int, restrict_to_user: bool, narrow_to_api_keys: bool) -> str:
     team_placeholders: Final = ", ".join(f"${i}" for i in range(3, 3 + team_count))
     user_clause: Final = f' AND sl."user" = ${3 + team_count}' if restrict_to_user else ""
+    api_key_placeholder: Final = 3 + team_count + (1 if restrict_to_user else 0)
+    api_key_clause: Final = f" AND sl.api_key = ANY(${api_key_placeholder}::text[])" if narrow_to_api_keys else ""
     return f"""
         SELECT
             sl.team_id,
@@ -7483,7 +7501,7 @@ def _team_user_spend_sql(*, team_count: int, restrict_to_user: bool) -> str:
         LEFT JOIN "LiteLLM_UserTable" u ON u.user_id = sl."user"
         WHERE sl."startTime" >= $1::timestamp
             AND sl."startTime" < $2::timestamp + INTERVAL '1 day'
-            AND sl.team_id IN ({team_placeholders}){user_clause}
+            AND sl.team_id IN ({team_placeholders}){user_clause}{api_key_clause}
         GROUP BY sl.team_id, sl."user", u.user_email, u.user_alias
         ORDER BY spend DESC, sl.team_id, sl."user"
     """
@@ -7555,15 +7573,24 @@ async def get_team_spend_by_user(
 
     own_user_only: Final = scope.api_key_filter is not None
     user_param: Final = (user_api_key_dict.user_id or "",) if own_user_only else ()
+    scoped_api_keys: Final = await spend_log_api_keys_for_teams(
+        prisma_client, scoped_team_ids, date.fromisoformat(start_date), date.fromisoformat(end_date)
+    )
+    api_key_param: Final = (list(scoped_api_keys),) if scoped_api_keys is not None else ()
     async with db_span("team_user_spend", "LiteLLM_SpendLogs"):
         rows: Final = _TEAM_USER_SPEND_ROWS.validate_python(
             await query_raw_within_statement_timeout(
                 prisma_client,
-                _team_user_spend_sql(team_count=len(scoped_team_ids), restrict_to_user=own_user_only),
+                _team_user_spend_sql(
+                    team_count=len(scoped_team_ids),
+                    restrict_to_user=own_user_only,
+                    narrow_to_api_keys=scoped_api_keys is not None,
+                ),
                 start_date,
                 end_date,
                 *scoped_team_ids,
                 *user_param,
+                *api_key_param,
                 what="Spend per user",
             )
         )

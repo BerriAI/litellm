@@ -73,14 +73,14 @@ jobs:
 
       - name: Cache uv dependencies
         if: steps.changes.outputs.decision != 'skip'
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ~/.cache/uv
             .venv
-          key: ${{ runner.os }}-uv-lint-${{ hashFiles('uv.lock') }}
+          key: ${{ runner.os }}-uv-${{ hashFiles('uv.lock') }}
           restore-keys: |
-            ${{ runner.os }}-uv-lint-
+            ${{ runner.os }}-uv-
 
       - name: Clean Python cache
         if: steps.changes.outputs.decision != 'skip'
@@ -114,7 +114,7 @@ jobs:
       - name: Check ruff format
         if: steps.changes.outputs.decision != 'skip'
         run: |
-          git diff --name-only --diff-filter=ACMR "$GATE_BASE_SHA" HEAD -- ':(glob)litellm/**/*.py' | grep -v '^litellm/enterprise/' > "$RUNNER_TEMP/ruff_format_files.txt" || true
+          git diff --name-only --diff-filter=ACMR "$GATE_BASE_SHA" HEAD -- ':(glob)litellm/**/*.py' | grep -Ev '^litellm/(enterprise|ui|vscode-extension|rust|proxy-extras|packaging|cli|scripts|runtime)/' > "$RUNNER_TEMP/ruff_format_files.txt" || true
           if [ ! -s "$RUNNER_TEMP/ruff_format_files.txt" ]; then
             echo "No changed litellm Python files to check with ruff format."
             exit 0
@@ -133,7 +133,7 @@ jobs:
 
       - name: Check MCP operation boundary
         if: steps.changes.outputs.decision != 'skip'
-        run: uv run --no-sync python scripts/check_mcp_operation_boundary.py
+        run: uv run --no-sync python litellm/scripts/check_mcp_operation_boundary.py
 
       - name: Run Ruff linting
         if: steps.changes.outputs.decision != 'skip'
@@ -145,28 +145,28 @@ jobs:
       - name: Run Ruff linting (test tree)
         if: steps.changes.outputs.decision != 'skip'
         run: |
-          uv run --no-sync ruff check --config ruff-tests.toml tests
+          uv run --no-sync ruff check --config .github/linters/ruff-tests.toml tests
 
       - name: Check strict ruff rules (delta vs merge-base counts)
         if: steps.changes.outputs.decision != 'skip'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          uv run --no-sync python scripts/ruff_strict_gate.py --base "$GATE_BASE_SHA"
+          uv run --no-sync python litellm/scripts/ruff_strict_gate.py --base "$GATE_BASE_SHA"
 
       - name: Check type discipline (mutable collections / casts / type guards / kwargs / unexplained suppressions, delta vs merge-base counts)
         if: steps.changes.outputs.decision != 'skip'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          uv run --no-sync python scripts/type_discipline_gate.py --base "$GATE_BASE_SHA"
+          uv run --no-sync python litellm/scripts/type_discipline_gate.py --base "$GATE_BASE_SHA"
 
       - name: Check test quality (zero-assert / mock-echo tests, sys.path.insert, raw env writes, litellm global mutation, credential-gated skips, conftest snapshot inventory, delta vs merge-base counts)
         if: steps.changes.outputs.decision != 'skip'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          uv run --no-sync python scripts/test_quality_gate.py --base "$GATE_BASE_SHA"
+          uv run --no-sync python litellm/scripts/test_quality_gate.py --base "$GATE_BASE_SHA"
 
       - name: Check OpenAPI docs (POST routes without a request schema, description or 200 schema, delta vs merge-base counts)
         if: steps.changes.outputs.decision != 'skip'
@@ -174,7 +174,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           uv sync --frozen --group proxy-dev --group e2e-dev --extra proxy
-          uv run --no-sync python scripts/openapi_docs_gate.py --base "$GATE_BASE_SHA"
+          uv run --no-sync python litellm/scripts/openapi_docs_gate.py --base "$GATE_BASE_SHA"
 
       - name: Print OpenAI version
         if: steps.changes.outputs.decision != 'skip'
@@ -186,12 +186,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          uv run --no-sync python scripts/type_check_gate.py --base "$GATE_BASE_SHA"
+          uv run --no-sync python litellm/scripts/type_check_gate.py --base "$GATE_BASE_SHA"
 
       - name: Check tests/e2e basedpyright (zero errors)
         if: steps.changes.outputs.decision != 'skip'
         run: |
-          if git diff --name-only --diff-filter=ACMRD "$GATE_BASE_SHA" HEAD -- ':(glob)tests/e2e/**/*.py' ':(glob)tests/e2e_harness/**/*.py' pyrightconfig.json | grep -q .; then
+          if git diff --name-only --diff-filter=ACMRD "$GATE_BASE_SHA" HEAD -- ':(glob)tests/e2e/**/*.py' ':(glob)tests/e2e_harness/**/*.py' pyproject.toml | grep -q .; then
             uv run --no-sync basedpyright tests/e2e tests/e2e_harness
           else
             echo "No changed tests/e2e Python files; skipping."
@@ -258,7 +258,7 @@ jobs:
           if [ -n "$GITGUARDIAN_API_KEY" ]; then
             retry() { "$@" || { sleep 15; "$@"; } || { sleep 30; "$@"; }; }
             retry git fetch --no-tags --unshallow origin
-            uv tool run --from 'ggshield==1.48.0' ggshield secret scan repo .
+            uv tool run --from 'ggshield==1.48.0' ggshield --config-path .github/gitguardian.yaml secret scan repo .
           else
             echo "GITGUARDIAN_API_KEY not set, skipping ggshield scan"
           fi
@@ -271,7 +271,7 @@ jobs:
     timeout-minutes: 8
     defaults:
       run:
-        working-directory: ui/litellm-dashboard
+        working-directory: litellm/ui/litellm-dashboard
 
     steps:
       - name: Checkout repository
@@ -315,9 +315,9 @@ jobs:
         if: steps.changed.outputs.has_files == 'true'
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
-          node-version-file: ui/litellm-dashboard/.nvmrc
+          node-version-file: litellm/ui/litellm-dashboard/.nvmrc
           cache: "npm"
-          cache-dependency-path: ui/litellm-dashboard/package-lock.json
+          cache-dependency-path: litellm/ui/litellm-dashboard/package-lock.json
 
       - name: Install dependencies
         if: steps.changed.outputs.has_files == 'true'
@@ -333,12 +333,12 @@ jobs:
           status=0
           if [ ${#prettier_files[@]} -gt 0 ]; then
             echo "::group::Prettier (${#prettier_files[@]} files)"
-            npx prettier --check "${prettier_files[@]}" || { status=1; echo "::error::Unformatted files. Fix with: npm run format"; }
+            node_modules/.bin/prettier --check "${prettier_files[@]}" || { status=1; echo "::error::Unformatted files. Fix with: npm run format"; }
             echo "::endgroup::"
           fi
           if [ ${#eslint_files[@]} -gt 0 ]; then
             echo "::group::ESLint (${#eslint_files[@]} files)"
-            npx eslint --no-warn-ignored --pass-on-unpruned-suppressions "${eslint_files[@]}" || status=1
+            node_modules/.bin/eslint --no-warn-ignored --pass-on-unpruned-suppressions "${eslint_files[@]}" || status=1
             echo "::endgroup::"
           fi
           exit $status
@@ -375,7 +375,7 @@ jobs:
             exit 0
           fi
           files="$(git diff --name-only "$base" HEAD)"
-          if grep -Eq '^(litellm/|enterprise/|(pyproject\.toml|uv\.lock)$|ui/litellm-dashboard/(src/lib/http/schema\.d\.ts|scripts/gen-api-types\.mjs|package(-lock)?\.json)$|\.github/workflows/test-linting\.yml$)' <<< "$files"; then
+          if grep -Ev '^litellm/(ui|vscode-extension|rust|proxy-extras|packaging|cli|scripts|runtime)/' <<< "$files" | grep -E '^(litellm/|enterprise/|(pyproject\.toml|uv\.lock)$|\.github/workflows/test-linting\.yml$)' >/dev/null || grep -Eq '^litellm/ui/litellm-dashboard/(src/lib/http/schema\.d\.ts|scripts/gen-api-types\.mjs|package(-lock)?\.json)$' <<< "$files"; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
           else
             echo "No litellm, enterprise, dependency or generator changes in this pull request, nothing to verify."
@@ -396,7 +396,7 @@ jobs:
 
       - name: Cache uv dependencies
         if: steps.changes.outputs.relevant == 'true'
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ~/.cache/uv
@@ -434,7 +434,7 @@ jobs:
             echo "A lazily loaded route or model changed without regenerating the snapshot that /openapi.json serves for unloaded features."
             echo "To fix, run from the repo root:"
             echo "  uv run python -m litellm.proxy._lazy_openapi_snapshot"
-            echo "then run npm run gen:api from ui/litellm-dashboard and commit both files."
+            echo "then run npm run gen:api from litellm/ui/litellm-dashboard and commit both files."
             exit 1
           fi
           echo "_lazy_openapi_snapshot.json is in sync with the lazily loaded routes."
@@ -443,18 +443,18 @@ jobs:
         if: steps.changes.outputs.relevant == 'true'
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
-          node-version-file: ui/litellm-dashboard/.nvmrc
+          node-version-file: litellm/ui/litellm-dashboard/.nvmrc
           cache: "npm"
-          cache-dependency-path: ui/litellm-dashboard/package-lock.json
+          cache-dependency-path: litellm/ui/litellm-dashboard/package-lock.json
 
       - name: Install dashboard dependencies
         if: steps.changes.outputs.relevant == 'true'
-        working-directory: ui/litellm-dashboard
+        working-directory: litellm/ui/litellm-dashboard
         run: npm ci
 
       - name: Regenerate types from the live spec
         if: steps.changes.outputs.relevant == 'true'
-        working-directory: ui/litellm-dashboard
+        working-directory: litellm/ui/litellm-dashboard
         env:
           LITELLM_PYTHON: "uv run --no-sync python"
         run: npm run gen:api
@@ -462,11 +462,11 @@ jobs:
       - name: Fail if types are stale
         if: steps.changes.outputs.relevant == 'true'
         run: |
-          if ! git diff --exit-code -- ui/litellm-dashboard/src/lib/http/schema.d.ts; then
-            echo "::error file=ui/litellm-dashboard/src/lib/http/schema.d.ts::Generated API types are out of sync with the proxy OpenAPI spec."
+          if ! git diff --exit-code -- litellm/ui/litellm-dashboard/src/lib/http/schema.d.ts; then
+            echo "::error file=litellm/ui/litellm-dashboard/src/lib/http/schema.d.ts::Generated API types are out of sync with the proxy OpenAPI spec."
             echo ""
             echo "A backend route or model changed without regenerating the dashboard types."
-            echo "To fix, run from ui/litellm-dashboard:"
+            echo "To fix, run from litellm/ui/litellm-dashboard:"
             echo "  npm run gen:api"
             echo "then commit the updated src/lib/http/schema.d.ts."
             exit 1
@@ -524,7 +524,7 @@ jobs:
         run: uv run --no-sync python ./tests/code_coverage_tests/check_provider_folders_documented.py
 
       - name: check_provider_endpoints_support_generated
-        run: uv run --no-sync python scripts/generate_provider_endpoints_support.py --check
+        run: uv run --no-sync python litellm/scripts/generate_provider_endpoints_support.py --check
 
       - name: test_generate_provider_endpoints_support
         run: uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_generate_provider_endpoints_support.py
@@ -703,7 +703,7 @@ jobs:
           version: "0.10.9"
 
       - name: Run Semgrep (custom rules)
-        run: uv tool run --from 'semgrep==1.157.0' semgrep scan --config .semgrep/rules . --error
+        run: uv tool run --from 'semgrep==1.157.0' semgrep scan --config .github/semgrep/rules . --error
   lint-passed:
     name: lint passed
     needs: [python, secret-scan, ui, ui-api-types, code-quality, ci-coverage, semgrep]

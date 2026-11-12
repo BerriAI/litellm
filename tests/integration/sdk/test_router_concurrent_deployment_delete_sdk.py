@@ -39,15 +39,16 @@ def _router_source_files() -> frozenset[str]:
     return frozenset({_HAND_CHANGES.co_filename, *(path for path in facade_files if path is not None)})
 
 
-def _lock_lines(path: str) -> frozenset[int]:
-    return frozenset(
-        number
-        for number, line in enumerate(linecache.getlines(path), start=1)
-        if "with self._deployment_index_lock" in line
-    )
+def _lock_lines(path: str, statement: str) -> frozenset[int]:
+    return frozenset(number for number, line in enumerate(linecache.getlines(path), start=1) if statement in line)
 
 
-_INDEX_LOCK_LINES: Final = MappingProxyType({path: _lock_lines(path) for path in _router_source_files()})
+_INDEX_LOCK_LINES: Final = MappingProxyType(
+    {
+        **{path: _lock_lines(path, "with self._deployment_index_lock") for path in _router_source_files()},
+        _LIST_REFRESH.co_filename: _lock_lines(_LIST_REFRESH.co_filename, "with self._lock"),
+    }
+)
 
 T = TypeVar("T")
 

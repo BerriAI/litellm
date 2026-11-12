@@ -35,6 +35,7 @@ from typing_extensions import overload
 import litellm
 from litellm._internal_context import service_target
 from litellm._logging import verbose_router_logger
+from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE
 from litellm.litellm_core_utils.add_retry_fallback_headers import (
     apply_quality_router_decision_headers,
     apply_remaining_usage_headers,
@@ -74,6 +75,7 @@ from litellm.types.utils import ModelInfo as ModelMapInfo
 from litellm.utils import get_utc_datetime, is_generalized_model_info
 
 if TYPE_CHECKING:
+    from litellm.router_rust.surface.registry import GroupCounters
     from litellm.rust_bridge._native import (
         RouterCall,
         RouterCoreHandle,
@@ -255,8 +257,11 @@ class HostModelInfo:
     """Mixed into ``HostRegistry``, which holds the model list, the indexes and the host."""
 
     _core_usage_store: RouterUsage
+    _group_counters_cache: dict[str, "GroupCounters"]  # mutable-ok: by model group
 
     def _live_handle(self) -> "RouterCoreHandle | None": ...  # the registry's: the handle ``RustCore`` set
+
+    def _group_members(self, model_group: str) -> tuple[tuple[object, object], ...] | None: ...  # the registry's
 
     def _core_handle(self) -> "RouterCoreHandle":
         handle: Final = self._live_handle()
@@ -798,17 +803,21 @@ class HostModelInfo:
         """This minute's tpm and rpm counters of every deployment in ``model_group`` (can be a wildcard route),
         under the model sent to ``litellm.completion()``, as the usage writes name them."""
         current_minute: Final = get_utc_datetime().strftime("%H-%M")  # use the same timezone regardless of system clock
-        model_list: Final = self._core_get_model_list(model_name=model_group)
-        if model_list is None:  # no matching deployments
+        members: Final = self._group_members(model_group)
+        if members is None:  # no matching deployments
             return None
-        named: Final = tuple(
-            (model.get("model_info", {}).get("id"), model["litellm_params"].get("model")) for model in model_list
-        )
-        deployments: Final = tuple(pair for pair in named if pair[0] is not None and pair[1] is not None)
-        return tuple(
-            tuple(UsageCounter(id, litellm_model, current_minute, kind) for id, litellm_model in deployments)
+        cached: Final = self._group_counters_cache.get(model_group)
+        if cached is not None and cached[0] is members and cached[1] == current_minute:
+            return cached[2]
+        deployments: Final = tuple(pair for pair in members if pair[0] is not None and pair[1] is not None)
+        counters: Final = tuple(
+            tuple(UsageCounter(id, litellm_model, current_minute, kind) for id, litellm_model in deployments)  # pyright: ignore[reportArgumentType]  # what the listing names, as the Python core passed it
             for kind in ("tpm", "rpm")
         )
+        if len(self._group_counters_cache) >= DEFAULT_MAX_LRU_CACHE_SIZE:
+            self._group_counters_cache.clear()
+        self._group_counters_cache[model_group] = (members, current_minute, counters)
+        return counters
 
     async def _core_get_model_group_usage(self, model_group: str) -> tuple[int | None, int | None]:
         """Current (tpm, rpm) usage of ``model_group``."""
