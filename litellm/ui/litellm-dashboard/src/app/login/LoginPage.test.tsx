@@ -343,7 +343,9 @@ describe("LoginPage", () => {
       fireEvent.change(screen.getByLabelText("Password"), { target: { value: "test-password" } });
       fireEvent.click(screen.getByRole("button", { name: "Login", exact: true }));
 
-      await waitFor(() => expect(mockAssignDocument).toHaveBeenCalledWith(expectedUrl));
+      await waitFor(() =>
+        expect(mockAssignDocument).toHaveBeenCalledWith(new URL(expectedUrl, window.location.origin).href),
+      );
       expect(mockPush).not.toHaveBeenCalled();
     });
 
@@ -357,13 +359,29 @@ describe("LoginPage", () => {
       expect(mockReplace).not.toHaveBeenCalled();
     });
 
+    it.each(["https://untrusted.example/ui/", "javascript://localhost/%0Aalert(1)"])(
+      "rejects an unsafe server-provided login redirect %j",
+      async (redirectUrl) => {
+        mockMutate.mockImplementation((_input, options) => options.onSuccess({ redirect_url: redirectUrl }));
+        renderLogin();
+        await screen.findByRole("heading", { name: "Login" });
+        fireEvent.change(screen.getByLabelText("Username"), { target: { value: "admin" } });
+        fireEvent.change(screen.getByLabelText("Password"), { target: { value: "test-password" } });
+        fireEvent.click(screen.getByRole("button", { name: "Login", exact: true }));
+
+        await waitFor(() => expect(mockAssignDocument).toHaveBeenCalledWith("/ui"));
+      },
+    );
+
     it("replaces the login document with a valid return URL for an existing session", async () => {
       document.cookie = `litellm_return_url=${encodeURIComponent("/ui/teams/")}; Path=/`;
       vi.mocked(getCookieFromDocument).mockReturnValue("valid-session");
       vi.mocked(isJwtExpired).mockReturnValue(false);
       renderLogin();
 
-      await waitFor(() => expect(mockReplaceDocument).toHaveBeenCalledWith("/ui/teams/"));
+      await waitFor(() =>
+        expect(mockReplaceDocument).toHaveBeenCalledWith(new URL("/ui/teams/", window.location.origin).href),
+      );
       expect(mockReplace).not.toHaveBeenCalled();
     });
 

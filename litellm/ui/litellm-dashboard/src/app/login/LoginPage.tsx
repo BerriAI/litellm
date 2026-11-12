@@ -40,6 +40,27 @@ const loginSchema = z.object({
 
 type LoginFormValues = z.infer<typeof loginSchema>;
 
+function navigateToUiPage(url: string, replace = false): void {
+  let target: URL;
+  try {
+    target = new URL(getUiPageUrl(url, true), window.location.origin);
+  } catch {
+    target = new URL("/ui", window.location.origin);
+  }
+
+  if (target.origin === window.location.origin && (target.protocol === "http:" || target.protocol === "https:")) {
+    if (replace) {
+      window.location.replace(target.href);
+    } else {
+      window.location.assign(target.href);
+    }
+  } else if (replace) {
+    window.location.replace("/ui");
+  } else {
+    window.location.assign("/ui");
+  }
+}
+
 function SsoEnabledNotice() {
   const { t } = useTranslation();
   const [dismissed, setDismissed] = useState(false);
@@ -140,7 +161,7 @@ function LoginPageContent() {
       // User already logged in - redirect to return URL or default
       const returnUrl = consumeReturnUrl(getRuntimeBackendBaseUrl());
       if (returnUrl) {
-        window.location.replace(getUiPageUrl(returnUrl, true));
+        navigateToUiPage(returnUrl, true);
       } else {
         window.location.replace("/ui");
       }
@@ -181,9 +202,9 @@ function LoginPageContent() {
             // Normal (non-control-plane) login — follow the server's redirect
             const returnUrl = consumeReturnUrl(getRuntimeBackendBaseUrl());
             if (returnUrl) {
-              window.location.assign(getUiPageUrl(returnUrl, true));
+              navigateToUiPage(returnUrl);
             } else {
-              window.location.assign(getUiPageUrl(data.redirect_url, true));
+              navigateToUiPage(data.redirect_url);
             }
           }
         },
