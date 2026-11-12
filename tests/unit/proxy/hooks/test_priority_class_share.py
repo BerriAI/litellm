@@ -108,3 +108,11 @@ async def test_registry_keeps_a_teams_newest_class_when_it_changed_class_mid_win
     await registry.touch("m", "a", "interactive", window=60)
     clock.now += 1
     assert dict(await registry.touch("m", "a", "batch", window=60)) == {"a": "batch"}
+
+
+@pytest.mark.asyncio
+async def test_registry_keeps_a_team_id_that_contains_the_separator_whole():
+    registry: Final = ActiveTeamRegistry(DualCache(), time_provider=_Clock())
+    members: Final = await registry.touch("m", "owned\x1fextra", "batch", window=60)
+    assert dict(members) == {"owned\x1fextra": "batch"}
+    assert team_share("batch", members, {"interactive": 0.6, "batch": 0.4}, 1.0).fraction == 1.0

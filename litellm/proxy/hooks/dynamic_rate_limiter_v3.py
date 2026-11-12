@@ -16,6 +16,7 @@ from litellm import Router
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
+from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
 from litellm.cost_calculator import get_usage_object
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.add_retry_fallback_headers import (
@@ -40,7 +41,13 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (  # noqa: F401  # l
     claim_request_stash_for_data,
     get_or_create_request_stash,
 )
-from litellm.proxy.hooks.priority_class_share import DEFAULT_CLASS, ActiveTeamRegistry, TeamShare, team_share
+from litellm.proxy.hooks.priority_class_share import (
+    DEFAULT_CLASS,
+    POOL_MEMBER,
+    ActiveTeamRegistry,
+    TeamShare,
+    team_share,
+)
 from litellm.proxy.hooks.rate_limiter_utils import (
     convert_priority_to_percent,
     resolve_llm_provider_for_rate_limit,
@@ -356,25 +363,26 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         priority: str | None,
         normalized_weights: Mapping[str, float],
     ) -> TeamShare | None:
-        """The caller's slice of its class share, or None when the split is off or the key has no team."""
+        """The caller's slice of its class share, or None when the split is off or the key has no team. A key with no
+        team keeps the class pool but still marks its class active, so the pool's capacity is not lent away."""
         if (
             litellm.priority_reservation is None
             or not _get_priority_settings().priority_class_share_splits_equally_among_active_teams
-            or user_api_key_dict.team_id is None
         ):
             return None
         priority_class: Final = self._priority_class(priority)
+        member: Final = POOL_MEMBER if user_api_key_dict.team_id is None else user_api_key_dict.team_id
         try:
-            members: Final = await self.active_teams.touch(
-                model, user_api_key_dict.team_id, priority_class, self.v3_limiter.window_size
-            )
-        except (RedisError, ValidationError) as e:
+            members: Final = await self.active_teams.touch(model, member, priority_class, self.v3_limiter.window_size)
+        except (RedisError, RedisCircuitBreakerOpenError, ValidationError) as e:
             verbose_proxy_logger.warning(
                 "Active team registry unavailable for %s, holding team %s to the class pool: %s",
                 model,
                 user_api_key_dict.team_id,
                 e,
             )
+            return None
+        if user_api_key_dict.team_id is None:
             return None
         return team_share(priority_class, members, normalized_weights, _get_priority_settings().default_priority)
 

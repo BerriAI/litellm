@@ -19,6 +19,7 @@ from litellm.redis.stores.rate_limits import RATE_LIMITS_TARGET
 ACTIVE_TEAMS_KEY_PREFIX: Final = "dynamic_rate_limiter:active_teams:"
 MEMBER_SEPARATOR: Final = "\x1f"
 DEFAULT_CLASS: Final = "default"
+POOL_MEMBER: Final = ""
 
 _TOUCH_LUA: Final = (
     "redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[1]) "
@@ -59,9 +60,10 @@ def team_share(
 
 
 def _members(raw: tuple[str | bytes, ...]) -> Mapping[str, str]:
-    """Oldest first, so a team seen under two classes in one window keeps its most recent one."""
+    """Oldest first, so a team seen under two classes in one window keeps its most recent one. The class is split off
+    from the right because a team id may itself contain the separator."""
     decoded: Final = (item.decode() if isinstance(item, bytes) else item for item in raw)
-    pairs: Final = (member.split(MEMBER_SEPARATOR, 1) for member in decoded)
+    pairs: Final = (member.rsplit(MEMBER_SEPARATOR, 1) for member in decoded)
     return MappingProxyType({pair[0]: pair[1] for pair in pairs if len(pair) == 2})
 
 

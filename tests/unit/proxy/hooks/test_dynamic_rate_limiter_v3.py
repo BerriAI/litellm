@@ -2306,3 +2306,25 @@ async def test_a_websocket_turn_ignores_the_class_share_while_the_split_is_off(m
     await handler.enforce_token_limits_for_frame(
         user_api_key_dict=_class_team("team-b"), requested_model="shared-model"
     )
+
+
+@pytest.mark.asyncio
+async def test_traffic_from_keys_without_a_team_keeps_its_class_present_in_the_split(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=False, splits=True)
+    no_team: Final = UserAPIKeyAuth(api_key="sk-plain", metadata={"priority": "interactive"})
+    await _burn(handler, no_team, "interactive", 20)
+    await _burn(handler, _class_team("team-c", "batch"), "batch", 450)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _class_team("team-c", "batch"), saturation=0.6, priority="batch")
+    _held_to_class_share(exc.value)
+    assert "Team share: 400, Remaining: 0," in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_a_team_id_containing_the_registry_separator_is_still_held_to_its_share(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=False, splits=True)
+    await _burn(handler, _class_team("team-b"), "interactive", 20)
+    await _burn(handler, _class_team("owned\x1fextra", "batch"), "batch", 450)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _class_team("owned\x1fextra", "batch"), saturation=0.6, priority="batch")
+    _held_to_class_share(exc.value)
