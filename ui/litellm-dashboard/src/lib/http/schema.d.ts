@@ -16012,6 +16012,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/skill-hub/skills/{name}/versions/{version_id}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restore Skill Version
+         * @description Proxy admins may republish retained bytes and metadata as a new version, preserving visibility and grants.
+         */
+        post: operations["restore_skill_version_skill_hub_skills__name__versions__version_id__restore_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/skill-hub/skills/{plugin_name}/downloads": {
         parameters: {
             query?: never;
@@ -47252,6 +47272,24 @@ export interface components {
             /** Reason */
             reason?: string | null;
         };
+        /** SkillHubRestore */
+        SkillHubRestore: {
+            /**
+             * Expected Skill Id
+             * @description Current skill ID read by the editor
+             */
+            expected_skill_id: string;
+            /**
+             * Expected Updated At
+             * @description Current updated_at read by the editor, including null
+             */
+            expected_updated_at: string | null;
+            /**
+             * Version
+             * @description Higher semantic version, or omit/null for an automatic patch bump
+             */
+            version?: string | null;
+        };
         /** SkillHubReviewResponse */
         SkillHubReviewResponse: {
             /**
@@ -75417,6 +75455,42 @@ export interface operations {
                 };
                 content: {
                     "application/zip": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    restore_skill_version_skill_hub_skills__name__versions__version_id__restore_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+                version_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SkillHubRestore"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillHubSkill"];
                 };
             };
             /** @description Validation Error */
