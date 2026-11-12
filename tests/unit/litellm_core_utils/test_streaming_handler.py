@@ -9935,3 +9935,134 @@ def test_chunk_creator_usage_only_chunk_with_dict_usage_keeps_details(
     assert usage.prompt_tokens_details.cached_tokens == 80
     assert usage.completion_tokens_details is not None
     assert usage.completion_tokens_details.reasoning_tokens == 5
+
+
+def _stream_of(chunks: Sequence[object], sync_mode: bool) -> Iterator[object] | AsyncIterator[object]:
+    return iter(chunks) if sync_mode else _as_async(iter(chunks))
+
+
+def _streamed_text_and_finish_reasons(received: Sequence[ModelResponseStream]) -> tuple[str, list[str]]:
+    return (
+        "".join(chunk.choices[0].delta.content or "" for chunk in received if chunk.choices),
+        [chunk.choices[0].finish_reason for chunk in received if chunk.choices and chunk.choices[0].finish_reason],
+    )
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_predibase_byte_stream_yields_token_text_then_the_reported_finish_reason(
+    sync_mode: bool, logging_obj: Logging
+) -> None:
+    lines: Final = (
+        b'data: {"token": {"id": 1, "text": "Hel"}}',
+        b'data: {"token": {"id": 2, "text": "lo"}, "details": {"finish_reason": "length"}}',
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=_stream_of(lines, sync_mode),
+        model="llama-3-1-8b-instruct",
+        custom_llm_provider="predibase",
+        logging_obj=logging_obj,
+    )
+
+    received: Final = await _collect(wrapper, sync_mode)
+
+    assert _streamed_text_and_finish_reasons(received) == ("Hello", ["length"])
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_predibase_error_event_fails_the_stream_with_the_upstream_message(
+    sync_mode: bool, logging_obj: Logging
+) -> None:
+    lines: Final = (
+        b'data: {"token": {"id": 1, "text": "Hel"}}',
+        b'data: {"error": "Request failed during generation: CUDA out of memory"}',
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=_stream_of(lines, sync_mode),
+        model="llama-3-1-8b-instruct",
+        custom_llm_provider="predibase",
+        logging_obj=logging_obj,
+    )
+
+    with pytest.raises(MidStreamFallbackError) as raised:
+        await _collect(wrapper, sync_mode)
+
+    assert "CUDA out of memory" in str(raised.value)
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_nlp_cloud_stream_drops_the_done_marker_and_finishes_with_stop(
+    sync_mode: bool, logging_obj: Logging
+) -> None:
+    lines: Final = ('{"generated_text": "Hello"}', '{"generated_text": " world[DONE]"}')
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=_stream_of(lines, sync_mode),
+        model="finetuned-llama-3-70b",
+        custom_llm_provider="nlp_cloud",
+        logging_obj=logging_obj,
+    )
+
+    received: Final = await _collect(wrapper, sync_mode)
+
+    assert _streamed_text_and_finish_reasons(received) == ("Hello world", ["stop"])
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_aleph_alpha_stream_yields_the_completion_text_and_stops(sync_mode: bool, logging_obj: Logging) -> None:
+    lines: Final = (b'{"completions": [{"completion": " Paris", "finish_reason": "maximum_tokens"}]}',)
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=_stream_of(lines, sync_mode),
+        model="luminous-base",
+        custom_llm_provider="aleph_alpha",
+        logging_obj=logging_obj,
+    )
+
+    received: Final = await _collect(wrapper, sync_mode)
+
+    assert _streamed_text_and_finish_reasons(received) == (" Paris", ["stop"])
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_generic_tool_use_streams_as_a_function_call_when_the_caller_passed_functions(
+    sync_mode: bool, logging_obj: Logging
+) -> None:
+    logging_obj.update_environment_variables(
+        model="bedrock/invoke-endpoint",
+        user=None,
+        optional_params={"functions": [{"name": "get_weather", "parameters": {"type": "object", "properties": {}}}]},
+        litellm_params={"litellm_call_id": "functions-stream"},
+    )
+    tool_use: Final = {
+        "id": "call_1",
+        "type": "function",
+        "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+        "index": 0,
+    }
+    chunks: Final = [
+        {
+            "text": "",
+            "tool_use": tool_use,
+            "is_finished": True,
+            "finish_reason": "tool_calls",
+            "usage": None,
+            "index": 0,
+        }
+    ]
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=chunks),
+        model="bedrock/invoke-endpoint",
+        custom_llm_provider="bedrock",
+        logging_obj=logging_obj,
+    )
+
+    received: Final = await _collect(wrapper, sync_mode)
+
+    deltas: Final = [chunk.choices[0].delta for chunk in received if chunk.choices]
+    assert [
+        (delta.function_call.name, delta.function_call.arguments) for delta in deltas if delta.function_call is not None
+    ] == [("get_weather", '{"city": "Paris"}')]
+    assert [delta.tool_calls for delta in deltas if delta.tool_calls] == []

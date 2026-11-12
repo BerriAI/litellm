@@ -394,6 +394,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
     get_parent_otel_span_from_kwargs,
     iter_items,
+    json_contains,
     normalize_drop_params,
     require_attributes,
 )
@@ -625,6 +626,7 @@ from litellm.proxy.common_utils.timezone_utils import (
     get_budget_reset_time,
 )
 from litellm.proxy.common_utils.token_count_log import (
+    answered_with_litellm_call_id,
     deployment_model_id,
     logged_token_count,
     rejected_token_count,
@@ -2535,6 +2537,7 @@ class _InvitationAcceptTxManager(Protocol):
         exc_type: type[BaseException] | None,
         exc_value: BaseException | None,
         traceback: TracebackType | None,
+        /,
     ) -> bool | None: ...
 
 
@@ -2596,6 +2599,9 @@ async def otel_unhandled_exception_handler(request: Request, exc: Exception):
         raise exc
     response: Final = await _unhandled_exception_response(request, exc)
     response.headers.update(trace_response_headers(getattr(request.state, "parent_otel_span", None)))
+    litellm_call_id: Final = attribute_of(request.state, "litellm_call_id")
+    if isinstance(litellm_call_id, str):
+        response.headers.setdefault(LITELLM_CALL_ID_HEADER, litellm_call_id)
     return response
 
 
@@ -5754,7 +5760,6 @@ def should_load_db_object(object_type: str | SupportedDBObjectType) -> bool:
 _CONFIG_PERSISTED_SECTIONS: Final = ("general_settings", "router_settings", "litellm_settings")
 _CONFIG_UNMANAGED_EXCLUSIONS: Final = frozenset(("environment_variables", "model_list"))
 _CONFIG_SECTION_VALUES: Final = TypeAdapter(Mapping[str, JsonValue])
-_CONFIG_SECTION_LOCK_SQL: Final = "SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtext($1))"
 
 
 class _ConfigParamWhere(TypedDict):
@@ -6307,7 +6312,7 @@ class ProxyConfig:
         prisma_client: PrismaClient,
     ) -> Mapping[str, JsonValue] | None:
         async with prisma_client.tx() as tx:
-            await tx.query_raw(_CONFIG_SECTION_LOCK_SQL, section_name)
+            await tx.query_raw(CONFIG_PARAM_LOCK_SQL, section_name)
             config_table: Final = cast("TableActions[_ConfigParamRow]", tx.litellm_config)
             config_where: Final[_ConfigParamWhere] = {"param_name": section_name}
             existing_row: Final[_ConfigParamRow | None] = await config_table.find_first(where=config_where)
@@ -13818,7 +13823,7 @@ async def moderations(
             llm_router=llm_router,
             user_model=user_model,
         )
-        response: Final = await llm_call
+        response: Final = _UNTYPED_VALUE.validate_python(await llm_call)
 
         ### ALERTING ###
         asyncio.create_task(proxy_logging_obj.update_request_status(litellm_call_id=litellm_call_id, status="success"))
@@ -13868,14 +13873,20 @@ async def moderations(
         )
 
 
+class _SpeechBytes(Protocol):
+    def aiter_bytes(self, chunk_size: int | None = None) -> Awaitable[AsyncIterator[bytes]]: ...
+
+
 async def _audio_speech_chunk_generator(
-    _response: HttpxBinaryResponseContent,
+    _response: object,
 ) -> AsyncGenerator[bytes, None]:
     # chunk_size has a big impact on latency, it can't be too small or too large
     # too small: latency is high
     # too large: latency is low, but memory usage is high
     # 8192 is a good compromise
-    _generator: Final = await _response.aiter_bytes(chunk_size=AUDIO_SPEECH_CHUNK_SIZE)
+    _generator: Final = await require_attributes(_response, _SpeechBytes, "aiter_bytes").aiter_bytes(
+        chunk_size=AUDIO_SPEECH_CHUNK_SIZE
+    )
     async for chunk in _generator:
         yield chunk
 
@@ -13936,7 +13947,7 @@ async def audio_speech(
             llm_router=llm_router,
             user_model=user_model,
         )
-        response: Final = await llm_call
+        response: Final = _UNTYPED_VALUE.validate_python(await llm_call)
 
         ### ALERTING ###
         asyncio.create_task(proxy_logging_obj.update_request_status(litellm_call_id=litellm_call_id, status="success"))
@@ -14100,7 +14111,7 @@ async def audio_transcriptions(
                 llm_router=llm_router,
                 user_model=user_model,
             )
-            response: Final = await llm_call
+            response: Final = _UNTYPED_VALUE.validate_python(await llm_call)
         except Exception as e:
             raise e
         finally:
@@ -14677,7 +14688,7 @@ async def get_assistants(
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
         if llm_router is None:
             raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value})
-        response: Final = await llm_router.aget_assistants(**data)
+        response: Final = _UNTYPED_VALUE.validate_python(await llm_router.aget_assistants(**data))
 
         ### ALERTING ###
         asyncio.create_task(
@@ -14753,7 +14764,7 @@ async def create_assistant(
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
         if llm_router is None:
             raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value})
-        response: Final = await llm_router.acreate_assistants(**data)
+        response: Final = _UNTYPED_VALUE.validate_python(await llm_router.acreate_assistants(**data))
 
         ### ALERTING ###
         asyncio.create_task(
@@ -14828,7 +14839,9 @@ async def delete_assistant(
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
         if llm_router is None:
             raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value})
-        response: Final = await llm_router.adelete_assistant(assistant_id=assistant_id, **data)
+        response: Final = _UNTYPED_VALUE.validate_python(
+            await llm_router.adelete_assistant(assistant_id=assistant_id, **data)
+        )
 
         ### ALERTING ###
         asyncio.create_task(
@@ -14903,7 +14916,7 @@ async def create_threads(
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
         if llm_router is None:
             raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value})
-        response: Final = await llm_router.acreate_thread(**data)
+        response: Final = _UNTYPED_VALUE.validate_python(await llm_router.acreate_thread(**data))
 
         ### ALERTING ###
         asyncio.create_task(
@@ -14976,7 +14989,7 @@ async def get_thread(
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
         if llm_router is None:
             raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value})
-        response: Final = await llm_router.aget_thread(thread_id=thread_id, **data)
+        response: Final = _UNTYPED_VALUE.validate_python(await llm_router.aget_thread(thread_id=thread_id, **data))
 
         ### ALERTING ###
         asyncio.create_task(
@@ -15053,7 +15066,7 @@ async def add_messages(
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
         if llm_router is None:
             raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value})
-        response: Final = await llm_router.a_add_message(thread_id=thread_id, **data)
+        response: Final = _UNTYPED_VALUE.validate_python(await llm_router.a_add_message(thread_id=thread_id, **data))
 
         ### ALERTING ###
         asyncio.create_task(
@@ -15126,7 +15139,7 @@ async def get_messages(
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
         if llm_router is None:
             raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value})
-        response: Final = await llm_router.aget_messages(thread_id=thread_id, **data)
+        response: Final = _UNTYPED_VALUE.validate_python(await llm_router.aget_messages(thread_id=thread_id, **data))
 
         ### ALERTING ###
         asyncio.create_task(
@@ -15206,7 +15219,9 @@ async def run_thread(
         if "stream" in data and data["stream"] is True:  # use generate_responses to stream responses
 
             async def produce_run_stream() -> StreamingResponse | JSONResponse:
-                run_stream: Final = await router.arun_thread(thread_id=thread_id, **data)
+                run_stream: Final = _UNTYPED_VALUE.validate_python(
+                    await router.arun_thread(thread_id=thread_id, **data)
+                )
                 return await create_response(
                     generator=async_assistants_data_generator(
                         user_api_key_dict=user_api_key_dict,
@@ -15234,7 +15249,7 @@ async def run_thread(
                 on_late_failure=audit_late_failure,
             )
 
-        response: Final = await router.arun_thread(thread_id=thread_id, **data)
+        response: Final = _UNTYPED_VALUE.validate_python(await router.arun_thread(thread_id=thread_id, **data))
 
         ### ALERTING ###
         asyncio.create_task(
@@ -15283,7 +15298,7 @@ from litellm.llms.anthropic.count_tokens.token_counter import AnthropicTokenCoun
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
-from litellm.repositories.config_repository import ConfigRepository
+from litellm.repositories.config_repository import CONFIG_PARAM_LOCK_SQL, ConfigRepository
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.table_repositories import (
     AccessGroupRepository,
@@ -16090,19 +16105,30 @@ def _system_message(system: object) -> ChatCompletionSystemMessage | None:
 )
 async def token_counter(
     request: TokenCountRequest,
+    http_request: Request,
+    fastapi_response: Response,
     call_endpoint: bool = False,
     litellm_call_id: Annotated[str | None, Header(alias=LITELLM_CALL_ID_HEADER)] = None,
 ):
     """
+    Returns:
+        TokenCountResponse
+
     Args:
         request: TokenCountRequest
         call_endpoint: bool - When set to "True" it will call the token counting endpoint - e.g Anthropic or Google AI Studio Token Counting APIs.
         litellm_call_id: the x-litellm-call-id header, logged with the count so it joins the inference call's logs
-
-    Returns:
-        TokenCountResponse
+        \f
+        http_request: carries the call id to the error handler when the count fails
+        fastapi_response: answers the x-litellm-call-id header the count's log line names
     """
-    return await count_request_tokens(request=request, call_endpoint=call_endpoint, litellm_call_id=litellm_call_id)
+    call_id: Final = resolve_litellm_call_id(litellm_call_id)
+    return await answered_with_litellm_call_id(
+        count_request_tokens(request=request, call_endpoint=call_endpoint, litellm_call_id=call_id),
+        call_id,
+        http_request,
+        fastapi_response,
+    )
 
 
 async def count_request_tokens(
@@ -16187,11 +16213,11 @@ async def _count_request_tokens(
     tools: Final = request.tools
     system: Final = request.system
 
-    deployment: dict[str, Any] | None = None if routed is None else dict(routed)
+    deployment: dict[str, object] | None = None if routed is None else dict(routed)
     litellm_model_name = None
     model_info: Final = None if routed is None else routed.get("model_info", {})
     if deployment is not None:
-        litellm_model_name = deployment.get("litellm_params", {}).get("model")
+        litellm_model_name = _with_get(deployment.get("litellm_params", _EMPTY_MAPPING)).get("model")
         deployment = {  # rebind-ok: merge the named credential into a copy
             **deployment,
             "litellm_params": _with_chat_timeout(
@@ -16199,8 +16225,8 @@ async def _count_request_tokens(
             ),
         }
         # remove the custom_llm_provider_prefix in the litellm_model_name
-        if "/" in litellm_model_name:
-            litellm_model_name = litellm_model_name.split("/", 1)[1]
+        if json_contains(litellm_model_name, "/"):
+            litellm_model_name = _split_once(litellm_model_name, "/")[1]
 
     model_to_use: str = (
         litellm_model_name if isinstance(litellm_model_name, str) and litellm_model_name else request.model
@@ -17083,6 +17109,14 @@ class _SupportsLower(Protocol):
     def lower(self) -> object: ...
 
 
+class _SupportsSplit(Protocol):
+    def split(self, sep: str, maxsplit: int, /) -> Sequence[object]: ...
+
+
+def _split_once(value: object, sep: str) -> Sequence[object]:
+    return require_attributes(value, _SupportsSplit, "split").split(sep, 1)
+
+
 def _lowered(value: object) -> object:
     return require_attributes(value, _SupportsLower, "lower").lower()
 
@@ -17251,18 +17285,19 @@ async def _apply_search_filter_to_models(
     def _is_byok_outside_caller_teams(model_info_dict: object) -> bool:
         return _byok_row_outside_caller_teams(model_info_dict, allowed_team_ids)
 
-    def _model_matches_search(m: dict[str, Any]) -> bool:
+    def _model_matches_search(m: Mapping[str, object]) -> bool:
         # Team BYOK models persist an internal `model_name`
         # (e.g. `model_name_{team_id}_{uuid}`) and expose the user-facing
         # name via `model_info.team_public_model_name`. Match both so the
         # name shown in the UI is searchable.
-        if search_lower in (m.get("model_name") or "").lower():
+        if json_contains(_lowered(m.get("model_name") or ""), search_lower):
             return True
-        team_public_model_name: Final = (m.get("model_info") or {}).get("team_public_model_name") or ""
-        if search_lower in team_public_model_name.lower():
+        team_public_model_name: Final = (
+            _with_get(m.get("model_info") or _EMPTY_MAPPING).get("team_public_model_name") or ""
+        )
+        if json_contains(_lowered(team_public_model_name), search_lower):
             return True
-        litellm_params: Final[Mapping[str, object]] = m.get("litellm_params") or MappingProxyType({})
-        litellm_model: Final = litellm_params.get("model")
+        litellm_model: Final = _with_get(m.get("litellm_params") or _EMPTY_MAPPING).get("model")
         return isinstance(litellm_model, str) and search_lower in litellm_model.lower()
 
     # Filter models in router by search term, dropping BYOK rows that
@@ -19493,7 +19528,7 @@ async def async_queue_request(
                 return StreamingResponse(
                     async_data_generator(
                         user_api_key_dict=user_api_key_dict,
-                        response=await router.schedule_acompletion(**data),
+                        response=_UNTYPED_VALUE.validate_python(await router.schedule_acompletion(**data)),
                         request_data=data,
                         request=request,
                     ),
@@ -19512,7 +19547,7 @@ async def async_queue_request(
                 on_late_failure=audit_late_failure,
             )
 
-        response: Final = await router.schedule_acompletion(**data)
+        response: Final = _UNTYPED_VALUE.validate_python(await router.schedule_acompletion(**data))
         fastapi_response.headers.update({"x-litellm-priority": str(queued_priority)})
         return response
     except Exception as e:
@@ -20159,7 +20194,7 @@ async def claim_onboarding_link(data: InvitationClaim, request: Request):
         )
 
     if user_obj and hasattr(user_obj, "__dict__"):
-        user_obj.__dict__.pop("password", None)
+        vars(user_obj).pop("password", None)
 
     # The password just changed via an invitation/reset link; any UI session
     # minted under the old password may be in hostile hands. Revoke them all —

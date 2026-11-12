@@ -8,6 +8,7 @@ import pytest
 
 import litellm
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+from litellm.router_api import ChangeSet
 from litellm.router_core import RouterCore
 from litellm.types.router import Deployment, RouterCacheEnum
 from litellm.utils import get_utc_datetime
@@ -479,6 +480,20 @@ async def test_group_usage_sums_each_deployments_counters_for_this_minute(make_c
 
     assert await core.health().usage("gpt") == (34, 3)
     assert await core.health().usage("al") == (34, 3)
+
+
+@pytest.mark.asyncio
+async def test_group_usage_follows_deployments_added_and_removed_after_a_read(make_core: MakeCore) -> None:
+    core = _usage_core(make_core)
+    await _serve(core, "a", "openai/gpt-4o", 30)
+    assert await core.health().usage("gpt") == (30, 1)
+
+    core.apply(ChangeSet(upsert=[typed("gpt", "c", model="openai/gpt-4o-mini", tpm=100, rpm=10)]))
+    await _serve(core, "c", "openai/gpt-4o-mini", 5)
+    assert await core.health().usage("gpt") == (35, 2)
+
+    core.apply(ChangeSet(delete=["a"]))
+    assert await core.health().usage("gpt") == (5, 1)
 
 
 @pytest.mark.asyncio

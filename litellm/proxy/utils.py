@@ -169,6 +169,7 @@ from litellm.litellm_core_utils.core_helpers import (
     attribute_or_none,
     coerce_token_limit,
     get_or_create_metadata_bucket,
+    has_attributes,
     independent_snapshot,
     is_expected_client_error,
     require_attributes,
@@ -2373,10 +2374,12 @@ class ProxyLogging:
                             modified_args = self._extract_modified_arguments_from_content(new_content, request_obj)
                             if modified_args is not None:
                                 # Return the masked/redacted arguments for the MCP call to use
-                                return MCPPreCallResponseObject(
-                                    should_proceed=True,
-                                    error_message=None,
-                                    modified_arguments=modified_args,
+                                return MCPPreCallResponseObject.model_validate(
+                                    {
+                                        "should_proceed": True,
+                                        "error_message": None,
+                                        "modified_arguments": modified_args,
+                                    }
                                 )
                             else:
                                 # Could not parse modified arguments, allow original call but warn
@@ -2395,7 +2398,7 @@ class ProxyLogging:
 
         return None
 
-    def _extract_modified_arguments_from_content(self, masked_content: str, request_obj) -> dict | None:
+    def _extract_modified_arguments_from_content(self, masked_content: str, request_obj) -> object:
         """
         Extract modified/masked arguments from the guardrail response content.
         """
@@ -2416,7 +2419,7 @@ class ProxyLogging:
 
                     # Try to parse as JSON first
                     try:
-                        modified_args = json.loads(args_text)
+                        modified_args = _DECODED_JSON.validate_python(json.loads(args_text))
                         verbose_proxy_logger.debug("Successfully parsed JSON args: %s", modified_args)
                         return modified_args
                     except json.JSONDecodeError as e:
@@ -5643,8 +5646,13 @@ _LOCK_TEAMS_BY_ID_SQL: Final = (
 )
 
 
-def _user_unique_conflict_message(metadata: object, user_id: object) -> str:
-    match metadata:
+class _UniqueConflictMetadata(Protocol):
+    @property
+    def meta(self) -> object: ...
+
+
+def _user_unique_conflict_message(error: _UniqueConflictMetadata, user_id: object) -> str:
+    match error.meta:
         case {"target": ["user_id"]}:
             return f"User with id {user_id} already exists"
         case {"target": ["sso_user_id"]}:
@@ -5658,7 +5666,7 @@ def _raise_user_unique_conflict(error: "UniqueViolationError", user_id: object, 
         raise error
     raise HTTPException(
         status_code=409,
-        detail={"error": _user_unique_conflict_message(error.meta, user_id)},
+        detail={"error": _user_unique_conflict_message(error, user_id)},
     ) from error
 
 
@@ -8338,6 +8346,10 @@ class PrismaClient:
 ### HELPER FUNCTIONS ###
 
 
+class _JsonDumpableRow(Protocol):
+    def model_dump_json(self) -> object: ...
+
+
 async def cache_user_row(user_id: str, cache: DualCache, db: PrismaClient) -> None:
     """
     Check if a user_id exists in cache,
@@ -8349,8 +8361,8 @@ async def cache_user_row(user_id: str, cache: DualCache, db: PrismaClient) -> No
         user_row: Final = await db.get_data(user_id=user_id)
         if user_row is not None:
             print_verbose(f"User Row: {user_row}, type = {type(user_row)}")
-            if hasattr(user_row, "model_dump_json") and callable(getattr(user_row, "model_dump_json")):
-                cache_value: Final[str] = user_row.model_dump_json()
+            if has_attributes(user_row, _JsonDumpableRow, "model_dump_json") and callable(user_row.model_dump_json):
+                cache_value: Final = user_row.model_dump_json()
                 cache.set_cache(key=cache_key, value=cache_value, ttl=600)  # store for 10 minutes
 
 

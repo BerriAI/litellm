@@ -73,6 +73,7 @@ from litellm.litellm_core_utils.core_helpers import (
     is_expected_client_error,
     proxy_request_headers,
     redact_nested_match_and_regex_keys,
+    require_attributes,
     stream_cost_injection_requested,
 )
 from litellm.litellm_core_utils.dd_tracing import NullTracer, tracer
@@ -110,6 +111,7 @@ from litellm.proxy.auth.auth_checks import (
     tag_max_budget_check_for_tags,
 )
 from litellm.proxy.auth.auth_utils import check_response_size_is_safe, get_request_route
+from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.bug_report_config import build_proxy_bug_report
 from litellm.proxy.common_utils.callback_utils import (
     get_logging_caching_headers,
@@ -175,7 +177,7 @@ from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.router import RouterRateLimitError
 from litellm.types.router_weights import RouterWeights, validate_router_weights
 
-_LateResponseT = TypeVar("_LateResponseT", bound=Response)
+_LateResponseT = TypeVar("_LateResponseT")
 _LlmCallT = TypeVar("_LlmCallT")
 _ResponseT: Final = TypeVar("_ResponseT")
 _ChunkT: Final = TypeVar("_ChunkT")
@@ -1047,11 +1049,14 @@ async def _enforce_guardrail_added_tag_budgets(
     llm_router: Router | None,
     user_api_key_dict: UserAPIKeyAuth,
     proxy_logging_obj: ProxyLogging,
+    http_method: str | None = None,
 ) -> None:
     added_tags: Final = tuple(
         tag for tag in get_tags_from_request_body(request_body=data) if tag not in tags_before_guardrails
     )
-    if not added_tags or request_skips_budget_checks(route=route, model=_request_model(data), llm_router=llm_router):
+    if not added_tags or request_skips_budget_checks(
+        route=route, model=_request_model(data), llm_router=llm_router, http_method=http_method
+    ):
         return
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
@@ -1365,7 +1370,17 @@ class LateSseFraming:
     """How a response the keepalive already opened ends once its upstream fails late."""
 
     failure: Callable[[Exception], tuple[str, ...]]
-    body: Callable[[Response], tuple[bytes, ...]]
+    body: Callable[[object], tuple[bytes, ...]]
+
+
+class _RenderedBody(Protocol):
+    @property
+    def body(self) -> bytes | memoryview: ...
+
+
+class _CarriesStatusCode(Protocol):
+    @property
+    def status_code(self) -> int: ...
 
 
 def _openai_late_failure_frames(exc: Exception) -> tuple[str, ...]:
@@ -1373,8 +1388,11 @@ def _openai_late_failure_frames(exc: Exception) -> tuple[str, ...]:
     return _sse_error_frames(error_obj)
 
 
-def _openai_late_body_frames(produced: Response) -> tuple[bytes, ...]:
-    return b"data: " + (bytes(produced.body) or b"{}") + b"\n\n", b"data: [DONE]\n\n"
+def _openai_late_body_frames(produced: object) -> tuple[bytes, ...]:
+    return (
+        b"data: " + (bytes(require_attributes(produced, _RenderedBody, "body").body) or b"{}") + b"\n\n",
+        b"data: [DONE]\n\n",
+    )
 
 
 def _anthropic_late_failure_frames(exc: Exception) -> tuple[str, ...]:
@@ -1393,10 +1411,14 @@ def _responses_late_failure_frames(exc: Exception) -> tuple[str, ...]:
     return _responses_error_frames(sse_error_payload(exc)[1])
 
 
-def _responses_late_body_frames(produced: Response) -> tuple[bytes, ...]:
-    body: Final = bytes(produced.body)
+def _responses_late_body_frames(produced: object) -> tuple[bytes, ...]:
+    body: Final = bytes(require_attributes(produced, _RenderedBody, "body").body)
     error_obj: Final = sse_error_object(body or b"{}") or {"message": body.decode()}
-    with_status: Final = {**error_obj, "code": error_obj.get("code") or str(produced.status_code)}
+    with_status: Final = {
+        **error_obj,
+        "code": error_obj.get("code")
+        or str(require_attributes(produced, _CarriesStatusCode, "status_code").status_code),
+    }
     return tuple(frame.encode() for frame in _responses_error_frames(with_status))
 
 
@@ -1620,7 +1642,7 @@ def ttft_keepalive_interval(request_data: Mapping[str, object], llm_router: Rout
     return resolve_ttft_keepalive_interval(deployments, litellm.sse_keepalive_ping_interval_seconds)
 
 
-async def _aclose_late_response(produced: Response) -> None:
+async def _aclose_late_response(produced: object) -> None:
     """Run the cleanup Starlette would have run, for a response it never called.
 
     Closing an already-closed async generator is a no-op, so this is safe to call
@@ -1643,7 +1665,7 @@ async def _aclose_late_response(produced: Response) -> None:
             verbose_proxy_logger.debug("error closing relayed streaming generator: %s", exc)
 
 
-async def _relay_late_response(produced: Response, framing: LateSseFraming) -> AsyncGenerator[bytes, None]:
+async def _relay_late_response(produced: object, framing: LateSseFraming) -> AsyncGenerator[bytes, None]:
     """Replay a Response that was built after a keepalive had already opened the wire."""
     if not isinstance(produced, StreamingResponse):
         # The status line is already on the wire, so a non-streaming body, an error
@@ -2846,6 +2868,7 @@ class ProxyBaseLLMRequestProcessing:
             llm_router=llm_router,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
+            http_method=RouteChecks.get_request_method(request),
         )
         if route_type == "aget_responses":
             attach_post_call_pipelines_to_retrieval(
@@ -3303,7 +3326,7 @@ class ProxyBaseLLMRequestProcessing:
         contents: list[object] | None = None,  # Add contents parameter
         skip_pre_call_logic: bool = False,
         first_chunk_framing: FirstChunkSseFraming = OPENAI_FIRST_CHUNK_FRAMING,
-    ) -> Any:
+    ) -> object:
         """
         Common request processing logic for both chat completions and responses API endpoints
         """
@@ -3571,20 +3594,21 @@ class ProxyBaseLLMRequestProcessing:
                         )
                     # Non-streaming response - fall through to normal response handling
                 elif select_data_generator:
-                    selected_data_generator = select_data_generator(
+                    produced_generator: Final[AsyncGenerator[str, None]] = select_data_generator(
                         response=response,
                         user_api_key_dict=user_api_key_dict,
                         request_data=self.data,
                         request=request,
                     )
-                    if route_type in ("aresponses", "aget_responses"):
-                        selected_data_generator = (
-                            ProxyBaseLLMRequestProcessing._wrap_responses_stream_for_container_ownership(
-                                original_stream_response=response,
-                                wrapped_generator=selected_data_generator,
-                                user_api_key_dict=user_api_key_dict,
-                            )
+                    selected_data_generator = (
+                        ProxyBaseLLMRequestProcessing._wrap_responses_stream_for_container_ownership(
+                            original_stream_response=response,
+                            wrapped_generator=produced_generator,
+                            user_api_key_dict=user_api_key_dict,
                         )
+                        if route_type in ("aresponses", "aget_responses")
+                        else produced_generator
+                    )
                 if selected_data_generator is not None:
                     return await create_response(
                         generator=selected_data_generator,
@@ -3826,9 +3850,9 @@ class ProxyBaseLLMRequestProcessing:
     @staticmethod
     async def _wrap_responses_stream_for_container_ownership(
         original_stream_response: object,
-        wrapped_generator: Any,
+        wrapped_generator: AsyncIterator[_ChunkT],
         user_api_key_dict: UserAPIKeyAuth,
-    ):
+    ) -> AsyncGenerator[_ChunkT, None]:
         """Forward SSE chunks and record container ownership before the terminal chunk goes out.
 
         Streaming ``/v1/responses`` short-circuits out of
