@@ -237,6 +237,18 @@ def get_decisions_provider_config(model: str, custom_llm_provider: str) -> BaseD
     return provider_config
 
 
+def validate_router_connection(model: str, provider: str | None, request: Mapping[str, object]) -> None:
+    api_base: Final = request.get("api_base") or request.get("base_url")
+    if provider is None or not isinstance(api_base, str) or not api_base:
+        return
+    api_key: Final = request.get("api_key")
+    provider_config: Final = get_decisions_provider_config(model, provider)
+    try:
+        provider_config.validate_client_connection(api_base, api_key if isinstance(api_key, str) else None)
+    except ValueError as error:
+        raise litellm.BadRequestError(message=str(error), model=model, llm_provider=provider) from error
+
+
 def _ir_request(request: DecisionsRequestFormat, safety_identifier: str | None) -> DecisionsIRRequest:
     match request:
         case DecisionsRequestBody():
