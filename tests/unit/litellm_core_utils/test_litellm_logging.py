@@ -14885,7 +14885,8 @@ async def test_failed_chat_prompt_is_counted_only_for_loggers_that_want_the_esti
     recorder_type: type[_FailureKwargsRecorder],
     expects_estimate: bool,
 ) -> None:
-    monkeypatch.setattr(litellm, "failure_callback", [])
+    for callback_list in ("callbacks", "success_callback", "_async_success_callback", "failure_callback"):
+        monkeypatch.setattr(litellm, callback_list, [])
     monkeypatch.setattr(litellm, "_async_failure_callback", [])
     recorder: Final = recorder_type()
     messages: Final = [{"role": "user", "content": "count these prompt words"}]

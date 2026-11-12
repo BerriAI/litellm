@@ -29,6 +29,7 @@ from typing_extensions import TypedDict
 
 import litellm
 from litellm._internal_context import in_mirrored_call, outside_mirrored_call, post_response_phase
+from litellm._lazy_imports import get_token_counter_new
 from litellm._logging import (
     is_debugging_on,
     redact_string,
@@ -92,7 +93,6 @@ from litellm.litellm_core_utils.classifier_logging import (
     is_classifier_call,
 )
 from litellm.litellm_core_utils.core_helpers import (
-    as_object_list,
     as_str_mapping,
     attribute_or_none,
     decoded_json_object,
@@ -239,7 +239,6 @@ from litellm.types.videos.utils import POLLED_VIDEO_STATUS_KWARG
 from litellm.utils import (
     get_base_model_from_metadata,
     print_verbose,
-    token_counter,
 )
 
 from ..integrations.argilla import ArgillaLogger
@@ -678,6 +677,7 @@ class UsageObservation(Enum):
 
 
 _CHAT_CALL_TYPES: Final = frozenset({CallTypes.completion.value, CallTypes.acompletion.value})
+_REQUEST_MESSAGES: Final = TypeAdapter(list[object] | None)
 
 
 class _UsageFields(TypedDict, total=False, extra_items=object):
@@ -4720,7 +4720,7 @@ class Logging(LiteLLMLoggingBaseClass):
         elif self.model_call_details.get("combined_usage_object") is None:
             self.model_call_details["response_cost"] = 0
         if (
-            self.call_type in _CHAT_CALL_TYPES
+            self._model_call_details_view.get("call_type") in _CHAT_CALL_TYPES
             and not isinstance(self.model_call_details.get("combined_usage_object"), Usage)
             and self._failure_callbacks_want_prompt_token_estimate()
         ):
@@ -4761,17 +4761,22 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def _failure_callbacks_want_prompt_token_estimate(self) -> bool:
         callbacks: Final = (
-            *self.get_combined_callback_list(self.dynamic_failure_callbacks, litellm.failure_callback),
-            *self.get_combined_callback_list(self.dynamic_async_failure_callbacks, litellm._async_failure_callback),
+            *(self.dynamic_failure_callbacks or ()),
+            *(self.dynamic_async_failure_callbacks or ()),
+            *litellm.logging_callback_manager.get_all_callbacks(),
         )
         return any(isinstance(cb, CustomLogger) and cb.wants_failed_prompt_token_estimate for cb in callbacks)
 
     def _prompt_token_estimate(self) -> int | None:
-        messages: Final = as_object_list(self.messages)
-        if litellm.disable_token_counter or not messages:
+        if litellm.disable_token_counter:
             return None
         try:
-            return token_counter(model=self.model, messages=messages, use_default_image_token_count=True)
+            messages: Final = _REQUEST_MESSAGES.validate_python(self.messages)
+            return (
+                get_token_counter_new()(model=self.model, messages=messages, use_default_image_token_count=True)
+                if messages
+                else None
+            )
         except (ValueError, TypeError, LookupError, AttributeError):
             return None
 

@@ -2244,6 +2244,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         # Always create if no parent span exists (backward compatibility)
         # OR if USE_OTEL_LITELLM_REQUEST_SPAN is explicitly enabled
         should_create_primary_span: Final = parent_otel_span is None or get_secret_bool("USE_OTEL_LITELLM_REQUEST_SPAN")
+        failure_kwargs: Final = _JSON_OBJECT.validate_python(kwargs)
 
         span = None
         if should_create_primary_span:
@@ -2258,7 +2259,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 span_kwargs["kind"] = self.span_kind.CLIENT
             span = otel_tracer.start_span(**span_kwargs)
             self.set_attributes(span, kwargs, response_obj)
-            self._set_failure_usage_attributes(span, kwargs)
+            self._set_failure_usage_attributes(span, failure_kwargs)
 
             # Record exception information using OTEL standard method
             span_error_message: Final = self._record_exception_on_span(span=span, kwargs=kwargs)
@@ -2272,7 +2273,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             # Note: parent_otel_span is guaranteed to be not None here
             if parent_otel_span is not None and parent_otel_span.is_recording():
                 self.set_attributes(parent_otel_span, kwargs, response_obj)
-                self._set_failure_usage_attributes(parent_otel_span, kwargs)
+                self._set_failure_usage_attributes(parent_otel_span, failure_kwargs)
                 parent_error_message: Final = self._record_exception_on_span(span=parent_otel_span, kwargs=kwargs)
                 parent_otel_span.set_status(Status(StatusCode.ERROR, parent_error_message))
 

@@ -7972,14 +7972,19 @@ _GEN_AI_USAGE_KEYS: Final = (
 
 
 @pytest.fixture
-def in_memory_otel() -> Iterator[tuple[OpenTelemetry, InMemorySpanExporter]]:
+def tracer_provider() -> Iterator[TracerProvider]:
+    provider: Final = TracerProvider()
+    yield provider
+    provider.shutdown()
+
+
+@pytest.fixture
+def in_memory_otel(tracer_provider: TracerProvider) -> tuple[OpenTelemetry, InMemorySpanExporter]:
     exporter: Final = InMemorySpanExporter()
-    tracer_provider: Final = TracerProvider()
     tracer_provider.add_span_processor(SimpleSpanProcessor(exporter))
     otel: Final = OpenTelemetry(tracer_provider=tracer_provider)
     otel.tracer = tracer_provider.get_tracer("litellm")
-    yield otel, exporter
-    tracer_provider.shutdown()
+    return otel, exporter
 
 
 def _redacted_logging(
@@ -8078,14 +8083,16 @@ async def test_failed_chat_span_flags_unknown_usage_without_estimate_when_token_
 
 @pytest.mark.asyncio
 async def test_failure_inside_active_parent_span_records_unknown_usage_on_the_parent(
-    in_memory_otel: tuple[OpenTelemetry, InMemorySpanExporter], monkeypatch: pytest.MonkeyPatch
+    in_memory_otel: tuple[OpenTelemetry, InMemorySpanExporter],
+    tracer_provider: TracerProvider,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     otel, exporter = in_memory_otel
     monkeypatch.delenv("USE_OTEL_LITELLM_REQUEST_SPAN", raising=False)
     logging_obj: Final = _redacted_logging(otel, list(_SECRET_PROMPT))
     error: Final = litellm.Timeout(message="timed out", model="test-model", llm_provider="hosted_vllm")
 
-    with trace.use_span(otel.tracer.start_span("caller_request"), end_on_exit=True):
+    with trace.use_span(tracer_provider.get_tracer("caller").start_span("caller_request"), end_on_exit=True):
         logging_obj.failure_handler(error, "tb")
         await logging_obj.async_failure_handler(error, "tb")
 
@@ -8148,7 +8155,7 @@ def test_successful_span_reports_provider_usage_without_failure_usage_flags(
     }
     response_obj: Final = json.loads((data_dir / "captured_response.json").read_text())
 
-    otel._handle_success(kwargs, response_obj, _FIXED_START, _FIXED_START + timedelta(seconds=1))
+    otel.log_success_event(kwargs, response_obj, _FIXED_START, _FIXED_START + timedelta(seconds=1))
 
     span_attributes: Final = tuple(dict(span.attributes or {}) for span in exporter.get_finished_spans())
     input_tokens: Final = {attrs.get(SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS.value) for attrs in span_attributes}
