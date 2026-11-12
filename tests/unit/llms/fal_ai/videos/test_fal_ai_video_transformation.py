@@ -14,6 +14,7 @@ from litellm.llms.fal_ai.videos.transformation import (
     FalAIVideoError,
     _queue_request_base_path,
 )
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai.cost_calculation import video_generation_cost
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
@@ -23,6 +24,161 @@ from litellm.utils import ProviderConfigManager
 MODEL = "bytedance/seedance-2.5/text-to-video"
 H3_TEXT_MODEL = "minimax/h3/text-to-video"
 H3_REFERENCE_MODEL = "minimax/h3/reference-to-video"
+
+
+@pytest.mark.parametrize(
+    ("seconds", "size", "extra_body", "expected_resolution"),
+    [
+        ("8", "360p", {}, "360p"),
+        ("5", "1280x720", {"duration": "8"}, "720p"),
+        ("5", "1080p", {}, "1080p"),
+        (None, None, {"duration": "8"}, "720p"),
+    ],
+)
+def test_unpriced_clip_is_rejected_before_fal_http(
+    monkeypatch: pytest.MonkeyPatch,
+    seconds: str | None,
+    size: str | None,
+    extra_body: dict[str, object],
+    expected_resolution: str,
+) -> None:
+    model: Final = "fal-ai/pixverse/v5/effects"
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            f"fal_ai/{model}": {"output_cost_per_video_clip": {"5s": {"360p": 0.7, "720p": 0.9}}},
+        },
+    )
+    upstream: Final = Mock(return_value=httpx.Response(200, json={"request_id": "unexpected"}))
+    with httpx.Client(transport=httpx.MockTransport(upstream)) as client:
+        with pytest.raises(litellm.BadRequestError) as error:
+            litellm.video_generation(
+                model=f"fal_ai/{model}",
+                prompt="clip",
+                seconds=seconds,
+                size=size,
+                extra_body=extra_body,
+                api_key="synthetic-fal-key",
+                client=HTTPHandler(client=client),
+            )
+    assert error.value.status_code == 400
+    assert model in str(error.value)
+    assert f"resolution='{expected_resolution}'" in str(error.value)
+    assert "duration=" in str(error.value)
+    upstream.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("info", "seconds", "size", "expected_body"),
+    [
+        ({"output_cost_per_video_clip": {"5s": {"360p": 0.7}}}, "5", "360p", {"duration": "5", "resolution": "360p"}),
+        (
+            {"output_cost_per_video_clip": {"8s": {"720p": 0.9}}},
+            "8",
+            "1280x720",
+            {"duration": "8", "resolution": "720p", "aspect_ratio": "16:9"},
+        ),
+        ({"output_cost_per_video_clip": {"5s": {"720p": 0.7}}}, None, None, {}),
+        (
+            {"output_cost_per_video_clip": {}, "output_cost_per_video_per_second": 0.1},
+            "8",
+            "360p",
+            {"duration": "8", "resolution": "360p"},
+        ),
+        ({}, "8", "360p", {"duration": "8", "resolution": "360p"}),
+    ],
+)
+def test_priced_or_non_clip_video_still_reaches_fal(
+    monkeypatch: pytest.MonkeyPatch,
+    info: dict[str, object],
+    seconds: str | None,
+    size: str | None,
+    expected_body: dict[str, object],
+) -> None:
+    model: Final = "fal-ai/pixverse/v5/text-to-video"
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, f"fal_ai/{model}": info})
+    upstream: Final = Mock(return_value=httpx.Response(200, json={"request_id": "priced-clip"}))
+    with httpx.Client(transport=httpx.MockTransport(upstream)) as client:
+        video: Final = litellm.video_generation(
+            model=f"fal_ai/{model}",
+            prompt="clip",
+            seconds=seconds,
+            size=size,
+            api_key="synthetic-fal-key",
+            client=HTTPHandler(client=client),
+        )
+    assert video.status == "queued"
+    upstream.assert_called_once()
+    assert (
+        upstream.call_args.args[0].read()
+        == httpx.Request("POST", "https://queue.fal.run", json={"prompt": "clip", **expected_body}).read()
+    )
+
+
+@pytest.mark.parametrize("pricing_source", ["model_info", "registered", "direct"])
+def test_custom_clip_pricing_controls_admission(pricing_source: str) -> None:
+    info: Final = {"output_cost_per_video_clip": {"8s": {"360p": 0.7}}}
+    litellm.register_model({"clip-deployment": info}, persist_across_reloads=False)
+    params: Final = GenericLiteLLMParams(
+        **(
+            {"model_info": info}
+            if pricing_source == "model_info"
+            else {"model_info": {"id": "clip-deployment"}}
+            if pricing_source == "registered"
+            else info
+        )
+    )
+    config: Final = FalAIVideoConfig()
+    body, _, _ = config.transform_video_create_request(
+        model="fal-ai/pixverse/v5/effects",
+        prompt="clip",
+        api_base="https://queue.fal.run",
+        video_create_optional_request_params={"duration": "8", "resolution": "360p"},
+        litellm_params=params,
+        headers={},
+    )
+    assert body == {"prompt": "clip", "duration": "8", "resolution": "360p"}
+    with pytest.raises(FalAIVideoError, match="duration='5'"):
+        config.transform_video_create_request(
+            model="fal-ai/pixverse/v5/effects",
+            prompt="clip",
+            api_base="https://queue.fal.run",
+            video_create_optional_request_params={"resolution": "360p"},
+            litellm_params=params,
+            headers={},
+        )
+
+
+@pytest.mark.parametrize("table", [{}, {"5s": {"360p": "invalid"}}])
+def test_empty_or_invalid_clip_table_is_rejected(table: dict[str, object]) -> None:
+    with pytest.raises(FalAIVideoError, match="has no pricing entry") as error:
+        FalAIVideoConfig().transform_video_create_request(
+            model="fal-ai/pixverse/v5/effects", prompt="clip", api_base="https://queue.fal.run",
+            video_create_optional_request_params={"duration": "5", "resolution": "360p"},
+            litellm_params=GenericLiteLLMParams(model_info={"output_cost_per_video_clip": table}), headers={},
+        )
+    assert error.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_async_unpriced_clip_is_rejected_before_fal_http() -> None:
+    upstream: Final = Mock(return_value=httpx.Response(200, json={"request_id": "unexpected"}))
+    async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as client:
+        handler: Final = AsyncHTTPHandler()
+        handler.client = client
+        with pytest.raises(litellm.BadRequestError, match="has no pricing entry"):
+            await litellm.avideo_generation(
+                model="fal_ai/fal-ai/pixverse/v5/effects",
+                prompt="clip",
+                seconds="8",
+                size="360p",
+                model_info={"output_cost_per_video_clip": {"5s": {"360p": 0.7}}},
+                api_key="synthetic-fal-key",
+                client=handler,
+            )
+    upstream.assert_not_called()
 
 
 @pytest.mark.parametrize("resolution", ["360p", "540p", "720p", "1080p"])

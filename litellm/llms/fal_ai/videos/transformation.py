@@ -10,6 +10,7 @@ import httpx
 from httpx._types import FileContent, RequestFiles
 from pydantic import TypeAdapter
 
+from litellm.litellm_core_utils.model_cost_table import published
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.videos.async_task_utils import unsupported_video_fields
@@ -20,6 +21,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # shared HTTP factory lacks typed params
     get_httpx_client,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # shared HTTP factory is private
 )
+from litellm.llms.openai.cost_calculation import video_clip_cost
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
@@ -36,6 +38,62 @@ from litellm.types.videos.utils import (
 
 class FalAIVideoError(BaseLLMException):
     pass
+
+
+_VIDEO_MODEL_INFO: Final = TypeAdapter(Mapping[str, object])
+
+
+def _video_pricing_info(model: str, params: GenericLiteLLMParams) -> Mapping[str, object]:
+    param_values: Final = _VIDEO_MODEL_INFO.validate_python(params.model_dump())
+    supplied: Final = _VIDEO_MODEL_INFO.validate_python(param_values.get("model_info") or {})
+    deployment_id: Final = supplied.get("id")
+    catalog: Final = published()
+    registered: Final = catalog.get(deployment_id) if isinstance(deployment_id, str) else None
+    direct: Final = MappingProxyType(
+        {
+            key: value
+            for key, value in (
+                ("output_cost_per_video_clip", params.output_cost_per_video_clip),
+                ("output_cost_per_video_per_second", params.output_cost_per_video_per_second),
+            )
+            if value is not None
+        }
+    )
+    candidates: Final = (
+        direct,
+        supplied,
+        _VIDEO_MODEL_INFO.validate_python(registered or {}),
+        _VIDEO_MODEL_INFO.validate_python(catalog.get(f"fal_ai/{model}") or {}),
+        _VIDEO_MODEL_INFO.validate_python(catalog.get(model) or {}),
+    )
+    return next(
+        (
+            info
+            for info in candidates
+            if info.get("output_cost_per_video_clip") is not None
+            or info.get("output_cost_per_video_per_second") is not None
+        ),
+        MappingProxyType[str, object]({}),
+    )
+
+
+def _unpriced_video_clip(
+    model: str, request: Mapping[str, object], params: GenericLiteLLMParams
+) -> FalAIVideoError | None:
+    info: Final = _video_pricing_info(model, params)
+    if info.get("output_cost_per_video_clip") is None or info.get("output_cost_per_video_per_second") is not None:
+        return None
+    duration: Final = request.get("duration", "5")
+    resolution: Final = request.get("resolution", _profile_for_model(model).default_resolution)
+    if video_clip_cost(info, duration, resolution) is not None:
+        return None
+    return FalAIVideoError(
+        status_code=400,
+        message=(
+            f"fal_ai/{model} has no pricing entry for duration={duration!r}, resolution={resolution!r}; "
+            "only priced video requests can be submitted"
+        ),
+    )
 
 
 _ALLOWED_ASPECT_RATIOS: Final[frozenset[str]] = frozenset({"auto", "16:9", "9:16", "1:1", "4:3", "3:4", "21:9"})
@@ -415,6 +473,9 @@ class FalAIVideoConfig(BaseVideoConfig):
             "prompt": prompt,
             **{key: value for key, value in video_create_optional_request_params.items() if key != "model"},
         }
+        error: Final = _unpriced_video_clip(model, request_data, litellm_params)
+        if error is not None:
+            raise error
         return request_data, [], f"{api_base.rstrip('/')}/{model}"
 
     def transform_video_create_response(
