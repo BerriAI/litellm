@@ -6,7 +6,7 @@ otherwise PrismaClient uses the writer-only PrismaWrapper directly.
 
 import asyncio
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final
 
@@ -16,7 +16,14 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy.db.prisma_client import PrismaWrapper
 
 if TYPE_CHECKING:
+    from prisma import models as prisma_models
     from prisma.types import HttpConfig
+
+    from litellm.proxy.db.prisma_client import PrismaBatchSession, PrismaTransactionManager
+    from litellm.repositories.prisma_protocols import TableActions
+
+    _DEFAULT_TX_MAX_WAIT: Final = timedelta(seconds=2)
+    _DEFAULT_TX_TIMEOUT: Final = timedelta(seconds=5)
 
 # Per-model action methods that read from the database. These are routed to
 # the read replica when one is configured.
@@ -301,6 +308,29 @@ class RoutingPrismaWrapper:
         if not reader_url:
             raise RuntimeError("DATABASE_URL_READ_REPLICA not set; cannot recreate read replica client")
         await self._reader.recreate_prisma_client(reader_url, http_client=http_client)
+
+    if TYPE_CHECKING:
+
+        async def execute_raw(self, query: str, *args: object) -> int: ...
+
+        async def query_first(self, query: str, *args: object) -> Mapping[str, object] | None: ...
+
+        def tx(
+            self, *, max_wait: int | timedelta = _DEFAULT_TX_MAX_WAIT, timeout: int | timedelta = _DEFAULT_TX_TIMEOUT
+        ) -> PrismaTransactionManager: ...
+
+        def batch_(self) -> PrismaBatchSession: ...
+
+        @property
+        def litellm_deprecatedverificationtoken(
+            self,
+        ) -> TableActions[prisma_models.LiteLLM_DeprecatedVerificationToken]: ...
+
+        @property
+        def litellm_mcpservertable(self) -> TableActions[prisma_models.LiteLLM_MCPServerTable]: ...
+
+        @property
+        def litellm_shadowevaljob(self) -> TableActions[prisma_models.LiteLLM_ShadowEvalJob]: ...
 
     def __getattr__(self, name: str) -> Any:
         if name in _TOP_LEVEL_READ_METHODS:

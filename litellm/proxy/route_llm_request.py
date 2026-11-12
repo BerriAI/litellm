@@ -14,12 +14,20 @@ from fastapi import HTTPException, status
 from pydantic import BeforeValidator, TypeAdapter, ValidationError
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, normalize_drop_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.routing_common_utils import is_proxy_admin_request
+from litellm.litellm_core_utils.total_deadline import enforce_total_timeout_scope
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy.openai_files_endpoints.common_utils import (
+    TeamProviderDeployment,
+    carries_explicit_credentials,
+    get_team_provider_deployment,
+    team_deployment_the_caller_may_use,
+)
 from litellm.router import router_arguments
 from litellm.router_api import router_init_args
+from litellm.router_attempt import metadata_field
 from litellm.router_config import build_router_config
 
 # Client-supplied params that make the router or the call path fabricate a
@@ -271,6 +279,13 @@ REQUIRED_ONE_OF_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[str, str]]] = Map
     {"acreate_interaction": ("model", "agent"), "acreate_agent": ("id", "name")}
 )
 
+BODY_PARAM_ALTERNATIVES_BY_ROUTE: Final[Mapping[str, Mapping[str, tuple[str, ...]]]] = MappingProxyType(
+    {
+        "acreate_interaction": MappingProxyType({"input": ("continuation_token",)}),
+        "avector_store_search": MappingProxyType({"query": ("query_image",)}),
+    }
+)
+
 JSON_OBJECT_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
 _OPTIONAL_JSON_OBJECT_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(
     Mapping[str, object] | None
@@ -320,8 +335,11 @@ def _find_missing_required_body_param(
     )
     if missing_merge_base_param is not None:
         return MissingBodyParam(name=missing_merge_base_param, model_deployments_loaded=True)
+    alternatives: Final = BODY_PARAM_ALTERNATIVES_BY_ROUTE.get(route_type, {})
     missing_present_params: Final = tuple(
-        param for param in REQUIRED_PRESENT_BODY_PARAMS_BY_ROUTE.get(route_type, ()) if param not in data
+        param
+        for param in REQUIRED_PRESENT_BODY_PARAMS_BY_ROUTE.get(route_type, ())
+        if param not in data and not any(alternative in data for alternative in alternatives.get(param, ()))
     )
     if not missing_present_params:
         return None
@@ -707,6 +725,73 @@ RouteType = Literal[
 ]
 
 
+_MODEL_LESS_VECTOR_STORE_FILE_ROUTES: Final[frozenset[str]] = frozenset(
+    {
+        "avector_store_file_create",
+        "avector_store_file_list",
+        "avector_store_file_retrieve",
+        "avector_store_file_content",
+        "avector_store_file_update",
+        "avector_store_file_delete",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _ModelLessTeamFileCall:
+    caller: UserAPIKeyAuth
+    custom_llm_provider: str
+
+
+def _model_less_team_vector_store_file_call(
+    route_type: str,
+    request: Mapping[str, object],
+    user_api_key_dict: UserAPIKeyAuth | None,
+) -> _ModelLessTeamFileCall | None:
+    custom_llm_provider: Final = request.get("custom_llm_provider")
+    if (
+        route_type not in _MODEL_LESS_VECTOR_STORE_FILE_ROUTES
+        or user_api_key_dict is None
+        or user_api_key_dict.team_id is None
+        or request.get("model")
+        or carries_explicit_credentials(request)
+        or not isinstance(custom_llm_provider, str)
+    ):
+        return None
+    return _ModelLessTeamFileCall(user_api_key_dict, custom_llm_provider)
+
+
+async def _authorized_team_file_deployment(
+    llm_router: LitellmRouter | None, call: _ModelLessTeamFileCall
+) -> TeamProviderDeployment | None:
+    return await team_deployment_the_caller_may_use(
+        get_team_provider_deployment(llm_router, call.caller, call.custom_llm_provider), llm_router, call.caller
+    )
+
+
+def _with_team_deployment_attribution(
+    kwargs: Mapping[str, object],
+    team_deployment: TeamProviderDeployment,
+    llm_router: LitellmRouter | None,
+    route_type: str,
+) -> Mapping[str, object]:
+    deployment: Final = None if llm_router is None else llm_router.registry().deployment(team_deployment.deployment_id)
+    if deployment is None:
+        return kwargs
+    field: Final = metadata_field(route_type)
+    return {
+        **kwargs,
+        field: {
+            **(as_str_mapping(kwargs.get(field)) or {}),
+            "model_group": team_deployment.public_model_name,
+            "deployment": deployment.litellm_params.model,
+            "model_info": deployment.model_info.model_dump(),
+            "api_base": deployment.litellm_params.api_base,
+            "deployment_model_name": deployment.model_name,
+        },
+    }
+
+
 def _merge_router_settings_override(
     data: dict[str, object],  # mutable-ok: route_request mutates the shared request body in place
 ) -> frozenset[str]:
@@ -754,6 +839,7 @@ async def route_request(
     """
     Common helper to route the request
     """
+    enforce_total_timeout_scope(data)  # pyright: ignore[reportUnknownArgumentType]  # route_request takes an untyped dict body
     router_only_settings_from_override: Final = _merge_router_settings_override(data)  # pyright: ignore[reportUnknownArgumentType]  # route_request takes an untyped dict body
     try:
         return await _route_request_single_attempt(
@@ -911,6 +997,23 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
             "alist_agent_versions",
         ]:
             return getattr(llm_router, f"{route_type}")(**data)
+        model_less_team_file_call: Final = _model_less_team_vector_store_file_call(
+            route_type, JSON_OBJECT_ADAPTER.validate_python(data), user_api_key_dict
+        )
+        team_file_deployment: Final = (
+            None
+            if model_less_team_file_call is None
+            else await _authorized_team_file_deployment(llm_router, model_less_team_file_call)
+        )
+        if team_file_deployment is not None:
+            return getattr(litellm, f"{route_type}")(
+                **_with_team_deployment_attribution(
+                    {**direct_litellm_kwargs(), **team_file_deployment.credentials},
+                    team_file_deployment,
+                    llm_router,
+                    route_type,
+                )
+            )
         if route_type in [
             "avideo_list",
             "avideo_status",
