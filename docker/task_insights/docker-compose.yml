@@ -1,0 +1,135 @@
+# Task Insights demo: the proxy and dashboard built from this checkout, Postgres, a dedicated Redis,
+# a one-shot seed job and an optional analysis worker. See docker/task_insights/README.md.
+#
+#   printf 'LITELLM_MASTER_KEY=sk-%s\nLITELLM_SALT_KEY=sk-%s\n' "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" > docker/task_insights/.env
+#   docker compose -f docker/task_insights/docker-compose.yml up -d --build --wait
+#   docker compose -f docker/task_insights/docker-compose.yml run --rm task-insights-seed
+#
+# The seeded walkthrough calls no model. The worker only starts with `--profile live`.
+name: litellm-task-insights
+
+x-litellm-runtime: &litellm-runtime
+  image: litellm-task-insights:local
+  pull_policy: never
+  env_file:
+    - path: .env
+      required: false
+  read_only: true
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
+    - /app/.cache:rw,noexec,nosuid,nodev,size=128m,mode=1777
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "3"
+
+services:
+  litellm:
+    <<: *litellm-runtime
+    build:
+      context: ../..
+      target: runtime
+    command: ["--config", "/app/task-insights-config.yaml", "--port", "4000"]
+    ports:
+      - "${TASK_INSIGHTS_PORT:-4000}:4000"
+    volumes:
+      - ./config.yaml:/app/task-insights-config.yaml:ro
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?set it in docker/task_insights/.env, see the header of this file}
+      LITELLM_MIGRATION_DIR: /tmp/litellm-migrations
+      DATABASE_URL: postgresql://llmproxy:dbpassword9090@db:5432/litellm
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      STORE_MODEL_IN_DB: "True"
+      LITELLM_TASK_INSIGHTS_ENABLED: "true"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')"
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 60s
+
+  task-insights-seed:
+    <<: *litellm-runtime
+    profiles: ["seed"]
+    entrypoint: ["python", "-m", "litellm.task_insights.demo_seed"]
+    command: []
+    environment:
+      DATABASE_URL: postgresql://llmproxy:dbpassword9090@db:5432/litellm
+    depends_on:
+      litellm:
+        condition: service_healthy
+
+  task-insights-traffic:
+    <<: *litellm-runtime
+    profiles: ["live"]
+    entrypoint: ["python", "-m", "litellm.task_insights.demo_traffic"]
+    command: ["--help"]
+    environment:
+      DATABASE_URL: postgresql://llmproxy:dbpassword9090@db:5432/litellm
+      LITELLM_TASK_INSIGHTS_GATEWAY_URL: http://litellm:4000/v1
+      LITELLM_TASK_INSIGHTS_GATEWAY_KEY: ${LITELLM_MASTER_KEY:-}
+    volumes:
+      - ./labels:/labels
+    depends_on:
+      litellm:
+        condition: service_healthy
+
+  task-insights-worker:
+    <<: *litellm-runtime
+    image: litellm-task-insights-worker:local
+    build:
+      context: ../..
+      dockerfile: docker/task_insights/Dockerfile.worker
+    profiles: ["live"]
+    command: ["python", "-m", "litellm.task_insights.worker"]
+    environment:
+      DATABASE_URL: postgresql://llmproxy:dbpassword9090@db:5432/litellm
+      LITELLM_TASK_INSIGHTS_GATEWAY_URL: http://litellm:4000/v1
+      LITELLM_TASK_INSIGHTS_GATEWAY_KEY: ${LITELLM_MASTER_KEY:-}
+      LITELLM_TASK_INSIGHTS_EMBEDDING_MODEL: qwen3.7-text-embedding
+      LITELLM_TASK_INSIGHTS_SYNTHESIS_MODEL: claude-sonnet-5-5
+      LITELLM_TASK_INSIGHTS_DECISION_MODEL: task-insights-decision
+      NUMBA_CACHE_DIR: /tmp/numba
+    depends_on:
+      litellm:
+        condition: service_healthy
+
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: llmproxy
+      POSTGRES_PASSWORD: dbpassword9090
+    volumes:
+      - task_insights_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d litellm -U llmproxy"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+volumes:
+  task_insights_postgres:

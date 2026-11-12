@@ -96,3 +96,38 @@ async def test_delivery_charges_the_creating_key_despite_an_orphaned_maintenance
         in_memory_llm_clients_cache.delete_cache(key=cache_key)
         await redis.aclose()
         sync_redis.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [False, True], ids=["task-insights-off", "task-insights-on"])
+@pytest.mark.parametrize("observation_fails", [False, True], ids=["observed", "observation-failed"])
+async def test_cleanup_keeps_unobserved_deliveries_only_while_task_insights_is_on(
+    monkeypatch: pytest.MonkeyPatch, enabled: bool, observation_fails: bool
+) -> None:
+    monkeypatch.setenv("LITELLM_TASK_INSIGHTS_ENABLED", "true" if enabled else "false")
+    ledger: Final = _Ledger(pending=False, unavailable=False)
+    cleanups: Final[list[str]] = []
+
+    async def execute(query: str, *args: object) -> int:
+        if query.startswith('DELETE FROM "LiteLLM_SpendLogDelivery"'):
+            cleanups.append(query)
+        return await ledger.execute(query, *args)
+
+    database: Final = MagicMock(spec=PrismaClient)
+    transaction: Final = MagicMock()
+    transaction.query_raw = AsyncMock(side_effect=ledger.query)
+    transaction.execute_raw = AsyncMock(side_effect=execute)
+    database.tx.return_value.__aenter__ = AsyncMock(return_value=transaction)
+    database.tx.return_value.__aexit__ = AsyncMock(return_value=False)
+    analytics: Final = MagicMock()
+    analytics.query_raw = AsyncMock(
+        side_effect=OSError("analytics down") if observation_fails else None, return_value=()
+    )
+    database.writer_db = analytics
+
+    await flush_accounting_deliveries(
+        DBSpendUpdateWriter(accounting_clock=lambda: 0.0), database, ProxyLogging(user_api_key_cache=UserApiKeyCache())
+    )
+
+    assert ['"LiteLLM_TaskObservation"' in query for query in cleanups] == [enabled]
+    assert analytics.query_raw.await_count == int(enabled)

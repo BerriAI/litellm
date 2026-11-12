@@ -2182,3 +2182,89 @@ model LiteLLM_SubscriptionAccountTable {
 
   @@unique([custom_llm_provider, account_id], map: "LiteLLM_SubscriptionAccountTable_provider_account_key")
 }
+
+model LiteLLM_TaskObservation {
+  delivery_id     String   @id
+  request_id      String
+  is_batch        Boolean
+  start_time      DateTime
+  team_id         String?
+  model_group     String?
+  model           String?
+  model_config_id String?
+  session_id      String?
+  spend           Float?
+  latency_ms      Float?
+  status          String?
+  request_text    String?
+  context_text    String?
+  text_hash       String?
+  excluded        Boolean  @default(false)
+  observed_at     DateTime @default(now())
+
+  @@index([request_id])
+  @@index([start_time])
+  @@index([text_hash])
+}
+
+model LiteLLM_TaskDefinition {
+  task_id               String    @id
+  name                  String
+  description           String
+  inclusion_criteria    String
+  exclusion_criteria    String
+  examples              Json      @default("[]")
+  required_capabilities String[]  @default([])
+  status                String
+  source                String
+  map_x                 Float
+  map_y                 Float
+  discovery_size        Int       @default(0)
+  created_at            DateTime  @default(now())
+  frozen_at             DateTime?
+
+  @@index([status])
+}
+
+model LiteLLM_TaskAssignment {
+  request_id          String   @id
+  task_id             String?
+  outcome             String
+  text_hash           String?
+  probabilities       Json     @default("{}")
+  top_probability     Float?
+  fit_probability     Float?
+  decision_model      String
+  decision_provenance Json     @default("{}")
+  attempts            Int      @default(0)
+  error               String?
+  assigned_at         DateTime @default(now())
+
+  @@index([task_id])
+  @@index([text_hash])
+}
+
+model LiteLLM_TaskMapPoint {
+  request_id String
+  status     String
+  task_id    String?
+  x          Float
+  y          Float
+
+  @@id([request_id, status])
+}
+
+model LiteLLM_TaskInsightsState {
+  id                     String    @id @default("default")
+  discovery_status       String    @default("idle")
+  discovery_requested_at DateTime?
+  discovery_window_start DateTime?
+  discovery_window_end   DateTime?
+  discovery_max_requests Int       @default(500)
+  discovery_finished_at  DateTime?
+  discovery_error        String?
+  discovery_provenance   Json      @default("{}")
+  taxonomy_frozen_at     DateTime?
+  last_bucketed_at       DateTime?
+  updated_at             DateTime  @default(now())
+}

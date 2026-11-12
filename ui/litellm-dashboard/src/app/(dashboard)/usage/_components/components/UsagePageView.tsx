@@ -67,6 +67,7 @@ import {
   type GatewayActivity,
 } from "./gatewayActivity";
 import ErrorsTab from "./errors/ErrorsTab";
+import TaskInsightsTab from "./taskInsights/TaskInsightsTab";
 import type { RequestErrorActivity } from "./errors/errorsData";
 import EndpointUsage from "./EndpointUsage/EndpointUsage";
 import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
@@ -534,6 +535,11 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
                         {t("usage.pageView.tabs.errors")}
                       </TabsTrigger>
                     )}
+                    {isAdmin && usageView === "global" && (
+                      <TabsTrigger value="tasks" className="flex-none px-3">
+                        {t("usage.pageView.tabs.taskInsights")}
+                      </TabsTrigger>
+                    )}
                   </TabsList>
                   <div className="flex items-center gap-2">
                     <AriaUsageTrigger />
@@ -678,6 +684,17 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
                       loading={requestErrorActivity === null && !requestErrorsFailed}
                       failed={requestErrorsFailed}
                       userScoped={effectiveUserId !== null}
+                    />
+                  </TabsContent>
+                )}
+                {isAdmin && usageView === "global" && (
+                  <TabsContent value="tasks">
+                    <TaskInsightsTab
+                      startTime={startTime}
+                      endTime={endTime}
+                      teams={teams}
+                      canEdit={!isViewOnly && isProxyAdminRole(userRole || "")}
+                      active={selectedTab === "tasks"}
                     />
                   </TabsContent>
                 )}

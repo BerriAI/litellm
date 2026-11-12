@@ -1364,6 +1364,17 @@ def _latest_user_message_text(turns: object) -> str | None:
     return _user_content_text(message_field(latest, "content"))
 
 
+def user_turn_texts(turns: object) -> tuple[str, ...]:
+    """Text of every user turn in a logged chat, Anthropic Messages or Responses `input`, oldest first.
+
+    A turn that carries tool output is skipped, since it holds what a tool returned rather than what the user asked.
+    """
+    if isinstance(turns, str):
+        return (turns,) if turns else ()
+    user_turns: Final = tuple(turn for turn in parts_of(turns) if message_field(turn, "role") == "user")
+    return tuple(text for text in (_user_content_text(message_field(turn, "content")) for turn in user_turns) if text)
+
+
 def _continues_stored_conversation(request_body: Mapping[str, object], call_type: object) -> bool:
     """Only `/v1/responses` resumes a stored conversation, so the same keys on a chat body do not exempt it."""
     return call_type in _RESPONSES_CALL_TYPES and any(request_body.get(key) for key in _STATEFUL_REQUEST_KEYS)

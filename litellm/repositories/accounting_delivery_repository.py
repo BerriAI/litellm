@@ -101,6 +101,10 @@ FROM "LiteLLM_SpendLogDelivery"
 WHERE state IN ('pending', 'parked')"""
 _STORAGE: Final = """SELECT (SELECT COUNT(*) FROM "LiteLLM_SpendLogDelivery" WHERE is_batch) AS batch_count,
     pg_total_relation_size('"LiteLLM_SpendLogDelivery"') AS table_bytes"""
+_OBSERVED: Final = (
+    'AND EXISTS (SELECT 1 FROM "LiteLLM_TaskObservation" observation '
+    'WHERE observation.delivery_id = "LiteLLM_SpendLogDelivery".delivery_id) '
+)
 _UNDECODABLE: Final = """UPDATE "LiteLLM_SpendLogDelivery"
 SET state = 'parked', attempts = attempts + 1, last_error = 'UndecodablePayload'
 WHERE delivery_id = ANY($1::text[]) AND state = 'pending'"""
@@ -135,7 +139,10 @@ class AccountingDeliveryRepository:
         async with self._database.tx(timeout=_TIMEOUT) as transaction:
             return DeliveryStorage.model_validate((await transaction.query_raw(_STORAGE))[0])
 
-    async def cleanup_applied(self, *, retention_days: int = 1, batch_size: int = 1000) -> int:
+    async def cleanup_applied(
+        self, *, retention_days: int = 1, batch_size: int = 1000, keep_unobserved: bool = False
+    ) -> int:
+        """`keep_unobserved` holds back deliveries Task Insights has not projected yet, so retention never drops one."""
         if retention_days < 1 or batch_size < 1:
             raise ValueError("Delivery retention and cleanup batch size must be positive")
         async with self._database.tx(timeout=_TIMEOUT) as transaction:
@@ -143,7 +150,8 @@ class AccountingDeliveryRepository:
                 'DELETE FROM "LiteLLM_SpendLogDelivery" WHERE delivery_id IN ('
                 'SELECT delivery_id FROM "LiteLLM_SpendLogDelivery" '
                 "WHERE state = 'applied' AND NOT is_batch AND applied_at < CURRENT_TIMESTAMP - make_interval(days => $1::integer) "
-                "ORDER BY applied_at, delivery_id LIMIT $2::integer FOR UPDATE SKIP LOCKED)",
+                + (_OBSERVED if keep_unobserved else "")
+                + "ORDER BY applied_at, delivery_id LIMIT $2::integer FOR UPDATE SKIP LOCKED)",
                 retention_days,
                 batch_size,
             )

@@ -1,5 +1,11 @@
 import moment from "moment";
-import { parseAsNativeArrayOf, parseAsString, parseAsStringEnum, type inferParserType } from "nuqs";
+import {
+  parseAsNativeArrayOf,
+  parseAsString,
+  parseAsStringEnum,
+  parseAsStringLiteral,
+  type inferParserType,
+} from "nuqs";
 
 import type { EntityType } from "@/components/EntityUsageExport/types";
 import { relativeTimeOptions } from "@/components/shared/date_range_presets";
@@ -9,7 +15,10 @@ import { USAGE_OPTIONS, type UsageOption } from "./components/UsageViewSelect/Us
 import { UsageClient } from "./components/overview/agentCatalog";
 
 export const DEFAULT_USAGE_VIEW: UsageOption = "global";
-export const USAGE_TABS = ["cost", "models", "keys", "users", "mcp", "endpoints", "errors"] as const;
+export const USAGE_TABS = ["cost", "models", "keys", "users", "mcp", "endpoints", "errors", "tasks"] as const;
+const ADMIN_TABS: readonly UsageTab[] = ["errors", "tasks"];
+export const TASK_INSIGHTS_METRICS = ["share", "cost", "latency"] as const;
+export type TaskInsightsMetric = (typeof TASK_INSIGHTS_METRICS)[number];
 export type UsageTab = (typeof USAGE_TABS)[number];
 export const DEFAULT_USAGE_TAB: UsageTab = "cost";
 
@@ -33,6 +42,10 @@ export const usageUrlParsers = {
   customer: entityIds,
   tag: entityIds,
   agent: entityIds,
+  ti_task: parseAsString,
+  ti_model: parseAsString,
+  ti_team: parseAsString,
+  ti_metric: parseAsStringLiteral(TASK_INSIGHTS_METRICS),
 };
 
 export type UsageUrlParams = inferParserType<typeof usageUrlParsers>;
@@ -80,6 +93,10 @@ const RESET_TO_DEFAULT_VIEW: UsageUrlPatch = {
   customer: null,
   tag: null,
   agent: null,
+  ti_task: null,
+  ti_model: null,
+  ti_team: null,
+  ti_metric: null,
 };
 
 const isUsageOption = (value: string | null): value is UsageOption => USAGE_OPTIONS.some((option) => option === value);
@@ -93,7 +110,7 @@ export const usageViewFromParams = (params: UsageUrlParams): UsageOption =>
   isUsageOption(params.view) ? params.view : DEFAULT_USAGE_VIEW;
 
 export const usageTabFromParams = (params: UsageUrlParams, isAdmin = true): UsageTab => {
-  return isUsageTab(params.tab) && (params.tab !== "errors" || isAdmin) ? params.tab : DEFAULT_USAGE_TAB;
+  return isUsageTab(params.tab) && (!ADMIN_TABS.includes(params.tab) || isAdmin) ? params.tab : DEFAULT_USAGE_TAB;
 };
 
 export const usageViewPatch = (view: UsageOption): UsageUrlPatch => ({
@@ -101,8 +118,11 @@ export const usageViewPatch = (view: UsageOption): UsageUrlPatch => ({
   view: view === DEFAULT_USAGE_VIEW ? null : view,
 });
 
+const TASK_INSIGHTS_RESET: UsageUrlPatch = { ti_task: null, ti_model: null, ti_team: null, ti_metric: null };
+
 export const usageTabPatch = (tab: string): UsageUrlPatch => ({
   tab: isUsageTab(tab) && tab !== DEFAULT_USAGE_TAB ? tab : null,
+  ...(tab === "tasks" ? {} : TASK_INSIGHTS_RESET),
 });
 
 export const selectedEntitiesFromParams = (params: UsageUrlParams, entityType: EntityType): readonly string[] => {
@@ -220,7 +240,14 @@ export const cleanUsageUrl = (params: UsageUrlParams, access: UsageUrlAccess): U
   );
   const invalidTab =
     params.tab !== null &&
-    (!TABBED_VIEWS.includes(view) || !isUsageTab(params.tab) || (!access.isAdmin && params.tab === "errors"));
+    (!TABBED_VIEWS.includes(view) ||
+      !isUsageTab(params.tab) ||
+      (!access.isAdmin && ADMIN_TABS.includes(params.tab)) ||
+      (params.tab === "tasks" && view !== "global"));
+  const onTaskInsights = !invalidTab && params.tab === "tasks";
+  const strayTaskInsightsKeys = (["ti_task", "ti_model", "ti_team", "ti_metric"] as const).filter(
+    (key) => !onTaskInsights && params[key] !== null,
+  );
   const panelOpen = CLIENT_USAGE_VIEWS.includes(view) && params.client !== null;
   const canFilterClientUser = access.isAdmin || Boolean(access.canViewTeamClients && params.client_team);
   const panelDates = clientDateParams(params);
@@ -241,6 +268,7 @@ export const cleanUsageUrl = (params: UsageUrlParams, access: UsageUrlAccess): U
       ? { client_team: null }
       : {}),
     ...Object.fromEntries(strayEntityKeys.map((key) => [key, null])),
+    ...Object.fromEntries(strayTaskInsightsKeys.map((key) => [key, null])),
     ...invalidDatePatch(params),
   };
   return Object.keys(patch).length > 0 ? { patch, deniedAccess: false } : null;

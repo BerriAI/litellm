@@ -1,5 +1,6 @@
 import os
 import time
+from datetime import datetime, timezone
 from typing import (
     TYPE_CHECKING,
     Final,
@@ -87,11 +88,18 @@ async def flush_accounting_deliveries(
     if acquired is False:
         return
     try:
+        from litellm.task_insights.observation import task_insights_enabled
+
+        observing: Final = task_insights_enabled()
+        if observing:
+            await _observe_task_insights(prisma_client, batch_size)
         retention_days: Final = int(os.environ.get("LITELLM_ACCOUNTING_DELIVERY_RETENTION_DAYS", "1"))
         cleanup_deadline: Final = time.monotonic() + 5
         for _ in range(batch_size):
             if (
-                await repository.cleanup_applied(retention_days=retention_days, batch_size=batch_size * 2)
+                await repository.cleanup_applied(
+                    retention_days=retention_days, batch_size=batch_size * 2, keep_unobserved=observing
+                )
                 < batch_size * 2
                 or time.monotonic() >= cleanup_deadline
             ):
@@ -100,6 +108,28 @@ async def flush_accounting_deliveries(
     finally:
         if acquired:
             await writer.pod_lock_manager.release_lock(cronjob_id=_JOB)
+
+
+async def _observe_task_insights(prisma_client: "PrismaClient", batch_size: int) -> None:
+    """Analytics run after billing committed, so a failure here is logged and never touches spend."""
+    from litellm.repositories.task_insights_repository import TaskInsightsDatabase, TaskInsightsRepository
+    from litellm.task_insights.observation import observe_applied_deliveries
+
+    database: Final = cast(  # cast-ok: the writer wrapper delegates query_raw, execute_raw and tx to Prisma
+        TaskInsightsDatabase, prisma_client.writer_db
+    )
+    try:
+        observed: Final = await observe_applied_deliveries(
+            TaskInsightsRepository(database),
+            now=lambda: datetime.now(timezone.utc),
+            batch_size=min(batch_size, 200),
+            max_batches=10,
+        )
+    except Exception:  # noqa: BLE001  # unobserved deliveries stay retained and the next flush retries them
+        verbose_proxy_logger.exception("Task Insights observation failed; deliveries are retained for the next flush")
+        return
+    if observed:
+        verbose_proxy_logger.debug("Task Insights observed %d applied deliveries", observed)
 
 
 async def _report(

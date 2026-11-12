@@ -1,4 +1,8 @@
-from typing import Annotated, TypeAlias
+from typing import (
+    Annotated,
+    TypeAlias,
+    cast,  # noqa: TID251  # the untyped Prisma wrapper cannot express the raw-query protocol
+)
 
 from fastapi import Depends
 
@@ -7,6 +11,7 @@ from litellm.models.fallback import RouterFallbackStore
 from litellm.models.gateway_activity import GatewayActivityStore
 from litellm.models.plugin_upload import PluginUploadStore
 from litellm.models.skill_submission import SkillSubmissionStore
+from litellm.models.task_insights import TaskInsightsStore
 from litellm.models.user_banner import UserBannerStore
 from litellm.proxy.deps.database import DatabaseDep
 from litellm.repositories.config_repository import ConfigRepository
@@ -14,6 +19,7 @@ from litellm.repositories.deployment_warning_ignore_repository import Deployment
 from litellm.repositories.gateway_activity_repository import GatewayActivityRepository
 from litellm.repositories.plugin_upload_repository import PluginUploadRepository
 from litellm.repositories.skill_submission_repository import SkillSubmissionRepository
+from litellm.repositories.task_insights_repository import TaskInsightsDatabase, TaskInsightsRepository
 from litellm.repositories.user_banner_repository import UserBannerRepository
 
 
@@ -63,3 +69,16 @@ async def get_router_fallback_repository(database: DatabaseDep) -> RouterFallbac
 
 
 RouterFallbackRepositoryDep: TypeAlias = Annotated[RouterFallbackStore | None, Depends(get_router_fallback_repository)]
+
+
+async def get_task_insights_repository(database: DatabaseDep) -> TaskInsightsStore | None:
+    if database is None:
+        return None
+    return TaskInsightsRepository(
+        cast(  # cast-ok: the routing wrapper delegates query_raw, execute_raw and tx to Prisma
+            TaskInsightsDatabase, database.prisma.db
+        )
+    )
+
+
+TaskInsightsRepositoryDep: TypeAlias = Annotated[TaskInsightsStore | None, Depends(get_task_insights_repository)]

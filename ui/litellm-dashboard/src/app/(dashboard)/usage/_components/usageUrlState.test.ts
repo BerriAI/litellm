@@ -448,3 +448,35 @@ describe("configured Usage default", () => {
     });
   });
 });
+
+describe("task insights tab", () => {
+  it("keeps the selected task, model, team and metric in a share link", () => {
+    const query = "?tab=tasks&ti_task=t1&ti_model=m1&ti_team=team-a&ti_metric=latency";
+
+    expect(clean(query)).toBeNull();
+    expect(load(query).ti_metric).toBe("latency");
+  });
+
+  it("rejects an unknown heatmap metric", () => {
+    expect(load("?tab=tasks&ti_metric=quality").ti_metric).toBeNull();
+  });
+
+  it("drops the task selection when the tab is left", () => {
+    expect(applyPatch("?tab=tasks&ti_task=t1&ti_model=m1&range=7d", usageTabPatch("models"))).toBe(
+      "?tab=models&range=7d",
+    );
+  });
+
+  it("removes task insights params that arrive without the tab", () => {
+    expect(clean("?tab=models&ti_task=t1")).toEqual({ query: "?tab=models", deniedAccess: false });
+  });
+
+  it("only offers the tab on the deployment-wide view", () => {
+    expect(clean("?view=my-usage&tab=tasks&ti_task=t1")).toEqual({ query: "?view=my-usage", deniedAccess: false });
+  });
+
+  it("hides the admin-only tab and its selection from an internal user", () => {
+    expect(usageTabFromParams(load("?tab=tasks"), false)).toBe("cost");
+    expect(clean("?tab=tasks&ti_task=t1", internalUserAccess)).toEqual({ query: "", deniedAccess: false });
+  });
+});
