@@ -13472,15 +13472,29 @@ _ADAPTER_BODY_WITH_S3_IMAGE: Final = json.dumps(
         ],
     }
 ).encode()
+_ADAPTER_PYTHON_LITERAL_BODY_WITH_S3_IMAGE_IN_TUPLES: Final = repr(
+    {
+        "model": "unknown-model",
+        "messages": (
+            {"role": "user", "content": ({"type": "image_url", "image_url": {"url": "s3://private-bucket/cat.png"}},)},
+        ),
+    }
+).encode()
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [_ADAPTER_BODY_WITH_S3_IMAGE, _ADAPTER_PYTHON_LITERAL_BODY_WITH_S3_IMAGE_IN_TUPLES],
+    ids=["json", "python_literal_with_tuples"],
+)
 async def test_chat_completion_pass_through_endpoint_refuses_an_s3_image_in_an_unlisted_bucket(
     monkeypatch: pytest.MonkeyPatch,
+    body: bytes,
 ):
     proxy_logging: Final = _stub_adapter_proxy(monkeypatch)
     request: Final = MagicMock(spec=Request)
-    request.body = AsyncMock(return_value=_ADAPTER_BODY_WITH_S3_IMAGE)
+    request.body = AsyncMock(return_value=body)
 
     with pytest.raises(ProxyException) as raised:
         await chat_completion_pass_through_endpoint(
