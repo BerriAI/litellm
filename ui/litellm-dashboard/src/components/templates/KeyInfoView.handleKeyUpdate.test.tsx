@@ -862,4 +862,18 @@ describe("KeyInfoView handleKeyUpdate max_budget_alert_emails", () => {
       max_budget_alert_emails: { "0": ["zero@example.com"] },
     });
   });
+
+  it("saves a stored max_budget_alert_emails string back unchanged on an unrelated edit", async () => {
+    const sentPayload = await submit(
+      {
+        key_alias: "renamed",
+        metadata: JSON.stringify({ cost_center: "ops", max_budget_alert_emails: "ops@qa.test" }),
+        max_budget_alert_emails: [],
+      },
+      ["key_alias"],
+      { ...baseKeyData, metadata: { cost_center: "ops", max_budget_alert_emails: "ops@qa.test" } },
+    );
+
+    expect(sentPayload.metadata).toEqual({ cost_center: "ops", max_budget_alert_emails: "ops@qa.test" });
+  });
 });

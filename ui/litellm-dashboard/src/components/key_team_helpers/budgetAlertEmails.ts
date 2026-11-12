@@ -41,15 +41,18 @@ export const isValidThreshold = (threshold: number | null): threshold is number 
   return isWholeNumber && threshold >= THRESHOLD_MIN && threshold <= THRESHOLD_MAX;
 };
 
+const isBudgetAlertMap = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const storedBudgetAlertValue = (metadata: unknown, metadataKey: BudgetAlertEmailsMetadataKey): unknown =>
+  typeof metadata === "object" && metadata !== null ? (metadata as Record<string, unknown>)[metadataKey] : undefined;
+
 const storedBudgetAlertConfig = (
   metadata: unknown,
   metadataKey: BudgetAlertEmailsMetadataKey,
 ): Readonly<Record<string, unknown>> => {
-  if (typeof metadata !== "object" || metadata === null) return {};
-  const config: unknown = (metadata as Record<string, unknown>)[metadataKey];
-  return typeof config === "object" && config !== null && !Array.isArray(config)
-    ? (config as Record<string, unknown>)
-    : {};
+  const config = storedBudgetAlertValue(metadata, metadataKey);
+  return isBudgetAlertMap(config) ? config : {};
 };
 
 const ROW_THRESHOLD_KEY_PATTERN: Readonly<Record<BudgetAlertEmailsMetadataKey, RegExp>> = {
@@ -111,7 +114,11 @@ export const budgetAlertEmailsMetadata = (
   rowEntries: Readonly<Record<string, unknown>>,
   metadataKey: BudgetAlertEmailsMetadataKey,
   metadataWithHiddenEntries: unknown,
-): Readonly<Partial<Record<BudgetAlertEmailsMetadataKey, Readonly<Record<string, unknown>>>>> => {
+): Readonly<Partial<Record<BudgetAlertEmailsMetadataKey, unknown>>> => {
+  const boxValue = storedBudgetAlertValue(metadataWithHiddenEntries, metadataKey);
+  if (Object.keys(rowEntries).length === 0 && boxValue !== undefined && !isBudgetAlertMap(boxValue)) {
+    return { [metadataKey]: boxValue };
+  }
   const emails = {
     ...budgetAlertEmailsRowsCannotShow(metadataWithHiddenEntries, metadataKey),
     ...rowEntries,

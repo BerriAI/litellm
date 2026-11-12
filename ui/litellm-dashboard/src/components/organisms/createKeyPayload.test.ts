@@ -66,6 +66,29 @@ it("keeps typed recipient entries the rows cannot show and lets the rows own eve
   });
 });
 
+it("stores a typed max_budget_alert_emails string as typed when no row is set", () => {
+  const result = build({ metadata: JSON.stringify({ cost_center: "ops", max_budget_alert_emails: "ops@qa.test" }) });
+  expect(result.kind).toBe("ok");
+  if (result.kind !== "ok") throw new Error(result.kind);
+  expect(JSON.parse(String(result.payload.metadata))).toEqual({
+    cost_center: "ops",
+    max_budget_alert_emails: "ops@qa.test",
+  });
+});
+
+it("replaces a typed max_budget_alert_emails string with the threshold rows", () => {
+  const result = build({
+    metadata: JSON.stringify({ cost_center: "ops", max_budget_alert_emails: "ops@qa.test" }),
+    max_budget_alert_emails: [{ threshold: 80, emails: "row@example.com" }],
+  });
+  expect(result.kind).toBe("ok");
+  if (result.kind !== "ok") throw new Error(result.kind);
+  expect(JSON.parse(String(result.payload.metadata))).toEqual({
+    cost_center: "ops",
+    max_budget_alert_emails: { "80": ["row@example.com"] },
+  });
+});
+
 it("keeps the budget alert rows when the metadata JSON box holds null", () => {
   const result = build({
     metadata: "null",
