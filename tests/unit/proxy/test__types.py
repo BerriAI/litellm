@@ -554,6 +554,39 @@ def test_mcp_metadata_accepts_a_boolean_skip_tool_output_validation(
     assert parsed.mcp_info == {"skip_tool_output_validation": value}
 
 
+@pytest.mark.parametrize("request_model", (NewMCPServerRequest, UpdateMCPServerRequest))
+@pytest.mark.parametrize("value", ["60", -1, True, None, float("inf"), float("nan"), 10**400])
+def test_mcp_metadata_rejects_an_invalid_output_schema_cache_ttl(
+    request_model: type[NewMCPServerRequest] | type[UpdateMCPServerRequest], value: object
+) -> None:
+    payload: Final = {
+        "server_id": "test",
+        "transport": "http",
+        "url": "https://example.com/mcp",
+        "mcp_info": {"output_schema_cache_ttl_seconds": value},
+    }
+
+    with pytest.raises(ValidationError):
+        request_model.model_validate(payload)
+
+
+@pytest.mark.parametrize("request_model", (NewMCPServerRequest, UpdateMCPServerRequest))
+@pytest.mark.parametrize("value", [0, 30, 2.5])
+def test_mcp_metadata_accepts_a_non_negative_output_schema_cache_ttl(
+    request_model: type[NewMCPServerRequest] | type[UpdateMCPServerRequest], value: float
+) -> None:
+    parsed: Final = request_model.model_validate(
+        {
+            "server_id": "test",
+            "transport": "http",
+            "url": "https://example.com/mcp",
+            "mcp_info": {"output_schema_cache_ttl_seconds": value},
+        }
+    )
+
+    assert parsed.mcp_info == {"output_schema_cache_ttl_seconds": value}
+
+
 MCP_SERVER_REQUESTS = (NewMCPServerRequest, UpdateMCPServerRequest)
 STDIO_SERVER_FIELDS = {"server_id": "stdio-1", "transport": "stdio", "command": "python", "args": ["server.py"]}
 

@@ -30,6 +30,8 @@ from mcp.shared._stream_protocols import ReadStream, WriteStream
 from mcp.shared.message import SessionMessage
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
+from litellm.mcp_client.output_schema_memory import OutputSchemaMemory
+
 _TransportStreams: TypeAlias = tuple[
     ReadStream[SessionMessage | Exception],
     WriteStream[SessionMessage],
@@ -485,6 +487,39 @@ class _UnvalidatedClientSession(ClientSession):
         return None
 
 
+class _RemembersOutputSchemas(ClientSession):
+    """Preloads the SDK's output schemas from earlier listings, so the output check needs no list of its own."""
+
+    _seeded: frozenset[str] = frozenset()
+    _on_listed: Callable[[ListToolsResult], None] | None = None
+
+    def bind(self, remembered: Sequence[MCPTool], on_listed: Callable[[ListToolsResult], None]) -> None:
+        self._on_listed = on_listed
+        self._seeded = frozenset(tool.name for tool in remembered)
+        if remembered:
+            self._absorb_tool_listing(  # pyright: ignore[reportPrivateUsage]  # the SDK has no public way to preload schemas
+                ListToolsResult(tools=list(remembered)), complete=False
+            )
+
+    async def list_tools(self, *, params: PaginatedRequestParams | None = None) -> ListToolsResult:
+        result: Final = await super().list_tools(params=params)
+        if self._on_listed is not None and (params is None or params.cursor is None):
+            self._on_listed(result)
+        return result
+
+    async def validate_tool_result(self, name: str, result: MCPCallToolResult) -> None:
+        try:
+            await super().validate_tool_result(name, result)
+        except RuntimeError:
+            if name not in self._seeded:
+                raise
+            self._seeded = frozenset()
+            relisted: Final = await self.list_tools()
+            if all(tool.name != name for tool in relisted.tools):
+                return
+            await super().validate_tool_result(name, result)
+
+
 class MCPClient:
     """
     MCP Client supporting:
@@ -514,7 +549,11 @@ class MCPClient:
         protocol_version: MCPUpstreamProtocol = "auto",
         skip_tool_output_validation: bool = False,
         upstream_transport: httpx2.AsyncBaseTransport | None = None,
-    ):
+        output_schema_memory: OutputSchemaMemory | None = None,
+        output_schema_cache_ttl_seconds: float = 0.0,
+    ) -> None:
+        self._output_schema_memory: Final = output_schema_memory
+        self._output_schema_cache_ttl_seconds: Final = output_schema_cache_ttl_seconds
         self.protocol_version: MCPUpstreamProtocol = TypeAdapter[MCPUpstreamProtocol](
             MCPUpstreamProtocol
         ).validate_python(protocol_version)
@@ -573,6 +612,17 @@ class MCPClient:
 
     async def discovery_auth_fingerprint(self) -> str:
         return self._hash_discovery_auth(await self.prepare_request_auth(), self._aws_identity())
+
+    async def _output_schema_key(self) -> str | None:
+        if (
+            self._output_schema_memory is None
+            or self._output_schema_cache_ttl_seconds <= 0
+            or self.skip_tool_output_validation
+            or self.protocol_version == "2026-07-28"
+            or self.transport_type == MCPTransport.stdio
+        ):
+            return None
+        return await self.discovery_auth_fingerprint()
 
     async def subscription_auth_fingerprint(self) -> str:
         from litellm.proxy.mcp_server.outbound_credentials.client_credentials import (
@@ -767,6 +817,7 @@ class MCPClient:
         user input (elicitation), or send log messages.
         """
         in_flight_error: BaseException | None = None
+        schema_key: Final = await self._output_schema_key()
         with anyio.CancelScope() as cleanup_scope:
             if isinstance(http_client, _MCPHTTPClient):
                 http_client.cleanup_scope = cleanup_scope
@@ -788,7 +839,11 @@ class MCPClient:
                     # The SDK drops a response stream that ends without a JSON-RPC reply, so nothing else
                     # ever fails the request.
                     session_type: Final = (
-                        _UnvalidatedClientSession if self.skip_tool_output_validation else ClientSession
+                        _UnvalidatedClientSession
+                        if self.skip_tool_output_validation
+                        else ClientSession
+                        if schema_key is None
+                        else _RemembersOutputSchemas
                     )
                     session_ctx: Final = session_type(
                         read_stream,
@@ -808,6 +863,21 @@ class MCPClient:
                         self._last_initialize_instructions = (
                             instructions.strip() or None if isinstance(instructions, str) else None
                         )
+                        if (
+                            isinstance(session_ctx, _RemembersOutputSchemas)
+                            and schema_key is not None
+                            and self._output_schema_memory is not None
+                        ):
+                            memory: Final = self._output_schema_memory
+
+                            def remember_listing(listed: ListToolsResult) -> None:
+                                memory.remember(
+                                    schema_key,
+                                    listed.tools,
+                                    ttl_seconds=self._output_schema_cache_ttl_seconds,
+                                )
+
+                            session_ctx.bind(memory.recall(schema_key), remember_listing)
                         result: Final = await operation(session)
                     except BaseException as operation_error:
                         in_flight_error = operation_error

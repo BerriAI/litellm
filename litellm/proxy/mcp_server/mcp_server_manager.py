@@ -84,6 +84,7 @@ from litellm.mcp_client.client import (
     strip_auth_scheme,
     to_basic_credentials,
 )
+from litellm.mcp_client.output_schema_memory import OutputSchemaMemory
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
     MCPAuthType,
@@ -290,6 +291,7 @@ _USER_ENV_VARS_CACHE_MAX_SIZE: Final = 4096  # cap to prevent unbounded growth
 
 _ListedToolsByCaller: TypeAlias = Mapping[str | None, Mapping[str, MCPTool]]
 _LISTED_TOOLS_CALLERS_PER_SERVER: Final = 256
+_OUTPUT_SCHEMA_MEMORY_MAX_ENTRIES: Final = 256
 _UNTYPED_VALUE: Final = TypeAdapter(object)
 
 
@@ -2025,7 +2027,7 @@ class MCPServerManager:
         per_user_token_cache: MCPPerUserTokenCache | None = None,
         discovery_clock: Callable[[], float] = time.monotonic,
         upstream_transport: httpx2.AsyncBaseTransport | None = None,
-    ):
+    ) -> None:
         self._per_user_oauth_token_store = per_user_oauth_token_store or LazyPerUserOAuthTokenStore(
             self.get_mcp_server_by_id
         )
@@ -2085,6 +2087,7 @@ class MCPServerManager:
         """
         self._listed_tools_by_server_id: dict[str, _ListedToolsByCaller] = {}  # mutable-ok: refreshed per tools/list
         self._listed_tools_generations: dict[str, int] = {}  # mutable-ok: bumped per server save
+        self._output_schema_memory: Final = OutputSchemaMemory(max_entries=_OUTPUT_SCHEMA_MEMORY_MAX_ENTRIES)
         self._upstream_initialize_instructions_by_server_id: dict[str, str] = {}
         # Per-server monotonic timestamp of last upstream prefetch attempt (success,
         # empty result, or failure). Used to throttle re-probes for servers that do
@@ -4422,6 +4425,7 @@ class MCPServerManager:
             ),
             upstream_transport=self._upstream_transport,
             for_tool_listing=for_tool_listing,
+            output_schema_memory=self._output_schema_memory,
         )
 
     _create_mcp_client = create_mcp_client
