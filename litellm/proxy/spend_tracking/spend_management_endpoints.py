@@ -261,6 +261,33 @@ async def _query_raw(prisma_client: PrismaClient, sql_query: str, *args: object)
     return await prisma_client.db.query_raw(sql_query, *args)
 
 
+def _key_alias_api_key_condition(placeholder: int) -> str:
+    """SQL condition matching spend logs of every token hash the aliased key has ever had.
+
+    A key is found by exact ``key_alias`` among active (``LiteLLM_VerificationToken``) and
+    deleted (``LiteLLM_DeletedVerificationToken``) keys. ``/key/regenerate`` archives the old
+    row, alias included, into ``LiteLLM_DeletedVerificationToken`` and rewrites the token in
+    place, so the row keeps its ``created_at``. Rows sharing ``created_at`` with a matched key
+    are therefore earlier hashes of the same key: this also keeps hashes retired *before* the
+    key was renamed reachable under its current alias. Tokens matched by alias directly are
+    kept as well, for rows without ``created_at``.
+
+    Filtering on ``api_key`` uses the ``(api_key, "startTime")`` index instead of reading the
+    metadata JSON of every log in the window. The condition contains no ``AND`` so callers can
+    keep joining conditions with ``AND``.
+    """
+    p = f"${placeholder}"
+    keys = (
+        'SELECT token, created_at, key_alias FROM "LiteLLM_VerificationToken" '
+        'UNION ALL SELECT token, created_at, key_alias FROM "LiteLLM_DeletedVerificationToken"'
+    )
+    return (
+        f"api_key IN (SELECT k.token FROM ({keys}) k "
+        f"WHERE k.key_alias = {p} "
+        f"OR k.created_at IN (SELECT m.created_at FROM ({keys}) m WHERE m.key_alias = {p}))"
+    )
+
+
 async def _scope_api_keys(
     prisma_client: PrismaClient, *, where_conditions: Mapping[str, object], start: datetime | None, end: datetime | None
 ) -> tuple[str, ...] | None:
@@ -2651,7 +2678,10 @@ async def ui_view_spend_logs(
         description="Filter logs by model ID (litellm model deployment id)",
     ),
     model_group: str | None = fastapi.Query(default=None, description="Filter logs by model group"),
-    key_alias: str | None = fastapi.Query(default=None, description="Filter logs by key alias"),
+    key_alias: str | None = fastapi.Query(
+        default=None,
+        description="Filter logs by exact key alias; matches every token hash the key has had, including deleted keys and hashes replaced by /key/regenerate",
+    ),
     end_user: str | None = fastapi.Query(default=None, description="Filter logs by end user"),
     error_code: str | None = fastapi.Query(default=None, description="Filter logs by error code (e.g., '404', '500')"),
     error_message: str | None = fastapi.Query(
@@ -2830,14 +2860,6 @@ async def ui_view_spend_logs(
 
         # Build metadata filters
         metadata_filters: Final = []
-        if key_alias is not None:
-            metadata_filters.append(
-                {
-                    "path": ["user_api_key_alias"],
-                    "string_contains": key_alias,
-                }
-            )
-
         if error_code is not None:
             metadata_filters.append(
                 {
@@ -3017,8 +3039,8 @@ async def ui_view_spend_logs(
 
         # Metadata JSON filters (PostgreSQL JSONB operators)
         if key_alias is not None:
-            sql_conditions.append(f"metadata->>'user_api_key_alias' LIKE ${p}")
-            sql_params.append(f"%{key_alias}%")
+            sql_conditions.append(_key_alias_api_key_condition(p))
+            sql_params.append(key_alias)
             p += 1
         if error_code is not None:
             sql_conditions.append(f"metadata->'error_information'->>'error_code' = ${p}")

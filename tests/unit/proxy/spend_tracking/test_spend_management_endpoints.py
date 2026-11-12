@@ -134,7 +134,7 @@ def _reconstruct_ui_where_from_sql(sql_query, params):
     for cond in (c.strip() for c in remaining.split(" AND ")):
         gte = re.search(r'"startTime" >= \(\$(\d+)', cond)
         lte = re.search(r'"startTime" <= \(\$(\d+)', cond)
-        alias = re.search(r"user_api_key_alias' LIKE \$(\d+)", cond)
+        alias = re.match(r"api_key IN \(SELECT k\.token .* WHERE k\.key_alias = \$(\d+) ", cond)
         code = re.search(r"error_code' = \$(\d+)", cond)
         msg = re.search(r"error_message' LIKE \$(\d+)", cond)
         credential = re.fullmatch(r"metadata->>'used_client_oauth_token' = \$(\d+)", cond)
@@ -178,12 +178,7 @@ def _reconstruct_ui_where_from_sql(sql_query, params):
                 params[int(api_key_not_in.group(2)) - 1],
             ]
         elif alias:
-            metadata_conds.append(
-                {
-                    "path": ["user_api_key_alias"],
-                    "string_contains": str(params[int(alias.group(1)) - 1]).strip("%"),
-                }
-            )
+            where["key_alias"] = params[int(alias.group(1)) - 1]
         elif code:
             metadata_conds.append(
                 {
@@ -5174,17 +5169,14 @@ async def test_ui_view_spend_logs_with_error_code_and_key_alias(client):
     ]
 
     def filter_by_error_code_and_key_alias(where):
-        if "AND" in where:
-            key_alias = error_code = None
-            for cond in where["AND"]:
-                if "metadata" in cond:
-                    mf = cond["metadata"]
-                    if mf.get("path") == ["user_api_key_alias"]:
-                        key_alias = mf.get("string_contains")
-                    elif mf.get("path") == ["error_information", "error_code"]:
-                        error_code = str(mf.get("equals", "")).strip('"')
-            if key_alias == "test-key-1" and error_code == "500":
-                return [mock_spend_logs[2]]
+        metadata_filter = where.get("metadata", {})
+        error_code = (
+            str(metadata_filter.get("equals", "")).strip('"')
+            if metadata_filter.get("path") == ["error_information", "error_code"]
+            else None
+        )
+        if where.get("key_alias") == "test-key-1" and error_code == "500":
+            return [mock_spend_logs[2]]
         return mock_spend_logs
 
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
@@ -8880,3 +8872,59 @@ def test_spend_calculate_rejection_body_is_openai_shaped(client):
     assert error["type"] == "invalid_request_error"
     assert error["param"] is None
     assert error["code"] == "400"
+
+
+def test_key_alias_api_key_condition_matches_every_hash_of_the_key():
+    condition = spend_management_endpoints._key_alias_api_key_condition(7)
+
+    assert condition.startswith("api_key IN (")
+    assert "k.key_alias = $7" in condition
+    assert "m.key_alias = $7" in condition
+    # earlier hashes of the same key share created_at (regenerate archives the row and
+    # rewrites the token in place), across active and deleted keys
+    assert "k.created_at IN (SELECT m.created_at" in condition
+    assert condition.count('"LiteLLM_VerificationToken"') == 2
+    assert condition.count('"LiteLLM_DeletedVerificationToken"') == 2
+    # callers join conditions with AND
+    assert " AND " not in condition.upper()
+    assert "user_api_key_alias" not in condition
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_key_alias_filters_on_api_key_not_metadata(client, monkeypatch):
+    logs = [
+        _owned_log("req1", "sk-current", "alice", "team1"),
+        _owned_log("req2", "sk-other", "bob", "team1"),
+    ]
+    queries: list[tuple[str, tuple]] = []
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(
+            logs,
+            lambda where: [log for log in logs if where.get("key_alias") != "prod-key" or log["api_key"] == "sk-current"],
+            query_observer=lambda sql, params: queries.append((sql, params)),
+        ),
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+    try:
+        response = client.get(
+            "/spend/logs/ui",
+            params={"key_alias": "prod-key", "start_date": "2026-09-01 00:00:00", "end_date": "2026-09-03 23:59:59"},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    assert [row["request_id"] for row in response.json()["data"]] == ["req1"]
+    spend_log_queries = [(sql, params) for sql, params in queries if '"LiteLLM_SpendLogs"' in sql]
+    assert spend_log_queries
+    for sql, params in spend_log_queries:
+        assert "user_api_key_alias" not in sql
+        assert "k.created_at IN (SELECT m.created_at" in sql
+        # exact match: the alias is bound as-is, without LIKE wildcards
+        assert "prod-key" in params
+        assert "%prod-key%" not in params
+
