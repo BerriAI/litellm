@@ -16152,10 +16152,14 @@ export interface paths {
         };
         /**
          * Get Submission
-         * @description Read an immutable proposal and its currently visible published skill.
+         * @description Read a proposal revision and its currently visible published skill.
          */
         get: operations["get_submission_skill_hub_submissions__submission_id__get"];
-        put?: never;
+        /**
+         * Edit Submission
+         * @description Replace a pending proposal's metadata, preserving files. Only its original submitting user may edit.
+         */
+        put: operations["edit_submission_skill_hub_submissions__submission_id__put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -16241,6 +16245,46 @@ export interface paths {
          * @description Start an optional scan of a pending submission. Scans never change approval decisions.
          */
         post: operations["start_skill_scan_skill_hub_submissions__submission_id__scan_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/submissions/{submission_id}/upload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Edit Submission Archive
+         * @description Replace a pending proposal's files using the upload limits. Only its original submitting user may edit.
+         */
+        put: operations["edit_submission_archive_skill_hub_submissions__submission_id__upload_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/submissions/{submission_id}/withdraw": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Withdraw Submission
+         * @description Withdraw a pending proposal without publishing it. Only its original submitting user may withdraw.
+         */
+        put: operations["withdraw_submission_skill_hub_submissions__submission_id__withdraw_put"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -28836,6 +28880,18 @@ export interface components {
              * @default default
              */
             target_storage: string;
+        };
+        /** Body_edit_submission_archive_skill_hub_submissions__submission_id__upload_put */
+        Body_edit_submission_archive_skill_hub_submissions__submission_id__upload_put: {
+            /** Expected Revision */
+            expected_revision: number;
+            /**
+             * File
+             * @description Replacement Agent Skills ZIP with the same declared skill name
+             */
+            file: string;
+            /** Version */
+            version?: string | null;
         };
         /** Body_image_edit_api_images_edits_post */
         Body_image_edit_api_images_edits_post: {
@@ -47588,6 +47644,8 @@ export interface components {
         SkillHubPublication: Record<string, never>;
         /** SkillHubRejection */
         SkillHubRejection: {
+            /** Expected Revision */
+            expected_revision?: number | null;
             /** Reason */
             reason?: string | null;
         };
@@ -47682,6 +47740,12 @@ export interface components {
             /** Base Updated At */
             base_updated_at: string | null;
             /**
+             * Can Edit
+             * @description Whether the caller may edit or withdraw this pending submission
+             * @default false
+             */
+            can_edit: boolean;
+            /**
              * Created At
              * Format: date-time
              */
@@ -47702,13 +47766,19 @@ export interface components {
             reviewed_at: string | null;
             /** Reviewed By */
             reviewed_by: string | null;
+            /**
+             * Revision
+             * @description Proposal revision used to prevent stale edits and reviews
+             * @default 0
+             */
+            revision: number;
             /** Skill Name */
             skill_name: string;
             /**
              * Status
              * @enum {string}
              */
-            status: "pending_review" | "approved" | "rejected";
+            status: "pending_review" | "approved" | "rejected" | "withdrawn";
             /** Submitted By */
             submitted_by: string;
         };
@@ -47716,6 +47786,32 @@ export interface components {
         SkillHubSubmissionDetail: {
             current_skill: components["schemas"]["SkillHubSkill"] | null;
             submission: components["schemas"]["SkillHubSubmission"];
+        };
+        /** SkillHubSubmissionEdit */
+        SkillHubSubmissionEdit: {
+            /** Description */
+            description?: string | null;
+            /** Domain */
+            domain?: string | null;
+            /**
+             * Expected Revision
+             * @description Revision read from the submission detail
+             */
+            expected_revision: number;
+            /**
+             * Expected Updated At
+             * @description Published updated_at read by the editor. A stale value returns 409
+             */
+            expected_updated_at?: string | null;
+            /** Keywords */
+            keywords?: string[] | null;
+            /** Namespace */
+            namespace?: string | null;
+            /**
+             * Version
+             * @description Explicit higher SemVer, or omit/null for an automatic patch bump
+             */
+            version?: string | null;
         };
         /** SkillHubSubmissionList */
         SkillHubSubmissionList: {
@@ -47725,6 +47821,14 @@ export interface components {
             has_more: boolean;
             /** Submissions */
             submissions: components["schemas"]["SkillHubSubmission"][];
+        };
+        /** SkillHubSubmissionRevision */
+        SkillHubSubmissionRevision: {
+            /**
+             * Expected Revision
+             * @description Revision read from the submission detail
+             */
+            expected_revision: number;
         };
         /** SkillHubVersion */
         SkillHubVersion: {
@@ -76029,7 +76133,7 @@ export interface operations {
     list_submissions_skill_hub_submissions_get: {
         parameters: {
             query?: {
-                status?: ("pending_review" | "approved" | "rejected") | null;
+                status?: ("pending_review" | "approved" | "rejected" | "withdrawn") | null;
                 limit?: number;
                 offset?: number;
             };
@@ -76090,6 +76194,41 @@ export interface operations {
             };
         };
     };
+    edit_submission_skill_hub_submissions__submission_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SkillHubSubmissionEdit"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillHubSubmission"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     approve_submission_skill_hub_submissions__submission_id__approve_put: {
         parameters: {
             query?: never;
@@ -76099,7 +76238,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["SkillHubSubmissionRevision"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -76240,6 +76383,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SkillScanResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    edit_submission_archive_skill_hub_submissions__submission_id__upload_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_edit_submission_archive_skill_hub_submissions__submission_id__upload_put"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillHubSubmission"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    withdraw_submission_skill_hub_submissions__submission_id__withdraw_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SkillHubSubmissionRevision"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillHubSubmission"];
                 };
             };
             /** @description Validation Error */
