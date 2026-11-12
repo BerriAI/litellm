@@ -19,7 +19,11 @@ from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     TeamAdminEditingDisabled,
     TeamAdminFieldNotPermitted,
     TeamAdminKeyEditAllowed,
+    TeamAdminMemberKeyCreationAllowed,
+    TeamAdminMemberKeyCreationDisabled,
     TeamAdminMemberKeyEditingDisabled,
+    TeamAdminMemberKeyOwnerNotPermitted,
+    TeamAdminMemberKeyTypeNotPermitted,
     TeamAdminMetadataKeyProxyControlled,
     TeamMemberDefaults,
     changed_key_fields,
@@ -34,10 +38,6 @@ from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     team_admin_may_raise_max_budget,
     team_admin_member_key_creation_or_raise,
     team_admin_member_key_creation_verdict,
-    TeamAdminMemberKeyCreationAllowed,
-    TeamAdminMemberKeyCreationDisabled,
-    TeamAdminMemberKeyOwnerNotPermitted,
-    TeamAdminMemberKeyTypeNotPermitted,
     team_admin_request_or_raise,
 )
 
@@ -386,7 +386,15 @@ class TestTeamMetadataEdits:
         assert verdict == TeamAdminMetadataKeyProxyControlled(key=key)
 
     @pytest.mark.parametrize(
-        "key", ["opted_out_global_guardrails", "callback_settings", "priority", "guardrails", "allowed_s3_buckets"]
+        "key",
+        [
+            "opted_out_global_guardrails",
+            "callback_settings",
+            "priority",
+            "max_borrow_multiplier",
+            "guardrails",
+            "allowed_s3_buckets",
+        ],
     )
     def test_changing_or_removing_a_stored_proxy_controlled_key_names_it(self, key: str):
         stored: Final = {**_STORED_METADATA, key: ["stored"]}

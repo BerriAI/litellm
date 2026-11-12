@@ -5402,6 +5402,8 @@ class PriorityReservationSettings(LiteLLMBaseModel):
 
     default_max_borrow_multiplier: float | None = Field(
         default=None,
+        ge=1.0,
+        allow_inf_nan=False,
         description="Default ceiling on borrowing when guaranteed_team_shares is on, as a multiple of a team's share (2.0 lets a 50M share burst to 100M). A team's metadata max_borrow_multiplier overrides it. None means a team may borrow up to the model ceiling.",
     )
 

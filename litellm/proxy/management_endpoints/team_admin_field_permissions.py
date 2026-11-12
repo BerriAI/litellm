@@ -96,6 +96,7 @@ PROXY_CONTROLLED_TEAM_METADATA_KEYS: Final[frozenset[str]] = frozenset(
         "model_config",
         "callback_settings",
         "priority",
+        "max_borrow_multiplier",
         "zguard_policy_id",
         "allowed_tools",
         TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY,

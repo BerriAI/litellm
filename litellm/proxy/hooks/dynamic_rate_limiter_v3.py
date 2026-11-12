@@ -187,10 +187,10 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             rate_limit={
                 "tokens_per_unit": None
                 if share_tpm is None
-                else min(int(share_tpm * scale), model_group_info.tpm or 0),
+                else int(min(share_tpm * scale, model_group_info.tpm or 0)),
                 "requests_per_unit": None
                 if share_rpm is None
-                else min(int(share_rpm * scale), model_group_info.rpm or 0),
+                else int(min(share_rpm * scale, model_group_info.rpm or 0)),
                 "window_size": self.v3_limiter.window_size,
             },
         )
@@ -516,7 +516,6 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             high_limit_multiplier=1,
         )
 
-        # A team with a guaranteed share is held to that share instead of its priority pool
         team_share_plan: Final = await self._team_share_plan(
             model=model,
             model_group_info=model_group_info,
@@ -856,7 +855,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             user_api_key_auth_metadata: Final = _OBJECT_MAP.validate_python(
                 standard_logging_metadata.get("user_api_key_auth_metadata") or {}
             )
-            key_priority: Final = _OPTIONAL_TEXT.validate_python(user_api_key_auth_metadata.get("priority"))
+            raw_priority: Final = user_api_key_auth_metadata.get("priority")
+            key_priority: Final = raw_priority if isinstance(raw_priority, str) else None
 
             # Get total tokens from response
             total_tokens = 0

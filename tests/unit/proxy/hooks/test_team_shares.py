@@ -74,14 +74,17 @@ def test_unknown_class_uses_default_weight():
     ("team_metadata", "default", "expected"),
     [
         ({"max_borrow_multiplier": 2}, None, 2.0),
-        ({"max_borrow_multiplier": 0.5}, None, 1.0),
+        ({"max_borrow_multiplier": 0.5}, None, None),
+        ({"max_borrow_multiplier": 0.5}, 3.0, 3.0),
+        ({"max_borrow_multiplier": float("inf")}, 3.0, 3.0),
+        ({"max_borrow_multiplier": float("nan")}, None, None),
         ({}, 3.0, 3.0),
         ({}, None, None),
         ({"max_borrow_multiplier": "2"}, 1.5, 1.5),
         ({"max_borrow_multiplier": True}, None, None),
     ],
 )
-def test_burst_multiplier_comes_from_team_metadata_then_default_and_never_drops_below_one(
+def test_burst_multiplier_comes_from_team_metadata_then_default_and_ignores_values_below_one_or_not_finite(
     team_metadata, default, expected
 ):
     user = UserAPIKeyAuth(team_id="t", team_metadata=team_metadata)
@@ -132,3 +135,67 @@ async def test_registry_is_shared_between_handlers_on_one_cache_and_scoped_per_m
     await second.members("opus", team_id="paa", priority="batch", now=1000.0)
     luna = await second.members("luna", team_id="state", priority="batch", now=1001.0)
     assert dict(luna) == {"assistant": "interactive", "state": "batch"}
+
+
+class _FakeSortedSets:
+    """The four sorted-set commands the registry sends, over one dict shared by every worker."""
+
+    def __init__(self) -> None:
+        self.sets: dict[str, dict[str, float]] = {}
+
+    async def zremrangebyscore(self, name: str, min: float | str, max: float | str) -> int:
+        entries = self.sets.setdefault(name, {})
+        stale = [member for member, score in entries.items() if score <= float(max)]
+        for member in stale:
+            del entries[member]
+        return len(stale)
+
+    async def zadd(self, name: str, mapping: dict[str, float]) -> int:
+        self.sets.setdefault(name, {}).update(mapping)
+        return len(mapping)
+
+    async def expire(self, name: str, time: int) -> bool:
+        return True
+
+    async def zrangebyscore(
+        self, name: str, min: float | str, max: float | str, withscores: bool
+    ) -> list[tuple[bytes, float]]:
+        return [(member.encode(), score) for member, score in self.sets.get(name, {}).items() if score >= float(min)]
+
+
+class _FakeRedisCache:
+    def __init__(self, client: _FakeSortedSets) -> None:
+        self._client = client
+
+    def init_async_client(self) -> _FakeSortedSets:
+        return self._client
+
+
+def _worker(redis: _FakeSortedSets) -> TeamShareRegistry:
+    cache = DualCache()
+    cache.redis_cache = _FakeRedisCache(redis)  # type: ignore[assignment]  # a fake stands in for the Redis boundary
+    return TeamShareRegistry(cache, window_size=60, local_ttl=1)
+
+
+@pytest.mark.asyncio
+async def test_registry_workers_add_teams_in_redis_without_erasing_each_other():
+    redis = _FakeSortedSets()
+    first, second = _worker(redis), _worker(redis)
+    await first.members("luna", team_id="assistant", priority="interactive", now=1000.0)
+    seen_by_second = await second.members("luna", team_id="state", priority="batch", now=1001.0)
+    seen_by_first = await first.members("luna", team_id="dec", priority="batch", now=1002.0)
+    assert dict(seen_by_second) == {"assistant": "interactive", "state": "batch"}
+    assert dict(seen_by_first) == {"assistant": "interactive", "state": "batch", "dec": "batch"}, (
+        "the first worker registered dec from a snapshot that never saw state, which must not drop state"
+    )
+
+
+@pytest.mark.asyncio
+async def test_registry_in_redis_prunes_teams_idle_for_a_window_and_keeps_the_newest_class():
+    redis = _FakeSortedSets()
+    worker = _worker(redis)
+    await worker.members("luna", team_id="assistant", priority="batch", now=1000.0)
+    await worker.members("luna", team_id="assistant", priority="interactive", now=1001.0)
+    await worker.members("luna", team_id="paa", priority="batch", now=1010.0)
+    members = await worker.members("luna", team_id="state", priority="batch", now=1062.0)
+    assert dict(members) == {"paa": "batch", "state": "batch"}, "assistant last registered at 1001, a window ago"
