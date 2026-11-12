@@ -377,17 +377,17 @@ function KeyEditSession({
     );
   };
 
+  const submitForm = (event: React.FormEvent<HTMLFormElement>) => {
+    moveMetadataTagsToTagsField(form, t);
+    if (!editingMemberKeyAsTeamAdmin) moveMetadataBudgetAlertsToKeyRows(form, t);
+    return form.handleSubmit((values) => handleSubmit(toSubmittedValues(values, { canViewPolicies, canViewPrompts })))(
+      event,
+    );
+  };
+
   return (
     <TooltipProvider>
-      <form
-        onSubmit={(event) => {
-          moveMetadataTagsToTagsField(form, t);
-          if (!editingMemberKeyAsTeamAdmin) moveMetadataBudgetAlertsToKeyRows(form, t);
-          return form.handleSubmit((values) =>
-            handleSubmit(toSubmittedValues(values, { canViewPolicies, canViewPrompts })),
-          )(event);
-        }}
-      >
+      <form onSubmit={submitForm}>
         <FieldGroup>
           <FormField control={form.control} name="key_alias" label={t("keyDetail.keyEditView.fields.keyAlias")}>
             {(field) => <Input {...field} value={(field.value as string | undefined) ?? ""} />}
