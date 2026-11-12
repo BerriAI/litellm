@@ -41,13 +41,6 @@ jobs:
         timeout-minutes: 2
         uses: ./.github/actions/detect-changes
 
-      - name: Define editable Rust bridge cache key
-        id: rust-bridge-key
-        if: steps.changes.outputs.decision != 'skip'
-        env:
-          RUST_BRIDGE_CACHE_KEY: ${{ runner.os }}-rust-bridge-editable-${{ hashFiles('litellm-rust/Cargo.lock', 'litellm-rust/Cargo.toml', 'litellm-rust/crates/**', 'model_prices_and_context_window.json', 'pyproject.toml', 'packaging/litellm-proxy/pyproject.toml') }}
-        run: echo "key=$RUST_BRIDGE_CACHE_KEY" >> "$GITHUB_OUTPUT"
-
       - name: Set up Python
         if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 3
@@ -66,10 +59,7 @@ jobs:
         id: rust-bridge-cache
         if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 5
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
-        with:
-          path: rust-bridge-dist
-          key: ${{ steps.rust-bridge-key.outputs.key }}
+        uses: ./.github/actions/restore-rust-bridge
 
       - name: Cache the Rust build
         if: steps.changes.outputs.decision != 'skip' && steps.rust-bridge-cache.outputs.cache-hit != 'true'
@@ -111,7 +101,7 @@ jobs:
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: rust-bridge-dist
-          key: ${{ steps.rust-bridge-key.outputs.key }}
+          key: ${{ steps.rust-bridge-cache.outputs.key }}
 
       - name: Expose the Rust bridge artifact
         id: rust-bridge-artifact
