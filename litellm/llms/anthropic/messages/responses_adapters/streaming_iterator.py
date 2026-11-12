@@ -1,7 +1,6 @@
 # What is this?
 ## Translates OpenAI call to Anthropic `/v1/messages` format
 import asyncio
-import functools
 import threading
 from collections import deque
 from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
@@ -164,6 +163,7 @@ class AnthropicResponsesStreamWrapper:
         self._sync_responses_iterator: Iterator[object] | None = None
         self._sync_upstream_lock: Final = threading.Lock()
         self._sync_upstream_closed = False
+        self._sync_upstream_to_close: _Closeable | None = None
 
     def _make_message_start(self) -> dict[str, object]:
         return {
@@ -573,8 +573,12 @@ class AnthropicResponsesStreamWrapper:
         return partial_responses_incomplete_event_on_disconnect(self.responses_stream)
 
     def _next_sync_event(self, sync_iterator: Iterator[object], missing: object) -> object:
-        with self._sync_upstream_lock:
-            return missing if self._sync_upstream_closed else next(sync_iterator, missing)
+        try:
+            with self._sync_upstream_lock:
+                return missing if self._sync_upstream_closed else next(sync_iterator, missing)
+        finally:
+            if (upstream := self._sync_upstream_to_close) is not None:
+                self._close_sync_upstream_unless_reading(upstream)
 
     async def aclose_upstream(self) -> None:
         from litellm.llms.anthropic.messages.native.streaming_iterator import SupportsAclose
@@ -583,13 +587,11 @@ class AnthropicResponsesStreamWrapper:
         if isinstance(upstream, SupportsAclose):
             await upstream.aclose()
         elif isinstance(upstream, _Closeable):
-            self._close_sync_upstream(upstream, wait_for_read=False)
+            self._sync_upstream_to_close = upstream
+            self._close_sync_upstream_unless_reading(upstream)
 
-    def _close_sync_upstream(self, upstream: _Closeable, *, wait_for_read: bool) -> None:
-        if not self._sync_upstream_lock.acquire(blocking=wait_for_read):
-            _ = asyncio.get_running_loop().run_in_executor(
-                None, functools.partial(self._close_sync_upstream, upstream, wait_for_read=True)
-            )
+    def _close_sync_upstream_unless_reading(self, upstream: _Closeable) -> None:
+        if not self._sync_upstream_lock.acquire(blocking=False):
             return
         try:
             self._sync_upstream_closed = True
