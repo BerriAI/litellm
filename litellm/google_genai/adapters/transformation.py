@@ -105,9 +105,9 @@ _RESPONSE_MIME_TYPE_KEYS: Final = ("responseMimeType", "response_mime_type")
 _RESPONSE_SCHEMA_KEYS: Final = ("responseJsonSchema", "response_json_schema", "responseSchema", "response_schema")
 _TOOL_PARAMETERS_KEYS: Final = ("parametersJsonSchema", "parameters")
 _JSON_MIME_TYPE: Final = "application/json"
-ADAPTER_GENERATION_CONFIG_KEYS: Final = frozenset(
-    {"temperature", "maxOutputTokens", "topP", "stopSequences", *_RESPONSE_MIME_TYPE_KEYS, *_RESPONSE_SCHEMA_KEYS}
-)
+_TEXT_MIME_TYPE: Final = "text/plain"
+_ADAPTER_SCALAR_CONFIG_KEYS: Final = frozenset({"temperature", "maxOutputTokens", "topP", "stopSequences"})
+_RESPONSE_FORMAT_CONFIG_KEYS: Final = frozenset({*_RESPONSE_MIME_TYPE_KEYS, *_RESPONSE_SCHEMA_KEYS})
 _GEMINI_ONLY_SCHEMA_KEYS: Final = frozenset({"propertyOrdering", "property_ordering"})
 _ADAPTER_DEFAULT_GENERATION_CONFIG: Final[Mapping[str, JsonValue]] = MappingProxyType(
     {"responseModalities": ["TEXT"], "candidateCount": 1}
@@ -117,14 +117,27 @@ _JSON_OBJECT_SCHEMA: Final = TypeAdapter(dict[str, JsonValue])
 _Validated: Final = TypeVar("_Validated")
 
 
-def adapter_honors_generation_config(key: str, value: object) -> bool:
-    return key in ADAPTER_GENERATION_CONFIG_KEYS or (
+def adapter_untranslated_generation_config(config: Mapping[str, object]) -> tuple[str, ...]:
+    keeps_response_format: Final = _asks_for_plain_text(config) or _translate_response_format(config) is not None
+    return tuple(sorted(key for key, value in config.items() if not _adapter_honors(key, value, keeps_response_format)))
+
+
+def _adapter_honors(key: str, value: object, keeps_response_format: bool) -> bool:
+    if key in _RESPONSE_FORMAT_CONFIG_KEYS:
+        return keeps_response_format
+    return key in _ADAPTER_SCALAR_CONFIG_KEYS or (
         key in _ADAPTER_DEFAULT_GENERATION_CONFIG and _ADAPTER_DEFAULT_GENERATION_CONFIG[key] == value
     )
 
 
 def _first_present(config: Mapping[str, object], keys: Sequence[str]) -> object | None:
     return next((config[key] for key in keys if config.get(key) is not None), None)
+
+
+def _asks_for_plain_text(config: Mapping[str, object]) -> bool:
+    return _first_present(config, _RESPONSE_SCHEMA_KEYS) is None and _first_present(
+        config, _RESPONSE_MIME_TYPE_KEYS
+    ) in (None, _TEXT_MIME_TYPE)
 
 
 def _validated(adapter: TypeAdapter[_Validated], value: object) -> _Validated | None:
