@@ -3047,12 +3047,12 @@ class ProxyBaseLLMRequestProcessing:
             PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS,
             ProxyRateLimitError,
             RateLimitFallback,
+            drop_client_saturation_opt_in,
             fallback_on_saturation_enabled,
             is_saturation_fallback,
             per_model_rate_limits_disable_fallbacks,
             with_rate_limit_fallback,
             with_saturation_fallbacks_exhausted,
-            without_client_saturation_opt_in,
         )
 
         general_settings_view: Final = cast(  # cast-ok: this method keeps its legacy bare-dict settings parameter
@@ -3075,9 +3075,8 @@ class ProxyBaseLLMRequestProcessing:
             if llm_router is not None
             else None
         )
-        scrubbed: Final[dict] = dict(  # mutable-ok: caller-defined request-payload shape
-            without_client_saturation_opt_in(_REQUEST_FIELDS.validate_python(self.data))
-        )
+        scrubbed: Final[dict] = self.data  # mutable-ok: caller-defined request-payload shape
+        drop_client_saturation_opt_in(scrubbed)
         self.data = scrubbed
         pristine: Final = (
             independent_snapshot(scrubbed)

@@ -36,7 +36,7 @@ This module provides a single proxy-side error class that:
 """
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, MutableMapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
@@ -94,15 +94,18 @@ def fallback_on_saturation_enabled(router_settings: object) -> bool:
         return False
 
 
-def without_client_saturation_opt_in(request_data: Mapping[str, object]) -> Mapping[str, object]:
-    """``request_data`` with ``fallback_on_saturation`` dropped from the client's ``router_settings_override``. Only
-    the key's or team's saved ``router_settings`` turn the saturation walk on, and the proxy writes those over this
-    field before the limiter reads it."""
+def drop_client_saturation_opt_in(
+    request_data: MutableMapping[str, object],  # mutable-ok: in-place edit keeps the caller's request object
+) -> None:
+    """Drop ``fallback_on_saturation`` from the client's ``router_settings_override``. Only the key's or team's saved
+    ``router_settings`` turn the saturation walk on, and the proxy writes those over this field before the limiter
+    reads it."""
     override: Final = _metadata_bucket(request_data.get("router_settings_override"))
     if FALLBACK_ON_SATURATION_SETTING not in override:
-        return request_data
-    kept: Final = {key: value for key, value in override.items() if key != FALLBACK_ON_SATURATION_SETTING}
-    return MappingProxyType({**request_data, "router_settings_override": kept})
+        return
+    request_data["router_settings_override"] = {  # rebind-ok: the request object must stay the caller's
+        key: value for key, value in override.items() if key != FALLBACK_ON_SATURATION_SETTING
+    }
 
 
 def saturation_fallbacks_exhausted(request_data: Mapping[str, object]) -> bool:
@@ -261,7 +264,7 @@ def _coerce_message(detail: object) -> str:
         try:
             return json.dumps(detail)
         except (TypeError, ValueError):
-            return str(detail)
+            return f"{detail}"
     return str(detail)
 
 
