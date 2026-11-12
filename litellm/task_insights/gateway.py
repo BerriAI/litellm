@@ -9,7 +9,7 @@ from typing import Final
 from openai import AsyncOpenAI
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
-from litellm.models.task_insights import TASK_CAPABILITIES, TASK_INSIGHTS_ANALYSIS_TAG, TaskCapability
+from litellm.models.task_insights import TASK_INSIGHTS_ANALYSIS_TAG, TaskCapability
 from litellm.task_insights.discovery import SynthesizedTask
 
 # DashScope's compatible endpoint rejects more than 20 inputs per call (400 InvalidParameter, 2026-11-12).
@@ -27,12 +27,11 @@ class _SynthesisReply(BaseModel):
     description: str = ""
     inclusion_criteria: str | tuple[str, ...] = ""
     exclusion_criteria: str | tuple[str, ...] = ""
-    required_capabilities: tuple[str, ...] = ()
+    required_capabilities: tuple[TaskCapability, ...] = ()
     example_indices: tuple[int, ...] = ()
 
 
 _SYNTHESIS: Final = TypeAdapter(_SynthesisReply)
-_CAPABILITIES: Final = TypeAdapter(tuple[TaskCapability, ...])
 
 
 def _sentence(value: str | tuple[str, ...]) -> str:
@@ -42,13 +41,12 @@ def _sentence(value: str | tuple[str, ...]) -> str:
 
 
 def _task(reply: _SynthesisReply) -> SynthesizedTask:
-    known: Final = tuple(cap for cap in reply.required_capabilities if cap in TASK_CAPABILITIES)
     return SynthesizedTask(
         name=reply.name,
         description=reply.description,
         inclusion_criteria=_sentence(reply.inclusion_criteria),
         exclusion_criteria=_sentence(reply.exclusion_criteria),
-        required_capabilities=_CAPABILITIES.validate_python(known),
+        required_capabilities=reply.required_capabilities,
         example_indices=reply.example_indices,
     )
 

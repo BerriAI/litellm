@@ -80,10 +80,33 @@ The first command removes only the sample records. `down -v` deletes the demo da
 - **Analysis traffic** carries the `litellm-task-insights-analysis` tag, so it is billed like other traffic, shown as analysis spend, and never analyzed itself.
 - **Placement.** Usage > Task Insights is a tab because it is another view of the same usage data under the same date filter ([NN/g on tabs](https://www.nngroup.com/articles/tabs-used-right/)).
 
+## What the 2026-11-12 verification run showed
+
+These numbers come from one small run on synthetic prompts. They show the pipeline works end to end, not that the
+taxonomy is good on real traffic.
+
+- The seeded demo started with no provider keys, made no model call, and seeding twice left identical row counts.
+- Live discovery read 44 synthetic coding requests sent through the gateway to `claude-haiku-5-5` and drafted two
+  named tasks, "Implement or refactor application code features" (27 requests) and "Repair builds and write tests"
+  (19), with 1 request left as noise. They were frozen without edits.
+- Jev then assigned the 30 held-out requests in under 20 seconds of the last send. 21 landed on a task and 9 came back
+  unknown, none failed. That is a coverage of 0.70, below the 0.80 we aimed for. The 9 unknown were explain, docs and
+  off-topic requests that neither frozen task covers.
+- Against labels written by an agent without looking at the assignments, all 30 outcomes matched, the 21 tasks and the
+  9 unknowns. Those are not human labels, and short synthetic one-liners are easy, so treat the agreement as a smoke
+  test.
+- The frozen definitions were stricter than the clusters they came from. Applied back to the 47 discovery texts, Jev
+  left 15 of them unknown.
+- The known-priced spend of the whole live run was $0.067, of which $0.062 was intent distillation and synthesis on
+  `claude-sonnet-5-5`, $0.0028 was 77 Jev decisions and $0.0020 was the 77 coding requests themselves. The DashScope
+  embedding calls are recorded at $0 because LiteLLM has no price for `qwen3.7-text-embedding`, so their real cost is
+  unknown, not zero.
+
 ## Limitations
 
 - The seeded taxonomy, positions and assignments are precomputed sample data. They show the UI and the persistence, not discovery or Jev quality.
-- Live quality depends on the labeled check above. A small batch gives a wide margin of error.
+- Live quality depends on the labeled check above. A small batch gives a wide margin of error, and the one run so far reached 0.70 coverage on synthetic prompts.
+- A synthesis reply that names a capability outside function_calling, vision, reasoning and structured_output becomes an unnamed draft to review, rather than losing the requirement silently.
 - Request text exists only when `store_prompts_in_spend_logs` is on. Requests without it count as not classified.
 - Observations keep bounded request excerpts with no retention of their own yet.
 - Requests bucketed after discovery have no embedding, so they are drawn at a stable offset around their task.

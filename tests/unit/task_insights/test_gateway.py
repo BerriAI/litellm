@@ -110,7 +110,7 @@ async def test_criteria_returned_as_bullet_lists_still_make_a_named_task():
             " ",
         ],
         "exclusion_criteria": ["Writing new tests", "Adding features"],
-        "required_capabilities": ["function_calling", "telepathy"],
+        "required_capabilities": ["function_calling", "reasoning"],
         "example_indices": [0, 2],
     }
     synthesizer = GatewaySynthesizer(_client(lambda request: _completion(json.dumps(reply))), "claude")
@@ -120,4 +120,15 @@ async def test_criteria_returned_as_bullet_lists_still_make_a_named_task():
     assert task.name == "Debug failing builds and tests"
     assert task.inclusion_criteria == "Reports a failing test or build. Asks for the cause or a fix."
     assert task.exclusion_criteria == "Writing new tests. Adding features."
-    assert (task.required_capabilities, task.example_indices) == (("function_calling",), (0, 2))
+    assert (task.required_capabilities, task.example_indices) == (("function_calling", "reasoning"), (0, 2))
+
+
+@pytest.mark.asyncio
+async def test_an_unsupported_capability_is_not_silently_dropped():
+    reply = {"name": "Read screenshots", "description": "d", "required_capabilities": ["telepathy"]}
+    synthesizer = GatewaySynthesizer(_client(lambda request: _completion(json.dumps(reply))), "claude")
+
+    task = await synthesizer.synthesize(("a",))
+
+    assert task.name == "Unnamed group"
+    assert task.required_capabilities == ()
