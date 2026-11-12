@@ -1002,6 +1002,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/alerts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List saved alerts
+         * @description Read saved alerts, newest first. Gateway admins and view-only admins can read. No usage queries run.
+         */
+        get: operations["list_alerts_alerts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/alerts/{alert_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read an alert
+         * @description Return the saved evidence and status. Requires a gateway admin or view-only admin.
+         */
+        get: operations["get_alert_alerts__alert_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change an alert's status
+         * @description Resolve, dismiss, or reopen an alert. Only gateway admins can write. Returns the updated alert.
+         */
+        patch: operations["update_alert_alerts__alert_id__patch"];
+        trace?: never;
+    };
     "/anthropic/{endpoint}": {
         parameters: {
             query?: never;
@@ -27106,12 +27150,99 @@ export interface components {
             /** Url */
             url: string;
         };
+        /** Alert */
+        Alert: {
+            /**
+             * Created At
+             * Format: date-time
+             * @description When the alert was first saved.
+             */
+            created_at: string;
+            /**
+             * Evidence
+             * @description Small saved snapshot explaining the alert.
+             */
+            evidence: components["schemas"]["MetricEvidence"] | components["schemas"]["DeprecationEvidence"];
+            /**
+             * Id
+             * @description Opaque alert ID, also used as a pagination cursor.
+             */
+            id: string;
+            /**
+             * Resource Id
+             * @description Resource ID. Whole-gateway alerts use 'gateway'. Keys use their SHA-256 hash, never a secret.
+             */
+            resource_id: string;
+            /**
+             * Resource Type
+             * @description Kind of affected resource.
+             * @enum {string}
+             */
+            resource_type: "gateway" | "key" | "team" | "user" | "model";
+            /**
+             * Status
+             * @description Current review status.
+             * @enum {string}
+             */
+            status: "open" | "resolved" | "dismissed";
+            /**
+             * Type
+             * @description Built-in alert category.
+             * @enum {string}
+             */
+            type: "spend" | "traffic" | "latency" | "reliability" | "model_deprecation";
+            /**
+             * Updated At
+             * Format: date-time
+             * @description When its status last changed.
+             */
+            updated_at: string;
+            /**
+             * Updated By
+             * @description User who last changed the status.
+             */
+            updated_by?: string | null;
+            /**
+             * Window End
+             * Format: date-time
+             * @description Exclusive end of the observed window, normalized to UTC milliseconds.
+             */
+            window_end: string;
+            /**
+             * Window Start
+             * Format: date-time
+             * @description Inclusive start of the observed window, normalized to UTC milliseconds.
+             */
+            window_start: string;
+        };
+        /** AlertPage */
+        AlertPage: {
+            /**
+             * Data
+             * @description Alerts ordered newest first.
+             */
+            data: components["schemas"]["Alert"][];
+            /**
+             * Next Cursor
+             * @description Pass as cursor to fetch the next page, or null at the end.
+             */
+            next_cursor?: string | null;
+        };
         /**
          * AlertType
          * @description Enum for alert types and management event types
          * @enum {string}
          */
         AlertType: "llm_exceptions" | "llm_too_slow" | "llm_requests_hanging" | "budget_alerts" | "spend_reports" | "failed_tracking_spend" | "user_spend_thresholds" | "user_spend_anomalies" | "db_exceptions" | "daily_reports" | "cooldown_deployment" | "new_model_added" | "model_deprecation_warnings" | "outage_alerts" | "region_outage_alerts" | "fallback_reports" | "new_virtual_key_created" | "virtual_key_updated" | "virtual_key_deleted" | "new_team_created" | "team_updated" | "team_deleted" | "new_internal_user_created" | "internal_user_updated" | "internal_user_deleted" | "mcp_tool_description_blocked" | "mcp_pinned_tools_changed";
+        /** AlertUpdate */
+        AlertUpdate: {
+            /**
+             * Status
+             * @description Mark resolved, dismiss, or reopen the alert.
+             * @enum {string}
+             */
+            status: "open" | "resolved" | "dismissed";
+        };
         /** AllowedVectorStoreIndexItem */
         AllowedVectorStoreIndexItem: {
             /** Index Name */
@@ -33054,6 +33185,20 @@ export interface components {
             /** Model */
             model: string;
             status: components["schemas"]["DeprecationAlertStatus"];
+        };
+        /** DeprecationEvidence */
+        DeprecationEvidence: {
+            /**
+             * Deprecation Date
+             * Format: date
+             * @description Date the affected model retires.
+             */
+            deprecation_date: string;
+            /**
+             * Replacement Model
+             * @description Suggested replacement.
+             */
+            replacement_model?: string | null;
         };
         /** DeprecationTagUsage */
         DeprecationTagUsage: {
@@ -39713,6 +39858,30 @@ export interface components {
             tool_calls: (components["schemas"]["ChatCompletionMessageToolCall"] | components["schemas"]["ChatCompletionMessageCustomToolCall"])[] | null;
         } & {
             [key: string]: unknown;
+        };
+        /** MetricEvidence */
+        MetricEvidence: {
+            /**
+             * Baseline
+             * @description Comparison value in the same unit.
+             */
+            baseline: number;
+            /**
+             * Sample Size
+             * @description Number of requests in the alert window.
+             */
+            sample_size: number;
+            /**
+             * Unit
+             * @description Unit for both values.
+             * @enum {string}
+             */
+            unit: "usd" | "requests" | "milliseconds" | "ratio";
+            /**
+             * Value
+             * @description Observed metric value in the alert window.
+             */
+            value: number;
         };
         /** MetricWithMetadata */
         MetricWithMetadata: {
@@ -54527,6 +54696,110 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    list_alerts_alerts_get: {
+        parameters: {
+            query?: {
+                /** @description Status to list. */
+                status?: "open" | "resolved" | "dismissed";
+                /** @description Maximum alerts per page. */
+                limit?: number;
+                /** @description next_cursor from the preceding page. */
+                cursor?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_alert_alerts__alert_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Alert ID returned by GET /alerts. */
+                alert_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Alert"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_alert_alerts__alert_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Alert ID returned by GET /alerts. */
+                alert_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AlertUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Alert"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

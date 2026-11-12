@@ -2207,3 +2207,20 @@ model LiteLLM_SubscriptionAccountTable {
 
   @@unique([custom_llm_provider, account_id], map: "LiteLLM_SubscriptionAccountTable_provider_account_key")
 }
+
+model LiteLLM_Alert {
+  id            BigInt   @id @default(autoincrement())
+  detection_key String   @unique @client.VarChar(64)
+  type          String   @client.VarChar(32)
+  resource_type String   @client.VarChar(16)
+  resource_id   String   @client.VarChar(1024)
+  status        String   @default("open") @client.VarChar(16)
+  window_start  DateTime
+  window_end    DateTime
+  evidence      Json
+  created_at    DateTime @default(now())
+  updated_at    DateTime @default(now()) @updatedAt
+  updated_by    String?  @client.VarChar(1024)
+
+  @@index([status, id])
+}
