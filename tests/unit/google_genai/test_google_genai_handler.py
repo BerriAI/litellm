@@ -10,11 +10,12 @@ import logging
 import threading
 from collections.abc import Iterator
 from unittest.mock import AsyncMock, MagicMock, patch
-from typing import Final, NotRequired, TypedDict
+from typing import Final
 
 import httpx
 import pytest
 import respx
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -353,14 +354,14 @@ _ANTHROPIC_SSE: Final = "".join(
 
 
 class _CallbackParams(TypedDict):
-    litellm_session_id: NotRequired[str | None]
+    litellm_session_id: ReadOnly[NotRequired[str | None]]
 
 
 class _CallbackKwargs(TypedDict):
-    call_type: str
-    litellm_call_id: str
-    litellm_params: _CallbackParams
-    standard_logging_object: StandardLoggingPayload
+    call_type: ReadOnly[str]
+    litellm_call_id: ReadOnly[str]
+    litellm_params: ReadOnly[_CallbackParams]
+    standard_logging_object: ReadOnly[StandardLoggingPayload]
 
 
 class _LoggedEvents(CustomLogger):
