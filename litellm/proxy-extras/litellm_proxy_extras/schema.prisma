@@ -87,8 +87,8 @@ model LiteLLM_CustomerMemberTable {
   alias String?
   parent_team_id String
   parent_team LiteLLM_CustomerTeamTable @relation(fields: [parent_team_id], references: [customer_team_id])
-  budget_id String?
-  budget LiteLLM_BudgetTable? @relation("CustomerMemberBudget", fields: [budget_id], references: [budget_id], onDelete: Restrict)
+  budget_override_id String?
+  budget_override LiteLLM_BudgetTable? @relation("CustomerMemberBudget", fields: [budget_override_id], references: [budget_id], onDelete: Restrict)
   budget_template_id String?
   budget_template LiteLLM_BudgetTable? @relation("CustomerMemberTemplate", fields: [budget_template_id], references: [budget_id], onDelete: Restrict)
   budget_override_expires_at DateTime?
