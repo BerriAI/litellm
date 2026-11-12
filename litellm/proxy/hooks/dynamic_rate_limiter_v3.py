@@ -7,7 +7,6 @@ import os
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
@@ -446,48 +445,28 @@ def _window_guarded(
     )
 
 
-def _distinct_fallback_holds(stash: RequestRateLimiterStash) -> tuple[BorrowingTeamModelHold, ...]:
-    """Each fallback hold once, though the stash keys it by both the requested name and the resolved group."""
-    return tuple(
-        {hold.descriptor["value"]: hold for hold in stash.borrowing_team_model_fallback_limits.values()}.values()
-    )
-
-
-def _hold_refunds(holds: tuple[BorrowingTeamModelHold, ...], ttl: int) -> tuple[ReservationOperation, ...]:
-    return tuple(
-        chain.from_iterable(
-            _window_guarded(_team_model_token_increment(hold.descriptor, -hold.reserved_tokens, ttl), hold.window)
-            for hold in holds
-        )
-    )
-
-
 def _team_model_settlement(
     stash: RequestRateLimiterStash | None, model_group: str | None, total_tokens: int, ttl: int
 ) -> tuple[ReservationOperation, ...]:
-    """Settle the counter that served the call to actual usage and give back every other hold the call took.
+    """Settle the counter that served the call to actual usage and return the admitting reservation it did not use.
 
     The admitting team counter serves unless a fallback group did, in which case that fallback's hold serves and
-    the admitting reservation is returned. Holds on fallback targets that did not serve are returned too.
+    the admitting reservation is returned. A hold on a fallback target that did not serve stays for that attempt's
+    own failure callback, which may still be reporting the usage it recorded.
     """
     if stash is None:
         return ()
     served: Final = stash.borrowing_team_model_fallback_limits.get(model_group) if model_group is not None else None
-    others: Final = tuple(hold for hold in _distinct_fallback_holds(stash) if hold is not served)
     admitted: Final = stash.borrowing_team_model_limit
     reserved_tokens: Final = stash.borrowing_team_model_reserved_tokens
     window: Final = stash.borrowing_team_model_reserved_window
     if served is None:
-        return (
-            *_window_guarded(_team_model_token_increment(admitted, total_tokens - reserved_tokens, ttl), window),
-            *_hold_refunds(others, ttl),
-        )
+        return _window_guarded(_team_model_token_increment(admitted, total_tokens - reserved_tokens, ttl), window)
     return (
         *_window_guarded(_team_model_token_increment(admitted, -reserved_tokens, ttl), window),
         *_window_guarded(
             _team_model_token_increment(served.descriptor, total_tokens - served.reserved_tokens, ttl), served.window
         ),
-        *_hold_refunds(others, ttl),
     )
 
 
@@ -1349,7 +1328,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         tpm_share: Final = (descriptor["rate_limit"] or {}).get("tokens_per_unit")
         if tpm_share is None or not data:
             return 0
-        as_dispatched: Final = dict(data)
+        as_dispatched: Final = dict(data, model=model)
         if self.v3_limiter.get_rate_limit_type() != "input":
             self.v3_limiter.bound_output_for_limit(as_dispatched, tpm_share, call_type)
         try:
@@ -1752,7 +1731,9 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             if stash is not None:
                 stash.borrowing_team_model_reserved_tokens = 0
                 stash.borrowing_team_model_reserved_window = None
-                stash.borrowing_team_model_fallback_limits = MappingProxyType({})
+                stash.borrowing_team_model_fallback_limits = MappingProxyType(
+                    {k: h for k, h in stash.borrowing_team_model_fallback_limits.items() if k != model_group}
+                )
             if not model_group:
                 if team_model_tokens:
                     await self.v3_limiter.async_increment_reservation_aware_tokens(

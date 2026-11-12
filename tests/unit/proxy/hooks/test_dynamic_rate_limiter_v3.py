@@ -2170,11 +2170,12 @@ async def _settle_tokens(
     tokens: int,
     response: object | None = None,
     call_id: str | None = None,
+    model_group: str = "shared-model",
     **extra_kwargs: object,
 ) -> None:
     await handler.async_log_success_event(
         kwargs={
-            "litellm_params": {"metadata": {"model_group": "shared-model"}},
+            "litellm_params": {"metadata": {"model_group": model_group}},
             "standard_logging_object": {
                 "metadata": {"user_api_key_team_id": "team-a", "user_api_key_auth_metadata": {}}
             },
@@ -2223,8 +2224,10 @@ async def _check(
     )
 
 
-async def _team_tokens_remaining(handler: PROXY_DynamicRateLimitHandlerV3) -> int:
-    share: Final = handler._borrowing_team_share("shared-model", _team_key())
+async def _team_tokens_remaining(
+    handler: PROXY_DynamicRateLimitHandlerV3, auth: UserAPIKeyAuth | None = None, model: str = "shared-model"
+) -> int:
+    share: Final = handler._borrowing_team_share(model, auth if auth is not None else _team_key())
     assert share is not None
     response: Final = await handler.v3_limiter.should_rate_limit(
         [share.share], read_only=True, skip_parallel_check=True
@@ -2654,6 +2657,30 @@ async def test_an_input_token_limit_leaves_the_reply_length_alone(monkeypatch: p
     prompt: Final[dict[str, object]] = {"messages": [{"role": "user", "content": "hi"}]}
     await _check(handler, _team_key(), saturation=1.0, data=prompt)
     assert "max_tokens" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_a_late_failure_from_a_fallback_that_did_not_serve_is_charged_to_that_target(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.0)
+    key: Final = _team_key(team_limits={"model_tpm_limit": {"shared-model": 100, "other-model": 100, "chat": 100}})
+    await _check(handler, key, saturation=1.0, data=_fallback_prompt(30))
+    assert await handler.async_fallback_target_allowed(key, "other-model", _fallback_prompt(30)) is True
+    assert await handler.async_fallback_target_allowed(key, "chat", _fallback_prompt(30)) is True
+    await _settle_tokens(handler, 7, model_group="chat")
+    await handler.async_log_failure_event(
+        kwargs={
+            "litellm_params": {"metadata": {"model_group": "other-model"}},
+            "combined_usage_object": litellm.Usage(prompt_tokens=20, completion_tokens=5, total_tokens=25),
+        },
+        response_obj=Exception("stream cut"),
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    assert await _team_tokens_remaining(handler, key, "shared-model") == 100
+    assert await _team_tokens_remaining(handler, key, "chat") == 93
+    assert await _team_tokens_remaining(handler, key, "other-model") == 75
 
 
 @pytest.mark.asyncio
