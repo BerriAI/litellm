@@ -900,11 +900,12 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                 )
             )
         )
+        frame_share: Final = next(
+            (d for d in share_descriptors if d["key"] == PRIORITY_CLASS_SHARE_AT_SATURATION), None
+        )
         connection_stash: Final = get_request_stash()
-        if connection_stash is not None:
-            connection_stash.priority_class_share = next(
-                (d for d in share_descriptors if d["key"] == PRIORITY_CLASS_SHARE_AT_SATURATION), None
-            )
+        if connection_stash is not None and frame_share is not None:
+            connection_stash.priority_class_share = frame_share
         borrowing: Final = self._borrowing_team_share(model=requested_model, user_api_key_dict=user_api_key_dict)
         if not share_descriptors and borrowing is None:
             return
@@ -1528,10 +1529,14 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                 None if stash is None else stash.borrowing_team_model_limit, total_tokens, self.v3_limiter.window_size
             )
             class_share: Final = None if stash is None else stash.priority_class_share
+            settled_team_id: Final = settlement_metadata.user_api_key_team_id
             priority_scope: Final = (
                 RateLimitScope("priority_model", priority_key)
                 if class_share is None
-                else RateLimitScope(class_share["key"], class_share["value"])
+                else RateLimitScope(
+                    class_share["key"],
+                    class_share["value"] if settled_team_id is None else counter_value(model_group, settled_team_id),
+                )
             )
             pipeline_operations: Final = (
                 model_tokens,
