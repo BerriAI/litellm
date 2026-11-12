@@ -129,9 +129,9 @@ class ReplicateImageGenerationConfig(BaseImageGenerationConfig):
     ) -> _ImageParams:
         extra_body: Final = optional_params.get("extra_body")
         prediction_input: Final = {
-            "prompt": prompt,
             **{key: value for key, value in optional_params.items() if key not in ("response_format", "extra_body")},
             **(_NATIVE_INPUT.validate_python(extra_body) if isinstance(extra_body, Mapping) else {}),
+            "prompt": prompt,
         }
         return dict(replicate_prediction_request("", model, prediction_input).body)
 
