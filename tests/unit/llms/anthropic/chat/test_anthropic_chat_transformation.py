@@ -1204,6 +1204,26 @@ def test_anthropic_chat_headers_add_context_management_beta():
     assert headers["anthropic-beta"] == "context-management-2025-06-27"
 
 
+def test_strict_function_tool_is_forwarded_to_anthropic():
+    config = AnthropicConfig()
+    schema = {"type": "object", "properties": {"order_id": {"type": "string"}}, "required": ["order_id"]}
+
+    def function_tool(**function_fields):
+        return {"type": "function", "function": {"name": "lookup_order", "parameters": schema, **function_fields}}
+
+    strict_tool, _ = config.map_tool_helper(function_tool(strict=True))
+    assert strict_tool is not None
+    assert strict_tool["strict"] is True
+
+    for tool in (function_tool(), function_tool(strict=False)):
+        mapped, _ = config.map_tool_helper(tool)
+        assert mapped is not None
+        assert "strict" not in mapped
+
+    headers = config.update_headers_with_optional_anthropic_beta(headers={}, optional_params={"tools": [strict_tool]})
+    assert "structured-outputs-2025-11-13" in headers["anthropic-beta"]
+
+
 def test_anthropic_beta_header_merging_with_output_format():
     """
     Test that anthropic-beta headers from extra_headers are merged with
