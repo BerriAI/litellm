@@ -5059,7 +5059,7 @@ async def test_other_decisions_providers_do_not_get_the_nace_client_header(
     assert "x-nace-client" not in route.calls[0].request.headers
 
 
-@pytest.mark.parametrize("model", ("s1-fast", "s1-pro", "reax-1"))
+@pytest.mark.parametrize("model", ("s1-fast", "s1-pro", "reax-1", "reax-1.3"))
 def test_decisionmodels_prices_are_input_only(model: str) -> None:
     entry: Final = litellm.model_cost[f"decisionmodels/{model}"]
 
