@@ -4,10 +4,12 @@ Dynamic rate limiter v3 - Saturation-aware priority-based rate limiting
 
 import os
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Final, Literal
 
 from fastapi import HTTPException
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm import ModelResponse, Router
@@ -19,7 +21,7 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
     ensure_response_additional_headers,
     response_has_hidden_params,
 )
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import (
     ProxyRateLimitError,
     map_v3_rate_limit_type,
@@ -32,6 +34,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (  # noqa: F401  # l
     _PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     claim_request_stash_for_data,
     get_or_create_request_stash,
+    get_request_stash_for_call,
 )
 from litellm.proxy.hooks.rate_limiter_utils import (
     convert_priority_to_percent,
@@ -44,6 +47,40 @@ from litellm.types.utils import CallTypesLiteral, LLMResponseTypes
 
 if TYPE_CHECKING:
     from litellm.types.utils import PriorityReservationSettings
+
+
+STEERED_FROM_HEADER: Final = "x-litellm-model-steered-from"
+
+
+class ModelPreference(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    model: str
+    alternates: tuple[str, ...] = ()
+
+
+MODEL_PREFERENCES: Final = TypeAdapter(tuple[ModelPreference, ...])
+
+
+@dataclass(frozen=True, slots=True)
+class SteeredModel:
+    model: str
+    group_info: ModelGroupInfo
+
+
+def alternates_for(user_api_key_dict: UserAPIKeyAuth, model: str) -> tuple[str, ...]:
+    """The team's opt-in alternates for ``model`` from ``team_metadata.model_preferences``, or none."""
+    raw: Final = (user_api_key_dict.team_metadata or {}).get("model_preferences")
+    if raw is None:
+        return ()
+    try:
+        preferences: Final = MODEL_PREFERENCES.validate_python(raw)
+    except ValidationError as error:
+        verbose_proxy_logger.warning(
+            "Ignoring malformed team model_preferences for team %s: %s", user_api_key_dict.team_id, error
+        )
+        return ()
+    return next((preference.alternates for preference in preferences if preference.model == model), ())
 
 
 def _get_priority_settings() -> "PriorityReservationSettings":
@@ -604,17 +641,25 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
         claim_request_stash_for_data(data)
         model: Final = data["model"]
+        if not isinstance(model, str):
+            return None
         priority: Final = self._get_priority_from_user_api_key_dict(user_api_key_dict=user_api_key_dict)
 
         # Get model configuration
-        model_group_info: Final[ModelGroupInfo | None] = self.llm_router.registry().group(model)
-        if model_group_info is None:
+        requested_group_info: Final[ModelGroupInfo | None] = self.llm_router.registry().group(model)
+        if requested_group_info is None:
             verbose_proxy_logger.debug("No model group info for %s, allowing request", model)
             return None
 
+        steered: Final = await self._steer_to_alternate(model, requested_group_info, user_api_key_dict)
+        served_model: Final = model if steered is None else steered.model
+        model_group_info: Final = requested_group_info if steered is None else steered.group_info
+        if steered is not None:
+            get_or_create_request_stash().steered_from_model = model
+
         try:
             # STEP 1: Check current saturation level
-            saturation: Final = await self._check_model_saturation(model, model_group_info)
+            saturation: Final = await self._check_model_saturation(served_model, model_group_info)
 
             saturation_threshold: Final = _get_priority_settings().saturation_threshold
 
@@ -629,7 +674,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             # Phase 3: Increment ALL counters only if request will be allowed
             # This prevents partial increments and ensures accurate tracking
             await self._check_rate_limits(
-                model=model,
+                model=served_model,
                 model_group_info=model_group_info,
                 user_api_key_dict=user_api_key_dict,
                 priority=priority,
@@ -643,7 +688,46 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             # Fail open on unexpected errors
             return None
 
+        if steered is None:
+            return None
+        rewritten: Final[dict[str, object]] = {**data, "model": served_model}
+        return rewritten
+
+    def _team_may_call(self, user_api_key_dict: UserAPIKeyAuth, model: str) -> bool:
+        from litellm.proxy.auth.auth_checks import model_in_access_group
+
+        team_models: Final = user_api_key_dict.team_models
+        if not team_models or SpecialModelNames.all_proxy_models.value in team_models:
+            return True
+        return model_in_access_group(model, team_models, self.llm_router)
+
+    async def _steer_to_alternate(
+        self, model: str, model_group_info: ModelGroupInfo, user_api_key_dict: UserAPIKeyAuth
+    ) -> "SteeredModel | None":
+        """First team alternate below ``saturation_threshold`` once ``model`` is at or above it, else None."""
+        alternates: Final = alternates_for(user_api_key_dict, model)
+        if not alternates:
+            return None
+        threshold: Final = _get_priority_settings().saturation_threshold
+        if await self._check_model_saturation(model, model_group_info) < threshold:
+            return None
+        for alternate in alternates:
+            if alternate == model:
+                continue
+            if (candidate := await self._idle_permitted_alternate(alternate, user_api_key_dict, threshold)) is not None:
+                verbose_proxy_logger.info("Steering team %s from %s to %s", user_api_key_dict.team_id, model, alternate)
+                return candidate
         return None
+
+    async def _idle_permitted_alternate(
+        self, alternate: str, user_api_key_dict: UserAPIKeyAuth, threshold: float
+    ) -> "SteeredModel | None":
+        group_info: Final = self.llm_router.registry().group(alternate)
+        if group_info is None or not self._team_may_call(user_api_key_dict, alternate):
+            return None
+        if await self._check_model_saturation(alternate, group_info) >= threshold:
+            return None
+        return SteeredModel(model=alternate, group_info=group_info)
 
     @with_service_target(RATE_LIMITS_TARGET)
     async def async_post_call_success_hook(
@@ -670,6 +754,10 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                         "Skipping x-litellm-priority header: priority %r is not Latin-1 encodable", priority
                     )
                 additional_headers["x-litellm-rate-limiter-version"] = "v3"
+                call_id: Final = data.get("litellm_call_id")
+                stash: Final = get_request_stash_for_call(call_id if isinstance(call_id, str) else None)
+                if stash is not None and stash.steered_from_model is not None:
+                    additional_headers[STEERED_FROM_HEADER] = stash.steered_from_model
 
             return response
 

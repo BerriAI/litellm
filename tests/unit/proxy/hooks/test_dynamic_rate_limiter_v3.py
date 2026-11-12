@@ -1819,3 +1819,67 @@ async def test_post_call_success_hook_priority_header_is_always_http_encodable(t
     http_response = Response(headers={key: str(value) for key, value in additional_headers.items()})
     assert http_response.headers.get("x-litellm-priority") == expected_priority_header
     assert http_response.headers["x-litellm-rate-limiter-version"] == "v3"
+
+
+def _steering_router(preferred: str, alternate: str, preferred_rpm: int = 2, alternate_rpm: int = 1000) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                    "rpm": rpm,
+                },
+            }
+            for name, rpm in ((preferred, preferred_rpm), (alternate, alternate_rpm))
+        ]
+    )
+
+
+def _team_user(team_models: list, preferences: object) -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(
+        team_id="flexible-team", team_models=team_models, team_metadata={"model_preferences": preferences}
+    )
+
+
+async def _saturate(handler: DynamicRateLimitHandler, model: str, requests: int = 1) -> None:
+    for _ in range(requests):
+        assert await handler.async_pre_call_hook(UserAPIKeyAuth(), DualCache(), {"model": model}, "completion") is None
+
+
+@pytest.mark.asyncio
+async def test_flexible_team_is_steered_to_its_alternate_once_the_preferred_model_saturates(monkeypatch):
+    monkeypatch.setattr(litellm, "priority_reservation", None)
+    monkeypatch.setattr(litellm.priority_reservation_settings, "saturation_threshold", 0.5)
+    handler = DynamicRateLimitHandler(internal_usage_cache=DualCache())
+    handler.update_variables(llm_router=_steering_router("luna", "opus"))
+    flexible = _team_user(["luna", "opus"], [{"model": "luna", "alternates": ["opus"]}])
+
+    assert await handler.async_pre_call_hook(flexible, DualCache(), {"model": "luna"}, "completion") is None
+
+    await _saturate(handler, "luna")
+    steered = await handler.async_pre_call_hook(flexible, DualCache(), {"model": "luna", "n": 1}, "completion")
+    assert steered == {"model": "opus", "n": 1}
+
+    response = litellm.ModelResponse()
+    await handler.async_post_call_success_hook(data={"model": "opus"}, user_api_key_dict=flexible, response=response)
+    assert response._hidden_params["additional_headers"]["x-litellm-model-steered-from"] == "luna"
+
+
+@pytest.mark.asyncio
+async def test_teams_without_a_permitted_idle_alternate_stay_on_the_preferred_model(monkeypatch):
+    monkeypatch.setattr(litellm, "priority_reservation", None)
+    monkeypatch.setattr(litellm.priority_reservation_settings, "saturation_threshold", 0.5)
+    handler = DynamicRateLimitHandler(internal_usage_cache=DualCache())
+    handler.update_variables(llm_router=_steering_router("luna", "opus", preferred_rpm=10, alternate_rpm=1))
+    await _saturate(handler, "luna", requests=5)
+    await _saturate(handler, "opus")
+
+    forbidden = _team_user(["luna"], [{"model": "luna", "alternates": ["opus"]}])
+    unknown = _team_user([], [{"model": "luna", "alternates": ["missing-model"]}])
+    malformed = _team_user([], {"luna": "opus"})
+    both_saturated = _team_user([], [{"model": "luna", "alternates": ["opus"]}])
+    for team in (forbidden, unknown, malformed, both_saturated):
+        assert await handler.async_pre_call_hook(team, DualCache(), {"model": "luna"}, "completion") is None
