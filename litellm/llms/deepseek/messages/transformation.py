@@ -3,12 +3,15 @@ DeepSeek Anthropic-compatible messages transformation config.
 """
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Final
 
 from pydantic import TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
@@ -17,6 +20,37 @@ from litellm.types.router import GenericLiteLLMParams
 
 _TOOL_LIST: Final = TypeAdapter(list[object])
 _TOOL_FIELDS: Final = TypeAdapter(dict[object, object])
+_FIELDS: Final = TypeAdapter(dict[str, object])
+DEEPSEEK_EFFORT_LEVELS: Final = ("none", "minimal", "low", "medium", "high", "xhigh", "ultra", "max")
+
+
+@dataclass(frozen=True, slots=True)
+class _InvalidEffort:
+    effort: object
+
+
+def _output_config_fields(params: Mapping[str, object]) -> Mapping[str, object]:
+    output_config: Final = params.get("output_config")
+    return _FIELDS.validate_python(output_config) if isinstance(output_config, dict) else {}
+
+
+def _without(params: Mapping[str, object], key: str) -> Mapping[str, object]:
+    return {name: value for name, value in params.items() if name != key}
+
+
+def _deepseek_effort_params(params: Mapping[str, object], drop_params: bool) -> Mapping[str, object] | _InvalidEffort:
+    alias: Final = params.get("reasoning_effort")
+    output_config: Final = _output_config_fields(params)
+    effort: Final = output_config.get("effort", alias if isinstance(alias, str) else None)
+    forwarded: Final = _without(params, "reasoning_effort") if isinstance(alias, str) else dict(params)
+    if effort is None:
+        return forwarded
+    if effort in DEEPSEEK_EFFORT_LEVELS:
+        return {**forwarded, "output_config": {**output_config, "effort": effort}}
+    if not drop_params:
+        return _InvalidEffort(effort=effort)
+    remaining: Final = _without(output_config, "effort")
+    return {**_without(forwarded, "output_config"), **({"output_config": remaining} if remaining else {})}
 
 
 def _custom_tool_without_type(tool: object) -> Mapping[object, object] | None:
@@ -45,7 +79,9 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
 
     It reads `thinking` and `output_config.effort` natively (ignoring
     `budget_tokens`) and accepts any `temperature`, so the Claude-specific
-    effort and temperature reshaping is skipped.
+    effort and temperature reshaping is skipped. The `reasoning_effort` alias
+    becomes `output_config.effort`, and a level DeepSeek does not accept is a
+    400, or dropped under `drop_params`.
     """
 
     @property
@@ -146,10 +182,22 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> dict:
+        effort_params: Final = _deepseek_effort_params(
+            _FIELDS.validate_python(anthropic_messages_optional_request_params),
+            drops_unsupported_params(litellm_params.drop_params),
+        )
+        if isinstance(effort_params, _InvalidEffort):
+            raise AnthropicError(
+                message=(
+                    f"Invalid effort: {effort_params.effort!r}. DeepSeek accepts one of: "
+                    f"{', '.join(repr(level) for level in DEEPSEEK_EFFORT_LEVELS)}"
+                ),
+                status_code=400,
+            )
         anthropic_messages_request: Final = super().transform_anthropic_messages_request(
             model=model,
             messages=messages,
-            anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+            anthropic_messages_optional_request_params=dict(effort_params),
             litellm_params=litellm_params,
             headers=headers,
         )
