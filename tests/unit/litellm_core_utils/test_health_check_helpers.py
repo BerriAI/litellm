@@ -220,6 +220,8 @@ def test_health_check_tracking_keeps_the_probed_deployment_identity_and_forces_t
                 "model_info": {"id": "standby-deployment"},
                 "model_group": "plain",
                 "tags": ["caller-tag"],
+                "agent_id": "caller-agent",
+                "spend_logs_metadata": {"owner": "caller"},
             },
         }
     )
@@ -229,6 +231,8 @@ def test_health_check_tracking_keeps_the_probed_deployment_identity_and_forces_t
     assert metadata["model_group"] == "plain"
     assert metadata["tags"] == [LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME]
     assert metadata["user_api_key_alias"] == LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
+    assert metadata.get("agent_id") is None
+    assert "spend_logs_metadata" not in metadata
 
 
 def test_get_metadata_for_health_check_call():

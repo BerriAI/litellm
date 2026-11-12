@@ -505,6 +505,36 @@ async def test_run_model_health_check_threads_resolved_mode_to_ahealth_check():
     assert probed_params["model"] == "amazon.titan-embed-text-v2:0"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_info", "expected_metadata"),
+    [
+        (
+            {"id": "standby-deployment", "mode": "chat"},
+            {"model_info": {"id": "standby-deployment"}, "model_group": "plain"},
+        ),
+        ({"mode": "chat"}, None),
+    ],
+)
+async def test_run_model_health_check_stamps_the_deployment_identity_only_in_logging_metadata(
+    model_info: dict[str, object], expected_metadata: dict[str, object] | None
+) -> None:
+    fake_ahealth_check: Final = AsyncMock(return_value={})
+
+    with patch.object(hc_module.litellm, "ahealth_check", fake_ahealth_check):
+        await hc_module._run_model_health_check(
+            {
+                "model_name": "plain",
+                "litellm_params": {"model": "openai/provider-b-pay", "api_key": "sk-fake"},
+                "model_info": model_info,
+            }
+        )
+
+    probed_params: Final = fake_ahealth_check.call_args.args[0]
+    assert probed_params.get("litellm_metadata") == expected_metadata
+    assert probed_params["model_info"] == {"mode": "chat"}
+
+
 _MANTLE_CLAUDE_DEPLOYMENT_PARAMS = {
     "model": "bedrock_mantle/anthropic.claude-haiku-4-5",
     "api_key": "test-bearer",
