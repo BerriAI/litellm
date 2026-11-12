@@ -31,6 +31,7 @@ from litellm.constants import (
     DEFAULT_IMAGE_HEIGHT,
     DEFAULT_IMAGE_TOKEN_COUNT,
     DEFAULT_IMAGE_WIDTH,
+    DEFAULT_MAX_RECURSE_DEPTH,
     MAX_IMAGE_URL_DOWNLOAD_SIZE_MB,
     MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES,
     MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES,
@@ -1758,31 +1759,72 @@ def _count_file_tokens(
     )
 
 
+_ANTHROPIC_SERVER_TOOL_FIELDS: Final = MappingProxyType(
+    {
+        "server_tool_use": ("name", "input"),
+        "mcp_tool_use": ("name", "input"),
+        "web_search_tool_result": ("content",),
+        "web_fetch_tool_result": ("content",),
+        "code_execution_tool_result": ("content",),
+        "bash_code_execution_tool_result": ("content",),
+        "text_editor_code_execution_tool_result": ("content",),
+        "mcp_tool_result": ("content",),
+        "web_search_result": ("url", "title", "snippet"),
+        "web_fetch_result": ("url", "content"),
+        "code_execution_result": ("stdout", "stderr", "content"),
+        "bash_code_execution_result": ("stdout", "stderr", "content"),
+        "text_editor_code_execution_view_result": ("content",),
+        "text_editor_code_execution_str_replace_result": ("lines",),
+        "text_editor_code_execution_create_result": (),
+        "encrypted_code_execution_result": ("stderr", "content"),
+        "code_execution_output": (),
+        "bash_code_execution_output": (),
+        "web_search_tool_result_error": ("error_code",),
+        "web_fetch_tool_result_error": ("error_code",),
+        "code_execution_tool_result_error": ("error_code",),
+        "bash_code_execution_tool_result_error": ("error_code",),
+        "text_editor_code_execution_tool_result_error": ("error_code", "error_message"),
+    }
+)
+_ANTHROPIC_DOCUMENT: Final = TypeAdapter(AnthropicMessagesDocumentParam)
+
+
 def _count_anthropic_content(
     content: Mapping[str, object],
     count_function: TokenCounterFunction,
     use_default_image_token_count: bool,
     default_token_count: int | None,
     pdf_pricing: PdfPagePricing = "claude",
+    *,
+    _content_depth: int = 0,
 ) -> int:
     """
     Count tokens in Anthropic-specific content blocks (tool_use, tool_result, etc.).
 
-    Uses TypedDict definitions from litellm.types.llms.anthropic to determine
-    what fields to count and how to handle nested structures.
-
-    Dynamically infers which fields to count based on the TypedDict definition,
-    avoiding hardcoded field names.
+    Uses readable server tool fields or the client tool TypedDict definitions.
     """
-    typeddict_cls: Final = _validate_anthropic_content(content)
-    type_hints: Final[Mapping[str, object]] = getattr(typeddict_cls, "__annotations__", {})
+    if _content_depth >= DEFAULT_MAX_RECURSE_DEPTH:
+        raise UnsupportedContentTypeError("Anthropic tool content nesting exceeds the token counter limit")
+    content_type: Final = content.get("type")
+    if content_type == "document":
+        return _count_document_tokens(
+            _ANTHROPIC_DOCUMENT.validate_python(content),
+            count_function,
+            use_default_image_token_count,
+            default_token_count,
+            pdf_pricing,
+        )
+    server_fields: Final = _ANTHROPIC_SERVER_TOOL_FIELDS.get(content_type) if isinstance(content_type, str) else None
+    fields: Final[Mapping[str, object]] = (
+        dict.fromkeys(server_fields)
+        if server_fields is not None
+        else getattr(_validate_anthropic_content(content), "__annotations__", {})
+    )
     tokens = 0
 
-    # Fields to skip (metadata/identifiers that don't contribute to prompt tokens)
     skip_fields: Final = {"type", "id", "tool_use_id", "cache_control", "is_error"}
 
-    # Iterate over all fields defined in the TypedDict
-    for field_name, field_type in type_hints.items():
+    for field_name in fields:
         if field_name in skip_fields:
             continue
 
@@ -1801,7 +1843,21 @@ def _count_anthropic_content(
                     pdf_pricing,
                 )
             elif isinstance(field_value, dict):
-                tokens += count_function(str(field_value))
+                if (
+                    server_fields is not None
+                    and field_name == "content"
+                    and (field_mapping := as_str_mapping(content[field_name])) is not None
+                ):
+                    tokens += _count_anthropic_content(
+                        field_mapping,
+                        count_function,
+                        use_default_image_token_count,
+                        default_token_count,
+                        pdf_pricing,
+                        _content_depth=_content_depth + 1,
+                    )
+                else:
+                    tokens += count_function(str(field_value))
         except Exception as e:
             if default_token_count is not None:
                 return default_token_count
@@ -1867,7 +1923,9 @@ def _count_content_list(
                     use_default_image_token_count,
                     pdf_pricing,
                 )
-            elif c["type"] in ("tool_use", "tool_result", "search_result"):
+            elif (
+                c["type"] in ("tool_use", "tool_result", "search_result") or c["type"] in _ANTHROPIC_SERVER_TOOL_FIELDS
+            ):
                 num_tokens += _count_anthropic_content(
                     c,
                     count_function,
@@ -1892,7 +1950,7 @@ def _count_content_list(
                     f"Invalid content item type: {content_type}. "
                     f"Expected str or dict with 'type' field "
                     f"(text, image_url, image, document, file, tool_use, tool_result, thinking, redacted_thinking, "
-                    f"compaction, tool_reference, search_result)."
+                    f"compaction, tool_reference, search_result, or Anthropic server tool blocks)."
                 )
         return num_tokens
     except Exception as e:
