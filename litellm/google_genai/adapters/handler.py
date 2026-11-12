@@ -87,10 +87,10 @@ class GenerateContentToCompletionHandler:
         completion_kwargs: Final = GenerateContentCompletionKwargs(
             **_TranslatedCompletionKwargs(
                 **dict[str, object](
-                completion_request,
-                **{key: request_kwargs[key] for key in _FORWARDED_REQUEST_KEYS if key in request_kwargs},
-                **({"stream": True} if stream else {}),
-                **({"stream_options": stream_options} if stream_options is not None else {}),
+                    completion_request,
+                    **{key: request_kwargs[key] for key in _FORWARDED_REQUEST_KEYS if key in request_kwargs},
+                    **({"stream": True} if stream else {}),
+                    **({"stream_options": stream_options} if stream_options is not None else {}),
                 )
             )
         )
