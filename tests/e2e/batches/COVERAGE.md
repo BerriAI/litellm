@@ -85,7 +85,10 @@ File delete asserts `object=="file"` and `deleted==True`.
 | `batch_client.py` | typed file upload/download + batch create/retrieve/cancel/list/delete over the shared ProxyClient; runtime batch model registration via /model/new; denial helpers |
 | `capabilities.py` | the provider x scenario matrix + per-provider /model/new params + id-shape classifiers + per-provider raw-id assertion |
 | `conftest.py` | session-scoped batch deployment registration and teardown |
-| `test_batches_e2e.py` | parametrized lifecycle with per-endpoint output assertions, file upload/delete outputs, key-model-access denial, per-backend content download, failure paths, second-hop routing, terminal state + cost |
+| `batch_helpers.py` | helpers the test files share: retrying retrieve/cancel, the one-line JSONL input, the batch object shape assertion, batch output line models |
+| `test_batches_e2e.py` | parametrized lifecycle with per-endpoint output assertions, file upload/delete outputs, key-model-access denial, per-backend content download, failure paths |
+| `test_batch_second_hop_e2e.py` | second-hop routing, in its own file so its wait runs on another xdist worker |
+| `test_batch_terminal_state_e2e.py` | terminal state + cost, in its own file so its 5 minute poll runs on another xdist worker |
 | `test_managed_files_enforcement_e2e.py` | require_managed_files enforcement pins; deselected unless `E2E_MANAGED_FILES_STACK` is set (see below) |
 
 ## require_managed_files enforcement (separate stack phase)
