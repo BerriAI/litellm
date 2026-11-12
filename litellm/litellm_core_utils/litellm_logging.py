@@ -29,6 +29,7 @@ from typing_extensions import TypedDict
 
 import litellm
 from litellm._internal_context import in_mirrored_call, outside_mirrored_call, post_response_phase
+from litellm._lazy_imports import get_token_counter_new
 from litellm._logging import (
     is_debugging_on,
     redact_string,
@@ -47,6 +48,7 @@ from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
     EMPTY_MAPPING,
+    FAILED_PROMPT_TOKEN_ESTIMATE_KEY,
     INTERNAL_CALLBACK_NAMES,
     KUBERNETES_POD_ROUTING_KEY,
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
@@ -674,6 +676,9 @@ class UsageObservation(Enum):
     ESTIMATED = "estimated"
 
 
+_CHAT_CALL_TYPES: Final = frozenset({CallTypes.completion.value, CallTypes.acompletion.value})
+
+
 class _UsageFields(TypedDict, total=False, extra_items=object):
     pass
 
@@ -828,7 +833,7 @@ class Logging(LiteLLMLoggingBaseClass):
         # Shallow copy of the outer list only (inner message dicts are shared).
         # Safe because the logging layer does not mutate individual message dicts.
         _copy_start: Final = time.time()
-        self.messages = copy.copy(messages) if messages is not None else None
+        self.messages: Sequence[object] | None = copy.copy(messages) if messages is not None else None
         self.message_copy_duration_ms: float = (time.time() - _copy_start) * 1000
         self.callback_duration_ms: float = 0.0
         self.stream = stream
@@ -4683,7 +4688,9 @@ class Logging(LiteLLMLoggingBaseClass):
         except Exception as e:
             verbose_logger.debug("Error in _handle_callback_failure: %s", e)
 
-    def _failure_handler_helper_fn(self, exception, traceback_exception, start_time=None, end_time=None):
+    def _failure_handler_helper_fn(
+        self, exception, traceback_exception, start_time=None, end_time=None, *, estimate_prompt_tokens: bool = True
+    ):
         if start_time is None:
             start_time = self.start_time
         if end_time is None:
@@ -4714,6 +4721,8 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details["response_cost"] = self.finalized_cost.amount
         elif self.model_call_details.get("combined_usage_object") is None:
             self.model_call_details["response_cost"] = 0
+        if estimate_prompt_tokens and self._should_estimate_failed_prompt():
+            self.model_call_details[FAILED_PROMPT_TOKEN_ESTIMATE_KEY] = self._prompt_token_estimate()
 
         raised_exception: Final[object] = exception
         exception_headers: Final = (
@@ -4747,6 +4756,43 @@ class Logging(LiteLLMLoggingBaseClass):
             standard_built_in_tools_params=self.standard_built_in_tools_params,
         )
         return start_time, end_time
+
+    def _should_estimate_failed_prompt(self) -> bool:
+        return (
+            self._model_call_details_view.get("call_type") in _CHAT_CALL_TYPES
+            and not isinstance(self.model_call_details.get("combined_usage_object"), Usage)
+            and self._failure_callbacks_want_prompt_token_estimate()
+        )
+
+    def _failure_callbacks_want_prompt_token_estimate(self) -> bool:
+        callbacks: Final = (
+            *(self.dynamic_failure_callbacks or ()),
+            *(self.dynamic_async_failure_callbacks or ()),
+            *litellm.callbacks,
+            *litellm.logging_callback_manager.get_failure_callbacks(),
+        )
+        return any(isinstance(cb, CustomLogger) and cb.wants_failed_prompt_token_estimate for cb in callbacks)
+
+    def _prompt_token_estimate(self) -> int | None:
+        from litellm.litellm_core_utils.token_counter import has_only_text_content
+
+        messages: Final = self.messages
+        if litellm.disable_token_counter or not messages:
+            return None
+        try:
+            if not has_only_text_content(messages):
+                return None
+            return get_token_counter_new()(model=self.model, messages=messages, use_default_image_token_count=True)
+        except (ValueError, TypeError, LookupError, AttributeError, RuntimeError, OSError):
+            return None
+
+    async def _offloaded_prompt_token_estimate(self) -> int | None:
+        from litellm.litellm_core_utils.token_counter import offload_token_count
+
+        try:
+            return await offload_token_count(self._prompt_token_estimate)()
+        except (RuntimeError, OSError):
+            return None
 
     async def special_failure_handlers(self, exception: Exception):
         """
@@ -4826,6 +4872,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 traceback_exception=traceback_exception,
                 start_time=start_time,
                 end_time=end_time,
+                estimate_prompt_tokens=not for_async_request,
             )
             callbacks: Final = self.get_combined_callback_list(
                 dynamic_success_callbacks=self.dynamic_failure_callbacks,
@@ -5025,7 +5072,10 @@ class Logging(LiteLLMLoggingBaseClass):
             traceback_exception=traceback_exception,
             start_time=start_time,
             end_time=end_time,
+            estimate_prompt_tokens=False,
         )
+        if self._should_estimate_failed_prompt():
+            self.model_call_details[FAILED_PROMPT_TOKEN_ESTIMATE_KEY] = await self._offloaded_prompt_token_estimate()
         if self._on_failure_payload_built is not None:
             self._on_failure_payload_built()
         callbacks: Final = self.get_combined_callback_list(
