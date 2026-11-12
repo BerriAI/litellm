@@ -31,6 +31,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.model_latest_aliases import get_model_latest_aliases
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.litellm_core_utils.ptu_shares import PTUTeamCeiling
+from litellm.litellm_core_utils.total_deadline import TotalTimeoutExpired, total_deadline
 from litellm.llms.azure.ptu_capacity import AZURE_PTU_CAPACITY
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
@@ -66,6 +67,7 @@ from litellm.redis.stores.rate_limits import (
     RateLimitStore,
 )
 from litellm.responses.streaming_iterator import _record_usage_for_failure
+from tests._support.clock_loops import AutojumpClockLoop
 from tests.unit.redis.stores.fake_rate_limits import FakeRateLimits, scope_key
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.extraction import ExtractionResponse
@@ -4686,6 +4688,7 @@ async def test_mcp_per_key_rejection_does_not_consume_shared_server_rpm_v3() -> 
     assert key_rejected.value.headers is not None
     assert key_rejected.value.headers["retry-after"] == str(handler.window_size)
     assert key_rejected.value.headers["rate_limit_type"] == "requests"
+    assert key_rejected.value.headers["rate_limited_by"] == "mcp_per_key"
     assert key_rejected.value.headers["reset_at"]
     await handler.enforce_mcp_server_rate_limits(second_key, server)
 
@@ -7951,6 +7954,34 @@ async def _admit(handler, auth, data=None):
     )
 
 
+def test_a_total_timeout_never_interrupts_a_token_reservation_so_the_failure_path_can_refund_it() -> None:
+    async def reserve_outlasting_the_budget(keys: list[str], args: list[object]) -> list[object]:
+        await asyncio.sleep(120)
+        return [0, *[value for index in range(0, len(args), 4) for value in (0, args[index + 1])]]
+
+    async def admit_under_a_total_timeout() -> tuple[bool, int]:
+        redis: Final = FakeRateLimits(check_and_increment_by_n_script=reserve_outlasting_the_budget)
+        handler: Final = _handler_with_redis(redis)
+        auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-total-timeout-reservation"), tpm_limit=1000)
+        stash: Final = get_or_create_request_stash()
+        try:
+            async with total_deadline(60, from_body=True):
+                await _admit(handler, auth)
+                await asyncio.sleep(3600)
+        except TotalTimeoutExpired:
+            return True, stash.reserved_tokens
+        return False, stash.reserved_tokens
+
+    loop: Final = AutojumpClockLoop()
+    try:
+        expired, reserved = loop.run_until_complete(admit_under_a_total_timeout())
+    finally:
+        loop.close()
+
+    assert expired
+    assert reserved > 0
+
+
 async def _read_only_check(handler, auth):
     descriptors = handler.create_rate_limit_descriptors(
         user_api_key_dict=auth,
@@ -8216,6 +8247,11 @@ async def test_batch_increment_refunds_pipelined_groups_declared_after_the_one_t
             {"org_id": "o", "organization_metadata": {"model_rpm_limit": {"test-model": 1}}},
             {},
             "model_per_organization",
+        ),
+        (
+            {"end_user_id": "customer", "end_user_model_rpm_limit": {"test-model": 1}},
+            {},
+            "model_per_end_user",
         ),
     ],
 )
@@ -8571,6 +8607,7 @@ def test_rate_limit_error_reports_reset_time_in_utc_on_a_non_utc_proxy(process_t
     assert exc_info.value.headers == {
         "retry-after": str(handler.window_size),
         "rate_limit_type": "requests",
+        "rate_limited_by": "api_key",
         "reset_at": expected_reset,
     }
     assert exc_info.value.detail == (
@@ -8665,8 +8702,9 @@ async def test_model_group_alias_shares_deployment_default_rpm_bucket_with_its_t
         ),
         ({"org_id": "o", "organization_metadata": {"model_rpm_limit": {"target": 1}}}, "model_per_organization"),
         ({"project_id": "p", "project_metadata": {"model_rpm_limit": {"target": 1}}}, "model_per_project"),
+        ({"end_user_id": "customer", "end_user_model_rpm_limit": {"target": 1}}, "model_per_end_user"),
     ],
-    ids=["key_metadata", "team_metadata", "organization_metadata", "project_metadata"],
+    ids=["key_metadata", "team_metadata", "organization_metadata", "project_metadata", "end_user_budget"],
 )
 async def test_model_group_alias_shares_metadata_model_rpm_bucket_with_its_target(
     limits: dict[str, object], counter_scope: str, first_name: str, second_name: str
@@ -9881,3 +9919,170 @@ def test_media_models_resolve_to_each_deployment_base_model():
     assert _resolve_media_models(None, "whisper", None) == ("whisper",)
     assert _resolve_media_models(router, "whisper", None) == ("azure/whisper-1",)
     assert _resolve_media_models(router, "unknown", None) == ("unknown",)
+
+
+@pytest.mark.asyncio
+async def test_end_user_model_rpm_limit_is_shared_across_keys_and_isolated_per_customer() -> None:
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    acme_via_key_one: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-acme-1"), end_user_id="acme", end_user_model_rpm_limit={"target": 1}
+    )
+    acme_via_key_two: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-acme-2"), end_user_id="acme", end_user_model_rpm_limit={"target": 1}
+    )
+    globex: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-globex"), end_user_id="globex", end_user_model_rpm_limit={"target": 1}
+    )
+
+    await _rpm_request(handler, cache, acme_via_key_one, "target")
+    with pytest.raises(HTTPException) as exc:
+        await _rpm_request(handler, cache, acme_via_key_two, "target")
+    assert exc.value.status_code == 429
+    assert "model_per_end_user: acme:target" in str(exc.value.detail), exc.value.detail
+    assert exc.value.headers is not None
+    assert exc.value.headers["rate_limited_by"] == "model_per_end_user"
+
+    await _rpm_request(handler, cache, globex, "target")
+    await _rpm_request(handler, cache, acme_via_key_one, "other-model")
+
+
+
+@pytest.mark.asyncio
+async def test_success_tpm_accounting_moves_the_charge_to_the_model_group_that_served_a_fallback() -> None:
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    key_metadata: Final = {"model_tpm_limit": {"primary": 1000, "fallback": 1000}}
+    auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-fallback-settle"), metadata=key_metadata)
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=auth,
+        cache=cache,
+        data={"model": "primary", "messages": [{"role": "user", "content": "hello"}], "max_tokens": 10},
+        call_type="acompletion",
+    )
+    stash: Final = get_request_stash()
+    assert stash is not None
+    assert stash.reserved_model == RateLimitedModel(requested="primary", group="primary")
+    assert stash.reserved_tokens > 0
+    assert await handler.async_fallback_target_allowed(
+        auth, "fallback", {"messages": [{"role": "user", "content": "hello"}]}
+    )
+
+    response: Final = ModelResponse(
+        id="fallback-settle",
+        object="chat.completion",
+        created=int(datetime.now().timestamp()),
+        model="fallback",
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+        choices=[],
+    )
+    kwargs: Final = {
+        "standard_logging_object": {"metadata": {"user_api_key_hash": auth.api_key}},
+        "litellm_params": {
+            "metadata": {
+                "model_group": "fallback",
+                "original_model_group": "primary",
+                "user_api_key_metadata": key_metadata,
+            }
+        },
+        "model": "fallback",
+    }
+
+    ops: Final = handler._build_success_event_pipeline_operations(
+        kwargs=kwargs, response_obj=response, rate_limit_type="total"
+    )
+
+    charged: Final = {_increment_of(op).counter: _increment_of(op).amount for op in ops}
+    assert charged[_counter("model_per_key", f"{auth.api_key}:fallback")] == 150
+    assert charged[_counter("model_per_key", f"{auth.api_key}:primary")] == -stash.reserved_tokens
+
+
+@pytest.mark.asyncio
+async def test_success_tpm_accounting_settles_an_alias_to_target_fallback_once_per_counter(
+    collision_limiter: tuple[DualCache, PROXY_MaxParallelRequestsHandler_v3, str, str],
+) -> None:
+    cache, handler, alias, target = collision_limiter
+    key_metadata: Final = {"model_tpm_limit": {alias: 1000, target: 1000}}
+    auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-alias-fallback-settle"), metadata=key_metadata)
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=auth,
+        cache=cache,
+        data={"model": alias, "messages": [{"role": "user", "content": "hello"}], "max_tokens": 10},
+        call_type="acompletion",
+    )
+    stash: Final = get_request_stash()
+    assert stash is not None
+    assert stash.reserved_model == RateLimitedModel(requested=alias, group=target)
+    assert stash.reserved_tokens > 0
+    assert await handler.async_fallback_target_allowed(
+        auth, target, {"messages": [{"role": "user", "content": "hello"}]}
+    )
+
+    response: Final = ModelResponse(
+        id="alias-fallback-settle",
+        object="chat.completion",
+        created=int(datetime.now().timestamp()),
+        model=target,
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+        choices=[],
+    )
+    kwargs: Final = {
+        "standard_logging_object": {"metadata": {"user_api_key_hash": auth.api_key}},
+        "litellm_params": {
+            "metadata": {"model_group": target, "original_model_group": alias, "user_api_key_metadata": key_metadata}
+        },
+        "model": target,
+    }
+
+    ops: Final = handler._build_success_event_pipeline_operations(
+        kwargs=kwargs, response_obj=response, rate_limit_type="total"
+    )
+
+    increments: Final = tuple(_increment_of(op) for op in ops)
+    target_counter: Final = _counter("model_per_key", f"{auth.api_key}:{target}")
+    alias_counter: Final = _counter("model_per_key", f"{auth.api_key}:{alias}")
+    assert [inc.amount for inc in increments if inc.counter == target_counter] == [150 - stash.reserved_tokens]
+    assert [inc.amount for inc in increments if inc.counter == alias_counter] == []
+
+
+
+@pytest.mark.asyncio
+async def test_success_tpm_accounting_ignores_a_client_supplied_model_group_without_a_router_fallback() -> None:
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    key_metadata: Final = {"model_tpm_limit": {"primary": 1000}}
+    auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-client-model-group"), metadata=key_metadata)
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=auth,
+        cache=cache,
+        data={"model": "primary", "messages": [{"role": "user", "content": "hello"}], "max_tokens": 10},
+        call_type="acompletion",
+    )
+    stash: Final = get_request_stash()
+    assert stash is not None
+    assert stash.reserved_tokens > 0
+
+    response: Final = ModelResponse(
+        id="client-model-group",
+        object="chat.completion",
+        created=int(datetime.now().timestamp()),
+        model="primary",
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+        choices=[],
+    )
+    kwargs: Final = {
+        "standard_logging_object": {"metadata": {"user_api_key_hash": auth.api_key}},
+        "litellm_params": {"metadata": {"model_group": "uncapped", "user_api_key_metadata": key_metadata}},
+        "model": "primary",
+    }
+
+    ops: Final = handler._build_success_event_pipeline_operations(
+        kwargs=kwargs, response_obj=response, rate_limit_type="total"
+    )
+
+    charged: Final = {_increment_of(op).counter: _increment_of(op).amount for op in ops}
+    assert charged[_counter("model_per_key", f"{auth.api_key}:primary")] == 150 - stash.reserved_tokens
+    assert not any(":uncapped" in counter.scope.descriptor_value for counter in charged)

@@ -21,6 +21,8 @@ import { type SearchQuery, toSearchQuery } from "./searchQuery";
 import { completingField, completingPrefix, suggest, type Suggestion, type SuggestionMenu } from "./suggestions";
 import { NO_VALUES, type ValueSource } from "./valueSource";
 
+const ARIA_AUTOCOMPLETE_LIST = "list";
+
 const schema = new Schema({ nodes: { doc: { content: "text*" }, text: {} } });
 
 const EMIT_WAIT_MS = 150;
@@ -214,7 +216,7 @@ function Root<F extends string>({
       attributes={{
         role: "combobox",
         "aria-label": label,
-        "aria-autocomplete": "list",
+        "aria-autocomplete": ARIA_AUTOCOMPLETE_LIST,
         "aria-expanded": String(visible),
         "aria-controls": listId,
         ...(activeItem && {

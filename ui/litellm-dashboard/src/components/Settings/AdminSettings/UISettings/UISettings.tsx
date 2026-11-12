@@ -18,6 +18,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Label } from "@/components/ui/label";
 import PageVisibilitySettings from "./PageVisibilitySettings";
 import BackgroundChatSettings from "./BackgroundChatSettings";
+import { productNames } from "@/i18n/untranslated/productNames";
 
 interface SettingRowProps {
   ariaLabel: string;
@@ -453,7 +454,7 @@ export default function UISettings() {
             <Separator />
             <div className="flex items-start justify-between gap-3">
               <div className="space-y-1">
-                <p className="text-sm font-medium text-foreground">Moyai</p>
+                <p className="text-sm font-medium text-foreground">{productNames.moyai}</p>
                 <p className="text-sm text-muted-foreground">
                   {moyaiUrl
                     ? t("adminPanel.uiSettings.moyai.connectedTo", { url: moyaiUrl })

@@ -5,8 +5,8 @@ use std::{
 };
 
 use futures_util::stream::BoxStream;
-use litellm_circuit_breaker::{Admission, Breaker, Failure, State};
-use redis::{Cmd, RedisError, Value};
+use litellm_circuit_breaker::{Admission, Breaker, Failure};
+use redis::{Cmd, ErrorKind, RedisError, ServerErrorKind, Value};
 
 use crate::{
     CallEvent, Command, ConnectError, Error, FailureKind, Namespace, Operation, Outcome, Pipeline,
@@ -74,11 +74,6 @@ impl RedisClient {
 
     pub fn downgrade(&self) -> WeakRedisClient {
         WeakRedisClient(Arc::downgrade(&self.0))
-    }
-
-    /// The breaker's current state, or none when the breaker is disabled.
-    pub fn breaker_state(&self) -> Option<State> {
-        self.0.breaker.as_ref().map(Breaker::state)
     }
 
     pub async fn ping(&self) -> Result<(), Error> {
@@ -297,6 +292,15 @@ fn settle(admission: Option<Admission>, error: Option<&Error>) {
             admission.failed(Failure::Timeout, Instant::now())
         }
         Some(Error::Transport(_)) => admission.failed(Failure::Hard, Instant::now()),
+        Some(Error::Server(error)) if proves_redis_answers(error) => admission.succeeded(),
         Some(Error::Server(_) | Error::Decode(_) | Error::BreakerOpen) => drop(admission),
     }
+}
+
+// A replica refusing a write is the old primary mid-failover, which must not reset a run of failures
+fn proves_redis_answers(error: &RedisError) -> bool {
+    !matches!(
+        error.kind(),
+        ErrorKind::InvalidClientConfig | ErrorKind::Server(ServerErrorKind::ReadOnly)
+    )
 }

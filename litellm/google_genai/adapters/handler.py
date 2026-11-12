@@ -2,6 +2,7 @@ from collections.abc import AsyncIterator, Coroutine, Iterable, Mapping
 from typing import Final, cast
 
 from openai.types.chat import ChatCompletionStreamOptionsParam
+from typing_extensions import TypedDict
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -14,6 +15,10 @@ from .transformation import GoogleGenAIAdapter
 
 # Initialize adapter
 GOOGLE_GENAI_ADAPTER: Final = GoogleGenAIAdapter()
+
+
+class _TranslatedCompletionKwargs(TypedDict, total=False, extra_items=object):
+    pass
 
 
 _FORWARDED_REQUEST_KEYS: Final = (
@@ -80,11 +85,13 @@ class GenerateContentToCompletionHandler:
         if stream and isinstance(logging_obj, LiteLLMLoggingObj):
             logging_obj.stream_options = stream_options
         completion_kwargs: Final = GenerateContentCompletionKwargs(
-            **dict(
+            **_TranslatedCompletionKwargs(
+                **dict[str, object](
                 completion_request,
                 **{key: request_kwargs[key] for key in _FORWARDED_REQUEST_KEYS if key in request_kwargs},
                 **({"stream": True} if stream else {}),
                 **({"stream_options": stream_options} if stream_options is not None else {}),
+                )
             )
         )
         messages: Final = completion_kwargs.get("messages", ())

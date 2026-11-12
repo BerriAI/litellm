@@ -25,11 +25,9 @@ import {
   Bell,
   Blocks,
   Bot,
-  BookOpen,
   Building2,
   Boxes,
   ChevronRight,
-  Code2,
   Database,
   ExternalLink,
   FileText,
@@ -55,12 +53,14 @@ import {
   Trophy,
   User,
   Users,
+  Receipt,
   Wallet,
   Wrench,
   Workflow,
 } from "lucide-react";
 import Link from "next/link";
 import ViewSwitcher from "@/components/Navbar/ViewSwitcher";
+import { usePluginMode } from "@/contexts/PluginModeContext";
 import { AriaSidebarLink } from "@/components/liteadmin/LiteAdmin";
 import { usePathname } from "next/navigation";
 import { useMemo, useState } from "react";
@@ -197,6 +197,28 @@ export const visibleMenuGroups = (groups: readonly MenuGroup[], context: MenuVis
 // Menu groups organized by category - defined outside component for export.
 // Shape (key/page/label/roles/children) is consumed by page_utils.ts; only the
 // icons changed to lucide as part of the sidebar redesign.
+const customerPortalGroups: MenuGroup[] = [
+  {
+    groupLabel: "CUSTOMER PORTAL",
+    items: [
+      {
+        key: "customers",
+        page: "customers",
+        label: "shell.nav.items.customers",
+        icon: <Users {...ICON} />,
+        roles: all_admin_roles,
+      },
+      {
+        key: "chargebacks",
+        page: "chargebacks",
+        label: "shell.nav.items.chargebacks",
+        icon: <Receipt {...ICON} />,
+        roles: all_admin_roles,
+      },
+    ],
+  },
+];
+
 const menuGroups: MenuGroup[] = [
   {
     groupLabel: "AI GATEWAY",
@@ -398,24 +420,10 @@ const menuGroups: MenuGroup[] = [
     groupLabel: "DEVELOPER TOOLS",
     items: [
       {
-        key: "api_ref",
-        page: "api_ref",
-        route: "api-reference",
-        label: "shell.nav.items.apiReference",
-        icon: <Code2 {...ICON} />,
-      },
-      {
         key: "model-hub-table",
         page: "model-hub-table",
         label: "shell.nav.items.aiHub",
         icon: <LayoutGrid {...ICON} />,
-      },
-      {
-        key: "learning-resources",
-        page: "learning-resources",
-        label: "shell.nav.items.learningResources",
-        icon: <BookOpen {...ICON} />,
-        external_url: "https://models.litellm.ai/cookbook",
       },
       {
         key: "caching",
@@ -542,6 +550,7 @@ const findMenuItemKey = (route: string): string => {
 
 const GROUP_LABELS: Record<string, ParseKeys> = {
   "AI GATEWAY": "shell.nav.groups.aiGateway",
+  "CUSTOMER PORTAL": "shell.nav.groups.customerPortal",
   OBSERVABILITY: "shell.nav.groups.observability",
   "ACCESS CONTROL": "shell.nav.groups.accessControl",
   "DEVELOPER TOOLS": "shell.nav.groups.developerTools",
@@ -553,6 +562,7 @@ export const groupText = (groupLabel: string): string =>
 
 const SECTION_DISPLAY: Record<string, ParseKeys> = {
   "AI GATEWAY": "shell.nav.sections.aiGateway",
+  "CUSTOMER PORTAL": "shell.nav.sections.customerPortal",
   OBSERVABILITY: "shell.nav.sections.observability",
   "ACCESS CONTROL": "shell.nav.sections.accessControl",
   "DEVELOPER TOOLS": "shell.nav.sections.developerTools",
@@ -575,7 +585,7 @@ export const labelText = (item: MenuItem): string =>
 export const getBreadcrumb = (pathname: string): { section: string | null; title: string } => {
   const route = routeForPathname(pathname);
   if (route === "aria") return { section: null, title: "Aria Agent" };
-  for (const group of menuGroups) {
+  for (const group of [...menuGroups, ...customerPortalGroups]) {
     for (const item of group.items) {
       const section = sectionText(group.groupLabel);
       if (routeOf(item) === route) return { section, title: labelText(item) };
@@ -597,6 +607,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
   allowVectorStoresForTeamAdmins,
 }) => {
   const { userId, accessToken, userRole, isViewOnly } = useAuthorized();
+  const { mode: pluginMode } = usePluginMode();
   const { t } = useTranslation();
   const term = useTerminology();
   const labelOf = (item: MenuItem) => (typeof item.label === "string" ? term(labelText(item)) : item.label);
@@ -639,8 +650,9 @@ const Sidebar_: React.FC<SidebarProps> = ({
       disableVectorStoresForInternalUsers,
       allowVectorStoresForTeamAdmins,
     };
-    return visibleMenuGroups(menuGroups, context);
+    return visibleMenuGroups(pluginMode === "customer-portal" ? customerPortalGroups : menuGroups, context);
   }, [
+    pluginMode,
     allowAgentsForTeamAdmins,
     allowVectorStoresForTeamAdmins,
     disableAgentsForInternalUsers,

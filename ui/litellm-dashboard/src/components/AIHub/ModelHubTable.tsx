@@ -833,8 +833,6 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                 <div className="flex flex-wrap gap-2">
                   {(() => {
                     const capabilities = getModelCapabilities(selectedModel);
-                    const colors = ["green", "blue", "purple", "orange", "red", "yellow"];
-
                     if (capabilities.length === 0) {
                       return (
                         <p className="text-muted-foreground">{t("aiHub.modelHubTable.modelDialog.noCapabilities")}</p>

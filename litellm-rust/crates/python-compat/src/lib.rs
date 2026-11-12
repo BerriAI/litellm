@@ -7,6 +7,7 @@
 //! |---|---|
 //! | [`literal`] | `ast.literal_eval(text)` |
 //! | [`repr`] | `repr(value)` and `str(value)` |
+//! | [`reprlib`] | `reprlib.repr(value)` |
 //! | [`json`] | `json.dumps(value)` and `json.loads(text)` |
 //! | [`pickle`] | `pickle.loads(data)` and `pickle.dumps(value)` for plain data |
 //! | [`truthy`] | `bool(value)` |
@@ -29,6 +30,7 @@ pub mod literal;
 pub mod number;
 pub mod pickle;
 pub mod repr;
+pub mod reprlib;
 pub mod truthy;
 mod value;
 
