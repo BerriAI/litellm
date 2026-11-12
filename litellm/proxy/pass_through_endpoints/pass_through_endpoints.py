@@ -668,7 +668,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         litellm_call_id: str | None = None,
     ) -> dict:
         """
-        Filter out litellm params from the request body
+        Filter out litellm params from the request body, except on configured pass-through routes
         """
         from litellm.proxy.proxy_server import llm_router
 
@@ -1940,17 +1940,9 @@ async def pass_through_request(
         )
 
         if response.status_code < 400 and response_body is not None and guardrails_to_run:
-            # Build an enriched data dict: _parsed_body has been stripped of
-            # `metadata` by both pre_call_hook and _init_kwargs_for_pass_through_endpoint,
-            # so we re-attach the configured guardrails here so should_run_guardrail
-            # sees them.
-            hook_data: Final = dict(_parsed_body or {})
-            existing_metadata = hook_data.get("metadata")
-            if not isinstance(existing_metadata, dict):
-                existing_metadata = {}
-            hook_data["metadata"] = {
-                **existing_metadata,
-                "guardrails": guardrails_to_run,
+            hook_data: Final = {
+                **{k: v for k, v in (_parsed_body or {}).items() if k not in ("metadata", "litellm_metadata")},
+                "metadata": {"guardrails": guardrails_to_run},
             }
             post_call_guardrail_data = hook_data
             response_body = await proxy_logging_obj.post_call_success_hook(

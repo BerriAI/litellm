@@ -11672,6 +11672,54 @@ async def test_configured_pass_through_forwards_the_client_body_unchanged(tmp_pa
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+async def test_configured_pass_through_body_cannot_switch_off_a_default_on_post_call_guardrail(
+    tmp_path, monkeypatch, metadata_key
+):
+    class RecordingPostCallGuardrail(CustomGuardrail):
+        def __init__(self) -> None:
+            super().__init__(guardrail_name="global-post", default_on=True, event_hook=GuardrailEventHooks.post_call)
+            self.calls: list[object] = []
+
+        async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+            self.calls.append(response)
+            return response
+
+    post_call_guardrail: Final = RecordingPostCallGuardrail()
+    proxy: Final = await _boot_db_backed_proxy(
+        tmp_path,
+        monkeypatch,
+        config_pass_through_endpoints=[
+            {
+                "path": "/cfg-guarded",
+                "target": "http://upstream.test/mcp",
+                "auth": False,
+                "guardrails": {"route-guard": {}},
+            }
+        ],
+        db_pass_through_endpoints=[],
+    )
+    await _run_db_sync_cycle(proxy)
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [
+            CustomGuardrail(guardrail_name="route-guard", default_on=False, event_hook=GuardrailEventHooks.pre_call),
+            post_call_guardrail,
+        ],
+    )
+
+    response, _ = await _send_through_proxy(
+        "/cfg-guarded",
+        {},
+        body={"id": 1, metadata_key: {"user_api_key_metadata": {"disable_global_guardrails": True}}},
+    )
+
+    assert response.status_code == 200
+    assert post_call_guardrail.calls == [{"ok": True}]
+
+
+@pytest.mark.asyncio
 async def test_config_pass_through_keeps_forwarding_client_headers_after_a_db_sync(tmp_path, monkeypatch):
     proxy: Final = await _boot_db_backed_proxy(
         tmp_path,
