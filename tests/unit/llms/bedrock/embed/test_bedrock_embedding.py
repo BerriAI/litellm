@@ -1,6 +1,7 @@
 import json
 import asyncio
 import os
+import threading
 from typing import Final
 from unittest.mock import Mock, patch
 from unittest.mock import AsyncMock, MagicMock
@@ -11,6 +12,7 @@ import respx
 
 import litellm
 from litellm.caching.caching import Cache
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.bedrock.embed.twelvelabs_marengo_transformation import TwelveLabsMarengoEmbeddingConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.bedrock.embed.embedding import BedrockEmbedding
@@ -188,6 +190,33 @@ def test_bedrock_cohere_embedding_returns_the_scripted_vector(respx_mock: respx.
 
     assert json.loads(route.calls.last.request.read()) == {"input_type": "search_document", "texts": ["hello"]}
     assert response.data == [{"object": "embedding", "index": 0, "embedding": [0.3, 0.2, 0.1]}]
+
+
+def test_bedrock_cohere_embedding_logs_the_runtime_endpoint_as_api_base(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    url: Final = "https://bedrock-runtime.us-east-1.amazonaws.com/model/cohere.embed-multilingual-v3/invoke"
+    respx_mock.post(url).respond(json={"embeddings": [[0.3, 0.2, 0.1]], "inputTextTokenCount": 4})
+    logged: Final = threading.Event()
+    api_bases: Final[list[str]] = []
+
+    class LoggedApiBase(CustomLogger):
+        def log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+            api_bases.append(kwargs["standard_logging_object"]["api_base"])
+            logged.set()
+
+    monkeypatch.setattr(litellm, "callbacks", [LoggedApiBase()])
+
+    litellm.embedding(
+        model="bedrock/cohere.embed-multilingual-v3",
+        input=["hello"],
+        api_key="test-bearer-token",
+        aws_region_name="us-east-1",
+        aws_bedrock_runtime_endpoint="https://bedrock-runtime.us-east-1.amazonaws.com",
+    )
+
+    assert logged.wait(timeout=5)
+    assert api_bases == [url]
 
 
 GOVCLOUD_WEST_RUNTIME: Final = "https://bedrock-runtime.us-gov-west-1.amazonaws.com"

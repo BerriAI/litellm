@@ -1,6 +1,8 @@
+import asyncio
 import json
 import os
 import sys
+import threading
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -8,12 +10,14 @@ import httpx
 import pytest
 import respx
 from httpx import Response
+from openai import AsyncAzureOpenAI, AzureOpenAI
 
 sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
 )
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.azure.azure import AzureChatCompletion
 from litellm.types.utils import EmbeddingResponse, Usage
 
@@ -205,3 +209,82 @@ def test_azure_embedding_max_retries_zero_sends_one_request(respx_mock: respx.Mo
         )
 
     assert route.call_count == 1
+
+
+_EMBEDDING_API_BASE: Final = "https://my-resource.openai.azure.com"
+
+
+def _embeddings_endpoint(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "object": "list",
+            "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+            "model": "text-embedding-3-large",
+            "usage": {"prompt_tokens": 1, "total_tokens": 1},
+        },
+    )
+
+
+class _LoggedApiBase(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.api_bases: list[str] = []
+        self.logged = threading.Event()
+
+    def log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self.api_bases.append(kwargs["standard_logging_object"]["api_base"])
+        self.logged.set()
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self.log_success_event(kwargs, response_obj, start_time, end_time)
+
+
+@pytest.fixture
+def logged_api_base(monkeypatch: pytest.MonkeyPatch) -> _LoggedApiBase:
+    logger: Final = _LoggedApiBase()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    return logger
+
+
+def test_azure_embedding_logs_the_deployment_api_base(logged_api_base: _LoggedApiBase) -> None:
+    client: Final = AzureOpenAI(
+        api_key="azure-test-key",
+        api_version="2024-02-01",
+        azure_endpoint=_EMBEDDING_API_BASE,
+        http_client=httpx.Client(transport=httpx.MockTransport(_embeddings_endpoint)),
+    )
+
+    litellm.embedding(
+        model="azure/text-embedding-3-large",
+        input=["hello"],
+        api_base=_EMBEDDING_API_BASE,
+        api_key="azure-test-key",
+        api_version="2024-02-01",
+        client=client,
+    )
+
+    assert logged_api_base.logged.wait(timeout=5)
+    assert logged_api_base.api_bases == [_EMBEDDING_API_BASE]
+
+
+@pytest.mark.asyncio
+async def test_azure_aembedding_logs_the_deployment_api_base(logged_api_base: _LoggedApiBase) -> None:
+    client: Final = AsyncAzureOpenAI(
+        api_key="azure-test-key",
+        api_version="2024-02-01",
+        azure_endpoint=_EMBEDDING_API_BASE,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(_embeddings_endpoint)),
+    )
+
+    await litellm.aembedding(
+        model="azure/text-embedding-3-large",
+        input=["hello"],
+        api_base=_EMBEDDING_API_BASE,
+        api_key="azure-test-key",
+        api_version="2024-02-01",
+        client=client,
+    )
+
+    assert await asyncio.to_thread(logged_api_base.logged.wait, 5)
+    assert logged_api_base.api_bases == [_EMBEDDING_API_BASE]

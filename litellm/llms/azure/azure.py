@@ -798,6 +798,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 api_key=api_key,
                 additional_args={
                     "complete_input_dict": data,
+                    "api_base": api_base,
                     "headers": {"api_key": api_key, "azure_ad_token": azure_ad_token},
                 },
             )
