@@ -124,6 +124,92 @@ def _priced_claude_family_generalization() -> Iterator[None]:
         set_fallback_generalizations(previous_rules)
 
 
+@pytest.mark.parametrize(
+    ("prompt_tokens", "completion_tokens", "expected"),
+    (
+        (None, 5, (0.0, 0.10)),
+        (10, None, (0.10, 0.0)),
+        (None, None, (0.0, 0.0)),
+        ("10", 5, (0.10, 0.10)),
+        (10, "5", (0.10, 0.10)),
+        ("10", "5", (0.10, 0.10)),
+        (0, 0, (0.0, 0.0)),
+        (10, 5, (0.10, 0.10)),
+        (cast(int, 10.0), cast(int, 5.0), (0.10, 0.10)),
+        (-10, "-5", (0.0, -0.10)),
+    ),
+)
+@pytest.mark.usefixtures("isolated_pricing_registry")
+def test_cost_per_token_prices_fallback_counts(
+    prompt_tokens: int | str | None, completion_tokens: int | str | None, expected: tuple[float, float]
+) -> None:
+    model: Final = "openai/token-count-fallback-test"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 0.01,
+                "output_cost_per_token": 0.02,
+            }
+        },
+        persist_across_reloads=False,
+    )
+
+    assert litellm.cost_per_token(
+        model=model, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens
+    ) == pytest.approx(expected)
+
+
+def test_cost_per_token_rejects_invalid_fallback_count() -> None:
+    with pytest.raises((TypeError, ValueError)):
+        litellm.cost_per_token(prompt_tokens="oops", completion_tokens=5)
+
+
+@pytest.mark.parametrize("prompt_tokens", (None, "0"))
+def test_cost_per_token_preserves_custom_cache_rates_for_fallback_counts(prompt_tokens: str | None) -> None:
+    assert litellm.cost_per_token(
+        prompt_tokens=prompt_tokens,
+        completion_tokens="5",
+        cache_read_input_tokens=4,
+        cache_creation_input_tokens=3,
+        custom_cost_per_token={
+            "input_cost_per_token": 0.01,
+            "output_cost_per_token": 0.02,
+            "cache_read_input_token_cost": 0.001,
+            "cache_creation_input_token_cost": 0.03,
+        },
+    ) == pytest.approx((4 * 0.001 + 3 * 0.03, 5 * 0.02))
+
+
+@pytest.mark.parametrize("prompt_tokens", (None, 99))
+def test_cost_per_token_prices_supplied_usage_at_the_requested_tier(prompt_tokens: int | None) -> None:
+    usage: Final = Usage(
+        prompt_tokens=10,
+        completion_tokens=5,
+        total_tokens=15,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=4),
+    )
+    original: Final = usage.model_copy(deep=True)
+    rates: Final[ModelInfo] = {
+        "input_cost_per_token": 0.01,
+        "output_cost_per_token": 0.02,
+        "input_cost_per_token_priority": 0.03,
+        "output_cost_per_token_priority": 0.04,
+        "cache_read_input_token_cost_priority": 0.005,
+    }
+
+    assert litellm.cost_per_token(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=99,
+        usage_object=usage,
+        custom_llm_provider="openai",
+        requested_model_info_override=rates,
+        service_tier="priority",
+    ) == pytest.approx((6 * 0.03 + 4 * 0.005, 5 * 0.04))
+    assert usage == original
+
+
 def test_cost_per_token_duplicate_openai_prefix_matches_model_cost(monkeypatch):
     """
     Router/proxy configs may use deployment ids like openai/openai/<model>. Cost lookup must
