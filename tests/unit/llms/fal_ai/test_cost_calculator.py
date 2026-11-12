@@ -408,3 +408,10 @@ def test_deployment_unit_price_replaces_the_catalog_unit_price(
         model_info=deployment_prices,
     )
     assert cost == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("model", BILLABLE_UNIT_MODELS)
+@pytest.mark.parametrize("body", ({}, {"resolution": "4K", "num_images": 2}))
+def test_passthrough_does_not_price_a_submission_billed_by_reported_units(model: str, body: dict[str, object]) -> None:
+    assert litellm.model_cost[f"fal_ai/{model}"]["output_cost_per_image"] > 0
+    assert fal_ai_passthrough_cost(model, body) is None
