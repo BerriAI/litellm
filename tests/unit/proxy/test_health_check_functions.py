@@ -770,6 +770,34 @@ async def test_latest_health_checks_lists_a_skipped_media_model_with_no_saved_ro
 
 
 @pytest.mark.asyncio
+async def test_latest_health_checks_lists_never_checked_media_only_for_models_the_key_may_use(monkeypatch):
+    prisma = MagicMock()
+    prisma.get_all_latest_health_checks = AsyncMock(return_value=())
+
+    def model_list():
+        return [
+            {
+                "model_name": name,
+                "litellm_params": {"model": "gemini/gemini-3-pro-image"},
+                "model_info": {"id": name, "mode": "image_generation"},
+            }
+            for name in ("image-mine", "image-other")
+        ]
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_model_list", model_list())
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", litellm.Router(model_list=model_list()))
+
+    restricted = await latest_health_checks_endpoint(
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=["image-mine"])
+    )
+    admin = await latest_health_checks_endpoint(user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN))
+
+    assert set(restricted["latest_health_checks"]) == {"image-mine"}
+    assert set(admin["latest_health_checks"]) == {"image-mine", "image-other"}
+
+
+@pytest.mark.asyncio
 async def test_latest_health_checks_endpoint_serialises_raw_rows(monkeypatch):
     row = LatestHealthCheckRow(
         health_check_id="hc-1",

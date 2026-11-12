@@ -2826,6 +2826,40 @@ async def test_cli_model_health_names_a_billed_media_model_without_probing_it(cl
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("cli", [False, True])
+async def test_non_admin_media_health_answer_keeps_the_admin_only_field_notice(cli):
+    from fastapi import Response
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.health_check import BILLED_MEDIA_NOT_CHECKED_WARNING
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    model_list = [
+        {
+            "model_name": "image",
+            "litellm_params": {"model": "gemini/gemini-3-pro-image"},
+            "model_info": {"id": "image-1", "mode": "image_generation"},
+        }
+    ]
+    response = Response()
+    with _proxy_health_globals(
+        None if cli else model_list,
+        None if cli else litellm.Router(model_list=copy.deepcopy(model_list)),
+        user_model="gemini/gemini-3-pro-image" if cli else None,
+    ):
+        result = await health_endpoint(
+            response=response,
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=["image"]),
+            model=None,
+            model_id=None if cli else "image-1",
+        )
+
+    assert response.status_code == 200
+    assert result["warnings"] == [BILLED_MEDIA_NOT_CHECKED_WARNING]
+    assert response.headers["Litellm-Health-Field-Notice"].endswith(" are admin-only on this endpoint")
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("model_info", "expected_status"),
     [
