@@ -218,7 +218,9 @@ class _FakeJsonResponse:
         return self._payload
 
 
-LITE_HELPER: Final = "/usr/local/bin/lite --base-url http://localhost:4000 auth print-token"
+PROXY: Final = "http://localhost:4000"
+OTHER_PROXY: Final = "https://other-proxy.example.com"
+LITE_HELPER: Final = f"/usr/local/bin/lite --base-url {PROXY} auth print-token"
 
 
 def _overlay_writer(tmp_path):
@@ -1721,13 +1723,16 @@ class TestRunAgent:
     @pytest.mark.parametrize(
         ("args", "user", "key_from_stored_login", "expected_overlay"),
         [
-            ((), {"apiKeyHelper": LITE_HELPER}, False, {"apiKeyHelper": "", "env": {"ANTHROPIC_AUTH_TOKEN": "sk-key"}}),
+            ((), {"apiKeyHelper": LITE_HELPER}, False, {"apiKeyHelper": "", "env": {"ANTHROPIC_AUTH_TOKEN": "sk-key", "ANTHROPIC_BASE_URL": PROXY}}),
             ((), {"apiKeyHelper": LITE_HELPER.replace("/usr/local/bin/lite", "/opt/other-venv/bin/lite")}, True, None),
             (
                 (),
-                {"apiKeyHelper": LITE_HELPER.replace("localhost:4000", "other-proxy.example.com")},
+                {
+                    "apiKeyHelper": LITE_HELPER.replace("http://localhost:4000", OTHER_PROXY),
+                    "env": {"ANTHROPIC_BASE_URL": OTHER_PROXY, "ANTHROPIC_AUTH_TOKEN": ""},
+                },
                 True,
-                {"apiKeyHelper": "", "env": {"ANTHROPIC_AUTH_TOKEN": "sk-key"}},
+                {"apiKeyHelper": "", "env": {"ANTHROPIC_AUTH_TOKEN": "sk-key", "ANTHROPIC_BASE_URL": PROXY}},
             ),
             ((), {"apiKeyHelper": LITE_HELPER}, True, None),
             ((), {"apiKeyHelper": "/opt/mine/helper"}, False, None),
@@ -1735,19 +1740,19 @@ class TestRunAgent:
                 ("--settings", '{"model":"opus"}'),
                 {"apiKeyHelper": LITE_HELPER},
                 False,
-                {"apiKeyHelper": "", "model": "opus", "env": {"ANTHROPIC_AUTH_TOKEN": "sk-key"}},
+                {"apiKeyHelper": "", "model": "opus", "env": {"ANTHROPIC_AUTH_TOKEN": "sk-key", "ANTHROPIC_BASE_URL": PROXY}},
             ),
             (
                 ("--settings", '{"apiKeyHelper":"","env":{"FOO":"1"}}'),
                 {"apiKeyHelper": LITE_HELPER},
                 True,
-                {"apiKeyHelper": "", "env": {"ANTHROPIC_AUTH_TOKEN": "sk-key", "FOO": "1"}},
+                {"apiKeyHelper": "", "env": {"ANTHROPIC_AUTH_TOKEN": "sk-key", "ANTHROPIC_BASE_URL": PROXY, "FOO": "1"}},
             ),
             (
                 ("--settings", '{"apiKeyHelper":"/opt/mine/helper","env":{"ANTHROPIC_AUTH_TOKEN":"sk-mine"}}'),
                 {"apiKeyHelper": LITE_HELPER},
                 False,
-                {"apiKeyHelper": "/opt/mine/helper", "env": {"ANTHROPIC_AUTH_TOKEN": "sk-mine"}},
+                {"apiKeyHelper": "/opt/mine/helper", "env": {"ANTHROPIC_AUTH_TOKEN": "sk-mine", "ANTHROPIC_BASE_URL": PROXY}},
             ),
         ],
         ids=[

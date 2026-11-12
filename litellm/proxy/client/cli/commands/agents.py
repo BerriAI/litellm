@@ -301,14 +301,15 @@ def claude_api_key_helper(
 
 def _launch_key_overlay_args(
     command: Sequence[str],
+    base_url: str,
     api_key: str,
     settings_helper: JsonValue,
     renews: bool,
     environ: Mapping[str, str],
     write_overlay: Callable[[str, Mapping[str, str]], Path],
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """A `--settings` overlay carrying the key this launch resolved when lite's helper would send another one.
-    It merges the user's last `--settings`, since Claude Code keeps only the last."""
+    """A `--settings` overlay carrying the key this launch resolved, and the proxy it was issued for, when lite's
+    helper would send another one. It merges the user's last `--settings`, since Claude Code keeps only the last."""
     if renews or not is_lite_api_key_helper(settings_helper):
         return (), tuple(command[1:])
     user_value, rest = _split_settings_flags(tuple(command[1:]))
@@ -316,7 +317,11 @@ def _launch_key_overlay_args(
     overlay: Final = {
         API_KEY_HELPER_KEY: "",
         **base,
-        ENV_KEY: {ANTHROPIC_AUTH_TOKEN_ENV: api_key, **_settings_env(base)},
+        ENV_KEY: {
+            ANTHROPIC_AUTH_TOKEN_ENV: api_key,
+            ANTHROPIC_BASE_URL_ENV: base_url.rstrip("/"),
+            **_settings_env(base),
+        },
     }
     return (_SETTINGS_FLAG, str(write_overlay(json.dumps(overlay, separators=(",", ":")), environ))), rest
 
@@ -1230,7 +1235,7 @@ def run_agent(
         )
         if subscription and os.path.basename(command[0]) == "claude"
         else _launch_key_overlay_args(
-            command, api_key, settings_helper, helper_renews_key, env_before_sync, write_overlay
+            command, base_url, api_key, settings_helper, helper_renews_key, env_before_sync, write_overlay
         )
     )
     if reattach_terminal is not None:
