@@ -94,6 +94,17 @@ def fallback_on_saturation_enabled(router_settings: object) -> bool:
         return False
 
 
+def without_client_saturation_opt_in(request_data: Mapping[str, object]) -> Mapping[str, object]:
+    """``request_data`` with ``fallback_on_saturation`` dropped from the client's ``router_settings_override``. Only
+    the key's or team's saved ``router_settings`` turn the saturation walk on, and the proxy writes those over this
+    field before the limiter reads it."""
+    override: Final = _metadata_bucket(request_data.get("router_settings_override"))
+    if FALLBACK_ON_SATURATION_SETTING not in override:
+        return request_data
+    kept: Final = {key: value for key, value in override.items() if key != FALLBACK_ON_SATURATION_SETTING}
+    return MappingProxyType({**request_data, "router_settings_override": kept})
+
+
 def saturation_fallbacks_exhausted(request_data: Mapping[str, object]) -> bool:
     """Whether this request already tried every fallback at saturation and is back on the model it asked for."""
     return any(

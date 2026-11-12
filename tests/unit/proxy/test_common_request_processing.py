@@ -8064,7 +8064,7 @@ class TestCostHeadersForCallsPricedAtZero:
         assert breakdown.output_cost == 0.0
 
 
-def _proxy_config(router_settings: dict[str, object] | None = None) -> MagicMock:
+def _proxy_config(router_settings: Mapping[str, object] | None = None) -> MagicMock:
     """A proxy config whose Key > Team router_settings read resolves to ``router_settings``."""
     return MagicMock(get_hierarchical_router_settings=AsyncMock(return_value=router_settings))
 
@@ -8383,6 +8383,237 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             )
 
         assert processor.data["model"] == "claude-3-haiku"
+
+    @pytest.mark.asyncio
+    async def test_a_fallback_over_its_model_budget_is_skipped(self, monkeypatch):
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+        from litellm.proxy._types import UserAPIKeyAuth as ProxyKey
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+        processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4"})
+
+        async def mock_pre_call_logic(**kwargs):
+            if processor.data.get("model") == "gpt-4":
+                raise ProxyRateLimitError(detail="TPM limit exceeded", headers={"retry-after": "30"})
+            return processor.data, MagicMock()
+
+        async def cheap_model_budget_left(*, valid_token, model_max_budget_limiter, model):
+            return model != "gpt-3.5-turbo"
+
+        monkeypatch.setattr(
+            "litellm.proxy.auth.user_api_key_auth._is_within_every_model_budget", cheap_model_budget_left
+        )
+        mock_router = route_entry_points_to_stubs(MagicMock())
+        mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo", "claude-3-haiku"]}]
+
+        with patch.object(processor, "common_processing_pre_call_logic", side_effect=mock_pre_call_logic):
+            await processor._pre_call_with_fallbacks(
+                request=MagicMock(),
+                general_settings={},
+                proxy_logging_obj=MagicMock(),
+                user_api_key_dict=ProxyKey(),
+                version=None,
+                proxy_config=_proxy_config(),
+                user_model=None,
+                user_temperature=None,
+                user_request_timeout=None,
+                user_max_tokens=None,
+                user_api_base=None,
+                model="gpt-4",
+                route_type="acompletion",
+                llm_router=mock_router,
+            )
+
+        assert processor.data["model"] == "claude-3-haiku"
+
+    @pytest.mark.asyncio
+    async def test_a_served_fallback_charges_the_access_groups_that_grant_it(self, monkeypatch):
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+        from litellm.proxy._types import UserAPIKeyAuth as ProxyKey
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+        processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4"})
+        key: Final = ProxyKey(matched_model_access_groups=["primary-group"])
+        charged_when_served = []
+
+        async def mock_pre_call_logic(**kwargs):
+            if processor.data.get("model") == "gpt-4":
+                raise ProxyRateLimitError(detail="TPM limit exceeded", headers={"retry-after": "30"})
+            charged_when_served.append(list(key.matched_model_access_groups or []))
+            return processor.data, MagicMock()
+
+        async def backup_group_grants_the_fallback(*, model, **kwargs):
+            return ("backup-group",) if model == "gpt-3.5-turbo" else ()
+
+        import litellm.proxy.proxy_server as proxy_server
+
+        monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+        monkeypatch.setattr(
+            "litellm.proxy.auth.auth_checks.collect_matched_model_access_groups", backup_group_grants_the_fallback
+        )
+        mock_router = route_entry_points_to_stubs(MagicMock())
+        mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo"]}]
+
+        with patch.object(processor, "common_processing_pre_call_logic", side_effect=mock_pre_call_logic):
+            data, _ = await processor._pre_call_with_fallbacks(
+                request=MagicMock(),
+                general_settings={},
+                proxy_logging_obj=MagicMock(),
+                user_api_key_dict=key,
+                version=None,
+                proxy_config=_proxy_config(),
+                user_model=None,
+                user_temperature=None,
+                user_request_timeout=None,
+                user_max_tokens=None,
+                user_api_base=None,
+                model="gpt-4",
+                route_type="acompletion",
+                llm_router=mock_router,
+            )
+
+        assert data["model"] == "gpt-3.5-turbo"
+        assert charged_when_served == [["backup-group"]]
+
+    @pytest.mark.asyncio
+    async def test_a_fallback_over_its_access_group_budget_is_skipped(self, monkeypatch):
+        from litellm.exceptions import BudgetExceededError
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+        from litellm.proxy._types import UserAPIKeyAuth as ProxyKey
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+        processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4"})
+        key: Final = ProxyKey(matched_model_access_groups=["primary-group"])
+
+        async def mock_pre_call_logic(**kwargs):
+            if processor.data.get("model") == "gpt-4":
+                raise ProxyRateLimitError(detail="TPM limit exceeded", headers={"retry-after": "30"})
+            return processor.data, MagicMock()
+
+        async def one_group_per_fallback(*, model, **kwargs):
+            return (f"{model}-group",)
+
+        async def haiku_group_is_spent(*, matched_model_access_groups, **kwargs):
+            if "gpt-3.5-turbo-group" in matched_model_access_groups:
+                raise BudgetExceededError(current_cost=2.0, max_budget=1.0)
+
+        import litellm.proxy.proxy_server as proxy_server
+
+        monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+        monkeypatch.setattr(
+            "litellm.proxy.auth.auth_checks.collect_matched_model_access_groups", one_group_per_fallback
+        )
+        monkeypatch.setattr("litellm.proxy.auth.auth_checks._model_access_group_max_budget_check", haiku_group_is_spent)
+        mock_router = route_entry_points_to_stubs(MagicMock())
+        mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo", "claude-3-haiku"]}]
+
+        with patch.object(processor, "common_processing_pre_call_logic", side_effect=mock_pre_call_logic):
+            data, _ = await processor._pre_call_with_fallbacks(
+                request=MagicMock(),
+                general_settings={},
+                proxy_logging_obj=MagicMock(),
+                user_api_key_dict=key,
+                version=None,
+                proxy_config=_proxy_config(),
+                user_model=None,
+                user_temperature=None,
+                user_request_timeout=None,
+                user_max_tokens=None,
+                user_api_base=None,
+                model="gpt-4",
+                route_type="acompletion",
+                llm_router=mock_router,
+            )
+
+        assert data["model"] == "claude-3-haiku"
+        assert key.matched_model_access_groups == ["claude-3-haiku-group"]
+
+    @pytest.mark.asyncio
+    async def test_a_client_body_cannot_opt_into_saturation_fallbacks(self):
+        from litellm.proxy.common_utils.proxy_rate_limit_error import fallback_on_saturation_requested
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+        processor = ProxyBaseLLMRequestProcessing(
+            data={"model": "gpt-4", "router_settings_override": {"fallback_on_saturation": True, "num_retries": 1}}
+        )
+        seen_by_the_limiter = []
+
+        async def mock_pre_call_logic(**kwargs):
+            seen_by_the_limiter.append(fallback_on_saturation_requested(processor.data))
+            return processor.data, MagicMock()
+
+        mock_router = route_entry_points_to_stubs(MagicMock())
+        mock_router.fallbacks = []
+
+        with patch.object(processor, "common_processing_pre_call_logic", side_effect=mock_pre_call_logic):
+            data, _ = await processor._pre_call_with_fallbacks(
+                request=MagicMock(),
+                general_settings={},
+                proxy_logging_obj=MagicMock(),
+                user_api_key_dict=MagicMock(router_settings=None),
+                version=None,
+                proxy_config=_proxy_config(),
+                user_model=None,
+                user_temperature=None,
+                user_request_timeout=None,
+                user_max_tokens=None,
+                user_api_base=None,
+                model="gpt-4",
+                route_type="acompletion",
+                llm_router=mock_router,
+            )
+
+        assert seen_by_the_limiter == [False]
+        assert data["router_settings_override"] == {"num_retries": 1}
+
+    @pytest.mark.asyncio
+    async def test_fallback_on_saturation_moves_past_a_fallback_that_refuses_the_request(self):
+        from fastapi import HTTPException
+
+        from litellm.proxy.common_utils.proxy_rate_limit_error import (
+            SATURATION_FALLBACK_DESCRIPTOR_KEY,
+            ProxyRateLimitError,
+            saturation_fallbacks_exhausted,
+        )
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+        processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4"})
+        attempted = []
+
+        async def mock_pre_call_logic(**kwargs):
+            attempted.append(processor.data.get("model"))
+            if processor.data.get("model") == "gpt-4" and not saturation_fallbacks_exhausted(processor.data):
+                raise ProxyRateLimitError(
+                    detail="at saturation", headers={}, descriptor_key=SATURATION_FALLBACK_DESCRIPTOR_KEY
+                )
+            if processor.data.get("model") == "gpt-3.5-turbo":
+                raise HTTPException(status_code=400, detail="guardrail refused the fallback")
+            return processor.data, MagicMock()
+
+        mock_router = route_entry_points_to_stubs(MagicMock())
+        mock_router.fallbacks = []
+        settings = {"fallbacks": [{"gpt-4": ["gpt-3.5-turbo"]}], "fallback_on_saturation": True}
+
+        with patch.object(processor, "common_processing_pre_call_logic", side_effect=mock_pre_call_logic):
+            data, _ = await processor._pre_call_with_fallbacks(
+                request=MagicMock(),
+                general_settings={},
+                proxy_logging_obj=MagicMock(),
+                user_api_key_dict=MagicMock(router_settings=None),
+                version=None,
+                proxy_config=_proxy_config(settings),
+                user_model=None,
+                user_temperature=None,
+                user_request_timeout=None,
+                user_max_tokens=None,
+                user_api_base=None,
+                model="gpt-4",
+                route_type="acompletion",
+                llm_router=mock_router,
+            )
+
+        assert attempted == ["gpt-4", "gpt-3.5-turbo", "gpt-4"]
+        assert data["model"] == "gpt-4"
 
     @pytest.mark.asyncio
     async def test_fallback_on_saturation_serves_the_first_fallback_with_room(self):

@@ -137,17 +137,17 @@ def test_a_fallback_the_team_may_not_call_is_never_used(saturation_proxy: tuple[
             )
         )
 
-        first: Final = _chat(owned, key, preferred)
-        assert first.status_code == 200, first.text
-        assert first.headers["x-litellm-model-id"] == preferred_id
-        second: Final = eventually(
-            lambda: _chat(owned, key, preferred),
-            lambda response: response.status_code != 200 or response.headers["x-litellm-model-id"] == preferred_id,
+        def served_by_preferred_or_refused() -> httpx.Response:
+            response: Final = _chat(owned, key, preferred)
+            assert FALLBACK_REASON_HEADER not in response.headers, response.headers
+            if response.status_code == 200:
+                assert response.headers["x-litellm-model-id"] == preferred_id
+            return response
+
+        refused: Final = eventually(
+            served_by_preferred_or_refused,
+            lambda response: response.status_code != 200,
             seconds=15,
             return_last_on_timeout=True,
         )
-        assert FALLBACK_REASON_HEADER not in second.headers
-        if second.status_code == 200:
-            assert second.headers["x-litellm-model-id"] == preferred_id
-        else:
-            assert second.status_code == 429, second.text
+        assert refused.status_code == 429, refused.text
