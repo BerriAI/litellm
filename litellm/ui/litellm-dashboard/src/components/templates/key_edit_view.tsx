@@ -38,6 +38,7 @@ import {
   KeyRateLimitFields,
   KeyTypeSelect,
   labelWithHint,
+  moveMetadataBudgetAlertsToKeyRows,
   moveMetadataTagsToTagsField,
 } from "./KeyEditViewControls";
 import {
@@ -326,7 +327,7 @@ function KeyEditSession({
           ...values,
           ...(detachProject && enableProjectsUI && canDetachProject ? { project_id: null } : {}),
         }),
-        [...Object.keys(dirtyFields), ...(budgetLimitsUnchanged ? [] : ["budget_limits"])],
+        [...Object.keys(form.formState.dirtyFields), ...(budgetLimitsUnchanged ? [] : ["budget_limits"])],
       );
     } finally {
       setIsKeySaving(false);
@@ -381,6 +382,7 @@ function KeyEditSession({
       <form
         onSubmit={(event) => {
           moveMetadataTagsToTagsField(form, t);
+          if (!editingMemberKeyAsTeamAdmin) moveMetadataBudgetAlertsToKeyRows(form, t);
           return form.handleSubmit((values) =>
             handleSubmit(toSubmittedValues(values, { canViewPolicies, canViewPrompts })),
           )(event);

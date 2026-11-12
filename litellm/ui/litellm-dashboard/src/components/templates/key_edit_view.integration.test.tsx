@@ -3449,6 +3449,26 @@ describe("KeyEditView", () => {
       expect(onSubmit.mock.calls[0][1]).toContain("max_budget_alert_emails");
     });
 
+    it("moves a recipient map typed into the metadata JSON box into the rows even without a blur", async () => {
+      const onSubmit = vi.fn().mockResolvedValue(undefined);
+      renderAlerts(onSubmit);
+      await screen.findAllByPlaceholderText("% of budget");
+
+      fireEvent.change(screen.getByLabelText("Metadata"), {
+        target: {
+          value: JSON.stringify({ cost_center: "ops", max_budget_alert_emails: { "80": ["typed@example.com"] } }),
+        },
+      });
+      fireEvent.submit(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+      expect(onSubmit.mock.calls[0][0].max_budget_alert_emails).toEqual([
+        { threshold: 50, emails: "" },
+        { threshold: 80, emails: "typed@example.com" },
+      ]);
+      expect(onSubmit.mock.calls[0][1]).toContain("max_budget_alert_emails");
+    });
+
     it("hides the rows from a team admin editing a member's key", async () => {
       renderAlerts(vi.fn(), true);
 
