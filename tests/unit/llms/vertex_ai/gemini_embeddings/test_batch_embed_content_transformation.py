@@ -28,6 +28,7 @@ from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation
     transform_openai_input_gemini_content,
     transform_openai_input_gemini_embed_content,
 )
+from litellm.llms.vertex_ai.common_utils import gemini_video_metadata_from_openai
 from litellm.types.llms.vertex_ai import VertexAIBatchEmbeddingsResponseObject
 from litellm.types.utils import EmbeddingResponse
 
@@ -568,6 +569,60 @@ class TestFileContentBlocks:
         block: Final = _file_block(file_data=VIDEO_DATA_URI, detail="high", video_metadata={"fps": "fast"})
         with pytest.raises(BadRequestError, match=r"video_metadata\.fps"):
             _build_part_for_input(block, drop_params=True)
+
+    @pytest.mark.parametrize(
+        "video_metadata, named_in_error",
+        [
+            ({"fps": 0.2, "start_offset": "0s", "end_offset": "1s"}, r"\(1s\) at 0\.2 fps rounds to 0 frames"),
+            ({"fps": 1, "start_offset": "0s", "end_offset": "0.3s"}, r"\(0\.3s\) at 1 fps rounds to 0 frames"),
+            ({"fps": 5, "start_offset": "6.1s", "end_offset": "6.19s"}, r"\(0\.09s\) at 5 fps rounds to 0 frames"),
+            ({"end_offset": "0.4s"}, r"\(0\.4s\) at 1 fps rounds to 0 frames"),
+            ({"start_offset": "-10s", "end_offset": " 0.3s"}, r"\(0\.3s\) at 1 fps rounds to 0 frames"),
+            ({"start_offset": "5.s", "end_offset": "+5.2s"}, r"\(0\.2s\) at 1 fps rounds to 0 frames"),
+            ({"start_offset": "0s", "end_offset": "0s"}, r"end_offset \(0s\) must be later than the window start \(0s\)"),
+            ({"start_offset": "10s", "end_offset": "0s"}, r"must be later than the window start \(10s\)"),
+            ({"start_offset": "-0s", "end_offset": "-1s"}, r"end_offset \(-1s\) must be later than the window start \(0s\)"),
+            ({"fps": 0, "start_offset": "0s", "end_offset": "10s"}, r"\.fps: Input should be greater than 0"),
+            ({"fps": -1}, r"\.fps: Input should be greater than 0"),
+        ],
+    )
+    def test_video_metadata_that_samples_no_frames_answers_400_naming_the_field(
+        self, video_metadata: dict[str, object], named_in_error: str
+    ) -> None:
+        with pytest.raises(BadRequestError, match=rf"file\.video_metadata.*{named_in_error}"):
+            _build_part_for_input(_file_block(file_data=VIDEO_DATA_URI, video_metadata=video_metadata))
+
+    @pytest.mark.parametrize(
+        "video_metadata",
+        [
+            {"fps": 0.2, "start_offset": "0s", "end_offset": "2.5s"},
+            {"fps": 5, "start_offset": "6.1s", "end_offset": "6.2s"},
+            {"fps": 1, "start_offset": "0s", "end_offset": "0.5s"},
+            {"end_offset": "0.5s"},
+            {"fps": 25, "start_offset": "0s", "end_offset": "1s"},
+            {"start_offset": "-1s", "end_offset": "1s"},
+            {"start_offset": "3s"},
+            {"start_offset": "5.s", "end_offset": "+6s"},
+            {"start_offset": "1000ms", "end_offset": "0.1s"},
+            {"end_offset": "1e-1s"},
+            {"end_offset": "0.3s "},
+        ],
+    )
+    def test_video_metadata_that_samples_a_frame_is_forwarded_as_given(self, video_metadata: dict[str, object]) -> None:
+        part: Final = _build_part_for_input(_file_block(file_data=VIDEO_DATA_URI, video_metadata=video_metadata))
+        assert part["video_metadata"] == gemini_video_metadata_from_openai(video_metadata)
+
+    @pytest.mark.parametrize(
+        "transform", [transform_openai_input_gemini_content, transform_openai_input_gemini_embed_content]
+    )
+    def test_transforms_answer_400_for_a_window_that_samples_no_frames_even_with_drop_params(
+        self, transform: Callable[..., object]
+    ) -> None:
+        block: Final = _file_block(
+            file_data=VIDEO_DATA_URI, video_metadata={"fps": 0.2, "start_offset": "0s", "end_offset": "1s"}
+        )
+        with pytest.raises(BadRequestError, match="rounds to 0 frames"):
+            transform(input=[block], model=self.MODEL, optional_params={}, drop_params=True)
 
     @pytest.mark.parametrize(
         "transform", [transform_openai_input_gemini_content, transform_openai_input_gemini_embed_content]
