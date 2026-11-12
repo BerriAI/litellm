@@ -1289,7 +1289,7 @@ def function_setup(
     original_function: str,
     rules_obj: Rules,
     start_time: datetime.datetime,
-    *args: Any,  # positional passthrough to the wrapped LLM call (ANN401 ignored, see ruff-strict.toml)
+    *args: Any,  # positional passthrough to the wrapped LLM call (ANN401 ignored, see .github/linters/ruff-strict.toml)
     is_async_call: bool = True,
     **kwargs: Any,  # kwargs-ok: forwarded to Logging()/callbacks, varies per call_type
 ) -> tuple[LiteLLMLoggingObject, dict[str, Any]]:
@@ -2087,6 +2087,39 @@ def _is_litellm_router_call(kwargs: Mapping[str, object]) -> bool:
     return any(isinstance(bucket, Mapping) and "model_group" in bucket for bucket in metadata_buckets)
 
 
+def clamp_max_tokens(
+    model: object,
+    args: tuple[object, ...],
+    kwargs: dict[str, object],  # mutable-ok: the @client wrapper rewrites the call's own kwargs
+    call_type: str,
+) -> None:
+    if (
+        kwargs.get("max_tokens", None) is not None
+        and model is not None
+        and litellm.modify_params is True
+        and call_type in (CallTypes.acompletion.value, CallTypes.completion.value, CallTypes.anthropic_messages.value)
+    ):
+        try:
+            base_model = model
+            if kwargs.get("hf_model_name", None) is not None:
+                base_model = f"huggingface/{kwargs.get('hf_model_name')}"
+            messages = None
+            if len(args) > 1:
+                messages = args[1]
+            elif kwargs.get("messages", None):
+                messages = kwargs["messages"]
+            kwargs["max_tokens"] = _get_modified_max_tokens()(
+                model=model,
+                base_model=base_model,
+                messages=messages,
+                user_max_tokens=kwargs.get("max_tokens"),
+                buffer_num=None,
+                buffer_perc=None,
+            )
+        except Exception as e:
+            print_verbose(f"Error while checking max token limit: {e}")
+
+
 def client(original_function):
     from litellm.litellm_core_utils.core_helpers import max_retries_per_request_hit
 
@@ -2203,38 +2236,7 @@ def client(original_function):
                     verbose_logger.debug("Cache hit!")
                     return caching_handler_response.cached_result
 
-            # CHECK MAX TOKENS
-            if (
-                kwargs.get("max_tokens", None) is not None
-                and model is not None
-                and litellm.modify_params is True  # user is okay with params being modified
-                and (
-                    call_type == CallTypes.acompletion.value
-                    or call_type == CallTypes.completion.value
-                    or call_type == CallTypes.anthropic_messages.value
-                )
-            ):
-                try:
-                    base_model = model
-                    if kwargs.get("hf_model_name", None) is not None:
-                        base_model = f"huggingface/{kwargs.get('hf_model_name')}"
-                    messages = None
-                    if len(args) > 1:
-                        messages = args[1]
-                    elif kwargs.get("messages", None):
-                        messages = kwargs["messages"]
-                    user_max_tokens: Final = kwargs.get("max_tokens")
-                    modified_max_tokens: Final = _get_modified_max_tokens()(
-                        model=model,
-                        base_model=base_model,
-                        messages=messages,
-                        user_max_tokens=user_max_tokens,
-                        buffer_num=None,
-                        buffer_perc=None,
-                    )
-                    kwargs["max_tokens"] = modified_max_tokens
-                except Exception as e:
-                    print_verbose(f"Error while checking max token limit: {e}")
+            clamp_max_tokens(model, args, kwargs, call_type)
             # MODEL CALL
             result = original_function(*args, **kwargs)
             end_time = datetime.datetime.now()
@@ -2499,38 +2501,7 @@ def client(original_function):
             if _llm_caching_handler.preset_cache_key is not None:
                 logging_obj.litellm_params["preset_cache_key"] = _llm_caching_handler.preset_cache_key
 
-            # CHECK MAX TOKENS
-            if (
-                kwargs.get("max_tokens", None) is not None
-                and model is not None
-                and litellm.modify_params is True  # user is okay with params being modified
-                and (
-                    call_type == CallTypes.acompletion.value
-                    or call_type == CallTypes.completion.value
-                    or call_type == CallTypes.anthropic_messages.value
-                )
-            ):
-                try:
-                    base_model = model
-                    if kwargs.get("hf_model_name", None) is not None:
-                        base_model = f"huggingface/{kwargs.get('hf_model_name')}"
-                    messages = None
-                    if len(args) > 1:
-                        messages = args[1]
-                    elif kwargs.get("messages", None):
-                        messages = kwargs["messages"]
-                    user_max_tokens: Final = kwargs.get("max_tokens")
-                    modified_max_tokens: Final = _get_modified_max_tokens()(
-                        model=model,
-                        base_model=base_model,
-                        messages=messages,
-                        user_max_tokens=user_max_tokens,
-                        buffer_num=None,
-                        buffer_perc=None,
-                    )
-                    kwargs["max_tokens"] = modified_max_tokens
-                except Exception as e:
-                    print_verbose(f"Error while checking max token limit: {e}")
+            clamp_max_tokens(model, args, kwargs, call_type)
 
             # MODEL CALL
             call_kwargs: Final = (
@@ -6583,13 +6554,10 @@ def get_model_region(litellm_params: LiteLLM_Params, mode: str | None) -> str | 
     return None
 
 
-def get_first_chars_messages(kwargs: dict) -> str:
-    try:
-        _messages = kwargs.get("messages")
-        _messages = str(_messages)[:100]
-        return _messages
-    except Exception:
-        return ""
+def get_first_chars_messages(kwargs: object) -> str:
+    request: Final = as_str_mapping(kwargs)
+    messages: Final = None if request is None else request.get("messages")
+    return "" if messages is None else str(messages)[:100]
 
 
 def count_characters(text: str) -> int:
@@ -10268,8 +10236,11 @@ class ProviderConfigManager:
 
     @staticmethod
     def get_provider_decisions_config(model: str, provider: LlmProviders) -> BaseDecisionsConfig | None:
-        if provider == LlmProviders.PERPLEXITY:
-            return litellm.PerplexityDecisionsConfig()
+        if provider in (LlmProviders.GEMINI, LlmProviders.PERPLEXITY):
+            return {
+                LlmProviders.GEMINI: litellm.GeminiDecisionsConfig,
+                LlmProviders.PERPLEXITY: litellm.PerplexityDecisionsConfig,
+            }[provider]()
         if provider == LlmProviders.TYPESAFE:
             return litellm.TypeSafeDecisionsConfig()
         if provider == LlmProviders.NACE:

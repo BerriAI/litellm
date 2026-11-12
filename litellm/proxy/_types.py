@@ -211,6 +211,7 @@ class LitellmTableNames(str, enum.Enum):
     SSO_CONFIG_TABLE_NAME = "LiteLLM_SSOConfig"
     UI_SETTINGS_TABLE_NAME = "LiteLLM_UISettings"
     AGENT_TABLE_NAME = "LiteLLM_AgentsTable"
+    GUARDRAILS_TABLE_NAME = "LiteLLM_GuardrailsTable"
 
 
 from litellm.types.integrations.slack_alerting import (
@@ -462,6 +463,7 @@ class LiteLLMRoutes(enum.Enum):
         "/skill-hub/skills/{name}/versions",
         "/skill-hub/skills/{name}/versions/{version_id}",
         "/skill-hub/skills/{name}/versions/{version_id}/archive",
+        "/skill-hub/skills/{name}/versions/{version_id}/restore",
         "/skill-hub/skills/{name}/publish",
         "/skill-hub/skills/{name}/unpublish",
         "/skill-hub/skills/{name}/upload",
@@ -2966,6 +2968,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "every replica. On by default; set to tune the window, pin a job, or turn it off."
         ),
     )
+    performance_alerts_enabled: bool = Field(
+        True,
+        description=(
+            "Check yesterday's usage for the gateway, models, teams, users and keys against the week before, "
+            "and save unusual spend, traffic, response time and failure rate changes as alerts. On by default. "
+            "Set false to disable monitoring. Free gateways stop after five saved performance alerts."
+        ),
+    )
     spend_capture_rate_check: SpendCaptureRateCheckSettings | None = Field(
         None,
         description=(
@@ -3024,7 +3034,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     use_spend_logs_partitioning: bool | None = Field(
         None,
-        description="If True and LiteLLM_SpendLogs has been converted to a range-partitioned table (db_scripts/partition_spend_logs.sql), retention cleanup drops expired partitions instead of deleting rows, and pre-creates upcoming partitions. Default is False.",
+        description="If True and LiteLLM_SpendLogs has been converted to a range-partitioned table (litellm/scripts/db/partition_spend_logs.sql), retention cleanup drops expired partitions instead of deleting rows, and pre-creates upcoming partitions. Default is False.",
     )
     maximum_spend_logs_cleanup_batch_size: int | None = Field(
         None,

@@ -277,8 +277,6 @@ try:
     import yaml
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
     from apscheduler.schedulers.base import STATE_STOPPED
-    from apscheduler.triggers.base import BaseTrigger
-    from apscheduler.triggers.interval import IntervalTrigger
 except ImportError as e:
     raise ImportError(f"Missing dependency {e}. Run `pip install 'litellm[proxy]'`")
 
@@ -370,8 +368,8 @@ from litellm.constants import (
     REALTIME_SESSION_FAILURE_LOGGED_KEY,
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
     ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG,
+    SCHEDULED_JOB_POLL_INTERVAL_SECONDS,
     SPEND_CAPTURE_RATE_CHECK_JOB_ID,
-    SPEND_LOG_SIZE_CHECK_INTERVAL,
     USER_SPEND_ALERTS_JOB_ID,
     WEEKLY_SPEND_REPORT_JOB_ID,
 )
@@ -430,6 +428,7 @@ from litellm.messages.dispatch import messages_target
 from litellm.proxy._lazy_features import attach_lazy_features, reserve_lazy_slot
 from litellm.proxy._types import *
 from litellm.proxy.agent_endpoints.auth.agent_access_groups import CeilingResolver, resolve_agent_access_group_ceiling
+from litellm.proxy.alerting_endpoints.alerts import router as alerts_router
 from litellm.proxy.alerting_endpoints.model_deprecation_alerts import (
     router as model_deprecation_alerts_router,
 )
@@ -617,7 +616,6 @@ from litellm.proxy.common_utils.scheduled_job_stagger import (
     apply_scheduled_job_stagger,
     attach_job_timing_logger,
     parse_stagger_settings,
-    stagger_trigger,
 )
 from litellm.proxy.common_utils.slow_gc_logger import log_slow_gc_passes
 from litellm.proxy.common_utils.swagger_utils import ERROR_RESPONSES
@@ -626,6 +624,7 @@ from litellm.proxy.common_utils.timezone_utils import (
     get_budget_reset_time,
 )
 from litellm.proxy.common_utils.token_count_log import (
+    answered_with_litellm_call_id,
     deployment_model_id,
     logged_token_count,
     rejected_token_count,
@@ -670,7 +669,10 @@ from litellm.proxy.container_endpoints.endpoints import router as container_rout
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
 from litellm.proxy.db.create_views import SupportsRawQueries
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
-from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
+from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
+    SPEND_LOG_RETENTION_JOB,
+    SPEND_LOG_SIZE_CHECK_JOB,
+)
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
     build_window_spend_transaction,
 )
@@ -696,6 +698,7 @@ from litellm.proxy.db.request_error_tracking import (
     flush_request_errors,
     request_error_accumulator,
 )
+from litellm.proxy.db.scheduled_job_runs import JobScheduler, register_poll
 from litellm.proxy.db.spend_counter_reseed import END_USER_COUNTER_PREFIX, SpendCounterReseed
 from litellm.proxy.discovery_endpoints import (
     agent_skills_discovery_router,
@@ -1209,7 +1212,7 @@ try:
 except Exception:
     # when using litellm docker image
     try:
-        import enterprise
+        from litellm import enterprise
     except Exception:
         pass
 
@@ -2595,6 +2598,9 @@ async def otel_unhandled_exception_handler(request: Request, exc: Exception):
         raise exc
     response: Final = await _unhandled_exception_response(request, exc)
     response.headers.update(trace_response_headers(getattr(request.state, "parent_otel_span", None)))
+    litellm_call_id: Final = attribute_of(request.state, "litellm_call_id")
+    if isinstance(litellm_call_id, str):
+        response.headers.setdefault(LITELLM_CALL_ID_HEADER, litellm_call_id)
     return response
 
 
@@ -5744,7 +5750,6 @@ def should_load_db_object(object_type: str | SupportedDBObjectType) -> bool:
 _CONFIG_PERSISTED_SECTIONS: Final = ("general_settings", "router_settings", "litellm_settings")
 _CONFIG_UNMANAGED_EXCLUSIONS: Final = frozenset(("environment_variables", "model_list"))
 _CONFIG_SECTION_VALUES: Final = TypeAdapter(Mapping[str, JsonValue])
-_CONFIG_SECTION_LOCK_SQL: Final = "SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtext($1))"
 
 
 class _ConfigParamWhere(TypedDict):
@@ -5906,6 +5911,28 @@ def _wants_size_check_job(settings: Mapping[str, object]) -> bool:
 
 def _wants_cleanup_jobs(settings: Mapping[str, object]) -> bool:
     return _wants_retention_job(settings) or _wants_size_check_job(settings)
+
+
+_SPEND_LOG_CLEANUP_POLLS: Final = (
+    (_SPEND_LOG_CLEANUP_JOB_ID, _wants_retention_job, SPEND_LOG_RETENTION_JOB),
+    (_SPEND_LOG_SIZE_CHECK_JOB_ID, _wants_size_check_job, SPEND_LOG_SIZE_CHECK_JOB),
+)
+
+
+def _register_spend_log_cleanup_jobs(
+    job_scheduler: JobScheduler, db: PrismaClient | None, settings: Mapping[str, object]
+) -> None:
+    """Poll LiteLLM_ScheduledJobRun for each cleanup job the settings ask for. Every pod polls, one claims each run."""
+    for job_id, wanted, job in _SPEND_LOG_CLEANUP_POLLS:
+        register_poll(
+            job_scheduler,
+            db,
+            job_id,
+            job,
+            wanted=wanted(settings),
+            poll_seconds=SCHEDULED_JOB_POLL_INTERVAL_SECONDS,
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+        )
 
 
 @lru_cache(maxsize=4096)
@@ -6297,7 +6324,7 @@ class ProxyConfig:
         prisma_client: PrismaClient,
     ) -> Mapping[str, JsonValue] | None:
         async with prisma_client.tx() as tx:
-            await tx.query_raw(_CONFIG_SECTION_LOCK_SQL, section_name)
+            await tx.query_raw(CONFIG_PARAM_LOCK_SQL, section_name)
             config_table: Final = cast("TableActions[_ConfigParamRow]", tx.litellm_config)
             config_where: Final[_ConfigParamWhere] = {"param_name": section_name}
             existing_row: Final[_ConfigParamRow | None] = await config_table.find_first(where=config_where)
@@ -7053,7 +7080,7 @@ class ProxyConfig:
                 elif key == "priority_reservation_settings":
                     from litellm.types.utils import PriorityReservationSettings
 
-                    litellm.priority_reservation_settings = PriorityReservationSettings(**value)
+                    litellm.priority_reservation_settings = PriorityReservationSettings.model_validate(value)
                 elif key == "callbacks":
                     initialize_callbacks_on_proxy(
                         value=value,
@@ -8485,97 +8512,10 @@ class ProxyConfig:
             )
 
     async def _reschedule_spend_log_cleanup_job(self):
-        """
-        Reschedule the spend log cleanup job based on current general_settings.
-        This is called when maximum_spend_logs_retention_period is updated dynamically.
-        If the retention period is None, the job will be removed.
-        """
-        global scheduler, general_settings, prisma_client
+        """Add or remove the cleanup polls when the settings that ask for them change."""
         if scheduler is None:
             return
-
-        from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
-            SpendLogCleanup,
-        )
-
-        if not _wants_retention_job(general_settings):
-            if scheduler.get_job(_SPEND_LOG_CLEANUP_JOB_ID) is not None:
-                scheduler.remove_job(_SPEND_LOG_CLEANUP_JOB_ID)
-                verbose_proxy_logger.info("Removed existing spend log cleanup job")
-        else:
-            trigger: Final = self._spend_log_cleanup_trigger()
-            if trigger is not None:
-                scheduler.add_job(
-                    SpendLogCleanup().cleanup_old_spend_logs,
-                    trigger,
-                    args=[prisma_client],
-                    id=_SPEND_LOG_CLEANUP_JOB_ID,
-                    replace_existing=True,
-                    misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
-                )
-                verbose_proxy_logger.info("Spend log cleanup rescheduled with trigger: %s", trigger)
-
-        if not _wants_size_check_job(general_settings):  # pyright: ignore[reportUnknownArgumentType]  # general_settings is an untyped module dict
-            if scheduler.get_job(_SPEND_LOG_SIZE_CHECK_JOB_ID) is not None:  # pyright: ignore[reportUnknownMemberType]  # apscheduler is untyped
-                scheduler.remove_job(_SPEND_LOG_SIZE_CHECK_JOB_ID)  # pyright: ignore[reportUnknownMemberType]  # apscheduler is untyped
-                verbose_proxy_logger.info("Removed existing spend log size check job")
-            return
-        size_trigger: Final = self._spend_log_size_check_trigger()
-        if size_trigger is None:
-            return
-        scheduler.add_job(  # pyright: ignore[reportUnknownMemberType]  # apscheduler is untyped
-            SpendLogCleanup().cleanup_spend_logs_by_size,
-            size_trigger,
-            args=[prisma_client],
-            id=_SPEND_LOG_SIZE_CHECK_JOB_ID,
-            replace_existing=True,
-            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
-        )
-        verbose_proxy_logger.info("Spend log size check rescheduled with trigger: %s", size_trigger)
-
-    def _spend_log_size_check_trigger(self) -> object | None:
-        return self._staggered_interval_trigger(
-            _SPEND_LOG_SIZE_CHECK_JOB_ID,
-            "maximum_spend_logs_size_check_interval",
-            general_settings.get("maximum_spend_logs_size_check_interval", SPEND_LOG_SIZE_CHECK_INTERVAL),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # general_settings is an untyped module dict
-        )
-
-    @staticmethod
-    def _staggered_interval_trigger(job_id: str, setting_name: str, interval: object) -> object | None:
-        if not isinstance(interval, str):
-            verbose_proxy_logger.error("Invalid %s value: %r", setting_name, interval)
-            return None
-        # this runs against a started scheduler, which the startup stagger sweep
-        # cannot reach, so the offset is applied here or the job reconverges across
-        # replicas the first time an admin edits the settings
-        try:
-            interval_seconds: Final = duration_in_seconds(interval)
-            return stagger_trigger(
-                job_id=job_id,
-                trigger=IntervalTrigger(seconds=interval_seconds),
-                period_seconds=interval_seconds,
-                settings=parse_stagger_settings(general_settings),  # pyright: ignore[reportUnknownArgumentType]  # general_settings is an untyped module dict
-            )
-        except (ValueError, OverflowError):
-            verbose_proxy_logger.error("Invalid %s value: %r", setting_name, interval)
-            return None
-
-    def _spend_log_cleanup_trigger(self) -> object | None:
-        cleanup_cron: Final[object] = general_settings.get("maximum_spend_logs_cleanup_cron")
-        if cleanup_cron:
-            from apscheduler.triggers.cron import CronTrigger
-
-            try:
-                cron_trigger: Final[BaseTrigger] = CronTrigger.from_crontab(cleanup_cron)
-            except (ValueError, TypeError, AttributeError):
-                verbose_proxy_logger.error("Invalid maximum_spend_logs_cleanup_cron value: %s", cleanup_cron)
-                return None
-            return cron_trigger
-        return self._staggered_interval_trigger(
-            _SPEND_LOG_CLEANUP_JOB_ID,
-            "maximum_spend_logs_retention_interval",
-            general_settings.get("maximum_spend_logs_retention_interval", "1d"),
-        )
+        _register_spend_log_cleanup_jobs(scheduler, prisma_client, general_settings)  # pyright: ignore[reportUnknownArgumentType, reportArgumentType]  # apscheduler is untyped
 
     async def _update_general_settings(self, db_general_settings: Mapping[str, SettingsJsonValue] | str | None) -> None:
         global general_settings
@@ -11979,6 +11919,24 @@ class ProxyStartupEvent:
             read_general_settings=_current_general_settings,
         )
 
+        from litellm.proxy.spend_tracking.performance_alerts import RUN_INTERVAL, run_performance_alerts
+        from litellm.repositories.performance_alert_repository import PerformanceAlertRepository
+
+        async def run_performance_alerts_job() -> None:
+            if _current_general_settings().get("performance_alerts_enabled", True) is True:
+                await run_performance_alerts(PerformanceAlertRepository(prisma_client, enterprise=premium_user is True))
+
+        scheduler.add_job(  # pyright: ignore[reportUnknownMemberType]  # APScheduler does not provide typed job methods
+            run_performance_alerts_job,
+            "interval",
+            seconds=RUN_INTERVAL.total_seconds(),
+            id="performance_alerts",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+        )
+
         ### PTU DAILY ROLLUP ###
         from litellm.proxy.spend_tracking.ptu_feature_flag import (
             is_ptu_cost_attribution_enabled,
@@ -12023,70 +11981,7 @@ class ProxyStartupEvent:
 
         ### SPEND LOG CLEANUP ###
         cleanup_settings: Final = _current_general_settings()
-        if _wants_size_check_job(cleanup_settings):
-            size_check_interval: Final = cleanup_settings.get(
-                "maximum_spend_logs_size_check_interval", SPEND_LOG_SIZE_CHECK_INTERVAL
-            )
-            try:
-                if not isinstance(size_check_interval, str):
-                    raise TypeError(size_check_interval)
-                size_check_seconds: Final = duration_in_seconds(size_check_interval)
-                scheduler.add_job(  # pyright: ignore[reportUnknownMemberType]  # apscheduler is untyped
-                    SpendLogCleanup().cleanup_spend_logs_by_size,
-                    "interval",
-                    seconds=size_check_seconds + random.randint(0, 60),
-                    args=[prisma_client],
-                    id=_SPEND_LOG_SIZE_CHECK_JOB_ID,
-                    replace_existing=True,
-                    misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
-                )
-                verbose_proxy_logger.info("Spend log size check scheduled every %s", size_check_interval)
-            except (TypeError, ValueError, OverflowError):
-                verbose_proxy_logger.error(
-                    "Invalid maximum_spend_logs_size_check_interval value: %r", size_check_interval
-                )
-        if _wants_retention_job(cleanup_settings):
-            spend_log_cleanup: Final = SpendLogCleanup()
-            cleanup_cron: Final = cleanup_settings.get("maximum_spend_logs_cleanup_cron")
-
-            if cleanup_cron and not isinstance(cleanup_cron, str):
-                verbose_proxy_logger.error("Invalid maximum_spend_logs_cleanup_cron value: %r", cleanup_cron)
-            elif isinstance(cleanup_cron, str) and cleanup_cron:
-                from apscheduler.triggers.cron import CronTrigger
-
-                try:
-                    cron_trigger: Final = CronTrigger.from_crontab(cleanup_cron)
-                    scheduler.add_job(
-                        spend_log_cleanup.cleanup_old_spend_logs,
-                        cron_trigger,
-                        args=[prisma_client],
-                        id=_SPEND_LOG_CLEANUP_JOB_ID,
-                        replace_existing=True,
-                        misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
-                    )
-                    verbose_proxy_logger.info("Spend log cleanup scheduled with cron: %s", cleanup_cron)
-                except ValueError:
-                    verbose_proxy_logger.error("Invalid maximum_spend_logs_cleanup_cron value: %s", cleanup_cron)
-            else:
-                # Interval-based scheduling (existing behavior)
-                retention_interval: Final = cleanup_settings.get("maximum_spend_logs_retention_interval", "1d")
-                try:
-                    if not isinstance(retention_interval, str):
-                        raise ValueError(retention_interval)
-                    interval_seconds: Final = duration_in_seconds(retention_interval)
-                    scheduler.add_job(
-                        spend_log_cleanup.cleanup_old_spend_logs,
-                        "interval",
-                        seconds=interval_seconds + random.randint(0, 60),
-                        args=[prisma_client],
-                        id=_SPEND_LOG_CLEANUP_JOB_ID,
-                        replace_existing=True,
-                        misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
-                    )
-                except (ValueError, OverflowError):
-                    verbose_proxy_logger.error(
-                        "Invalid maximum_spend_logs_retention_interval value: %r", retention_interval
-                    )
+        _register_spend_log_cleanup_jobs(scheduler, prisma_client, cleanup_settings)  # pyright: ignore[reportUnknownArgumentType, reportArgumentType]  # apscheduler is untyped
         if _wants_cleanup_jobs(cleanup_settings):
             proxy_config.record_cleanup_schedule_attempt(cleanup_settings)
         ### CHECK BATCH COST ###
@@ -15283,7 +15178,7 @@ from litellm.llms.anthropic.count_tokens.token_counter import AnthropicTokenCoun
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
-from litellm.repositories.config_repository import ConfigRepository
+from litellm.repositories.config_repository import CONFIG_PARAM_LOCK_SQL, ConfigRepository
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.table_repositories import (
     AccessGroupRepository,
@@ -16090,19 +15985,30 @@ def _system_message(system: object) -> ChatCompletionSystemMessage | None:
 )
 async def token_counter(
     request: TokenCountRequest,
+    http_request: Request,
+    fastapi_response: Response,
     call_endpoint: bool = False,
     litellm_call_id: Annotated[str | None, Header(alias=LITELLM_CALL_ID_HEADER)] = None,
 ):
     """
+    Returns:
+        TokenCountResponse
+
     Args:
         request: TokenCountRequest
         call_endpoint: bool - When set to "True" it will call the token counting endpoint - e.g Anthropic or Google AI Studio Token Counting APIs.
         litellm_call_id: the x-litellm-call-id header, logged with the count so it joins the inference call's logs
-
-    Returns:
-        TokenCountResponse
+        \f
+        http_request: carries the call id to the error handler when the count fails
+        fastapi_response: answers the x-litellm-call-id header the count's log line names
     """
-    return await count_request_tokens(request=request, call_endpoint=call_endpoint, litellm_call_id=litellm_call_id)
+    call_id: Final = resolve_litellm_call_id(litellm_call_id)
+    return await answered_with_litellm_call_id(
+        count_request_tokens(request=request, call_endpoint=call_endpoint, litellm_call_id=call_id),
+        call_id,
+        http_request,
+        fastapi_response,
+    )
 
 
 async def count_request_tokens(
@@ -22704,6 +22610,7 @@ app.include_router(router_settings_router)
 app.include_router(fallback_management_router)
 app.include_router(cache_settings_router)
 app.include_router(model_deprecation_alerts_router)
+app.include_router(alerts_router)
 app.include_router(coordination_redis_settings_router)
 app.include_router(user_agent_analytics_router)
 app.include_router(gateway_request_router)

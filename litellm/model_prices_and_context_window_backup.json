@@ -26230,6 +26230,9 @@
             "video"
         ]
     },
+    "fal_ai/bytedance/seedance-latest/text-to-video": {
+        "alias_of": "fal_ai/bytedance/seedance-2.5/text-to-video"
+    },
     "fal_ai/bytedance/seedance-2.5/image-to-video": {
         "litellm_provider": "fal_ai",
         "mode": "video_generation",
@@ -26248,6 +26251,9 @@
             "video"
         ]
     },
+    "fal_ai/bytedance/seedance-latest/image-to-video": {
+        "alias_of": "fal_ai/bytedance/seedance-2.5/image-to-video"
+    },
     "fal_ai/bytedance/seedance-2.5/reference-to-video": {
         "litellm_provider": "fal_ai",
         "mode": "video_generation",
@@ -26265,6 +26271,9 @@
         "supported_output_modalities": [
             "video"
         ]
+    },
+    "fal_ai/bytedance/seedance-latest/reference-to-video": {
+        "alias_of": "fal_ai/bytedance/seedance-2.5/reference-to-video"
     },
     "fal_ai/minimax/h3/text-to-video": {
         "litellm_provider": "fal_ai",
@@ -28593,6 +28602,7 @@
     "fireworks_ai/accounts/fireworks/models/deepseek-v4-flash": {
         "cache_read_input_token_cost": 2.8e-08,
         "deprecation_date": "2026-08-14",
+        "deprecation_source": "https://docs.fireworks.ai/api-reference/list-models.md",
         "input_cost_per_token": 1.4e-07,
         "litellm_provider": "fireworks_ai",
         "max_input_tokens": 1048576,
@@ -28600,6 +28610,7 @@
         "mode": "chat",
         "output_cost_per_token": 2.8e-07,
         "source": "https://docs.fireworks.ai/serverless/pricing",
+        "successor_model": "fireworks_ai/accounts/fireworks/models/deepseek-v4-flash-0731",
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -29065,6 +29076,7 @@
     "fireworks_ai/deepseek-v4-flash": {
         "cache_read_input_token_cost": 2.8e-08,
         "deprecation_date": "2026-08-14",
+        "deprecation_source": "https://docs.fireworks.ai/api-reference/list-models.md",
         "input_cost_per_token": 1.4e-07,
         "litellm_provider": "fireworks_ai",
         "max_input_tokens": 1048576,
@@ -29072,6 +29084,7 @@
         "mode": "chat",
         "output_cost_per_token": 2.8e-07,
         "source": "https://docs.fireworks.ai/serverless/pricing",
+        "successor_model": "fireworks_ai/deepseek-v4-flash-0731",
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -31932,6 +31945,8 @@
         "mode": "image_generation",
         "output_cost_per_image": 0.039,
         "output_cost_per_image_token": 3e-05,
+        "output_cost_per_image_token_batches": 1.5e-05,
+        "output_cost_per_image_token_priority": 5.4e-05,
         "output_cost_per_reasoning_token": 2.5e-06,
         "output_cost_per_token": 2.5e-06,
         "output_cost_per_token_batches": 1.25e-06,
@@ -56741,6 +56756,9 @@
             "comment": "Output: 20/30/68 credits per second at 480p/720p/1080p @ $0.01 per credit; input video billed additionally at 10/15/34 credits per input second and the 80 credit minimum per task are not modeled"
         }
     },
+    "runwayml/seedance-latest": {
+        "alias_of": "runwayml/seedance2_5"
+    },
     "runwayml/hailuo3": {
         "litellm_provider": "runwayml",
         "mode": "video_generation",
@@ -68558,10 +68576,12 @@
     "xai/grok-imagine-image-quality": {
         "deprecation_date": "2026-11-02",
         "deprecation_source": "https://docs.x.ai/developers/migration/imagine-image-quality-nov-2",
-        "input_cost_per_image": 0.05,
+        "input_cost_per_image": 0.04,
         "litellm_provider": "xai",
         "mode": "image_generation",
-        "source": "https://docs.x.ai/docs/models",
+        "output_cost_per_image_1K": 0.04,
+        "output_cost_per_image_2K": 0.06,
+        "source": "https://docs.x.ai/developers/migration/imagine-image-quality-nov-2",
         "successor_model": "xai/grok-imagine-image-2.0",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -68577,10 +68597,12 @@
     "xai/grok-imagine-image-quality-20260403": {
         "deprecation_date": "2026-11-02",
         "deprecation_source": "https://docs.x.ai/developers/migration/imagine-image-quality-nov-2",
-        "input_cost_per_image": 0.05,
+        "input_cost_per_image": 0.04,
         "litellm_provider": "xai",
         "mode": "image_generation",
-        "source": "https://docs.x.ai/docs/models",
+        "output_cost_per_image_1K": 0.04,
+        "output_cost_per_image_2K": 0.06,
+        "source": "https://docs.x.ai/developers/migration/imagine-image-quality-nov-2",
         "successor_model": "xai/grok-imagine-image-2.0",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -68596,10 +68618,12 @@
     "xai/grok-imagine-image-quality-latest": {
         "deprecation_date": "2026-11-02",
         "deprecation_source": "https://docs.x.ai/developers/migration/imagine-image-quality-nov-2",
-        "input_cost_per_image": 0.05,
+        "input_cost_per_image": 0.04,
         "litellm_provider": "xai",
         "mode": "image_generation",
-        "source": "https://docs.x.ai/docs/models",
+        "output_cost_per_image_1K": 0.04,
+        "output_cost_per_image_2K": 0.06,
+        "source": "https://docs.x.ai/developers/migration/imagine-image-quality-nov-2",
         "successor_model": "xai/grok-imagine-image-2.0",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -68615,10 +68639,12 @@
     "xai/grok-imagine-image-pro": {
         "deprecation_date": "2026-05-15",
         "deprecation_source": "https://docs.x.ai/developers/migration/may-15-retirement",
-        "input_cost_per_image": 0.05,
+        "input_cost_per_image": 0.04,
         "litellm_provider": "xai",
         "mode": "image_generation",
-        "source": "https://docs.x.ai/docs/models",
+        "output_cost_per_image_1K": 0.04,
+        "output_cost_per_image_2K": 0.06,
+        "source": "https://docs.x.ai/developers/migration/imagine-image-quality-nov-2",
         "successor_model": "xai/grok-imagine-image-2.0",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -77922,6 +77948,9 @@
         "tpm": 4000000.0,
         "web_search_billing_unit": "per_query"
     },
+    "gemini/nano-banana-latest": {
+        "alias_of": "gemini/gemini-nano-banana-2.1"
+    },
     "gemini-nano-banana-2.1": {
         "cache_read_input_token_cost": 1.5e-07,
         "cache_read_input_token_cost_batches": 7.5e-08,
@@ -78015,6 +78044,9 @@
         "supports_vision": true,
         "supports_web_search": true,
         "web_search_billing_unit": "per_query"
+    },
+    "vertex_ai/nano-banana-latest": {
+        "alias_of": "vertex_ai/gemini-nano-banana-2.1"
     },
     "azure_ai/grok-4.7": {
         "cache_read_input_token_cost": 5e-07,
@@ -83589,6 +83621,7 @@
     "fireworks_ai/accounts/fireworks/routers/spot-deepseek-v4-flash": {
         "cache_read_input_token_cost": 2.1e-08,
         "deprecation_date": "2026-08-14",
+        "deprecation_source": "https://docs.fireworks.ai/api-reference/list-models.md",
         "input_cost_per_token": 1.05e-07,
         "litellm_provider": "fireworks_ai",
         "max_input_tokens": 1048576,
@@ -83596,6 +83629,7 @@
         "mode": "chat",
         "output_cost_per_token": 2.1e-07,
         "source": "https://api.fireworks.ai/v1/serverless/models",
+        "successor_model": "fireworks_ai/accounts/fireworks/models/deepseek-v4-flash-0731",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -86821,6 +86855,15 @@
         "output_cost_per_token": 1e-05,
         "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
     },
+    "gmi/google/gemini-4-carbon": {
+        "cache_read_input_token_cost": 1e-07,
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
     "gmi/google/gemma-4-26b-a4b-it": {
         "input_cost_per_token": 1.3e-07,
         "litellm_provider": "gmi",
@@ -87152,6 +87195,18 @@
         "max_input_tokens": 2000000,
         "mode": "chat",
         "output_cost_per_token": 6e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/xai/grok4.7": {
+        "cache_read_input_token_cost": 5e-07,
+        "cache_read_input_token_cost_above_200k_tokens": 1e-06,
+        "input_cost_per_token": 2e-06,
+        "input_cost_per_token_above_200k_tokens": 4e-06,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 500000,
+        "mode": "chat",
+        "output_cost_per_token": 6e-06,
+        "output_cost_per_token_above_200k_tokens": 1.2e-05,
         "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
     },
     "gmi/zai-org/GLM-4.5-Air-FP8": {
@@ -97747,6 +97802,9 @@
         "output_cost_per_image_4K": 0.1134,
         "source": "https://replicate.com/google/nano-banana-2.1"
     },
+    "replicate/google/nano-banana-latest": {
+        "alias_of": "replicate/google/nano-banana-2.1"
+    },
     "replicate/heygen/avatar-iv": {
         "litellm_provider": "replicate",
         "mode": "video_generation",
@@ -99949,17 +100007,20 @@
         ]
     },
     "databricks/databricks-claude-fable-5-2": {
-        "cache_creation_input_token_cost": 8e-06,
-        "cache_read_input_token_cost": 8e-06,
-        "input_cost_per_token": 8e-06,
+        "cache_creation_input_token_cost": 9.99999e-06,
+        "cache_creation_input_token_cost_above_1hr": 1.599997e-05,
+        "cache_read_input_token_cost": 1.9999e-07,
+        "input_cost_per_token": 8.00002e-06,
+        "input_dbu_cost_per_token": 0.000114286,
         "litellm_provider": "databricks",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
-        "metadata": {"notes":"Claude Fable 5.2 on Databricks is available only through Unity Gateway with the model service name system.ai.claude-fable-5-2, and Databricks hosts it through Amazon Bedrock. The Databricks pricing page lists no row for it yet, so input and output are inherited from the catalog Bedrock row anthropic.claude-fable-5-2, no '*_dbu_cost_per_token' fields are published, and cache tokens bill at the input rate until Databricks publishes cache DBU rates."},
+        "metadata": {"notes":"Costs per token are the published Global DBU rates times $0.070 per DBU. The '*_dbu_cost_per_token' fields are provided for reference; cost calculation reads the dollar '*_cost_per_token' fields."},
         "mode": "chat",
-        "output_cost_per_token": 4e-05,
+        "output_cost_per_token": 4.000003e-05,
+        "output_dbu_cost_per_token": 0.000571429,
         "prompt_cache_min_tokens": 512.0,
-        "source": "https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models",
+        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supports_adaptive_thinking": true,
         "supports_anthropic_thinking_payload": true,
         "supports_assistant_prefill": false,
@@ -99974,17 +100035,20 @@
         "thinking_always_on": true
     },
     "databricks/system.ai.claude-fable-5-2": {
-        "cache_creation_input_token_cost": 8e-06,
-        "cache_read_input_token_cost": 8e-06,
-        "input_cost_per_token": 8e-06,
+        "cache_creation_input_token_cost": 9.99999e-06,
+        "cache_creation_input_token_cost_above_1hr": 1.599997e-05,
+        "cache_read_input_token_cost": 1.9999e-07,
+        "input_cost_per_token": 8.00002e-06,
+        "input_dbu_cost_per_token": 0.000114286,
         "litellm_provider": "databricks",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
-        "metadata": {"notes":"Claude Fable 5.2 on Databricks is available only through Unity Gateway with the model service name system.ai.claude-fable-5-2, and Databricks hosts it through Amazon Bedrock. The Databricks pricing page lists no row for it yet, so input and output are inherited from the catalog Bedrock row anthropic.claude-fable-5-2, no '*_dbu_cost_per_token' fields are published, and cache tokens bill at the input rate until Databricks publishes cache DBU rates."},
+        "metadata": {"notes":"Claude Fable 5.2 on Databricks is served through Unity Gateway with the model service name system.ai.claude-fable-5-2, hosted through Amazon Bedrock. Costs per token are the published Global DBU rates times $0.070 per DBU. The '*_dbu_cost_per_token' fields are provided for reference; cost calculation reads the dollar '*_cost_per_token' fields."},
         "mode": "chat",
-        "output_cost_per_token": 4e-05,
+        "output_cost_per_token": 4.000003e-05,
+        "output_dbu_cost_per_token": 0.000571429,
         "prompt_cache_min_tokens": 512.0,
-        "source": "https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models",
+        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supports_adaptive_thinking": true,
         "supports_anthropic_thinking_payload": true,
         "supports_assistant_prefill": false,
@@ -100780,5 +100844,54 @@
         "metadata": {"comment":"5 credits per 1,000 characters @ $0.01 per credit = $0.00005 per character; 1 credit minimum not modeled"},
         "mode": "audio_speech",
         "source": "https://docs.dev.runwayml.com/guides/pricing/"
+    },
+    "gemini/gemini-decision-1": {
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "gemini",
+        "max_input_tokens": 262144,
+        "mode": "decisions",
+        "output_cost_per_token": 0.0,
+        "rpm": 1500,
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
+        "supported_endpoints": [
+            "/v1/decisions"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": false,
+        "supports_computer_use": false,
+        "supports_function_calling": false,
+        "supports_parallel_function_calling": false,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": false,
+        "supports_reasoning": false,
+        "supports_response_schema": false,
+        "supports_tool_choice": false,
+        "supports_url_context": false,
+        "supports_video_input": true,
+        "supports_vision": true,
+        "supports_web_search": false,
+        "tpm": 1000000
+    },
+    "runwayml/kling_4": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"Promo rate through 2026-11-30 UTC: 12.56 credits per second (720p) and 18.8 (1080p) without input video @ $0.01 per credit = $0.1256 and $0.188 per second; list rate 15.7/23.5 credits per second applies from 2026-12-01 UTC (ruling runwayml-kling-4-promo-rate). The with-input-video rate (7.52/11.28 credits per output second plus the same per second of the greater of input and output duration) and rounding up to the next credit are not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1256,
+        "output_cost_per_second_1080p": 0.188,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
     }
 }

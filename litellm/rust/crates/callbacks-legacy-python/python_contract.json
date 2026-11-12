@@ -1,0 +1,163 @@
+{
+  "setup": [
+    "call_type",
+    "args",
+    "kwargs",
+    "start_time",
+    "asynchronous"
+  ],
+  "finalize": [
+    "response",
+    "logger",
+    "kwargs",
+    "start_time",
+    "end_time",
+    "cache_hit"
+  ],
+  "update_logging": [
+    "logger",
+    "kwargs",
+    "model",
+    "optional_params",
+    "litellm_params",
+    "custom_llm_provider"
+  ],
+  "pre_call": [
+    "logger",
+    "input",
+    "api_key",
+    "additional_args"
+  ],
+  "messages_input": [
+    "body",
+    "kwargs"
+  ],
+  "post_call": [
+    "logger",
+    "original_response",
+    "api_key",
+    "additional_args"
+  ],
+  "record_response": [
+    "logger",
+    "status",
+    "headers",
+    "body",
+    "sent"
+  ],
+  "retried_request": [
+    "logger",
+    "logged_body",
+    "body",
+    "reasons"
+  ],
+  "record_api_window": [
+    "logger",
+    "start",
+    "end"
+  ],
+  "times_provider_exchange": [
+    "client",
+    "timeout"
+  ],
+  "defers_async_logging": [
+    "logger"
+  ],
+  "claim_async_success_log": [
+    "logger"
+  ],
+  "mark_async_success_enqueued": [
+    "logger"
+  ],
+  "defer_success": [
+    "logger",
+    "pending",
+    "response",
+    "start",
+    "end"
+  ],
+  "sync_success_for_async_call": [
+    "logger",
+    "response",
+    "start",
+    "end"
+  ],
+  "failure_handler": [
+    "logger",
+    "error",
+    "start",
+    "end",
+    "asynchronous"
+  ],
+  "submit_success": [
+    "logger",
+    "response",
+    "start",
+    "end"
+  ],
+  "async_success_handler": [
+    "logger",
+    "response",
+    "start",
+    "end"
+  ],
+  "cache_hit_success": [
+    "logger",
+    "response",
+    "start",
+    "end"
+  ],
+  "enqueue_logging": [
+    "coroutine"
+  ],
+  "restore_context": [
+    "logger"
+  ],
+  "custom_pricing_fields": [],
+  "is_internal_call": [],
+  "before_deployment_call": [
+    "kwargs",
+    "call_type"
+  ],
+  "after_deployment_success": [
+    "kwargs",
+    "response",
+    "call_type"
+  ],
+  "after_deployment_failure": [
+    "kwargs",
+    "error",
+    "call_type"
+  ],
+  "stream_opened": [
+    "logger",
+    "head",
+    "keeps_requested"
+  ],
+  "stamp_stream_head": [
+    "head",
+    "logger",
+    "kwargs",
+    "start_time",
+    "end_time",
+    "cache_hit"
+  ],
+  "stream_success": [
+    "logger",
+    "url_route",
+    "endpoint_type",
+    "request_body",
+    "chunks",
+    "start",
+    "end",
+    "first_chunk",
+    "stream_teardown"
+  ],
+  "stream_failure": [
+    "logger",
+    "endpoint_type",
+    "request_body",
+    "chunks",
+    "error"
+  ]
+}
