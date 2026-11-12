@@ -73,10 +73,10 @@ export default function TaskBreakdown({ tasks, colors, selectedTaskId, onSelect 
         <TableBody>
           {rows.map((task) => (
             <TableRow key={task.task_id} data-state={selectedTaskId === task.task_id ? "selected" : undefined}>
-              <TableCell>
+              <TableCell className="whitespace-normal">
                 <button
                   type="button"
-                  className="flex items-center gap-2 text-left font-medium hover:underline"
+                  className="flex items-center gap-2 text-left font-medium break-words hover:underline"
                   onClick={() => onSelect(task.task_id)}
                 >
                   <span
