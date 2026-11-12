@@ -80,33 +80,18 @@ class _Source:
     resource_id: LiteralString
     requests: LiteralString
     filter: LiteralString
-    exists: LiteralString
 
 
 _SOURCES: Final[Mapping[PerformanceScope, _Source]] = {
-    "gateway": _Source('"LiteLLM_DailyModelUsage"', "'gateway'", "request_count", "", "true"),
-    "model": _Source('"LiteLLM_DailyModelUsage"', "model_group", "request_count", "", "true"),
-    "team": _Source(
-        '"LiteLLM_DailyTeamSpend"',
-        "team_id",
-        "api_requests",
-        "",
-        'EXISTS (SELECT 1 FROM "LiteLLM_TeamTable" t WHERE t.team_id = page.resource_id AND NOT t.blocked)',
-    ),
-    "user": _Source(
-        '"LiteLLM_DailyUserSpend"',
-        "user_id",
-        "api_requests",
-        "",
-        'EXISTS (SELECT 1 FROM "LiteLLM_UserTable" u WHERE u.user_id = page.resource_id)',
-    ),
+    "gateway": _Source('"LiteLLM_DailyModelUsage"', "'gateway'", "request_count", ""),
+    "model": _Source('"LiteLLM_DailyModelUsage"', "model_group", "request_count", ""),
+    "team": _Source('"LiteLLM_DailyTeamSpend"', "team_id", "api_requests", ""),
+    "user": _Source('"LiteLLM_DailyUserSpend"', "user_id", "api_requests", ""),
     "key": _Source(
         '"LiteLLM_DailyUserSpend"',
         "api_key",
         "api_requests",
         " AND api_key ~ '^[0-9a-f]{64}$'",
-        'EXISTS (SELECT 1 FROM "LiteLLM_VerificationToken" k WHERE k.token = page.resource_id'
-        " AND k.blocked IS NOT TRUE AND (k.expires IS NULL OR k.expires > now()))",
     ),
 }
 
@@ -127,8 +112,7 @@ def _page_sql(scope: PerformanceScope, wrapped: bool) -> LiteralString:
         if scope == "gateway"
         else f" GROUP BY {source.resource_id} ORDER BY {source.resource_id}"
     )
-    return f"""WITH page AS (
-    SELECT {source.resource_id} AS resource_id,
+    return f"""SELECT {source.resource_id} AS resource_id,
         COALESCE(SUM(spend) FILTER (WHERE date = $1), 0)::float8 AS spend,
         COALESCE(SUM(spend) FILTER (WHERE date < $1), 0)::float8 AS base_spend,
         COALESCE(SUM({source.requests}) FILTER (WHERE date = $1), 0)::bigint AS requests,
@@ -143,9 +127,7 @@ def _page_sql(scope: PerformanceScope, wrapped: bool) -> LiteralString:
         COUNT(DISTINCT date) FILTER (WHERE date < $1 AND timed_requests > 0) AS timed_days
     FROM {source.table}
     WHERE date BETWEEN $2 AND $1{where}{group}
-    LIMIT $3::int
-)
-SELECT page.*, {source.exists} AS exists FROM page ORDER BY resource_id"""
+    LIMIT $3::int"""
 
 
 def _next_id_sql(scope: PerformanceScope, wrapped: bool) -> LiteralString:

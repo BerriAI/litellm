@@ -3034,7 +3034,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     use_spend_logs_partitioning: bool | None = Field(
         None,
-        description="If True and LiteLLM_SpendLogs has been converted to a range-partitioned table (scripts/db/partition_spend_logs.sql), retention cleanup drops expired partitions instead of deleting rows, and pre-creates upcoming partitions. Default is False.",
+        description="If True and LiteLLM_SpendLogs has been converted to a range-partitioned table (litellm/scripts/db/partition_spend_logs.sql), retention cleanup drops expired partitions instead of deleting rows, and pre-creates upcoming partitions. Default is False.",
     )
     maximum_spend_logs_cleanup_batch_size: int | None = Field(
         None,
