@@ -67,6 +67,12 @@ def get_api_base(model: str, optional_params: dict | LiteLLM_Params) -> str | No
     if litellm.model_alias_map and model in litellm.model_alias_map:
         model = litellm.model_alias_map[model]
     declared: Final = declared_authenticating_provider(model, _optional_params.custom_llm_provider)
+    if declared == "github_copilot":
+        from litellm.llms.github_copilot.app_auth import app_config
+
+        github_app: Final = app_config(_optional_params)
+        if github_app is not None:
+            return github_app.api_base
     if declared is not None:
         return _api_base_without_login(declared)
     try:

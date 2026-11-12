@@ -18,6 +18,7 @@ from ..common_utils import (
     DEFAULT_GITHUB_COPILOT_API_BASE,
     GetAccessTokenError,
     get_copilot_default_headers,
+    pin_session_authorization,
 )
 from ..per_user_auth import require_github_copilot_user_session
 
@@ -126,10 +127,10 @@ class GithubCopilotConfig(OpenAIConfig):
         )
         session_token: Final = user_session.token if user_session is not None else None
         validated_headers: Final = {**self._copilot_headers(session_token), **parent_headers}
-        if session_token is not None:
+        if user_session is not None:
             # the caller's stored session token wins unconditionally, even over a
             # caller-supplied api_key or the parent's placeholder Authorization
-            validated_headers["Authorization"] = f"Bearer {session_token}"
+            pin_session_authorization(validated_headers, user_session.token, user_session.integration_id)
 
         # Add X-Initiator header based on message roles
         initiator: Final = self._determine_initiator(messages)

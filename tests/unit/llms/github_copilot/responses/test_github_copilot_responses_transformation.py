@@ -7,6 +7,7 @@ transformations for the Responses API.
 Source: litellm/llms/github_copilot/responses/transformation.py
 """
 
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 
 import httpx
@@ -216,7 +217,7 @@ class TestGithubCopilotResponsesAPITransformation:
         config = GithubCopilotResponsesAPIConfig()
 
         # Create mock litellm_params with input attribute
-        mock_litellm_params = MagicMock()
+        mock_litellm_params = SimpleNamespace()
         mock_litellm_params.input = [
             {
                 "role": "user",
@@ -240,7 +241,7 @@ class TestGithubCopilotResponsesAPITransformation:
         config = GithubCopilotResponsesAPIConfig()
 
         # Create mock litellm_params with input attribute
-        mock_litellm_params = MagicMock()
+        mock_litellm_params = SimpleNamespace()
         mock_litellm_params.input = [
             {"role": "user", "content": "Hello"},
             {"role": "assistant", "content": "Hi"},

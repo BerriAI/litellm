@@ -1,0 +1,583 @@
+import asyncio
+import json
+from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Final
+
+import httpx
+import jwt
+import pytest
+import respx
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+
+import litellm
+from litellm.exceptions import AuthenticationError, BadRequestError, RateLimitError, ServiceUnavailableError
+from litellm.litellm_core_utils.clientside_credential_handler import get_dynamic_litellm_params
+from litellm.llms.github_copilot import app_auth
+from litellm.llms.github_copilot.app_auth import APP_FIELDS, AppConfig, AppTokenManager, app_config
+from litellm.llms.github_copilot.per_user_auth import (
+    GithubCopilotUserSession,
+    is_github_copilot_per_user_request,
+    require_github_copilot_user_session,
+)
+from litellm.types.router import holds_secret_pointer, reject_server_owned_wif_fields
+from litellm.types.utils import CredentialItem
+
+_NOW: Final = 1_800_000_000.0
+_CONFIG: Final = AppConfig("test-client", 123, "os.environ/TEST_APP_KEY")
+
+
+@dataclass
+class Clock:
+    now: float = _NOW
+    elapsed: float = 0
+
+    def wall(self) -> float:
+        return self.now
+
+    def monotonic(self) -> float:
+        return self.elapsed
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+        self.elapsed += seconds
+
+
+@pytest.fixture
+def private_key() -> str:
+    key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    return key.private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+    ).decode()
+
+
+def token_payload(token: str = "installation-token", expires: float = _NOW + 3600) -> Mapping[str, object]:
+    return {
+        "token": token,
+        "expires_at": datetime.fromtimestamp(expires, timezone.utc).isoformat(),
+        "permissions": {"organization_copilot_requests": "read"},
+    }
+
+
+def manager(
+    private_key: str,
+    respond: Callable[[httpx.Request], httpx.Response],
+    clock: Clock,
+    secret_reader: Callable[[str], str | None] | None = None,
+) -> AppTokenManager:
+    return AppTokenManager(
+        client_factory=lambda: httpx.Client(transport=httpx.MockTransport(respond)),
+        secret_reader=secret_reader or (lambda _: private_key),
+        clock=clock.wall,
+        monotonic=clock.monotonic,
+    )
+
+
+def test_jwt_signature_and_minimum_permissions(private_key: str) -> None:
+    requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(201, json=token_payload())
+
+    session: Final = manager(private_key, respond, Clock()).resolve(_CONFIG)
+    request: Final = requests[0]
+    signing_key: Final = serialization.load_pem_private_key(private_key.encode(), password=None)
+    assert isinstance(signing_key, rsa.RSAPrivateKey)
+    claims: Final = jwt.decode(
+        request.headers["Authorization"].removeprefix("Bearer "),
+        signing_key.public_key(),
+        algorithms=["RS256"],
+        options={"verify_exp": False, "verify_iat": False},
+    )
+    assert claims == {"iss": _CONFIG.app_id, "iat": int(_NOW) - 60, "exp": int(_NOW) + 540}
+    assert str(request.url) == _CONFIG.token_url
+    assert json.loads(request.content) == {"permissions": {"organization_copilot_requests": "read"}}
+    assert session.token == "installation-token"
+    assert session.api_base == _CONFIG.api_base
+    assert "installation-token" not in repr(session)
+
+
+def test_refreshes_before_expiry_and_reuses_new_token(private_key: str) -> None:
+    clock: Final = Clock()
+    requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(201, json=token_payload(f"token-{len(requests)}", clock.now + 3600))
+
+    auth: Final = manager(private_key, respond, clock)
+    assert auth.resolve(_CONFIG).token == "token-1"
+    clock.advance(3479)
+    assert auth.resolve(_CONFIG).token == "token-1"
+    clock.advance(1)
+    assert auth.resolve(_CONFIG).token == "token-2"
+    assert auth.resolve(_CONFIG).token == "token-2"
+    assert len(requests) == 2
+
+
+def test_monotonic_expiry_survives_wall_clock_rollback(private_key: str) -> None:
+    clock: Final = Clock()
+    requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(201, json=token_payload(f"token-{len(requests)}", clock.now + 3600))
+
+    auth: Final = manager(private_key, respond, clock)
+    assert auth.resolve(_CONFIG).token == "token-1"
+    clock.elapsed = 3480
+    clock.now -= 600
+    assert auth.resolve(_CONFIG).token == "token-2"
+
+
+@pytest.mark.parametrize("async_calls", [False, True])
+async def test_concurrent_callers_mint_one_token(private_key: str, async_calls: bool) -> None:
+    requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(201, json=token_payload())
+
+    auth: Final = manager(private_key, respond, Clock())
+    if async_calls:
+        sessions: Final = await asyncio.gather(*(auth.aresolve(_CONFIG) for _ in range(20)))
+        assert {session.token for session in sessions} == {"installation-token"}
+    else:
+        with ThreadPoolExecutor(max_workers=20) as pool:
+            tokens: Final = tuple(pool.map(lambda _: auth.resolve(_CONFIG).token, range(20)))
+        assert set(tokens) == {"installation-token"}
+    assert len(requests) == 1
+
+
+def test_app_installation_host_and_rotated_key_never_share_tokens(private_key: str) -> None:
+    requests: Final[list[httpx.Request]] = []
+    secrets: Final = {"current": private_key}
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(201, json=token_payload(f"token-{len(requests)}"))
+
+    auth: Final = manager(private_key, respond, Clock(), lambda _: secrets["current"])
+    configs: Final = (
+        _CONFIG,
+        AppConfig("other-app", 123, _CONFIG.private_key_ref),
+        AppConfig(_CONFIG.app_id, 456, _CONFIG.private_key_ref),
+        AppConfig(_CONFIG.app_id, 123, _CONFIG.private_key_ref, "example.ghe.com"),
+    )
+    assert tuple(auth.resolve(config).token for config in configs) == ("token-1", "token-2", "token-3", "token-4")
+    secrets["current"] = private_key + "\n"
+    assert auth.resolve(_CONFIG).token == "token-5"
+    assert auth.resolve(configs[1]).token == "token-6"
+
+
+@pytest.mark.parametrize("status", [401, 403, 404, 429, 500])
+def test_failed_refresh_never_returns_old_token_or_leaks_response(private_key: str, status: int) -> None:
+    clock: Final = Clock()
+    requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if len(requests) == 1:
+            return httpx.Response(201, json=token_payload())
+        return httpx.Response(status, json={"message": private_key + "installation-token"})
+
+    auth: Final = manager(private_key, respond, clock)
+    assert auth.resolve(_CONFIG).token == "installation-token"
+    clock.advance(3480)
+    error_type: Final = (
+        RateLimitError if status == 429 else ServiceUnavailableError if status == 500 else AuthenticationError
+    )
+    for _ in range(2):
+        with pytest.raises(error_type) as error:
+            auth.resolve(_CONFIG)
+        assert "installation-token" not in str(error.value)
+        assert "PRIVATE KEY" not in str(error.value)
+        assert error.value.__cause__ is None
+    assert len(requests) == 2
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {**token_payload(), "token": ""},
+        {**token_payload(), "token": "secret\r\ninjected-header"},
+        {**token_payload(), "expires_at": "not-a-date"},
+        {**token_payload(), "expires_at": "2027-01-15T08:00:00"},
+        token_payload(expires=_NOW),
+        {**token_payload(), "permissions": {"contents": "write"}},
+    ],
+)
+def test_rejects_invalid_tokens_without_logging_payload(private_key: str, payload: Mapping[str, object]) -> None:
+    auth: Final = manager(private_key, lambda _: httpx.Response(201, json=payload), Clock())
+    with pytest.raises((AuthenticationError, ServiceUnavailableError)) as error:
+        auth.resolve(_CONFIG)
+    assert "installation-token" not in str(error.value)
+
+
+def test_redirect_does_not_forward_app_jwt(private_key: str) -> None:
+    requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(307, headers={"Location": "https://attacker.example/token"})
+
+    auth: Final = manager(private_key, respond, Clock())
+    with pytest.raises(ServiceUnavailableError, match="HTTP 307"):
+        auth.resolve(_CONFIG)
+    assert tuple(str(request.url) for request in requests) == (_CONFIG.token_url,)
+
+
+@pytest.mark.parametrize("secret", [None, "", "invalid-private-key"])
+def test_missing_or_invalid_key_never_contacts_github(secret: str | None) -> None:
+    def unexpected_request(request: httpx.Request) -> httpx.Response:
+        pytest.fail(f"Unexpected request to {request.url}")
+
+    auth: Final = manager("", unexpected_request, Clock(), lambda _: secret)
+    with pytest.raises(AuthenticationError):
+        auth.resolve(_CONFIG)
+
+
+def test_named_credential_owns_auth_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
+    values: Final = {
+        "github_copilot_auth_type": "github_app",
+        "github_copilot_app_id": "stored-app",
+        "github_copilot_app_installation_id": "123",
+        "github_copilot_app_private_key_ref": "os.environ/STORED_KEY",
+    }
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [CredentialItem(credential_name="app", credential_values=values, credential_info={})],
+    )
+    assert app_config({"litellm_credential_name": "app", **values, "github_copilot_app_id": "attacker"}) == AppConfig(
+        "stored-app", 123, "os.environ/STORED_KEY"
+    )
+
+
+@pytest.mark.parametrize("field", APP_FIELDS)
+def test_app_configuration_is_server_owned(field: str) -> None:
+    with pytest.raises(ValueError, match="cannot be set in a request body"):
+        reject_server_owned_wif_fields({field: "attacker"})
+    assert holds_secret_pointer("github_copilot_app_private_key_ref")
+
+
+@pytest.mark.parametrize("override", [{"api_base": "https://attacker.example"}, {"api_key": "attacker"}])
+def test_clientside_override_cannot_disable_app_auth(override: Mapping[str, str]) -> None:
+    with pytest.raises(BadRequestError, match="do not accept"):
+        get_dynamic_litellm_params(
+            {
+                "github_copilot_auth_type": "github_app",
+                "github_copilot_app_id": "app",
+                "github_copilot_app_installation_id": 123,
+                "github_copilot_app_private_key_ref": "os.environ/KEY",
+            },
+            dict(override),
+        )
+
+
+@pytest.mark.parametrize(
+    "surface,async_call",
+    [
+        ("chat", False),
+        ("chat", True),
+        ("responses", False),
+        ("responses", True),
+        ("messages", True),
+        ("embeddings", False),
+        ("embeddings", True),
+    ],
+)
+async def test_public_calls_pin_app_identity_and_keep_credentials_out_of_body(
+    private_key: str, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, surface: str, async_call: bool
+) -> None:
+    clock: Final = Clock()
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(app_auth, "APP_TOKEN_MANAGER", AppTokenManager(clock=clock.wall, monotonic=clock.monotonic))
+    monkeypatch.setenv("TEST_APP_KEY", private_key)
+    token_route: Final = respx_mock.post(_CONFIG.token_url).respond(201, json=token_payload())
+    upstream: Final = respx_mock.post(host="api.githubcopilot.com").respond(200, json=_model_payload(surface))
+    kwargs: Final = {
+        "github_copilot_auth_type": "github_app",
+        "github_copilot_app_id": _CONFIG.app_id,
+        "github_copilot_app_installation_id": _CONFIG.installation_id,
+        "github_copilot_app_private_key_ref": _CONFIG.private_key_ref,
+        "api_base": "https://attacker.example",
+        "api_key": "attacker-key",
+        "extra_headers": {"aUtHoRiZaTiOn": "Bearer attacker", "Copilot-Integration-ID": "attacker", "x-keep": "ok"},
+    }
+    if surface == "chat":
+        chat_args: Final = {
+            "model": "github_copilot/claude-sonnet-5.5",
+            "messages": [{"role": "user", "content": "hi"}],
+            **kwargs,
+        }
+        chat: Final = await litellm.acompletion(**chat_args) if async_call else litellm.completion(**chat_args)
+        assert chat.choices[0].message.content == "OK"
+    elif surface == "responses":
+        response_args: Final = {"model": "github_copilot/gpt-6.1-sol", "input": "hi", **kwargs}
+        response: Final = (
+            await litellm.aresponses(**response_args) if async_call else litellm.responses(**response_args)
+        )
+        assert response.status == "completed"
+    elif surface == "messages":
+        message_args: Final = {
+            "model": "github_copilot/claude-sonnet-5.5",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 16,
+            **kwargs,
+        }
+        message: Final = (
+            await litellm.anthropic.messages.acreate(**message_args)
+            if async_call
+            else litellm.anthropic.messages.create(**message_args)
+        )
+        assert message["content"] == [{"type": "text", "text": "OK"}]
+    else:
+        embedding_args: Final = {"model": "github_copilot/text-embedding-3-small", "input": ["hi"], **kwargs}
+        embedding: Final = (
+            await litellm.aembedding(**embedding_args) if async_call else litellm.embedding(**embedding_args)
+        )
+        assert embedding.data[0]["embedding"] == [0.1, 0.2]
+    assert token_route.call_count == 1
+    assert upstream.call_count == 1
+    request: Final = upstream.calls.last.request
+    assert request.headers["authorization"] == "Bearer installation-token"
+    assert request.headers["copilot-integration-id"] == "copilot-developer-cli"
+    if surface != "embeddings":
+        assert request.headers["x-keep"] == "ok"
+    assert not any(field in json.loads(request.content) for field in APP_FIELDS)
+    assert private_key.encode() not in request.content
+    assert kwargs["extra_headers"]["aUtHoRiZaTiOn"] == "Bearer attacker"
+
+
+def _model_payload(surface: str) -> Mapping[str, object]:
+    if surface == "chat":
+        return {
+            "id": "chatcmpl-app",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "claude-sonnet-5.5",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "OK"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6},
+        }
+    if surface == "responses":
+        return {
+            "id": "response-app",
+            "object": "response",
+            "created_at": 1,
+            "status": "completed",
+            "model": "gpt-6.1-sol",
+            "output": [],
+            "usage": {"input_tokens": 4, "output_tokens": 2, "total_tokens": 6},
+        }
+    if surface == "messages":
+        return {
+            "id": "msg-app",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-5.5",
+            "content": [{"type": "text", "text": "OK"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 4, "output_tokens": 2},
+        }
+    return {
+        "object": "list",
+        "model": "text-embedding-3-small",
+        "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+        "usage": {"prompt_tokens": 4, "total_tokens": 4},
+    }
+
+
+def test_app_session_is_deployment_owned_but_excluded_from_shared_response_cache() -> None:
+    from litellm.caching.caching_handler import _is_response_cache_excluded
+    from litellm.router_utils.cooldown_handlers import _is_per_user_provider_request
+
+    params: Final = {
+        "github_copilot_user_session": GithubCopilotUserSession("app-token", _CONFIG.api_base, is_app=True)
+    }
+    assert not is_github_copilot_per_user_request(params)
+    assert not _is_per_user_provider_request({"litellm_params": params})
+    assert _is_response_cache_excluded("github_copilot/claude-sonnet-5.5", params)
+
+
+def test_app_mode_without_session_cannot_fall_back_to_user_login() -> None:
+    with pytest.raises(BadRequestError, match="resolved installation session"):
+        require_github_copilot_user_session(
+            {
+                "github_copilot_auth_type": "github_app",
+                "github_copilot_app_id": _CONFIG.app_id,
+                "github_copilot_app_installation_id": _CONFIG.installation_id,
+                "github_copilot_app_private_key_ref": _CONFIG.private_key_ref,
+            }
+        )
+
+
+async def test_router_isolates_two_apps_and_rejects_credential_switching(
+    private_key: str, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    clock: Final = Clock()
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(app_auth, "APP_TOKEN_MANAGER", AppTokenManager(clock=clock.wall, monotonic=clock.monotonic))
+    monkeypatch.setenv("TEST_APP_KEY", private_key)
+    credentials: Final = [
+        CredentialItem(
+            credential_name=name,
+            credential_values={
+                "github_copilot_auth_type": "github_app",
+                "github_copilot_app_id": name,
+                "github_copilot_app_installation_id": installation,
+                "github_copilot_app_private_key_ref": "os.environ/TEST_APP_KEY",
+            },
+            credential_info={},
+        )
+        for name, installation in (("service-a", 123), ("service-b", 456))
+    ]
+    monkeypatch.setattr(litellm, "credential_list", credentials)
+    app_a: Final = respx_mock.post(_CONFIG.token_url).respond(201, json=token_payload("token-a"))
+    app_b: Final = respx_mock.post("https://api.github.com/app/installations/456/access_tokens").respond(
+        201, json=token_payload("token-b")
+    )
+    upstream: Final = respx_mock.post(host="api.githubcopilot.com").respond(200, json=_model_payload("chat"))
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {
+                    "model": "github_copilot/claude-sonnet-5.5",
+                    "litellm_credential_name": name,
+                },
+                "model_info": {"id": name},
+            }
+            for name in ("service-a", "service-b")
+        ],
+        num_retries=0,
+    )
+    for name, token in (("service-a", "token-a"), ("service-b", "token-b"), ("service-a", "token-a")):
+        response: Final = await router.acompletion(model=name, messages=[{"role": "user", "content": "hi"}])
+        assert response.choices[0].message.content == "OK"
+        assert response._hidden_params["model_id"] == name
+        assert upstream.calls.last.request.headers["authorization"] == f"Bearer {token}"
+    assert app_a.call_count == app_b.call_count == 1
+    for override in ("service-b", None):
+        with pytest.raises(BadRequestError, match="litellm_credential_name cannot be overridden"):
+            await router.acompletion(
+                model="service-a",
+                messages=[{"role": "user", "content": "hi"}],
+                litellm_credential_name=override,
+            )
+    assert upstream.call_count == 3
+
+
+@pytest.mark.parametrize(
+    "status,headers,cooldown",
+    [
+        (429, {"retry-after": "90"}, 90),
+        (403, {"x-ratelimit-remaining": "0", "x-ratelimit-reset": str(int(_NOW + 120))}, 120),
+        (429, {"retry-after": "invalid"}, 60),
+        (429, {"retry-after": "9" * 400}, 3600),
+    ],
+)
+def test_mint_rate_limits_are_cached_and_expose_retry_after(
+    private_key: str, status: int, headers: Mapping[str, str], cooldown: int
+) -> None:
+    clock: Final = Clock()
+    requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if len(requests) == 1:
+            return httpx.Response(status, headers=headers)
+        return httpx.Response(201, json=token_payload(expires=clock.now + 3600))
+
+    auth: Final = manager(private_key, respond, clock)
+    with pytest.raises(RateLimitError) as error:
+        auth.resolve(_CONFIG)
+    assert error.value.headers == {"retry-after": str(cooldown)}
+    clock.advance(cooldown - 1)
+    with pytest.raises(RateLimitError) as cached:
+        auth.resolve(_CONFIG)
+    assert cached.value.headers == {"retry-after": "1"}
+    assert len(requests) == 1
+    clock.advance(1)
+    assert auth.resolve(_CONFIG).token == "installation-token"
+    assert len(requests) == 2
+
+
+def test_secret_backend_failure_is_sanitized() -> None:
+    def failing_secret_reader(ref: str) -> str:
+        raise ValueError("sensitive-backend-details")
+
+    auth: Final = AppTokenManager(secret_reader=failing_secret_reader)
+    with pytest.raises(AuthenticationError) as error:
+        auth.resolve(_CONFIG)
+    assert "sensitive-backend-details" not in str(error.value)
+    assert error.value.__suppress_context__
+
+
+def test_token_cache_is_bounded(private_key: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(app_auth, "_CACHE_SIZE", 2)
+    requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(201, json=token_payload(f"token-{len(requests)}"))
+
+    auth: Final = manager(private_key, respond, Clock())
+    for installation in (123, 456, 789):
+        auth.resolve(AppConfig(_CONFIG.app_id, installation, _CONFIG.private_key_ref))
+    assert auth.resolve(_CONFIG).token == "token-4"
+    assert len(requests) == 4
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"github_copilot_auth_type": "per_user"},
+        {"github_copilot_app_id": ""},
+        {"github_copilot_app_installation_id": "../123"},
+        {"github_copilot_app_installation_id": 0},
+        {"github_copilot_app_installation_id": True},
+        {"github_copilot_app_private_key_ref": "-----BEGIN PRIVATE KEY-----"},
+        {"github_copilot_app_private_key_ref": "oidc/https://attacker.example"},
+        {"github_copilot_host": "attacker.example"},
+    ],
+)
+def test_invalid_app_configuration_fails_closed(override: Mapping[str, object]) -> None:
+    with pytest.raises(BadRequestError, match="GitHub App authentication requires"):
+        app_config(
+            {
+                "github_copilot_auth_type": "github_app",
+                "github_copilot_app_id": _CONFIG.app_id,
+                "github_copilot_app_installation_id": _CONFIG.installation_id,
+                "github_copilot_app_private_key_ref": _CONFIG.private_key_ref,
+                **override,
+            }
+        )
+
+
+def test_network_failure_does_not_expose_jwt(private_key: str) -> None:
+    def fail(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError(request.headers["authorization"], request=request)
+
+    auth: Final = manager(private_key, fail, Clock())
+    with pytest.raises(ServiceUnavailableError) as error:
+        auth.resolve(_CONFIG)
+    assert "Bearer" not in str(error.value)
+    assert error.value.__context__ is None
+
+
+@pytest.mark.parametrize("is_app", [False, True])
+def test_session_serialization_redacts_bearer_token(is_app: bool) -> None:
+    from litellm.types.router import GenericLiteLLMParams
+
+    session: Final = GithubCopilotUserSession("sensitive-bearer", _CONFIG.api_base, is_app=is_app)
+    params: Final = GenericLiteLLMParams(github_copilot_user_session=session)
+    assert session.token == "sensitive-bearer"
+    assert "sensitive-bearer" not in repr(session)
+    assert "sensitive-bearer" not in str(params.model_dump())
+    assert "sensitive-bearer" not in params.model_dump_json()
