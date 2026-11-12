@@ -297,7 +297,9 @@ _FAILURE_KINDS: Final = (
     "CallerCredentialAuthenticationError",
     "CallerCredentialRateLimitError",
 )
-_DECLINED: Final = frozenset({"MalformedRequestFieldError", "UnsupportedEndpointError"})
+_DECLINED: Final = frozenset(
+    {"MalformedRequestFieldError", "UnsupportedEndpointError", "PreviousResponseNotReplayableError"}
+)
 _PROVIDERS: Final = tuple(provider.value for provider in LlmProviders)
 _DEFAULT_COOLDOWN_SECONDS: Final = 5.0
 # Past this a retry-after no longer fits the Rust core's durations; it cools down as good as forever.

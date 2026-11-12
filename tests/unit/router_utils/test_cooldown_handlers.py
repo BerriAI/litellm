@@ -20,6 +20,7 @@ from litellm import Router
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache
+from litellm.exceptions import PreviousResponseNotReplayableError
 from litellm.litellm_core_utils.litellm_logging import mask_api_base_credentials
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.router_cooldowns import RouterCooldowns, RouterCooldownStore
@@ -88,6 +89,7 @@ def _ctx_double(
     (
         (litellm.APIConnectionError, False),
         (litellm.UnsupportedEndpointError, False),
+        (PreviousResponseNotReplayableError, False),
         (litellm.BadRequestError, True),
     ),
 )

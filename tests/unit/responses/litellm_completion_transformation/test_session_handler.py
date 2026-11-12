@@ -1592,6 +1592,39 @@ async def test_previous_response_refusal_does_not_fall_back_to_another_model_gro
     assert (refusal.value.param, refusal.value.code) == ("previous_response_id", "previous_response_not_found")
 
 
+async def test_previous_response_refusal_does_not_cool_down_the_deployment(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    response_id: Final = _gemini_response_id("chatcmpl-turn-1")
+    stored: Final = _StoredSpendLogs((_turn_stored_redacted(response_id, "My code word is PLUM-42."),))
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bridged",
+                "litellm_params": {"model": "gemini/gemini-3.5-flash", "api_key": "test-key"},
+                "model_info": {"allowed_fails_policy": {"BadRequestErrorAllowedFails": 0}},
+            },
+            {"model_name": "native", "litellm_params": {"model": "openai/gpt-5.6", "api_key": "test-key"}},
+        ],
+        fallbacks=[{"bridged": ["native"]}],
+        cooldown_time=60,
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=stored)), respx.mock:
+        bridged_route: Final = respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_answer())
+        native_route: Final = respx.post(_OPENAI_RESPONSES_URL).mock(
+            return_value=httpx.Response(500, json={"error": {"message": "unexpected fallback"}})
+        )
+        for _ in range(2):
+            with pytest.raises(litellm.BadRequestError):
+                await router.aresponses(
+                    model="bridged", input="What is my code word?", previous_response_id=response_id
+                )
+        await router.aresponses(model="bridged", input="Plan a Tokyo trip.")
+
+    assert bridged_route.call_count == 1
+    assert not native_route.called
+
+
 async def test_previous_response_replays_a_turn_whose_own_messages_field_holds_the_redaction_marker(
     monkeypatch: pytest.MonkeyPatch,
 ):

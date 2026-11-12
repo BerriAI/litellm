@@ -24,7 +24,7 @@ from litellm.constants import (
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD,
 )
-from litellm.exceptions import MidStreamFallbackError, MissingMessageRoleError
+from litellm.exceptions import MidStreamFallbackError, MissingMessageRoleError, PreviousResponseNotReplayableError
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import mask_api_base_credentials
 from litellm.router_deprecated import renamed_router_param
@@ -380,7 +380,10 @@ def _should_run_cooldown_logic(
         )
         return False
 
-    if isinstance(original_exception, (litellm.MalformedRequestFieldError, litellm.UnsupportedEndpointError)):
+    if isinstance(
+        original_exception,
+        (litellm.MalformedRequestFieldError, litellm.UnsupportedEndpointError, PreviousResponseNotReplayableError),
+    ):
         verbose_router_logger.debug(
             "Should Not Run Cooldown Logic: litellm rejected the request before calling the deployment"
         )
