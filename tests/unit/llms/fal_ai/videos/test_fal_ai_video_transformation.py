@@ -99,15 +99,15 @@ class TestFalAIVideoTransformation:
         assert mapped["reference_image_urls"] == [url]
         assert "image_url" not in mapped
 
-    def test_map_openai_params_supports_h3_max_profile(self):
-        url = "https://example.com/image.png"
+    def test_map_openai_params_supports_h3_max_profile(self) -> None:
+        url: Final = "https://example.com/image.png"
 
         assert self.config.map_openai_params({"size": "768p"}, H3_MAX_TEXT_MODEL, False) == {"resolution": "768P"}
         assert self.config.map_openai_params({"size": "1920x1080"}, H3_MAX_TEXT_MODEL, False) == {
             "resolution": "1080P",
             "aspect_ratio": "16:9",
         }
-        mapped = self.config.map_openai_params(
+        mapped: Final = self.config.map_openai_params(
             {"seconds": 5.5, "input_reference": url, "size": "1280x768"},
             H3_MAX_TURBO_IMAGE_MODEL,
             False,
@@ -219,11 +219,13 @@ class TestFalAIVideoTransformation:
 
         assert video.usage == {"duration_seconds": 5.0, "video_resolution": "2K"}
 
-    def test_transform_video_create_response_h3_max_leaves_default_resolution_to_cost_map(self, local_model_cost_map):
-        response = Mock(spec=httpx.Response)
+    def test_transform_video_create_response_h3_max_leaves_default_resolution_to_cost_map(
+        self, local_model_cost_map: None
+    ) -> None:
+        response: Final = Mock(spec=httpx.Response)
         response.json.return_value = {"request_id": "abc"}
 
-        video = self.config.transform_video_create_response(
+        video: Final = self.config.transform_video_create_response(
             model=H3_MAX_RECAST_MODEL,
             raw_response=response,
             logging_obj=self.logging_obj,
@@ -232,7 +234,7 @@ class TestFalAIVideoTransformation:
         )
 
         assert video.usage == {"duration_seconds": 5.0}
-        row = litellm.model_cost[f"fal_ai/{H3_MAX_RECAST_MODEL}"]
+        row: Final = litellm.model_cost[f"fal_ai/{H3_MAX_RECAST_MODEL}"]
         assert default_video_cost_calculator(
             model=H3_MAX_RECAST_MODEL,
             duration_seconds=5.0,
