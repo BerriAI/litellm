@@ -21,6 +21,7 @@ tiktoken = ["litellm-token-counter/tiktoken"]
 [dependencies]
 rustls.workspace = true
 litellm-secret-value.workspace = true
+litellm-db.workspace = true
 fancy-regex.workspace = true
 litellm-tracing.workspace = true
 litellm-spend-clickhouse.workspace = true
@@ -71,6 +72,7 @@ serde_json.workspace = true
 strum.workspace = true
 veil.workspace = true
 thiserror.workspace = true
+sqlx.workspace = true
 tokio = { workspace = true, features = ["rt", "sync"] }
 
 [dev-dependencies]

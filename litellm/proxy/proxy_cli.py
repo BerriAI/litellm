@@ -79,7 +79,7 @@ def _build_db_connection_url_params(
     socket_timeout: float | None = None,
     disable_prepared_statements: bool = False,
     extra_params: dict | None = None,
-) -> dict:
+) -> dict[str, str | int | float]:
     """Build the Prisma DATABASE_URL query params controlling connection pool behavior.
 
     `connect_timeout` / `socket_timeout` map to the Prisma URL params of the same
@@ -91,7 +91,7 @@ def _build_db_connection_url_params(
     `extra_params` is an untyped passthrough — keys it provides win over the
     named arguments above, so it can be used to override any default we set here.
     """
-    params: Final[dict] = {
+    params: Final[dict[str, str | int | float]] = {
         "connection_limit": connection_limit,
     }
     if pool_timeout is not None:
@@ -1637,11 +1637,13 @@ def run_server(
             db_connection_timeout = LiteLLMDatabaseConnectionPool.database_connection_pool_timeout.value
 
         if os.getenv("DATABASE_URL", None) is not None or os.getenv("DIRECT_URL", None) is not None:
+            from litellm.proxy.db.connection_budget import ConnectionBudget
             from litellm.proxy.db.db_url_settings import (
                 DISABLE_PREPARED_STATEMENTS_ENV_VAR,
                 add_missing_query_params,
                 idle_lifetime_params,
                 postgres_connection_budget_message,
+                prisma_default_params,
                 reader_shareable_params,
                 translate_libpq_ssl_params,
                 unsupported_db_scheme,
@@ -1676,7 +1678,13 @@ def run_server(
                 disable_prepared_statements=disable_prepared_statements,
                 extra_params=db_extra_connection_params,
             )
+            writer_budget: Final = ConnectionBudget.of(connection_url_params["connection_limit"])
+            rust_writer_connections: Final = 0 if writer_budget is None else writer_budget.rust
+            prisma_url_params: Final = (
+                connection_url_params if writer_budget is None else writer_budget.prisma_params(connection_url_params)
+            )
             lifetime_params: Final = idle_lifetime_params(general_settings.get("database_max_idle_connection_lifetime"))
+            prisma_defaults: Final = prisma_default_params(lifetime_params, rust_writer_connections)
             if os.getenv("DATABASE_URL", None) is not None:
                 database_url = get_secret("DATABASE_URL", default_value=None)
                 resolved_url: Final[str | None] = str(database_url) if database_url else None
@@ -1693,10 +1701,10 @@ def run_server(
                 )
                 modified_url = append_query_params(
                     writer_url,
-                    connection_url_params,
+                    dict(prisma_url_params),
                 )
                 os.environ["DATABASE_URL"] = translate_libpq_ssl_params(
-                    add_missing_query_params(modified_url, lifetime_params)
+                    add_missing_query_params(modified_url, prisma_defaults)
                 )
             if os.getenv("DIRECT_URL", None) is not None:
                 database_url = os.getenv("DIRECT_URL")
@@ -1723,15 +1731,16 @@ def run_server(
                             _with_query_value(read_replica_url, "options", reader_options)
                             if reader_options
                             else read_replica_url,
-                            reader_shareable_params(connection_url_params),
+                            reader_shareable_params(prisma_url_params),
                         ),
-                        lifetime_params,
+                        prisma_defaults,
                     )
                 )
             print_startup_message(
                 postgres_connection_budget_message(
                     writer_limit=_url_query_value(os.getenv("DATABASE_URL"), "connection_limit")
                     or f"{db_connection_pool_limit}",
+                    rust_writer_limit=rust_writer_connections,
                     reader_limit=(
                         _url_query_value(os.getenv("DATABASE_URL_READ_REPLICA"), "connection_limit")
                         or f"{db_connection_pool_limit}"

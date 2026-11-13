@@ -8,6 +8,7 @@ from typing_extensions import disjoint_base
 
 from litellm.redis.store_settings import RedisBreakerSettings, RedisStoreSettings
 from litellm.redis.stores.router_session_pins.keys import PinKey
+from litellm.rust_bridge.database import NativeDatabaseEndpoint
 from litellm.rust_bridge.execution import Execution
 from litellm.rust_bridge.public_call import NativeCall
 
@@ -562,7 +563,8 @@ class NativeSpendCounters:
 @final
 class NativeDatabase:
     @staticmethod
-    def connect() -> Future[NativeDatabase]: ...
+    def connect(writer: NativeDatabaseEndpoint) -> Future[NativeDatabase]: ...
+    def set_writer_password(self, password: str) -> None: ...
     def close(self) -> Future[None]: ...
 
 @final

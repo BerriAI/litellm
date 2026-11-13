@@ -34,6 +34,8 @@ from pydantic import ValidationError
 from litellm.proxy.db.db_url_settings import (
     PG_SSL_REQUEST,
     DatabaseURLSettings,
+    add_missing_query_params,
+    prisma_default_params,
     token_refresh_params_from_url,
     translate_libpq_ssl_params,
     unsupported_db_scheme,
@@ -1278,32 +1280,52 @@ def test_reader_keeps_its_own_pinned_idle_lifetime(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "writer_limit, reader_limit, num_workers, expected",
+    "writer_limit, rust_writer_limit, reader_limit, num_workers, expected",
     [
-        ("10", None, "4", "4 worker(s) x writer connection_limit 10 = up to 40 connections"),
+        ("10", 0, None, "4", "4 worker(s) x writer connection_limit 10 = up to 40 connections"),
         (
             "10",
+            0,
             "10",
             "4",
             "4 worker(s) x (writer connection_limit 10 + reader connection_limit 10) = up to 80 connections",
         ),
+        ("8", 2, None, "4", "4 worker(s) x (writer connection_limit 8 + rust writer pool 2) = up to 40 connections"),
         (
-            "10",
+            "8",
+            2,
+            "8",
+            "4",
+            "4 worker(s) x (writer connection_limit 8 + rust writer pool 2 + reader connection_limit 8) = up to 72 connections",
+        ),
+        (
+            "8",
+            2,
             "50",
             "4",
-            "4 worker(s) x (writer connection_limit 10 + reader connection_limit 50) = up to 240 connections",
+            "4 worker(s) x (writer connection_limit 8 + rust writer pool 2 + reader connection_limit 50) = up to 240 connections",
         ),
-        ("10", None, "0", "1 worker(s) x writer connection_limit 10 = up to 10 connections"),
+        ("8", 2, None, "0", "1 worker(s) x (writer connection_limit 8 + rust writer pool 2) = up to 10 connections"),
     ],
-    ids=["writer_only", "reader_doubles_engines", "reader_pins_its_own_limit", "worker_floor"],
+    ids=[
+        "no_rust_share_writer_only",
+        "no_rust_share_with_reader",
+        "writer_only",
+        "reader_adds_an_engine",
+        "reader_pins_its_own_limit",
+        "worker_floor",
+    ],
 )
 def test_connection_budget_message_sums_the_engines_each_worker_owns(
-    writer_limit: str, reader_limit: str | None, num_workers: str, expected: str
+    writer_limit: str, rust_writer_limit: int, reader_limit: str | None, num_workers: str, expected: str
 ) -> None:
     from litellm.proxy.db.db_url_settings import postgres_connection_budget_message
 
     message: Final = postgres_connection_budget_message(
-        writer_limit=writer_limit, reader_limit=reader_limit, num_workers=num_workers
+        writer_limit=writer_limit,
+        rust_writer_limit=rust_writer_limit,
+        reader_limit=reader_limit,
+        num_workers=num_workers,
     )
     assert expected in message
     assert "max_connections minus superuser_reserved_connections" in message
@@ -1312,5 +1334,30 @@ def test_connection_budget_message_sums_the_engines_each_worker_owns(
 def test_connection_budget_message_survives_an_unparseable_limit() -> None:
     from litellm.proxy.db.db_url_settings import postgres_connection_budget_message
 
-    message: Final = postgres_connection_budget_message(writer_limit="ten", reader_limit=None, num_workers="2")
+    message: Final = postgres_connection_budget_message(
+        writer_limit="ten", rust_writer_limit=2, reader_limit=None, num_workers="2"
+    )
     assert "writer='ten'" in message
+
+
+@pytest.mark.parametrize(
+    ("url", "native_connections", "expected_name"),
+    [
+        ("postgresql://u:p@db:5432/proxy", 0, None),
+        ("postgresql://u:p@db:5432/proxy", 2, "litellm-prisma"),
+        ("postgresql://u:p@db:5432/proxy?application_name=ops", 2, "ops"),
+    ],
+    ids=["untagged_without_native_pool", "tagged_beside_native_pool", "operator_name_wins"],
+)
+def test_prisma_is_tagged_only_beside_a_native_pool(
+    url: str, native_connections: int, expected_name: str | None
+) -> None:
+    final_url: Final = add_missing_query_params(
+        url, prisma_default_params({"max_idle_connection_lifetime": 60}, native_connections)
+    )
+
+    query: Final = urllib.parse.parse_qs(urllib.parse.urlsplit(final_url).query)
+    assert (query.get("application_name"), query["max_idle_connection_lifetime"]) == (
+        None if expected_name is None else [expected_name],
+        ["60"],
+    )
