@@ -195,16 +195,51 @@ describe("customer organization usage", () => {
     expect(screen.queryByRole("row", { name: /Customer A/ })).not.toBeInTheDocument();
   });
 
-  it("creates an organization using the entered ID and alias", async () => {
+  it("creates an organization and its member budget profiles from the customer page", async () => {
     const user = userEvent.setup();
     renderWithProviders(<CustomersPage />);
     await user.click(screen.getByRole("button", { name: "Create Customer" }));
+    fireEvent.change(screen.getByLabelText("Customer name"), { target: { value: " New customer " } });
     fireEvent.change(screen.getByLabelText("Customer organization id"), { target: { value: " new-org " } });
-    fireEvent.change(screen.getByLabelText("Alias"), { target: { value: " New customer " } });
+    fireEvent.change(screen.getByLabelText("Customer monthly budget (USD)"), { target: { value: "1000" } });
+    fireEvent.change(screen.getByLabelText("Group 1 yearly budget (USD)"), { target: { value: "1500" } });
+    await user.click(screen.getByRole("radio", { name: "Use power_user as default" }));
     const dialog = screen.getByRole("dialog");
-    await user.click(within(dialog).getByRole("button", { name: "Create" }));
+    await user.click(within(dialog).getByRole("button", { name: "Create customer" }));
     await waitFor(() =>
-      expect(creations).toEqual([{ customer_org_id: "new-org", alias: "New customer", default_budgets: [] }]),
+      expect(creations).toEqual([
+        {
+          customer_org_id: "new-org",
+          alias: "New customer",
+          budget: { max_budget: 1000, budget_duration: "1mo" },
+          default_budgets: [
+            {
+              name: "power_user",
+              is_default: true,
+              budget_limits: [
+                { budget_duration: "1mo", max_budget: 200 },
+                { budget_duration: "12mo", max_budget: 1500 },
+              ],
+            },
+            {
+              name: "default_user",
+              is_default: false,
+              budget_limits: [
+                { budget_duration: "1mo", max_budget: 50 },
+                { budget_duration: "12mo", max_budget: 500 },
+              ],
+            },
+            {
+              name: "low_user",
+              is_default: false,
+              budget_limits: [
+                { budget_duration: "1mo", max_budget: 10 },
+                { budget_duration: "12mo", max_budget: 100 },
+              ],
+            },
+          ],
+        },
+      ]),
     );
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
