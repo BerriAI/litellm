@@ -1,6 +1,10 @@
 # Usage dashboard demo (synthetic data)
 
-A local stack for walking through Usage > Overview with a year of synthetic history. It builds LiteLLM from this checkout, runs two proxy workers that share one dedicated Redis, and keeps its own Postgres volume (`litellm_usage_demo_postgres`) under the fixed Compose project `litellm-usage-demo`. No provider credentials are needed and no model is ever called. Everything the page shows comes from daily aggregate rows that `seed_usage_demo.sql` writes into `LiteLLM_DailyUserSpend`, the table the Usage page reads, plus matching request tallies in `LiteLLM_DailyGatewayRequests` under the route `usage-demo:/chat/completions`. All seeded keys, users and model groups start with `usage-demo-` or `demo-`, so they are easy to recognise as synthetic.
+A local stack for walking through Usage > Overview and the Claude Code client panel with a year of synthetic history. It builds LiteLLM from this checkout, runs two proxy workers that share one dedicated Redis, and keeps everything in its own Postgres volume (`litellm_usage_demo_postgres`) under the fixed Compose project `litellm-usage-demo`. That volume is ephemeral and owned by this demo. Never point the stack or the SQL scripts at a database you care about. Both scripts check that Postgres runs with `cluster_name=litellm_usage_demo`, which only this Compose file sets, and refuse to run anywhere else.
+
+No provider credentials are needed and no model is ever called. The seed writes daily aggregate rows directly into `LiteLLM_DailyUserSpend` (what the Usage page reads), `LiteLLM_DailyTagSpend` (the Claude Code user-agent tag the client panel reads) and `LiteLLM_DailyGatewayRequests` (request tallies under the route `usage-demo:/chat/completions`). Because it skips the spend log and the aggregation writer, the demo checks the read path and the UI only. It is not evidence that request ingestion or aggregation is correct. All seeded keys, users and model groups start with `usage-demo-` or `demo-`, so they are easy to recognise as synthetic.
+
+Every service rotates its Docker logs at 10 MB with three files kept.
 
 Pinned images are `postgres:16.6` and `redis:7.4.2`. The proxy image is built locally as `litellm-usage-demo:local` and is never pulled.
 
@@ -23,7 +27,7 @@ To confirm both workers are serving, `docker compose logs litellm | grep "Starte
 
 ## What the synthetic data contains
 
-Twelve calendar months ending today in UTC, so the current month is partial. Eleven model groups across OpenAI, Anthropic, Bedrock, Gemini, Azure, Vertex AI and a subscription provider, which is more than the eight leaders the charts name, so the rest fall into Other. `demo-coding-assistant` starts in the fourth month and grows fast while `demo-legacy-completion` declines and stops after the eighth, which shows the model mix shifting. Prompt tokens include cache reads and writes as a subset. `demo-image-gen` has per-request spend with zero tokens and `demo-subscription-chat` has tokens with zero metered spend. The fifth month has no traffic at all, so it shows up as an empty month rather than disappearing.
+Twelve calendar months ending today in UTC, so the current month is partial. A partial month only means the range stops inside it. It says nothing about whether every day in it is fully aggregated. Eleven model groups across OpenAI, Anthropic, Bedrock, Gemini, Azure, Vertex AI and a subscription provider, which is more than the eight leaders the charts name, so the rest fall into Other. `demo-coding-assistant` starts in the fourth month and grows fast while `demo-legacy-completion` declines and stops after the eighth, which shows the model mix shifting. Prompt tokens include cache reads and writes as a subset. `demo-image-gen` has per-request spend with zero tokens and `demo-subscription-chat` has tokens with zero metered spend. The fifth month has no traffic at all, so it shows up as an empty month rather than disappearing.
 
 ## Manual QA checklist
 
@@ -41,18 +45,20 @@ Pick Last 12 months in the date picker (shortcut `12M`) unless a step says other
 10. Switch the dashboard theme to dark. Charts, legend, notes and table stay readable.
 11. Narrow the window to phone width. Controls wrap, charts keep full width and the table scrolls horizontally.
 12. Export data from the Overview tab still downloads the same range and scope as the page shows.
-13. Pick a user from the user filter (for example `usage-demo-user-b`). Stats, charts and table only show that user's three keys' models, and the comparison follows the same filter.
-14. Open the Models, Keys and Endpoints tabs and the client usage panel. They behave as before.
+13. Pick a user from the user filter (for example `usage-demo-user-b`). Stats, charts and table only show that user's five models from the research and coding keys, and the comparison follows the same filter.
+14. Open the Claude Code client (client picker in the header, or its row under Top agents) with the all-users scope and 12M. The panel shows the same paired Tokens over Spend monthly charts and contribution table for `demo-coding-assistant` and `demo-subscription-chat`, whose totals match the panel's summary tiles. The subscription model contributes tokens with no metered spend.
+15. In that panel, a person or team scope reads individual spend logs, which this demo does not seed, so it shows no Claude Code usage. That is expected here and not a regression.
+16. Open the Models, Keys and Endpoints tabs. They behave as before and fire no previous-period request.
 
 ## Reset and clean up
 
-Remove only the synthetic rows and keep the stack running:
+Remove the usage-demo rows and keep the stack running:
 
 ```sh
 docker compose exec -T db psql -v ON_ERROR_STOP=1 -U llmproxy -d litellm -f /seed/reset_usage_demo.sql
 ```
 
-Stop the stack and delete its own volume and image, and nothing else:
+Stop the stack and delete this project's containers, its volume and its locally built image, and nothing else:
 
 ```sh
 docker compose down --volumes --rmi local

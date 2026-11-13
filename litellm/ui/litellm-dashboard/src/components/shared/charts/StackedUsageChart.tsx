@@ -50,15 +50,10 @@ export interface StackedUsageChartProps {
   totalLabel?: string;
   scale?: StackedUsageScale;
   className?: string;
-  /** Tooltip header text for an `xKey` value; defaults to `xLabel`. */
   tooltipLabel?: (value: string) => string;
-  /** Full-precision formatter for tooltip values, when `format` abbreviates axis ticks. */
   tooltipFormat?: (value: number) => string;
-  /** Prints `totalFor` above each bar. Linear scale only, since a log stack has no meaningful top. */
   showTotals?: boolean;
-  /** Charts sharing a `syncId` move their tooltips together across the same buckets. */
   syncId?: string;
-  /** Fixed tick column width, so stacked charts line their plot areas up. */
   yAxisWidth?: number;
   ariaLabel?: string;
 }

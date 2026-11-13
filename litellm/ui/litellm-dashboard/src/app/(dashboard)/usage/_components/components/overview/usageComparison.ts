@@ -1,4 +1,4 @@
-import { EMPTY_DAILY_ACTIVITY_METADATA, type DailyActivityMetadata } from "@/components/UsagePage/dailyActivityApi";
+import type { DailyActivityMetadata } from "@/components/UsagePage/dailyActivityApi";
 import type { DayRange } from "./usageTrendData";
 
 export type Change =
@@ -18,29 +18,37 @@ export interface StatComparison {
   readonly avgCostPerRequest: Change;
 }
 
+type TotalField = "total_spend" | "total_tokens" | "total_api_requests";
+
 const PENDING: Change = { kind: "pending" };
 const UNAVAILABLE: Change = { kind: "unavailable" };
 
-/** Percent change from `previous` to `current`. A zero baseline has no ratio, so it reads New or unchanged. */
-export const changeBetween = (current: number, previous: number): Change => {
-  if (!Number.isFinite(current) || !Number.isFinite(previous)) return UNAVAILABLE;
+const reported = (metadata: DailyActivityMetadata | null, field: TotalField): number | null => {
+  const value: unknown = metadata?.[field];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+};
+
+export const changeBetween = (current: number | null, previous: number | null): Change => {
+  if (current === null || previous === null || !Number.isFinite(current) || !Number.isFinite(previous)) {
+    return UNAVAILABLE;
+  }
   if (previous === 0) return current === 0 ? { kind: "same" } : { kind: "new" };
   return { kind: "change", percent: ((current - previous) / previous) * 100 };
 };
 
-const perRequest = (spend: number, requests: number): number | null => (requests > 0 ? spend / requests : null);
-
-const avgCostChange = (current: Required<DailyActivityMetadata>, previous: Required<DailyActivityMetadata>): Change => {
-  const now = perRequest(current.total_spend, current.total_api_requests);
-  const before = perRequest(previous.total_spend, previous.total_api_requests);
-  if (now === null || before === null) return UNAVAILABLE;
-  return changeBetween(now, before);
+const perRequest = (metadata: DailyActivityMetadata | null): number | null => {
+  const spend = reported(metadata, "total_spend");
+  const requests = reported(metadata, "total_api_requests");
+  return spend !== null && requests !== null && requests > 0 ? spend / requests : null;
 };
 
-/**
- * Headline changes against the preceding period, every figure from the same aggregate on both sides.
- * Request counts are only compared when the tile shows that aggregate's count, not gateway tallies.
- */
+const fieldChange = (
+  current: DailyActivityMetadata | null,
+  previous: DailyActivityMetadata | null,
+  field: TotalField,
+): Change => changeBetween(reported(current, field), reported(previous, field));
+
+/** Request counts are only compared when the tile shows the aggregate's own count, not gateway tallies. */
 export const statComparison = ({
   current,
   previous,
@@ -48,7 +56,7 @@ export const statComparison = ({
   status,
   requestsComparable,
 }: {
-  current: DailyActivityMetadata;
+  current: DailyActivityMetadata | null;
   previous: DailyActivityMetadata | null;
   previousRange: DayRange;
   status: ComparisonStatus;
@@ -64,13 +72,11 @@ export const statComparison = ({
       avgCostPerRequest: placeholder,
     };
   }
-  const now = { ...EMPTY_DAILY_ACTIVITY_METADATA, ...current } as Required<DailyActivityMetadata>;
-  const before = { ...EMPTY_DAILY_ACTIVITY_METADATA, ...previous } as Required<DailyActivityMetadata>;
   return {
     previous: previousRange,
-    spend: changeBetween(now.total_spend, before.total_spend),
-    tokens: changeBetween(now.total_tokens, before.total_tokens),
-    requests: requestsComparable ? changeBetween(now.total_api_requests, before.total_api_requests) : null,
-    avgCostPerRequest: avgCostChange(now, before),
+    spend: fieldChange(current, previous, "total_spend"),
+    tokens: fieldChange(current, previous, "total_tokens"),
+    requests: requestsComparable ? fieldChange(current, previous, "total_api_requests") : null,
+    avgCostPerRequest: changeBetween(perRequest(current), perRequest(previous)),
   };
 };

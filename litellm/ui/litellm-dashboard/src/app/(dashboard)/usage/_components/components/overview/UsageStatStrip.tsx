@@ -26,11 +26,8 @@ interface UsageStatStripProps {
   requestCountsPending: boolean;
   budget: number | null;
   showBudgetHint?: boolean;
-  /** Changes against the preceding period; omitted where a surface has no comparison. */
   comparison?: StatComparison;
-  /** The range's own figures failed to load, so every tile reads unavailable rather than zero. */
   failed?: boolean;
-  /** Request counts can come from gateway tallies that still loaded when the spend aggregate failed. */
   requestsFailed?: boolean;
 }
 

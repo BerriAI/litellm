@@ -6,9 +6,11 @@ import { useTranslation } from "react-i18next";
 import type { DailyData } from "@/components/UsagePage/types";
 import { StackedUsageChart } from "@/components/shared/charts";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { formatCompact, formatCompactUsd, modelColorMap } from "./overviewData";
+import { cn } from "@/lib/cva.config";
+import { modelColorMap } from "./overviewData";
 import { ChartSkeleton, Panel, PANEL_INSET_X, Segmented } from "./Primitives";
-import ModelContributionTable, { formatExactUsd } from "./ModelContributionTable";
+import ModelContributionTable from "./ModelContributionTable";
+import { COMPACT_FORMAT, EXACT_FORMAT, formatExactCount, formatExactUsd } from "./trendFormat";
 import {
   bucketTooltipLabel,
   coveringRange,
@@ -16,6 +18,7 @@ import {
   formatDayRange,
   usageTrend,
   type DayRange,
+  type TrendDimension,
   type TrendGranularity,
   type TrendMetric,
 } from "./usageTrendData";
@@ -40,16 +43,6 @@ const CHART_TITLE: Record<TrendMetric, ParseKeys> = {
 const MAX_LABELLED_BARS = 16;
 const Y_AXIS_WIDTH = 64;
 
-const exactFormat: Record<TrendMetric, (value: number) => string> = {
-  spend: formatExactUsd,
-  tokens: (value) => value.toLocaleString("en-US"),
-  requests: (value) => value.toLocaleString("en-US"),
-};
-const compactFormat: Record<TrendMetric, (value: number) => string> = {
-  spend: formatCompactUsd,
-  tokens: formatCompact,
-  requests: formatCompact,
-};
 
 function Legend({ labels, colors }: { labels: readonly string[]; colors: readonly string[] }) {
   const { t } = useTranslation();
@@ -83,22 +76,37 @@ interface UsageTrendPanelProps {
   range: DayRange | null;
   loading: boolean;
   failed: boolean;
+  dimension?: TrendDimension;
+  colorByModel?: ReadonlyMap<string, string>;
+  compact?: boolean;
 }
 
-/** Tokens over spend per bucket, stacked by one shared set of leading models, then the exact table behind both. */
-export default function UsageTrendPanel({ results, range, loading, failed }: UsageTrendPanelProps) {
+export default function UsageTrendPanel({
+  results,
+  range,
+  loading,
+  failed,
+  dimension = "model_groups",
+  colorByModel: sharedColors,
+  compact = false,
+}: UsageTrendPanelProps) {
   const { t } = useTranslation();
   const syncId = useId();
   const [view, setView] = useState<TrendView>("paired");
   const [chosenGranularity, setChosenGranularity] = useState<TrendGranularity | null>(null);
   const covered = useMemo(() => (range ? coveringRange(range, results) : null), [range, results]);
   const granularity = chosenGranularity ?? (covered ? defaultGranularity(covered) : "day");
-  const colorByModel = useMemo(() => modelColorMap(results), [results]);
+  const colorByModel = useMemo(() => sharedColors ?? modelColorMap(results), [sharedColors, results]);
   const trend = useMemo(
-    () => (range ? usageTrend({ results, range, granularity, colorByModel }) : null),
-    [results, range, granularity, colorByModel],
+    () => (range ? usageTrend({ results, range, granularity, colorByModel, dimension }) : null),
+    [results, range, granularity, colorByModel, dimension],
   );
+  const chartHeight = compact ? "h-48" : "h-60";
   const bucketByKey = useMemo(() => new Map((trend?.buckets ?? []).map((bucket) => [bucket.key, bucket])), [trend]);
+  const tickByKey = useMemo(
+    () => new Map((trend?.series.tokens.data ?? []).map((point) => [point.date, point.label])),
+    [trend],
+  );
   const metrics: readonly TrendMetric[] = view === "paired" ? ["tokens", "spend"] : ["requests"];
   const partialBuckets = granularity === "day" ? [] : (trend?.buckets ?? []).filter((bucket) => bucket.partial);
   const showTotals = (trend?.buckets.length ?? 0) <= MAX_LABELLED_BARS;
@@ -110,8 +118,8 @@ export default function UsageTrendPanel({ results, range, loading, failed }: Usa
     if (loading || trend === null) {
       return (
         <div role="status" aria-label={t("usage.trend.loading")} className="grid gap-4">
-          <ChartSkeleton className="h-60" />
-          {view === "paired" && <ChartSkeleton className="h-60" />}
+          <ChartSkeleton className={chartHeight} />
+          {view === "paired" && <ChartSkeleton className={chartHeight} />}
         </div>
       );
     }
@@ -131,19 +139,19 @@ export default function UsageTrendPanel({ results, range, loading, failed }: Usa
                 labels={series.labels}
                 colors={series.colors}
                 xKey="date"
-                xLabel={(key) => series.data.find((row) => row.date === key)?.label ?? key}
+                xLabel={(key) => tickByKey.get(key) ?? key}
                 tooltipLabel={(key) => {
                   const bucket = bucketByKey.get(key);
                   return bucket ? bucketTooltipLabel(bucket, granularity) : key;
                 }}
-                format={compactFormat[metric]}
-                tooltipFormat={exactFormat[metric]}
+                format={COMPACT_FORMAT[metric]}
+                tooltipFormat={EXACT_FORMAT[metric]}
                 totalFor={(key) => totals.get(key)}
                 showTotals={showTotals}
                 syncId={syncId}
                 yAxisWidth={Y_AXIS_WIDTH}
                 ariaLabel={t("usage.trend.chartLabel", { metric: t(CHART_TITLE[metric]) })}
-                className="h-60"
+                className={chartHeight}
               />
             </figure>
           );
@@ -159,7 +167,7 @@ export default function UsageTrendPanel({ results, range, loading, failed }: Usa
           <Notice>
             {t("usage.trend.unattributedNote", {
               spend: formatExactUsd(trend.unattributed.spend),
-              tokens: trend.unattributed.tokens.toLocaleString("en-US"),
+              tokens: formatExactCount(trend.unattributed.tokens),
             })}
           </Notice>
         )}
@@ -192,7 +200,7 @@ export default function UsageTrendPanel({ results, range, loading, failed }: Usa
     >
       <div className={PANEL_INSET_X}>{body()}</div>
       {!failed && !loading && !empty && trend !== null && (
-        <section aria-label={t("usage.trend.table.title")} className={`mt-4 border-t pt-3 pb-2 ${PANEL_INSET_X}`}>
+        <section aria-label={t("usage.trend.table.title")} className={cn("mt-4 border-t pt-3 pb-2", PANEL_INSET_X)}>
           <h4 className="text-sm leading-5 font-medium text-foreground">{t("usage.trend.table.title")}</h4>
           <ModelContributionTable rows={trend.rows} total={trend.total} />
         </section>

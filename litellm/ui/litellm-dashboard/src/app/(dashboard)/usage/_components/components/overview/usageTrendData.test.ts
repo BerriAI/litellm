@@ -267,6 +267,30 @@ describe("usageTrend", () => {
     expect(tokenless.total.tokenShare).toBeNull();
   });
 
+  it("stacks a client's deployments from the models breakdown when asked for that dimension", () => {
+    const client = day("2026-10-03", {});
+    const withModels = {
+      ...client,
+      metrics: metricsOf({ spend: 3, tokens: 300 }),
+      breakdown: {
+        ...client.breakdown,
+        models: { "claude-x": { metrics: metricsOf({ spend: 3, tokens: 300 }), metadata: {}, api_key_breakdown: {} } },
+      },
+    } as DailyData;
+    const october = { start: "2026-10-01", end: "2026-10-31" };
+    const trend = usageTrend({
+      results: [withModels],
+      range: october,
+      granularity: "month",
+      colorByModel: new Map(),
+      dimension: "models",
+    });
+
+    expect(trend.series.spend.labels).toEqual(["claude-x"]);
+    expect(trend.totals.tokens.get("2026-10")).toBe(300);
+    expect(trend.unattributed).toEqual({ spend: 0, tokens: 0, requests: 0 });
+  });
+
   it("omits Other entirely when every model fits among the leaders", () => {
     const october = { start: "2026-10-01", end: "2026-10-31" };
     const trend = trendOf([day("2026-10-03", { a: { spend: 1, tokens: 1 } })], october, "month");

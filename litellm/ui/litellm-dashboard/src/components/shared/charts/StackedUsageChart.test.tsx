@@ -47,7 +47,6 @@ describe("StackedUsageChart bar totals", () => {
     { day: "2026-10", a: 1, b: 2 },
     { day: "2026-11", a: 4, b: 0 },
   ];
-  // Totals unlike any axis tick, so a match can only be the printed bar total.
   const totals = new Map([
     ["2026-10", 13],
     ["2026-11", 17],

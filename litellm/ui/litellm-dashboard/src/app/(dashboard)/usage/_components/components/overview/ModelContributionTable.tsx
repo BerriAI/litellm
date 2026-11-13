@@ -14,12 +14,11 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { cn } from "@/lib/cva.config";
-import { formatUsd } from "./overviewData";
+import { formatExactCount, formatExactUsd } from "./trendFormat";
 import type { ContributionRow, ObservedRate } from "./usageTrendData";
 
 const ONE_DECIMAL = { minimumFractionDigits: 1, maximumFractionDigits: 1 } as const;
 
-export const formatExactUsd = (value: number): string => formatUsd(value, value !== 0 && Math.abs(value) < 1 ? 4 : 2);
 
 const RATE_GAP_LABEL = {
   noTokens: "usage.trend.table.spendWithoutTokens",
@@ -43,7 +42,7 @@ function Figures({ row }: { row: ContributionRow }) {
   const { t } = useTranslation();
   return (
     <>
-      <TableCell className={NUMERIC_CELL_CLASS}>{t("format.number", { val: row.tokens })}</TableCell>
+      <TableCell className={NUMERIC_CELL_CLASS}>{formatExactCount(row.tokens)}</TableCell>
       <TableCell className={cn(NUMERIC_CELL_CLASS, "text-muted-foreground")}>
         <Share value={row.tokenShare} />
       </TableCell>
@@ -58,7 +57,6 @@ function Figures({ row }: { row: ContributionRow }) {
   );
 }
 
-/** Every model group's tokens and spend for the range, the exact figures behind both charts. */
 export default function ModelContributionTable({
   rows,
   total,

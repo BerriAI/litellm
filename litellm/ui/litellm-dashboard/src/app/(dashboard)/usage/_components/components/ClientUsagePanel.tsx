@@ -17,13 +17,14 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 import { Skeleton } from "@/components/ui/skeleton";
 import i18n from "@/i18n/i18n";
 import { EMPTY_DAILY_ACTIVITY_METADATA, toDailyData } from "@/components/UsagePage/dailyActivityApi";
+import { formatDate } from "@/components/networking";
 import type { DailyData } from "@/components/UsagePage/types";
 import claudeLogo from "../../../../../../public/assets/logos/claude.svg";
 import type { UsageClient } from "../hooks/clientUsageData";
 import { useClientUsage } from "../hooks/useClientUsage";
 import { topAgents, type AgentRow } from "./overview/agentCatalog";
 import { useClientAgentModels } from "../hooks/useClientAgentModels";
-import UsageBreakdownChart from "./overview/UsageBreakdownChart";
+import UsageTrendPanel from "./overview/UsageTrendPanel";
 import { clientAgentDetail, type ClientAgentDetail } from "./overview/clientAgentDetail";
 import { modelColorMap, formatCompact, formatUsd, overviewTotals } from "./overview/overviewData";
 import { reconciledTokenBreakdown } from "./overview/tokenBreakdown";
@@ -139,6 +140,10 @@ export default function ClientUsagePanel({
   const modelResults = scopedRequest ? toDailyData(personUsage.data) : agentModels.results;
   const chartLoading = scopedRequest ? personUsage.loading : agentModels.loading;
   const chartError = scopedRequest ? personUsage.error : agentModels.error;
+  const chartRange = useMemo(
+    () => (startTime && endTime ? { start: formatDate(startTime), end: formatDate(endTime) } : null),
+    [startTime, endTime],
+  );
 
   const canFilterPerson = canChooseUser && !teamId && !accessError;
   const canRetry = !accessError && (scopedRequest || canChooseUser);
@@ -282,10 +287,12 @@ export default function ClientUsagePanel({
               ) : (
                 <>
                   {!chartError && (
-                    <UsageBreakdownChart
+                    <UsageTrendPanel
                       dimension="models"
                       results={modelResults}
+                      range={chartRange}
                       loading={chartLoading}
+                      failed={false}
                       compact
                       colorByModel={colorByModel}
                     />

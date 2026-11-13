@@ -15438,8 +15438,10 @@
       "empty": "No usage recorded in this range",
       "unavailable": "Usage trend is unavailable because spend data failed to load.",
       "weekTooltip": "Week of {{range}} ({{days}} days)",
-      "partialMonthTooltip": "{{month}}, partial: {{range}}",
-      "partialNote": "Partial periods cover only the days in range: {{periods}}.",
+      "partialMonthTooltip": "{{month}}, {{range}} only",
+      "partialMonthTick": "{{month}} {{from}}–{{to}}",
+      "dayRange": "{{start}} – {{end}}",
+      "partialNote": "Some periods include only the days inside the selected range: {{periods}}. Recent days can still change while spend is being aggregated.",
       "unattributedNote": "The model breakdown differs from the daily totals by {{spend}} and {{tokens}} tokens, so bars and table show the attributed amount only.",
       "table": {
         "title": "Contribution by model",

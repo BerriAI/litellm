@@ -16,9 +16,10 @@ describe("changeBetween", () => {
     expect(changeBetween(15, 10)).toEqual({ kind: "change", percent: 50 });
   });
 
-  it("refuses to compare a value that is not a finite number", () => {
+  it("refuses to compare a value that is missing or not a finite number", () => {
     expect(changeBetween(Number.NaN, 1)).toEqual({ kind: "unavailable" });
     expect(changeBetween(1, Number.POSITIVE_INFINITY)).toEqual({ kind: "unavailable" });
+    expect(changeBetween(1, null)).toEqual({ kind: "unavailable" });
   });
 });
 
@@ -61,6 +62,29 @@ describe("statComparison", () => {
     });
     expect(comparison.avgCostPerRequest).toEqual({ kind: "unavailable" });
     expect(comparison.spend).toEqual({ kind: "new" });
+  });
+
+  it("reads a total the response left out as unavailable, never as a zero baseline", () => {
+    const comparison = statComparison({
+      current,
+      previous: { total_tokens: 10 },
+      previousRange,
+      status: "ready",
+      requestsComparable: true,
+    });
+    expect(comparison.spend).toEqual({ kind: "unavailable" });
+    expect(comparison.requests).toEqual({ kind: "unavailable" });
+    expect(comparison.avgCostPerRequest).toEqual({ kind: "unavailable" });
+    expect(comparison.tokens).toEqual({ kind: "change", percent: 29900 });
+
+    const withoutCurrent = statComparison({
+      current: null,
+      previous: metadata(20, 10, 100),
+      previousRange,
+      status: "ready",
+      requestsComparable: true,
+    });
+    expect(withoutCurrent.spend).toEqual({ kind: "unavailable" });
   });
 
   it.each([

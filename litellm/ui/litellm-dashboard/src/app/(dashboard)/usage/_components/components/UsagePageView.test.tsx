@@ -75,7 +75,6 @@ beforeAll(() => {
 
 // Mock the networking module
 vi.mock("@/components/networking", () => ({
-  // Local calendar days, as the real formatter sends them, so day math reads the same in every timezone.
   formatDate: (date: Date) =>
     `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`,
   subscriptionUsageCall: vi.fn(),
@@ -284,8 +283,7 @@ vi.mock("@/app/(dashboard)/hooks/users/useUsers", () => ({
   useUserLookup: vi.fn(() => ({ data: null })),
 }));
 
-// The overview's previous-period request is the only aggregate that asks for a single key per day without
-// naming one, so routing on that keeps every assertion below about the range the page is showing.
+// Only the previous-period request asks for one key per day without naming a key.
 const isComparisonRequest = (request: unknown): boolean => {
   const fields = request as { apiKeyLimit?: number; apiKey?: string | null };
   return fields.apiKeyLimit === 1 && !fields.apiKey;
@@ -914,8 +912,6 @@ describe("UsagePage", () => {
       );
     };
 
-    // One day, one bar in the tokens chart and one in the spend chart, both gpt-4. The day total
-    // exceeds the model breakdown, and that gap is reported in words rather than drawn as "Other".
     await waitFor(() => {
       expect(spendBars()).toHaveLength(2);
     });
@@ -1394,7 +1390,9 @@ describe("UsagePage", () => {
         results: [],
         metadata: { total_spend: 100.6, total_tokens: 0, total_api_requests: 1500 },
       });
-      renderWithProviders(<UsagePage {...defaultProps} />, { searchParams: "?user=user-001&from=2025-01-01&to=2025-01-31" });
+      renderWithProviders(<UsagePage {...defaultProps} />, {
+        searchParams: "?user=user-001&from=2025-01-01&to=2025-01-31",
+      });
 
       await waitFor(() => {
         expect(mockComparisonCall).toHaveBeenCalledWith(
@@ -1405,11 +1403,19 @@ describe("UsagePage", () => {
           }),
         );
       });
-      // Spend and average cost per request both rose by a quarter; tokens had no baseline at all.
       expect(await overview().findAllByText("+25.0%")).toHaveLength(2);
       expect(overview().getAllByText("vs Dec 1 – Dec 31").length).toBeGreaterThan(0);
       expect(within(overview().getByText("Total Tokens").parentElement!.parentElement!).getByText("New")).toBeVisible();
       expect(overview().queryByText(/Infinity/)).not.toBeInTheDocument();
+    });
+
+    it("fetches no previous period on tabs that show no comparison", async () => {
+      renderWithProviders(<UsagePage {...defaultProps} />, {
+        searchParams: "?tab=models&from=2025-01-01&to=2025-01-31",
+      });
+      await waitFor(() => expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled());
+
+      expect(mockComparisonCall).not.toHaveBeenCalled();
     });
 
     it("keeps the current range on screen and says the comparison is unavailable when it fails", async () => {
@@ -1422,7 +1428,9 @@ describe("UsagePage", () => {
     });
 
     it("exports exactly the scope and dates the overview is showing", async () => {
-      renderWithProviders(<UsagePage {...defaultProps} />, { searchParams: "?user=user-001&from=2025-01-01&to=2025-01-31" });
+      renderWithProviders(<UsagePage {...defaultProps} />, {
+        searchParams: "?user=user-001&from=2025-01-01&to=2025-01-31",
+      });
       await waitFor(() => expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled());
       const shown = mockUserDailyActivityAggregatedCall.mock.lastCall?.[0];
 

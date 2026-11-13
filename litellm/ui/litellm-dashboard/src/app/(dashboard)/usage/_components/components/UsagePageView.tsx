@@ -296,10 +296,10 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
     [startTime, endTime],
   );
   const comparisonRange = useMemo(() => (currentRange ? previousPeriod(currentRange) : null), [currentRange]);
-  // Only metadata totals are read from the comparison, so it asks for the smallest per-key breakdown.
+  const showsComparison = (usageView === "global" || usageView === "my-usage") && selectedTab === "cost";
   const comparisonRequest = useMemo<DailyActivityRequest | null>(
     () =>
-      dailyActivityRequest && comparisonRange
+      showsComparison && dailyActivityRequest && comparisonRange
         ? {
             ...dailyActivityRequest,
             startTime: dayStart(comparisonRange.start),
@@ -307,7 +307,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
             apiKeyLimit: 1,
           }
         : null,
-    [dailyActivityRequest, comparisonRange],
+    [showsComparison, dailyActivityRequest, comparisonRange],
   );
   const {
     data: comparisonRaw,
@@ -426,16 +426,24 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
   );
   const comparison = useMemo(
     () =>
-      comparisonRange
+      comparisonRange && comparisonRequest
         ? statComparison({
-            current: userSpendData.metadata,
+            current: aggregatedRaw.metadata ?? null,
             previous: comparisonRaw.metadata ?? null,
             previousRange: comparisonRange,
             status: comparisonStatus(comparisonLoading, comparisonFailed),
             requestsComparable: gatewayActivity === null,
           })
         : undefined,
-    [userSpendData.metadata, comparisonRaw, comparisonRange, comparisonLoading, comparisonFailed, gatewayActivity],
+    [
+      aggregatedRaw,
+      comparisonRaw,
+      comparisonRange,
+      comparisonRequest,
+      comparisonLoading,
+      comparisonFailed,
+      gatewayActivity,
+    ],
   );
   const providerSpend = useMemo(() => providerSpendRows(userSpendData.results), [userSpendData.results]);
   const {

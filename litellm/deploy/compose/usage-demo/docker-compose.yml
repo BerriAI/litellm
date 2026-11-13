@@ -7,14 +7,21 @@
 #   docker compose -f litellm/deploy/compose/usage-demo/docker-compose.yml exec -T db \
 #     psql -v ON_ERROR_STOP=1 -U llmproxy -d litellm -f /seed/seed_usage_demo.sql
 #
-# The project name and volume are fixed and demo-only, so the stack never
-# touches the litellm_postgres_data volume of litellm/deploy/compose.
+# The project, its Postgres volume and the cluster_name the seed checks for are
+# all demo-owned and disposable, so the stack never touches another database.
 name: litellm-usage-demo
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
 
 services:
   litellm:
     image: litellm-usage-demo:local
     pull_policy: build
+    logging: *logging
     build:
       context: ../../../..
       dockerfile: litellm/deploy/docker/Dockerfile
@@ -57,6 +64,8 @@ services:
 
   db:
     image: postgres:16.6
+    logging: *logging
+    command: ["postgres", "-c", "cluster_name=litellm_usage_demo"]
     environment:
       POSTGRES_DB: litellm
       POSTGRES_USER: llmproxy
@@ -73,6 +82,7 @@ services:
 
   redis:
     image: redis:7.4.2
+    logging: *logging
     command: ["redis-server", "--save", "", "--appendonly", "no"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]

@@ -231,7 +231,7 @@ describe("ClientUsagePanel", () => {
     expect(panel).toHaveTextContent(/Spend\s*\$25\.00/);
     expect(within(panel).getAllByText("Unavailable")).toHaveLength(4);
     expect(await screen.findByText(/Model usage does not match these client totals yet/)).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Daily usage" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Usage trend" })).not.toBeInTheDocument();
     expect(screen.queryByText("5,000")).not.toBeInTheDocument();
   });
 
@@ -242,7 +242,7 @@ describe("ClientUsagePanel", () => {
     expect(screen.queryByText("$12.50")).not.toBeInTheDocument();
     expect(screen.queryByText("Total tokens")).not.toBeInTheDocument();
     expect(screen.queryByRole("combobox", { name: "Filter by person" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Daily usage" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Usage trend" })).not.toBeInTheDocument();
     expect(uiSpendLogsCall).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
   });
@@ -276,13 +276,16 @@ describe("ClientUsagePanel", () => {
     expect(screen.getByRole("dialog", { name: "Claude Desktop" })).toBeInTheDocument();
   });
 
-  it("should show the client model breakdown using the overview controls", async () => {
+  it("should show the client's tokens over spend with the overview's buckets and contribution table", async () => {
     renderWithProviders(<ClientUsagePanel {...defaultProps} />);
-    expect(await screen.findByText("test-model")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Daily usage" })).toBeInTheDocument();
-    expect(screen.getByRole("radiogroup", { name: "Metric" })).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: "Tokens" })).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: "Weekly" })).toBeInTheDocument();
+    const table = await screen.findByRole("region", { name: "Contribution by model" });
+    const row = within(table).getByRole("row", { name: /test-model/ });
+    expect(row).toHaveTextContent("9,000");
+    expect(row).toHaveTextContent("$12.50");
+    expect(screen.getByRole("heading", { name: "Usage trend" })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Tokens stacked by model" })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Spend stacked by model" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Monthly" })).toBeInTheDocument();
   });
 
   it("should show personal client usage without loading the global user list or all-user export", async () => {
@@ -392,7 +395,7 @@ describe("ClientUsagePanel", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(scopeError);
     expect(screen.queryByText("$12.50")).not.toBeInTheDocument();
     expect(screen.queryByText("Total tokens")).not.toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Daily usage" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Usage trend" })).not.toBeInTheDocument();
     expect(uiSpendLogsCall).not.toHaveBeenCalled();
     expect(dailyActivityExportCall).not.toHaveBeenCalled();
     expect(userListCall).not.toHaveBeenCalled();
@@ -406,6 +409,6 @@ describe("ClientUsagePanel", () => {
     renderWithProviders(<StaleSummaryPanel />);
     expect(await screen.findByText(/Model usage does not match these client totals/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Retry model breakdown" }));
-    expect(await screen.findByText("test-model")).toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: "Contribution by model" })).toHaveTextContent("test-model");
   });
 });

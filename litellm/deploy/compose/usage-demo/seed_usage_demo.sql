@@ -1,5 +1,6 @@
--- Synthetic Usage dashboard history. Every row belongs to the usage-demo namespace,
--- so rerunning replaces only what this script wrote and never touches other spend.
+-- Synthetic Usage dashboard history for the disposable litellm-usage-demo database only.
+-- It refuses to run anywhere else, and rerunning replaces the usage-demo namespace rows.
+-- These are aggregate rows written directly, so they exercise the read path and UI, not ingestion.
 --
 -- Twelve calendar months of daily aggregates ending today (UTC), so the current
 -- month is partial. Deterministic: rerunning on the same day writes identical rows.
@@ -9,6 +10,16 @@
 --   * demo-subscription-chat: tokens with zero metered spend
 --   * no traffic at all in the fifth month, a real zero bucket
 --   * demo-legacy-completion stops after month eight, demo-coding-assistant starts in month four
+--   * the coding key's traffic is also tagged as Claude Code, so the client panel has data
+
+DO $$
+BEGIN
+  IF current_setting('cluster_name') IS DISTINCT FROM 'litellm_usage_demo' THEN
+    RAISE EXCEPTION 'refusing to run outside the litellm-usage-demo database (cluster_name is "%")',
+      current_setting('cluster_name');
+  END IF;
+END
+$$;
 
 BEGIN;
 
@@ -125,6 +136,24 @@ SELECT
   now(),
   now()
 FROM daily_usage u;
+
+DELETE FROM "LiteLLM_DailyTagSpend" WHERE api_key LIKE 'usage-demo-key-%';
+
+INSERT INTO "LiteLLM_DailyTagSpend" (
+  id, tag, date, api_key, model, model_group, custom_llm_provider,
+  prompt_tokens, completion_tokens, cache_read_input_tokens, cache_creation_input_tokens,
+  spend, api_requests, successful_requests, failed_requests, total_response_time_ms, timed_requests,
+  created_at, updated_at
+)
+SELECT
+  'usage-demo-tag-' || md5(id),
+  'User-Agent: claude-cli/2.1.263 (external, cli)',
+  date, api_key, model, model_group, custom_llm_provider,
+  prompt_tokens, completion_tokens, cache_read_input_tokens, cache_creation_input_tokens,
+  spend, api_requests, successful_requests, failed_requests, total_response_time_ms, timed_requests,
+  now(), now()
+FROM "LiteLLM_DailyUserSpend"
+WHERE api_key = 'usage-demo-key-coding' AND user_id = 'usage-demo-user-b';
 
 -- Gateway request tallies for the same synthetic days, so the request tiles that prefer
 -- them agree with the spend aggregate. The route name keeps these rows in the demo namespace.
