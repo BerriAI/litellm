@@ -1066,14 +1066,37 @@ async def _managed_authorization_scope(
         if scope_user_id and prisma_client is not None
         else None
     )
-    merged_scope: Final = union_scopes(" ".join(prior_grant.get("scopes") or ()) if prior_grant else None, scope)
+    as_metadata: OAuthMetadata | None = None
+    if server.authorization_server_metadata is not None:
+        try:
+            as_metadata = OAuthMetadata.model_validate(server.authorization_server_metadata)
+        except Exception:
+            as_metadata = None
+
+    as_scopes: set[str] = set()
+    if as_metadata is not None and as_metadata.scopes_supported:
+        as_scopes.update(as_metadata.scopes_supported)
+    elif isinstance(server.authorization_server_metadata, dict):
+        raw_as_scopes = server.authorization_server_metadata.get("scopes_supported")
+        if isinstance(raw_as_scopes, (list, tuple, set)):
+            as_scopes.update(str(s) for s in raw_as_scopes)
+
+    advertised_scopes: Final[set[str]] = (
+        set(server.scopes or ())
+        | set(server.configured_scopes or ())
+        | as_scopes
+    )
+    prior_scopes: Final[list[str]] = [
+        s for s in (prior_grant.get("scopes") or ())
+        if not advertised_scopes or s in advertised_scopes
+    ] if prior_grant else []
+
+    merged_scope: Final = union_scopes(" ".join(prior_scopes) if prior_scopes else None, scope)
     selected_scope: Final = (
         get_client_metadata_scopes(
             merged_scope,
             None,
-            OAuthMetadata.model_validate(server.authorization_server_metadata)
-            if server.authorization_server_metadata is not None
-            else None,
+            as_metadata,
             ["authorization_code", "refresh_token"],
         )
         if merged_scope is not None
@@ -2759,6 +2782,26 @@ async def callback(
                     return rejected_error
                 original_state = state_data.get("original_state")
                 redirect_uri = _get_validated_client_redirect_uri(request, state_data)
+
+                if error == "invalid_scope":
+                    try:
+                        scope_user_id = state_data.get("scope_user_id") or state_data.get("litellm_user_id")
+                        server_id = state_data.get("mcp_server_id")
+                        from litellm.proxy.proxy_server import prisma_client
+
+                        if scope_user_id and server_id and prisma_client is not None:
+                            from litellm.proxy.mcp_server.db import delete_user_credential
+
+                            await delete_user_credential(prisma_client, str(scope_user_id), str(server_id))
+                            verbose_logger.warning(
+                                "MCP /callback: cleared stale OAuth credential for user=%s server=%s after invalid_scope error",
+                                scope_user_id,
+                                server_id,
+                            )
+                    except Exception as ex:
+                        verbose_logger.warning(
+                            "MCP /callback: failed to clear stale credential on invalid_scope: %s", ex
+                        )
             except Exception:
                 # Untrusted/invalid client redirect_uri (HTTPException), or an
                 # undecryptable state (expired key, tampered): surface the IdP
