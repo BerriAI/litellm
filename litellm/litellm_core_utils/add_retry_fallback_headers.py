@@ -3,6 +3,7 @@ import math
 from collections.abc import Awaitable, Mapping
 from types import MappingProxyType
 from typing import Final, Protocol, TypedDict, cast
+from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
@@ -169,12 +170,15 @@ def apply_response_model_id(response: object, request_metadata: Mapping[str, obj
 
 
 def apply_response_api_base(response: object, api_base: object) -> None:
+    """The served deployment's endpoint, without the userinfo or query string a URL can carry credentials in."""
     if not isinstance(api_base, str) or not api_base:
         return
     hidden_params: Final = get_hidden_params_dict(response, create=isinstance(response, dict))
     if hidden_params.get("api_base"):
         return
-    hidden_params["api_base"] = api_base
+    parts: Final = urlsplit(api_base)
+    host: Final = parts.netloc.rpartition("@")[2]
+    hidden_params["api_base"] = urlunsplit((parts.scheme, host, parts.path, "", ""))
     _write_hidden_params(response, hidden_params)
 
 

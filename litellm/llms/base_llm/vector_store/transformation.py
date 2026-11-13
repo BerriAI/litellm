@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from abc import abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -64,15 +65,15 @@ class LiteLLMVectorStoreEmbeddingExecutor:
 
 @dataclass(slots=True)
 class OncePerRequestEmbeddingExecutor:
-    """Embeds a request's query once, so every search attempt of that request reuses the vector or its failure."""
+    """Embeds a request's query once per embedding setup, so search retries reuse the vector or its failure."""
 
     inner: VectorStoreEmbeddingExecutor
-    outcomes: dict[tuple[str, str], EmbeddingResponse | Exception] = field(  # mutable-ok: one request's memo
+    outcomes: dict[tuple[str, str, str], EmbeddingResponse | Exception] = field(  # mutable-ok: one request's memo
         default_factory=dict
     )
 
     def embed(self, model: str, query: str, configuration: Mapping[str, object]) -> EmbeddingResponse:
-        key: Final = (model, query)
+        key: Final = (model, query, json.dumps(configuration, sort_keys=True, default=str))
         if key not in self.outcomes:
             try:
                 self.outcomes[key] = self.inner.embed(model, query, configuration)
@@ -81,7 +82,7 @@ class OncePerRequestEmbeddingExecutor:
         return _embedding_or_raise(self.outcomes[key])
 
     async def aembed(self, model: str, query: str, configuration: Mapping[str, object]) -> EmbeddingResponse:
-        key: Final = (model, query)
+        key: Final = (model, query, json.dumps(configuration, sort_keys=True, default=str))
         if key not in self.outcomes:
             try:
                 self.outcomes[key] = await self.inner.aembed(model, query, configuration)

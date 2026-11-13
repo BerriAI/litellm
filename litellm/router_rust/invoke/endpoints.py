@@ -53,7 +53,11 @@ from litellm.router_strategy.complexity_router.context_compaction import (
     surface_for_call,
 )
 from litellm.router_utils.endpoint_eligibility import endpoint_for_call, endpoint_selection
-from litellm.vector_stores.deployments import is_vector_store_router_deployment
+from litellm.vector_stores.deployments import (
+    is_vector_store_router_deployment,
+    selected_vector_store_group,
+    vector_store_deployment_connection,
+)
 from litellm.vector_stores.search_query import store_search_params
 
 if TYPE_CHECKING:
@@ -1041,6 +1045,7 @@ def _generic_attempt(
         **without_retrieve_stream_defaults(data, kwargs),
         "caching": core.shaping.cache_responses,
         **kwargs,
+        **vector_store_deployment_connection(deployment, data),
         "model": model_name,
         **_session_with_model(kwargs.get("session"), model_name),
         **(
@@ -1195,8 +1200,9 @@ def _resolved_credentials(core: EndpointCore, deployment: Mapping[str, object], 
 
 
 def vector_store_deployment_refusal(plan: Plan, deployment: Mapping[str, object], group: str) -> Exception | None:
-    """A vector store deployment serves vector store search alone, whichever request or fallback picked it."""
-    if plan.host_op in _VECTOR_STORE_SEARCH_OPS or not is_vector_store_router_deployment(deployment):
+    """A vector store deployment serves only the vector store searches the server itself routed to a group."""
+    served_by_the_server: Final = plan.host_op in _VECTOR_STORE_SEARCH_OPS and selected_vector_store_group() is not None
+    if served_by_the_server or not is_vector_store_router_deployment(deployment):
         return None
     from litellm.exceptions import UnsupportedEndpointError
 

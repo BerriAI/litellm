@@ -1,4 +1,6 @@
-from collections.abc import Iterable, Mapping
+from collections.abc import Generator, Iterable, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from types import MappingProxyType
 from typing import Any, Final  # noqa: TID251  # load_config indexes and rewrites each model_list entry in place
 
@@ -181,6 +183,44 @@ def with_primary_deployment(
             **{key: value for key, value in primary_params.items() if key not in ("model", "order")},
         }
     )
+
+
+_SELECTED_GROUP: Final[ContextVar[str | None]] = ContextVar("vector_store_group_selected", default=None)
+_ROUTING_ONLY_PARAMS: Final = frozenset({"model", "order"})
+_ALWAYS_CONNECTION_PARAMS: Final = frozenset(
+    {"api_base", "api_key", "api_version", "litellm_credential_name", "azure_search_service_name"}
+)
+
+
+@contextmanager
+def vector_store_group_selected(group: str | None) -> Generator[None]:
+    """Marks the vector store search the server itself routed to ``group``, the only kind a vector store deployment serves."""
+    token: Final = _SELECTED_GROUP.set(group)
+    try:
+        yield
+    finally:
+        _SELECTED_GROUP.reset(token)
+
+
+def selected_vector_store_group() -> str | None:
+    return _SELECTED_GROUP.get()
+
+
+def vector_store_deployment_connection(
+    deployment: Mapping[str, object], params: Mapping[str, object]
+) -> Mapping[str, object]:
+    """A vector store deployment's own settings, which no request value may replace."""
+    if not is_vector_store_router_deployment(deployment):
+        return MappingProxyType({})
+    return MappingProxyType({key: value for key, value in params.items() if key not in _ROUTING_ONLY_PARAMS})
+
+
+def connection_override_keys(deployments: Iterable[Mapping[str, object]]) -> frozenset[str]:
+    """The request keys that would replace a setting of these deployments."""
+    deployment_keys: Final[frozenset[str]] = frozenset().union(
+        *((as_str_mapping(deployment.get("litellm_params")) or {}).keys() for deployment in deployments)
+    )
+    return _ALWAYS_CONNECTION_PARAMS | (deployment_keys - _ROUTING_ONLY_PARAMS - {"custom_llm_provider"})
 
 
 def with_deployment_group(store_params: Mapping[str, object]) -> Mapping[str, object]:

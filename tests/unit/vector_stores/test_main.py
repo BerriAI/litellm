@@ -403,9 +403,12 @@ async def test_router_vector_store_search_reports_the_serving_deployments_api_ba
         ]
     )
 
-    response = await router.avector_store_search(
-        vector_store_id="claims-docs", query="claims", model="kb-search", mock_response="mocked"
-    )
+    from litellm.vector_stores.deployments import vector_store_group_selected
+
+    with vector_store_group_selected("kb-search"):
+        response = await router.avector_store_search(
+            vector_store_id="claims-docs", query="claims", model="kb-search", mock_response="mocked"
+        )
 
     assert response["_hidden_params"]["api_base"] == "https://eastus.search.windows.net"
 
@@ -421,3 +424,102 @@ async def test_sdk_vector_store_search_response_is_unchanged_without_the_router(
     )
 
     assert "_hidden_params" not in response
+
+
+_EASTUS_SEARCH: Final = "https://eastus.search.windows.net/indexes/claims-docs/docs/search"
+_SCUS_SEARCH: Final = "https://scus.search.windows.net/indexes/claims-docs/docs/search"
+_AZURE_SEARCH_HIT: Final = {"value": [{"@search.score": 0.9, "id": "doc-1", "content": "served by scus"}]}
+
+
+@pytest.fixture
+def httpx_transport(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+
+def _search_group_router() -> litellm.Router:
+    def search_deployment(region: str, order: int) -> Mapping[str, object]:
+        return {
+            "model_name": "kb-search",
+            "litellm_params": {
+                "model": "azure_ai/kb-search",
+                "custom_llm_provider": "azure_ai",
+                "api_base": f"https://{region}.search.windows.net",
+                "api_key": f"key-{region}",
+                "order": order,
+            },
+            "model_info": {"id": f"search-{region}", "mode": "vector_store"},
+        }
+
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "query-embeddings",
+                "litellm_params": {
+                    "model": "openai/text-embedding-3-small",
+                    "api_key": "sk-fake",
+                    "mock_response": [0.1, 0.2, 0.3],
+                },
+            },
+            search_deployment("eastus", 1),
+            search_deployment("scus", 2),
+        ],
+        num_retries=1,
+    )
+
+
+async def _grouped_search(router: litellm.Router, **request: object) -> object:
+    return await router.avector_store_search(
+        vector_store_id="claims-docs",
+        query="claims",
+        model="kb-search",
+        custom_llm_provider="azure_ai",
+        litellm_embedding_model="query-embeddings",
+        **request,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_grouped_search_fails_over_to_the_next_order_deployment_in_the_same_request(
+    respx_mock, httpx_transport
+):
+    from litellm.vector_stores.deployments import vector_store_group_selected
+
+    eastus = respx_mock.post(url__startswith=_EASTUS_SEARCH).mock(return_value=httpx.Response(503, json={}))
+    scus = respx_mock.post(url__startswith=_SCUS_SEARCH).mock(return_value=httpx.Response(200, json=_AZURE_SEARCH_HIT))
+
+    with vector_store_group_selected("kb-search"):
+        response = await _grouped_search(_search_group_router())
+
+    assert eastus.called and scus.call_count == 1
+    assert scus.calls.last.request.headers["api-key"] == "key-scus"
+    assert response["data"][0]["content"][0]["text"] == "served by scus"
+    assert response["_hidden_params"]["model_id"] == "search-scus"
+    assert response["_hidden_params"]["api_base"] == "https://scus.search.windows.net"
+
+
+@pytest.mark.asyncio
+async def test_a_grouped_search_keeps_the_deployments_connection_over_the_callers(respx_mock, httpx_transport):
+    from litellm.vector_stores.deployments import vector_store_group_selected
+
+    eastus = respx_mock.post(url__startswith=_EASTUS_SEARCH).mock(
+        return_value=httpx.Response(200, json=_AZURE_SEARCH_HIT)
+    )
+    attacker = respx_mock.post(url__startswith="https://attacker.example").mock(return_value=httpx.Response(200))
+
+    with vector_store_group_selected("kb-search"):
+        await _grouped_search(_search_group_router(), api_base="https://attacker.example", api_key="caller-key")
+
+    assert not attacker.called
+    assert eastus.calls.last.request.headers["api-key"] == "key-eastus"
+
+
+@pytest.mark.asyncio
+async def test_a_search_the_server_did_not_route_to_a_group_never_reaches_it(respx_mock, httpx_transport):
+    eastus = respx_mock.post(url__startswith=_EASTUS_SEARCH).mock(
+        return_value=httpx.Response(200, json=_AZURE_SEARCH_HIT)
+    )
+
+    with pytest.raises(litellm.BadRequestError, match="is a vector store deployment"):
+        await _grouped_search(_search_group_router())
+
+    assert not eastus.called

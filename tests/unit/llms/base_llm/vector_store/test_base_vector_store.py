@@ -143,3 +143,18 @@ async def test_once_per_request_embedding_executor_does_not_retry_a_failed_embed
             await executor.aembed("query-embeddings", "claims", {})
 
     assert inner.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_once_per_request_embedding_executor_embeds_again_for_different_embedding_settings():
+    from litellm.llms.base_llm.vector_store.transformation import OncePerRequestEmbeddingExecutor
+
+    inner = _CountingEmbeddingExecutor(
+        EmbeddingResponse(data=[{"embedding": [0.1, 0.2], "index": 0, "object": "embedding"}])
+    )
+    executor = OncePerRequestEmbeddingExecutor(inner=inner)
+
+    await executor.aembed("query-embeddings", "claims", {"dimensions": 256})
+    await executor.aembed("query-embeddings", "claims", {"dimensions": 1536})
+
+    assert inner.calls == 2

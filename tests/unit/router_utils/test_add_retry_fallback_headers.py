@@ -352,3 +352,19 @@ def test_add_fallback_headers_to_dict_response():
 
     assert result is response
     assert response["_hidden_params"]["additional_headers"]["x-litellm-attempted-fallbacks"] == 1
+
+
+@pytest.mark.parametrize(
+    ("api_base", "reported"),
+    [
+        ("https://user:secret@eastus.search.windows.net:8443/v1?api-key=secret", "https://eastus.search.windows.net:8443/v1"),
+        ("https://eastus.search.windows.net", "https://eastus.search.windows.net"),
+    ],
+)
+def test_apply_response_api_base_reports_the_endpoint_without_url_credentials(api_base, reported):
+    from litellm.litellm_core_utils.add_retry_fallback_headers import apply_response_api_base
+
+    response: dict[str, object] = {}
+    apply_response_api_base(response, api_base)
+
+    assert response["_hidden_params"]["api_base"] == reported
