@@ -1,1 +1,1 @@
-ALTER TABLE "LiteLLM_UserTable" ADD COLUMN "budget_limits" JSONB;
+ALTER TABLE "LiteLLM_UserTable" ADD COLUMN IF NOT EXISTS "budget_limits" JSONB;
