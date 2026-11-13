@@ -36,6 +36,17 @@ class TestJSONProviderLoader:
         assert publicai.api_base_env == "PUBLICAI_API_BASE"
         assert publicai.param_mappings.get("max_completion_tokens") == "max_tokens"
 
+    def test_septor_provider_loads(self):
+        """Septor is an OpenAI-compatible hosted gateway."""
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        assert JSONProviderRegistry.exists("septor")
+        septor = JSONProviderRegistry.get("septor")
+        assert septor is not None
+        assert septor.base_url == "https://api.septorlabs.com/v1"
+        assert septor.api_key_env == "SEPTOR_API_KEY"
+        assert septor.api_base_env == "SEPTOR_API_BASE"
+
     def test_dynamic_config_generation(self):
         """Test dynamic config class creation"""
         from litellm.llms.openai_like.dynamic_config import create_config_class
