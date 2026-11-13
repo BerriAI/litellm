@@ -7,6 +7,7 @@ mod config;
 mod host;
 mod retries;
 mod stream;
+mod surrogate;
 
 use std::{
     sync::{Arc, Mutex, PoisonError},
@@ -14,7 +15,6 @@ use std::{
 };
 
 use litellm_error::Report;
-use litellm_host_python::{from_py_argument, json_loads, to_py};
 use litellm_router_core::lookup::{ListScope, Lookup, Row};
 use litellm_router_core::{
     AttemptError, Blocked, BuildPath, Built, Deployment, DeploymentSpec, Error, FailureKind,
@@ -38,6 +38,13 @@ use self::host::{
     PythonRandomness, Stage, Step, StepHost, StepKind,
 };
 use crate::errors::RustBridgeDeclined;
+
+type StringsOrRow<'py> = (Vec<Bound<'py, PyString>>, Option<Bound<'py, PyAny>>);
+type ListedNameOrRow<'py> = (
+    bool,
+    Option<Bound<'py, PyString>>,
+    Option<Bound<'py, PyAny>>,
+);
 
 /// The `error_kind` of a `failed` step.
 #[derive(Clone, Copy, Debug, strum::IntoStaticStr)]
@@ -123,8 +130,13 @@ impl From<&Error> for ErrorKind {
     }
 }
 
-fn config_error_to_pyerr(error: config::Error) -> PyErr {
-    let message = Report::new(&error).to_string();
+fn py_error_text(py: Python<'_>, message: &str) -> Py<PyString> {
+    surrogate::decode_str(py, message)
+        .map_or_else(|_| PyString::new(py, message).unbind(), Bound::unbind)
+}
+
+fn config_error_to_pyerr(py: Python<'_>, error: config::Error) -> PyErr {
+    let message = py_error_text(py, &Report::new(&error).to_string());
     if error.declined() {
         RustBridgeDeclined::new_err(message)
     } else {
@@ -132,8 +144,8 @@ fn config_error_to_pyerr(error: config::Error) -> PyErr {
     }
 }
 
-fn drive_error_to_pyerr(error: DriveError) -> PyErr {
-    let message = Report::new(&error).to_string();
+fn drive_error_to_pyerr(py: Python<'_>, error: DriveError) -> PyErr {
+    let message = py_error_text(py, &Report::new(&error).to_string());
     if error.is_request() {
         PyValueError::new_err(message)
     } else {
@@ -145,10 +157,10 @@ fn drive_error_to_pyerr(error: DriveError) -> PyErr {
 fn document(value: &Bound<'_, PyAny>) -> PyResult<Value> {
     match value.cast::<PyString>() {
         Ok(text) => {
-            let parsed = json_loads(value.py(), text.to_str()?.as_bytes())?;
-            from_py_argument(parsed.bind(value.py()))
+            let parsed = value.py().import("json")?.call_method1("loads", (text,))?;
+            surrogate::encode_py_to_value(&parsed)
         }
-        Err(_) => from_py_argument(value),
+        Err(_) => surrogate::encode_py_to_value(value),
     }
 }
 
@@ -171,6 +183,7 @@ pub(crate) struct RouterCoreHandle {
 impl RouterCoreHandle {
     #[new]
     fn new(config: &Bound<'_, PyAny>, dynamic: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let py = config.py();
         let (config, dynamic) = (document(config)?, document(dynamic)?);
         let build = || {
             let config = config::parse_router_config(config)?;
@@ -181,14 +194,14 @@ impl RouterCoreHandle {
         };
         build()
             .map(|router| Self { router })
-            .map_err(config_error_to_pyerr)
+            .map_err(|error| config_error_to_pyerr(py, error))
     }
 
     /// Start a call; nothing runs until the first `next(None)`.
     fn start(&self, op: &str, request: &Bound<'_, PyAny>) -> PyResult<RouterCall> {
         let op = Op::new(op);
-        let request =
-            config::parse_request(document(request)?, None).map_err(config_error_to_pyerr)?;
+        let request = config::parse_request(document(request)?, None)
+            .map_err(|error| config_error_to_pyerr(request.py(), error))?;
         let router = self.router.clone();
         Ok(RouterCall::new(async move {
             router.call(op, request).await.map(Finish::Call)
@@ -198,9 +211,15 @@ impl RouterCoreHandle {
     /// Pick the deployment `model` routes to now, without calling it. Driven like `start`: its
     /// steps are the cache reads and selections the pick needs, and it ends with `done`
     /// (`deployment_id`, `model_group`) or `failed`.
-    fn select(&self, model: &str, request: &Bound<'_, PyAny>) -> PyResult<RouterCall> {
-        let request = config::parse_request(document(request)?, Some(model))
-            .map_err(config_error_to_pyerr)?;
+    fn select(
+        &self,
+        model: &Bound<'_, PyString>,
+        request: &Bound<'_, PyAny>,
+    ) -> PyResult<RouterCall> {
+        let py = request.py();
+        let model = surrogate::encode_str(model)?;
+        let request = config::parse_request(document(request)?, Some(&model))
+            .map_err(|error| config_error_to_pyerr(py, error))?;
         let router = self.router.clone();
         Ok(RouterCall::new(async move {
             let deployment = router.select(&Op::from("acompletion"), &request).await?;
@@ -213,9 +232,15 @@ impl RouterCoreHandle {
     }
 
     /// List the deployments a pick for `model` would choose among, driven like `select`.
-    fn healthy(&self, model: &str, request: &Bound<'_, PyAny>) -> PyResult<RouterCall> {
-        let request = config::parse_request(document(request)?, Some(model))
-            .map_err(config_error_to_pyerr)?;
+    fn healthy(
+        &self,
+        model: &Bound<'_, PyString>,
+        request: &Bound<'_, PyAny>,
+    ) -> PyResult<RouterCall> {
+        let py = request.py();
+        let model = surrogate::encode_str(model)?;
+        let request = config::parse_request(document(request)?, Some(&model))
+            .map_err(|error| config_error_to_pyerr(py, error))?;
         let router = self.router.clone();
         Ok(RouterCall::new(async move {
             let candidates = router.healthy(&Op::from("acompletion"), &request).await?;
@@ -236,10 +261,12 @@ impl RouterCoreHandle {
     /// Apply `{"upsert": [deployments], "delete": [ids], "settings": {dynamic document}}` and
     /// return the new registry version.
     fn apply(&self, changes: &Bound<'_, PyAny>) -> PyResult<u64> {
-        let changes = config::parse_changes(document(changes)?).map_err(config_error_to_pyerr)?;
+        let py = changes.py();
+        let changes = config::parse_changes(document(changes)?)
+            .map_err(|error| config_error_to_pyerr(py, error))?;
         self.router
             .apply(changes)
-            .map_err(|error| config_error_to_pyerr(error.into()))
+            .map_err(|error| config_error_to_pyerr(py, error.into()))
     }
 
     /// Build `entries` (model_list entries) through the host, driven like `start`: its steps
@@ -294,11 +321,11 @@ impl RouterCoreHandle {
     /// `router_model_info`; it ends with `done` (`info`: the merged map or None).
     fn deployment_model_info(
         &self,
-        model_id: &str,
+        model_id: &Bound<'_, PyString>,
         model_name: &Bound<'_, PyAny>,
     ) -> PyResult<RouterCall> {
-        let model_id = model_id.to_owned();
-        let model_name = from_py_argument::<Value>(model_name)?;
+        let model_id = surrogate::encode_str(model_id)?;
+        let model_name = surrogate::encode_py_to_value(model_name)?;
         let router = self.router.clone();
         Ok(RouterCall::new(async move {
             router
@@ -333,7 +360,7 @@ impl RouterCoreHandle {
         id: &Bound<'_, PyAny>,
         configured: &Bound<'_, PyAny>,
     ) -> PyResult<RouterCall> {
-        let id = from_py_argument::<Value>(id)?;
+        let id = surrogate::encode_py_to_value(id)?;
         let Value::Object(configured) = document(configured)? else {
             return Err(PyValueError::new_err(
                 "the configured model_info must be a dict",
@@ -350,7 +377,9 @@ impl RouterCoreHandle {
     /// `router_model_info`; it ends with `done` (`value`: `{"cost_map_keys", "max_input_tokens",
     /// "max_output_tokens"}`).
     fn model_listing_info(&self, deployments: &Bound<'_, PyAny>) -> PyResult<RouterCall> {
-        let deployments: Vec<Value> = from_py_argument(deployments)?;
+        let deployments: Vec<Value> =
+            serde_json::from_value(surrogate::encode_py_to_value(deployments)?)
+                .map_err(|error| PyValueError::new_err(error.to_string()))?;
         let router = self.router.clone();
         Ok(RouterCall::new(async move {
             let listing = router.model_listing_info(&deployments).await?;
@@ -365,11 +394,13 @@ impl RouterCoreHandle {
     /// `get_configured_mode` / `get_configured_display_name`: `value` when it is a string that is
     /// not blank.
     #[staticmethod]
-    fn configured_text(value: &Bound<'_, PyAny>) -> PyResult<Option<String>> {
-        let value = from_py_argument::<Value>(value).ok();
-        Ok(litellm_router_core::group_info::configured_text(
-            value.as_ref(),
-        ))
+    fn configured_text<'py>(
+        py: Python<'py>,
+        value: &Bound<'py, PyAny>,
+    ) -> PyResult<Option<Bound<'py, PyString>>> {
+        let value = surrogate::encode_py_to_value(value).ok();
+        let text = litellm_router_core::group_info::configured_text(value.as_ref());
+        surrogate::decode_opt_str(py, text.as_deref())
     }
 
     /// `get_configured_service_tiers`: each of `model_infos`' `service_tiers`, unvalidated.
@@ -378,10 +409,12 @@ impl RouterCoreHandle {
         py: Python<'_>,
         model_infos: &Bound<'_, PyAny>,
     ) -> PyResult<Vec<Py<PyAny>>> {
-        let model_infos: Vec<serde_json::Map<String, Value>> = from_py_argument(model_infos)?;
+        let model_infos: Vec<serde_json::Map<String, Value>> =
+            serde_json::from_value(surrogate::encode_py_to_value(model_infos)?)
+                .map_err(|error| PyValueError::new_err(error.to_string()))?;
         litellm_router_core::group_info::configured_service_tiers(&model_infos)
             .iter()
-            .map(|tiers| to_py(py, tiers))
+            .map(|tiers| surrogate::decode_value(py, tiers))
             .collect()
     }
 
@@ -409,15 +442,15 @@ impl RouterCoreHandle {
     #[allow(clippy::too_many_arguments)]
     fn report_failure(
         &self,
-        id: &str,
+        id: &Bound<'_, PyString>,
         failure: &Bound<'_, PyDict>,
         deployment_cooldown: bool,
         count_only: bool,
-        requested_group: Option<String>,
+        requested_group: Option<&Bound<'_, PyString>>,
         cooldown_time: Option<f64>,
         uncounted: bool,
         counts_request: bool,
-        usage_model: Option<String>,
+        usage_model: Option<&Bound<'_, PyString>>,
         callbacks: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<RouterCall> {
         let failure = match attempt_outcome(failure)? {
@@ -429,15 +462,15 @@ impl RouterCoreHandle {
             }
         };
         let router = self.router.clone();
-        let id = id.to_owned();
+        let id = surrogate::encode_str(id)?;
         let report = FailureReport {
             deployment_cooldown,
             cooldown_time,
             count_only,
-            requested_group,
+            requested_group: surrogate::encode_opt_str(requested_group)?,
             uncounted,
             counts_request,
-            usage_model,
+            usage_model: surrogate::encode_opt_str(usage_model)?,
             callbacks: outcome_callbacks(callbacks)?,
         };
         Ok(RouterCall::new(async move {
@@ -456,18 +489,18 @@ impl RouterCoreHandle {
     #[pyo3(signature = (id, total_tokens, requests, usage_model=None, tracks_usage=None, callbacks=None))]
     fn report_success(
         &self,
-        id: &str,
+        id: &Bound<'_, PyString>,
         total_tokens: f64,
         requests: f64,
-        usage_model: Option<String>,
+        usage_model: Option<&Bound<'_, PyString>>,
         tracks_usage: Option<bool>,
         callbacks: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<RouterCall> {
         let router = self.router.clone();
-        let id = id.to_owned();
+        let id = surrogate::encode_str(id)?;
         let report = SuccessReport {
             tracks_usage,
-            usage_model,
+            usage_model: surrogate::encode_opt_str(usage_model)?,
             callbacks: outcome_callbacks(callbacks)?,
         };
         Ok(RouterCall::new(async move {
@@ -485,11 +518,11 @@ impl RouterCoreHandle {
     #[pyo3(signature = (id, callbacks=None))]
     fn count_success(
         &self,
-        id: &str,
+        id: &Bound<'_, PyString>,
         callbacks: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<RouterCall> {
         let router = self.router.clone();
-        let id = id.to_owned();
+        let id = surrogate::encode_str(id)?;
         let callbacks = outcome_callbacks(callbacks)?;
         Ok(RouterCall::new(async move {
             router
@@ -505,7 +538,7 @@ impl RouterCoreHandle {
         let records = registry
             .deployments(&DeploymentFilter::default())
             .iter()
-            .map(|deployment| to_py(py, &host::deployment_record(deployment)))
+            .map(|deployment| surrogate::decode_value(py, &host::deployment_record(deployment)))
             .collect::<PyResult<Vec<_>>>()?;
         PyList::new(py, records)
     }
@@ -516,17 +549,18 @@ impl RouterCoreHandle {
         let records = registry
             .deployments_from(start)
             .iter()
-            .map(|deployment| to_py(py, &host::deployment_record(deployment)))
+            .map(|deployment| surrogate::decode_value(py, &host::deployment_record(deployment)))
             .collect::<PyResult<Vec<_>>>()?;
         PyList::new(py, records)
     }
 
     /// The deployment with this id, or None.
-    fn deployment(&self, py: Python<'_>, id: &str) -> PyResult<Option<Py<PyAny>>> {
+    fn deployment(&self, py: Python<'_>, id: &Bound<'_, PyString>) -> PyResult<Option<Py<PyAny>>> {
+        let id = surrogate::encode_str(id)?;
         self.router
             .registry()
-            .deployment(id)
-            .map(|deployment| to_py(py, &host::deployment_record(&deployment)))
+            .deployment(&id)
+            .map(|deployment| surrogate::decode_value(py, &host::deployment_record(&deployment)))
             .transpose()
     }
 
@@ -537,22 +571,29 @@ impl RouterCoreHandle {
     fn lookup_all<'py>(
         &self,
         py: Python<'py>,
-        model_name: &str,
-        team_id: Option<&str>,
-        rename: Option<&str>,
+        model_name: &Bound<'_, PyString>,
+        team_id: Option<&Bound<'_, PyString>>,
+        rename: Option<&Bound<'_, PyString>>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let model_name = surrogate::encode_str(model_name)?;
+        let team_id = surrogate::encode_opt_str(team_id)?;
+        let rename = surrogate::encode_opt_str(rename)?;
         let registry = self.router.registry();
-        rows_to_py(py, &Lookup::new(&registry).all(model_name, team_id, rename))
+        rows_to_py(
+            py,
+            &Lookup::new(&registry).all(&model_name, team_id.as_deref(), rename.as_deref()),
+        )
     }
 
     /// `_team_deployments_across_teams`: the rows, and how many teams own them.
     fn lookup_across_teams<'py>(
         &self,
         py: Python<'py>,
-        model: &str,
+        model: &Bound<'_, PyString>,
     ) -> PyResult<(Bound<'py, PyAny>, usize)> {
+        let model = surrogate::encode_str(model)?;
         let registry = self.router.registry();
-        let (rows, teams) = Lookup::new(&registry).across_teams(model);
+        let (rows, teams) = Lookup::new(&registry).across_teams(&model);
         Ok((rows_to_py(py, &rows)?, teams))
     }
 
@@ -567,12 +608,13 @@ impl RouterCoreHandle {
     fn lookup_model_ids<'py>(
         &self,
         py: Python<'py>,
-        model_name: Option<&str>,
+        model_name: Option<&Bound<'_, PyString>>,
         exclude_team_models: bool,
-    ) -> PyResult<(Vec<String>, Option<Bound<'py, PyAny>>)> {
+    ) -> PyResult<StringsOrRow<'py>> {
+        let model_name = surrogate::encode_opt_str(model_name)?;
         let registry = self.router.registry();
-        match Lookup::new(&registry).model_ids(model_name, exclude_team_models) {
-            Ok(ids) => Ok((ids, None)),
+        match Lookup::new(&registry).model_ids(model_name.as_deref(), exclude_team_models) {
+            Ok(ids) => Ok((surrogate::decode_vec_str(py, &ids)?, None)),
             Err(raw) => Ok((Vec::new(), Some(row_to_py(py, &raw)?))),
         }
     }
@@ -582,15 +624,17 @@ impl RouterCoreHandle {
     fn lookup_model_list<'py>(
         &self,
         py: Python<'py>,
-        model_name: Option<&str>,
-        team_id: Option<&str>,
+        model_name: Option<&Bound<'_, PyString>>,
+        team_id: Option<&Bound<'_, PyString>>,
         scope: &Bound<'_, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let model_name = surrogate::encode_opt_str(model_name)?;
+        let team_id = surrogate::encode_opt_str(team_id)?;
         let scope = list_scope(scope)?;
         let registry = self.router.registry();
         rows_to_py(
             py,
-            &Lookup::new(&registry).model_list(model_name, team_id, &scope),
+            &Lookup::new(&registry).model_list(model_name.as_deref(), team_id.as_deref(), &scope),
         )
     }
 
@@ -598,13 +642,14 @@ impl RouterCoreHandle {
     fn lookup_model_names<'py>(
         &self,
         py: Python<'py>,
-        team_id: Option<&str>,
+        team_id: Option<&Bound<'_, PyString>>,
         scope: &Bound<'_, PyAny>,
-    ) -> PyResult<(Vec<String>, Option<Bound<'py, PyAny>>)> {
+    ) -> PyResult<StringsOrRow<'py>> {
+        let team_id = surrogate::encode_opt_str(team_id)?;
         let scope = list_scope(scope)?;
         let registry = self.router.registry();
-        match Lookup::new(&registry).model_names(team_id, &scope) {
-            Ok(names) => Ok((names, None)),
+        match Lookup::new(&registry).model_names(team_id.as_deref(), &scope) {
+            Ok(names) => Ok((surrogate::decode_vec_str(py, &names)?, None)),
             Err(raw) => Ok((Vec::new(), Some(row_to_py(py, &raw)?))),
         }
     }
@@ -614,15 +659,34 @@ impl RouterCoreHandle {
     fn lookup_access_groups<'py>(
         &self,
         py: Python<'py>,
-        model_name: Option<&str>,
-        access_group: Option<&str>,
-        team_id: Option<&str>,
+        model_name: Option<&Bound<'_, PyString>>,
+        access_group: Option<&Bound<'_, PyString>>,
+        team_id: Option<&Bound<'_, PyString>>,
         scope: &Bound<'_, PyAny>,
-    ) -> PyResult<(AccessGroups, Option<Bound<'py, PyAny>>)> {
+    ) -> PyResult<(AccessGroups<'py>, Option<Bound<'py, PyAny>>)> {
+        let model_name = surrogate::encode_opt_str(model_name)?;
+        let access_group = surrogate::encode_opt_str(access_group)?;
+        let team_id = surrogate::encode_opt_str(team_id)?;
         let scope = list_scope(scope)?;
         let registry = self.router.registry();
-        match Lookup::new(&registry).access_groups(model_name, access_group, team_id, &scope) {
-            Ok(groups) => Ok((groups, None)),
+        match Lookup::new(&registry).access_groups(
+            model_name.as_deref(),
+            access_group.as_deref(),
+            team_id.as_deref(),
+            &scope,
+        ) {
+            Ok(groups) => {
+                let decoded = groups
+                    .iter()
+                    .map(|(group, names)| {
+                        Ok((
+                            surrogate::decode_str(py, group)?,
+                            surrogate::decode_vec_str(py, names)?,
+                        ))
+                    })
+                    .collect::<PyResult<AccessGroups<'py>>>()?;
+                Ok((decoded, None))
+            }
             Err(raw) => Ok((Vec::new(), Some(row_to_py(py, &raw)?))),
         }
     }
@@ -632,34 +696,42 @@ impl RouterCoreHandle {
     fn lookup_name_serving<'py>(
         &self,
         py: Python<'py>,
-        model_id: &str,
+        model_id: &Bound<'_, PyString>,
         scope: &Bound<'_, PyAny>,
-    ) -> PyResult<(bool, Option<String>, Option<Bound<'py, PyAny>>)> {
+    ) -> PyResult<ListedNameOrRow<'py>> {
+        let model_id = surrogate::encode_str(model_id)?;
         let scope = list_scope(scope)?;
         let registry = self.router.registry();
-        match Lookup::new(&registry).name_serving(model_id, &scope) {
-            Ok((listed, name)) => Ok((listed, name, None)),
+        match Lookup::new(&registry).name_serving(&model_id, &scope) {
+            Ok((listed, name)) => Ok((
+                listed,
+                surrogate::decode_opt_str(py, name.as_deref())?,
+                None,
+            )),
             Err(raw) => Ok((false, None, Some(row_to_py(py, &raw)?))),
         }
     }
 
     /// Whether `model_names` (the group names) holds `name`.
-    fn has_model_name(&self, name: &str) -> bool {
-        self.router
+    fn has_model_name(&self, name: &Bound<'_, PyString>) -> PyResult<bool> {
+        let name = surrogate::encode_str(name)?;
+        Ok(self
+            .router
             .registry()
             .host_indexes()
             .model_names
-            .contains(&Value::String(name.to_owned()))
+            .contains(&Value::String(name)))
     }
 
     /// `_core_team_model_has_alternatives`, or the row the read raises at.
     fn lookup_team_model_has_alternatives<'py>(
         &self,
         py: Python<'py>,
-        id: &str,
+        id: &Bound<'_, PyString>,
     ) -> PyResult<(bool, Option<Bound<'py, PyAny>>)> {
+        let id = surrogate::encode_str(id)?;
         let registry = self.router.registry();
-        match Lookup::new(&registry).team_model_has_alternatives(id) {
+        match Lookup::new(&registry).team_model_has_alternatives(&id) {
             Ok(found) => Ok((found, None)),
             Err(raw) => Ok((false, Some(row_to_py(py, &raw)?))),
         }
@@ -670,11 +742,15 @@ impl RouterCoreHandle {
     fn lookup_group_usable_by_team<'py>(
         &self,
         py: Python<'py>,
-        model_group: &str,
-        team_id: Option<&str>,
+        model_group: &Bound<'_, PyString>,
+        team_id: Option<&Bound<'_, PyString>>,
     ) -> PyResult<(Option<usize>, Option<Bound<'py, PyAny>>)> {
+        let model_group = surrogate::encode_str(model_group)?;
+        let team_id = surrogate::encode_opt_str(team_id)?;
         let registry = self.router.registry();
-        match Lookup::new(&registry).group_deployment_usable_by_team(model_group, team_id) {
+        match Lookup::new(&registry)
+            .group_deployment_usable_by_team(&model_group, team_id.as_deref())
+        {
             Ok(position) => Ok((position, None)),
             Err(raw) => Ok((None, Some(row_to_py(py, &raw)?))),
         }
@@ -684,11 +760,13 @@ impl RouterCoreHandle {
     fn lookup_team_public_name<'py>(
         &self,
         py: Python<'py>,
-        model_id: &str,
-        team_id: &str,
+        model_id: &Bound<'_, PyString>,
+        team_id: &Bound<'_, PyString>,
     ) -> PyResult<(Option<usize>, Option<Bound<'py, PyAny>>)> {
+        let model_id = surrogate::encode_str(model_id)?;
+        let team_id = surrogate::encode_str(team_id)?;
         let registry = self.router.registry();
-        match Lookup::new(&registry).team_public_name_deployment(model_id, team_id) {
+        match Lookup::new(&registry).team_public_name_deployment(&model_id, &team_id) {
             Ok(position) => Ok((position, None)),
             Err(raw) => Ok((None, Some(row_to_py(py, &raw)?))),
         }
@@ -698,25 +776,33 @@ impl RouterCoreHandle {
     fn lookup_routable<'py>(
         &self,
         py: Python<'py>,
-        model_group: &str,
-        team_id: Option<&str>,
+        model_group: &Bound<'_, PyString>,
+        team_id: Option<&Bound<'_, PyString>>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let model_group = surrogate::encode_str(model_group)?;
+        let team_id = surrogate::encode_opt_str(team_id)?;
         let registry = self.router.registry();
-        rows_to_py(py, &Lookup::new(&registry).routable(model_group, team_id))
+        rows_to_py(
+            py,
+            &Lookup::new(&registry).routable(&model_group, team_id.as_deref()),
+        )
     }
 
     /// `_core_wildcard_route_deployments`: the team router's routes, else the global router's.
     fn lookup_wildcard_route<'py>(
         &self,
         py: Python<'py>,
-        model: &str,
-        team_id: Option<&str>,
-        requests: Vec<String>,
+        model: &Bound<'_, PyString>,
+        team_id: Option<&Bound<'_, PyString>>,
+        requests: Vec<Bound<'_, PyString>>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let model = surrogate::encode_str(model)?;
+        let team_id = surrogate::encode_opt_str(team_id)?;
+        let requests = surrogate::encode_vec_str(requests)?;
         let registry = self.router.registry();
         rows_to_py(
             py,
-            &Lookup::new(&registry).wildcard_route(model, team_id, &requests),
+            &Lookup::new(&registry).wildcard_route(&model, team_id.as_deref(), &requests),
         )
     }
 
@@ -726,31 +812,41 @@ impl RouterCoreHandle {
     fn lookup_candidate_ids<'py>(
         &self,
         py: Python<'py>,
-        resolved: &str,
-        team_id: Option<&str>,
-        members: Option<Vec<String>>,
-        requests: Vec<String>,
-    ) -> PyResult<(Vec<String>, Option<Bound<'py, PyAny>>)> {
+        resolved: &Bound<'_, PyString>,
+        team_id: Option<&Bound<'_, PyString>>,
+        members: Option<Vec<Bound<'_, PyString>>>,
+        requests: Vec<Bound<'_, PyString>>,
+    ) -> PyResult<StringsOrRow<'py>> {
+        let resolved = surrogate::encode_str(resolved)?;
+        let team_id = surrogate::encode_opt_str(team_id)?;
+        let members = surrogate::encode_opt_vec_str(members)?;
+        let requests = surrogate::encode_vec_str(requests)?;
         let registry = self.router.registry();
         let lookup = Lookup::new(&registry);
-        match lookup.candidate_ids(resolved, team_id, members.as_deref(), &requests) {
-            Ok(ids) => Ok((ids, None)),
+        match lookup.candidate_ids(&resolved, team_id.as_deref(), members.as_deref(), &requests) {
+            Ok(ids) => Ok((surrogate::decode_vec_str(py, &ids)?, None)),
             Err(raw) => Ok((Vec::new(), Some(row_to_py(py, &raw)?))),
         }
     }
 
     /// Whether the id map holds `id` (`_has_model_id`).
-    fn has_model_id(&self, id: &str) -> bool {
-        self.router.registry().host_indexes().has_id(id)
+    fn has_model_id(&self, id: &Bound<'_, PyString>) -> PyResult<bool> {
+        let id = surrogate::encode_str(id)?;
+        Ok(self.router.registry().host_indexes().has_id(&id))
     }
 
     /// What the id map holds for `id`, as written (a position, or what a caller wrote), or None.
-    fn id_position<'py>(&self, py: Python<'py>, id: &str) -> PyResult<Option<Bound<'py, PyAny>>> {
+    fn id_position<'py>(
+        &self,
+        py: Python<'py>,
+        id: &Bound<'_, PyString>,
+    ) -> PyResult<Option<Bound<'py, PyAny>>> {
+        let id = surrogate::encode_str(id)?;
         let registry = self.router.registry();
         registry
             .host_indexes()
-            .id_entry(id)
-            .map(|held| to_py(py, held).map(|value| value.into_bound(py)))
+            .id_entry(&id)
+            .map(|held| surrogate::decode_value(py, held).map(|value| value.into_bound(py)))
             .transpose()
     }
 
@@ -763,20 +859,21 @@ impl RouterCoreHandle {
             .iter()
             .map(|(id, held)| Value::Array(vec![Value::String(id.clone()), held.clone()]))
             .collect();
-        to_py(py, &Value::Array(pairs)).map(|value| value.into_bound(py))
+        surrogate::decode_value(py, &Value::Array(pairs)).map(|value| value.into_bound(py))
     }
 
     /// What the name index holds for `name`, as written, or None when it does not index it.
     fn named_positions<'py>(
         &self,
         py: Python<'py>,
-        name: &str,
+        name: &Bound<'_, PyString>,
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
+        let name = surrogate::encode_str(name)?;
         let registry = self.router.registry();
         registry
             .host_indexes()
-            .named(name)
-            .map(|held| to_py(py, held).map(|value| value.into_bound(py)))
+            .named(&name)
+            .map(|held| surrogate::decode_value(py, held).map(|value| value.into_bound(py)))
             .transpose()
     }
 
@@ -784,37 +881,48 @@ impl RouterCoreHandle {
     fn team_positions<'py>(
         &self,
         py: Python<'py>,
-        team: &str,
-        public: &str,
+        team: &Bound<'_, PyString>,
+        public: &Bound<'_, PyString>,
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
+        let team = surrogate::encode_str(team)?;
+        let public = surrogate::encode_str(public)?;
         let registry = self.router.registry();
         registry
             .host_indexes()
-            .team_named(team, public)
-            .map(|held| to_py(py, held).map(|value| value.into_bound(py)))
+            .team_named(&team, &public)
+            .map(|held| surrogate::decode_value(py, held).map(|value| value.into_bound(py)))
             .transpose()
     }
 
     /// `team_public_model_names_of`: the public names the team index holds for `team`.
-    fn team_public_names_of(&self, team: &str) -> Vec<String> {
-        self.router
+    fn team_public_names_of<'py>(
+        &self,
+        py: Python<'py>,
+        team: &Bound<'_, PyString>,
+    ) -> PyResult<Vec<Bound<'py, PyString>>> {
+        let team = surrogate::encode_str(team)?;
+        let names = self
+            .router
             .registry()
             .host_indexes()
-            .team_public_names_of(team)
+            .team_public_names_of(&team);
+        surrogate::decode_vec_str(py, &names)
     }
 
     /// The positions of the deployments whose `litellm_params.model` is `model`.
-    fn litellm_model_positions(&self, model: &str) -> Vec<usize> {
-        self.router
+    fn litellm_model_positions(&self, model: &Bound<'_, PyString>) -> PyResult<Vec<usize>> {
+        let model = surrogate::encode_str(model)?;
+        Ok(self
+            .router
             .registry()
             .deployments(&DeploymentFilter::default())
             .iter()
             .enumerate()
             .filter(|(_, deployment)| {
-                deployment.raw_params.get("model").and_then(Value::as_str) == Some(model)
+                deployment.raw_params.get("model").and_then(Value::as_str) == Some(model.as_str())
             })
             .map(|(position, _)| position)
-            .collect()
+            .collect())
     }
 
     /// `PatternMatchRouter.route` over the wildcard router (or `team`'s): the first pattern's
@@ -823,13 +931,16 @@ impl RouterCoreHandle {
     fn pattern_route<'py>(
         &self,
         py: Python<'py>,
-        team: Option<&str>,
-        request: &str,
-        filtered: Option<Vec<String>>,
+        team: Option<&Bound<'_, PyString>>,
+        request: &Bound<'_, PyString>,
+        filtered: Option<Vec<Bound<'_, PyString>>>,
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
+        let team = surrogate::encode_opt_str(team)?;
+        let request = surrogate::encode_str(request)?;
+        let filtered = surrogate::encode_opt_vec_str(filtered)?;
         let registry = self.router.registry();
         let indexes = registry.host_indexes();
-        let router = match team {
+        let router = match team.as_deref() {
             None => Some(&indexes.patterns),
             Some(team) => indexes
                 .team_patterns
@@ -838,16 +949,25 @@ impl RouterCoreHandle {
                 .map(|(_, router)| router),
         };
         router
-            .and_then(|router| router.route(request, filtered.as_deref()))
-            .map(|routed| to_py(py, &Value::Array(routed)).map(|value| value.into_bound(py)))
+            .and_then(|router| router.route(&request, filtered.as_deref()))
+            .map(|routed| {
+                surrogate::decode_value(py, &Value::Array(routed)).map(|value| value.into_bound(py))
+            })
             .transpose()
     }
 
     /// `get_models_by_pattern`: the models the first matching (request, pattern) pair routes to.
-    fn models_by_pattern(&self, team: Option<&str>, requests: Vec<String>) -> Option<Vec<String>> {
+    fn models_by_pattern<'py>(
+        &self,
+        py: Python<'py>,
+        team: Option<&Bound<'_, PyString>>,
+        requests: Vec<Bound<'_, PyString>>,
+    ) -> PyResult<Option<Vec<Bound<'py, PyString>>>> {
+        let team = surrogate::encode_opt_str(team)?;
+        let requests = surrogate::encode_vec_str(requests)?;
         let registry = self.router.registry();
         let indexes = registry.host_indexes();
-        let router = match team {
+        let router = match team.as_deref() {
             None => Some(&indexes.patterns),
             Some(team) => indexes
                 .team_patterns
@@ -855,7 +975,10 @@ impl RouterCoreHandle {
                 .find(|(held, _)| held == team)
                 .map(|(_, router)| router),
         };
-        router.and_then(|router| router.models_by_pattern(&requests))
+        router
+            .and_then(|router| router.models_by_pattern(&requests))
+            .map(|models| surrogate::decode_vec_str(py, &models))
+            .transpose()
     }
 
     /// The indexes the host hands out (`HostIndexes`): id map, name and team indexes, group and
@@ -863,27 +986,31 @@ impl RouterCoreHandle {
     fn host_indexes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let indexes = serde_json::to_value(self.router.registry().host_indexes())
             .map_err(|error| PyValueError::new_err(error.to_string()))?;
-        to_py(py, &indexes).map(|value| value.into_bound(py))
+        surrogate::decode_value(py, &indexes).map(|value| value.into_bound(py))
     }
 
     /// `provider_default_deployment_ids` as the indexes hold it now: the ids of the wildcard
     /// deployments the cooldown check skips.
-    fn provider_default_ids(&self) -> Vec<String> {
-        self.router
-            .registry()
-            .host_indexes()
-            .provider_default_ids
-            .clone()
+    fn provider_default_ids<'py>(&self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyString>>> {
+        let registry = self.router.registry();
+        surrogate::decode_vec_str(py, &registry.host_indexes().provider_default_ids)
     }
 
     /// The provider the host resolved when it built the deployment with this id (its
     /// `provider` build step), or None when there is no such deployment or it never went
     /// through a host build.
-    fn provider(&self, id: &str) -> Option<String> {
-        self.router
+    fn provider<'py>(
+        &self,
+        py: Python<'py>,
+        id: &Bound<'_, PyString>,
+    ) -> PyResult<Option<Bound<'py, PyString>>> {
+        let id = surrogate::encode_str(id)?;
+        let resolved = self
+            .router
             .registry()
-            .deployment(id)
-            .and_then(|deployment| deployment.resolved_provider.clone())
+            .deployment(&id)
+            .and_then(|deployment| deployment.resolved_provider.clone());
+        surrogate::decode_opt_str(py, resolved.as_deref())
     }
 
     /// What `name` resolves to: `{"model_group", "kind", "ids"}`, or None for an unknown name.
@@ -891,12 +1018,13 @@ impl RouterCoreHandle {
     fn resolve<'py>(
         &self,
         py: Python<'py>,
-        name: &str,
+        name: &Bound<'_, PyString>,
         specific_deployment: bool,
     ) -> PyResult<Option<Bound<'py, PyDict>>> {
+        let name = surrogate::encode_str(name)?;
         let registry = self.router.registry();
         let Some(resolution) = registry.resolve(
-            name,
+            &name,
             ResolveScope {
                 specific_deployment,
             },
@@ -904,12 +1032,14 @@ impl RouterCoreHandle {
             return Ok(None);
         };
         let dict = PyDict::new(py);
-        dict.set_item("model_group", resolution.group)?;
+        dict.set_item("model_group", surrogate::decode_str(py, &resolution.group)?)?;
         dict.set_item("kind", format!("{:?}", resolution.kind))?;
-        dict.set_item(
-            "ids",
-            PyList::new(py, resolution.deployments.iter().map(|d| d.id.clone()))?,
-        )?;
+        let ids: Vec<String> = resolution
+            .deployments
+            .iter()
+            .map(|d| d.id.clone())
+            .collect();
+        dict.set_item("ids", surrogate::decode_list_str(py, &ids)?)?;
         Ok(Some(dict))
     }
 
@@ -918,18 +1048,19 @@ impl RouterCoreHandle {
     fn routable<'py>(
         &self,
         py: Python<'py>,
-        model: &str,
+        model: &Bound<'_, PyString>,
         request: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyList>> {
-        let request = config::parse_request(document(request)?, Some(model))
-            .map_err(config_error_to_pyerr)?;
+        let model = surrogate::encode_str(model)?;
+        let request = config::parse_request(document(request)?, Some(&model))
+            .map_err(|error| config_error_to_pyerr(py, error))?;
         let records = litellm_router_core::resolve::routable(
             &self.router.registry(),
             &self.router.settings().dynamic,
             &request,
         )
         .iter()
-        .map(|d| to_py(py, &host::deployment_record(d)))
+        .map(|d| surrogate::decode_value(py, &host::deployment_record(d)))
         .collect::<PyResult<Vec<_>>>()?;
         PyList::new(py, records)
     }
@@ -938,18 +1069,21 @@ impl RouterCoreHandle {
     /// strategy select step spells them. A name that resolves to nothing reads its routing group
     /// membership as is.
     #[pyo3(signature = (model, routing_strategy=None))]
-    fn routing_context(
+    fn routing_context<'py>(
         &self,
-        model: &str,
+        py: Python<'py>,
+        model: &Bound<'_, PyString>,
         routing_strategy: Option<&str>,
-    ) -> (String, &'static str, Option<String>) {
+    ) -> PyResult<(String, &'static str, Option<Bound<'py, PyString>>)> {
+        let model = surrogate::encode_str(model)?;
         let registry = self.router.registry();
         let settings = self.router.settings();
         let (kind, group) = registry
-            .resolve(model, ResolveScope::default())
-            .map_or((ResolveKind::Group, model.to_owned()), |resolution| {
-                (resolution.kind, resolution.group)
-            });
+            .resolve(&model, ResolveScope::default())
+            .map_or_else(
+                || (ResolveKind::Group, model.clone()),
+                |resolution| (resolution.kind, resolution.group),
+            );
         let (strategy, scope) = routing_context(
             &registry,
             &settings.routing_strategy,
@@ -958,7 +1092,11 @@ impl RouterCoreHandle {
             &group,
         );
         let (scope, group) = scope.wire();
-        (strategy.to_string(), scope, group.map(str::to_owned))
+        Ok((
+            strategy.to_string(),
+            scope,
+            surrogate::decode_opt_str(py, group)?,
+        ))
     }
 
     fn retire(&self) {
@@ -1021,7 +1159,7 @@ impl RouterCoreHandle {
     fn retry_policy_retries(
         &self,
         failure: &Bound<'_, PyDict>,
-        model_group: Option<&str>,
+        model_group: Option<&Bound<'_, PyString>>,
     ) -> PyResult<Option<u32>> {
         retries::policy_retries(&self.router, failure, model_group)
     }
@@ -1072,11 +1210,15 @@ impl RouterCall {
         let response = match driver.pending_call() {
             None => match outcome {
                 None => None,
-                Some(_) => return Err(drive_error_to_pyerr(DriveError::UnexpectedResponse)),
+                Some(_) => {
+                    return Err(drive_error_to_pyerr(py, DriveError::UnexpectedResponse));
+                }
             },
-            Some(call) => Some(host_call_response(call, outcome)?),
+            Some(call) => Some(host_call_response(py, call, outcome)?),
         };
-        let step = driver.resume(response).map_err(drive_error_to_pyerr)?;
+        let step = driver
+            .resume(response)
+            .map_err(|error| drive_error_to_pyerr(py, error))?;
         let dict = step_dict(py, step)?;
         dict.set_item("events", events_list(py, driver.take_events())?)?;
         Ok(dict)
@@ -1084,16 +1226,16 @@ impl RouterCall {
 }
 
 /// `(group, names)` pairs, in the order the groups appear.
-type AccessGroups = Vec<(String, Vec<String>)>;
+type AccessGroups<'py> = Vec<(Bound<'py, PyString>, Vec<Bound<'py, PyString>>)>;
 
 /// Lookup rows as the host reads them.
 fn rows_to_py<'py>(py: Python<'py>, rows: &[Row]) -> PyResult<Bound<'py, PyAny>> {
     let rows = Value::Array(rows.iter().map(Row::wire).collect());
-    to_py(py, &rows).map(|value| value.into_bound(py))
+    surrogate::decode_value(py, &rows).map(|value| value.into_bound(py))
 }
 
 fn row_to_py<'py>(py: Python<'py>, row: &Row) -> PyResult<Bound<'py, PyAny>> {
-    to_py(py, &row.wire()).map(|value| value.into_bound(py))
+    surrogate::decode_value(py, &row.wire()).map(|value| value.into_bound(py))
 }
 
 /// `{"aliases": [{alias, target}], "groups": [{name, members}], "wildcard": [requests]}`.
@@ -1104,13 +1246,17 @@ fn list_scope(scope: &Bound<'_, PyAny>) -> PyResult<ListScope> {
 
 /// Read Python's outcome for `call`.
 fn host_call_response(
+    py: Python<'_>,
     call: &HostCall,
     outcome: Option<Bound<'_, PyAny>>,
 ) -> PyResult<HostCallResponse> {
     let missing = || {
-        drive_error_to_pyerr(DriveError::MissingResponse {
-            expected: call.kind(),
-        })
+        drive_error_to_pyerr(
+            py,
+            DriveError::MissingResponse {
+                expected: call.kind(),
+            },
+        )
     };
     // `{"raised": True, ...}`: the step's work raised, reported as an attempt's failure.
     if let HostCall::Select { .. } | HostCall::PreRoute { .. } | HostCall::AllowFallback { .. } =
@@ -1135,7 +1281,7 @@ fn host_call_response(
             stage: Stage::PreCall,
             ..
         } => {
-            let facts = from_py_argument(&outcome.ok_or_else(missing)?)?;
+            let facts = surrogate::encode_py_to_value(&outcome.ok_or_else(missing)?)?;
             serde_json::from_value(facts)
                 .map(HostCallResponse::PreCall)
                 .map_err(|error| PyValueError::new_err(format!("bad pre-call facts: {error}")))
@@ -1148,7 +1294,9 @@ fn host_call_response(
             let outcome = outcome.ok_or_else(missing)?;
             let models = outcome.cast::<PyDict>()?.get_item("models")?;
             Ok(HostCallResponse::Models(match models {
-                Some(models) if !models.is_none() => Some(models.extract()?),
+                Some(models) if !models.is_none() => {
+                    Some(surrogate::encode_vec_str(models.extract()?)?)
+                }
                 _ => None,
             }))
         }
@@ -1168,9 +1316,23 @@ fn host_call_response(
                 };
             }
             if let Ok(answer) = outcome.cast::<PyTuple>() {
-                return Ok(HostCallResponse::Filtered(Ok(answer.extract()?)));
+                if answer.len() != 2 {
+                    return Err(PyValueError::new_err(
+                        "a `callback_filters` tuple outcome must be `(remaining_ids, preferred_id)`",
+                    ));
+                }
+                let kept: Vec<Bound<'_, PyString>> = answer.get_item(0)?.extract()?;
+                let preferred: Option<Bound<'_, PyString>> = answer.get_item(1)?.extract()?;
+                return Ok(HostCallResponse::Filtered(Ok((
+                    surrogate::encode_vec_str(kept)?,
+                    surrogate::encode_opt_str(preferred.as_ref())?,
+                ))));
             }
-            Ok(HostCallResponse::Filtered(Ok((outcome.extract()?, None))))
+            let kept: Vec<Bound<'_, PyString>> = outcome.extract()?;
+            Ok(HostCallResponse::Filtered(Ok((
+                surrogate::encode_vec_str(kept)?,
+                None,
+            ))))
         }
         HostCall::Select {
             stage: Stage::Strategy { records, .. },
@@ -1178,9 +1340,10 @@ fn host_call_response(
         } if !records.is_empty() => Ok(HostCallResponse::Positions(
             outcome.ok_or_else(missing)?.extract()?,
         )),
-        HostCall::Select { .. } => Ok(HostCallResponse::Select(
-            outcome.ok_or_else(missing)?.extract()?,
-        )),
+        HostCall::Select { .. } => {
+            let ids: Vec<Bound<'_, PyString>> = outcome.ok_or_else(missing)?.extract()?;
+            Ok(HostCallResponse::Select(surrogate::encode_vec_str(ids)?))
+        }
         HostCall::PreRoute { .. } => pre_route_outcome(outcome).map(HostCallResponse::PreRoute),
         HostCall::Attempt { .. } => {
             let outcome = outcome.ok_or_else(missing)?;
@@ -1217,12 +1380,16 @@ fn host_call_response(
             })
         }
         HostCall::Cache(call) => cache_outcome(call.op(), outcome).map(HostCallResponse::Cache),
-        HostCall::Secrets { .. } => Ok(HostCallResponse::Secrets(from_py_argument(
-            &outcome.ok_or_else(missing)?,
-        )?)),
+        HostCall::Secrets { .. } => {
+            let secrets = serde_json::from_value(surrogate::encode_py_to_value(
+                &outcome.ok_or_else(missing)?,
+            )?)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+            Ok(HostCallResponse::Secrets(secrets))
+        }
         // `None` is a response here (no row, no entry), so a missing outcome reads as one.
         HostCall::ModelInfo { .. } => Ok(HostCallResponse::ModelInfo(match outcome {
-            Some(outcome) if !outcome.is_none() => from_py_argument(&outcome)?,
+            Some(outcome) if !outcome.is_none() => surrogate::encode_py_to_value(&outcome)?,
             _ => Value::Null,
         })),
         HostCall::Build { kind, .. } => {
@@ -1236,7 +1403,10 @@ fn host_call_response(
                     Provided::Invalid
                 } else {
                     Provided::Provider(match outcome.get_item("provider")? {
-                        Some(provider) if !provider.is_none() => Some(provider.extract()?),
+                        Some(provider) if !provider.is_none() => {
+                            let s: Bound<'_, PyString> = provider.extract()?;
+                            Some(surrogate::encode_str(&s)?)
+                        }
                         _ => None,
                     })
                 })),
@@ -1245,9 +1415,10 @@ fn host_call_response(
                         Built::Invalid
                     } else {
                         match outcome.get_item("entry")? {
-                            Some(entry) if !entry.is_none() => {
-                                Built::Entry(from_py_argument(&entry)?)
-                            }
+                            Some(entry) if !entry.is_none() => Built::Entry(
+                                serde_json::from_value(surrogate::encode_py_to_value(&entry)?)
+                                    .map_err(|error| PyValueError::new_err(error.to_string()))?,
+                            ),
                             _ => Built::Skip,
                         }
                     };
@@ -1268,15 +1439,17 @@ fn pre_route_outcome(outcome: Option<Bound<'_, PyAny>>) -> PyResult<Option<PreRo
         return Ok(None);
     };
     if let Ok(model) = outcome.cast::<PyString>() {
-        return Ok(Some(PreRouted::Model(model.to_str()?.to_owned())));
+        return Ok(Some(PreRouted::Model(surrogate::encode_str(model)?)));
     }
     // `(model, group)`: the model to resolve, served as the group a session binding stamped.
     if let Ok(pair) = outcome.cast::<PyTuple>()
         && pair.len() == 2
     {
+        let model: Bound<'_, PyString> = pair.get_item(0)?.extract()?;
+        let group: Bound<'_, PyString> = pair.get_item(1)?.extract()?;
         return Ok(Some(PreRouted::Bound {
-            model: pair.get_item(0)?.extract()?,
-            group: pair.get_item(1)?.extract()?,
+            model: surrogate::encode_str(&model)?,
+            group: surrogate::encode_str(&group)?,
         }));
     }
     let spec: DeploymentSpec = serde_json::from_value(document(&outcome)?)
@@ -1294,20 +1467,29 @@ fn cache_outcome(op: CacheOp, outcome: Option<Bound<'_, PyAny>>) -> PyResult<Cac
     let json = |value: Option<Value>| value.filter(|value| !value.is_null());
     match op {
         CacheOp::HealthStates => outcome
-            .map(|outcome| from_py_argument::<Value>(&outcome))
+            .map(|outcome| surrogate::encode_py_to_value(&outcome))
             .transpose()
             .map(|value| CacheOutcome::Value(json(value))),
         CacheOp::Cooldowns | CacheOp::Usage | CacheOp::Outcomes => {
             let outcome = outcome.ok_or_else(|| {
                 PyValueError::new_err(format!("a `{op}` cache outcome must be a list, not None"))
             })?;
-            if !outcome.is_instance_of::<PyList>() {
-                return Err(PyValueError::new_err(format!(
+            let list = outcome.cast::<PyList>().map_err(|_| {
+                PyValueError::new_err(format!(
                     "a `{op}` cache outcome must be a list with one entry per value asked for"
-                )));
-            }
-            let values: Vec<Option<Value>> = from_py_argument(&outcome)?;
-            Ok(CacheOutcome::Values(values.into_iter().map(json).collect()))
+                ))
+            })?;
+            let values = list
+                .iter()
+                .map(|item| {
+                    if item.is_none() {
+                        Ok(None)
+                    } else {
+                        Ok(json(Some(surrogate::encode_py_to_value(&item)?)))
+                    }
+                })
+                .collect::<PyResult<Vec<Option<Value>>>>()?;
+            Ok(CacheOutcome::Values(values))
         }
         CacheOp::IncrementAllowedFails => outcome
             .filter(|outcome| !outcome.is_instance_of::<PyBool>())
@@ -1357,6 +1539,12 @@ pub(crate) fn attempt_outcome(outcome: &Bound<'_, PyDict>) -> PyResult<Result<u6
             Some(_) | None => Ok(None),
         }
     }
+    fn item_str(outcome: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<String>> {
+        item::<Bound<'_, PyString>>(outcome, key)?
+            .as_ref()
+            .map(surrogate::encode_str)
+            .transpose()
+    }
     let ok: bool = item(outcome, "ok")?
         .ok_or_else(|| PyValueError::new_err("an attempt outcome needs `ok`"))?;
     if ok {
@@ -1376,8 +1564,8 @@ pub(crate) fn attempt_outcome(outcome: &Bound<'_, PyDict>) -> PyResult<Result<u6
     let mut failure = AttemptError::new(kind, item(outcome, "status")?);
     failure.retry_after = retry_after;
     failure.num_retries = item(outcome, "num_retries")?;
-    failure.failed_deployment_id = item(outcome, "failed_deployment_id")?;
-    failure.detail = item::<String>(outcome, "detail")?.map(Into::into);
+    failure.failed_deployment_id = item_str(outcome, "failed_deployment_id")?;
+    failure.detail = item_str(outcome, "detail")?.map(Into::into);
     failure.recorded = item::<bool>(outcome, "recorded")?.unwrap_or(false);
     failure.names_provider = item::<bool>(outcome, "llm_provider")?.unwrap_or(false);
     failure.agentic_followup = item::<bool>(outcome, "agentic_followup")?.unwrap_or(false);
@@ -1411,10 +1599,11 @@ fn cause_items(dict: &Bound<'_, PyDict>, cause: RetryCause) -> PyResult<()> {
 /// A pick's error, as the `failed` step names it (`error_kind` and what names it), with the
 /// model its message names (`failed_model`) when the error carries one.
 fn pick_items(dict: &Bound<'_, PyDict>, error: &Error) -> PyResult<()> {
+    let py = dict.py();
     error_items(dict, error)?;
     match error {
         Error::NoHealthyDeployments { model, .. } | Error::UnknownModel { model } => {
-            dict.set_item("failed_model", model)
+            dict.set_item("failed_model", surrogate::decode_str(py, model)?)
         }
         _ => Ok(()),
     }
@@ -1422,12 +1611,16 @@ fn pick_items(dict: &Bound<'_, PyDict>, error: &Error) -> PyResult<()> {
 
 /// `error_kind` and the fields that name the error.
 fn error_items(dict: &Bound<'_, PyDict>, error: &Error) -> PyResult<()> {
-    dict.set_item("error", Report::new(error).to_string())?;
+    let py = dict.py();
+    dict.set_item(
+        "error",
+        surrogate::decode_str(py, &Report::new(error).to_string())?,
+    )?;
     dict.set_item("error_kind", <&'static str>::from(ErrorKind::from(error)))?;
     match error {
         Error::EndpointNotSupported { model, message } => {
-            dict.set_item("error_model", model)?;
-            dict.set_item("error_detail", message)
+            dict.set_item("error_model", surrogate::decode_str(py, model)?)?;
+            dict.set_item("error_detail", surrogate::decode_str(py, message)?)
         }
         Error::OnlyMarkers { model }
         | Error::UnknownModel { model }
@@ -1435,35 +1628,44 @@ fn error_items(dict: &Bound<'_, PyDict>, error: &Error) -> PyResult<()> {
         | Error::PtuReserved { model }
         | Error::MultipleTeams { model }
         | Error::DefaultDeploymentRaises { model }
-        | Error::IndexOutOfRange { model } => dict.set_item("error_model", model),
+        | Error::IndexOutOfRange { model } => {
+            dict.set_item("error_model", surrogate::decode_str(py, model)?)
+        }
         Error::ContextWindowExceeded { model, detail } => {
-            dict.set_item("error_model", model)?;
-            dict.set_item("error_detail", detail)
+            dict.set_item("error_model", surrogate::decode_str(py, model)?)?;
+            dict.set_item("error_detail", surrogate::decode_str(py, detail)?)
         }
         Error::UnsupportedParams { model, params } => {
-            dict.set_item("error_model", model)?;
-            dict.set_item("error_params", PyList::new(dict.py(), params)?)
+            dict.set_item("error_model", surrogate::decode_str(py, model)?)?;
+            dict.set_item("error_params", surrogate::decode_list_str(py, params)?)
         }
         Error::RoutingPluginsLeftNothing { models } => {
-            dict.set_item("error_params", PyList::new(dict.py(), models)?)
+            dict.set_item("error_params", surrogate::decode_list_str(py, models)?)
         }
         Error::Reserved {
             model,
             until,
             timezone,
         } => {
-            dict.set_item("error_model", model)?;
-            dict.set_item("error_detail", format!("{until} {timezone}"))
+            dict.set_item("error_model", surrogate::decode_str(py, model)?)?;
+            dict.set_item(
+                "error_detail",
+                surrogate::decode_str(py, &format!("{until} {timezone}"))?,
+            )
         }
         Error::NoHealthyDeployments {
             request_ids: Some(ids),
             ..
-        } => dict.set_item("error_request_ids", PyList::new(dict.py(), ids)?),
-        Error::NonNumericWeight { metric } => dict.set_item("error_detail", metric),
-        Error::MissingRoutingGroup { group } => dict.set_item("error_model", group),
+        } => dict.set_item("error_request_ids", surrogate::decode_list_str(py, ids)?),
+        Error::NonNumericWeight { metric } => {
+            dict.set_item("error_detail", surrogate::decode_str(py, metric)?)
+        }
+        Error::MissingRoutingGroup { group } => {
+            dict.set_item("error_model", surrogate::decode_str(py, group)?)
+        }
         Error::ModelInfo { exception, detail } => {
             dict.set_item("error_exception", *exception)?;
-            dict.set_item("error_detail", detail)
+            dict.set_item("error_detail", surrogate::decode_str(py, detail)?)
         }
         _ => Ok(()),
     }
@@ -1482,7 +1684,7 @@ fn events_list(py: Python<'_>, events: Vec<RouterEvent>) -> PyResult<Bound<'_, P
                 picked,
             } => {
                 dict.set_item("kind", "retries_exhausted")?;
-                dict.set_item("model_group", model_group)?;
+                dict.set_item("model_group", surrogate::decode_str(py, &model_group)?)?;
                 dict.set_item("attempted", attempted)?;
                 dict.set_item("max", max)?;
                 dict.set_item("level", level)?;
@@ -1495,7 +1697,7 @@ fn events_list(py: Python<'_>, events: Vec<RouterEvent>) -> PyResult<Bound<'_, P
             RouterEvent::FallingBack { level, model } => {
                 dict.set_item("kind", "falling_back")?;
                 dict.set_item("level", level)?;
-                dict.set_item("model", model)?;
+                dict.set_item("model", surrogate::decode_str(py, &model)?)?;
             }
             RouterEvent::OrderChainFailed { level, last_hop } => {
                 dict.set_item("kind", "order_chain_failed")?;
@@ -1524,8 +1726,8 @@ fn events_list(py: Python<'_>, events: Vec<RouterEvent>) -> PyResult<Bound<'_, P
                 unroutable,
             } => {
                 dict.set_item("kind", "fallback")?;
-                dict.set_item("from", from)?;
-                dict.set_item("to", to)?;
+                dict.set_item("from", surrogate::decode_str(py, &from)?)?;
+                dict.set_item("to", surrogate::decode_str(py, &to)?)?;
                 dict.set_item("order", order)?;
                 dict.set_item("depth", depth)?;
                 dict.set_item("level", level)?;
@@ -1533,7 +1735,7 @@ fn events_list(py: Python<'_>, events: Vec<RouterEvent>) -> PyResult<Bound<'_, P
                 dict.set_item("parent", parent)?;
                 dict.set_item("max_fallbacks", max_fallbacks)?;
                 if let Some(model) = unroutable {
-                    dict.set_item("unroutable", to_py(py, &model)?)?;
+                    dict.set_item("unroutable", surrogate::decode_value(py, &model)?)?;
                 }
             }
             RouterEvent::Blocked {
@@ -1543,7 +1745,7 @@ fn events_list(py: Python<'_>, events: Vec<RouterEvent>) -> PyResult<Bound<'_, P
             } => {
                 dict.set_item("kind", "blocked")?;
                 dict.set_item("level", level)?;
-                dict.set_item("model", model)?;
+                dict.set_item("model", surrogate::decode_str(py, &model)?)?;
                 dict.set_item("blocked", <&'static str>::from(blocked))?;
             }
             RouterEvent::FallbackDone {
@@ -1555,8 +1757,8 @@ fn events_list(py: Python<'_>, events: Vec<RouterEvent>) -> PyResult<Bound<'_, P
                 succeeded,
             } => {
                 dict.set_item("kind", "fallback_done")?;
-                dict.set_item("from", from)?;
-                dict.set_item("to", to)?;
+                dict.set_item("from", surrogate::decode_str(py, &from)?)?;
+                dict.set_item("to", surrogate::decode_str(py, &to)?)?;
                 dict.set_item("level", level)?;
                 dict.set_item("scope", scope)?;
                 dict.set_item("parent", parent)?;
@@ -1572,7 +1774,7 @@ fn events_list(py: Python<'_>, events: Vec<RouterEvent>) -> PyResult<Bound<'_, P
                 dict.set_item("kind", "retry_logged")?;
                 dict.set_item("scope", scope)?;
                 dict.set_item("level", level)?;
-                dict.set_item("model", model)?;
+                dict.set_item("model", surrogate::decode_str(py, &model)?)?;
                 dict.set_item("attempted_retries", attempted_retries)?;
                 cause_items(&dict, cause)?;
             }
@@ -1583,7 +1785,7 @@ fn events_list(py: Python<'_>, events: Vec<RouterEvent>) -> PyResult<Bound<'_, P
             } => {
                 dict.set_item("kind", "retry_policy_raised")?;
                 dict.set_item("level", level)?;
-                dict.set_item("model", model)?;
+                dict.set_item("model", surrogate::decode_str(py, &model)?)?;
                 cause_items(&dict, cause)?;
             }
             RouterEvent::RetryCountRaised {
@@ -1593,7 +1795,7 @@ fn events_list(py: Python<'_>, events: Vec<RouterEvent>) -> PyResult<Bound<'_, P
             } => {
                 dict.set_item("kind", "retry_count_raised")?;
                 dict.set_item("level", level)?;
-                dict.set_item("model", model)?;
+                dict.set_item("model", surrogate::decode_str(py, &model)?)?;
                 cause_items(&dict, cause)?;
             }
             RouterEvent::RetriesOpened {
@@ -1618,7 +1820,7 @@ fn events_list(py: Python<'_>, events: Vec<RouterEvent>) -> PyResult<Bound<'_, P
             } => {
                 dict.set_item("kind", "pick_failed")?;
                 dict.set_item("level", level)?;
-                dict.set_item("model", model)?;
+                dict.set_item("model", surrogate::decode_str(py, &model)?)?;
                 pick_items(&dict, &error.0)?;
             }
             RouterEvent::LevelFailed {
@@ -1629,7 +1831,7 @@ fn events_list(py: Python<'_>, events: Vec<RouterEvent>) -> PyResult<Bound<'_, P
             } => {
                 dict.set_item("kind", "level_failed")?;
                 dict.set_item("level", level)?;
-                dict.set_item("model", model)?;
+                dict.set_item("model", surrogate::decode_str(py, &model)?)?;
                 dict.set_item("handling", handling)?;
                 pick_items(&dict, &error.0)?;
             }
@@ -1642,7 +1844,7 @@ fn events_list(py: Python<'_>, events: Vec<RouterEvent>) -> PyResult<Bound<'_, P
                 dict.set_item("kind", "mock_failed")?;
                 dict.set_item("mock", <&'static str>::from(mock))?;
                 dict.set_item("level", level)?;
-                dict.set_item("model", model)?;
+                dict.set_item("model", surrogate::decode_str(py, &model)?)?;
                 dict.set_item("num_retries", num_retries)?;
             }
             RouterEvent::CooldownSet {
@@ -1650,12 +1852,12 @@ fn events_list(py: Python<'_>, events: Vec<RouterEvent>) -> PyResult<Bound<'_, P
                 cooldown,
             } => {
                 dict.set_item("kind", "cooldown_set")?;
-                dict.set_item("deployment_id", deployment_id)?;
+                dict.set_item("deployment_id", surrogate::decode_str(py, &deployment_id)?)?;
                 dict.set_item("cooldown_time", cooldown.as_secs_f64())?;
             }
             RouterEvent::PickStarted { model } => {
                 dict.set_item("kind", "pick_started")?;
-                dict.set_item("model", model)?;
+                dict.set_item("model", surrogate::decode_str(py, &model)?)?;
             }
             RouterEvent::Selected {
                 deployment_id,
@@ -1663,7 +1865,7 @@ fn events_list(py: Python<'_>, events: Vec<RouterEvent>) -> PyResult<Bound<'_, P
                 ..
             } => {
                 dict.set_item("kind", "selected")?;
-                dict.set_item("deployment_id", deployment_id)?;
+                dict.set_item("deployment_id", surrogate::decode_str(py, &deployment_id)?)?;
                 dict.set_item("pick_seconds", pick.as_secs_f64())?;
             }
             _ => continue,
@@ -1721,24 +1923,37 @@ fn host_call_items(py: Python<'_>, dict: &Bound<'_, PyDict>, call: HostCall) -> 
             dict.set_item("scope", scope)?;
             dict.set_item("max_retries", max_retries)?;
             dict.set_item("model_group_size", model_group_size)?;
-            dict.set_item("deployment_id", deployment_id)?;
-            dict.set_item("deployment", to_py(py, &deployment)?)?;
-            dict.set_item("model", model)?;
-            dict.set_item("model_group", model_group)?;
+            dict.set_item("deployment_id", surrogate::decode_str(py, &deployment_id)?)?;
+            dict.set_item("deployment", surrogate::decode_value(py, &deployment)?)?;
+            dict.set_item("model", surrogate::decode_str(py, &model)?)?;
+            dict.set_item("model_group", surrogate::decode_str(py, &model_group)?)?;
             dict.set_item("target_order", target_order)?;
-            dict.set_item("candidate_ids", PyList::new(py, candidate_ids)?)?;
+            dict.set_item(
+                "candidate_ids",
+                surrogate::decode_list_str(py, &candidate_ids)?,
+            )?;
             dict.set_item("retry", retry)?;
             dict.set_item("fallback_depth", fallback_depth)?;
             dict.set_item("fallback_level", fallback_level)?;
             dict.set_item("timeout", timeout)?;
-            dict.set_item("params", params.map(|p| to_py(py, &p)).transpose()?)
+            dict.set_item(
+                "params",
+                params
+                    .map(|p| surrogate::decode_value(py, &p))
+                    .transpose()?,
+            )
         }
         HostCall::Sleep { seconds } => dict.set_item("seconds", seconds),
-        HostCall::AllowFallback { target } => dict.set_item("target", target),
+        HostCall::AllowFallback { target } => {
+            dict.set_item("target", surrogate::decode_str(py, &target)?)
+        }
         HostCall::RefuseFallbacks { level, targets } => {
             dict.set_item("level", level)?;
             let targets = targets.0.iter().cloned().map(Value::Object).collect();
-            dict.set_item("targets", to_py(py, &Value::Array(targets))?)
+            dict.set_item(
+                "targets",
+                surrogate::decode_value(py, &Value::Array(targets))?,
+            )
         }
         HostCall::Select {
             stage,
@@ -1753,7 +1968,10 @@ fn host_call_items(py: Python<'_>, dict: &Bound<'_, PyDict>, call: HostCall) -> 
                 Stage::Plugins => ("plugins", None),
                 Stage::Strategy { strategy, records } => {
                     if !records.is_empty() {
-                        dict.set_item("records", to_py(py, &Value::Array(records))?)?;
+                        dict.set_item(
+                            "records",
+                            surrogate::decode_value(py, &Value::Array(records))?,
+                        )?;
                     }
                     ("strategy", Some(strategy))
                 }
@@ -1773,8 +1991,11 @@ fn host_call_items(py: Python<'_>, dict: &Bound<'_, PyDict>, call: HostCall) -> 
                     skipped_ids,
                     target_order,
                 } => {
-                    dict.set_item("excluded_ids", excluded_ids)?;
-                    dict.set_item("skipped_ids", skipped_ids)?;
+                    dict.set_item(
+                        "excluded_ids",
+                        surrogate::decode_list_str(py, &excluded_ids)?,
+                    )?;
+                    dict.set_item("skipped_ids", surrogate::decode_list_str(py, &skipped_ids)?)?;
                     dict.set_item("target_order", target_order)?;
                     ("callback_filters", None)
                 }
@@ -1783,26 +2004,33 @@ fn host_call_items(py: Python<'_>, dict: &Bound<'_, PyDict>, call: HostCall) -> 
                     ("routing_plugins", None)
                 }
             };
-            dict.set_item("pool", PyList::new(py, pool)?)?;
+            dict.set_item("pool", surrogate::decode_list_str(py, &pool)?)?;
             dict.set_item("stage", stage)?;
             dict.set_item("strategy", strategy)?;
-            dict.set_item("model_group", model_group)?;
-            dict.set_item("model", name)?;
+            dict.set_item("model_group", surrogate::decode_str(py, &model_group)?)?;
+            dict.set_item("model", surrogate::decode_str(py, &name)?)?;
             dict.set_item("scope", scope)?;
-            dict.set_item("group", group)?;
-            dict.set_item("candidates", PyList::new(py, candidates)?)
+            dict.set_item("group", surrogate::decode_opt_str(py, group.as_deref())?)?;
+            dict.set_item("candidates", surrogate::decode_list_str(py, &candidates)?)
         }
         HostCall::PreRoute {
             model,
             fallback_depth,
             retry,
         } => {
-            dict.set_item("model", model)?;
+            dict.set_item("model", surrogate::decode_str(py, &model)?)?;
             dict.set_item("fallback_depth", fallback_depth)?;
             dict.set_item("retry", retry)
         }
         HostCall::Cache(call) => {
-            dict.update(to_py(py, &call)?.bind(py).cast::<PyDict>()?.as_mapping())
+            let value = serde_json::to_value(&call)
+                .map_err(|error| PyValueError::new_err(error.to_string()))?;
+            dict.update(
+                surrogate::decode_value(py, &value)?
+                    .bind(py)
+                    .cast::<PyDict>()?
+                    .as_mapping(),
+            )
         }
         HostCall::Secrets { index, refs } => {
             dict.set_item("index", index)?;
@@ -1810,15 +2038,15 @@ fn host_call_items(py: Python<'_>, dict: &Bound<'_, PyDict>, call: HostCall) -> 
                 .into_iter()
                 .map(|secret| {
                     let item = PyDict::new(py);
-                    item.set_item("name", secret.name)?;
+                    item.set_item("name", surrogate::decode_str(py, &secret.name)?)?;
                     match secret.at {
                         SecretAt::Param(key) => {
-                            item.set_item("key", key)?;
+                            item.set_item("key", surrogate::decode_str(py, &key)?)?;
                             item.set_item("env_only", false)?;
                         }
                         SecretAt::DataSource { source, key } => {
                             item.set_item("source", source)?;
-                            item.set_item("key", key)?;
+                            item.set_item("key", surrogate::decode_str(py, &key)?)?;
                             item.set_item("env_only", true)?;
                         }
                     }
@@ -1838,15 +2066,24 @@ fn host_call_items(py: Python<'_>, dict: &Bound<'_, PyDict>, call: HostCall) -> 
         } => {
             dict.set_item("path", <&'static str>::from(path))?;
             dict.set_item("index", index)?;
-            dict.set_item("entry", to_py(py, &entry)?)?;
-            dict.set_item("declared_id", declared_id)?;
+            dict.set_item("entry", surrogate::decode_value(py, &entry)?)?;
+            dict.set_item(
+                "declared_id",
+                surrogate::decode_opt_str(py, declared_id.as_deref())?,
+            )?;
             dict.set_item("duplicate_id", duplicate_id)?;
-            dict.set_item("provider", provider)
+            dict.set_item(
+                "provider",
+                surrogate::decode_opt_str(py, provider.as_deref())?,
+            )
         }
         HostCall::ModelInfo { lookup } => {
             if let Value::Object(lookup) = lookup {
                 for (key, value) in lookup {
-                    dict.set_item(key, to_py(py, &value)?)?;
+                    dict.set_item(
+                        surrogate::decode_str(py, &key)?,
+                        surrogate::decode_value(py, &value)?,
+                    )?;
                 }
             }
             Ok(())
@@ -1855,10 +2092,17 @@ fn host_call_items(py: Python<'_>, dict: &Bound<'_, PyDict>, call: HostCall) -> 
 }
 
 fn done_items(dict: &Bound<'_, PyDict>, finish: Finish) -> PyResult<()> {
+    let py = dict.py();
     match finish {
         Finish::Call(response) => {
-            dict.set_item("deployment_id", response.deployment_id)?;
-            dict.set_item("model_group", response.model_group)?;
+            dict.set_item(
+                "deployment_id",
+                surrogate::decode_str(py, &response.deployment_id)?,
+            )?;
+            dict.set_item(
+                "model_group",
+                surrogate::decode_str(py, &response.model_group)?,
+            )?;
             dict.set_item("attempted_retries", response.attempted_retries)?;
             dict.set_item("max_retries", response.max_retries)?;
             dict.set_item("attempted_fallbacks", response.attempted_fallbacks)?;
@@ -1869,16 +2113,15 @@ fn done_items(dict: &Bound<'_, PyDict>, finish: Finish) -> PyResult<()> {
             model_group,
             deployment,
         } => {
-            dict.set_item("deployment_id", deployment_id)?;
-            dict.set_item("model_group", model_group)?;
-            dict.set_item("deployment", to_py(dict.py(), &deployment)?)
+            dict.set_item("deployment_id", surrogate::decode_str(py, &deployment_id)?)?;
+            dict.set_item("model_group", surrogate::decode_str(py, &model_group)?)?;
+            dict.set_item("deployment", surrogate::decode_value(py, &deployment)?)
         }
         Finish::Reported { cooldown } => {
             dict.set_item("cooled", cooldown.is_some())?;
             dict.set_item("cooldown_time", cooldown.map(|c| c.as_secs_f64()))
         }
         Finish::Built(built) => {
-            let py = dict.py();
             let records = built
                 .into_iter()
                 .map(|deployment| {
@@ -1886,46 +2129,57 @@ fn done_items(dict: &Bound<'_, PyDict>, finish: Finish) -> PyResult<()> {
                     item.set_item("index", deployment.index)?;
                     item.set_item(
                         "id",
-                        deployment.spec.model_info.get("id").and_then(Value::as_str),
+                        surrogate::decode_opt_str(
+                            py,
+                            deployment.spec.model_info.get("id").and_then(Value::as_str),
+                        )?,
                     )?;
-                    item.set_item("provider", deployment.spec.provider)?;
+                    item.set_item(
+                        "provider",
+                        surrogate::decode_opt_str(py, deployment.spec.provider.as_deref())?,
+                    )?;
                     Ok(item)
                 })
                 .collect::<PyResult<Vec<_>>>()?;
             dict.set_item("built", PyList::new(py, records)?)
         }
-        Finish::Counted { key } => dict.set_item("key", key),
+        Finish::Counted { key } => {
+            dict.set_item("key", surrogate::decode_opt_str(py, key.as_deref())?)
+        }
         Finish::SuccessCounted { counted } => dict.set_item("counted", counted),
-        Finish::RouterModelInfo(merged) => {
-            let py = dict.py();
-            match merged {
-                Some(merged) => {
-                    dict.set_item("info", to_py(py, &Value::Object(merged.info))?)?;
-                    dict.set_item("user_keys", merged.user_keys)
-                }
-                None => dict.set_item("info", py.None()),
+        Finish::RouterModelInfo(merged) => match merged {
+            Some(merged) => {
+                dict.set_item(
+                    "info",
+                    surrogate::decode_value(py, &Value::Object(merged.info))?,
+                )?;
+                dict.set_item(
+                    "user_keys",
+                    surrogate::decode_list_str(py, &merged.user_keys)?,
+                )
             }
-        }
-        Finish::DeploymentModelInfo(info) => {
-            let py = dict.py();
-            match info {
-                Some(info) => dict.set_item("info", to_py(py, &Value::Object(info))?),
-                None => dict.set_item("info", py.None()),
-            }
-        }
-        Finish::Value(value) => dict.set_item("value", to_py(dict.py(), &value)?),
+            None => dict.set_item("info", py.None()),
+        },
+        Finish::DeploymentModelInfo(info) => match info {
+            Some(info) => dict.set_item("info", surrogate::decode_value(py, &Value::Object(info))?),
+            None => dict.set_item("info", py.None()),
+        },
+        Finish::Value(value) => dict.set_item("value", surrogate::decode_value(py, &value)?),
         Finish::Healthy {
             single,
             deployment_ids,
             deployments,
         } => {
             dict.set_item("single", single)?;
-            dict.set_item("deployment_ids", deployment_ids)?;
+            dict.set_item(
+                "deployment_ids",
+                surrogate::decode_list_str(py, &deployment_ids)?,
+            )?;
             let records = deployments
                 .iter()
-                .map(|d| to_py(dict.py(), d))
+                .map(|d| surrogate::decode_value(py, d))
                 .collect::<PyResult<Vec<_>>>()?;
-            dict.set_item("deployments", PyList::new(dict.py(), records)?)
+            dict.set_item("deployments", PyList::new(py, records)?)
         }
     }
 }
@@ -2086,6 +2340,107 @@ assert drive(call, [None])["kind"] == "done"
                 !declined,
                 "{error}"
             );
+        });
+    }
+
+    #[rstest]
+    #[case::asterisk("'openai/a*b'", "'openai/a*b'")]
+    #[case::double_asterisk("'openai/*/*'", "'openai/*/*'")]
+    #[case::newline("'openai/gpt-4o\\nfoo'", "'openai/gpt-4o'")]
+    #[case::high_surrogate("'openai/\\ud800'", "'openai/\\ud800'")]
+    #[case::low_surrogate("'openai/\\udc00'", "'openai/\\udc00'")]
+    #[case::sentinel_and_surrogate("'openai/\\uf8fe\\ud800'", "'openai/\\uf8fe\\ud800'")]
+    fn python_drives_wildcard_models_with_surrogates_and_special_chars(
+        #[case] requested_expr: &str,
+        #[case] expected_expr: &str,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = PyDict::new(py);
+            locals.set_item("native", crate::native_module(py)).unwrap();
+            let req_cstr = std::ffi::CString::new(requested_expr).unwrap();
+            let exp_cstr = std::ffi::CString::new(expected_expr).unwrap();
+            locals
+                .set_item("requested", py.eval(&req_cstr, None, None).unwrap())
+                .unwrap();
+            locals
+                .set_item("expected", py.eval(&exp_cstr, None, None).unwrap())
+                .unwrap();
+            py.run(
+                c_str!(
+                    r#"
+config = {"model_list": [
+    {"model_name": "openai/*", "litellm_params": {"model": "openai/*", "api_key": "k"}, "model_info": {"id": "w"}}
+]}
+handle = native.RouterCoreHandle(config, {})
+
+def drive(call, outcome=None):
+    step = call.next(outcome)
+    while step["kind"] == "cache":
+        answer = [None] if step["op"] == "cooldowns" else None
+        step = call.next(answer)
+    return step
+
+selected = drive(handle.select(requested, {}))
+assert selected["kind"] == "done", selected
+assert selected["deployment"]["litellm_params"]["model"] == expected, selected
+
+healthy = drive(handle.healthy(requested, {}))
+assert healthy["kind"] == "done", healthy
+assert healthy["deployments"][0]["litellm_params"]["model"] == expected, healthy
+
+call = handle.start("acompletion", {"model": requested})
+attempt = drive(call)
+assert attempt["kind"] == "attempt", attempt
+assert attempt["deployment"]["litellm_params"]["model"] == expected, attempt
+done = drive(call, {"ok": True, "total_tokens": 1})
+assert done["kind"] == "done", done
+
+routed = handle.pattern_route(None, requested)
+assert routed is not None and routed[0]["litellm_params"]["model"] == expected, routed
+
+resolved = handle.resolve(requested)
+assert resolved is not None and resolved["model_group"] == "openai/*", resolved
+
+wildcard_rows = handle.lookup_wildcard_route(requested, None, [requested])
+assert len(wildcard_rows) == 1, wildcard_rows
+"#
+                ),
+                Some(&locals),
+                Some(&locals),
+            )
+            .unwrap();
+        });
+    }
+
+    #[rstest]
+    fn unknown_surrogate_model_error_preserves_surrogate() {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = PyDict::new(py);
+            locals.set_item("native", crate::native_module(py)).unwrap();
+            py.run(
+                c_str!(
+                    r#"
+config = {"model_list": [
+    {"model_name": "openai/*", "litellm_params": {"model": "openai/*", "api_key": "k"}, "model_info": {"id": "w"}}
+]}
+handle = native.RouterCoreHandle(config, {})
+call = handle.select("unknown/\ud800", {})
+step = call.next(None)
+assert step["kind"] == "select", step
+assert step["model"] == "unknown/\ud800", step
+assert step["model_group"] == "unknown/\ud800", step
+step = call.next({"models": None})
+assert step["kind"] == "failed", step
+assert step["error_model"] == "unknown/\ud800", step
+assert "unknown/\ud800" in step["error"], step
+"#
+                ),
+                Some(&locals),
+                Some(&locals),
+            )
+            .unwrap();
         });
     }
 }

@@ -6,7 +6,11 @@ use litellm_router_core::{
     AttemptError, Router,
     retry::{RetryContext, resolve_retry_policy, should_retry as core_should_retry},
 };
-use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
+use pyo3::{
+    exceptions::PyValueError,
+    prelude::*,
+    types::{PyDict, PyString},
+};
 
 fn failure(outcome: &Bound<'_, PyDict>) -> PyResult<AttemptError> {
     match super::attempt_outcome(outcome)? {
@@ -18,11 +22,12 @@ fn failure(outcome: &Bound<'_, PyDict>) -> PyResult<AttemptError> {
 pub(crate) fn policy_retries(
     router: &Router,
     outcome: &Bound<'_, PyDict>,
-    model_group: Option<&str>,
+    model_group: Option<&Bound<'_, PyString>>,
 ) -> PyResult<Option<u32>> {
     let failure = failure(outcome)?;
+    let model_group = super::surrogate::encode_opt_str(model_group)?;
     let settings = router.settings();
-    let policy = match model_group {
+    let policy = match model_group.as_deref() {
         Some(group) => resolve_retry_policy(
             settings.retry_policy.as_ref(),
             group,

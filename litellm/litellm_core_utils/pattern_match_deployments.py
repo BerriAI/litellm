@@ -240,11 +240,11 @@ class PatternMatchRouter:
 
         if len(dynamic_segments) > wildcard_count:
             return matched_pattern.string  # default to the user input, if unable to map based on wildcards.
-        # Replace the corresponding wildcards in the litellm model pattern with extracted segments
-        for segment in dynamic_segments:
-            litellm_deployment_litellm_model = litellm_deployment_litellm_model.replace("*", segment, 1)
-
-        return litellm_deployment_litellm_model
+        parts: Final = litellm_deployment_litellm_model.split("*")
+        return parts[0] + "".join(
+            f"{dynamic_segments[idx] if idx < len(dynamic_segments) else '*'}{part}"
+            for idx, part in enumerate(parts[1:])
+        )
 
     def get_pattern(self, model: str | None, custom_llm_provider: str | None = None) -> list[dict] | None:
         """

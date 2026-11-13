@@ -1837,6 +1837,18 @@ def test_deployments_by_pattern(model_list):
             "bedrock/meta.llama3-*",
             "meta.llama3-70b",
         ),
+        (
+            "p/a*b/s/c",
+            "p/*/s/*",
+            "upstream/*/s/*",
+            "upstream/a*b/s/c",
+        ),
+        (
+            "openai/*/*",
+            "openai/*",
+            "openai/*",
+            "openai/*/*",
+        ),
     ],
 )
 def test_pattern_match_deployment_set_model_name(user_request_model, model_name, litellm_model, expected_model):

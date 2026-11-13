@@ -691,4 +691,42 @@ mod tests {
             Err(Error::EndpointNotSupported { model, .. }) if model == "openai/a"
         ));
     }
+
+    #[rstest]
+    #[case::stops_before_lf("openai/*", "openai/*", "openai/gpt-4o\nfoo", Some("openai/gpt-4o"))]
+    #[case::keeps_cr_before_lf(
+        "team-a/*",
+        "azure/*",
+        "team-a/gpt-4o\r\nX-Inject: 1",
+        Some("azure/gpt-4o\r")
+    )]
+    #[case::cannot_cross_lf("*-mini", "openai/*", "a\nb-mini", None)]
+    #[case::multi_wildcard_with_captured_asterisk(
+        "p/*/s/*",
+        "upstream/*/s/*",
+        "p/a*b/s/c",
+        Some("upstream/a*b/s/c")
+    )]
+    fn resolve_request_applies_python_wildcard_substitution_and_newline_rules(
+        #[case] pattern: &str,
+        #[case] target: &str,
+        #[case] request: &str,
+        #[case] expected_model: Option<&str>,
+    ) {
+        let registry = registry(json!([
+            {"model_name": pattern, "litellm_params": {"model": target}, "model_info": {"id": "w"}},
+        ]));
+        let resolved = resolve_request(
+            &registry,
+            request,
+            false,
+            Caller::default(),
+            None,
+            None,
+            Timestamp::now(),
+        )
+        .unwrap();
+        let actual = resolved.map(|r| r.deployments[0].params.model.clone());
+        assert_eq!(actual.as_deref(), expected_model);
+    }
 }

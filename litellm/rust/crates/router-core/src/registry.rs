@@ -14,7 +14,10 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     error::ConfigError,
-    host_index::{HostIndexes, IndexWrite, cache_flags_left_to_the_catalog, deployment_model_name},
+    host_index::{
+        HostIndexes, IndexWrite, cache_flags_left_to_the_catalog, deployment_model_name,
+        pattern_to_regex, regex_match,
+    },
 };
 
 /// A registry's version; every change produces a higher one.
@@ -1154,22 +1157,10 @@ fn pattern_specificity(pattern: &str) -> (usize, usize) {
     (regex.chars().count(), complexity)
 }
 
-/// `*` matches any run of characters, as the pattern router's `(.*)` does under `re.match`:
-/// anchored at the start only, so the name may run on past the pattern's last literal.
+/// `*` matches any run of characters before `\n`, as the pattern router's `(.*)` does under
+/// `re.match`: anchored at the start only, so the name may run on past the pattern's last literal.
 fn wildcard_matches(pattern: &str, name: &str) -> bool {
-    let mut parts = pattern.split('*');
-    let first = parts.next().unwrap_or_default();
-    let Some(mut rest) = name.strip_prefix(first) else {
-        return false;
-    };
-    let parts: Vec<&str> = parts.collect();
-    for part in parts {
-        match rest.find(part) {
-            Some(at) => rest = &rest[at + part.len()..],
-            None => return false,
-        }
-    }
-    true
+    regex_match(&pattern_to_regex(pattern), name).is_some()
 }
 
 /// `deployment_id` in `litellm/router_api.py`: sha256 over the model group and every
@@ -1635,6 +1626,31 @@ mod tests {
         assert_eq!(
             (next.version(), ids),
             (1, vec!["2".to_owned(), "1".to_owned()])
+        );
+    }
+
+    #[rstest]
+    #[case::matches_before_lf("openai/*", "openai/gpt-4o\nfoo", true)]
+    #[case::cannot_cross_lf("*-mini", "a\nb-mini", false)]
+    #[case::allows_cr_without_lf("*-mini", "a\rb-mini", true)]
+    fn wildcard_resolve_respects_newline_boundaries(
+        #[case] pattern: &str,
+        #[case] request: &str,
+        #[case] expected_match: bool,
+    ) {
+        let registry = Registry::build(
+            vec![spec(
+                pattern,
+                json!({"model": "openai/*"}),
+                json!({"id": "w"}),
+            )],
+            BTreeMap::new(),
+            Vec::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            registry.resolve(request, ResolveScope::default()).is_some(),
+            expected_match
         );
     }
 }
