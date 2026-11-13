@@ -106,6 +106,25 @@ class Clock:
 
 
 @pytest.mark.asyncio
+async def test_missing_sources_are_cached_briefly_and_bounded(db: DatabaseDouble) -> None:
+    clock: Final = Clock()
+    cache: Final = SourceCache(clock.read)
+    assert await cache.source(db, "missing") is None
+    db.fail_reads = True
+    assert await cache.source(db, "missing") is None
+    clock.advance()
+    with pytest.raises(RuntimeError, match="database offline"):
+        await cache.source(db, "missing")
+    db.fail_reads = False
+    for index in range(257):
+        assert await cache.source(db, f"missing-{index}") is None
+    db.fail_reads = True
+    assert await cache.source(db, "missing-256") is None
+    with pytest.raises(RuntimeError, match="database offline"):
+        await cache.source(db, "missing-0")
+
+
+@pytest.mark.asyncio
 async def test_cache_is_worker_local_expires_and_can_be_invalidated(db: DatabaseDouble) -> None:
     clock: Final = Clock()
     cache: Final = SourceCache(clock.read)

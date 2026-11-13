@@ -78,15 +78,19 @@ class SourceCache:
     def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
         self.clock = clock
         self.entries: tuple[CacheEntry, ...] = ()
+        self.missing: tuple[tuple[str, float], ...] = ()
 
     def discard(self, source_id: str) -> None:
         self.entries = tuple(entry for entry in self.entries if entry.source.source_id != source_id)
+        self.missing = tuple(entry for entry in self.missing if entry[0] != source_id)
 
     def put(self, source: SourceRecord) -> None:
         self.discard(source.source_id)
         self.entries = (*self.entries[-255:], CacheEntry(source, self.clock() + 20))
 
     async def source(self, db: Database, source_id: str) -> SourceRecord | None:
+        if any(key == source_id and expiry > self.clock() for key, expiry in self.missing):
+            return None
         cached: Final = next(
             (
                 entry.source
@@ -100,6 +104,8 @@ class SourceCache:
         source: Final = await get_source(db, source_id)
         if source is not None:
             self.put(source)
+        else:
+            self.missing = (*self.missing[-255:], (source_id, self.clock() + 5))
         return source
 
 

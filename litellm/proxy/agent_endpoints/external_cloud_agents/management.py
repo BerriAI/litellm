@@ -31,6 +31,7 @@ class Management:
             encrypt_value_helper(ingest_key),
             user_id,
         )
+        self.cache.discard(source_id)
         return Connection(source_id=source_id, hook_path=f"/grok_bot/inference_hook/{source_id}", ingest_key=ingest_key)
 
     async def sources(self) -> tuple[Source, ...]:
