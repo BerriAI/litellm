@@ -19,7 +19,7 @@ from typing import (
 )
 
 from fastapi import HTTPException, Request, status
-from pydantic import TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
 from typing_extensions import ReadOnly, TypedDict
@@ -123,6 +123,42 @@ _CREDENTIAL_HEADER_NAMES: Final = SpecialHeaders.litellm_credential_header_names
 )
 _TRANSPORT_ONLY_CREDENTIAL_KEYS: Final = frozenset({"provider_specific_header", "headers", "api_key"})
 _REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object])
+
+
+class _CustomerPolicyCarrier(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    user_api_key_auth: object = None
+
+
+_CUSTOMER_REQUEST_MODELS: Final[TypeAdapter[str | tuple[str, ...] | None]] = TypeAdapter(str | tuple[str, ...] | None)
+
+
+def customer_request_auth(data: Mapping[str, object]) -> UserAPIKeyAuth | None:
+    carriers: Final = tuple(
+        _CustomerPolicyCarrier.model_validate(customer_usage_fields(data.get(field)))
+        for field in ("metadata", "litellm_metadata")
+    )
+    return next(
+        (carrier.user_api_key_auth for carrier in carriers if isinstance(carrier.user_api_key_auth, UserAPIKeyAuth)),
+        None,
+    )
+
+
+def check_customer_request_model_access(
+    data: Mapping[str, object], auth: UserAPIKeyAuth | None, llm_router: "Router | None"
+) -> None:
+    if auth is None or not auth.customer_model_scopes:
+        return
+    from litellm.proxy.auth.auth_checks import check_customer_model_access
+    from litellm.proxy.auth.auth_utils import request_fallback_model_names
+
+    requested: Final = _CUSTOMER_REQUEST_MODELS.validate_python(data.get("model"))
+    names: Final = (requested,) if isinstance(requested, str) else (requested or ())
+    for model in (*names, *request_fallback_model_names(data)):
+        check_customer_model_access(model=model, valid_token=auth, llm_router=llm_router)
+
+
 _REQUEST_ENTRIES: Final = TypeAdapter(tuple[object, ...])
 
 # Matches any header of the form x-<something>-session-id (case-insensitive).
@@ -3024,12 +3060,16 @@ async def add_litellm_data_to_request(
         )
     if _customer_usage is not None:
         data[_metadata_variable_name][CUSTOMER_USAGE_METADATA_KEY] = (  # rebind-ok: data is an out-param
-            _customer_usage.model_dump_json()
+            _customer_usage.attribution.model_dump_json()
         )
+
+    _customer_request_auth: Final = user_api_key_dict.with_customer_model_scopes(
+        _customer_usage.model_scopes if _customer_usage is not None else ()
+    )
 
     data = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
         data=data,
-        user_api_key_dict=user_api_key_dict,
+        user_api_key_dict=_customer_request_auth,
         _metadata_variable_name=_metadata_variable_name,
     )
     data[_metadata_variable_name]["litellm_api_version"] = version
@@ -3245,6 +3285,8 @@ async def add_litellm_data_to_request(
 
     if holds_api_key_secret_reference(data):  # pyright: ignore[reportUnknownArgumentType]  # data is an untyped dict
         raise HTTPException(status_code=400, detail=API_KEY_SECRET_REFERENCE_REJECTION)
+
+    check_customer_request_model_access(_REQUEST_FIELDS.validate_python(data), _customer_request_auth, llm_router)
 
     ## ENFORCED PARAMS CHECK
     # loop through each enforced param

@@ -17,7 +17,11 @@ from pydantic import ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
-from litellm.proxy.auth.auth_checks import can_key_call_resolved_model, can_token_call_search_tool
+from litellm.proxy.auth.auth_checks import (
+    can_key_call_resolved_model,
+    can_token_call_search_tool,
+    check_customer_model_access,
+)
 from litellm.router_api import RegistryReader, RoutingContext
 from litellm.search import asearch
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -105,6 +109,10 @@ class RouterFallbackAccessCheck:
         if _is_search_request(request_kwargs):
             return await is_search_tool_authorized_for_token(search_tool_name=model, valid_token=valid_token)
         if not self.is_enforced():
+            try:
+                check_customer_model_access(model=model, valid_token=valid_token, llm_router=ctx)
+            except ProxyException:
+                return False
             return True
         return await is_model_authorized_for_token(model=model, valid_token=valid_token, llm_router=ctx)
 

@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
-import { fireEvent, renderWithProviders, screen, testQueryClient, waitFor, within } from "../../../../tests/test-utils";
+import {
+  act,
+  fireEvent,
+  renderWithProviders,
+  screen,
+  testQueryClient,
+  waitFor,
+  within,
+} from "../../../../tests/test-utils";
 import CustomersPage from "./page";
 
 vi.unmock("@/app/(dashboard)/hooks/useAuthorized");
@@ -97,11 +105,12 @@ afterEach(() => {
 });
 
 describe("customer organization usage", () => {
-  it("changes range totals in one aggregate request while retaining current budget usage", async () => {
+  it("should change range totals in one aggregate request while retaining recorded budget spend", async () => {
     const user = userEvent.setup();
     const onUrlUpdate = vi.fn();
     renderWithProviders(<CustomersPage />, { searchParams: "?page=2", onUrlUpdate });
     const row = await screen.findByRole("row", { name: /Customer A/ });
+    expect(screen.getByRole("heading", { name: "Customer organizations" })).toBeInTheDocument();
     expect(within(row).getByRole("cell", { name: "$51.00 / $500.00 10.2% used" })).toBeInTheDocument();
     expect(screen.queryByRole("columnheader", { name: "Budget usage" })).not.toBeInTheDocument();
     expect(within(row).getByText("3")).toBeInTheDocument();
@@ -113,7 +122,7 @@ describe("customer organization usage", () => {
     expect(await screen.findByText("$7.00")).toBeInTheDocument();
     const updatedRow = screen.getByRole("row", { name: /Customer A/ });
     expect(
-      within(updatedRow).getByRole("cell", { name: "$7.00 Current budget $51.00 / $500.00 10.2% used" }),
+      within(updatedRow).getByRole("cell", { name: "$7.00 Recorded budget spend $51.00 / $500.00 10.2% used" }),
     ).toBeInTheDocument();
     expect(within(updatedRow).getByText("3")).toBeInTheDocument();
     expect(within(updatedRow).getByRole("link", { name: "Customer A" })).toHaveAttribute(
@@ -131,27 +140,27 @@ describe("customer organization usage", () => {
     expect(onUrlUpdate.mock.lastCall?.[0].queryString).toContain("range=2024-02-01..2024-02-29");
   });
 
-  it("restores a custom range from the URL and sends edited calendar days", async () => {
+  it("should restore a custom range from the URL and sends edited calendar days", async () => {
     const user = userEvent.setup();
     renderWithProviders(<CustomersPage />, { searchParams: "?range=2024-01-03..2024-01-10" });
     await screen.findByRole("row", { name: /Customer A/ });
     expect(requests.at(-1)?.searchParams.get("start_date")).toBe("2024-01-03");
     expect(requests.at(-1)?.searchParams.get("end_date")).toBe("2024-01-10");
     await user.click(screen.getByRole("button", { name: /3 Jan 2024/ }));
-    fireEvent.change(screen.getByLabelText("Start date"), { target: { value: "2024-02-01" } });
-    fireEvent.change(screen.getByLabelText("End date"), { target: { value: "2024-02-29" } });
+    act(() => fireEvent.change(screen.getByLabelText("Start date"), { target: { value: "2024-02-01" } }));
+    act(() => fireEvent.change(screen.getByLabelText("End date"), { target: { value: "2024-02-29" } }));
     await user.click(screen.getByRole("button", { name: "Apply" }));
     expect(await screen.findByText("$7.00")).toBeInTheDocument();
     expect(requests.at(-1)?.searchParams.get("end_date")).toBe("2024-02-29");
   });
 
-  it("shows over-budget percentages, zero and missing limits, and members without usage", async () => {
+  it("should show over-budget percentages, zero and missing limits, and members without usage", async () => {
     renderWithProviders(<CustomersPage />);
     const over = await screen.findByRole("row", { name: /over-budget/ });
-    expect(within(over).getByText("Current budget $750.00 / $500.00")).toBeInTheDocument();
+    expect(within(over).getByText("Recorded budget spend $750.00 / $500.00")).toBeInTheDocument();
     expect(within(over).getByText("150% used")).toBeInTheDocument();
     const zero = screen.getByRole("row", { name: /zero-budget/ });
-    expect(within(zero).getByText("Current budget $1.00 / $0.00")).toBeInTheDocument();
+    expect(within(zero).getByText("Recorded budget spend $1.00 / $0.00")).toBeInTheDocument();
     expect(within(zero).getByText("Percentage unavailable for a $0 budget")).toBeInTheDocument();
     const uncapped = screen.getByRole("row", { name: /no-budget/ });
     expect(within(uncapped).getByText("$0.00")).toBeInTheDocument();
@@ -160,27 +169,27 @@ describe("customer organization usage", () => {
     expect(within(unused).getByText("$0.00 / $500.00")).toBeInTheDocument();
     expect(within(unused).getByText("0% used")).toBeInTheDocument();
     expect(within(unused).getByText("4")).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "Members" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Customer members" })).toBeInTheDocument();
   });
 
-  it("blocks ranges over 400 days before Apply and accepts the boundary", async () => {
+  it("should block ranges over 400 days before Apply and accepts the boundary", async () => {
     const user = userEvent.setup();
     renderWithProviders(<CustomersPage />);
     await screen.findByRole("row", { name: /Customer A/ });
     await user.click(screen.getByRole("button", { name: /1 Mar 2024/ }));
-    fireEvent.change(screen.getByLabelText("Start date"), { target: { value: "2024-01-01" } });
-    fireEvent.change(screen.getByLabelText("End date"), { target: { value: "2025-02-05" } });
+    act(() => fireEvent.change(screen.getByLabelText("Start date"), { target: { value: "2024-01-01" } }));
+    act(() => fireEvent.change(screen.getByLabelText("End date"), { target: { value: "2025-02-05" } }));
     expect(screen.getByText("Select a date range of 400 days or less.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Apply" })).toBeDisabled();
     expect(requests).toHaveLength(1);
-    fireEvent.change(screen.getByLabelText("End date"), { target: { value: "2025-02-04" } });
+    act(() => fireEvent.change(screen.getByLabelText("End date"), { target: { value: "2025-02-04" } }));
     expect(screen.getByRole("button", { name: "Apply" })).toBeEnabled();
     await user.click(screen.getByRole("button", { name: "Apply" }));
     await waitFor(() => expect(requests).toHaveLength(2));
     expect(requests.at(-1)?.searchParams.get("end_date")).toBe("2025-02-04");
   });
 
-  it("uses the default month when a saved URL exceeds the range limit", async () => {
+  it("should use the default month when a saved URL exceeds the range limit", async () => {
     renderWithProviders(<CustomersPage />, { searchParams: "?range=2020-01-01..2024-03-31" });
     await screen.findByRole("row", { name: /Customer A/ });
     expect(requests).toHaveLength(1);
@@ -188,19 +197,19 @@ describe("customer organization usage", () => {
     expect(requests[0].searchParams.get("end_date")).toBe("2024-03-31");
   });
 
-  it("shows a failure instead of presenting missing usage as zero", async () => {
+  it("should show a failure instead of presenting missing usage as zero", async () => {
     failed = true;
     renderWithProviders(<CustomersPage />);
     expect(await screen.findByText("Could not load customer organization usage.")).toBeInTheDocument();
     expect(screen.queryByRole("row", { name: /Customer A/ })).not.toBeInTheDocument();
   });
 
-  it("creates an organization using the entered ID and alias", async () => {
+  it("should create an organization using the entered ID and alias", async () => {
     const user = userEvent.setup();
     renderWithProviders(<CustomersPage />);
-    await user.click(screen.getByRole("button", { name: "Create Customer" }));
-    fireEvent.change(screen.getByLabelText("Customer organization id"), { target: { value: " new-org " } });
-    fireEvent.change(screen.getByLabelText("Alias"), { target: { value: " New customer " } });
+    await user.click(screen.getByRole("button", { name: "Create customer organization" }));
+    act(() => fireEvent.change(screen.getByLabelText("Customer organization ID"), { target: { value: " new-org " } }));
+    act(() => fireEvent.change(screen.getByLabelText("Alias"), { target: { value: " New customer " } }));
     const dialog = screen.getByRole("dialog");
     await user.click(within(dialog).getByRole("button", { name: "Create" }));
     await waitFor(() =>

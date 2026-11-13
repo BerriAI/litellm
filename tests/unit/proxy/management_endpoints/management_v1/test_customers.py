@@ -10,13 +10,20 @@ from litellm.proxy.list_api.common import ManagementProblem, problem_response
 from litellm.proxy.management_endpoints.management_v1 import router
 from litellm.proxy.management_endpoints.management_v1.customers import get_customer_hierarchy
 from litellm.proxy.management_helpers.customer_hierarchy import CustomerHierarchy
-from tests.unit.proxy.management_helpers.test_customer_hierarchy import NOW, Database
+from litellm.types.proxy.management_endpoints.customer_hierarchy import CustomerMember
+from tests.unit.proxy.management_helpers.test_customer_hierarchy import (
+    NOW,
+    BoundedChildrenTable,
+    Database,
+    DeleteConflictTable,
+    Record,
+)
 
 if TYPE_CHECKING:
     from prisma import Prisma
 
 
-def client(role: LitellmUserRoles = LitellmUserRoles.PROXY_ADMIN) -> TestClient:
+def client(role: LitellmUserRoles = LitellmUserRoles.PROXY_ADMIN, *, database: Database | None = None) -> TestClient:
     app: Final = FastAPI()
     app.include_router(router)
 
@@ -26,7 +33,7 @@ def client(role: LitellmUserRoles = LitellmUserRoles.PROXY_ADMIN) -> TestClient:
 
     auth: Final = UserAPIKeyAuth(user_id="admin", user_role=role)
     hierarchy: Final = CustomerHierarchy(
-        cast("Prisma", Database()), clock=lambda: NOW
+        cast("Prisma", database if database is not None else Database()), clock=lambda: NOW
     )  # cast-ok: in-memory Prisma edge
     app.dependency_overrides[user_api_key_auth] = lambda: auth
     app.dependency_overrides[get_customer_hierarchy] = lambda: hierarchy
@@ -73,11 +80,13 @@ def family(http: TestClient) -> dict[str, object]:
         ("GET", "/customer_organizations/id", None),
         ("PATCH", "/customer_organizations/id", {}),
         ("DELETE", "/customer_organizations/id", None),
+        ("DELETE", "/customer_organizations/id?cascade=true", None),
         ("POST", "/customer_teams", {"parent_org_id": "id"}),
         ("GET", "/customer_teams", None),
         ("GET", "/customer_teams/id", None),
         ("PATCH", "/customer_teams/id", {}),
         ("DELETE", "/customer_teams/id", None),
+        ("DELETE", "/customer_teams/id?cascade=true", None),
         ("POST", "/customer_members", {"parent_team_id": "id"}),
         ("GET", "/customer_members", None),
         ("GET", "/customer_members/id", None),
@@ -358,8 +367,9 @@ def test_new_entities_report_zero_spend_and_no_reset_and_parent_deletion_conflic
         assert fetched.json()["spend"] == 0
         assert fetched.json()["budget_reset_at"] is None
     for path in ("customer_organizations/org", "customer_teams/team"):
-        blocked: Final = http.delete("/management/v1/" + path)
-        assert blocked.status_code == 409, blocked.text
+        for query in ("", "?cascade=false"):
+            blocked: Final = http.delete("/management/v1/" + path + query)
+            assert blocked.status_code == 409, blocked.text
     for path in ("customer_members/member", "customer_teams/team", "customer_organizations/org"):
         deleted: Final = http.delete("/management/v1/" + path)
         assert deleted.status_code == 204, deleted.text
@@ -571,3 +581,230 @@ def test_organization_list_counts_all_members_and_searches_before_paginating() -
     assert literal.json()["data"][0]["customer_org_id"] == "other"
     assert literal.json()["data"][0]["member_count"] == 0
     assert literal.json()["meta"]["total_count"] == 1
+
+
+def created_member(http: TestClient, member_id: str, team_id: str, *, override: bool = False) -> CustomerMember:
+    response: Final = http.post(
+        "/management/v1/customer_members",
+        json={
+            "customer_member_id": member_id,
+            "parent_team_id": team_id,
+            "budget_override": {"max_budget": 5} if override else None,
+        },
+    )
+    assert response.status_code == 201, response.text
+    return CustomerMember.model_validate(response.json())
+
+
+def test_team_cascade_removes_only_its_members_and_owned_budgets() -> None:
+    database: Final = Database()
+    http: Final = client(database=database)
+    organization: Final = family(http)
+    created_member(http, "inherited", "team")
+    overridden: Final = created_member(http, "overridden", "team", override=True)
+    sibling: Final = http.post(
+        "/management/v1/customer_teams", json={"customer_team_id": "sibling", "parent_org_id": "org"}
+    )
+    assert sibling.status_code == 201, sibling.text
+    created_member(http, "sibling-member", "sibling", override=True)
+    before_budgets: Final = frozenset(database.litellm_budgettable.rows)
+    team_budget: Final = database.litellm_customerteamtable.rows["team"].model_dump()["budget_id"]
+    deleted: Final = http.delete("/management/v1/customer_teams/team?cascade=true")
+    assert deleted.status_code == 204, deleted.text
+    assert frozenset(database.litellm_customerteamtable.rows) == {"sibling"}
+    assert frozenset(database.litellm_customermembertable.rows) == {"sibling-member"}
+    assert frozenset(database.litellm_budgettable.rows) == before_budgets - {team_budget, overridden.budget_override_id}
+    fetched: Final = http.get("/management/v1/customer_organizations/org")
+    assert fetched.status_code == 200, fetched.text
+    assert fetched.json() == {**organization, "member_count": 1}
+    assert http.get("/management/v1/customer_members/sibling-member").status_code == 200
+
+
+def test_organization_cascade_preserves_the_sibling_customer_and_its_budgets() -> None:
+    database: Final = Database()
+    http: Final = client(database=database)
+    family(http)
+    created_member(http, "inherited", "team")
+    created_member(http, "overridden", "team", override=True)
+    second_team: Final = http.post(
+        "/management/v1/customer_teams",
+        json={"customer_team_id": "second-team", "parent_org_id": "org", "budget": {"max_budget": 20}},
+    )
+    assert second_team.status_code == 201, second_team.text
+    created_member(http, "second-member", "second-team", override=True)
+    owned_budget_ids: Final = frozenset(database.litellm_budgettable.rows)
+    sibling_org: Final = http.post(
+        "/management/v1/customer_organizations",
+        json={
+            "customer_org_id": "other",
+            "budget": {"max_budget": 10},
+            "default_budgets": [{"name": "default", "max_budget": 3}],
+        },
+    )
+    assert sibling_org.status_code == 201, sibling_org.text
+    sibling_team: Final = http.post(
+        "/management/v1/customer_teams",
+        json={"customer_team_id": "other-team", "parent_org_id": "other", "budget": {"max_budget": 5}},
+    )
+    assert sibling_team.status_code == 201, sibling_team.text
+    created_member(http, "other-member", "other-team", override=True)
+    sibling_budgets: Final = {
+        key: value for key, value in database.litellm_budgettable.rows.items() if key not in owned_budget_ids
+    }
+    sibling_rows: Final = (
+        database.litellm_customerorganizationtable.rows["other"],
+        database.litellm_customerteamtable.rows["other-team"],
+        database.litellm_customermembertable.rows["other-member"],
+    )
+    deleted: Final = http.delete("/management/v1/customer_organizations/org?cascade=true")
+    assert deleted.status_code == 204, deleted.text
+    assert database.litellm_customerorganizationtable.rows == {"other": sibling_rows[0]}
+    assert database.litellm_customerteamtable.rows == {"other-team": sibling_rows[1]}
+    assert database.litellm_customermembertable.rows == {"other-member": sibling_rows[2]}
+    assert database.litellm_budgettable.rows == sibling_budgets
+
+
+@pytest.mark.parametrize("resource,entity_id", (("customer_teams", "team"), ("customer_organizations", "org")))
+def test_cascade_rolls_back_child_and_budget_deletes_after_a_late_foreign_key_failure(
+    resource: str, entity_id: str
+) -> None:
+    database: Final = Database()
+    http: Final = client(database=database)
+    family(http)
+    created_member(http, "member", "team", override=True)
+    failing: Final = DeleteConflictTable(
+        "customer_team_id" if resource == "customer_teams" else "customer_org_id", database
+    )
+    if resource == "customer_teams":
+        failing.rows = database.litellm_customerteamtable.rows
+        database.litellm_customerteamtable = failing
+    else:
+        failing.rows = database.litellm_customerorganizationtable.rows
+        database.litellm_customerorganizationtable = failing
+    tables: Final = (
+        database.litellm_customerorganizationtable,
+        database.litellm_customerteamtable,
+        database.litellm_customermembertable,
+        database.litellm_budgettable,
+    )
+    snapshots: Final = tuple(table.rows for table in tables)
+    response: Final = http.delete(f"/management/v1/{resource}/{entity_id}?cascade=true")
+    assert response.status_code == 409, response.text
+    assert failing.members_at_delete == 0
+    assert tuple(table.rows for table in tables) == snapshots
+
+
+@pytest.mark.parametrize("resource,entity_id", (("customer_teams", "team"), ("customer_organizations", "org")))
+def test_cascade_processes_more_than_two_batches_without_unbounded_child_reads(resource: str, entity_id: str) -> None:
+    database: Final = Database()
+    http: Final = client(database=database)
+    family(http)
+    created_member(http, "member", "team")
+    bounded: Final = BoundedChildrenTable(
+        "customer_member_id" if resource == "customer_teams" else "customer_team_id", database
+    )
+    sample: Final = (
+        database.litellm_customermembertable.rows["member"]
+        if resource == "customer_teams"
+        else database.litellm_customerteamtable.rows["team"]
+    )
+    if resource == "customer_teams":
+        bounded.rows = {
+            f"member-{index}": sample.model_copy(update={"customer_member_id": f"member-{index}"})
+            for index in range(205)
+        }
+        database.litellm_customermembertable = bounded
+    else:
+        bounded.rows = {
+            "team": sample,
+            **{
+                f"team-{index}": sample.model_copy(update={"customer_team_id": f"team-{index}", "budget_id": None})
+                for index in range(204)
+            },
+        }
+        database.litellm_customerteamtable = bounded
+    response: Final = http.delete(f"/management/v1/{resource}/{entity_id}?cascade=true")
+    assert response.status_code == 204, response.text
+    assert bounded.batch_sizes == (100, 100, 5, 0)
+    assert not bounded.rows
+    assert not database.litellm_customermembertable.rows
+
+
+@pytest.mark.parametrize("resource", ("customer_teams", "customer_organizations"))
+def test_missing_cascade_parent_does_not_delete_any_existing_rows(resource: str) -> None:
+    database: Final = Database()
+    http: Final = client(database=database)
+    family(http)
+    created_member(http, "member", "team", override=True)
+    tables: Final = (
+        database.litellm_customerorganizationtable,
+        database.litellm_customerteamtable,
+        database.litellm_customermembertable,
+        database.litellm_budgettable,
+    )
+    snapshots: Final = tuple(table.rows for table in tables)
+    response: Final = http.delete(f"/management/v1/{resource}/missing?cascade=true")
+    assert response.status_code == 404, response.text
+    assert tuple(table.rows for table in tables) == snapshots
+
+
+@pytest.mark.parametrize(
+    "resource,entity_id,query",
+    (
+        ("customer_organizations", "org", "?cascade=true"),
+        ("customer_teams", "team", "?cascade=true"),
+        ("customer_members", "member", ""),
+    ),
+)
+def test_customer_deletion_preserves_budgets_still_referenced_by_gateway_keys_or_projects(
+    resource: str, entity_id: str, query: str
+) -> None:
+    database: Final = Database()
+    http: Final = client(database=database)
+    family(http)
+    created_member(http, "member", "team", override=True)
+    budgets: Final = database.litellm_budgettable.rows
+    database.litellm_verificationtoken.rows = {
+        f"key-{index}": Record.model_validate({"token": f"key-{index}", "budget_id": budget_id})
+        for index, budget_id in enumerate(budgets)
+    }
+    database.litellm_projecttable.rows = {
+        f"project-{index}": Record.model_validate({"project_id": f"project-{index}", "budget_id": budget_id})
+        for index, budget_id in enumerate(budgets)
+    }
+    keys: Final = database.litellm_verificationtoken.rows
+    projects: Final = database.litellm_projecttable.rows
+    response: Final = http.delete(f"/management/v1/{resource}/{entity_id}{query}")
+    assert response.status_code == 204, response.text
+    assert database.litellm_budgettable.rows == budgets
+    assert database.litellm_verificationtoken.rows == keys
+    assert database.litellm_projecttable.rows == projects
+    assert http.get(f"/management/v1/{resource}/{entity_id}").status_code == 404
+
+
+def test_customer_members_are_paginated_across_only_the_selected_organization() -> None:
+    http: Final = client()
+    family(http)
+    created_member(http, "member-a", "team")
+    second: Final = http.post(
+        "/management/v1/customer_teams", json={"customer_team_id": "team-b", "parent_org_id": "org"}
+    )
+    assert second.status_code == 201, second.text
+    created_member(http, "member-b", "team-b")
+    other_org: Final = http.post("/management/v1/customer_organizations", json={"customer_org_id": "other"})
+    assert other_org.status_code == 201, other_org.text
+    other_team: Final = http.post(
+        "/management/v1/customer_teams", json={"customer_team_id": "other-team", "parent_org_id": "other"}
+    )
+    assert other_team.status_code == 201, other_team.text
+    created_member(http, "other-member", "other-team", override=True)
+    first: Final = http.get("/management/v1/customer_members?parent_org_id=org&page_size=1")
+    assert first.status_code == 200, first.text
+    assert first.json()["meta"]["total_count"] == 2
+    assert [member["customer_member_id"] for member in first.json()["data"]] == ["member-a"]
+    second_page: Final = http.get(first.json()["links"]["next"])
+    assert second_page.status_code == 200, second_page.text
+    assert [member["customer_member_id"] for member in second_page.json()["data"]] == ["member-b"]
+    intersected: Final = http.get("/management/v1/customer_members?parent_org_id=org&parent_team_id=other-team")
+    assert intersected.status_code == 200, intersected.text
+    assert intersected.json()["data"] == []

@@ -1,8 +1,11 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Final, cast  # noqa: TID251  # the fake exposes only the Prisma lookup methods exercised here
+from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 
 from litellm.proxy.common_utils.customer_usage import (
@@ -10,6 +13,7 @@ from litellm.proxy.common_utils.customer_usage import (
     CustomerUsageDatabase,
     CustomerUsageError,
     CustomerUsageFailure,
+    ResolvedCustomerUsage,
     resolve_customer_usage,
 )
 
@@ -19,8 +23,17 @@ class Table:
     identifier: str
     rows: Mapping[str, Mapping[str, object]]
 
-    async def find_unique(self, where: Mapping[str, object]) -> Mapping[str, object] | None:
-        return self.rows.get(str(where[self.identifier]))
+    async def find_unique(
+        self, where: Mapping[str, object], include: Mapping[str, bool] | None = None
+    ) -> Mapping[str, object] | None:
+        row: Final = self.rows.get(str(where[self.identifier]))
+        if row is None:
+            return None
+        return {
+            field: value
+            for field, value in row.items()
+            if field not in ("budget", "budget_override") or (include is not None and include.get(field))
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +51,34 @@ DATABASE: Final = cast(  # cast-ok: the external Prisma fake implements the look
         Table("customer_member_id", {"member-1": {"parent_team_id": "team-1"}}),
     ),
 )
+
+
+def _budget_database(
+    *,
+    organization: tuple[str, ...] | None = None,
+    team: tuple[str, ...] | None = None,
+    template: tuple[str, ...] | None = None,
+    override: tuple[str, ...] | None = None,
+    expires_at: datetime | None = None,
+) -> CustomerUsageDatabase:
+    return cast(  # cast-ok: the fake implements the existing hierarchy lookup subset
+        CustomerUsageDatabase,
+        Database(
+            Table("customer_org_id", {"org-1": {"budget": {"allowed_models": organization}}}),
+            Table("customer_team_id", {"team-1": {"parent_org_id": "org-1", "budget": {"allowed_models": team}}}),
+            Table(
+                "customer_member_id",
+                {
+                    "member-1": {
+                        "parent_team_id": "team-1",
+                        "budget": {"allowed_models": template},
+                        "budget_override": {"allowed_models": override},
+                        "budget_override_expires_at": expires_at,
+                    }
+                },
+            ),
+        ),
+    )
 
 
 @pytest.mark.asyncio
@@ -58,7 +99,7 @@ async def test_resolves_ancestors_without_requiring_redundant_request_ids(
     actual: Final = await resolve_customer_usage(
         metadata=metadata, key_metadata={}, administrator=True, database=DATABASE, ledger_enabled=True
     )
-    assert actual == expected
+    assert actual == ResolvedCustomerUsage(expected, ())
 
 
 @pytest.mark.asyncio
@@ -142,7 +183,7 @@ async def test_key_binding_tracks_requests_with_no_repeated_customer_metadata() 
         database=DATABASE,
         ledger_enabled=True,
     )
-    assert actual == CustomerUsageAttribution(customer_org_id="org-1")
+    assert actual == ResolvedCustomerUsage(CustomerUsageAttribution(customer_org_id="org-1"), ())
 
 
 @pytest.mark.asyncio
@@ -163,6 +204,182 @@ async def test_untracked_requests_do_not_require_a_database_or_ledger() -> None:
         metadata={}, key_metadata={}, administrator=False, database=None, ledger_enabled=False
     )
     assert actual is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("organization", "team", "template", "override", "expires_at", "expected"),
+    (
+        (None, (), None, (), None, ()),
+        (("a", "b"), ("b", "c"), ("b",), None, None, (("a", "b"), ("b", "c"), ("b",))),
+        (None, None, ("a",), (), None, (("a",),)),
+        (None, None, ("a",), ("b",), None, (("b",),)),
+        (None, None, ("a",), ("b",), datetime(2000, 1, 1, tzinfo=timezone.utc), (("a",),)),
+        (None, None, ("a",), ("b",), datetime(2100, 1, 1, tzinfo=timezone.utc), (("b",),)),
+    ),
+)
+async def test_resolves_model_scopes_with_member_inheritance_and_override_expiry(
+    organization: tuple[str, ...] | None,
+    team: tuple[str, ...] | None,
+    template: tuple[str, ...] | None,
+    override: tuple[str, ...] | None,
+    expires_at: datetime | None,
+    expected: tuple[tuple[str, ...], ...],
+) -> None:
+    resolved: Final = await resolve_customer_usage(
+        metadata={"customer_member_id": "member-1"},
+        key_metadata={"customer_org_id": "org-1"},
+        administrator=False,
+        database=_budget_database(
+            organization=organization, team=team, template=template, override=override, expires_at=expires_at
+        ),
+        ledger_enabled=True,
+    )
+    assert isinstance(resolved, ResolvedCustomerUsage)
+    assert resolved.model_scopes == expected
+    assert resolved.attribution.model_dump() == {
+        "customer_org_id": "org-1",
+        "customer_team_id": "team-1",
+        "customer_member_id": "member-1",
+    }
+
+
+def test_customer_model_policy_is_private_and_request_local() -> None:
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    original: Final = UserAPIKeyAuth(models=["a", "b"])
+    first: Final = original.with_customer_model_scopes((("a",),))
+    second: Final = original.with_customer_model_scopes((("b",),))
+    assert original.customer_model_scopes == ()
+    assert first.customer_model_scopes == (("a",),)
+    assert second.customer_model_scopes == (("b",),)
+    assert "customer_model_scopes" not in first.model_dump_json()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ("key-only", "customer-only"))
+async def test_customer_model_selection_cannot_grant_models_outside_the_key(model: str) -> None:
+    from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+    from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
+
+    auth: Final = UserAPIKeyAuth(models=["key-only"]).with_customer_model_scopes((("customer-only",),))
+    with pytest.raises(ProxyException) as denied:
+        await can_key_call_resolved_model(model, None, auth, None)
+    assert denied.value.code == "403"
+
+
+@pytest.mark.asyncio
+async def test_empty_customer_policy_inherits_existing_key_permissions() -> None:
+    from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+    from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
+
+    auth: Final = UserAPIKeyAuth(models=["key-only"]).with_customer_model_scopes(())
+    await can_key_call_resolved_model("key-only", None, auth, None)
+    with pytest.raises(ProxyException) as denied:
+        await can_key_call_resolved_model("other-model", None, auth, None)
+    assert denied.value.code == "403"
+
+
+@pytest.mark.asyncio
+async def test_customer_models_intersect_each_parent_and_reuse_aliases_wildcards_and_access_groups() -> None:
+    from litellm import Router
+    from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+    from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "allowed-model",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "unused-local"},
+                "model_info": {"access_groups": ["model-group"]},
+            }
+        ]
+    )
+    auth: Final = UserAPIKeyAuth(
+        models=["model-group"], aliases={"friendly": "allowed-model"}
+    ).with_customer_model_scopes((("allowed-*",), ("model-group",), ("allowed-model",)))
+    await can_key_call_resolved_model("friendly", None, auth, router)
+    denied: Final = auth.with_customer_model_scopes((("allowed-*",), ("other-model",), ("allowed-model",)))
+    with pytest.raises(ProxyException) as error:
+        await can_key_call_resolved_model("friendly", None, denied, router)
+    assert error.value.code == "403"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ("/v1/chat/completions", "/v1/responses"))
+@pytest.mark.parametrize(
+    ("level", "requested_model", "rewrite_model"),
+    (
+        ("organization", "blocked-model", False),
+        ("team", "blocked-model", False),
+        ("template", "blocked-model", False),
+        ("organization", "allowed-model", True),
+    ),
+)
+async def test_registered_inference_routes_reject_hierarchy_model_denials_before_provider_calls(
+    monkeypatch: pytest.MonkeyPatch, path: str, level: str, requested_model: str, rewrite_model: bool
+) -> None:
+    from litellm import Router
+    from litellm.proxy import proxy_server as server
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    organization: Final = ("allowed-model",) if level == "organization" else None
+    team: Final = ("allowed-model",) if level == "team" else None
+    template: Final = ("allowed-model",) if level == "template" else None
+    database: Final = _budget_database(organization=organization, team=team, template=template)
+    auth: Final = UserAPIKeyAuth(
+        api_key="controlled-hash",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        metadata={"customer_org_id": "org-1"},
+        models=["allowed-model", "blocked-model"],
+    )
+    completion: Final = AsyncMock(side_effect=AssertionError("provider must not run"))
+    responses: Final = AsyncMock(side_effect=AssertionError("provider must not run"))
+    monkeypatch.setattr(server, "prisma_client", SimpleNamespace(db=database))
+    monkeypatch.setattr(server, "general_settings", {"use_spend_logs_ledger": True})
+    router: Final = (
+        Router(
+            model_list=[
+                {
+                    "model_name": name,
+                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "unused-local"},
+                }
+                for name in ("allowed-model", "blocked-model")
+            ]
+        )
+        if rewrite_model
+        else None
+    )
+    monkeypatch.setattr(server, "llm_router", router)
+    monkeypatch.setattr("litellm.acompletion", completion)
+    monkeypatch.setattr("litellm.aresponses", responses)
+    monkeypatch.setitem(server.app.dependency_overrides, user_api_key_auth, lambda: auth)
+    if rewrite_model:
+
+        async def rewrite(**kwargs: object) -> Mapping[str, object]:
+            return {
+                **cast(Mapping[str, object], kwargs["data"]),
+                "model": "blocked-model",
+            }  # cast-ok: hook data is the request mapping
+
+        monkeypatch.setattr(server.proxy_logging_obj, "pre_call_hook", rewrite)
+    metadata_field: Final = "litellm_metadata" if path.endswith("responses") else "metadata"
+    body: Final = {"model": requested_model, metadata_field: {"customer_member_id": "member-1"}}
+    payload: Final = (
+        {**body, "input": "controlled"}
+        if path.endswith("responses")
+        else {**body, "messages": [{"role": "user", "content": "controlled"}]}
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=server.app, raise_app_exceptions=False), base_url="http://controlled-proxy"
+    ) as client:
+        response: Final = await client.post(path, json=payload)
+    assert response.status_code == 403
+    assert response.json()["error"]["param"] == "model"
+    assert auth.customer_model_scopes == ()
+    completion.assert_not_awaited()
+    responses.assert_not_awaited()
 
 
 @pytest.mark.asyncio

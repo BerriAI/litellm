@@ -186,14 +186,15 @@ async def update_customer_organization(
 @router.delete(
     "/customer_organizations/{customer_org_id}",
     status_code=204,
-    description="Delete a customer organization and its owned budgets. Parents with children return 409. Proxy admins only.",
+    description="Delete a customer organization and its owned budgets. Set cascade=true to also delete its customer teams and members; otherwise parents with children return 409. Proxy admins only.",
 )
 @management_endpoint_wrapper
 async def delete_customer_organization(
     customer_org_id: str,
     hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+    cascade: Annotated[bool, Query(description="Also delete this customer organization's teams and members.")] = False,
 ) -> Response:
-    resolve(await hierarchy.delete_organization(customer_org_id))
+    resolve(await hierarchy.delete_organization(customer_org_id, cascade=cascade))
     return Response(status_code=204)
 
 
@@ -262,14 +263,15 @@ async def update_customer_team(
 @router.delete(
     "/customer_teams/{customer_team_id}",
     status_code=204,
-    description="Delete a customer team and its owned budgets. Parents with children return 409. Proxy admins only.",
+    description="Delete a customer team and its owned budgets. Set cascade=true to also delete its customer members; otherwise parents with children return 409. Proxy admins only.",
 )
 @management_endpoint_wrapper
 async def delete_customer_team(
     customer_team_id: str,
     hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+    cascade: Annotated[bool, Query(description="Also delete this customer team's members.")] = False,
 ) -> Response:
-    resolve(await hierarchy.delete_team(customer_team_id))
+    resolve(await hierarchy.delete_team(customer_team_id, cascade=cascade))
     return Response(status_code=204)
 
 
@@ -362,9 +364,10 @@ async def list_customer_members(
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1)] = 50,
     parent_team_id: str | None = None,
+    parent_org_id: str | None = None,
 ) -> ListResponse[CustomerMember]:
     size: Final = min(page_size, 100)
-    result: Final = resolve(await hierarchy.list_members(parent_team_id, page, size))
+    result: Final = resolve(await hierarchy.list_members(parent_team_id, page, size, parent_org_id=parent_org_id))
     return list_response(result, request, page, size)
 
 

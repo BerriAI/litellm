@@ -8,7 +8,8 @@ import { extractProxyErrorMessage } from "@/lib/http/client";
 import { uiHref } from "@/utils/uiHref";
 import CustomerMemberSpend from "../_components/CustomerMemberSpend";
 import CustomerUsageHeader from "../_components/CustomerUsageHeader";
-import CustomerHierarchyNavigation from "../_components/CustomerHierarchyNavigation";
+import CustomerHierarchyNavigation, { customerHierarchyHref } from "../_components/CustomerHierarchyNavigation";
+import CustomerBudgetSummary from "../_components/CustomerBudgetSummary";
 import CustomerUsageRankings from "../_components/CustomerUsageRankings";
 import CustomerUsageTrend from "../_components/CustomerUsageTrend";
 import useCustomerHierarchyUsage from "../_components/useCustomerHierarchyUsage";
@@ -48,13 +49,18 @@ export default function CustomerHierarchyUsagePage() {
     setPage,
   } = useCustomerHierarchyUsage();
   const metricLabel = t(METRIC_LABELS[params.metric]);
+  const budgetEntity = data?.member ?? data?.team ?? data?.organization;
+  const budgetSettingsHref = scope ? `${customerHierarchyHref("manage", scope)}&tab=settings` : null;
 
   if (!scope)
     return (
       <div className="px-8 py-12">
         <h1 className="text-xl font-semibold">{t("customerPortal.analytics.title")}</h1>
         <p className="mt-2 text-sm text-muted-foreground">{t("customerPortal.analytics.selectOrganization")}</p>
-        <a className="mt-5 inline-block text-sm font-medium text-primary hover:underline" href={uiHref("customers")}>
+        <a
+          className="mt-5 inline-block text-sm font-medium text-primary hover:underline"
+          href={uiHref("customers")}
+        >
           {t("customerPortal.analytics.backToCustomers")}
         </a>
       </div>
@@ -90,6 +96,10 @@ export default function CustomerHierarchyUsagePage() {
             requestCountsPending={usage.isPending}
             budget={null}
             showBudgetHint={false}
+            spendDetails={
+              budgetEntity &&
+              budgetSettingsHref && <CustomerBudgetSummary entity={budgetEntity} settingsHref={budgetSettingsHref} />
+            }
           />
           <CustomerUsageTrend
             data={data}
