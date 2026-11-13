@@ -26,7 +26,7 @@ from openai._legacy_response import HttpxBinaryResponseContent
 from pydantic import BaseModel
 
 import litellm
-from litellm._internal_context import in_post_response_phase
+from litellm._internal_context import current_request_parent_otel_span, in_post_response_phase
 from litellm._logging import session_id_var, trace_id_var, verbose_logger
 from litellm._service_logger import ServiceLogging
 from litellm.caching.caching import DualCache
@@ -15062,3 +15062,74 @@ async def test_failed_chat_prompt_is_counted_only_when_an_opted_in_logger_receiv
 
     assert counted_prompts == ([messages] if expects_estimate else [])
     assert logging_obj.model_call_details.get(FAILED_PROMPT_TOKEN_ESTIMATE_KEY) == (7 if expects_estimate else None)
+
+
+class _SpanSeenByCallbacks(CustomLogger):
+    """Records the request span a datastore op made inside each hook would report under."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen: dict[str, object] = {}
+        self.logged = threading.Event()
+
+    def _record(self, hook: str) -> None:
+        self.seen[hook] = current_request_parent_otel_span()
+        self.logged.set()
+
+    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self._record("success")
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self._record("success")
+
+    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self._record("failure")
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self._record("failure")
+
+
+async def _sdk_call(*, asynchronous: bool, stream: bool, fails: bool, span: object) -> None:
+    request: Final = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": {"litellm_parent_otel_span": span},
+        "mock_response": Exception("provider down") if fails else "hello",
+        "stream": stream,
+    }
+    with contextlib.suppress(Exception):
+        if asynchronous:
+            response = await litellm.acompletion(**request)
+            if stream:
+                async for _ in response:
+                    pass
+            return
+        response = litellm.completion(**request)
+        if stream:
+            for _ in response:
+                pass
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [True, False], ids=["async", "sync"])
+@pytest.mark.parametrize(
+    ("stream", "fails", "hook"),
+    [
+        pytest.param(False, False, "success", id="success"),
+        pytest.param(True, False, "success", id="stream_success"),
+        pytest.param(False, True, "failure", id="failure"),
+    ],
+)
+async def test_every_callback_runs_under_the_span_an_sdk_caller_passed(
+    monkeypatch: pytest.MonkeyPatch, asynchronous: bool, stream: bool, fails: bool, hook: str
+) -> None:
+    """A store op in any callback parents under the caller's span, with no Router scope around the call and
+    after a sync stream, whose success handler runs on an executor thread that never copied the caller's context."""
+    span: Final = object()
+    logger: Final = _SpanSeenByCallbacks()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+
+    await _sdk_call(asynchronous=asynchronous, stream=stream, fails=fails, span=span)
+    await asyncio.wait_for(asyncio.to_thread(logger.logged.wait, 10), timeout=10)
+
+    assert (logger.seen.get(hook), current_request_parent_otel_span()) == (span, None)

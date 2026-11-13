@@ -20,7 +20,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict
 
 import litellm
-from litellm._internal_context import request_parent_otel_span, with_service_target
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.redis.stores.router_usage import ROUTER_USAGE_TARGET, CounterIncrement, RouterUsage, UsageCounter
@@ -431,14 +431,9 @@ class ModelRateLimitingCheck(CustomLogger):
 
     @with_service_target(ROUTER_USAGE_TARGET)
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        from litellm.litellm_core_utils.core_helpers import (
-            get_parent_otel_span_from_kwargs,
-        )
-
         try:
             standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")
-            with request_parent_otel_span(get_parent_otel_span_from_kwargs(kwargs)):
-                await async_io_token_reconcile_success(self.usage, kwargs, response_obj)
+            await async_io_token_reconcile_success(self.usage, kwargs, response_obj)
 
             if standard_logging_object is None:
                 return
@@ -474,12 +469,8 @@ class ModelRateLimitingCheck(CustomLogger):
             verbose_router_logger.debug("Error in ModelRateLimitingCheck.async_log_success_event: %s", e)
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
-        from litellm.litellm_core_utils.core_helpers import (
-            get_parent_otel_span_from_kwargs,
-        )
-
         # Never fail the primary logging pipeline over an io-token refund error.
-        with contextlib.suppress(Exception), request_parent_otel_span(get_parent_otel_span_from_kwargs(kwargs)):
+        with contextlib.suppress(Exception):
             await async_io_token_refund_failure(self.usage, kwargs)
 
     @with_service_target(ROUTER_USAGE_TARGET)

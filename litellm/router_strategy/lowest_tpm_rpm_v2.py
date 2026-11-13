@@ -13,12 +13,11 @@ from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
-from litellm._internal_context import request_parent_otel_span, with_service_target
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.constants import USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
-from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs
 from litellm.litellm_core_utils.deployment_pricing import deployment_backend_models
 from litellm.litellm_core_utils.token_counter import embedding_aware_token_count
 from litellm.redis.stores.router_usage import (
@@ -329,12 +328,11 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                 _SUCCESS_KWARGS_ADAPTER.validate_python(kwargs).get("litellm_params") or {},
                 USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY,
             )
-            with request_parent_otel_span(get_parent_otel_span_from_kwargs(kwargs)):
-                await self.async_increment_tpm(
-                    deployment_id=str(model_id),
-                    deployment_name=model if isinstance(model, str) else None,
-                    tokens=total_tokens if counted_tokens is None else max(0, total_tokens - counted_tokens),
-                )
+            await self.async_increment_tpm(
+                deployment_id=str(model_id),
+                deployment_name=model if isinstance(model, str) else None,
+                tokens=total_tokens if counted_tokens is None else max(0, total_tokens - counted_tokens),
+            )
 
             ### TESTING ###
             if self.test_flag:
