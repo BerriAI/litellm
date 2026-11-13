@@ -7,6 +7,8 @@ const PRESETS = ["month", "previous", "YTD"] as const;
 type Preset = (typeof PRESETS)[number];
 type Range = { from: Date; to: Date };
 
+export const CUSTOMER_USAGE_MAX_RANGE_DAYS = 400;
+
 export const calendarDate = (date: Date): string =>
   `${date.getFullYear().toString().padStart(4, "0")}-${(date.getMonth() + 1).toString().padStart(2, "0")}-${date.getDate().toString().padStart(2, "0")}`;
 
@@ -22,7 +24,9 @@ export const customerRangeParser = createParser<Range>({
     if (!start || !end || extra !== undefined) return null;
     const from = parseDate(start);
     const to = parseDate(end);
-    return from && to && from <= to ? { from, to } : null;
+    if (!from || !to || from > to) return null;
+    const spanDays = (Date.parse(end) - Date.parse(start)) / 86_400_000;
+    return spanDays <= CUSTOMER_USAGE_MAX_RANGE_DAYS ? { from, to } : null;
   },
   serialize: ({ from, to }) => `${calendarDate(from)}..${calendarDate(to)}`,
   eq: (a, b) => calendarDate(a.from) === calendarDate(b.from) && calendarDate(a.to) === calendarDate(b.to),
@@ -73,5 +77,5 @@ export const useCustomerUsageRange = () => {
       { history: "push" },
     );
   };
-  return { dateValue, onDateChange, preset: params.period ?? (params.range ? null : "month") };
+  return { dateValue, onDateChange, preset: params.range ? params.period : "month" };
 };

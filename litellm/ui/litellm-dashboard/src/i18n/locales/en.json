@@ -8807,6 +8807,7 @@
       "selectTimeRange": "Select Time Range",
       "invalidDateFormat": "Invalid date format",
       "endBeforeStart": "End date cannot be before start date",
+      "rangeTooLong": "Select a date range of {{days}} days or less.",
       "selectDateRange": "Select date range",
       "relativeTime": "Relative time",
       "startAndEndDates": "Start and end dates",

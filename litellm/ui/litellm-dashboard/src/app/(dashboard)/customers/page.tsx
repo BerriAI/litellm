@@ -16,7 +16,12 @@ import { ErrorState } from "@/components/shared/ErrorState";
 import { uiHref } from "@/utils/uiHref";
 import CreateCustomerDialog from "./_components/CreateCustomerDialog";
 import CustomerDetail from "./_components/CustomerDetail";
-import { calendarDate, customerUsagePresets, useCustomerUsageRange } from "./_components/customerUsageRange";
+import {
+  calendarDate,
+  CUSTOMER_USAGE_MAX_RANGE_DAYS,
+  customerUsagePresets,
+  useCustomerUsageRange,
+} from "./_components/customerUsageRange";
 
 const TABLE_OPTIONS = {
   sortFields: ["created_at"],
@@ -143,6 +148,7 @@ function CustomerOrganizations() {
             }}
             presetShortLabel={preset}
             presets={customerUsagePresets}
+            maxRangeDays={CUSTOMER_USAGE_MAX_RANGE_DAYS}
             label={t("customerPortal.range.label")}
             showTimeRange={false}
             compact

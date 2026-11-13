@@ -163,6 +163,31 @@ describe("customer organization usage", () => {
     expect(screen.getByRole("columnheader", { name: "Members" })).toBeInTheDocument();
   });
 
+  it("blocks ranges over 400 days before Apply and accepts the boundary", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<CustomersPage />);
+    await screen.findByRole("row", { name: /Customer A/ });
+    await user.click(screen.getByRole("button", { name: /1 Mar 2024/ }));
+    fireEvent.change(screen.getByLabelText("Start date"), { target: { value: "2024-01-01" } });
+    fireEvent.change(screen.getByLabelText("End date"), { target: { value: "2025-02-05" } });
+    expect(screen.getByText("Select a date range of 400 days or less.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Apply" })).toBeDisabled();
+    expect(requests).toHaveLength(1);
+    fireEvent.change(screen.getByLabelText("End date"), { target: { value: "2025-02-04" } });
+    expect(screen.getByRole("button", { name: "Apply" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(requests).toHaveLength(2));
+    expect(requests.at(-1)?.searchParams.get("end_date")).toBe("2025-02-04");
+  });
+
+  it("uses the default month when a saved URL exceeds the range limit", async () => {
+    renderWithProviders(<CustomersPage />, { searchParams: "?range=2020-01-01..2024-03-31" });
+    await screen.findByRole("row", { name: /Customer A/ });
+    expect(requests).toHaveLength(1);
+    expect(requests[0].searchParams.get("start_date")).toBe("2024-03-01");
+    expect(requests[0].searchParams.get("end_date")).toBe("2024-03-31");
+  });
+
   it("shows a failure instead of presenting missing usage as zero", async () => {
     failed = true;
     renderWithProviders(<CustomersPage />);

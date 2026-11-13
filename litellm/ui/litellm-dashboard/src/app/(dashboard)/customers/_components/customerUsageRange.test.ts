@@ -17,6 +17,12 @@ describe("customer usage calendar ranges", () => {
     expect(customerRangeParser.serialize(range!)).toBe("2024-02-29..2024-02-29");
   });
 
+  it("accepts the API's 400-day boundary across leap years and daylight saving", () => {
+    const range = customerRangeParser.parse("2024-01-01..2025-02-04");
+    expect(range).not.toBeNull();
+    expect(customerRangeParser.serialize(range!)).toBe("2024-01-01..2025-02-04");
+  });
+
   it.each([
     "2023-02-29..2023-03-01",
     "2024-02-30..2024-03-01",
@@ -24,6 +30,7 @@ describe("customer usage calendar ranges", () => {
     "2024-02-01",
     "2024-02-01..2024-02-29..2024-03-01",
     "2024-2-01..2024-02-29",
+    "2024-01-01..2025-02-05",
   ])("rejects invalid URL range %s", (range) => {
     expect(customerRangeParser.parse(range)).toBeNull();
   });

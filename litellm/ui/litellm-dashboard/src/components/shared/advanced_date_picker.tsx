@@ -20,6 +20,7 @@ interface AdvancedDatePickerProps {
   align?: "left" | "right";
   compact?: boolean;
   presets?: readonly RelativeTimeOption[];
+  maxRangeDays?: number;
 }
 
 export function matchRelativeTimeOption(
@@ -47,6 +48,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
   align = "right",
   compact = false,
   presets = relativeTimeOptions,
+  maxRangeDays,
 }) => {
   const { t } = useTranslation();
   const inputId = useId();
@@ -90,8 +92,12 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
       return { isValid: false, error: t("shared.advancedDatePicker.endBeforeStart") };
     }
 
+    if (maxRangeDays !== undefined && end.diff(start, "days") > maxRangeDays) {
+      return { isValid: false, error: t("shared.advancedDatePicker.rangeTooLong", { days: maxRangeDays }) };
+    }
+
     return { isValid: true, error: "" };
-  }, [startDate, endDate, showTimeRange, t]);
+  }, [startDate, endDate, showTimeRange, maxRangeDays, t]);
 
   const validation = validateDateRange();
 
