@@ -41,7 +41,8 @@ from litellm.constants import (
 from litellm.cost_calculator import ocr_batch_cost
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_logger_v2 import Abort, CallContext, CustomLoggerV2, Field, Hook, Patch, on
-from litellm.integrations.custom_logger_v2.host import V2Outcome
+from litellm.integrations.custom_logger_v2.host import V2Outcome, get_dispatcher
+from litellm.integrations.custom_logger_v2.selection import RequestSelection, Selection
 from litellm.litellm_core_utils import litellm_logging
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.token_counter import token_counter
@@ -15725,3 +15726,42 @@ async def test_an_awaited_v2_provider_request_sent_subscriber_keeps_every_legacy
 
     assert await asyncio.to_thread(sent.done.wait, 30)
     assert [entry[0] if isinstance(entry, tuple) else entry for entry in journal] == ["first", "last", "v2"]
+
+
+class _NoLogObserver(_EndedRecorder):
+    selection = Selection(name="no_log_observer", honors_no_log=True)
+
+
+@pytest.mark.parametrize("bound", [False, True])
+async def test_a_no_log_request_skips_a_v2_observer_that_honors_no_log(
+    logging_obj: LitellmLogging, monkeypatch: pytest.MonkeyPatch, bound: bool
+) -> None:
+    journal: Final[list[object]] = []
+    observer: Final = _NoLogObserver(journal)
+    _plane_lists(monkeypatch, _async_success_callback=[_Entry("legacy", journal), observer])
+    logging_obj.stream = False
+    logging_obj.update_environment_variables(litellm_params={"acompletion": True, "no-log": True}, optional_params={})
+    now: Final = datetime.datetime.now()
+    logging_obj.start_time = now
+    if bound:
+        logging_obj.v2_scope = get_dispatcher().open_scope(RequestSelection(no_log=True))
+
+    await logging_obj.async_success_handler(result=ModelResponse(id="served"), start_time=now, end_time=now)
+
+    assert _ran(journal, "success") == []
+    assert "v2" not in journal
+
+
+async def test_a_logged_request_still_reaches_a_v2_observer_that_honors_no_log(
+    logging_obj: LitellmLogging, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    journal: Final[list[object]] = []
+    observer: Final = _NoLogObserver(journal)
+    _plane_lists(monkeypatch, _async_success_callback=[observer])
+    logging_obj.stream = False
+    logging_obj.update_environment_variables(litellm_params={"acompletion": True}, optional_params={})
+    now: Final = datetime.datetime.now()
+
+    await logging_obj.async_success_handler(result=ModelResponse(id="served"), start_time=now, end_time=now)
+
+    assert journal == ["v2"]
