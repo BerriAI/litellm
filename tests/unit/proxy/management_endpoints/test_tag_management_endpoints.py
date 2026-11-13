@@ -516,6 +516,7 @@ async def test_update_tag_clears_or_sets_only_provided_budget_fields(
                 litellm_proxymodeltable=SimpleNamespace(find_many=find_models),
                 litellm_budgettable=SimpleNamespace(update=update_budget),
                 litellm_customermembertable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
+                litellm_customerteamtable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
                 litellm_customerorganizationtable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
             )
         ),
@@ -575,6 +576,7 @@ async def test_update_tag_explicit_null_clears_budget_duration():
     )
     mock_db = Mock()
     mock_db.litellm_customermembertable.find_many = AsyncMock(return_value=[])
+    mock_db.litellm_customerteamtable.find_many = AsyncMock(return_value=[])
     mock_db.litellm_customerorganizationtable.find_many = AsyncMock(return_value=[])
     mock_prisma = SimpleNamespace(db=mock_db)
     mock_db.litellm_tagtable.find_unique = AsyncMock(return_value=existing_tag)

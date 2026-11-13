@@ -794,6 +794,30 @@ async def test_a_key_pinned_to_another_organization_is_refused_before_any_member
 
 
 @pytest.mark.asyncio
+async def test_a_key_pinned_to_another_organization_is_refused_before_an_unknown_alias_is_registered() -> None:
+    organizations: Final = _OrganizationTable((_organization("acme"),))
+    registrar: Final = _OrganizationRegistrar(organizations)
+    prisma: Final = _Prisma(_MemberTable({}), organizations)
+
+    with pytest.raises(ProxyException) as denied:
+        await _resolve(
+            prisma,
+            CustomerRequestIdentity(customer_org_alias="ghost"),
+            key_metadata={"customer_org_id": "org-1"},
+            register_organization=registrar,
+        )
+    assert (denied.value.code, registrar.calls, len(organizations.rows)) == ("403", (), 1)
+
+    own: Final = await _resolve(
+        prisma,
+        CustomerRequestIdentity(customer_org_alias="ghost"),
+        key_metadata={"customer_org_id": "ghost"},
+        register_organization=registrar,
+    )
+    assert own is not None and (own.customer_org_id, registrar.calls) == ("ghost", ("ghost",))
+
+
+@pytest.mark.asyncio
 async def test_a_member_id_past_the_identifier_bound_is_not_registered_and_only_the_organization_is_charged() -> None:
     members: Final = _MemberTable({})
     registrar: Final = _Registrar(members)

@@ -37,7 +37,12 @@ from litellm.proxy.management_helpers.customer_hierarchy import budget_limit_jso
 from litellm.proxy.management_helpers.utils import validate_budget_windows_update
 from litellm.proxy.utils import jsonify_object
 from litellm.repositories.budget_repository import BudgetRepository
-from litellm.repositories.table_repositories import CustomerMemberRepository, CustomerOrganizationRepository
+from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE
+from litellm.repositories.table_repositories import (
+    CustomerMemberRepository,
+    CustomerOrganizationRepository,
+    CustomerTeamRepository,
+)
 
 router: Final = APIRouter()
 _WRITE_VALUES: Final = TypeAdapter(Mapping[str, object])
@@ -239,20 +244,25 @@ async def update_budget(
             "OR": (
                 {"budget_id": budget_obj.budget_id},
                 {"budget_override_id": budget_obj.budget_id},
-                {
-                    "parent_team": {
-                        "is": {
-                            "OR": (
-                                {"budget_id": budget_obj.budget_id},
-                                {"parent_org": {"is": {"budget_id": budget_obj.budget_id}}},
-                            )
-                        }
-                    }
-                },
+                {"parent_org": {"is": {"budget_id": budget_obj.budget_id}}},
             )
         }
     )
     await forget_customer_hierarchies(tuple(member.customer_member_id for member in members), user_api_key_cache)
+    teams: Final = await CustomerTeamRepository(prisma_client).table.find_many(
+        where={"OR": ({"budget_id": budget_obj.budget_id}, {"budget_override_id": budget_obj.budget_id})}
+    )
+    team_ids: Final = tuple(team.customer_team_id for team in teams)
+    for offset in range(0, len(team_ids), IN_LIST_CHUNK_SIZE):
+        await forget_customer_hierarchies(
+            tuple(
+                member.customer_member_id
+                for member in await CustomerMemberRepository(prisma_client).table.find_many(
+                    where={"parent_team_ids": {"has_some": team_ids[offset : offset + IN_LIST_CHUNK_SIZE]}}
+                )
+            ),
+            user_api_key_cache,
+        )
     organizations: Final = await CustomerOrganizationRepository(prisma_client).table.find_many(
         where={"budget_id": budget_obj.budget_id}
     )

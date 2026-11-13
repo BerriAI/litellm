@@ -29,12 +29,17 @@ from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation
     transform_openai_input_gemini_embed_content,
 )
 from litellm.types.llms.vertex_ai import VertexAIBatchEmbeddingsResponseObject
-from litellm.types.utils import EmbeddingResponse
+from litellm.types.utils import EmbeddingResponse, Usage
 
 IMAGE_DATA_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAIAQMAAAD+wSzIAAAABlBMVEX///+/v7+jQ3Y5AAAADklEQVQI12P4AIX8EAgALgAD/aNpbtEAAAAASUVORK5CYII"
 GCS_URL = "gs://my-bucket/image.png"
 VIDEO_DATA_URI = "data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAAIZnJlZQAA"
 FILES_URI = "https://generativelanguage.googleapis.com/v1beta/files/clip123"
+
+
+def _prompt_cost(model: str, usage: Usage) -> float:
+    cost, _ = generic_cost_per_token(model=model, usage=usage, custom_llm_provider="vertex_ai")
+    return cost
 
 
 def _file_block(**file: object) -> dict[str, object]:
@@ -380,6 +385,64 @@ class TestProcessEmbedContentResponseUsage:
         )
         assert prompt_cost > 0
 
+    def test_document_modality_is_billed_as_image_tokens(self):
+        """PDF usage arrives as DOCUMENT tokens, which Google bills at the image token rate.
+
+        https://ai.google.dev/gemini-api/docs/pricing "Document token billing", read 2026-11-13.
+        """
+
+        def usage_for(details: tuple[dict[str, object], ...], prompt_tokens: int) -> Usage:
+            return process_embed_content_response(
+                input=[{"type": "file", "file": {"file_data": "gs://bucket/invoice.pdf", "format": "application/pdf"}}],
+                model_response=EmbeddingResponse(),
+                model=self.MODEL,
+                response_json={
+                    "embedding": {"values": [0.1, 0.2]},
+                    "usageMetadata": {
+                        "promptTokenCount": prompt_tokens,
+                        "totalTokenCount": prompt_tokens,
+                        "promptTokensDetails": list(details),
+                    },
+                },
+            ).usage
+
+        document_usage: Final = usage_for(
+            ({"modality": "TEXT", "tokenCount": 12}, {"modality": "DOCUMENT", "tokenCount": 258}), 270
+        )
+        image_usage: Final = usage_for(
+            ({"modality": "TEXT", "tokenCount": 12}, {"modality": "IMAGE", "tokenCount": 258}), 270
+        )
+
+        assert document_usage.prompt_tokens == 270
+        assert document_usage.prompt_tokens_details.text_tokens == 12
+        assert document_usage.prompt_tokens_details.image_tokens == 258
+        assert _prompt_cost(self.MODEL, document_usage) == _prompt_cost(self.MODEL, image_usage) > 0
+
+    def test_unrecognized_modality_keeps_usage_and_bills_as_text(self):
+        def usage_for(modality: str) -> Usage:
+            return process_embed_content_response(
+                input=["gs://bucket/clip.mp4"],
+                model_response=EmbeddingResponse(),
+                model=self.MODEL,
+                response_json={
+                    "embedding": {"values": [0.1]},
+                    "usageMetadata": {
+                        "promptTokenCount": 112,
+                        "totalTokenCount": 112,
+                        "promptTokensDetails": [
+                            {"modality": "TEXT", "tokenCount": 12},
+                            {"modality": modality, "tokenCount": 100},
+                        ],
+                    },
+                },
+            ).usage
+
+        unknown_usage: Final = usage_for("MODALITY_UNSPECIFIED")
+
+        assert unknown_usage.prompt_tokens == 112
+        assert unknown_usage.prompt_tokens_details.text_tokens == 112
+        assert _prompt_cost(self.MODEL, unknown_usage) == _prompt_cost(self.MODEL, usage_for("TEXT")) > 0
+
     def test_video_modality_preserves_token_count(self):
         response_json = {
             "embedding": {"values": [0.1]},
@@ -398,57 +461,6 @@ class TestProcessEmbedContentResponseUsage:
         assert result.usage.prompt_tokens == 516
         assert result.usage.prompt_tokens_details.video_tokens == 516
         assert result.usage.prompt_tokens_details.text_tokens == 0
-
-    def test_pdf_document_tokens_are_reported_and_billed_at_the_text_rate(self) -> None:
-        def usage_for(modality: str) -> litellm.Usage:
-            return process_embed_content_response(
-                input=["gs://bucket/scan.pdf"],
-                model_response=EmbeddingResponse(),
-                model=self.MODEL,
-                response_json={
-                    "embedding": {"values": [0.1]},
-                    "usageMetadata": {
-                        "promptTokenCount": 516,
-                        "totalTokenCount": 516,
-                        "promptTokensDetails": [{"modality": modality, "tokenCount": 516}],
-                    },
-                },
-            ).usage
-
-        document_usage: Final = usage_for("DOCUMENT")
-
-        assert document_usage.prompt_tokens == 516
-        assert document_usage.total_tokens == 516
-        assert document_usage.prompt_tokens_details.text_tokens == 516
-        document_cost, _ = generic_cost_per_token(
-            model=self.MODEL, usage=document_usage, custom_llm_provider="vertex_ai"
-        )
-        text_cost, _ = generic_cost_per_token(
-            model=self.MODEL, usage=usage_for("TEXT"), custom_llm_provider="vertex_ai"
-        )
-        assert document_cost == text_cost > 0
-
-    def test_document_tokens_do_not_displace_separately_priced_modalities(self) -> None:
-        usage: Final = process_embed_content_response(
-            input=["gs://bucket/scan.pdf", "gs://bucket/clip.mp4"],
-            model_response=EmbeddingResponse(),
-            model=self.MODEL,
-            response_json={
-                "embedding": {"values": [0.1]},
-                "usageMetadata": {
-                    "promptTokenCount": 816,
-                    "totalTokenCount": 816,
-                    "promptTokensDetails": [
-                        {"modality": "DOCUMENT", "tokenCount": 516},
-                        {"modality": "VIDEO", "tokenCount": 300},
-                    ],
-                },
-            },
-        ).usage
-
-        assert usage.prompt_tokens == 816
-        assert usage.prompt_tokens_details.text_tokens == 516
-        assert usage.prompt_tokens_details.video_tokens == 300
 
     def test_missing_usage_metadata_does_not_estimate_from_base64(self):
         response_json = {"embedding": {"values": [0.1, 0.2]}}

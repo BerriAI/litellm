@@ -26,9 +26,9 @@ export default function CustomerHierarchyNavigation({
   active: CustomerHierarchyView;
 }) {
   const { t } = useTranslation();
-  const pages: readonly CustomerHierarchyView[] = scope.member
-    ? ["usage", "settings"]
-    : ["usage", scope.team ? "members" : "teams", "settings"];
+  let pages: readonly CustomerHierarchyView[] = ["usage", "teams", "members", "settings"];
+  if (scope.team) pages = ["usage", "members", "settings"];
+  if (scope.member) pages = ["usage", "settings"];
   return (
     <nav aria-label={t("customerPortal.hierarchy.customerNavigation")} className="flex gap-6 border-b">
       {pages.map((page) => (
@@ -37,7 +37,7 @@ export default function CustomerHierarchyNavigation({
           href={
             page === "usage"
               ? customerHierarchyHref("usage", scope)
-              : `${customerHierarchyHref("manage", scope)}${page === "settings" ? "&tab=settings" : ""}`
+              : `${customerHierarchyHref("manage", scope)}${page === "settings" || (page === "members" && !scope.team) ? `&tab=${page}` : ""}`
           }
           aria-current={active === page ? "page" : undefined}
           className={cn(
