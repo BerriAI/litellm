@@ -2,10 +2,9 @@ use std::{future::Future, pin::Pin, sync::Arc, time::SystemTime};
 
 use axum::http::{Request, request::Parts};
 use litellm_config::Config;
+use litellm_gateway_auth_core::{MasterKey, Token};
 use litellm_secret_value::SecretValue;
 use litellm_secrets::source::SecretSource;
-use sha2::{Digest, Sha256};
-use subtle::ConstantTimeEq;
 
 use crate::{
     AuthenticatedCaller, AuthenticatedRequest, Authentication, AuthenticationMethod, Authorizer,
@@ -28,7 +27,7 @@ impl Clock for SystemClock {
 }
 
 pub enum Credential {
-    Token(SecretValue),
+    Token(Token),
     Transport,
 }
 
@@ -124,10 +123,7 @@ impl Auth {
         self.authenticator.validate().await
     }
 
-    pub async fn authenticate(
-        &self,
-        credential: &SecretValue,
-    ) -> Result<AuthenticatedRequest, Error> {
+    pub async fn authenticate(&self, credential: &Token) -> Result<AuthenticatedRequest, Error> {
         self.authenticate_request(
             &Credential::Token(credential.clone()),
             &Request::new(()).into_parts().0,
@@ -182,7 +178,7 @@ impl MasterKeyAuthenticator {
         Self { key, secrets }
     }
 
-    async fn key(&self) -> Result<SecretValue, Error> {
+    async fn key(&self) -> Result<MasterKey, Error> {
         let configured = self.key.as_ref().ok_or(Error::Unconfigured)?;
         let resolved = match configured.expose().strip_prefix("os.environ/") {
             Some(name) if !name.is_empty() => self
@@ -196,7 +192,7 @@ impl MasterKeyAuthenticator {
         if resolved.expose().trim().is_empty() {
             return Err(Error::Unconfigured);
         }
-        Ok(resolved)
+        Ok(MasterKey::new(resolved))
     }
 }
 
@@ -215,9 +211,7 @@ impl Authenticator for MasterKeyAuthenticator {
             let Credential::Token(credential) = credential else {
                 return Err(Error::InvalidToken);
             };
-            if !bool::from(
-                Sha256::digest(credential.expose()).ct_eq(&Sha256::digest(expected.expose())),
-            ) {
+            if !expected.matches(credential) {
                 return Err(Error::InvalidToken);
             }
             Ok(VerifiedIdentity {

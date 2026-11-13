@@ -4,7 +4,7 @@ use axum::{
     middleware::Next,
     response::Response,
 };
-use litellm_secret_value::SecretValue;
+use litellm_gateway_auth_core::Token;
 
 use crate::{AccessRequest, Auth, AuthenticatedRequest, Credential, Error};
 
@@ -20,7 +20,7 @@ impl CredentialExtractor for Bearer {
     }
 }
 
-fn bearer(parts: &Parts) -> Result<SecretValue, Error> {
+fn bearer(parts: &Parts) -> Result<Token, Error> {
     let mut values = parts.headers.get_all(AUTHORIZATION).iter();
     let value = values.next().ok_or(Error::InvalidToken)?;
     if values.next().is_some() {
@@ -33,7 +33,7 @@ fn bearer(parts: &Parts) -> Result<SecretValue, Error> {
         .map(str::trim)
         .filter(|value| !value.is_empty() && !value.bytes().any(|byte| byte.is_ascii_whitespace()))
         .ok_or(Error::InvalidToken)?;
-    Ok(SecretValue::new(token))
+    Ok(Token::new(token))
 }
 
 pub async fn authenticate(
