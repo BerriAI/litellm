@@ -689,7 +689,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                     _tightest_team_share((stash.borrowing_team_model_limit, stash.priority_class_share)),
                     _capped_idle_share(stash.borrowing_team_model_share, stash.borrowing_team_model_cap),
                 )
-            )
+            ) or _tightest_team_share((hold.share if hold is not None else stash.borrowing_team_model_share,))
             if share is None:
                 return
             descriptor, share_tokens = share

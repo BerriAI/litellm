@@ -4,6 +4,7 @@ every refusal with the same reason the 429 carries in its rate_limited_by header
 from __future__ import annotations
 
 import json
+import math
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
@@ -21,6 +22,8 @@ OPENAI_MODEL: Final = "gpt-4.1-mini"
 MODEL_TPM: Final = 600
 TEAM_TPM: Final = 100
 REPLY_TOKENS: Final = 30
+SATURATION_THRESHOLD: Final = 0.6
+IDLE_REPLIES: Final = math.ceil(MODEL_TPM * SATURATION_THRESHOLD / REPLY_TOKENS)
 UPSTREAM_REPLY: Final = json.dumps(
     {
         "id": "chatcmpl_dynamic_limiter_metrics",
@@ -48,7 +51,7 @@ def saturated_model(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[
         "priority_reservation": {"interactive": 0.6, "batch": 0.4},
         "priority_reservation_settings": {
             "default_priority": 1.0,
-            "saturation_threshold": 0.6,
+            "saturation_threshold": SATURATION_THRESHOLD,
             "saturation_check_cache_ttl": 0,
             "team_model_limit_borrows_idle_capacity_from_other_teams": True,
         },
@@ -72,7 +75,7 @@ def _team_series(samples: Sequence[Sample], name: str, team: str) -> Mapping[str
     }
 
 
-def test_a_team_over_its_share_shows_up_as_borrowed_tokens_and_a_matching_throttle_reason(
+def test_idle_time_usage_is_not_borrowed_so_a_saturated_team_gets_its_full_share_then_a_matching_throttle_reason(
     saturated_model: tuple[Gateway, str],
 ) -> None:
     owned, upstream = saturated_model
@@ -92,7 +95,8 @@ def test_a_team_over_its_share_shows_up_as_borrowed_tokens_and_a_matching_thrott
             for _ in range(16)
         )
         blocked: Final = tuple(response for response in responses if response.status_code == 429)
-        expected_borrowed: Final = max(0, (len(responses) - len(blocked)) * REPLY_TOKENS - TEAM_TPM)
+        admitted: Final = len(responses) - len(blocked)
+        expected_borrowed: Final = max(0, (admitted - IDLE_REPLIES) * REPLY_TOKENS - TEAM_TPM)
         samples: Final = eventually(
             lambda: scrape(owned),
             lambda scraped: (
@@ -105,7 +109,8 @@ def test_a_team_over_its_share_shows_up_as_borrowed_tokens_and_a_matching_thrott
             return_last_on_timeout=True,
         )
 
-    assert responses[0].status_code == 200, responses[0].text
+    assert all(r.status_code == 200 for r in responses[:admitted]), [r.status_code for r in responses]
+    assert admitted > IDLE_REPLIES, [r.status_code for r in responses]
     assert blocked, [r.text for r in responses]
     reason: Final = blocked[0].headers.get("rate_limited_by")
     assert reason == "model_per_team_saturated", dict(blocked[0].headers)
@@ -119,7 +124,6 @@ def test_a_team_over_its_share_shows_up_as_borrowed_tokens_and_a_matching_thrott
     assert labels["model_group"] == model and labels["priority"] == "default", labels
     assert share_tokens == TEAM_TPM
     assert borrowed[share_labels] == expected_borrowed, borrowed
-    assert borrowed[share_labels] > 0, borrowed
     ((throttle_labels, refused),) = throttled.items()
     throttle: Final[dict[str, str]] = json.loads(throttle_labels)
     assert throttle["reason"] == reason and throttle["rate_limit_type"] == "tokens", throttle
