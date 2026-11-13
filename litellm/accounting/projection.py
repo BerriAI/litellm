@@ -14,6 +14,7 @@ from litellm.constants import (
     MODEL_INSIGHTS_TASK_TAG_PREFIX,
 )
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import GuardrailCostByUnitEntry
+from litellm.proxy.common_utils.customer_usage import CUSTOMER_USAGE_METADATA_KEY, CustomerUsageAttribution
 from litellm.proxy.db.daily_spend_bulk_upsert import DAILY_SPEND_TABLES, daily_spend_entity_ids
 from litellm.proxy.db.model_insights_tasks import load_model_insight_tasks
 from litellm.proxy.db.model_usage_rollup import date_from_start_time
@@ -205,8 +206,51 @@ def project(row: Mapping[str, object]) -> tuple[Contribution, ...]:
         *_window_contributions(row, metadata),
         *_model_contributions(row, metadata),
         *_guardrail_contributions(row, metadata),
+        *_customer_usage_contributions(row, metadata),
     )
     return tuple(_capped(contribution) for contribution in contributions if _indexable(contribution))
+
+
+def _customer_usage_contributions(
+    row: Mapping[str, object], metadata: Mapping[str, object]
+) -> tuple[Contribution, ...]:
+    serialized: Final = metadata.get(CUSTOMER_USAGE_METADATA_KEY)
+    date: Final = _date(row)
+    if not isinstance(serialized, str) or date is None:
+        return ()
+    try:
+        attribution: Final = CustomerUsageAttribution.model_validate_json(serialized)
+    except ValidationError:
+        return ()
+    counters: Final = _daily_counters(row, metadata)
+    identities: Final = (
+        ("LiteLLM_CustomerOrganizationTable", "customer_org_id", attribution.customer_org_id),
+        ("LiteLLM_CustomerTeamTable", "customer_team_id", attribution.customer_team_id),
+        ("LiteLLM_CustomerMemberTable", "customer_member_id", attribution.customer_member_id),
+    )
+    return (
+        Contribution(
+            "LiteLLM_DailyCustomerMemberSpend",
+            (
+                ("date", date),
+                ("customer_org_id", attribution.customer_org_id),
+                ("customer_team_id", attribution.customer_team_id or ""),
+                ("customer_member_id", attribution.customer_member_id or ""),
+                ("model", _text(row.get("model"))),
+                ("model_group", _text(row.get("model_group"))),
+                ("custom_llm_provider", _text(row.get("custom_llm_provider"))),
+                ("api_key", _text(row.get("api_key"))),
+                ("mcp_namespaced_tool_name", _text(row.get("mcp_namespaced_tool_name"))),
+                ("endpoint", _text(ROUTE_ENDPOINT_MAPPING.get(_text(row.get("call_type"))))),
+            ),
+            counters,
+        ),
+        *(
+            _spend(table, ((column, identity),), float(_number(row.get("spend"))))
+            for table, column, identity in identities
+            if identity is not None
+        ),
+    )
 
 
 def _indexable(contribution: Contribution) -> bool:

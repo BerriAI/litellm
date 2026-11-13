@@ -7,14 +7,17 @@ import pytest
 from pydantic import TypeAdapter
 
 from litellm.accounting.delivery_projection import entity_transactions
+from litellm.accounting.delivery_projection import project_deliveries
 from litellm.accounting.projection import project
 from litellm.accounting.snapshot import build_accounting_payload
 from litellm.constants import BILLED_RETRY_ATTEMPT_METADATA_KEY, INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.proxy._types import SpendLogsPayload
+from litellm.proxy.common_utils.customer_usage import CUSTOMER_USAGE_METADATA_KEY, CustomerUsageAttribution
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 from litellm.proxy.proxy_server import proxy_logging_obj
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.accounting_delivery_repository import DeliveryProjection
 from litellm.types.utils import ModelResponse, Usage
 
 _NOW: Final = datetime(2026, 11, 2, tzinfo=timezone.utc)
@@ -76,6 +79,103 @@ async def test_customer_member_and_end_user_are_charged_independently(
         transactions = await writer.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
     assert transactions["end_user_list_transactions"] == {"end-user": 0.25}
     assert transactions.get("customer_member_list_transactions") == ({member_id: 0.25} if member_id else {})
+
+
+def test_customer_model_aliases_and_providers_keep_separate_daily_totals() -> None:
+    stamp: Final = CustomerUsageAttribution(customer_org_id="org-1", customer_member_id="member-1").model_dump_json()
+    base: Final = {
+        "startTime": _NOW,
+        "api_key": "hashed-key",
+        "model": "shared-model",
+        "metadata": {CUSTOMER_USAGE_METADATA_KEY: stamp},
+    }
+    deliveries: Final = tuple(
+        DeliveryProjection({**base, "model_group": alias, "custom_llm_provider": provider, "spend": spend})
+        for alias, provider, spend in (
+            ("alias-a", "provider-a", 1),
+            ("alias-b", "provider-a", 2),
+            ("alias-a", "provider-b", 3),
+        )
+    )
+    totals: Final = {
+        (dict(item.key)["model_group"], dict(item.key)["custom_llm_provider"]): dict(item.increments)["spend"]
+        for item in project_deliveries(deliveries)
+        if item.table == "LiteLLM_DailyCustomerMemberSpend"
+    }
+    assert totals == {("alias-a", "provider-a"): 1, ("alias-b", "provider-a"): 2, ("alias-a", "provider-b"): 3}
+
+
+@pytest.mark.parametrize("retry", [False, True])
+def test_customer_usage_survives_logging_and_accounting_with_correct_request_counts(retry: bool) -> None:
+    attribution: Final = CustomerUsageAttribution(
+        customer_org_id="org-1", customer_team_id="team-1", customer_member_id="member-1"
+    )
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "usage-model",
+            "custom_llm_provider": "openai",
+            "call_type": "acompletion",
+            "litellm_call_id": "usage-request",
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key": "hashed-key",
+                    "status": "success",
+                    CUSTOMER_USAGE_METADATA_KEY: attribution.model_dump_json(),
+                    **({BILLED_RETRY_ATTEMPT_METADATA_KEY: True} if retry else {}),
+                }
+            },
+        },
+        response_obj=ModelResponse(
+            id="usage-request", model="usage-model", usage=Usage(prompt_tokens=10, completion_tokens=5)
+        ),
+        start_time=_NOW,
+        end_time=_NOW,
+    )
+    accounting: Final = build_accounting_payload(
+        {**payload, "spend": 0.75}, entities={}, model_access_groups=(), windows=(), router=lambda: None
+    )
+    contributions: Final = project(accounting)
+    usage: Final = next(item for item in contributions if item.table == "LiteLLM_DailyCustomerMemberSpend")
+    assert dict(usage.key) == {
+        "date": _NOW.date().isoformat(),
+        "customer_org_id": attribution.customer_org_id,
+        "customer_team_id": attribution.customer_team_id,
+        "customer_member_id": attribution.customer_member_id,
+        "model": payload["model"],
+        "model_group": payload["model_group"],
+        "custom_llm_provider": payload["custom_llm_provider"],
+        "api_key": payload["api_key"],
+        "mcp_namespaced_tool_name": "",
+        "endpoint": "/chat/completions",
+    }
+    assert dict(usage.increments) == {
+        "spend": 0.75,
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+        "api_requests": 0 if retry else 1,
+        "successful_requests": 0 if retry else 1,
+        "failed_requests": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "compression_saved_tokens": 0,
+        "compression_savings_spend": 0,
+        "prompt_caching_savings_spend": 0,
+        "gateway_injected_caching_savings_spend": 0,
+        "autorouter_savings_spend": 0,
+        "guardrail_spend": 0,
+        "total_response_time_ms": 0,
+        "timed_requests": 1,
+    }
+    assert {
+        item.table: dict(item.increments)["spend"]
+        for item in contributions
+        if item.table
+        in ("LiteLLM_CustomerOrganizationTable", "LiteLLM_CustomerTeamTable", "LiteLLM_CustomerMemberTable")
+    } == {
+        "LiteLLM_CustomerOrganizationTable": 0.75,
+        "LiteLLM_CustomerTeamTable": 0.75,
+        "LiteLLM_CustomerMemberTable": 0.75,
+    }
 
 
 @pytest.mark.parametrize("status", ["success", "failure"])

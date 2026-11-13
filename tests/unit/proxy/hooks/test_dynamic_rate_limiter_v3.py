@@ -3520,7 +3520,7 @@ async def test_a_failed_request_settles_the_team_share_gauges_too(monkeypatch: p
     registry = _prometheus_sink(monkeypatch)
     await _admit_then_settle(handler, _team_key(), tokens=90)
     claim_request_stash_for_data({"litellm_call_id": "failed-call"})
-    await _check(handler, _team_key(), saturation=0.0, data=_prompt(words=40), priority=None)
+    await _check(handler, _team_key(), saturation=0.5)
     await handler.async_log_failure_event(
         kwargs={
             "litellm_params": {"metadata": {"model_group": "shared-model"}},
@@ -3536,10 +3536,10 @@ async def test_a_failed_request_settles_the_team_share_gauges_too(monkeypatch: p
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "auth, burns, saturation_threshold, reason",
+    "auth, burns, saturation_threshold, reason, enforced_share_tokens",
     [
-        (_team_key(), (60, 70), 0.1, "model_per_team_saturated"),
-        (_capped_team_key(2), (150, 60), 0.5, "model_per_team_max_borrow_multiple"),
+        (_team_key(), (60, 70), 0.0, "model_per_team_saturated", 100),
+        (_capped_team_key(2), (150, 60), 0.5, "model_per_team_max_borrow_multiple", 200),
     ],
     ids=["saturated", "borrow_cap"],
 )
@@ -3549,6 +3549,7 @@ async def test_a_refused_request_is_counted_under_the_reason_its_429_header_carr
     burns: tuple[int, ...],
     saturation_threshold: float,
     reason: str,
+    enforced_share_tokens: int,
 ):
     handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=saturation_threshold)
     registry = _prometheus_sink(monkeypatch)
@@ -3564,7 +3565,10 @@ async def test_a_refused_request_is_counted_under_the_reason_its_429_header_carr
         )
         == 1
     )
-    assert _sample(registry, "litellm_dynamic_limiter_borrowed_tokens", **TEAM_LABELS) == sum(burns) - 100
+    assert _sample(registry, "litellm_dynamic_limiter_share_tokens", **TEAM_LABELS) == enforced_share_tokens
+    assert (
+        _sample(registry, "litellm_dynamic_limiter_borrowed_tokens", **TEAM_LABELS) == sum(burns) - enforced_share_tokens
+    )
 
 
 @pytest.mark.asyncio
@@ -3628,7 +3632,7 @@ async def test_an_alternates_refusal_is_not_counted_while_the_preferred_model_ad
 
 @pytest.mark.asyncio
 async def test_share_gauges_and_throttles_carry_the_teams_priority_so_the_series_join(monkeypatch: pytest.MonkeyPatch):
-    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.1)
+    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.0)
     registry = _prometheus_sink(monkeypatch)
     team: Final = UserAPIKeyAuth(
         api_key="sk-interactive",
@@ -3651,7 +3655,7 @@ async def test_share_gauges_and_throttles_carry_the_teams_priority_so_the_series
 async def test_a_fallback_served_request_publishes_the_teams_share_on_the_fallback_model(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    handler = _borrowing_handler(monkeypatch, borrows=True)
+    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.0)
     registry = _prometheus_sink(monkeypatch)
     team: Final = _team_key(team_limits={"model_tpm_limit": {"other-model": 40, "shared-model": 100}})
     assert await handler.async_pre_call_hook(team, DualCache(), {"model": "other-model"}, "completion") is None
@@ -3674,7 +3678,7 @@ async def test_a_failing_metrics_sink_never_changes_admission(monkeypatch: pytes
         def increment_dynamic_limiter_throttled(self, *args: object, **kwargs: object) -> None:
             raise RuntimeError("metrics backend down")
 
-    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.1)
+    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.0)
     _prometheus_sink(monkeypatch, BrokenSink)
     await _admit_at_the_hook(handler, _team_key(), tokens=60)
     await _admit_at_the_hook(handler, _team_key(), tokens=70)
