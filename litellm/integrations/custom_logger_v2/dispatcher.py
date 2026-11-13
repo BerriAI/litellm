@@ -4,6 +4,7 @@ import logging
 from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
+from functools import reduce
 from itertools import chain
 from operator import itemgetter
 from types import TracebackType
@@ -95,6 +96,21 @@ def _decides(hook: Hook, entry: Entry, result: object) -> bool:
             return True
         case _:
             return False
+
+
+async def _settle(running: Awaitable[object]) -> object:
+    try:
+        return await running
+    except Exception as error:
+        return error
+
+
+def _loop_running() -> bool:
+    try:
+        _ = asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
 
 
 def _fatal(error: BaseException) -> bool:
@@ -294,14 +310,48 @@ class RequestScope:
         call: CallFacts | None,
         binding: SyncBinding,
     ) -> Mapping[Field, object]:
-        v2_entries: Final = tuple(entry for entry in chain.from_iterable(plan.stages) if not entry.subscription.legacy)
-        if v2_entries or plan.awaited:
-            raise ContractViolation(
-                f"{hook.value} runs synchronously here, so only off-path V2 callbacks may subscribe"
+        staged: Final = tuple(chain.from_iterable(plan.stages))
+        if not plan.awaited and all(entry.subscription.legacy for entry in staged):
+            result: Final = run_legacy_plan_sync(plan, fields, binding)
+            self._submit_off_path(hook, plan.off_path, result, call)
+            return result
+        if any(entry.subscription.parallel for entry in staged):
+            raise ContractViolation("a synchronous hook cannot run parallel legacy entries")
+        blocking: Final = not _loop_running()
+        ran: Final = reduce(
+            lambda done, entry: self._run_sync_entry(hook, entry, done, call, binding, blocking),
+            (*staged, *plan.inline),
+            _Chain(fields=fields),
+        )
+        deferred: Final = tuple(entry for entry in staged if not (blocking or entry.subscription.legacy))
+        if blocking and plan.awaited:
+            awaited: Final = plan.awaited
+            self._swallow(
+                hook,
+                awaited,
+                asyncio.run(self._gather(hook, awaited, ran.fields, call, self._states_of(awaited))),
             )
-        result: Final = run_legacy_plan_sync(plan, fields, binding)
-        self._submit_off_path(hook, plan.off_path, result, call)
-        return result
+        self._submit_off_path(hook, (*deferred, *(() if blocking else plan.awaited), *plan.off_path), ran.fields, call)
+        return ran.fields
+
+    def _run_sync_entry(
+        self,
+        hook: Hook,
+        entry: Entry,
+        done: _Chain,
+        call: CallFacts | None,
+        binding: SyncBinding,
+        blocking: bool,
+    ) -> _Chain:
+        if entry.subscription.legacy:
+            return self._fold(hook, (entry,), (_legacy_start(entry, binding, done.fields),), done)
+        if not blocking:
+            return done
+        settled: Final = asyncio.run(_settle(self._invoke(hook, entry, done.fields, call, self._state(entry))))
+        folded: Final = self._fold(hook, (entry,), (settled,), done)
+        if folded.terminal is not None:
+            raise ContractViolation(f"{hook.value} runs synchronously here, so it cannot end the hook")
+        return folded
 
     def _state(self, entry: Entry) -> object:
         factory: Final = entry.manifest.request_state

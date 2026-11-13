@@ -15654,3 +15654,74 @@ async def test_a_failing_v2_log_prepare_writer_is_contained_and_async_success_st
     assert journal.count("v2") == 2
     assert recorder.done.is_set()
 
+
+def _sync_success(logging_obj: LitellmLogging) -> None:
+    logging_obj.stream = False
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={})
+    now: Final = datetime.datetime.now()
+    logging_obj.success_handler(result=ModelResponse(id="served"), start_time=now, end_time=now)
+
+
+def test_a_v2_log_prepare_writer_and_an_awaited_v2_run_inline_on_a_sync_success_between_legacy_loggers(
+    logging_obj: LitellmLogging, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    journal: Final[list[object]] = []
+    stamp: Final = _PayloadStamp()
+    recorder: Final = _EndedRecorder(journal)
+    _plane_lists(monkeypatch, success_callback=[_Entry("first", journal), stamp, recorder, _Entry("last", journal)])
+
+    _sync_success(logging_obj)
+
+    assert len(stamp.seen) == 1
+    assert [
+        entry[0] if isinstance(entry, tuple) else entry for entry in journal if entry not in _ran(journal, "hook")
+    ] == [
+        "first",
+        "last",
+        "v2",
+    ]
+    payload: Final[object] = logging_obj.model_call_details["standard_logging_object"]
+    assert isinstance(payload, dict)
+    assert payload["stamped_by"] == "v2"
+
+
+async def test_a_sync_success_on_a_running_loop_still_delivers_legacy_loggers_and_hands_v2_writers_off_path(
+    logging_obj: LitellmLogging, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    journal: Final[list[object]] = []
+    stamp: Final = _PayloadStamp()
+    recorder: Final = _EndedRecorder(journal)
+    _plane_lists(monkeypatch, success_callback=[_Entry("first", journal), stamp, recorder, _Entry("last", journal)])
+
+    _sync_success(logging_obj)
+
+    assert [entry[0] for entry in _ran(journal, "success")] == ["first", "last"]
+    assert await asyncio.to_thread(recorder.done.wait, 30)
+
+
+class _AwaitedSent(CustomLoggerV2):
+    def __init__(self, journal: list[object]) -> None:
+        self.journal = journal
+        self.done = threading.Event()
+
+    @on(Hook.provider_request_sent, awaited=True)
+    async def provider_request_sent(self, view: object, ctx: CallContext[object]) -> None:
+        self.journal.append("v2")
+        self.done.set()
+
+
+@pytest.mark.parametrize("on_loop", [False, True])
+async def test_an_awaited_v2_provider_request_sent_subscriber_keeps_every_legacy_log_pre_api_call(
+    logging_obj: LitellmLogging, monkeypatch: pytest.MonkeyPatch, on_loop: bool
+) -> None:
+    journal: Final[list[object]] = []
+    sent: Final = _AwaitedSent(journal)
+    _plane_lists(monkeypatch, input_callback=[_Entry("first", journal), sent, _Entry("last", journal)])
+
+    if on_loop:
+        _fire_provider_event(logging_obj, Hook.provider_request_sent)
+    else:
+        await asyncio.to_thread(_fire_provider_event, logging_obj, Hook.provider_request_sent)
+
+    assert await asyncio.to_thread(sent.done.wait, 30)
+    assert [entry[0] if isinstance(entry, tuple) else entry for entry in journal] == ["first", "last", "v2"]

@@ -307,11 +307,25 @@ def test_sync_subscribers_run_legacy_inline_in_order_and_hand_v2_callbacks_to_th
     assert journal[:2] == ["first", "second"]
 
 
-def test_sync_subscribers_reject_a_blocking_v2_callback() -> None:
-    subscribers: Final = hook_subscribers(Hook.log_prepare, [Masking(), BlockingAttemptEnded()])
+class SyncStamp(CustomLoggerV2):
+    @on(Hook.log_prepare, reads={F.standard_logging_payload}, writes={F.standard_logging_payload})
+    async def prepare(self, view: object, ctx: CallContext[object]) -> Patch:
+        return Patch().merge(F.standard_logging_payload, {"stamped": True})
 
-    with pytest.raises(ContractViolation, match="synchronously"):
-        run_subscribers_sync(subscribers, KwargsFields({}, {}), lambda logger, data: None)
+
+def test_sync_subscribers_run_a_blocking_v2_callback_inline_in_list_order() -> None:
+    journal: Final[list[object]] = []
+    details: Final[dict[str, object]] = {"standard_logging_object": {}}
+    masking: Final = Masking()
+    subscribers: Final = hook_subscribers(Hook.log_prepare, [SyncStamp(), masking, BlockingAttemptEnded()])
+
+    def start(logger: object, data: object) -> None:
+        journal.append((logger, data))
+
+    run_subscribers_sync(subscribers, KwargsFields(details, {F.standard_logging_payload: "standard_logging_object"}), start)
+
+    assert journal == [(masking, details)]
+    assert details["standard_logging_object"] == {"stamped": True}
 
 
 def test_every_entry_keeps_string_and_callable_callbacks_in_list_order() -> None:
