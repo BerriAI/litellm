@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, ClassVar, Final, Optional, TypeVar, cast
 
 import httpx
 from httpx import Response
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.constants import AWS_ERROR_TYPE_HEADER
@@ -22,7 +22,12 @@ from litellm.llms.bedrock.chat.converse_to_openai import as_json_array, as_json_
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     bedrock_invoke_guardrail_headers,
 )
-from litellm.types.llms.openai import ChatCompletionSystemMessage, ChatCompletionUserMessage
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionAssistantMessage,
+    ChatCompletionSystemMessage,
+    ChatCompletionUserMessage,
+)
 from litellm.types.utils import ModelResponseStream
 
 from ..base_aws_llm import BaseAWSLLM
@@ -333,6 +338,9 @@ def _leaf_texts(block: Mapping[str, object]) -> Iterator[str]:
         yield json.dumps(block["json"], default=str)
     if "toolUse" in block:
         yield json.dumps(_JSON_OBJECT.validate_python(block["toolUse"]).get("input"), default=str)
+    if "guardContent" in block:
+        guarded_text: Final = _JSON_OBJECT.validate_python(block["guardContent"]).get("text", {})
+        yield from _leaf_texts(_JSON_OBJECT.validate_python(guarded_text))
 
 
 def _block_texts(block: Mapping[str, object]) -> Iterator[str]:
@@ -369,6 +377,60 @@ def _count_prompt_tokens(model: str, request_body: object) -> int:
         *map(_chat_message, _JSON_OBJECTS.validate_python(body["messages"])),
     )
     return token_counter(model=model, messages=messages)
+
+
+_LOGGED_PARAMETER_NAMES: Final = MappingProxyType(
+    {
+        "max_gen_len": "max_tokens",
+        "max_tokens": "max_tokens",
+        "maxTokens": "max_tokens",
+        "maxTokenCount": "max_tokens",
+        "temperature": "temperature",
+        "top_p": "top_p",
+        "topP": "top_p",
+        "top_k": "top_k",
+        "topK": "top_k",
+        "stop": "stop",
+        "stop_sequences": "stop",
+        "stopSequences": "stop",
+        "dimensions": "dimensions",
+    }
+)
+_NESTED_PARAMETER_BLOCKS: Final = ("inferenceConfig", "textGenerationConfig")
+
+
+def _turn_message(turn: Mapping[str, object]) -> AllMessageValues:
+    content: Final = _content_text(turn.get("content", ""))
+    if turn.get("role") == "assistant":
+        return ChatCompletionAssistantMessage(role="assistant", content=content)
+    return ChatCompletionUserMessage(role="user", content=content)
+
+
+def _logged_messages(body: Mapping[str, object]) -> tuple[AllMessageValues, ...] | None:
+    if "messages" in body:
+        system: Final = body.get("system")
+        return (
+            *((ChatCompletionSystemMessage(role="system", content=_content_text(system)),) if system else ()),
+            *map(_turn_message, _JSON_OBJECTS.validate_python(body["messages"])),
+        )
+    prompt: Final = body.get("prompt", body.get("inputText"))
+    return (ChatCompletionUserMessage(role="user", content=prompt),) if isinstance(prompt, str) else None
+
+
+def _parameter_sources(body: Mapping[str, object]) -> Iterator[Mapping[str, object]]:
+    yield body
+    nested_blocks: Final = (as_json_object(body.get(name)) for name in _NESTED_PARAMETER_BLOCKS)
+    yield from (block for block in nested_blocks if block is not None)
+
+
+def _is_logged_parameter(item: tuple[str, object]) -> bool:
+    name, value = item
+    if name not in _LOGGED_PARAMETER_NAMES or isinstance(value, bool):
+        return False
+    entries: Final = as_json_array(value)
+    if entries is not None:
+        return all(isinstance(entry, str) for entry in entries)
+    return isinstance(value, (int, float))
 
 
 def _invoke_guardrail_trace(httpx_response: Response) -> Mapping[str, object]:
@@ -454,6 +516,18 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
 
     def is_streaming_request(self, endpoint: str, request_data: dict) -> bool:
         return "stream" in endpoint
+
+    def logging_messages(self, endpoint: str, request_data: Mapping[str, object]) -> Sequence[AllMessageValues] | None:
+        try:
+            return _logged_messages(request_data)
+        except ValidationError:
+            return None
+
+    def logging_model_parameters(self, endpoint: str, request_data: Mapping[str, object]) -> Mapping[str, object]:
+        parameters: Final = filter(
+            _is_logged_parameter, chain.from_iterable(source.items() for source in _parameter_sources(request_data))
+        )
+        return MappingProxyType({_LOGGED_PARAMETER_NAMES[name]: value for name, value in parameters})
 
     def _encode_model_id_for_endpoint(self, model_id: str) -> str:
         """

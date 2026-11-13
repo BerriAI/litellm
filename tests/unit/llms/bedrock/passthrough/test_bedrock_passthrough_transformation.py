@@ -6,6 +6,7 @@ import sys
 import types
 from binascii import crc32
 from collections.abc import Callable, Mapping
+from copy import deepcopy
 from datetime import datetime
 from types import MappingProxyType
 from typing import Final
@@ -16,7 +17,7 @@ import pytest
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.litellm_logging import Logging, get_standard_logging_object_payload
 from litellm.llms.base_llm.passthrough.transformation import PassthroughStreamCollector
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.passthrough.transformation import (
@@ -24,7 +25,12 @@ from litellm.llms.bedrock.passthrough.transformation import (
     is_bedrock_streaming_endpoint,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.passthrough.main import AsyncPassthroughStreamingResponse, PassthroughStreamingResponse
+from litellm.passthrough.main import (
+    AsyncPassthroughStreamingResponse,
+    PassthroughStreamingResponse,
+    allm_passthrough_route,
+    llm_passthrough_route,
+)
 from litellm.types.utils import ModelResponse
 
 CONVERSE_MODEL = "anthropic.claude-sonnet-4-5-20250929-v1:0"
@@ -1804,3 +1810,173 @@ def test_sdk_invoke_passthrough_bills_the_caller_guardrail_bedrock_traced_once(
     assert [_billed_guardrails(logged) for logged in callback.standard_logging_objects] == [
         [(BILLED_GUARDRAIL_USAGE, pytest.approx(BILLED_GUARDRAIL_COST))]
     ]
+
+
+LLAMA_MODEL: Final = "meta.llama3-1-8b-instruct-v1:0"
+BEDROCK_RUNTIME: Final = "https://bedrock-runtime.us-east-1.amazonaws.com"
+NATIVE_REQUESTS: Final = (
+    pytest.param(
+        f"/model/{LLAMA_MODEL}/invoke",
+        {"prompt": "llama prompt", "max_gen_len": 2, "temperature": 0.5, "top_p": 0.9},
+        [{"role": "user", "content": "llama prompt"}],
+        {"max_tokens": 2, "temperature": 0.5, "top_p": 0.9},
+        id="invoke-prompt",
+    ),
+    pytest.param(
+        "/model/amazon.titan-embed-text-v2:0/invoke",
+        {"inputText": "embedding input", "dimensions": 256, "normalize": False},
+        [{"role": "user", "content": "embedding input"}],
+        {"dimensions": 256},
+        id="invoke-embedding",
+    ),
+    pytest.param(
+        "/model/amazon.titan-text-express-v1/invoke",
+        {"inputText": "titan prompt", "textGenerationConfig": {"maxTokenCount": 5, "stopSequences": ["User:"]}},
+        [{"role": "user", "content": "titan prompt"}],
+        {"max_tokens": 5, "stop": ["User:"]},
+        id="invoke-text-generation-config",
+    ),
+    pytest.param(
+        f"/model/{CONVERSE_MODEL}/converse",
+        {
+            "system": [{"text": "system instruction"}, {"guardContent": {"text": {"text": "guarded system"}}}],
+            "messages": [
+                {"role": "user", "content": [{"text": "first question"}]},
+                {"role": "assistant", "content": [{"text": "first answer"}]},
+                {"role": "user", "content": [{"text": "follow-up"}]},
+            ],
+            "inferenceConfig": {"maxTokens": 2, "temperature": 0, "topP": 1},
+        },
+        [
+            {"role": "system", "content": "system instruction\nguarded system"},
+            {"role": "user", "content": "first question"},
+            {"role": "assistant", "content": "first answer"},
+            {"role": "user", "content": "follow-up"},
+        ],
+        {"max_tokens": 2, "temperature": 0, "top_p": 1},
+        id="converse",
+    ),
+)
+
+
+def _route_logging_obj(dynamic_async_success_callbacks: list[CustomLogger] | None = None) -> Logging:
+    return Logging(
+        model=f"bedrock/{CONVERSE_MODEL}",
+        messages="default-message-value",
+        stream=None,
+        call_type="allm_passthrough_route",
+        start_time=datetime(2025, 1, 1),
+        litellm_call_id="call-1",
+        function_id="fn-1",
+        dynamic_async_success_callbacks=dynamic_async_success_callbacks,
+    )
+
+
+@pytest.mark.parametrize("body_argument", ["data", "json"])
+@pytest.mark.parametrize(("endpoint", "body", "logged_messages", "logged_parameters"), NATIVE_REQUESTS)
+def test_native_bedrock_request_is_logged_with_its_prompt_and_parameters(
+    body_argument: str,
+    endpoint: str,
+    body: dict[str, object],
+    logged_messages: list[dict[str, str]],
+    logged_parameters: dict[str, object],
+) -> None:
+    sent_body: Final = deepcopy(body)
+    logging_obj: Final = _route_logging_obj()
+    transport: Final = httpx.MockTransport(lambda request: httpx.Response(200, json={"generation": "OK"}))
+
+    llm_passthrough_route(
+        method="POST",
+        model=f"bedrock/{LLAMA_MODEL}",
+        endpoint=endpoint,
+        api_base=BEDROCK_RUNTIME,
+        client=HTTPHandler(client=httpx.Client(transport=transport)),
+        litellm_logging_obj=logging_obj,
+        data=body if body_argument == "data" else None,
+        json=body if body_argument == "json" else None,
+        aws_access_key_id="AKIAROUTEKEY",
+        aws_secret_access_key="route-secret",
+        aws_region_name="us-east-1",
+    )
+    payload: Final = get_standard_logging_object_payload(
+        kwargs=logging_obj.model_call_details,
+        init_response_obj=ModelResponse(),
+        start_time=datetime(2025, 1, 1),
+        end_time=datetime(2025, 1, 1, 0, 0, 1),
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert body == sent_body
+    assert payload is not None
+    assert payload["messages"] == logged_messages
+    assert payload["model_parameters"] == logged_parameters
+    assert logging_obj.model_call_details["stream"] is False
+
+
+def test_unreadable_native_bedrock_body_keeps_the_request_flowing() -> None:
+    logging_obj: Final = _route_logging_obj()
+    placeholder_messages: Final = logging_obj.messages
+    sent: Final[list[httpx.Request]] = []
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(200, json={"generation": "OK"})
+
+    response: Final = llm_passthrough_route(
+        method="POST",
+        model=f"bedrock/{CONVERSE_MODEL}",
+        endpoint=f"/model/{CONVERSE_MODEL}/converse",
+        api_base=BEDROCK_RUNTIME,
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(reply))),
+        litellm_logging_obj=logging_obj,
+        json={"messages": "not a list of turns", "inferenceConfig": {"maxTokens": True, "stopSequences": [1, 2]}},
+        aws_access_key_id="AKIAROUTEKEY",
+        aws_secret_access_key="route-secret",
+        aws_region_name="us-east-1",
+    )
+
+    assert isinstance(response, httpx.Response)
+    assert response.status_code == 200
+    assert len(sent) == 1
+    assert logging_obj.model_call_details["messages"] == placeholder_messages
+    assert logging_obj.model_call_details["optional_params"] == {}
+
+
+@pytest.mark.asyncio
+async def test_native_bedrock_stream_is_logged_as_a_stream_with_its_prompt() -> None:
+    callback: Final = _CaptureAsyncSuccessCallback()
+    logging_obj: Final = _route_logging_obj([callback])
+    stream: Final = _converse_text_stream(["streamed reply"])
+    transport: Final = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200, headers={"content-type": "application/vnd.amazon.eventstream"}, content=stream
+        )
+    )
+
+    relay: Final = await allm_passthrough_route(
+        method="POST",
+        model=f"bedrock/{CONVERSE_MODEL}",
+        endpoint=CONVERSE_STREAM_ENDPOINT,
+        api_base=BEDROCK_RUNTIME,
+        client=AsyncHTTPHandler(transport=transport),
+        litellm_logging_obj=logging_obj,
+        json={
+            "messages": [{"role": "user", "content": [{"text": "stream prompt"}]}],
+            "inferenceConfig": {"maxTokens": 64},
+        },
+        aws_access_key_id="AKIAROUTEKEY",
+        aws_secret_access_key="route-secret",
+        aws_region_name="us-east-1",
+    )
+    assert isinstance(relay, AsyncPassthroughStreamingResponse)
+    relayed: Final = b"".join([chunk async for chunk in relay])
+
+    assert relayed == stream
+    assert await relay.wait_for_spend_flush() is True
+    assert callback.kwargs is not None
+    standard_logging_object: Final = callback.kwargs["standard_logging_object"]
+    assert isinstance(standard_logging_object, dict)
+    assert standard_logging_object["stream"] is True
+    assert standard_logging_object["messages"] == [{"role": "user", "content": "stream prompt"}]
+    assert standard_logging_object["model_parameters"] == {"max_tokens": 64}

@@ -7,9 +7,9 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import weakref
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Coroutine, Generator, Iterator
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Coroutine, Generator, Iterator, Mapping
 from functools import partial
-from types import TracebackType
+from types import MappingProxyType, TracebackType
 from typing import Final, cast
 
 import httpx
@@ -28,6 +28,7 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 from .utils import BasePassthroughUtils
 
 _provider_errors: Final[weakref.WeakSet[httpx.HTTPStatusError]] = weakref.WeakSet()
+_NO_REQUEST_BODY: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 def raise_for_provider_status(response: httpx.Response) -> None:
@@ -502,15 +503,6 @@ def llm_passthrough_route(
     if "model_id" in kwargs:
         litellm_params_dict["model_id"] = kwargs["model_id"]
 
-    litellm_logging_obj.update_environment_variables(
-        model=model,
-        litellm_params=litellm_params_dict,
-        optional_params={},
-        endpoint=endpoint,
-        custom_llm_provider=custom_llm_provider,
-        request_data=data if data else json,
-    )
-
     provider_config: Final = cast(
         BasePassthroughConfig | None, kwargs.get("provider_config")
     ) or ProviderConfigManager.get_provider_passthrough_config(
@@ -519,6 +511,29 @@ def llm_passthrough_route(
     )
     if provider_config is None:
         raise Exception(f"Provider {custom_llm_provider} not found")
+
+    _request_data: Final[dict[str, object] | None] = (
+        data if isinstance(data, dict) else (json if isinstance(json, dict) else None)
+    )
+    request_body: Final = _request_data if _request_data is not None else _NO_REQUEST_BODY
+    is_streaming_request: Final = provider_config.is_streaming_request(
+        endpoint=endpoint,
+        request_data=_request_data or {},
+    )
+    litellm_logging_obj.stream = is_streaming_request
+
+    logged_parameters: Final = provider_config.logging_model_parameters(endpoint=endpoint, request_data=request_body)
+    litellm_logging_obj.update_environment_variables(
+        model=model,
+        litellm_params=litellm_params_dict,
+        optional_params=dict(logged_parameters),
+        endpoint=endpoint,
+        custom_llm_provider=custom_llm_provider,
+        request_data=data if data else json,
+    )
+    logged_messages: Final = provider_config.logging_messages(endpoint=endpoint, request_data=request_body)
+    if logged_messages is not None:
+        litellm_logging_obj.update_messages(list(logged_messages))
 
     updated_url, base_target_url = provider_config.get_complete_url(
         api_base=api_base,
@@ -553,7 +568,6 @@ def llm_passthrough_route(
         forward_headers=False,
     )
 
-    _request_data: dict | None = data if isinstance(data, dict) else (json if isinstance(json, dict) else None)
     headers, signed_json_body = provider_config.sign_request(
         headers=headers,
         litellm_params={**litellm_params_dict, "guardrailConfig": guardrailConfig},
@@ -577,18 +591,6 @@ def llm_passthrough_route(
         headers=headers,
         cookies=cookies,
     )
-
-    ## IS STREAMING REQUEST
-    _streaming_request_data: Final[dict[str, object]] = (
-        data if isinstance(data, dict) else (json if isinstance(json, dict) else {})
-    )
-    is_streaming_request: Final = provider_config.is_streaming_request(
-        endpoint=endpoint,
-        request_data=_streaming_request_data,
-    )
-
-    # Update logging object with streaming status
-    litellm_logging_obj.stream = is_streaming_request
 
     ## LOGGING PRE-CALL
     request_data: Final = data if data else json
