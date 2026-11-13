@@ -1591,7 +1591,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
     @with_service_target(RATE_LIMITS_TARGET)
     async def async_post_call_failure_hook(
         self,
-        request_data: dict,  # pyright: ignore[reportMissingTypeArgument]  # the proxy's bare request dict, as the base hook declares it
+        request_data: dict[str, object],  # mutable-ok: the base hook declares this parameter as a dict
         original_exception: Exception,
         user_api_key_dict: UserAPIKeyAuth,
         traceback_str: str | None = None,
