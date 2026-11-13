@@ -41,13 +41,16 @@ function HierarchyHeader({ hierarchy, selected }: Pick<ScopeProps, "hierarchy" |
   const entity = selected.entity;
   const team = selected.team;
   const label = customerEntityLabel(entity);
-  const budget = entity.kind === "member" ? entity.record.effective_budget : entity.record.budget;
+  const budget = entity.kind === "organization" ? entity.record.budget : entity.record.effective_budget;
   const budgetEntity: CustomerUsageEntity = {
     id: customerEntityId(entity),
     label,
     spend: entity.record.spend,
     budgetLimit: budget?.max_budget ?? null,
+    budgetDuration: budget?.budget_duration ?? null,
+    budgetLimits: budget?.budget_limits ?? [],
     budgetResetAt: entity.record.budget_reset_at ?? null,
+    budgetUsage: entity.record.budget_usage,
   };
   const budgetScope = {
     org: selected.organization.customer_org_id,

@@ -134,7 +134,7 @@ describe("customer hierarchy management", () => {
     const table = await screen.findByRole("table", { name: "Customer teams" });
     expect(within(table).getByRole("button", { name: "Product" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Example customer" })).toBeInTheDocument();
-    expect(screen.getByRole("progressbar", { name: "Current budget" })).toHaveAttribute("aria-valuenow", "12");
+    expect(screen.getByRole("progressbar", { name: "Recorded budget spend" })).toHaveAttribute("aria-valuenow", "12");
     expect(
       requestedUrls()
         .find((url) => url.pathname === "/management/v1/customer_teams")
@@ -150,6 +150,33 @@ describe("customer hierarchy management", () => {
       ["org-1", "1"],
       ["org-1", "2"],
     ]);
+  });
+
+  it("should show effective member window limits without treating them as an absent budget", async () => {
+    fetchMock.mockImplementation(async (input) =>
+      requestUrl(input).pathname === "/management/v1/customer_members/member-a"
+        ? json({
+            ...member,
+            effective_budget: {
+              max_budget: null,
+              budget_limits: [
+                { budget_duration: "1mo", max_budget: 10 },
+                { budget_duration: "12mo", max_budget: 100 },
+              ],
+            },
+          })
+        : serve(input),
+    );
+    renderWithProviders(<CustomerHierarchyManager />, { searchParams: "?org=org-1&team=team-a&member=member-a" });
+    const summary = await screen.findByRole("region", { name: "Current budget" });
+    expect(within(summary).getByText("Unavailable / $10.00")).toBeInTheDocument();
+    expect(within(summary).getByText("Unavailable / $100.00")).toBeInTheDocument();
+    expect(within(summary).getByRole("link", { name: "Edit budget" })).toHaveAttribute(
+      "href",
+      `${uiHref("customers/manage")}?org=org-1&team=team-a&member=member-a&tab=settings`,
+    );
+    expect(within(summary).queryByText(/No limit/)).not.toBeInTheDocument();
+    expect(within(summary).queryByRole("progressbar")).not.toBeInTheDocument();
   });
 
   it("should list customer members across an organization and open their customer team context", async () => {
