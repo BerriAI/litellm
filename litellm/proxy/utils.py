@@ -2405,7 +2405,7 @@ class ProxyLogging:
         # global lists. The manager dedupes, so this is idempotent with
         # ``function_setup``.
         for callback in litellm.callbacks:
-            if isinstance(callback, CustomLogger):
+            if isinstance(callback, CustomLogger | CustomLoggerV2):
                 litellm.logging_callback_manager.add_litellm_success_callback(callback)
                 litellm.logging_callback_manager.add_litellm_failure_callback(callback)
                 litellm.logging_callback_manager.add_litellm_async_success_callback(callback)

@@ -15582,3 +15582,34 @@ async def test_prompt_resolve_propagates_the_managers_error(logging_obj: Litellm
         await _resolve_prompt(logging_obj, _PromptManager(("m", [], {}), error), use_async)
 
     assert raised.value is error
+
+
+class _EndedRecorder(CustomLoggerV2):
+    def __init__(self, journal: list[object]) -> None:
+        self.journal = journal
+        self.done = threading.Event()
+
+    @on(Hook.attempt_ended, awaited=True)
+    async def attempt_ended(self, view: object, ctx: CallContext[object]) -> None:
+        self.journal.append("v2")
+        self.done.set()
+
+
+async def test_a_v2_callback_in_litellm_callbacks_gets_attempt_ended_after_an_acompletion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    journal: Final[list[object]] = []
+    recorder: Final = _EndedRecorder(journal)
+    _plane_lists(monkeypatch)
+    monkeypatch.setattr(litellm, "callbacks", [_Entry("legacy", journal), recorder])
+
+    _ = await litellm.acompletion(model="gpt-4o", messages=[{"role": "user", "content": "hi"}], mock_response="ok")
+
+    assert await asyncio.to_thread(recorder.done.wait, 30)
+    assert recorder in litellm._async_success_callback
+    assert recorder in litellm._async_failure_callback
+    successes: Final = _ran(journal, "success")
+    assert [entry[0] if entry in successes else entry for entry in journal if entry == "v2" or entry in successes] == [
+        "legacy",
+        "v2",
+    ]

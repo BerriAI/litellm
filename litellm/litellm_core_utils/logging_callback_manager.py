@@ -8,6 +8,7 @@ from litellm._logging import verbose_logger
 from litellm.constants import MAX_CALLBACKS
 from litellm.integrations.additional_logging_utils import AdditionalLoggingUtils
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_logger_v2.logger import CustomLoggerV2
 from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
 from litellm.types.utils import CallbacksByType
 
@@ -75,7 +76,7 @@ class LoggingCallbackManager:
                 parent_list=litellm.callbacks,
             )
 
-    def add_litellm_success_callback(self, callback: CustomLogger | str | Callable[..., object]):
+    def add_litellm_success_callback(self, callback: CustomLogger | str | Callable[..., object] | CustomLoggerV2):
         """
         Add a success callback to `litellm.success_callback`.
         Auto-routes async callbacks to litellm._async_success_callback.
@@ -92,7 +93,7 @@ class LoggingCallbackManager:
             else:
                 self._safe_add_callback_to_list(callback=callback, parent_list=litellm.success_callback)
 
-    def add_litellm_failure_callback(self, callback: CustomLogger | str | Callable[..., object]):
+    def add_litellm_failure_callback(self, callback: CustomLogger | str | Callable[..., object] | CustomLoggerV2):
         """
         Add a failure callback to `litellm.failure_callback`.
         Auto-routes async callbacks to litellm._async_failure_callback.
@@ -103,14 +104,14 @@ class LoggingCallbackManager:
             else:
                 self._safe_add_callback_to_list(callback=callback, parent_list=litellm.failure_callback)
 
-    def add_litellm_async_success_callback(self, callback: CustomLogger | Callable[..., object] | str):
+    def add_litellm_async_success_callback(self, callback: CustomLogger | Callable[..., object] | str | CustomLoggerV2):
         """
         Add a success callback to litellm._async_success_callback
         """
         with _callback_lists_lock:
             self._safe_add_callback_to_list(callback=callback, parent_list=litellm._async_success_callback)
 
-    def add_litellm_async_failure_callback(self, callback: CustomLogger | Callable[..., object] | str):
+    def add_litellm_async_failure_callback(self, callback: CustomLogger | Callable[..., object] | str | CustomLoggerV2):
         """
         Add a failure callback to litellm._async_failure_callback
         """
@@ -266,7 +267,7 @@ class LoggingCallbackManager:
 
     def _safe_add_callback_to_list(
         self,
-        callback: CustomLogger | Callable[..., object] | str,
+        callback: CustomLogger | CustomLoggerV2 | Callable[..., object] | str,
         parent_list: list[CustomLogger | Callable[..., object] | str],
     ):
         """
@@ -290,6 +291,9 @@ class LoggingCallbackManager:
                 custom_logger=callback,
                 parent_list=parent_list,
             )
+        elif isinstance(callback, CustomLoggerV2):
+            if not any(existing is callback for existing in parent_list):
+                parent_list.append(callback)  # pyright: ignore[reportArgumentType]  # the event lists also hold V2 callbacks
 
         elif callable(callback):
             self._add_callback_function_to_list(callback=callback, parent_list=parent_list)
