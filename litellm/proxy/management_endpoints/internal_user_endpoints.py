@@ -97,6 +97,7 @@ from litellm.proxy.utils import handle_exception_on_proxy, hash_password, query_
 from litellm.redis.stores.spend_counters import (
     user_counter,
 )
+from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
@@ -485,7 +486,7 @@ async def _memberships_on_team_member_budget(
     capped_team_ids: Final = [m.team_id for m in memberships if m.max_budget_in_team is not None]
     if not capped_team_ids:
         return memberships
-    team_rows: Final = await _team_table(prisma_client).find_many(where={"team_id": {"in": capped_team_ids}})
+    team_rows: Final = await find_many_in(_team_table(prisma_client), "team_id", capped_team_ids)
     budgeted_team_ids: Final = frozenset(
         row.team_id
         for row in team_rows
