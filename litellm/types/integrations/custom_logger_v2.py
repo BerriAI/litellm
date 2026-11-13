@@ -363,6 +363,12 @@ class RateLimitState(Record):
     additional_headers_present: bool | None = None
 
 
+class LoggedModelGroup(Record):
+    value: Scalar | None = None
+    error_type: str | None = None
+    error_text: str | None = None
+
+
 class LoggedRequest(Record):
     client_ip: Scalar | None = None
     user_agent: Scalar | None = None
@@ -447,6 +453,7 @@ __all__ = [
     "KeyIdentity",
     "KeyLimits",
     "LoggedKeyIdentity",
+    "LoggedModelGroup",
     "LoggedRequest",
     "McpToolCall",
     "MetadataKind",

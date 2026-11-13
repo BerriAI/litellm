@@ -398,5 +398,13 @@
     "agent_id": 42,
     "request_user": 42,
     "cost_tracking_end_user_id": 42
+  },
+  "logged_model_group": {
+    "rejected": [
+      "member"
+    ],
+    "value": 42,
+    "error_type": "text",
+    "error_text": "text"
   }
 }

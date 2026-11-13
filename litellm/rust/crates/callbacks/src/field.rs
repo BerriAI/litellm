@@ -104,6 +104,7 @@ fields! {
     ColdStorageObjectKey = 40, SmallRecord, std::string::String;
     StandardLoggingPayloadRef = 41, Compatibility, u64;
     LoggedKeyIdentity = 42, SmallRecord, crate::record::LoggedKeyIdentity;
+    LoggedModelGroup = 43, SmallRecord, crate::record::LoggedModelGroup;
 }
 
 impl Field {
@@ -138,6 +139,7 @@ pub const DERIVED_ONLY: FieldSet = FieldSet::of(&[
     Field::ColdStorageObjectKey,
     Field::StandardLoggingPayloadRef,
     Field::LoggedKeyIdentity,
+    Field::LoggedModelGroup,
 ]);
 
 pub const BY_REFERENCE: FieldSet = FieldSet::of(&[Field::StandardLoggingPayloadRef]);
@@ -229,7 +231,7 @@ mod tests {
     #[case::wire(Field::ProviderRequestBody, 24, "provider_request_body")]
     #[case::compatibility(Field::DeprecatedResponseObj, 29, "deprecated_response_obj")]
     #[case::typed(Field::KeyLimits, 30, "key_limits")]
-    #[case::last(Field::LoggedKeyIdentity, 42, "logged_key_identity")]
+    #[case::last(Field::LoggedModelGroup, 43, "logged_model_group")]
     fn a_field_keeps_its_bit_and_its_snake_case_name(
         #[case] field: Field,
         #[case] bit: u8,

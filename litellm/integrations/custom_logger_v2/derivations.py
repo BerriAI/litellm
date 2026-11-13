@@ -18,6 +18,7 @@ from litellm.types.integrations.custom_logger_v2 import (
     KeyIdentity,
     KeyLimits,
     LoggedKeyIdentity,
+    LoggedModelGroup,
     LoggedRequest,
     McpToolCall,
     MetadataKind,
@@ -537,8 +538,30 @@ def model_group(args: HookArgs) -> object:
     return _metadata_value(params.get(name), "model_group")
 
 
+def _handler_model_group(request: Mapping[str, object] | None) -> tuple[object, Exception | None]:
+    if request is None:
+        return None, None
+    from litellm.proxy.common_utils.callback_utils import get_model_group_from_litellm_kwargs
+
+    try:
+        return get_model_group_from_litellm_kwargs(request), None  # pyright: ignore[reportArgumentType]  # the logging handlers pass model_call_details
+    except Exception as error:  # noqa: BLE001  # the port reproduces what the logging handlers do when the helper raises
+        return None, error
+
+
+def logged_model_group(args: HookArgs) -> LoggedModelGroup | None:
+    request: Final = mapping(args.request)
+    if request is None:
+        return None
+    group, error = _handler_model_group(request)
+    if error is not None:
+        return LoggedModelGroup(error_type=type(error).__name__, error_text=str(error))
+    return coerce_record(LoggedModelGroup, {"value": group})
+
+
 def rate_limit_state(args: HookArgs) -> RateLimitState | None:
-    group: Final = model_group(args)
+    group, error = _handler_model_group(mapping(args.request))
+    raised: Final = error is not None
     metadata: Final = litellm_params(args).get("metadata")
     hidden: Final = member(payload_of(args), "hidden_params")
     headers: Final = member(mapping(hidden), "additional_headers")
@@ -546,9 +569,13 @@ def rate_limit_state(args: HookArgs) -> RateLimitState | None:
     return coerce_record(
         RateLimitState,
         {
-            "key_model_group": group,
-            "key_remaining_requests": _metadata_value(metadata, f"litellm-key-remaining-requests-{group}"),
-            "key_remaining_tokens": _metadata_value(metadata, f"litellm-key-remaining-tokens-{group}"),
+            "key_model_group": None if raised else group,
+            "key_remaining_requests": None
+            if raised
+            else _metadata_value(metadata, f"litellm-key-remaining-requests-{group}"),
+            "key_remaining_tokens": None
+            if raised
+            else _metadata_value(metadata, f"litellm-key-remaining-tokens-{group}"),
             "limiter_headers": None
             if header_map is None
             else {key: value for key, value in header_map.items() if key.startswith(_LIMITER_HEADER_PREFIX)},
@@ -621,12 +648,14 @@ RECORD_TYPES: Final[Mapping[Field, object]] = MappingProxyType(
         Field.log_id: str,
         Field.cold_storage_object_key: str,
         Field.logged_key_identity: LoggedKeyIdentity,
+        Field.logged_model_group: LoggedModelGroup,
     }
 )
 
 LOGGING_SLOTS: Final[Mapping[Field, Slot]] = MappingProxyType(
     {
         Field.logged_key_identity: derived(logged_key_identity),
+        Field.logged_model_group: derived(logged_model_group),
         Field.deployment: derived(deployment),
         Field.request_tags: derived(request_tags),
         Field.guardrail_info: derived(guardrail_info),
@@ -694,6 +723,7 @@ __all__ = [
     "key_limits",
     "log_id",
     "logged_key_identity",
+    "logged_model_group",
     "logged_request",
     "mapping",
     "mcp_tool_call",

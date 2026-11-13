@@ -319,6 +319,15 @@ pub struct RateLimitState {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
+pub struct LoggedModelGroup {
+    pub rejected: Option<Vec<String>>,
+    pub value: Option<Scalar>,
+    pub error_type: Option<String>,
+    pub error_text: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct LoggedRequest {
     pub rejected: Option<Vec<String>>,
     pub client_ip: Option<Scalar>,
@@ -375,6 +384,7 @@ mod tests {
             Field::LogId => round_trip::<typed::LogId>(sample),
             Field::ColdStorageObjectKey => round_trip::<typed::ColdStorageObjectKey>(sample),
             Field::LoggedKeyIdentity => round_trip::<typed::LoggedKeyIdentity>(sample),
+            Field::LoggedModelGroup => round_trip::<typed::LoggedModelGroup>(sample),
             other => panic!("{other:?} has no typed record sample"),
         }
     }
@@ -388,7 +398,7 @@ mod tests {
             assert_eq!(&decoded(field, sample), sample, "{name}");
         }
         let typed: Vec<&str> = samples.keys().map(String::as_str).collect();
-        assert_eq!(typed.len(), 19);
+        assert_eq!(typed.len(), 20);
     }
 
     #[rstest]

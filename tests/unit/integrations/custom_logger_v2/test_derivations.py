@@ -15,6 +15,7 @@ from litellm.integrations.custom_logger_v2 import derivations
 from litellm.integrations.custom_logger_v2.derivations import RECORD_TYPES
 from litellm.integrations.custom_logger_v2.slots import HookArgs
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.callback_utils import get_model_group_from_litellm_kwargs
 from litellm.types.integrations.custom_logger_v2 import (
     AttemptTiming,
     BudgetPlan,
@@ -27,6 +28,7 @@ from litellm.types.integrations.custom_logger_v2 import (
     KeyIdentity,
     KeyLimits,
     LoggedKeyIdentity,
+    LoggedModelGroup,
     MetadataKind,
     ModelInfo,
     ModelPreference,
@@ -1279,3 +1281,93 @@ def test_a_completion_start_that_is_present_but_none_differs_from_a_missing_one(
     assert present is not None
     assert missing is not None
     assert (present.completion_start_present, missing.completion_start_present) == (True, False)
+
+
+def _helper_outcome(request: dict[str, object]) -> LoggedModelGroup:
+    try:
+        group: Final = get_model_group_from_litellm_kwargs(request)
+    except Exception as error:  # noqa: BLE001  # the outcome the logging handlers see
+        return LoggedModelGroup(error_type=type(error).__name__, error_text=str(error))
+    return coerce_record(LoggedModelGroup, {"value": group})
+
+
+_MODEL_GROUP_REQUESTS: Final = (
+    pytest.param({"litellm_params": {"metadata": {"model_group": "g"}}}, id="metadata"),
+    pytest.param(
+        {"litellm_params": {"metadata": {"model_group": "g"}, "litellm_metadata": {"model_group": "lg"}}},
+        id="litellm_metadata_only_inside_params",
+    ),
+    pytest.param(
+        {
+            "litellm_metadata": None,
+            "litellm_params": {"metadata": {"model_group": "g"}, "litellm_metadata": {"model_group": "lg"}},
+        },
+        id="litellm_metadata_top_level",
+    ),
+    pytest.param({"litellm_metadata": {}, "litellm_params": {"metadata": {"model_group": "g"}}}, id="empty_bucket"),
+    pytest.param({"litellm_params": {"metadata": {"model_group": 7}}}, id="int_group"),
+    pytest.param({"litellm_params": {"metadata": {"model_group": ["g"]}}}, id="list_group"),
+    pytest.param({"litellm_params": ["g"]}, id="params_not_a_mapping"),
+    pytest.param({"litellm_params": {"metadata": "g"}}, id="metadata_not_a_mapping"),
+    pytest.param({"litellm_params": {"metadata": []}}, id="falsy_metadata"),
+    pytest.param({}, id="no_params"),
+)
+
+
+@pytest.mark.parametrize("request_data", _MODEL_GROUP_REQUESTS)
+def test_logged_model_group_is_what_the_logging_handlers_helper_returns_or_raises(
+    request_data: dict[str, object],
+) -> None:
+    assert derivations.logged_model_group(HookArgs(request=request_data)) == _helper_outcome(request_data)
+
+
+def test_logged_model_group_names_the_error_the_helper_raises() -> None:
+    assert derivations.logged_model_group(HookArgs(request={"litellm_params": {"metadata": "g"}})) == LoggedModelGroup(
+        error_type="AttributeError", error_text="'str' object has no attribute 'get'"
+    )
+
+
+def test_rate_limit_state_reads_remaining_limits_under_the_model_group_the_helper_picks() -> None:
+    request: Final = {
+        "litellm_params": {
+            "litellm_metadata": {"model_group": "lg"},
+            "metadata": {
+                "model_group": "g",
+                "litellm-key-remaining-requests-g": 5,
+                "litellm-key-remaining-tokens-g": 6,
+                "litellm-key-remaining-requests-lg": 50,
+            },
+        }
+    }
+
+    state: Final = derivations.rate_limit_state(HookArgs(request=request))
+
+    assert state is not None
+    assert (state.key_model_group, state.key_remaining_requests, state.key_remaining_tokens) == ("g", 5, 6)
+
+
+def test_rate_limit_state_formats_a_missing_or_non_str_model_group_into_the_key_like_prometheus() -> None:
+    request: Final = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": ["g"],
+                "litellm-key-remaining-requests-['g']": 5,
+                "litellm-key-remaining-tokens-None": 6,
+            }
+        }
+    }
+    missing: Final = {"litellm_params": {"metadata": {"litellm-key-remaining-tokens-None": 6}}}
+
+    state: Final = derivations.rate_limit_state(HookArgs(request=request))
+    without_group: Final = derivations.rate_limit_state(HookArgs(request=missing))
+
+    assert state is not None
+    assert without_group is not None
+    assert (state.key_remaining_requests, state.key_remaining_tokens) == (5, None)
+    assert (without_group.key_model_group, without_group.key_remaining_tokens) == (None, 6)
+
+
+def test_rate_limit_state_leaves_the_key_limits_absent_when_the_helper_raises() -> None:
+    state: Final = derivations.rate_limit_state(HookArgs(request={"litellm_params": {"metadata": "g"}}))
+
+    assert state == RateLimitState(hidden_params_present=False, additional_headers_present=False)
