@@ -696,7 +696,7 @@ async def load_customer_hierarchy(
             f"aliased {identity.customer_org_alias}",
             CUSTOMER_ORG_ALIAS_HEADER,
         )
-    if identity.customer_team_id is None:
+    if identity.customer_team_id is None or hierarchy.customer_member_id is None:
         return hierarchy
     selected: Final = select_customer_team(hierarchy, identity.customer_team_id)
     if selected is None:

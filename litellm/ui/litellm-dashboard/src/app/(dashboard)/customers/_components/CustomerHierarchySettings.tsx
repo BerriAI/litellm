@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Trash2 } from "lucide-react";
@@ -85,6 +86,7 @@ const DELETE_MESSAGES = {
 } as const;
 
 function SettingsForm({ entity, organization, onSaved, onDeleted }: Props) {
+  const queryClient = useQueryClient();
   const { t } = useTranslation();
   const initial = customerHierarchyFields(entity);
   const [fields, setFields] = useState(initial);
@@ -128,6 +130,7 @@ function SettingsForm({ entity, organization, onSaved, onDeleted }: Props) {
     setDeleteError(null);
     try {
       await deleteEntity(entity);
+      void queryClient.invalidateQueries({ queryKey: ["get", "/management/v1/customer_portal/limits"] });
       setDeleteOpen(false);
       onDeleted();
     } catch (cause) {

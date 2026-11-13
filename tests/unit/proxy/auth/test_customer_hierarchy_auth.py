@@ -778,8 +778,10 @@ async def test_a_member_the_aliased_organization_has_never_seen_is_registered_th
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("error", (ErrorCode.BUDGET_REQUIRED, ErrorCode.FREE_TIER_LIMIT))
+@pytest.mark.parametrize("team_id", (None, "team-1"))
 async def test_an_unknown_member_runs_untracked_without_an_alias_and_on_the_organization_when_registration_fails(
     error: ErrorCode,
+    team_id: str | None,
 ) -> None:
     members: Final = _MemberTable({})
     registrar: Final = _Registrar(members)
@@ -791,7 +793,9 @@ async def test_an_unknown_member_runs_untracked_without_an_alias_and_on_the_orga
     failing: Final = _Registrar(members, Failure(error))
     prisma: Final = _Prisma(members, _OrganizationTable((_organization("acme", max_budget=5.0),)))
     organization_only: Final = await _resolve(
-        prisma, CustomerRequestIdentity(customer_member_id="user-7", customer_org_alias="acme"), register=failing
+        prisma,
+        CustomerRequestIdentity(customer_member_id="user-7", customer_org_alias="acme", customer_team_id=team_id),
+        register=failing,
     )
     assert failing.calls == (("org-1", "user-7"),)
     assert organization_only is not None
