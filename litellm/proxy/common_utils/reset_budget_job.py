@@ -864,45 +864,6 @@ class ResetBudgetJob:
             verbose_proxy_logger.warning("Failed to fetch %s for counter invalidation: %s", log_subject, e)
             return ()
 
-    async def _invalidate_enduser_caches(self, budget_ids: Sequence[str]) -> _EndUserWalk:
-        """Drop the cached spend of every customer the committed tier reset zeroed.
-
-        Paged like ``_reset_windows_for``, and capless for its reason too: the
-        customers on one tier are unbounded, and a cap cannot keep its position
-        across pod elections, so it would restart at the first customer forever.
-        """
-        if not budget_ids:
-            return _ENDUSER_WALK_DONE
-        where: Final = _enduser_invalidation_where(budget_ids)
-        walk = _EndUserWalk()
-        while walk.cursor is not None:
-            walk = await self._invalidate_enduser_page(where=where, cursor=walk.cursor, reached=walk.invalidated)
-        return walk
-
-    async def _invalidate_enduser_page(self, where: Mapping[str, object], cursor: str, reached: int) -> _EndUserWalk:
-        """Invalidate one page of customers and say where the walk goes next."""
-        try:
-            rows: Final = await self._fetch_enduser_page(where=where, cursor=cursor)
-        except Exception as e:
-            verbose_proxy_logger.warning(
-                "Failed to fetch end users for cache invalidation after %s customers (cursor %r): %s. "
-                "The customers past that page keep their cached spend until it expires.",
-                reached,
-                cursor,
-                e,
-            )
-            return _EndUserWalk(cursor=None, invalidated=reached, truncated=True)
-        if not rows:
-            return _EndUserWalk(cursor=None, invalidated=reached)
-        await self._invalidate_caches(
-            counter_keys=tuple(_enduser_counter_key(row) for row in rows),
-            cache_keys=tuple(key for row in rows for key in _enduser_cache_keys(row)),
-        )
-        walked: Final = reached + len(rows)
-        if len(rows) < RESET_BUDGET_JOB_BATCH_SIZE:
-            return _EndUserWalk(cursor=None, invalidated=walked)
-        return _EndUserWalk(cursor=rows[-1].user_id, invalidated=walked)
-
     async def _fetch_enduser_page(self, where: Mapping[str, object], cursor: str) -> tuple[_EndUserRow, ...]:
         """One keyset page of customers, ordered by primary key so the cursor never repeats a row."""
         return tuple(
@@ -1009,7 +970,9 @@ class ResetBudgetJob:
         tiers due: the next tick resumes with the pages still carrying spend.
         Each page invalidates its own caches right after its commit, so no
         zeroed row sits behind a cached spend that still rejects requests.
-        Capless like ``_invalidate_enduser_caches``, for its reason.
+        Capless: the customers on one tier are unbounded, and a cap cannot keep
+        its position across pod elections, so it would restart at the first
+        customer forever.
         """
         if not cascade.budget_ids:
             return 0
@@ -1100,7 +1063,7 @@ class ResetBudgetJob:
             return _BudgetCascadeFailed(cascade=_EMPTY_CASCADE, error=e)
 
         try:
-            await self._reset_enduser_spend(cascade)
+            endusers_reset: Final = await self._reset_enduser_spend(cascade)
             await self._commit_budget_cascade(cascade)
         except Exception as e:
             return _BudgetCascadeFailed(cascade=cascade, error=e)
@@ -1112,7 +1075,7 @@ class ResetBudgetJob:
                 (reset_at for _, reset_at in cascade.budget_resets),
                 cutoff=datetime.now(timezone.utc),
             ),
-            endusers=await self._invalidate_enduser_caches(cascade.budget_ids),
+            endusers=_EndUserWalk(cursor=None, invalidated=endusers_reset),
         )
 
     async def reset_budget_for_litellm_budget_table(self) -> None:

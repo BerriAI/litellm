@@ -1038,18 +1038,16 @@ def test_reset_budget_resets_endusers_with_null_budget_id(reset_budget_job, mock
         },
     ]
 
-    # The paged reset and the post-commit invalidation walk both cover both
-    # branches, so implicitly created customers on the default tier are reset
-    # and get their cached spend dropped too.
+    # The paged reset covers both branches, so implicitly created customers on
+    # the default tier are reset and get their cached spend dropped too.
     find_many_calls = mock_prisma_client.db.litellm_endusertable.find_many_calls
-    assert len(find_many_calls) == 2
+    assert len(find_many_calls) == 1
     assert find_many_calls[0]["where"]["spend"] == {"gt": 0}
-    for call in find_many_calls:
-        assert call["where"]["OR"] == [
-            {"budget_id": {"in": [default_budget_id]}},
-            {"budget_id": None},
-        ]
-        assert call["take"] == RESET_BUDGET_JOB_BATCH_SIZE
+    assert find_many_calls[0]["where"]["OR"] == [
+        {"budget_id": {"in": [default_budget_id]}},
+        {"budget_id": None},
+    ]
+    assert find_many_calls[0]["take"] == RESET_BUDGET_JOB_BATCH_SIZE
 
     litellm.max_end_user_budget_id = None
 
@@ -1080,12 +1078,11 @@ def test_reset_budget_skips_null_budget_id_endusers_when_default_not_configured(
 
     asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
 
-    # The invalidation walk must not reach for NULL-budget-id customers: they
+    # The reset walk must not reach for NULL-budget-id customers: they
     # ride a default tier that is not expiring, so their spend stays put.
     find_many_calls = mock_prisma_client.db.litellm_endusertable.find_many_calls
     assert [call["where"] for call in find_many_calls] == [
         {"budget_id": {"in": ["some-budget"]}, "spend": {"gt": 0}, "user_id": {"gt": ""}},
-        {"budget_id": {"in": ["some-budget"]}, "user_id": {"gt": ""}},
     ]
 
     litellm.max_end_user_budget_id = None
@@ -1121,12 +1118,11 @@ def test_reset_budget_skips_null_budget_id_endusers_when_default_not_in_reset_li
 
     asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
 
-    # The invalidation walk must not reach for NULL-budget-id customers: they
+    # The reset walk must not reach for NULL-budget-id customers: they
     # ride a default tier that is not expiring, so their spend stays put.
     find_many_calls = mock_prisma_client.db.litellm_endusertable.find_many_calls
     assert [call["where"] for call in find_many_calls] == [
         {"budget_id": {"in": ["other-budget"]}, "spend": {"gt": 0}, "user_id": {"gt": ""}},
-        {"budget_id": {"in": ["other-budget"]}, "user_id": {"gt": ""}},
     ]
 
     litellm.max_end_user_budget_id = None
@@ -1890,16 +1886,19 @@ def test_budget_table_reset_invalidates_enduser_counter_and_cache(reset_budget_j
     assert "end_user_id:customer-42" in deleted
 
 
-def test_enduser_invalidation_is_paged_and_batched(reset_budget_job, mock_prisma_client, monkeypatch):
-    """The post-commit invalidation walk stays bounded in memory and in round trips.
+def test_enduser_reset_invalidates_each_customer_exactly_once(reset_budget_job, mock_prisma_client, monkeypatch):
+    """Regression for #50899: the paged reset invalidates each page's caches
+    right after its commit, and the cascade used to then walk the same
+    customers a second time in a post-commit sweep, deleting every spend
+    counter and management-cache key twice.
 
-    Reading every customer on an expiring tier into one result set puts a
-    customer-count-sized list in the proxy's heap on every tick, which is an OOM
-    on a large enough deployment rather than a slow tick. Awaiting one cache call
-    per customer makes the last customer wait out every customer ahead of it.
-    Both regress silently, so pin the page size, the strictly advancing cursor,
-    and one batched call per page. The paged reset ahead of the commit
-    invalidates its pages too, so the cache calls count both walks.
+    The reset walk stays bounded in memory and in round trips: reading every
+    customer on an expiring tier into one result set puts a customer-count-sized
+    list in the proxy's heap on every tick, which is an OOM on a large enough
+    deployment rather than a slow tick. Awaiting one cache call per customer
+    makes the last customer wait out every customer ahead of it. Both regress
+    silently, so pin the page size, the strictly advancing cursor, one batched
+    call per page, and one delete per key.
     """
     counter_cache: Final = _make_counter_invalidation_job(monkeypatch)
     mock_prisma_client.data["budget"] = [_budget_row(budget_id="budget-1")]
@@ -1914,56 +1913,27 @@ def test_enduser_invalidation_is_paged_and_batched(reset_budget_job, mock_prisma
     asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
 
     all_reads: Final = mock_prisma_client.db.litellm_endusertable.find_many_calls
-    reads: Final = [read for read in all_reads if "spend" not in read["where"]]
-    assert len(all_reads) == 6
-    assert [read["take"] for read in reads] == [RESET_BUDGET_JOB_BATCH_SIZE] * 3
-    assert [read["where"]["user_id"]["gt"] for read in reads] == [
+    assert len(all_reads) == 3
+    assert [read["take"] for read in all_reads] == [RESET_BUDGET_JOB_BATCH_SIZE] * 3
+    assert [read["where"]["user_id"]["gt"] for read in all_reads] == [
         "",
         f"cust-{RESET_BUDGET_JOB_BATCH_SIZE - 1:06d}",
         f"cust-{RESET_BUDGET_JOB_BATCH_SIZE * 2 - 1:06d}",
     ]
 
-    assert len(counter_cache.deletes) == 6
-    assert counter_cache.user_api_key_cache.async_delete_cache_keys.await_count == 6
+    assert len(counter_cache.deletes) == 3
+    assert counter_cache.user_api_key_cache.async_delete_cache_keys.await_count == 3
 
-    invalidated: Final = counter_cache.deleted()
-    assert invalidated == {f"spend:end_user:cust-{i:06d}" for i in range(population)} | {
+    counter_keys: Final = [key for batch in counter_cache.deletes for key in batch]
+    assert len(counter_keys) == len(set(counter_keys))
+    assert set(counter_keys) == {f"spend:end_user:cust-{i:06d}" for i in range(population)} | {
         f"spend:committed:end_user:cust-{i:06d}" for i in range(population)
     }
-    evicted: Final = {
+    management_keys: Final = [
         key for call in counter_cache.user_api_key_cache.async_delete_cache_keys.await_args_list for key in call.args[0]
-    }
-    assert evicted == {f"end_user_id:cust-{i:06d}" for i in range(population)}
-
-
-def test_enduser_invalidation_reports_a_page_read_failure_instead_of_a_clean_finish(
-    mock_prisma_client, monkeypatch
-):
-    """A page that fails to read is not the end of the customer list.
-
-    The tier's window is already advanced by the time this walk runs, so no later
-    tick comes back for the customers past the page that failed: their cached
-    spend goes on rejecting requests until it expires. Returning the same empty
-    page normal end-of-data returns hid that behind a report of a clean pass.
-    """
-    _make_counter_invalidation_job(monkeypatch)
-    mock_prisma_client.data["budget"] = [_budget_row(budget_id="budget-1")]
-    endusers: Final = mock_prisma_client.db.litellm_endusertable
-    endusers.set_find_many_results(
-        [
-            type("EndUser", (), {"user_id": f"cust-{i:06d}", "spend": 5.0, "budget_id": "budget-1"})
-            for i in range(RESET_BUDGET_JOB_BATCH_SIZE + 3)
-        ]
-    )
-    endusers.set_find_many_error(3, RuntimeError("connection reset while paging customers"))
-    logging_obj: Final = RecordingProxyLogging()
-    job: Final = ResetBudgetJob(proxy_logging_obj=logging_obj, prisma_client=mock_prisma_client)
-
-    _run_and_drain_hooks(job.reset_budget_for_litellm_budget_table)
-
-    metadata: Final = logging_obj.service_logging_obj.success_calls[0]["event_metadata"]
-    assert metadata["enduser_invalidation_truncated"] is True
-    assert metadata["num_endusers_updated"] == RESET_BUDGET_JOB_BATCH_SIZE
+    ]
+    assert len(management_keys) == len(set(management_keys))
+    assert set(management_keys) == {f"end_user_id:cust-{i:06d}" for i in range(population)}
 
 
 def test_a_failed_counter_batch_still_evicts_the_management_cache(
@@ -3960,9 +3930,8 @@ def _wire_cascade_reads_for_test(prisma_client, endusers=()):
     tables an awaitable find_many so the reads resolve instead of falling into
     the job's warn-and-continue path.
 
-    End users are read by the paged reset and the post-commit invalidation
-    walk rather than by ``get_data``, so callers that care about them pass
-    them here.
+    End users are read by the paged reset rather than by ``get_data``, so
+    callers that care about them pass them here.
     """
     for table in (
         "litellm_teammembership",
