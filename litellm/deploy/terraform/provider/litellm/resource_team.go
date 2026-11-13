@@ -319,7 +319,7 @@ func resourceLiteLLMTeamUpdate(d *schema.ResourceData, m interface{}) error {
 	if err != nil {
 		return fmt.Errorf("error updating team: %w", err)
 	}
-	log.Printf("[DEBUG] Update team request payload: %+v", teamData)
+	log.Printf("[DEBUG] Updating team with ID: %s", d.Id())
 
 	resp, err := MakeRequest(client, "POST", endpointTeamUpdate, teamData)
 	if err != nil {

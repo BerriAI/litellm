@@ -353,7 +353,7 @@ func resourceLiteLLMProjectUpdate(d *schema.ResourceData, m interface{}) error {
 	if err != nil {
 		return err
 	}
-	log.Printf("[DEBUG] Update project request payload: %+v", projectData)
+	log.Printf("[DEBUG] Updating project with ID: %s", d.Id())
 
 	resp, err := MakeRequest(client, "POST", endpointProjectUpdate, projectData)
 	if err != nil {
