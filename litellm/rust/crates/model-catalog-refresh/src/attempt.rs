@@ -7,8 +7,10 @@ use litellm_http::Client;
 use litellm_s3::S3Uri;
 use litellm_s3::sdk::config::retry::RetryConfig;
 use litellm_s3::sdk::config::timeout::TimeoutConfig;
+use litellm_s3::sdk::error::SdkError;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
-use reqwest::header::{ETAG, HeaderMap, RETRY_AFTER};
+use reqwest::StatusCode;
+use reqwest::header::{ETAG, HeaderMap, IF_NONE_MATCH, RETRY_AFTER};
 use url::Url;
 
 use crate::{Error, GcsAccess, GcsUri, RETRYABLE_STATUSES, S3Access};
@@ -24,9 +26,13 @@ const OBJECT_NAME_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC
 pub(crate) const MAX_BODY_BYTES: u64 = 100 * 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Fetched {
-    pub body: Vec<u8>,
-    pub etag: Option<String>,
+pub enum Fetched {
+    Document {
+        body: Vec<u8>,
+        etag: Option<String>,
+    },
+    /// The source still holds the document whose ETag the request carried
+    NotModified,
 }
 
 #[derive(Debug)]
@@ -52,16 +58,21 @@ impl Rejected {
     }
 }
 
-/// Any status below 400 is the document
+/// Any status below 400 is the document, except a 304 that answers the ETag this request sent
 pub(crate) async fn http(
     client: &Client,
     url: Url,
     bearer: Option<&str>,
+    if_none_match: Option<&str>,
     timeout: Duration,
 ) -> Result<Fetched, Rejected> {
     let request = match bearer {
         Some(token) => client.get(url).bearer_auth(token),
         None => client.get(url),
+    };
+    let request = match if_none_match {
+        Some(etag) => request.header(IF_NONE_MATCH, etag),
+        None => request,
     };
     let transport = |error: litellm_http::Error| Rejected {
         cause: Cause::Transport(Error::from(error)),
@@ -88,6 +99,9 @@ pub(crate) async fn http(
             retry_after,
         });
     }
+    if if_none_match.is_some() && response.status() == StatusCode::NOT_MODIFIED {
+        return Ok(Fetched::NotModified);
+    }
     if response
         .content_length()
         .is_some_and(|length| length > MAX_BODY_BYTES)
@@ -103,7 +117,7 @@ pub(crate) async fn http(
     {
         append(&mut body, &chunk).map_err(Rejected::fatal)?;
     }
-    Ok(Fetched { body, etag })
+    Ok(Fetched::Document { body, etag })
 }
 
 /// S3 failures are final: the SDK already classifies its own errors and a missing or denied object stays so
@@ -111,6 +125,7 @@ pub(crate) async fn s3(
     client: &Client,
     s3: &S3Access,
     object: &S3Uri,
+    if_none_match: Option<&str>,
     timeout: Duration,
 ) -> Result<Fetched, Rejected> {
     let fetched = async {
@@ -127,12 +142,22 @@ pub(crate) async fn s3(
                 .build(),
         )
         .build();
-        let output = litellm_s3::sdk::Client::from_conf(config)
+        let sent = litellm_s3::sdk::Client::from_conf(config)
             .get_object()
             .bucket(&object.bucket)
             .key(&object.key)
+            .set_if_none_match(if_none_match.map(str::to_owned))
             .send()
-            .await?;
+            .await;
+        let output = match sent {
+            Err(SdkError::ServiceError(refused))
+                if if_none_match.is_some()
+                    && refused.raw().status().as_u16() == StatusCode::NOT_MODIFIED.as_u16() =>
+            {
+                return Ok(Fetched::NotModified);
+            }
+            sent => sent?,
+        };
         if output
             .content_length()
             .is_some_and(|length| length.unsigned_abs() > MAX_BODY_BYTES)
@@ -145,7 +170,7 @@ pub(crate) async fn s3(
         while let Some(chunk) = tokio::time::timeout(timeout, stream.try_next()).await?? {
             append(&mut body, &chunk)?;
         }
-        Ok::<_, Error>(Fetched { body, etag })
+        Ok::<_, Error>(Fetched::Document { body, etag })
     };
     fetched.await.map_err(Rejected::fatal)
 }
@@ -154,6 +179,7 @@ pub(crate) async fn gcs(
     client: &Client,
     gcs: &GcsAccess,
     object: &GcsUri,
+    if_none_match: Option<&str>,
     timeout: Duration,
 ) -> Result<Fetched, Rejected> {
     let started = tokio::time::Instant::now();
@@ -194,6 +220,7 @@ pub(crate) async fn gcs(
         client,
         url,
         token.as_ref().map(|token| token.expose()),
+        if_none_match,
         timeout.saturating_sub(started.elapsed()),
     )
     .await

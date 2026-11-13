@@ -46,6 +46,7 @@ from litellm.rust_bridge._native import (
     NativeFetchPolicy,
     NativeInstalled,
     NativeModelCostMap,
+    NativeNotModified,
     NativeRejected,
 )
 
@@ -189,11 +190,25 @@ class ModelCostMapReloaded:
 
 
 @dataclass(frozen=True, slots=True)
+class ModelCostMapNotModified:
+    """The source still serves the installed document, so nothing was installed and ``litellm.model_cost`` stays."""
+
+    @property
+    def model_count(self) -> int:
+        return len(GetModelCostMap.loaded_model_cost_map())
+
+    @property
+    def model_cost_map(self) -> dict[str, dict[str, object]]:
+        """Compat for callers that publish every reload. Nothing changed, so there is nothing to publish."""
+        return model_cost_inputs.loaded()
+
+
+@dataclass(frozen=True, slots=True)
 class ModelCostMapReloadUnavailable:
     reason: str
 
 
-ModelCostMapReloadResult = ModelCostMapReloaded | ModelCostMapReloadUnavailable
+ModelCostMapReloadResult = ModelCostMapReloaded | ModelCostMapNotModified | ModelCostMapReloadUnavailable
 
 
 @dataclass(frozen=True, slots=True)
@@ -298,7 +313,9 @@ def _install(installed: NativeInstalled) -> int:
     return installed.model_count
 
 
-def install_model_cost_map(body: bytes, etag: str | None = None) -> ModelCostMapReloadResult:
+def install_model_cost_map(
+    body: bytes, etag: str | None = None
+) -> ModelCostMapReloaded | ModelCostMapReloadUnavailable:
     """Installs a cost map document as ``litellm.model_cost``, every kept ``register_model`` call written on top."""
     installed: Final = model_cost_inputs.install(body, etag)
     if isinstance(installed, NativeRejected):
@@ -328,6 +345,11 @@ def _warn_rejected(rejected: NativeRejected, url: str) -> None:
     )
 
 
+def _installed_etag(url: str) -> str | None:
+    """The ETag of the installed document when ``url`` is where it came from. Another source's ETag proves nothing."""
+    return model_cost_inputs.provenance.etag if _LastLoad.current.url == url else None
+
+
 def _warn_ignored_fetch_hooks(sleep: object, rng: object, client: object) -> None:
     if (sleep, rng, client) != (None, None, None):
         warnings.warn(
@@ -349,6 +371,10 @@ async def refetch_model_cost_map(
     Re-fetch the model cost map for a runtime reload, retrying transient HTTP
     errors (429/5xx/transport) with Retry-After-aware backoff, and install it.
 
+    The request carries the ETag of the document already installed from ``url``.
+    A source that still serves that document answers 304, and the result is
+    ``ModelCostMapNotModified`` with nothing downloaded, installed or published.
+
     Unlike ``get_model_cost_map`` this never falls back to the packaged backup:
     on failure it returns ``ModelCostMapReloadUnavailable`` and the map already
     installed stays.
@@ -359,12 +385,16 @@ async def refetch_model_cost_map(
         _mark_rows_with_rules_set("local", None, True, None, datetime.now(timezone.utc))
         return ModelCostMapReloaded(model_count=_install(model_cost_inputs.install_bundled()))
 
-    fetched: Final = await cost_map_source(url, use_http_settings=True).fetch(fetch_policy(timeout, max_attempts))
+    fetched: Final = await cost_map_source(url, use_http_settings=True).fetch(
+        fetch_policy(timeout, max_attempts), _installed_etag(url)
+    )
     if isinstance(fetched, NativeFetchFailed):
         verbose_logger.warning(
             "LiteLLM: model cost map reload failed: %s. Keeping the currently loaded map.", fetched.reason
         )
         return ModelCostMapReloadUnavailable(reason=fetched.reason)
+    if isinstance(fetched, NativeNotModified):
+        return ModelCostMapNotModified()
     installed: Final = model_cost_inputs.install(fetched.body, fetched.etag)
     if isinstance(installed, NativeRejected):
         verbose_logger.warning(

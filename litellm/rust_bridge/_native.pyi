@@ -26,7 +26,9 @@ def unsupported_tls_settings(ssl_security_level: str | None = None, ssl_ecdh_cur
 @final
 class NativeCostMapSource:
     def __new__(cls, url: str, *, use_http_settings: bool) -> NativeCostMapSource: ...
-    def fetch(self, policy: NativeFetchPolicy) -> Future[NativeFetched | NativeFetchFailed]: ...
+    def fetch(
+        self, policy: NativeFetchPolicy, if_none_match: str | None = None
+    ) -> Future[NativeFetched | NativeNotModified | NativeFetchFailed]: ...
     def fetch_blocking(
         self, policy: NativeFetchPolicy, resume_from: NativeFetchFailed | None = None
     ) -> NativeFetched | NativeFetchFailed: ...
@@ -48,6 +50,9 @@ class NativeFetched:
     def body(self) -> bytes: ...
     @property
     def etag(self) -> str | None: ...
+
+@final
+class NativeNotModified: ...
 
 @final
 class NativeFetchFailed:
@@ -762,6 +767,7 @@ __all__ = [
     "NativeFetchFailed",
     "NativeFetchPolicy",
     "NativeFetched",
+    "NativeNotModified",
     "NativeInstalled",
     "NativeModelCostMap",
     "NativeModelCostMapState",

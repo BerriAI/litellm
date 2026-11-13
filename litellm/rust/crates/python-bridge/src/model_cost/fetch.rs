@@ -30,11 +30,14 @@ impl NativeCostMapSource {
         })
     }
 
-    /// Fetches on the shared runtime with a pooled client
+    /// Fetches on the shared runtime with a pooled client. `if_none_match` is the ETag of the document already
+    /// installed from this URL, and a source that still serves it answers `NativeNotModified`
+    #[pyo3(signature = (policy, if_none_match = None))]
     fn fetch<'py>(
         &self,
         py: Python<'py>,
         policy: PyRef<'_, NativeFetchPolicy>,
+        if_none_match: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let client = crate::http::pool()
             .client(&self.http, ClientVariant::Provider)
@@ -48,6 +51,7 @@ impl NativeCostMapSource {
                     &s3(),
                     &GcsAccess::Environment,
                     &url,
+                    if_none_match.as_deref(),
                     policy,
                     Start::Fresh,
                 )
@@ -78,6 +82,7 @@ impl NativeCostMapSource {
                     &s3(),
                     &GcsAccess::Environment,
                     &url,
+                    None,
                     policy,
                     start,
                 ))
@@ -147,6 +152,13 @@ pub(crate) struct NativeFetched {
 
 #[pyclass(
     frozen,
+    name = "NativeNotModified",
+    module = "litellm.rust_bridge._native"
+)]
+pub(crate) struct NativeNotModified;
+
+#[pyclass(
+    frozen,
     skip_from_py_object,
     name = "NativeFetchFailed",
     module = "litellm.rust_bridge._native"
@@ -181,14 +193,15 @@ impl<'py> IntoPyObject<'py> for Outcome {
 
     fn into_pyobject(self, py: Python<'py>) -> PyResult<Self::Output> {
         match self.0 {
-            Ok(fetched) => Bound::new(
+            Ok(Fetched::Document { body, etag }) => Bound::new(
                 py,
                 NativeFetched {
-                    body: PyBytes::new(py, &fetched.body).unbind(),
-                    etag: fetched.etag,
+                    body: PyBytes::new(py, &body).unbind(),
+                    etag,
                 },
             )
             .map(Bound::into_any),
+            Ok(Fetched::NotModified) => Bound::new(py, NativeNotModified).map(Bound::into_any),
             Err(failed) => Bound::new(py, NativeFetchFailed(failed)).map(Bound::into_any),
         }
     }

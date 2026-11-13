@@ -21,6 +21,7 @@ from integration._support.wire import Reply, Request, wire_server
 import litellm
 from litellm.litellm_core_utils.get_model_cost_map import (
     GetModelCostMap,
+    ModelCostMapNotModified,
     ModelCostMapReloaded,
     ModelCostMapReloadUnavailable,
     get_model_cost_map_loaded_at,
@@ -65,6 +66,10 @@ class _Server:
     @property
     def authorizations(self) -> Sequence[str]:
         return [request.headers.get("authorization", "") for request in self.received]
+
+    @property
+    def validators(self) -> Sequence[str | None]:
+        return [request.headers.get("if-none-match") for request in self.received]
 
     @property
     def requests(self) -> int:
@@ -409,6 +414,76 @@ def test_reload_records_the_served_bytes_and_etag():
         asyncio.run(refetch_model_cost_map(url=server.url))
 
     assert get_model_cost_map_provenance() == {"source_revision": _blob_id(body), "etag": 'W/"etag"'}
+
+
+_UNCHANGED: Final = _Reply(status=304, body=b"", headers={"ETag": '"v1"'})
+
+
+@pytest.mark.usefixtures("remote_source", "own_model_cost")
+@pytest.mark.parametrize("load", ["boot", "reload"])
+def test_a_reload_of_an_unchanged_source_sends_the_installed_etag_and_installs_nothing(
+    load: Literal["boot", "reload"],
+):
+    with _serving(_Reply(headers={"ETag": '"v1"'}), _UNCHANGED) as server:
+        loaded: Final = _rows_loaded_through(load, server.url)
+        installed: Final = litellm.model_cost
+        provenance: Final = get_model_cost_map_provenance()
+        source: Final = get_model_cost_map_source_info()
+        result: Final = asyncio.run(refetch_model_cost_map(url=server.url))
+
+    assert result == ModelCostMapNotModified()
+    assert result.model_count == len(loaded)
+    assert server.validators == [None, '"v1"']
+    assert litellm.model_cost is installed
+    assert get_model_cost_map_provenance() == provenance
+    assert get_model_cost_map_source_info() == source
+
+
+@pytest.mark.usefixtures("remote_source", "own_model_cost")
+def test_a_reload_of_a_changed_source_sends_the_installed_etag_and_installs_the_new_document():
+    changed: Final = _document_with(**{"lit-changed-model": {"litellm_provider": "openai", "mode": "chat"}})
+    with _serving(_Reply(headers={"ETag": '"v1"'}), _Reply(body=changed, headers={"ETag": '"v2"'})) as server:
+        asyncio.run(refetch_model_cost_map(url=server.url))
+        installed: Final = litellm.model_cost
+        result: Final = asyncio.run(refetch_model_cost_map(url=server.url))
+
+    assert isinstance(result, ModelCostMapReloaded)
+    assert server.validators == [None, '"v1"']
+    assert litellm.model_cost is not installed
+    assert "lit-changed-model" in litellm.model_cost
+    assert get_model_cost_map_provenance() == {"source_revision": _blob_id(changed), "etag": '"v2"'}
+
+
+@pytest.mark.usefixtures("remote_source", "own_model_cost")
+def test_a_reload_of_a_source_without_an_etag_is_a_full_fetch_every_time():
+    with _serving(_Reply()) as server:
+        asyncio.run(refetch_model_cost_map(url=server.url))
+        installed: Final = litellm.model_cost
+        result: Final = asyncio.run(refetch_model_cost_map(url=server.url))
+
+    assert isinstance(result, ModelCostMapReloaded)
+    assert server.validators == [None, None]
+    assert litellm.model_cost is not installed
+
+
+@pytest.mark.usefixtures("remote_source", "own_model_cost")
+def test_a_reload_from_another_source_does_not_send_the_installed_etag():
+    with _serving(_Reply(headers={"ETag": '"v1"'})) as installed_from, _serving(_Reply()) as other:
+        asyncio.run(refetch_model_cost_map(url=installed_from.url))
+        result: Final = asyncio.run(refetch_model_cost_map(url=other.url))
+
+    assert isinstance(result, ModelCostMapReloaded)
+    assert other.validators == [None]
+
+
+@pytest.mark.usefixtures("remote_source", "own_model_cost")
+def test_a_reload_after_a_boot_that_fell_back_to_the_bundled_map_is_a_full_fetch():
+    with _serving(_Reply(status=404, body=b"missing"), _Reply(headers={"ETag": '"v1"'})) as server:
+        litellm.get_model_cost_map(url=server.url)
+        result: Final = asyncio.run(refetch_model_cost_map(url=server.url))
+
+    assert isinstance(result, ModelCostMapReloaded)
+    assert server.validators == [None, None]
 
 
 def _self_signed(directory: Path) -> tuple[ssl.SSLContext, Path]:

@@ -8,3 +8,5 @@
 - `Start::After(failed)` resumes the backoff schedule where another caller's first attempt left off
 - Error reasons use the URL with userinfo, query and fragment stripped, since presigned URLs carry credentials
 - Bodies over `MAX_BODY_BYTES` are rejected
+- `if_none_match` is the ETag of the document the caller already holds. A 304 to it is `Fetched::NotModified` on http(s), `s3://` and `gs://`. A 304 to a request that sent no ETag stays a document, and an ETag no header can carry is not sent
+- An attempt never sets `Accept-Encoding`. The client does, the same on every request, so a conditional fetch negotiates the encoding of the fetch that recorded its ETag. GitHub's raw host gives each encoding its own ETag and answers 200 when they differ
