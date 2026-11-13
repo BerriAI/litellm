@@ -7,7 +7,7 @@ import json
 import time
 import traceback
 import uuid
-from collections.abc import AsyncIterable, Awaitable, Callable, Coroutine, Iterable, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Callable, Coroutine, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from functools import lru_cache
@@ -2323,12 +2323,16 @@ class GuardedResponsesWsFrame:
     """A ``response.create`` frame after the proxy's pre_call guardrails ran on it: the frame to forward (guardrails
     may rewrite ``input`` and ``instructions``), the guardrail records that bill against this turn only, the
     Presidio ``pii_tokens`` the walk masked with, which the handler needs to unmask the provider's reply, and how
-    to carry those guardrail records onto the connection's failure row when the deployment then refuses the turn."""
+    to carry those guardrail records onto the connection's failure row when the deployment then refuses the turn.
+    ``guard_output`` runs the turn's streamed reply through the post_call guardrails HTTP ``/v1/responses`` runs, which
+    ``output_guardrails`` names; it is ``None`` when none apply."""
 
     frame: str
     guardrail_information: tuple[Mapping[str, object], ...] = ()
     pii_tokens: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
     bill_refusal: Callable[[Exception], None] | None = None
+    output_guardrails: tuple[str, ...] = ()
+    guard_output: Callable[[AsyncIterable[object]], AsyncGenerator[object, None]] | None = None
 
 
 ResponsesWsFrameGuard: TypeAlias = Callable[[str], Awaitable[GuardedResponsesWsFrame]]
@@ -2339,6 +2343,13 @@ class ResponsesWsFrameRejection(ValueError):
     def __init__(self, message: str, provider_specific_fields: Mapping[str, object] | None = None) -> None:
         super().__init__(message)
         self.provider_specific_fields: Final = provider_specific_fields
+
+
+def _is_presidio_like(callback: object) -> bool:
+    """The PII masking interface the native relay masks and unmasks with, duck-typed as the HTTP handler collects it."""
+    return callable(getattr(callback, "check_pii", None)) and callable(
+        getattr(callback, "get_presidio_settings_from_request_data", None)
+    )
 
 
 def _frame_rejection_event(rejection: Exception) -> str:
@@ -2634,6 +2645,10 @@ class ResponsesWebSocketStreaming:
         guarded: Final = await self._guard_frame(message)
         if guarded is None:
             return
+        unguarded_output: Final = self._output_guardrails_relay_cannot_run(guarded.output_guardrails)
+        if unguarded_output:
+            await self._refuse_unguarded_output(guarded, unguarded_output)
+            return
         admitted: Final = await self._admit_or_reject_turn(guarded, message, turn_admission)
         if admitted is None:
             return
@@ -2642,6 +2657,36 @@ class ResponsesWebSocketStreaming:
         masked: Final = await self._mask_response_create(guarded.frame)
         self._record_client_frame(masked, guarded.guardrail_information, admitted.reservation)
         await self.backend_ws.send(masked)
+
+    @staticmethod
+    def _output_guardrails_relay_cannot_run(output_guardrails: tuple[str, ...]) -> tuple[str, ...]:
+        """The relay forwards the provider's events as they arrive, and with ``stream_id`` lanes and steering a turn's
+        events can't be told apart from another's, so only Presidio's output masking and unmasking, which it runs on
+        each event itself, apply here. Any other post_call guardrail or pipeline would be skipped."""
+        presidio_names: Final = frozenset(
+            name
+            for cb in litellm.callbacks
+            if _is_presidio_like(cb) and isinstance(name := getattr(cb, "guardrail_name", None), str)
+        )
+        return tuple(name for name in output_guardrails if name not in presidio_names)
+
+    async def _refuse_unguarded_output(
+        self, guarded: GuardedResponsesWsFrame, guardrail_names: tuple[str, ...]
+    ) -> None:
+        """Refuses the turn before it reaches the provider, as HTTP would scan its reply and this socket can't."""
+        verbose_logger.info(
+            "Responses WebSocket: refused a turn whose post_call guardrails %s can't run on a native socket",
+            guardrail_names,
+        )
+        rejection: Final = ResponsesWsFrameRejection(
+            "this turn's output guardrails can't run on a native Responses WebSocket; send it over HTTP /v1/responses"
+        )
+        if self._failure is None:
+            self._failure = rejection
+        if guarded.bill_refusal is not None:
+            guarded.bill_refusal(rejection)
+        with contextlib.suppress(Exception):
+            await self.websocket.send_text(_frame_rejection_event(rejection))
 
     def _remember_pii_tokens(self, pii_tokens: Mapping[str, str]) -> None:
         metadata: Final = self.request_data.get("metadata")
@@ -3524,17 +3569,35 @@ class ManagedResponsesWebSocketHandler:
         call_kwargs["litellm_metadata"]["proxy_server_request"] = proxy_server_request
         call_kwargs["proxy_server_request"] = proxy_server_request
 
-    async def _stream_and_forward(self, model: str, call_kwargs: dict[str, object]) -> _MutableJsonObject | None:
+    async def _stream_and_forward(
+        self,
+        model: str,
+        call_kwargs: dict[str, object],
+        guard_output: Callable[[AsyncIterable[object]], AsyncGenerator[object, None]] | None = None,
+    ) -> _MutableJsonObject | None:
         """
-        Stream ``litellm.aresponses`` and forward every chunk over the WebSocket.
+        Stream ``litellm.aresponses`` and forward every chunk over the WebSocket. Returns the terminal event dict,
+        or ``None``.
 
+        ``guard_output`` wraps the provider stream in the turn's post_call guardrails, so the client and the turn
+        history get what they let through, and a guardrail block raises, ending the turn with an error frame.
+        """
+        stream_response: Final = await litellm.aresponses(model=model, **call_kwargs)
+        provider_stream: Final = cast(  # cast-ok: aresponses returns an async stream
+            AsyncIterable[object], stream_response
+        )
+        if guard_output is None:
+            return await self._forward_chunks(provider_stream)
+        async with contextlib.aclosing(guard_output(provider_stream)) as served:
+            return await self._forward_chunks(served)
+
+    async def _forward_chunks(self, served: AsyncIterable[object]) -> _MutableJsonObject | None:
+        """
         Captures the first terminal (``response.completed`` or ``response.incomplete``) event from the chunk object
-        directly (before serialization) to avoid a redundant JSON round-trip on every chunk. Returns the terminal
-        event dict, or ``None``.
+        directly (before serialization) to avoid a redundant JSON round-trip on every chunk.
         """
         terminal_event: _MutableJsonObject | None = None
-        stream_response: Final = await litellm.aresponses(model=model, **call_kwargs)
-        async for chunk in cast(AsyncIterable[object], stream_response):  # cast-ok: aresponses returns an async stream
+        async for chunk in served:
             if chunk is None:
                 continue
             # Read type from the object before serializing to avoid double JSON parse
@@ -3677,7 +3740,7 @@ class ManagedResponsesWebSocketHandler:
         }
 
         try:
-            terminal_event: Final = await self._stream_and_forward(model, call_kwargs)
+            terminal_event: Final = await self._stream_and_forward(model, call_kwargs, guarded.guard_output)
         except Exception as exc:
             verbose_logger.exception("ManagedResponsesWS: error processing response.create: %s", exc)
             await self._send_error(str(exc))

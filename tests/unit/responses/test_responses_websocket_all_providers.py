@@ -421,6 +421,118 @@ class TestManagedWebSocketHandlerIntegration:
         assert sent[1]["response"]["output"][0]["content"][0]["text"] == "Sent to alice@example.com"
 
     @pytest.mark.asyncio
+    async def test_managed_socket_serves_and_remembers_the_reply_the_output_guard_lets_through(self, monkeypatch):
+        import json
+        from collections.abc import AsyncGenerator, AsyncIterable
+        from unittest.mock import AsyncMock, MagicMock
+
+        import litellm
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.responses.streaming_iterator import GuardedResponsesWsFrame, ManagedResponsesWebSocketHandler
+
+        async def redact(stream: AsyncIterable[object]) -> AsyncGenerator[object, None]:
+            async for chunk in stream:
+                yield json.loads(json.dumps(chunk).replace("PELICAN", "[REDACTED]"))
+
+        async def guard(frame: str) -> GuardedResponsesWsFrame:
+            return GuardedResponsesWsFrame(frame=frame, guard_output=redact)
+
+        async def first_stream():
+            yield {"type": "response.output_text.delta", "delta": "PELICAN noted"}
+            yield {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_turn1",
+                    "output": [
+                        {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "PELICAN noted"}],
+                        }
+                    ],
+                },
+            }
+
+        async def empty_stream():
+            return
+            yield {}
+
+        aresponses: Final = AsyncMock(side_effect=(first_stream(), empty_stream()))
+        monkeypatch.setattr(litellm, "aresponses", aresponses)
+        websocket: Final = MagicMock()
+        websocket.send_text = AsyncMock()
+        handler: Final = ManagedResponsesWebSocketHandler(
+            websocket=websocket,
+            model="anthropic/claude-sonnet-4-5",
+            logging_obj=Logging(
+                model="anthropic/claude-sonnet-4-5",
+                messages=[],
+                stream=True,
+                call_type="aresponses",
+                start_time=0,
+                litellm_call_id="test-id",
+                function_id="test-func",
+            ),
+            frame_guard=guard,
+        )
+
+        await handler._process_response_create(json.dumps({"type": "response.create", "input": "remember it"}))
+        await handler._process_response_create(
+            json.dumps({"type": "response.create", "previous_response_id": "resp_turn1", "input": "again"})
+        )
+
+        sent: Final = [json.loads(call.args[0]) for call in websocket.send_text.await_args_list]
+        assert sent[0]["delta"] == "[REDACTED] noted"
+        assert sent[1]["response"]["output"][0]["content"][0]["text"] == "[REDACTED] noted"
+        assert "PELICAN" not in json.dumps(aresponses.call_args_list[1].kwargs["input"])
+
+    @pytest.mark.asyncio
+    async def test_managed_socket_ends_a_turn_the_output_guard_blocks_with_an_error_frame(self, monkeypatch):
+        import json
+        from collections.abc import AsyncGenerator, AsyncIterable
+        from unittest.mock import AsyncMock, MagicMock
+
+        import litellm
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.responses.streaming_iterator import GuardedResponsesWsFrame, ManagedResponsesWebSocketHandler
+
+        async def block(stream: AsyncIterable[object]) -> AsyncGenerator[object, None]:
+            async for _chunk in stream:
+                raise ValueError("blocked by output guardrail")
+            yield {}
+
+        async def guard(frame: str) -> GuardedResponsesWsFrame:
+            return GuardedResponsesWsFrame(frame=frame, guard_output=block)
+
+        async def provider_stream():
+            yield {"type": "response.output_text.delta", "delta": "forbidden reply"}
+            yield {"type": "response.completed", "response": {"id": "resp_turn1", "output": []}}
+
+        monkeypatch.setattr(litellm, "aresponses", AsyncMock(side_effect=lambda **kwargs: provider_stream()))
+        websocket: Final = MagicMock()
+        websocket.send_text = AsyncMock()
+        handler: Final = ManagedResponsesWebSocketHandler(
+            websocket=websocket,
+            model="anthropic/claude-sonnet-4-5",
+            logging_obj=Logging(
+                model="anthropic/claude-sonnet-4-5",
+                messages=[],
+                stream=True,
+                call_type="aresponses",
+                start_time=0,
+                litellm_call_id="test-id",
+                function_id="test-func",
+            ),
+            frame_guard=guard,
+        )
+
+        await handler._process_response_create(json.dumps({"type": "response.create", "input": "hi"}))
+
+        sent: Final = [json.loads(call.args[0]) for call in websocket.send_text.await_args_list]
+        assert sent == [{"type": "error", "error": {"type": "server_error", "message": "blocked by output guardrail"}}]
+        assert handler._session_history == {}
+
+    @pytest.mark.asyncio
     async def test_http_handler_hands_the_frame_guard_to_a_managed_socket(self):
         import json
         from unittest.mock import AsyncMock, MagicMock
@@ -1570,6 +1682,52 @@ class TestWebSocketProjectQuotaEnforcement:
         }
         assert [json.loads(call.args[0])["input"] for call in mock_backend_ws.send.call_args_list] == ["fine"]
         assert len(handler._open_turns) == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("output_guardrails", "forwarded"),
+        [(("output-redactor",), False), (("pii-mask", "output-redactor"), False), (("pii-mask",), True), ((), True)],
+    )
+    async def test_native_handler_refuses_a_turn_whose_output_guardrails_it_cannot_run(
+        self, monkeypatch, output_guardrails: tuple[str, ...], forwarded: bool
+    ):
+        from unittest.mock import AsyncMock, MagicMock
+
+        import litellm
+        from litellm.responses.streaming_iterator import GuardedResponsesWsFrame, ResponsesWebSocketStreaming
+
+        refusal = "this turn's output guardrails can't run on a native Responses WebSocket; send it over HTTP /v1/responses"
+        presidio = MagicMock(spec=["check_pii", "get_presidio_settings_from_request_data", "guardrail_name"])
+        presidio.guardrail_name = "pii-mask"
+        monkeypatch.setattr(litellm, "callbacks", [presidio])
+        bill_refusal = MagicMock()
+
+        async def guard(frame: str) -> GuardedResponsesWsFrame:
+            return GuardedResponsesWsFrame(frame=frame, output_guardrails=output_guardrails, bill_refusal=bill_refusal)
+
+        mock_backend_ws = MagicMock()
+        mock_backend_ws.send = AsyncMock()
+        mock_websocket = MagicMock()
+        mock_websocket.send_text = AsyncMock()
+        mock_websocket.receive_text = AsyncMock(side_effect=RuntimeError("client closed"))
+        logging_obj = MagicMock()
+        logging_obj.copy_for_new_call.return_value = logging_obj
+
+        handler = ResponsesWebSocketStreaming(
+            websocket=mock_websocket,
+            backend_ws=mock_backend_ws,
+            logging_obj=logging_obj,
+            first_message=json.dumps({"type": "response.create", "input": "hi"}),
+            frame_guard=guard,
+        )
+        await handler.client_to_backend()
+
+        sent_to_client = [json.loads(call.args[0]) for call in mock_websocket.send_text.call_args_list]
+        refused = {"type": "error", "error": {"type": "invalid_request_error", "message": refusal}}
+        assert (mock_backend_ws.send.await_count, len(handler._open_turns)) == ((1, 1) if forwarded else (0, 0))
+        assert sent_to_client == ([] if forwarded else [refused])
+        assert [str(call.args[0]) for call in bill_refusal.call_args_list] == ([] if forwarded else [refusal])
+        assert str(handler._failure) == ("None" if forwarded else refusal)
 
     @pytest.mark.asyncio
     async def test_native_handler_forwards_frame_allowed_by_quota_callback(self):

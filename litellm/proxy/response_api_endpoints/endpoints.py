@@ -3,7 +3,7 @@ import contextlib
 import copy
 import json
 import uuid
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from functools import partial
@@ -2245,6 +2245,18 @@ class _GuardrailWalk(Protocol):
         guardrails_only: bool,
     ) -> object: ...
 
+    def async_post_call_streaming_iterator_hook(
+        self,
+        response: AsyncIterable[object],
+        user_api_key_dict: UserAPIKeyAuth,
+        request_data: dict[str, object],  # mutable-ok: ProxyLogging hands the guardrails the request dict they edit
+        guardrails_only: bool = False,
+    ) -> AsyncGenerator[object, None]: ...
+
+    def post_call_stream_guardrail_names(
+        self, user_api_key_dict: UserAPIKeyAuth, request_data: Mapping[str, object]
+    ) -> tuple[str, ...]: ...
+
 
 async def _key_team_object(user_api_key_dict: UserAPIKeyAuth) -> LiteLLM_TeamTable | None:
     from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
@@ -2357,11 +2369,21 @@ def _responses_ws_frame_guard(
             else {**_forwarded_frame_fields(body), **guarded_fields}
         )
         guardrail_information: Final = _recorded_guardrail_information(guarded_data.get(metadata_key))
+        output_guardrails: Final = proxy_logging_obj.post_call_stream_guardrail_names(user_api_key_dict, guarded_data)
         return GuardedResponsesWsFrame(
             frame=json.dumps(rewritten),
             guardrail_information=guardrail_information,
             pii_tokens=pii_tokens,
             bill_refusal=partial(record_refused_turn, guardrail_information),
+            output_guardrails=output_guardrails,
+            guard_output=partial(
+                proxy_logging_obj.async_post_call_streaming_iterator_hook,
+                user_api_key_dict=user_api_key_dict,
+                request_data=_without_pii_tokens(guarded_data),
+                guardrails_only=True,
+            )
+            if output_guardrails
+            else None,
         )
 
     return guard
@@ -2569,6 +2591,19 @@ def _recorded_pii_tokens(metadata: object) -> Mapping[str, str]:
 
 
 _NO_PII_TOKENS: Final[Mapping[str, str]] = MappingProxyType({})
+
+
+def _without_pii_tokens(
+    data: dict[str, object],  # mutable-ok: ProxyLogging hands the guardrails the request dict they edit
+) -> dict[str, object]:  # mutable-ok: same
+    """The socket unmasks the client's copy of a reply itself and keeps Presidio's tokens in the turn history, which
+    goes back to the provider on the next turn. Without the tokens the post_call walk can't unmask the reply into that
+    history."""
+    metadata: Final = data.get("metadata")
+    bucket: Final = _WS_FRAME.validate_python(metadata) if isinstance(metadata, dict) else None
+    if bucket is None or "pii_tokens" not in bucket:
+        return data
+    return {**data, "metadata": {key: value for key, value in bucket.items() if key != "pii_tokens"}}
 
 
 @dataclass(slots=True)

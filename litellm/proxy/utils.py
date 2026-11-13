@@ -735,6 +735,16 @@ def _pipeline_steps(pipelines: Sequence[tuple[str, "GuardrailPipeline"]]) -> Ite
         yield from pipeline.steps
 
 
+def _runs_on_post_call_stream(
+    guardrail: CustomGuardrail, request_data: Mapping[str, object], pipeline_gated_names: frozenset[str]
+) -> bool:
+    """A guardrail the post_call streaming walk runs on its own: selected for post_call and not a pipeline step."""
+    return (
+        guardrail.guardrail_name not in pipeline_gated_names
+        and guardrail.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.post_call) is True
+    )
+
+
 def _pipeline_step_guardrail_names(pipelines: Sequence[tuple[str, "GuardrailPipeline"]]) -> frozenset[str]:
     return frozenset(step.guardrail for step in _pipeline_steps(pipelines))
 
@@ -4871,11 +4881,51 @@ class ProxyLogging:
                     raise e
         return response
 
+    @staticmethod
+    def post_call_stream_guardrail_names(
+        user_api_key_dict: UserAPIKeyAuth, request_data: Mapping[str, object]
+    ) -> tuple[str, ...]:
+        """
+        The post_call pipelines and guardrails the ``guardrails_only`` streaming walk would run on this request's
+        reply, by name, without running them.
+        """
+        caps: Final = ProxyLogging.callback_capabilities()
+        post_call_pipelines: Final = _streamable_post_call_pipelines(request_data, user_api_key_dict)
+        if not caps.iterator_overrides and not post_call_pipelines:
+            return ()
+
+        from litellm.proxy.proxy_server import llm_router
+
+        # the walk merges model-level guardrails into the request; merge into copies, so the request is left as is
+        probe: Final[dict[str, object]] = {  # mutable-ok: check_and_merge_model_level_guardrails merges into it
+            **request_data,
+            **{
+                key: _PLAIN_STREAM_FIELDS.validate_python(bucket)
+                for key in ("metadata", "litellm_metadata")
+                if isinstance(bucket := request_data.get(key), dict)
+            },
+        }
+        merged: Final = cast(  # cast-ok: returns the request dict it was given, str-keyed
+            "Mapping[str, object]", check_and_merge_model_level_guardrails(data=probe, llm_router=llm_router)
+        )
+        pipeline_gated_names: Final = _pipeline_step_guardrail_names(post_call_pipelines)
+        return (
+            *(name for name, _ in post_call_pipelines),
+            *(
+                callback.guardrail_name
+                for callback, _ in caps.iterator_overrides
+                if isinstance(callback, CustomGuardrail)
+                and _runs_on_post_call_stream(callback, merged, pipeline_gated_names)
+                and callback.guardrail_name is not None
+            ),
+        )
+
     async def async_post_call_streaming_iterator_hook(
         self,
         response,
         user_api_key_dict: UserAPIKeyAuth,
         request_data: dict[str, object],
+        guardrails_only: bool = False,
     ):
         """
         Allow user to modify outgoing streaming data -> Given a whole response iterator.
@@ -4883,6 +4933,9 @@ class ProxyLogging:
 
         Covers:
         1. /chat/completions
+
+        With ``guardrails_only`` the walk is limited to guardrails and guardrail pipelines, as on
+        ``pre_call_hook``: other callbacks, such as response id encryption, leave the stream as is.
         """
         caps: Final = ProxyLogging.callback_capabilities()
         post_call_pipelines: Final = _streamable_post_call_pipelines(request_data, user_api_key_dict)
@@ -4915,10 +4968,10 @@ class ProxyLogging:
         running_overrides: Final = tuple(
             (callback, kind)
             for callback, kind in caps.iterator_overrides
-            if not isinstance(callback, CustomGuardrail)
+            if (not isinstance(callback, CustomGuardrail) and not guardrails_only)
             or (
-                callback.guardrail_name not in pipeline_gated_names
-                and callback.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.post_call) is True
+                isinstance(callback, CustomGuardrail)
+                and _runs_on_post_call_stream(callback, request_data, pipeline_gated_names)
             )
         )
         drops_token_ids: Final = bool(post_call_pipelines) or any(
