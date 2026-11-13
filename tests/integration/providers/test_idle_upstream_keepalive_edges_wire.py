@@ -42,6 +42,7 @@ QUIET_ROWS: Final = (
         anthropic_deployment,
         messages_sdk_stream,
         respond=quiet_stream_answer,
+        rust=True,
     ),
 )
 MALFORMED_ROW: Final = Row("malformed-chat-openai-sdk-sync", openai_deployment, chat_sdk)
