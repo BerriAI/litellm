@@ -362,9 +362,16 @@ fn retain_blocks(messages: Vec<Message>, keep: impl Fn(&ContentBlock) -> bool) -
         .collect()
 }
 
+fn is_empty_unsigned_thinking_block(block: &ContentBlock) -> bool {
+    // Anthropic sends redacted thinking blocks, and the signature is used to
+    // match them to the appropriate thinking block on their servers. If there
+    // is a signature, we need to keep it.
+    is_empty_thinking_block(block) && block.signature.as_deref().is_none_or(str::is_empty)
+}
+
 pub fn strip_empty_content_blocks(messages: Vec<Message>) -> Vec<Message> {
     retain_blocks(messages, |block| {
-        !is_empty_text_block(block) && !is_empty_thinking_block(block)
+        !is_empty_text_block(block) && !is_empty_unsigned_thinking_block(block)
     })
 }
 
@@ -1001,11 +1008,11 @@ mod tests {
         ]}]),
         json!([{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "x", "content": "y"}]}])
     )]
-    #[case::empty_signed_thinking_beside_tool_use(
+    #[case::empty_unsigned_thinking_beside_tool_use(
         json!([
             {"role": "user", "content": "weather?"},
             {"role": "assistant", "content": [
-                {"type": "thinking", "thinking": "", "signature": "sig_abc"},
+                {"type": "thinking", "thinking": ""},
                 {"type": "tool_use", "id": "toolu_01A", "name": "get_weather", "input": {"city": "Paris"}}
             ]}
         ]),
@@ -1015,6 +1022,13 @@ mod tests {
                 {"type": "tool_use", "id": "toolu_01A", "name": "get_weather", "input": {"city": "Paris"}}
             ]}
         ])
+    )]
+    #[case::empty_thinking_with_empty_signature(
+        json!([{"role": "assistant", "content": [
+            {"type": "thinking", "thinking": "", "signature": ""},
+            {"type": "redacted_thinking", "data": "opaque"}
+        ]}]),
+        json!([{"role": "assistant", "content": [{"type": "redacted_thinking", "data": "opaque"}]}])
     )]
     #[case::whitespace_thinking_beside_real_and_redacted_thinking(
         json!([{"role": "assistant", "content": [
@@ -1052,6 +1066,11 @@ mod tests {
     #[case::empty_string_content(json!([{"role": "user", "content": ""}]))]
     #[case::textless_non_text_block(json!([{"role": "user", "content": [
         {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "AA=="}}
+    ]}]))]
+    #[case::empty_signed_thinking_beside_tool_use(json!([{"role": "assistant", "content": [
+        {"type": "thinking", "thinking": "", "signature": "sig_abc"},
+        {"type": "redacted_thinking", "data": "opaque"},
+        {"type": "tool_use", "id": "toolu_01A", "name": "get_weather", "input": {"city": "Paris"}}
     ]}]))]
     #[case::encrypted_reasoning_left_for_the_responses_bridge(json!([{"role": "assistant", "content": [
         {"type": "thinking", "thinking": "plan", "signature": tagged("gAAAA_1")},

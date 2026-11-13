@@ -101,6 +101,31 @@ describe("UISettings", () => {
     expect(screen.getByRole("switch", { name: "Require authentication for public AI Hub" })).toBeInTheDocument();
   });
 
+  it.each([false, true])("saves the deployment Aria visibility toggle from %s", (disabled) => {
+    const mutate = vi.fn();
+    mockUseUISettings.mockReturnValue(buildSettingsResponse({ data: { values: { disable_aria: disabled } } }));
+    mockUseUpdateUISettings.mockReturnValue({ mutate, isPending: false, error: null });
+    render(<UISettings />);
+    const toggle = screen.getByRole("switch", { name: "Hide Aria Agent for everyone" });
+    if (disabled) expect(toggle).toBeChecked();
+    else expect(toggle).not.toBeChecked();
+    fireEvent.click(toggle);
+    expect(mutate).toHaveBeenCalledWith({ disable_aria: !disabled }, expect.any(Object));
+  });
+
+  it("keeps configuration-owned Aria visibility read-only", () => {
+    mockUseUISettings.mockReturnValue(
+      buildSettingsResponse({ data: { values: { disable_aria: true }, source: { disable_aria: "config" } } }),
+    );
+    render(<UISettings />);
+    expect(screen.getByRole("switch", { name: "Hide Aria Agent for everyone" })).toBeChecked();
+    expect(screen.getByRole("switch", { name: "Hide Aria Agent for everyone" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect(screen.getByText("Managed by the deployment configuration.")).toBeInTheDocument();
+  });
+
   it("should toggle setting and call update", () => {
     const mutateMock = vi.fn((_settings, options) => {
       options?.onSuccess?.();

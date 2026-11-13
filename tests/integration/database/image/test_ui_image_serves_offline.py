@@ -23,6 +23,7 @@ import subprocess
 import time
 import uuid
 from collections.abc import Iterator
+from typing import Final
 
 import pytest
 
@@ -130,3 +131,21 @@ def test_ui_serves_as_arbitrary_uid_read_only(ui_container: tuple[str, str]) -> 
             f"GET {path} returned {page.stdout.strip()!r} as uid {ARBITRARY_UID}.\n"
             f"{_container_logs(container)}"
         )
+
+    for payload in ("/__next._tree.txt", "/login/index.txt", "/login/__next._tree.txt", "/projects/__next._full.txt"):
+        exported: Final = _docker("exec", container, "cat", f"/var/lib/litellm/ui{payload}").stdout
+        assert exported, f"empty exported payload at {payload}"
+        for prefix in ("", "/ui"):
+            response: Final = _docker(
+                "run", "--rm", "--network", network, CURL_IMAGE,
+                "--silent", "--show-error", "--max-time", "10",
+                "--write-out", "\n%{http_code} %{content_type}",
+                f"http://{container}:{UI_PORT}{prefix}{payload}?_rsc=regression",
+            )
+            assert response.stdout == f"{exported}\n200 text/plain", (
+                f"GET {prefix}{payload} did not serve the exported RSC payload.\n{response.stdout}"
+            )
+
+    for path in ("/ui/login/__next.missing.txt", "/ui/missing.txt", "/missing.txt"):
+        missing: Final = _probe(network, container, path)
+        assert missing.stdout.strip() == "404", f"GET {path} must not fall back to HTML, got {missing.stdout!r}"

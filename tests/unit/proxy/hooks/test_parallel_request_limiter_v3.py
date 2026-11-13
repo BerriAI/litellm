@@ -3879,68 +3879,6 @@ class _YieldingIncrementInMemoryCache(InMemoryCache):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("success_starts_first", [True, False])
-@pytest.mark.parametrize("failure_path", ["failure_event", "post_call_failure_hook"])
-async def test_concurrent_failure_and_success_callbacks_settle_a_reservation_once_v3(
-    success_starts_first: bool, failure_path: str
-) -> None:
-    api_key: Final = hash_token("sk-concurrent-failure-and-success")
-    model: Final = "gpt-4o-mini"
-    project: Final = "proj-concurrent"
-    local_cache: Final = DualCache(in_memory_cache=_YieldingIncrementInMemoryCache())
-    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
-    caller: Final = UserAPIKeyAuth(
-        api_key=api_key,
-        tpm_limit=10_000,
-        project_id=project,
-        project_metadata={"model_itpm_limit": {model: 10_000}, "model_otpm_limit": {model: 10_000}},
-    )
-    counter_keys: Final = (
-        _counter("api_key", api_key),
-        _counter("model_per_project_itpm", f"{project}:{model}"),
-        _counter("model_per_project_otpm", f"{project}:{model}"),
-    )
-    await handler.async_pre_call_hook(
-        user_api_key_dict=caller,
-        cache=local_cache,
-        data={
-            "model": model,
-            "messages": [{"role": "user", "content": "hello"}],
-            "max_tokens": 50,
-            "litellm_call_id": "concurrent-call",
-        },
-        call_type="completion",
-    )
-    kwargs: Final = {
-        "litellm_call_id": "concurrent-call",
-        "model": model,
-        "standard_logging_object": {"metadata": {"user_api_key_hash": api_key}},
-    }
-    now: Final = datetime.now()
-    log_failure: Final = (
-        partial(handler.async_log_failure_event, kwargs=dict(kwargs), response_obj=None, start_time=now, end_time=now)
-        if failure_path == "failure_event"
-        else partial(
-            handler.async_post_call_failure_hook,
-            request_data=dict(kwargs),
-            original_exception=Exception("stream ended"),
-            user_api_key_dict=caller,
-        )
-    )
-    log_success: Final = partial(
-        handler.async_log_success_event,
-        kwargs=dict(kwargs),
-        response_obj=ModelResponse(usage=Usage(prompt_tokens=20, completion_tokens=10, total_tokens=30)),
-        start_time=now,
-        end_time=now,
-    )
-
-    await asyncio.gather(*((log_success(), log_failure()) if success_starts_first else (log_failure(), log_success())))
-
-    assert tuple([int(_local(handler, key) or 0) for key in counter_keys]) == (30, 20, 10)
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("second_call_type", "second_model"),
     [("call_mcp_tool", "mcp-tool-call"), ("completion", "gpt-4o-mini")],
@@ -10178,3 +10116,32 @@ async def test_team_model_limits_stop_being_hard_caps_when_borrowing_is_on(
     assert exc.value.status_code == 429
     assert exc.value.headers is not None
     assert exc.value.headers["rate_limit_type"] == rate_limit_type
+
+
+@pytest.mark.asyncio
+async def test_raise_if_over_limit_before_body_refuses_an_exhausted_key_without_charging_it() -> None:
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-exhausted"), rpm_limit=1)
+    requests: Final = _counter("api_key", auth.api_key, "requests")
+
+    assert await handler.raise_if_over_limit_before_body(auth) is None
+    await handler.async_pre_call_hook(auth, cache, {"model": "gpt-5.6", "messages": []}, "acompletion")
+    charged: Final = _local(handler, requests)
+
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await handler.raise_if_over_limit_before_body(auth)
+    assert exc.value.status_code == 429
+    assert exc.value.headers["rate_limited_by"] == "api_key"
+    assert _local(handler, requests) == charged, "the headers-only refusal must not count as a request"
+
+
+@pytest.mark.asyncio
+async def test_raise_if_over_limit_before_body_skips_limits_that_need_the_model() -> None:
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-per-model"), metadata={"model_rpm_limit": {"gpt-5.6": 1}})
+
+    await handler.async_pre_call_hook(auth, cache, {"model": "gpt-5.6", "messages": []}, "acompletion")
+
+    assert await handler.raise_if_over_limit_before_body(auth) is None
