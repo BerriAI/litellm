@@ -44,10 +44,15 @@ from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
 )
 from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import EncryptedContentAffinityCheck
 from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
-from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import PromptCachingDeploymentCheck
+from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import (
+    PromptCachingDeploymentCheck,
+    new_responses_pins_in_flight,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.redis.stores.router_session_pins import RouterSessionPinStore
+    from litellm.redis.stores.router_usage import RouterUsage
     from litellm.router_python_host import PythonHost
     from litellm.router_rust.steps.selection import StrategySelectors
     from litellm.router_rust.surface.registry import HostRegistry
@@ -106,6 +111,8 @@ class OptionalChecks:
         owner: "GlobalCallbackHolder",
         host: "PythonHost",
         cache: DualCache,
+        usage: "RouterUsage",
+        pins: "RouterSessionPinStore",
         hosted: "HostRegistry",
         ctx: object,
         arguments: Mapping[str, object],
@@ -113,6 +120,8 @@ class OptionalChecks:
         self._owner: Final = owner
         self._host: Final = host
         self._cache: Final = cache
+        self._usage: Final = usage
+        self._pins: Final = pins
         self._hosted: Final = hosted
         self._ctx: Final = ctx
         self.optional_callbacks: list[object] | None = None  # mutable-ok: the router's live list, as Python keeps it
@@ -130,6 +139,7 @@ class OptionalChecks:
             redis_cache=cache.redis_cache,
             in_memory_cache=InMemoryCache(max_size_in_memory=PROMPT_CACHE_PIN_CACHE_MAX_SIZE),
         )
+        self.prompt_caching_pins_in_flight: Final = new_responses_pins_in_flight()
         self._request_scoped_selectors: tuple[CustomLogger, ...] = ()
         self._request_scoped_policies: tuple[CustomLogger, ...] = ()
         # ``_slack_alerting_loggers``: the Slack alerting logger ``alerting_config`` builds, if any.
@@ -167,6 +177,9 @@ class OptionalChecks:
         group: Final = hosted.get_routing_group(resolved)
         return group is not None and group.routing_strategy == "priority"
 
+    def _group_has_alternatives(self, model: str) -> bool:
+        return len(self._hosted._core_deployments_named(model) or ()) > 1  # pyright: ignore[reportPrivateUsage]  # the host registry's name index
+
     async def repin_session_after_success(
         self, litellm_params: Mapping[str, object], response: object, cooldowns: "CooldownCache"
     ) -> None:
@@ -202,7 +215,7 @@ class OptionalChecks:
 
     def _affinity_check(self, user_key: bool, responses_api: bool, session_id: bool) -> DeploymentAffinityCheck:
         return DeploymentAffinityCheck(
-            cache=self._cache,
+            pins=self._pins,
             ttl_seconds=self.deployment_affinity_ttl_seconds,  # pyright: ignore[reportArgumentType]  # the argument as passed
             enable_user_key_affinity=user_key,
             enable_responses_api_affinity=responses_api,
@@ -217,6 +230,12 @@ class OptionalChecks:
             self.optional_callbacks = []
         self.optional_callbacks.append(callback)
         self._host.callbacks.add_litellm_callback(callback)
+
+    def adopt(self, callback: object) -> None:
+        """Own a check already registered with the host: list it in ``optional_callbacks``."""
+        if self.optional_callbacks is None:
+            self.optional_callbacks = []
+        self.optional_callbacks.append(callback)
 
     def ensure_deployment_affinity_callback(self) -> None:
         """``_ensure_deployment_affinity_callback``: the affinity check with every global flag off."""
@@ -285,7 +304,10 @@ class OptionalChecks:
             callback: CustomLogger | None = None
             if name == "prompt_caching":
                 callback = PromptCachingDeploymentCheck(
-                    cache=self.prompt_caching_pin_cache, is_priority_group=self._is_priority_group
+                    cache=self.prompt_caching_pin_cache,
+                    is_priority_group=self._is_priority_group,
+                    responses_pins_in_flight=self.prompt_caching_pins_in_flight,
+                    group_has_alternatives=self._group_has_alternatives,
                 )
             elif name == "router_budget_limiting":
                 if self.budget_limiter() is not None:
@@ -297,7 +319,7 @@ class OptionalChecks:
                 )
                 self.router_budget_logger = callback
             elif name == "enforce_model_rate_limits":
-                callback = ModelRateLimitingCheck(dual_cache=self._cache)
+                callback = ModelRateLimitingCheck(usage=self._usage)
             if callback is None:
                 continue
             if self.optional_callbacks is not None and any(
@@ -323,7 +345,9 @@ class OptionalChecks:
         if self.optional_callbacks is None or not any(type(cb) is callback_cls for cb in self.optional_callbacks):
             return
         self.optional_callbacks = [cb for cb in self.optional_callbacks if type(cb) is not callback_cls]
-        others: Final = tuple(owner for owner in live_check_owners if id(owner) != id(self._owner))
+        others: Final = tuple(
+            owner for owner in live_check_owners if id(owner) != id(self._owner) and _router_alive(owner)
+        )
         if any(any(type(cb) is callback_cls for cb in (owner.optional_callbacks or ())) for owner in others):
             return
         callbacks: Final = _callbacks(self._host)
@@ -399,6 +423,28 @@ class OptionalChecks:
         bound: Final = request.get("litellm_logging_obj") in self._bound_requests
         return {"success": bound and not sync, "failure": bound, "make_call": make_call}
 
+    def decryptable_reasoning(
+        self, model_group: str, request_input: Sequence[object], targets: "Sequence[Deployment]"
+    ) -> tuple[object, ...]:
+        """``registry().decryptable_reasoning``: one target decrypting is enough only when encrypted
+        content affinity pins ``model_group`` to the reasoning's origin."""
+        target_dicts: Final = tuple(target.model_dump(exclude_none=True) for target in targets)
+        pinned: Final = any(
+            isinstance(callback, EncryptedContentAffinityCheck) and callback.is_enabled_for_model_group(model_group)
+            for callback in self.optional_callbacks or ()
+        )
+        target_groups: Final = (target_dicts,) if pinned else tuple((target,) for target in target_dicts)
+        kept: Final = list(request_input)
+        for group in target_groups:
+            EncryptedContentAffinityCheck.strip_reasoning_the_targets_cannot_decrypt(
+                self._ctx,  # pyright: ignore[reportArgumentType]  # the core's RoutingContext serves registry()
+                kept,
+                None,
+                group,
+                unmarked_origin=None,
+            )
+        return tuple(kept)
+
     def routing_callbacks(self) -> Iterable[object]:
         """``_routing_callbacks``: the host's callbacks, or after ``observe(request_scoped=True)`` the
         host's callbacks with the router's own selectors and policies in place of theirs."""
@@ -412,21 +458,28 @@ class OptionalChecks:
             *self._policies_not_set_globally(),
         )
 
+    def has_filters(self) -> bool:
+        """Whether ``filter_deployments`` would run any callback: without one it keeps every deployment."""
+        return any(filters_deployments(callback) for callback in self.routing_callbacks())
+
     async def filter_deployments(
         self,
         model: str,
         deployments: list[dict[str, object]],  # mutable-ok: CustomLogger deployment-list contract
         messages: object,
         request: Mapping[str, object],
-    ) -> list[object]:  # mutable-ok: as the filters return it
+    ) -> tuple[list[object], str | None]:  # mutable-ok: as the filters return it
         """``async_callback_filter_deployments``: each routing callback narrows the deployments in
-        turn; a filter's error is raised for the Rust core to decide on."""
+        turn, then the prompt caching check names the deployment it prefers among the rest, which
+        the Rust core takes only if its later filters keep it; a filter's error is raised for the
+        Rust core to decide on."""
         remaining: list[object] = list(deployments)  # mutable-ok: filter contract  # rebind-ok: narrowed
-        base: Final[object] = CustomLogger.async_filter_deployments  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # untyped deployment dicts
         request_kwargs: Final = dict(request)
-        for callback in tuple(self.routing_callbacks()):
-            # The base filter returns its input unchanged: only overriding filters are run.
-            if not isinstance(callback, CustomLogger) or type(callback).async_filter_deployments is base:  # pyright: ignore[reportUnknownMemberType]  # see above
+        callbacks: Final = tuple(self.routing_callbacks())
+        for callback in callbacks:
+            if not isinstance(callback, CustomLogger) or not filters_deployments(callback):
+                continue
+            if isinstance(callback, PromptCachingDeploymentCheck):
                 continue
             remaining = await callback.async_filter_deployments(  # pyright: ignore[reportUnknownMemberType, reportAssignmentType, reportUnknownVariableType]  # see above
                 model=model,
@@ -435,7 +488,15 @@ class OptionalChecks:
                 request_kwargs=request_kwargs,
                 parent_otel_span=None,
             )
-        return remaining
+        prompt_caching: Final = next((cb for cb in callbacks if isinstance(cb, PromptCachingDeploymentCheck)), None)
+        if prompt_caching is None:
+            return remaining, None
+        return remaining, await prompt_caching.async_preferred_deployment_id(
+            model,
+            remaining,  # pyright: ignore[reportArgumentType]  # RustCore's deployment dicts
+            messages,  # pyright: ignore[reportArgumentType]  # the request's messages, as given
+            request_kwargs,
+        )
 
     # -- release --------------------------------------------------------------------------------
 
@@ -519,14 +580,22 @@ def _ids_of(value: object) -> Sequence[object]:
     return value if isinstance(value, list | tuple) else ()  # pyright: ignore[reportUnknownVariableType]  # the step's id list
 
 
+def filters_deployments(callback: object) -> bool:
+    """A routing callback that overrides ``async_filter_deployments``: the base filter returns its
+    input unchanged, so only overriding filters are run."""
+    base: Final[object] = CustomLogger.async_filter_deployments  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # untyped deployment dicts
+    return isinstance(callback, CustomLogger) and type(callback).async_filter_deployments is not base  # pyright: ignore[reportUnknownMemberType]  # see above
+
+
 def filtered_ids(remaining: Iterable[object], candidates: Sequence[str]) -> list[str]:  # mutable-ok: a JSON list
     """The ids of the deployments the filters left, in their order, among the candidates."""
-    ids: Final[list[str]] = []  # mutable-ok: built here
+    allowed: Final = frozenset(candidates)
+    ids: Final[dict[str, None]] = {}  # mutable-ok: built here, insertion-ordered
     for deployment in remaining:
         found = (as_str_mapping((as_str_mapping(deployment) or {}).get("model_info")) or {}).get("id")
-        if isinstance(found, str) and found in candidates and found not in ids:
-            ids.append(found)
-    return ids
+        if isinstance(found, str) and found in allowed:
+            ids.setdefault(found)
+    return list(ids)
 
 
 class RustOptionalChecks:
@@ -552,21 +621,41 @@ class RustOptionalChecks:
     def optional_callbacks(self) -> "list[object] | None":  # mutable-ok: the router's live list
         return self._opt.optional_callbacks
 
+    @optional_callbacks.setter
+    def optional_callbacks(self, value: "list[object] | None") -> None:  # mutable-ok: the list a caller assigns
+        """Assigning the list replaces it, as on the Python router: the checks read the new one."""
+        self._opt.optional_callbacks = value
+
     @property
     def router_budget_logger(self) -> RouterBudgetLimiting | None:
         return self._opt.router_budget_logger
+
+    # The affinity settings are plain attributes on the Python router: an assignment is what an
+    # affinity check added afterwards (`add_optional_pre_call_checks`) is built with.
 
     @property
     def deployment_affinity_ttl_seconds(self) -> object:
         return self._opt.deployment_affinity_ttl_seconds
 
+    @deployment_affinity_ttl_seconds.setter
+    def deployment_affinity_ttl_seconds(self, value: object) -> None:
+        self._opt.deployment_affinity_ttl_seconds = value
+
     @property
     def session_affinity_repin_on_failover(self) -> object:
         return self._opt.session_affinity_repin_on_failover
 
+    @session_affinity_repin_on_failover.setter
+    def session_affinity_repin_on_failover(self, value: object) -> None:
+        self._opt.session_affinity_repin_on_failover = value
+
     @property
     def model_group_affinity_config(self) -> "dict[str, list[str]] | None":  # mutable-ok: the argument as passed
         return self._opt.model_group_affinity_config
+
+    @model_group_affinity_config.setter
+    def model_group_affinity_config(self, value: "dict[str, list[str]] | None") -> None:
+        self._opt.model_group_affinity_config = value
 
     def add_optional_pre_call_checks(self, optional_pre_call_checks: "Sequence[object] | None") -> None:
         self._opt.add(optional_pre_call_checks)
@@ -620,15 +709,17 @@ class RustOptionalChecks:
     async def _answer_callback_filters(
         self, step: Mapping[str, object], request: Mapping[str, object], messages: object
     ) -> tuple[object, BaseException | None]:
-        """A ``callback_filters`` step: the remaining ids, or a filter's error as an attempt
-        failure with the error itself, which the caller keeps to raise."""
+        """A ``callback_filters`` step: the remaining ids and the one a filter prefers, or a
+        filter's error as an attempt failure with the error itself, which the caller keeps to raise."""
         from litellm.router_rust.core import attempt_failure
 
         candidates: Final = [str(id) for id in step.get("candidates") or ()]  # pyright: ignore[reportGeneralTypeIssues, reportUnknownVariableType, reportUnknownArgumentType]  # the step's id list
+        if not self._opt.has_filters():
+            return (list(dict.fromkeys(candidates)), None), None
         records: Final = self._records_of(candidates)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]  # RustCore's deployment dicts
         narrowed: Final = _request_with_failed_ids(request, step)
         try:
-            remaining: Final = await self._opt.filter_deployments(
+            remaining, preferred_id = await self._opt.filter_deployments(
                 str(step.get("model_group")),
                 records,  # pyright: ignore[reportUnknownArgumentType]  # see above
                 messages,
@@ -639,7 +730,8 @@ class RustOptionalChecks:
         # A filter's pin lands on the request kwargs the pick goes on to read.
         if narrowed is not request and narrowed.get(_ENCRYPTED_PIN) and isinstance(request, dict):
             request[_ENCRYPTED_PIN] = True  # rebind-ok: the request dict the pick goes on to read
-        return filtered_ids(remaining, candidates), None  # pyright: ignore[reportUnknownArgumentType]  # see above
+        kept: Final = filtered_ids(remaining, candidates)  # pyright: ignore[reportUnknownArgumentType]  # see above
+        return (kept, preferred_id), None
 
 
 __all__ = [
@@ -648,3 +740,9 @@ __all__ = [
     "filtered_ids",
     "register_router_selector",
 ]
+
+
+def _router_alive(owner: object) -> bool:
+    """A core whose public ``Router`` was dropped holds no check: it only waits for the collector."""
+    handle: Final = vars(owner).get("_core_owner") if hasattr(owner, "__dict__") else None
+    return not callable(handle) or handle() is not None

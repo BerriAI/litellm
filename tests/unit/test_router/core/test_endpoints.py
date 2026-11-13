@@ -22,7 +22,6 @@ from tests.unit.test_router.core.scripted_host import (
     completion_response,
     deployment,
     embedding_response,
-    records_outcomes_through_callbacks,
 )
 
 MESSAGES: Final = [{"role": "user", "content": "hi"}]
@@ -279,21 +278,18 @@ async def test_request_level_api_key_replaces_the_deployment_key_on_the_host_cal
     )
 
 
-async def test_construction_registers_one_success_and_one_failure_callback_per_mode(
-    make_core: MakeCore, host: ScriptedHost
-):
+async def test_construction_registers_no_outcome_callbacks(make_core: MakeCore, host: ScriptedHost):
+    """The core records every attempt's outcome itself, so it registers no callbacks on its host."""
     core: Final = _one_group(make_core)
-    registered: Final = {name: len(callbacks) for name, callbacks in host.lists.items()}
-    one: Final = 1 if records_outcomes_through_callbacks(core) else 0
-    assert registered == {
+    assert core.registry() is not None
+    assert {name: len(callbacks) for name, callbacks in host.lists.items()} == {
         "callbacks": 0,
-        "success_callback": one,
-        "_async_success_callback": one,
-        "failure_callback": one,
-        "_async_failure_callback": one,
+        "success_callback": 0,
+        "_async_success_callback": 0,
+        "failure_callback": 0,
+        "_async_failure_callback": 0,
         "input_callback": 0,
     }
-    assert all(callable(callbacks[0]) for callbacks in host.lists.values() if callbacks)
 
 
 async def test_retire_removes_the_callbacks_the_core_registered(make_core: MakeCore, host: ScriptedHost):

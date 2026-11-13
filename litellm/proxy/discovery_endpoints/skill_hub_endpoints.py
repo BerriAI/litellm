@@ -1,8 +1,10 @@
 import asyncio
 import hashlib
-from dataclasses import replace
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
 from datetime import datetime
-from typing import Annotated, Final
+from itertools import chain
+from typing import Annotated, Final, Literal
 from urllib.parse import quote
 
 import httpx
@@ -14,7 +16,11 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.models.plugin_upload import (
     PluginArchiveMetadata,
+    PluginDownloader,
+    PluginDownloadsResponse,
     PluginPublication,
+    PluginPublicationBase,
+    PluginPublicationError,
     PluginSnapshot,
     PluginUploadStore,
     PluginVersion,
@@ -28,10 +34,13 @@ from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketp
     delete_plugin,
     disable_plugin,
     enable_plugin,
+    get_plugin_downloads,
     header_key_caller,
-    list_plugins,
+    list_visible_plugins,
     plugin_archive_source_matches,
     plugin_archive_url,
+    plugin_downloader,
+    require_download_recorded,
 )
 from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_skill_access import resolve_skill_visibility
 from litellm.proxy.anthropic_endpoints.claude_code_endpoints.skill_upload_archive import build_uploaded_skill_archive
@@ -49,6 +58,7 @@ from litellm.proxy.discovery_endpoints.agent_skills_archive import (
 from litellm.proxy.discovery_endpoints.skill_hub_mutations import (
     SkillMutationError,
     archive_writer,
+    publication_error,
     write_skill,
     write_target,
 )
@@ -59,6 +69,7 @@ from litellm.proxy.discovery_endpoints.skill_import import (
     parse_skill_source,
     select_imported_skill,
 )
+from litellm.repositories.plugin_publication import read_plugin_publisher, read_plugin_review
 from litellm.types.proxy.claude_code_endpoints import PluginListItem
 from litellm.types.proxy.discovery_endpoints.agent_skills_endpoints import AgentSkillsIndexEntry
 from litellm.types.proxy.skill_hub import (
@@ -69,13 +80,25 @@ from litellm.types.proxy.skill_hub import (
     SkillHubPendingSkill,
     SkillHubProposal,
     SkillHubPublication,
+    SkillHubRestore,
     SkillHubSkill,
     SkillHubVersion,
     SkillHubVersions,
+    SkillSortField,
 )
 
 router: Final = APIRouter(prefix="/skill-hub/skills", tags=["Skills Hub"])
 _EDITABLE_METADATA: Final = frozenset(SkillHubMetadata.model_fields)
+router.add_api_route(
+    "/{plugin_name}/downloads", get_plugin_downloads, methods=["GET"], response_model=PluginDownloadsResponse
+)
+
+
+@dataclass(frozen=True, slots=True)
+class VisibleSkillArchive:
+    archive: SkillArchive
+    metadata: PluginArchiveMetadata
+    downloader: PluginDownloader
 
 
 def _url(request: Request, route: str) -> str:
@@ -88,7 +111,7 @@ def _download_url(request: Request, name: str) -> str:
     return _url(request, f"skill-hub/skills/{quote(name, safe='')}/archive")
 
 
-def _skill_response(request: Request, plugin: PluginListItem) -> SkillHubSkill:
+def _skill_response(request: Request, plugin: PluginListItem, download_count: int | None = None) -> SkillHubSkill:
     local_archive: Final = plugin_archive_source_matches(
         request,
         plugin.name,
@@ -105,34 +128,93 @@ def _skill_response(request: Request, plugin: PluginListItem) -> SkillHubSkill:
         namespace=plugin.namespace,
         keywords=None if plugin.keywords is None else tuple(plugin.keywords),
         updated_at=None if plugin.updated_at is None else datetime.fromisoformat(plugin.updated_at),
+        created_at=None if plugin.created_at is None else datetime.fromisoformat(plugin.created_at),
+        created_by=plugin.created_by,
+        approved_by=plugin.approved_by,
+        published_by=plugin.published_by,
+        security_scan_passed=plugin.security_scan_passed,
         visibility="public" if plugin.enabled else "private",
         source={"source": "archive", "url": _download_url(request, plugin.name)} if local_archive else plugin.source,
         download_url=_download_url(request, plugin.name) if local_archive else None,
         content_url=_url(request, f"skill-hub/skills/{quote(plugin.name, safe='')}/content") if local_archive else None,
+        download_count=download_count,
     )
 
 
 @router.get("", response_model=SkillHubList)
 async def list_skills(
     request: Request,
+    uploads: PluginUploadRepositoryDep,
     caller: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     query: str = "",
     offset: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    tag: str = "",
+    security_scan_passed: bool | None = None,
+    sort_by: SkillSortField = "name",
+    sort_order: Literal["asc", "desc"] = "asc",
 ) -> SkillHubList:
     """Browse the caller's public and granted private skills."""
-    catalog: Final = await list_plugins(enabled_only=False, user_api_key_dict=caller)
-    needle: Final = query.casefold()
+    catalog: Final = await list_visible_plugins(enabled_only=False, user_api_key_dict=caller)
+    needle: Final = query.strip().casefold()
+    selected_tag: Final = tag.strip().casefold()
     matched: Final = tuple(
         plugin
         for plugin in sorted(catalog.plugins, key=lambda item: item.name)
-        if needle in " ".join((plugin.name, plugin.description or "", *(plugin.keywords or ()))).casefold()
+        if needle
+        in " ".join(
+            (
+                plugin.name,
+                plugin.description or "",
+                plugin.domain or "",
+                plugin.namespace or "",
+                plugin.created_by or "",
+                plugin.approved_by or "",
+                plugin.published_by or "",
+                *(plugin.keywords or ()),
+            )
+        ).casefold()
+        and (not selected_tag or selected_tag in {word.casefold() for word in plugin.keywords or ()})
+        and (security_scan_passed is None or plugin.security_scan_passed == security_scan_passed)
+    )
+    counts: Final[Mapping[str, int]] = (
+        await _require_store(uploads).download_counts(tuple(plugin.id for plugin in matched))
+        if sort_by == "download_count"
+        else {}
+    )
+    ordered: Final = sorted(
+        matched, key=lambda plugin: _skill_sort_key(plugin, sort_by, counts), reverse=sort_order == "desc"
+    )
+    page: Final = ordered[offset : offset + limit]
+    page_counts: Final = (
+        await _require_store(uploads).download_counts(tuple(plugin.id for plugin in page))
+        if sort_by != "download_count"
+        else counts
     )
     return SkillHubList(
-        skills=tuple(_skill_response(request, plugin) for plugin in matched[offset : offset + limit]),
+        skills=tuple(_skill_response(request, plugin, page_counts.get(plugin.id)) for plugin in page),
         count=len(matched),
         next_offset=offset + limit if offset + limit < len(matched) else None,
+        tags=tuple(
+            sorted(set(chain.from_iterable(plugin.keywords or () for plugin in catalog.plugins)), key=str.casefold)
+        ),
     )
+
+
+def _skill_sort_key(plugin: PluginListItem, field: SkillSortField, counts: Mapping[str, int]) -> str | float:
+    if field == "download_count":
+        return counts.get(plugin.id, 0)
+    if field == "security_scan_passed":
+        return int(plugin.security_scan_passed)
+    if field in {"created_at", "updated_at"}:
+        value: Final = plugin.created_at if field == "created_at" else plugin.updated_at
+        return datetime.fromisoformat(value).timestamp() if value else 0
+    return {
+        "name": plugin.name,
+        "created_by": plugin.created_by or "",
+        "published_by": plugin.published_by or "",
+        "approved_by": plugin.approved_by or "",
+    }[field].casefold()
 
 
 @router.get("/{name}", response_model=SkillHubSkill)
@@ -152,6 +234,7 @@ async def get_skill(
 
 def skill_metadata_response(request: Request, metadata: PluginArchiveMetadata) -> SkillHubSkill:
     manifest: Final = MANIFEST_FIELDS.validate_json(metadata.manifest_json or "{}")
+    review: Final = read_plugin_review(manifest)
     return _skill_response(
         request,
         PluginListItem.model_validate(
@@ -163,7 +246,11 @@ def skill_metadata_response(request: Request, metadata: PluginArchiveMetadata) -
                 "source": dict(metadata.source),
                 "has_agent_skill_metadata": metadata.has_agent_skill_metadata,
                 "enabled": metadata.enabled,
-                "created_at": None,
+                "created_at": metadata.created_at.isoformat() if metadata.created_at is not None else None,
+                "created_by": metadata.created_by,
+                "approved_by": review.approved_by if review else None,
+                "published_by": read_plugin_publisher(manifest),
+                "security_scan_passed": review.security_scan_passed if review else False,
                 "updated_at": metadata.updated_at.isoformat() if metadata.updated_at is not None else None,
                 "domain": manifest.get("domain"),
                 "namespace": manifest.get("namespace"),
@@ -392,7 +479,11 @@ def skill_publication_response(
                 "version": published.version,
                 "enabled": published.enabled,
                 "has_agent_skill_metadata": has_agent_skill_metadata(publication.manifest),
-                "created_at": None,
+                "created_at": published.created_at.isoformat() if published.created_at is not None else None,
+                "created_by": published.created_by,
+                "approved_by": published.review.approved_by if published.review else None,
+                "published_by": published.published_by,
+                "security_scan_passed": published.review.security_scan_passed if published.review else False,
                 "updated_at": published.updated_at.isoformat(),
                 "domain": publication.manifest.get("domain"),
                 "namespace": publication.manifest.get("namespace"),
@@ -520,14 +611,22 @@ async def download_skill_version(
     """Download a retained publication as a portable ZIP with SKILL.md at its root."""
     store: Final = _require_store(uploads)
     metadata: Final = await _version_metadata(name, store, caller)
-    if metadata.id is None:
-        raise HTTPException(404, "Skill not found")
+    version: Final = await store.version(metadata, version_id)
+    if version is None:
+        raise HTTPException(404, "Skill version not found")
     content: Final = await store.version_content(metadata, version_id)
     archive: Final = (
         await asyncio.to_thread(build_agent_skill_archive, content, plugin_name=name) if content is not None else None
     )
     if archive is None:
         raise HTTPException(404, "This version has no retained Agent Skills archive")
+    require_download_recorded(
+        await store.record_download(
+            replace(metadata, version=version.version),
+            archive.digest.removeprefix("sha256:"),
+            plugin_downloader(caller),
+        )
+    )
     return Response(
         archive.content,
         media_type="application/zip",
@@ -540,7 +639,55 @@ async def download_skill_version(
     )
 
 
-async def _visible_archive(request: Request, name: str, uploads: PluginUploadStore | None) -> SkillArchive:
+@router.post("/{name}/versions/{version_id}/restore", response_model=SkillHubSkill)
+async def restore_skill_version(
+    request: Request,
+    name: str,
+    version_id: str,
+    body: SkillHubRestore,
+    uploads: PluginUploadRepositoryDep,
+    caller: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> SkillHubSkill:
+    """Proxy admins may republish retained bytes and metadata as a new version, preserving visibility and grants."""
+    _require_admin(caller)
+    store: Final = _require_store(uploads)
+    metadata: Final = await _version_metadata(name, store, caller)
+    if metadata.id != body.expected_skill_id or metadata.updated_at != body.expected_updated_at:
+        raise HTTPException(409, "The published skill changed. Reload it before restoring a version")
+    version: Final = await store.version(metadata, version_id)
+    if version is None:
+        raise HTTPException(404, "Skill version not found")
+    content: Final = await store.version_content(metadata, version_id) if version.archive_available else None
+    if content is None:
+        raise HTTPException(409, "This version has no verified retained archive to restore")
+    digest: Final = hashlib.sha256(content).hexdigest()
+    review: Final = read_plugin_review(version.manifest)
+    publication: Final = PluginPublication(
+        name=name,
+        version=body.version,
+        description=version.description,
+        manifest={
+            **version.manifest,
+            "source": {
+                "source": "archive",
+                "url": plugin_archive_url(request, name, digest),
+                "sha256": digest,
+            },
+        },
+        content=content,
+        created_by=caller.user_id or "proxy-admin",
+        review=replace(review, approved_by=caller.user_id or "proxy-admin") if review is not None else None,
+    )
+    published: Final = await store.publish(
+        publication, PluginPublicationBase(body.expected_skill_id, body.expected_updated_at)
+    )
+    if isinstance(published, PluginPublicationError):
+        error: Final = publication_error(published)
+        raise HTTPException(error.status, error.message)
+    return skill_publication_response(request, publication, published)
+
+
+async def _visible_archive(request: Request, name: str, uploads: PluginUploadStore | None) -> VisibleSkillArchive:
     anonymous_allowed: Final = litellm.public_skills_index is True and not marketplace_auth_required()
     caller: Final = (
         await header_key_caller(request) if marketplace_key_header_present(request) or not anonymous_allowed else None
@@ -563,7 +710,7 @@ async def _visible_archive(request: Request, name: str, uploads: PluginUploadSto
     )
     if archive is None:
         raise HTTPException(404, "This skill has no stored Agent Skills archive")
-    return archive
+    return VisibleSkillArchive(archive, metadata, plugin_downloader(caller))
 
 
 @router.get(
@@ -575,9 +722,15 @@ async def download_skill(
     request: Request, name: str, uploads: PluginUploadRepositoryDep, digest: str | None = None
 ) -> Response:
     """Download the complete portable skill, with SKILL.md at the ZIP root."""
-    archive: Final = await _visible_archive(request, name, uploads)
+    visible: Final = await _visible_archive(request, name, uploads)
+    archive: Final = visible.archive
     if digest is not None and digest != archive.digest:
         raise HTTPException(404, "Skill archive version not found")
+    require_download_recorded(
+        await _require_store(uploads).record_download(
+            visible.metadata, archive.digest.removeprefix("sha256:"), visible.downloader
+        )
+    )
     return Response(
         archive.content,
         media_type="application/zip",
@@ -593,9 +746,9 @@ async def download_skill(
 @router.get("/{name}/content", response_class=Response, responses={200: {"content": {"text/markdown": {}}}})
 async def skill_content(request: Request, name: str, uploads: PluginUploadRepositoryDep) -> Response:
     """Read the original SKILL.md without downloading supporting files."""
-    archive: Final = await _visible_archive(request, name, uploads)
+    visible: Final = await _visible_archive(request, name, uploads)
     return Response(
-        archive.manifest_content,
+        visible.archive.manifest_content,
         media_type="text/markdown",
         headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
     )

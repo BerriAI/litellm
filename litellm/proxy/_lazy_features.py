@@ -50,9 +50,11 @@ def _mount_app(prefix: str, attr_name: str = "app") -> Callable[["FastAPI", obje
 
 def _include_skill_hub(app: "FastAPI", module: object) -> None:
     from litellm.proxy.discovery_endpoints.skill_hub_submissions import router
+    from litellm.proxy.discovery_endpoints.skill_scanning import router as scan_router
 
     _include_router()(app, module)
     app.include_router(router)
+    app.include_router(scan_router)
 
 
 @dataclass(frozen=True)
@@ -241,6 +243,7 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
             "/mistral/",
             "/nvidia_nim/",
             "/openai/",
+            "/opensearch/",
             "/openai_passthrough/",
             "/tinyfish/",
             "/transcribe",
@@ -369,8 +372,8 @@ class LazyFeatureMiddleware:
             fastapi_app.state.lazy_locks = {}
 
     @property
-    def _loaded(self) -> set:
-        return self._fastapi_app.state.lazy_loaded
+    def _loaded(self) -> set[str]:
+        return _lazy_loaded(self._fastapi_app)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         # Short-circuit once every feature has loaded.
