@@ -101608,10 +101608,10 @@
     },
     "fal_ai/google/gemini-omni-flash/v1.2/upscale": {
         "litellm_provider": "fal_ai",
-        "metadata": {"comment":"per second of upscaled output video by target resolution; output_cost_per_second is the default resolution 1080p rate for a 720p source, the page's worked example; a 360p source upscaled to 1080p is $0.0819 per second and depends on the source resolution, which has no catalog field"},
+        "metadata": {"comment":"per second of upscaled output video by target resolution; the 1080p tier and output_cost_per_second take the higher source-dependent rate ($0.0819 from a 360p source) because the catalog selects by target resolution alone and the source resolution has no field, so a 720p source upscaled to 1080p ($0.041 per second) is overcounted, the same convention as fal_ai/blackforestlabs/flux-video-upscale"},
         "mode": "video_generation",
-        "output_cost_per_second": 0.041,
-        "output_cost_per_second_1080p": 0.041,
+        "output_cost_per_second": 0.0819,
+        "output_cost_per_second_1080p": 0.0819,
         "output_cost_per_second_4k": 0.1638,
         "output_cost_per_second_720p": 0.041,
         "source": "https://fal.ai/models/google/gemini-omni-flash/v1.2/upscale",
