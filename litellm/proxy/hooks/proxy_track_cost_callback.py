@@ -36,6 +36,7 @@ from litellm.proxy.auth.auth_checks import (
     get_key_object,
     get_team_object,
 )
+from litellm.proxy.auth.customer_spend import settle_customer_spend
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
 from litellm.proxy.db.db_spend_update_writer import (
@@ -1440,7 +1441,14 @@ async def _update_database_and_spend_counters_in_batch(
         await _release_budget_reservation(budget_reservation=budget_reservation)
         return False
 
+    from litellm.proxy.proxy_server import spend_counter_store
+
     try:
+        await settle_customer_spend(
+            _OBJECT_MAPPING.validate_python(get_litellm_metadata_from_kwargs(kwargs=kwargs)),
+            response_cost,
+            spend_counter_store,
+        )
         await increment_spend_counters(
             token=user_api_key,
             team_id=team_id,

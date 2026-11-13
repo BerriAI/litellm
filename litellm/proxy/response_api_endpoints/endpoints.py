@@ -2678,7 +2678,6 @@ async def _responses_websocket_session(
             user_request_timeout=user_request_timeout,
             user_max_tokens=user_max_tokens,
             user_api_base=user_api_base,
-            model=resolved_model,
             route_type="_aresponses_websocket",
             skip_guardrails=True,
         )

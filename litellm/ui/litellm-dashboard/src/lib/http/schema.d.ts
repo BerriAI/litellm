@@ -33242,6 +33242,8 @@ export interface components {
         CustomerScopeAuth: {
             /** Allowed Models */
             allowed_models?: string[] | null;
+            /** Budget Reset At */
+            budget_reset_at?: string | null;
             /** Entity Id */
             entity_id: string;
             /**

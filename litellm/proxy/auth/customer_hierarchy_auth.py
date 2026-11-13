@@ -22,6 +22,7 @@ from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy.auth.auth_checks import can_object_call_model
 from litellm.proxy.auth.auth_object_prefetch import AUTH_OBJECTS_TARGET
 from litellm.proxy.auth.customer_member_auto_create import ensure_customer_member
+from litellm.proxy.auth.customer_spend import current_customer_spend
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, get_management_object_ttl
@@ -62,6 +63,7 @@ class _OrganizationRow(BaseModel):
     customer_org_id: str
     alias: str | None = None
     spend: float = 0.0
+    budget_reset_at: datetime | None = None
     budget: Mapping[str, object] | None = None
 
 
@@ -71,6 +73,7 @@ class _TeamRow(BaseModel):
     customer_team_id: str
     alias: str | None = None
     spend: float = 0.0
+    budget_reset_at: datetime | None = None
     budget: Mapping[str, object] | None = None
     parent_org: _OrganizationRow
 
@@ -81,6 +84,7 @@ class _MemberRow(BaseModel):
     customer_member_id: str
     alias: str | None = None
     spend: float = 0.0
+    budget_reset_at: datetime | None = None
     budget: Mapping[str, object] | None = None
     budget_override: Mapping[str, object] | None = None
     budget_override_expires_at: datetime | None = None
@@ -145,13 +149,16 @@ def customer_identity_from_headers(headers: Mapping[str, object] | None) -> Cust
     return identity
 
 
-def _scope(key: CustomerScopeKey, entity_id: str, spend: float, budget: Budget | None) -> CustomerScopeAuth:
+def _scope(
+    key: CustomerScopeKey, entity_id: str, spend: float, budget: Budget | None, budget_reset_at: datetime | None = None
+) -> CustomerScopeAuth:
     if budget is None:
-        return CustomerScopeAuth(key=key, entity_id=entity_id, spend=spend)
+        return CustomerScopeAuth(key=key, entity_id=entity_id, spend=spend, budget_reset_at=budget_reset_at)
     return CustomerScopeAuth(
         key=key,
         entity_id=entity_id,
         spend=spend,
+        budget_reset_at=budget_reset_at,
         max_budget=budget.max_budget,
         tpm_limit=budget.tpm_limit,
         rpm_limit=budget.rpm_limit,
@@ -182,13 +189,21 @@ def customer_hierarchy_from_member_row(row: Mapping[str, object], now: datetime)
                 organization.customer_org_id,
                 organization.spend,
                 related_budget(organization.budget, now),
+                organization.budget_reset_at,
             ),
-            _scope("customer_team", team.customer_team_id, team.spend, related_budget(team.budget, now)),
+            _scope(
+                "customer_team",
+                team.customer_team_id,
+                team.spend,
+                related_budget(team.budget, now),
+                team.budget_reset_at,
+            ),
             _scope(
                 "customer_member",
                 member.customer_member_id,
                 member.spend,
                 effective_member_budget(template, override, member.budget_override_expires_at, now),
+                member.budget_reset_at,
             ),
         ),
     )
@@ -206,6 +221,7 @@ def customer_hierarchy_from_organization_row(row: Mapping[str, object], now: dat
                 organization.customer_org_id,
                 organization.spend,
                 related_budget(organization.budget, now),
+                organization.budget_reset_at,
             ),
         ),
     )
@@ -320,7 +336,9 @@ def _not_found(message: str, param: str) -> ProxyException:
 
 
 async def _organization_named_by_alias(
-    customer_org_alias: str, prisma_client: "PrismaClient | None", user_api_key_cache: UserApiKeyCache
+    customer_org_alias: str,
+    prisma_client: "PrismaClient | None",
+    user_api_key_cache: UserApiKeyCache,
 ) -> CustomerHierarchyAuth:
     organization: Final = (
         await get_customer_organization_hierarchy(customer_org_alias, prisma_client, user_api_key_cache)
@@ -431,7 +449,10 @@ async def resolve_customer_hierarchy(
 ) -> CustomerHierarchyAuth:
     """Load the hierarchy the headers name and admit the request against it. ``request_model`` is the model the
     route will actually serve, which may differ from the body."""
-    hierarchy: Final = await load_customer_hierarchy(identity, prisma_client, user_api_key_cache, register)
+    from litellm.proxy.proxy_server import get_current_spend
+
+    cached: Final = await load_customer_hierarchy(identity, prisma_client, user_api_key_cache, register)
+    hierarchy: Final = await current_customer_spend(cached, get_current_spend)
     try:
         check_customer_hierarchy_access(hierarchy, llm_router, request_model, route, key_metadata)
     except litellm.BudgetExceededError as error:
