@@ -674,6 +674,7 @@ async fn increment_if_present_only_raises_an_entry_redis_holds(
     );
 }
 
+#[rstest]
 #[tokio::test]
 async fn without_redis_every_operation_is_memory_only() {
     let store = store(None);
