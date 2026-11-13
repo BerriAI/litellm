@@ -281,6 +281,9 @@ class Database:
             Table("customer_member_id", self) if source is None else source.litellm_customermembertable
         )
         self.litellm_budgettable = Table("budget_id", self) if source is None else source.litellm_budgettable
+        self.litellm_budgetwindowspend = (
+            Table("entity_id", self) if source is None else source.litellm_budgetwindowspend
+        )
         self.litellm_verificationtoken = Table("token", self) if source is None else source.litellm_verificationtoken
         self.litellm_projecttable = Table("project_id", self) if source is None else source.litellm_projecttable
         self.litellm_customerbudgetincreaserequest = (

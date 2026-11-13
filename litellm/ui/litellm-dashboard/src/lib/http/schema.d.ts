@@ -33374,6 +33374,24 @@ export interface components {
              */
             type: "custom";
         };
+        /** CustomerBudgetUsage */
+        CustomerBudgetUsage: {
+            /** Budget Duration */
+            budget_duration: string | null;
+            /** Max Budget */
+            max_budget: number;
+            /** Reset At */
+            reset_at?: string | null;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "scalar" | "window";
+            /** Spend */
+            spend: number | null;
+            /** Window Start */
+            window_start?: string | null;
+        };
         /**
          * CustomerHierarchyAuth
          * @description The levels a request is charged to. A request that named only an organization alias has no team or member.
@@ -33413,6 +33431,11 @@ export interface components {
             budget_override_id?: string | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
+            /**
+             * Budget Usage
+             * @description Recorded spend for each independent effective budget. Excludes pending reservations and updates after accounting flushes. Window boundaries follow the configured reset timezone and time.
+             */
+            budget_usage?: components["schemas"]["CustomerBudgetUsage"][] | null;
             /**
              * Created At
              * Format: date-time
@@ -40814,6 +40837,11 @@ export interface components {
             budget_override_id?: string | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
+            /**
+             * Budget Usage
+             * @description Recorded spend for each independent effective budget. Excludes pending reservations and updates after accounting flushes. Window boundaries follow the configured reset timezone and time.
+             */
+            budget_usage?: components["schemas"]["CustomerBudgetUsage"][] | null;
             /** Created */
             created: boolean;
             /**
@@ -42715,6 +42743,11 @@ export interface components {
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /**
+             * Budget Usage
+             * @description Recorded spend for each independent effective budget. Excludes pending reservations and updates after accounting flushes. Window boundaries follow the configured reset timezone and time.
+             */
+            budget_usage?: components["schemas"]["CustomerBudgetUsage"][] | null;
+            /**
              * Created At
              * Format: date-time
              */
@@ -42909,6 +42942,11 @@ export interface components {
             budget_id?: string | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
+            /**
+             * Budget Usage
+             * @description Recorded spend for each independent effective budget. Excludes pending reservations and updates after accounting flushes. Window boundaries follow the configured reset timezone and time.
+             */
+            budget_usage?: components["schemas"]["CustomerBudgetUsage"][] | null;
             /** Created */
             created: boolean;
             /**
@@ -49724,6 +49762,11 @@ export interface components {
             budget_override_id?: string | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
+            /**
+             * Budget Usage
+             * @description Recorded spend for each independent effective budget. Excludes pending reservations and updates after accounting flushes. Window boundaries follow the configured reset timezone and time.
+             */
+            budget_usage?: components["schemas"]["CustomerBudgetUsage"][] | null;
             /**
              * Created At
              * Format: date-time

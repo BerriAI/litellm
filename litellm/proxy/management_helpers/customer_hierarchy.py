@@ -17,6 +17,7 @@ from litellm.proxy.common_utils.timezone_utils import (
 )
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.list_api.common import escape_like
+from litellm.proxy.management_helpers.customer_budget_usage import customer_budget_usage
 from litellm.repositories.budget_repository import create_budget_row, update_budget_row
 from litellm.repositories.chunked_in import delete_many_in, find_many_in
 from litellm.repositories.prisma_protocols import TableActions
@@ -38,6 +39,7 @@ from litellm.types.proxy.management_endpoints.customer_hierarchy import (
 
 if TYPE_CHECKING:
     from prisma import Json, Prisma
+    from prisma.models import LiteLLM_BudgetWindowSpend
 
 
 class ErrorCode(str, Enum):
@@ -474,6 +476,7 @@ class CustomerHierarchyStore:
         self.teams: TableActions[PrismaRecord] = db.litellm_customerteamtable  # pyright: ignore[reportAttributeAccessIssue]  # protocol accepts immutable query mappings
         self.members: TableActions[PrismaRecord] = db.litellm_customermembertable  # pyright: ignore[reportAttributeAccessIssue]  # protocol accepts immutable query mappings
         self.budgets: TableActions[PrismaRecord] = db.litellm_budgettable  # pyright: ignore[reportAttributeAccessIssue]  # protocol accepts immutable query mappings
+        self.window_spend: TableActions[LiteLLM_BudgetWindowSpend] = db.litellm_budgetwindowspend  # pyright: ignore[reportAttributeAccessIssue]  # protocol accepts immutable query mappings
 
     async def lock_free_capacity(self, scope: str | None = None) -> None:
         await self.db.query_raw("SELECT set_config('lock_timeout', $1, true)", f"{FREE_CAPACITY_LOCK_TIMEOUT_MS}ms")
@@ -535,9 +538,10 @@ class CustomerHierarchyStore:
         budgets: Final = {budget.budget_id: budget for budget in resolved}
 
         counts: Final = await self.organization_member_counts(tuple(record.customer_org_id for record in records))
-        return tuple(
+        responses: Final = tuple(
             organization_response(record, budgets, counts.get(record.customer_org_id, 0)) for record in records
         )
+        return await customer_budget_usage(responses, self.window_spend, self.now, self.settings)
 
     async def organization_member_counts(self, organization_ids: tuple[str, ...]) -> Mapping[str, int]:
         if not organization_ids:
@@ -564,11 +568,21 @@ class CustomerHierarchyStore:
 
     async def get_team(self, team_id: str) -> Team | Failure:
         row: Final = await self.teams.find_unique(where={"customer_team_id": team_id}, include=_MEMBER_INCLUDE)
-        return team_response(row, self.now) if row is not None else Failure(ErrorCode.NOT_FOUND)
+        if row is None:
+            return Failure(ErrorCode.NOT_FOUND)
+        responses: Final = await customer_budget_usage(
+            (team_response(row, self.now),), self.window_spend, self.now, self.settings
+        )
+        return responses[0]
 
     async def get_member(self, member_id: str) -> CustomerMember | Failure:
         row: Final = await self.members.find_unique(where={"customer_member_id": member_id}, include=_MEMBER_INCLUDE)
-        return member_response(row, self.now) if row is not None else Failure(ErrorCode.NOT_FOUND)
+        if row is None:
+            return Failure(ErrorCode.NOT_FOUND)
+        responses: Final = await customer_budget_usage(
+            (member_response(row, self.now),), self.window_spend, self.now, self.settings
+        )
+        return responses[0]
 
     async def create_budget(self, budget: Budget, actor: str, name: str | None = None) -> str:
         budget_id: Final = str(uuid4())
@@ -969,7 +983,12 @@ class CustomerHierarchyStore:
             order=[{"created_at": "asc"}, {"customer_team_id": "asc"}],
             include=_MEMBER_INCLUDE,
         )
-        return Page(tuple(team_response(row, self.now) for row in rows), count)
+        return Page(
+            await customer_budget_usage(
+                tuple(team_response(row, self.now) for row in rows), self.window_spend, self.now, self.settings
+            ),
+            count,
+        )
 
     async def list_members(
         self, parent_team_id: str | None, page: int, page_size: int, *, parent_org_id: str | None = None
@@ -986,7 +1005,12 @@ class CustomerHierarchyStore:
             order=[{"created_at": "asc"}, {"customer_member_id": "asc"}],
             include=_MEMBER_INCLUDE,
         )
-        return Page(tuple(member_response(row, self.now) for row in rows), count)
+        return Page(
+            await customer_budget_usage(
+                tuple(member_response(row, self.now) for row in rows), self.window_spend, self.now, self.settings
+            ),
+            count,
+        )
 
     async def _delete_unused_budgets(self, budget_ids: Sequence[str]) -> None:
         where: Final[Mapping[str, object]] = {field: {"none": {}} for field in _BUDGET_REFERENCE_FIELDS}

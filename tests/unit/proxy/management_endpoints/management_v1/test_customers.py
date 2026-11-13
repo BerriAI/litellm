@@ -1653,3 +1653,31 @@ def test_member_in_two_teams_is_listed_under_each_and_teams_from_another_organiz
     assert mixed.status_code == 404, mixed.text
     fetched: Final = http.get("/management/v1/customer_organizations/org")
     assert fetched.json()["member_count"] == 1
+
+
+def test_list_and_detail_expose_each_effective_budget_with_its_own_recorded_spend() -> None:
+    database: Final = Database()
+    http: Final = client(database=database)
+    family(http)
+    created: Final = http.post(
+        "/management/v1/customer_members",
+        json={
+            "customer_member_id": "window-member", "parent_team_ids": ["team"],
+            "budget_override": {
+                "max_budget": 50, "budget_duration": "1mo",
+                "budget_limits": [{"budget_duration": "1mo", "max_budget": 10}],
+            },
+        },
+    )
+    assert created.status_code == 201, created.text
+    database.litellm_budgetwindowspend.rows = {
+        "window-member": Record(
+            entity_type="customer_member", entity_id="window-member", window_duration="1mo",
+            window_start=NOW, spend=8,
+        ),
+    }
+    detail: Final = http.get("/management/v1/customer_members/window-member")
+    listing: Final = http.get("/management/v1/customer_members?parent_team_id=team")
+    assert detail.status_code == listing.status_code == 200
+    assert listing.json()["data"][0]["budget_usage"] == detail.json()["budget_usage"]
+    assert [(item["spend"], item["max_budget"]) for item in detail.json()["budget_usage"]] == [(0, 50), (8, 10)]
