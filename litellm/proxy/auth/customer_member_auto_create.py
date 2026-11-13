@@ -46,6 +46,8 @@ async def ensure_customer_member(
     team: Final = await _default_team(hierarchy, customer_org_id)
     if isinstance(team, Failure):
         return team
+    if team.parent_org_id != customer_org_id:
+        return Failure(ErrorCode.FORBIDDEN)
     created: Final = await hierarchy.create_member(
         MemberCreate(customer_member_id=customer_member_id, parent_team_id=team.customer_team_id), AUTO_CREATE_ACTOR
     )

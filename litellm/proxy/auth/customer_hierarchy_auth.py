@@ -26,6 +26,7 @@ from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, get_management_object_ttl
 from litellm.proxy.management_helpers.customer_hierarchy import (
+    ErrorCode,
     Failure,
     PrismaRecord,
     effective_member_budget,
@@ -335,6 +336,13 @@ async def _register_member(
         return None
     registered: Final = await register(organization.customer_org_id, customer_member_id, prisma_client)
     if isinstance(registered, Failure):
+        if registered.code is ErrorCode.FORBIDDEN:
+            raise ProxyException(
+                message="The default customer team belongs to a different organization",
+                type=ProxyErrorTypes.auth_error,
+                param=CUSTOMER_ORG_ALIAS_HEADER,
+                code=status.HTTP_403_FORBIDDEN,
+            )
         verbose_proxy_logger.warning(
             "Could not register customer member %s in organization %s: %s",
             customer_member_id,

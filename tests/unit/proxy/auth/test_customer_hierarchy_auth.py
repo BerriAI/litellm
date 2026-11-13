@@ -448,18 +448,23 @@ async def test_a_member_the_aliased_organization_has_never_seen_is_registered_th
 
 
 @pytest.mark.asyncio
-async def test_an_unknown_member_stays_refused_without_an_alias_or_when_registration_fails() -> None:
+@pytest.mark.parametrize(
+    "failure_code, expected_status", [(ErrorCode.BUDGET_REQUIRED, "401"), (ErrorCode.FORBIDDEN, "403")]
+)
+async def test_an_unknown_member_stays_refused_without_an_alias_or_when_registration_fails(
+    failure_code: ErrorCode, expected_status: str
+) -> None:
     members: Final = _MemberTable({})
     registrar: Final = _Registrar(members)
     with pytest.raises(ProxyException) as no_alias:
         await _resolve(_Prisma(members), CustomerRequestIdentity(customer_member_id="user-7"), register=registrar)
     assert (no_alias.value.code, registrar.calls) == ("401", ())
 
-    failing: Final = _Registrar(members, Failure(ErrorCode.BUDGET_REQUIRED))
+    failing: Final = _Registrar(members, Failure(failure_code))
     prisma: Final = _Prisma(members, _OrganizationTable((_organization("acme"),)))
     with pytest.raises(ProxyException) as failed:
         await _resolve(
             prisma, CustomerRequestIdentity(customer_member_id="user-7", customer_org_alias="acme"), register=failing
         )
-    assert (failed.value.code, failing.calls) == ("401", (("org-1", "user-7"),))
+    assert (failed.value.code, failing.calls) == (expected_status, (("org-1", "user-7"),))
     assert "user-7" not in members.rows

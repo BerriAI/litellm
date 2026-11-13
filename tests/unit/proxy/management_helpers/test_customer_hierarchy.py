@@ -167,7 +167,7 @@ class Database:
             return tuple(
                 dict(row)
                 for row in connection.execute(
-                    query.replace("= ANY($1::text[])", "IN (SELECT value FROM json_each($1))"),
+                    query.replace("= ANY($1::text[])", "IN (SELECT value FROM json_each(?))"),
                     tuple(json.dumps(arg) for arg in args),
                 )
             )
