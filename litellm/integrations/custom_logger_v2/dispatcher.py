@@ -144,6 +144,15 @@ async def _gather_started(started: tuple[Awaitable[object] | None, ...], fail_fa
     return tuple(None if run is None else next(done) for run in started)
 
 
+async def _settle(run: Awaitable[object], fail_fast: bool) -> object:
+    if fail_fast:
+        return await run
+    try:
+        return await run
+    except BaseException as error:  # noqa: BLE001  # mirrors gather(return_exceptions=True) for a one-entry stage
+        return error
+
+
 def _fail_fast(hook: Hook, stage: tuple[Entry, ...]) -> bool:
     return HOOK_SPECS[hook].fail_fast_parallel and all(entry.subscription.parallel for entry in stage)
 
@@ -404,6 +413,22 @@ class RequestScope:
         )
         return await _gather_started(started, _fail_fast(hook, tuple(entries)))
 
+    async def _run_stage(
+        self,
+        hook: Hook,
+        stage: tuple[Entry, ...],
+        fields: Mapping[Field, object],
+        call: CallFacts | None,
+        binding: LegacyBinding | None,
+    ) -> tuple[object, ...]:
+        match stage:
+            case (only,) if not only.subscription.legacy:
+                return (
+                    await _settle(self._invoke(hook, only, fields, call, self._state(only)), _fail_fast(hook, stage)),
+                )
+            case _:
+                return await self._gather(hook, stage, fields, call, self._states_of(stage), binding)
+
     async def _run_stages(
         self,
         hook: Hook,
@@ -415,7 +440,7 @@ class RequestScope:
         if not stages:
             return chain
         stage: Final = stages[0]
-        results: Final = await self._gather(hook, stage, chain.fields, call, self._states_of(stage), binding)
+        results: Final = await self._run_stage(hook, stage, chain.fields, call, binding)
         folded: Final = self._fold(hook, stage, results, chain)
         if folded.terminal is not None:
             return folded

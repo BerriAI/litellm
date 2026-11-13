@@ -3,6 +3,7 @@ import gc
 import threading
 import weakref
 from collections.abc import Awaitable, Callable, Coroutine, Mapping, Set
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from types import MappingProxyType
 
@@ -335,6 +336,29 @@ async def test_parallel_pre_call_checks_see_the_patches_of_the_serial_chain() ->
     await scope.run_hook(Hook.pre_call, FIELDS, None)
 
     assert seen == [()]
+
+
+REQUEST_STASH: ContextVar[object] = ContextVar("request_stash", default=None)
+
+
+async def test_a_blocking_v2_callback_sets_context_the_next_stage_and_the_caller_see() -> None:
+    stash = object()
+    seen: list[object] = []
+
+    async def claim(view: object, ctx: CallContext[object]) -> None:
+        _ = REQUEST_STASH.set(stash)
+
+    async def look(view: object, ctx: CallContext[object]) -> None:
+        seen.append(REQUEST_STASH.get())
+
+    scope = dispatcher(
+        v2_callback("claimer", behaviour=claim, may_abort=True),
+        v2_callback("looker", behaviour=look, may_abort=True),
+    ).open_scope(RequestSelection())
+
+    await scope.run_hook(Hook.pre_call, FIELDS, None)
+
+    assert (seen, REQUEST_STASH.get()) == ([stash], stash)
 
 
 async def test_selection_mask_removes_opted_out_v2_callbacks_and_their_reads() -> None:

@@ -1,6 +1,7 @@
 import asyncio
 import gc
 from collections.abc import Awaitable, Generator
+from contextvars import ContextVar
 from typing import Final
 
 import pytest
@@ -239,6 +240,38 @@ async def test_a_v2_callback_writer_without_abort_still_waits_for_the_legacy_ent
 
     assert journal == ["legacy", "tagger"]
     assert data["model"] == "tagged"
+
+
+REQUEST_STASH: Final[ContextVar[object]] = ContextVar("request_stash", default=None)
+
+
+class StashClaimer(CustomLoggerV2):
+    def __init__(self, stash: object) -> None:
+        self.stash = stash
+
+    @on(Hook.pre_call, writes={F.metadata}, may_abort=True)
+    async def pre_call(self, view: object, ctx: CallContext[object]) -> None:
+        _ = REQUEST_STASH.set(self.stash)
+
+
+async def test_a_blocking_v2_callback_sets_context_a_later_legacy_callback_and_the_caller_see() -> None:
+    stash: Final = object()
+    seen: Final[list[object]] = []
+    callbacks: Final[list[object]] = [StashClaimer(stash), PreCallOnly()]
+
+    def start(logger: object, data: object) -> Awaitable[None]:
+        async def run() -> None:
+            seen.append(REQUEST_STASH.get())
+
+        return run()
+
+    await run_subscribers(
+        hook_subscribers(Hook.pre_call, callbacks),
+        KwargsFields({"messages": []}, PROXY_REQUEST_KEYS),
+        start,
+    )
+
+    assert (seen, REQUEST_STASH.get()) == ([stash], stash)
 
 
 async def test_legacy_only_and_dispatched_subscribers_give_the_same_result() -> None:
