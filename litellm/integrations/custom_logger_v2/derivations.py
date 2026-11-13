@@ -2,7 +2,7 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY, RESPONSES_WEBSOCKET_CALL_ID_METADATA_KEY
 from litellm.integrations.custom_logger_v2.enums import Field
@@ -17,13 +17,17 @@ from litellm.types.integrations.custom_logger_v2 import (
     GuardrailEntry,
     KeyIdentity,
     KeyLimits,
+    LoggedKeyIdentity,
     LoggedRequest,
     McpToolCall,
+    MetadataKind,
     ModelInfo,
+    ModelPreference,
     Outcome,
     OutputCap,
     RateLimitState,
     RateLimitStatuses,
+    ScalarItem,
     Usage,
     UsageRecord,
     coerce_record,
@@ -31,10 +35,7 @@ from litellm.types.integrations.custom_logger_v2 import (
 )
 
 _ABSENT: Final = object()
-_TAGS: Final[TypeAdapter[tuple[str, ...]]] = TypeAdapter(tuple[str, ...])
-_TEXT: Final[TypeAdapter[str]] = TypeAdapter(str)
-_ENTRIES: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
-_GUARDRAILS: Final[TypeAdapter[tuple[GuardrailEntry, ...]]] = TypeAdapter(tuple[GuardrailEntry, ...])
+_TAGS: Final[TypeAdapter[tuple[str | int | float | bool | None, ...]]] = TypeAdapter(tuple[ScalarItem, ...])
 _LIMITER_HEADER_PREFIX: Final = "x-ratelimit-"
 
 
@@ -54,6 +55,23 @@ def auth_of(args: HookArgs) -> object:
 
 def _metadata_value(source: object, name: str) -> object:
     return member(mapping(source) or {}, name)
+
+
+def _text(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _model_preferences(team_metadata: object) -> object:
+    raw: Final = _metadata_value(team_metadata, "model_preferences")
+    if raw is None:
+        return None
+    from litellm.proxy.hooks.dynamic_rate_limiter_v3 import MODEL_PREFERENCES
+
+    try:
+        parsed: Final = MODEL_PREFERENCES.validate_python(raw)
+    except ValidationError:
+        return None
+    return tuple(ModelPreference(model=preference.model, alternates=preference.alternates) for preference in parsed)
 
 
 def key_identity(args: HookArgs) -> KeyIdentity | None:
@@ -81,23 +99,123 @@ def key_identity(args: HookArgs) -> KeyIdentity | None:
             "invoked_agent_id": getattr(auth, "invoked_agent_id", None),
             "team_priority": _metadata_value(team_metadata, "priority"),
             "key_priority": _metadata_value(getattr(auth, "metadata", None), "priority"),
-            "model_preferences": _metadata_value(team_metadata, "model_preferences"),
+            "model_preferences": _model_preferences(team_metadata),
         },
     )
 
 
-def _estimated_output_tokens(auth: object, model: object) -> EstimatedOutputTokens:
-    key_metadata: Final = getattr(auth, "metadata", None)
-    team_metadata: Final = getattr(auth, "team_metadata", None)
-    per_model: Final = "default_estimated_output_tokens_per_model"
-    default: Final = "default_estimated_output_tokens"
+def _metadata_kind(payload: Mapping[str, object]) -> MetadataKind:
+    if "metadata" not in payload:
+        return MetadataKind.missing
+    metadata: Final = payload["metadata"]
+    if metadata is None:
+        return MetadataKind.null
+    return MetadataKind.mapping if isinstance(metadata, Mapping) else MetadataKind.other
+
+
+_LOGGED_KEY_MEMBERS: Final = MappingProxyType(
+    {
+        "key_hash": "user_api_key_hash",
+        "key_alias": "user_api_key_alias",
+        "key_spend": "user_api_key_spend",
+        "key_max_budget": "user_api_key_max_budget",
+        "key_budget_reset_at": "user_api_key_budget_reset_at",
+        "user_id": "user_api_key_user_id",
+        "user_email": "user_api_key_user_email",
+        "user_spend": "user_api_key_user_spend",
+        "user_max_budget": "user_api_key_user_max_budget",
+        "team_id": "user_api_key_team_id",
+        "team_alias": "user_api_key_team_alias",
+        "team_spend": "user_api_key_team_spend",
+        "team_max_budget": "user_api_key_team_max_budget",
+        "org_id": "user_api_key_org_id",
+        "org_alias": "user_api_key_org_alias",
+        "project_id": "user_api_key_project_id",
+        "project_alias": "user_api_key_project_alias",
+        "end_user_id": "user_api_key_end_user_id",
+        "request_route": "user_api_key_request_route",
+        "agent_id": "agent_id",
+    }
+)
+
+
+def _cost_tracking_end_user_id(params: Mapping[str, object]) -> object:
+    litellm_bucket: Final = mapping(params.get("litellm_metadata")) or {}
+    metadata_bucket: Final = mapping(params.get("metadata")) or {}
+    spend_keys: Final = {key: value for key, value in metadata_bucket.items() if "user_api_key" in key}
+    bucket: Final = (
+        {**litellm_bucket, **spend_keys} if litellm_bucket and metadata_bucket else litellm_bucket or metadata_bucket
+    )
+    return params.get("user_api_key_end_user_id") or bucket.get("user_api_key_end_user_id")
+
+
+_STAMPED_KEYS: Final = (
+    *(key for key in _LOGGED_KEY_MEMBERS.values() if key.startswith("user_api_key_")),
+    "user_api_key_auth_metadata",
+)
+
+
+def _missing_keys(metadata: Mapping[str, object] | None) -> tuple[str, ...] | None:
+    if metadata is None:
+        return None
+    return tuple(key for key in _STAMPED_KEYS if key not in metadata) or None
+
+
+def logged_key_identity(args: HookArgs) -> LoggedKeyIdentity | None:
+    payload: Final = payload_of(args)
+    if payload is None:
+        return None
+    raw_metadata: Final = payload.get("metadata")
+    metadata: Final = mapping(raw_metadata) or {}
+    auth_metadata: Final = metadata.get("user_api_key_auth_metadata")
+    auth_metadata_mapping: Final = mapping(auth_metadata)
+    return coerce_record(
+        LoggedKeyIdentity,
+        {
+            "metadata_kind": _metadata_kind(payload),
+            "missing_keys": _missing_keys(mapping(raw_metadata)),
+            **{name: metadata.get(key) for name, key in _LOGGED_KEY_MEMBERS.items()},
+            "auth_metadata_priority": member(auth_metadata_mapping, "priority"),
+            "request_user": member(args.request, "user"),
+            "cost_tracking_end_user_id": _cost_tracking_end_user_id(litellm_params(args)),
+        },
+        rejected=("auth_metadata",) if auth_metadata is not None and auth_metadata_mapping is None else (),
+    )
+
+
+def _estimates(metadata: object, model: str | None) -> tuple[int | None, int | None]:
+    from litellm.proxy.auth.auth_utils import (
+        ESTIMATED_OUTPUT_TOKENS_FIELD,
+        ESTIMATED_OUTPUT_TOKENS_METADATA_FIELDS,
+        ESTIMATED_OUTPUT_TOKENS_PER_MODEL_FIELD,
+        _validated_output_token_estimate,  # pyright: ignore[reportPrivateUsage]  # the limiter's own parse of the value
+        _validated_output_token_estimates_per_model,  # pyright: ignore[reportPrivateUsage]  # the limiter's own parse of the map
+    )
+
+    members: Final = mapping(metadata)
+    if not members or ESTIMATED_OUTPUT_TOKENS_METADATA_FIELDS.isdisjoint(members):
+        return None, None
+    per_model: Final = (
+        None
+        if model is None
+        else _validated_output_token_estimates_per_model(members.get(ESTIMATED_OUTPUT_TOKENS_PER_MODEL_FIELD))
+    )
+    return (
+        None if per_model is None or model is None else per_model.get(model),
+        _validated_output_token_estimate(members.get(ESTIMATED_OUTPUT_TOKENS_FIELD)),
+    )
+
+
+def _estimated_output_tokens(auth: object, model: str | None) -> EstimatedOutputTokens:
+    key_per_model, key_default = _estimates(getattr(auth, "metadata", None), model)
+    team_per_model, team_default = _estimates(getattr(auth, "team_metadata", None), model)
     return coerce_record(
         EstimatedOutputTokens,
         {
-            "key_per_model": _metadata_value(_metadata_value(key_metadata, per_model), str(model)),
-            "key_default": _metadata_value(key_metadata, default),
-            "team_per_model": _metadata_value(_metadata_value(team_metadata, per_model), str(model)),
-            "team_default": _metadata_value(team_metadata, default),
+            "key_per_model": key_per_model,
+            "key_default": key_default,
+            "team_per_model": team_per_model,
+            "team_default": team_default,
         },
     )
 
@@ -130,9 +248,9 @@ def key_limits(args: HookArgs) -> KeyLimits | None:
         KeyLimits,
         {
             **{name: getattr(auth, name, None) for name in _LIMIT_ATTRIBUTES},
-            "rpm_limit_type": _metadata_value(metadata, "rpm_limit_type"),
-            "tpm_limit_type": _metadata_value(metadata, "tpm_limit_type"),
-            "estimated_output_tokens": _estimated_output_tokens(auth, model) if isinstance(model, str) else None,
+            "rpm_limit_type": _text(_metadata_value(metadata, "rpm_limit_type")),
+            "tpm_limit_type": _text(_metadata_value(metadata, "tpm_limit_type")),
+            "estimated_output_tokens": _estimated_output_tokens(auth, model if isinstance(model, str) else None),
         },
     )
 
@@ -255,7 +373,7 @@ def outcome(args: HookArgs) -> Outcome | None:
 
 def _zero_cost(diagnostic: object) -> object:
     members: Final = mapping(diagnostic)
-    return diagnostic if members is None else {"reason": members.get("reason")}
+    return diagnostic if members is None else {"reason": members.get("reason"), "reason_present": "reason" in members}
 
 
 def cost(args: HookArgs) -> Cost | None:
@@ -271,28 +389,35 @@ def cost(args: HookArgs) -> Cost | None:
     )
 
 
-def request_tags(args: HookArgs) -> tuple[str, ...] | None:
+def request_tags(args: HookArgs) -> tuple[str | int | float | bool | None, ...] | None:
     return coerce_value("request_tags", _TAGS, member(payload_of(args), "request_tags"))
 
 
-def _guardrail_entry(entry: object) -> object:
+def _guardrail_entry(entry: object) -> GuardrailEntry:
     entry_mapping: Final = mapping(entry)
     if entry_mapping is None:
-        return entry
+        return GuardrailEntry(mapping=False)
     mode: Final = entry_mapping.get("guardrail_mode")
-    return {
-        "modes": (mode,) if isinstance(mode, str) else mode,
-        "duration": entry_mapping.get("duration"),
-    }
+    return coerce_record(
+        GuardrailEntry,
+        {
+            "mapping": True,
+            "modes": (mode,) if isinstance(mode, str) else mode,
+            "duration": entry_mapping.get("duration"),
+        },
+    )
 
 
 def guardrail_info(args: HookArgs) -> tuple[GuardrailEntry, ...] | None:
     raw: Final = member(payload_of(args), "guardrail_information")
+    if not raw:
+        return None
     single: Final = mapping(raw)
-    entries: Final = coerce_value("guardrail_info", _ENTRIES, raw if single is None else (single,))
-    return (
-        None if entries is None else coerce_value("guardrail_info", _GUARDRAILS, tuple(map(_guardrail_entry, entries)))
-    )
+    if single is not None:
+        return (_guardrail_entry(single),)
+    if isinstance(raw, list | tuple):
+        return tuple(map(_guardrail_entry, raw))  # pyright: ignore[reportUnknownArgumentType]  # untyped legacy entries
+    return (GuardrailEntry(mapping=False),)
 
 
 def litellm_params(args: HookArgs) -> Mapping[str, object]:
@@ -304,18 +429,24 @@ def litellm_metadata(args: HookArgs) -> Mapping[str, object]:
     return mapping(params.get("litellm_metadata")) or mapping(params.get("metadata")) or {}
 
 
+def _model_info(raw: object) -> object:
+    if not raw:
+        return None
+    members: Final = mapping(raw)
+    return (
+        raw if members is None else coerce_record(ModelInfo, {name: members.get(name) for name in ("id", "tpm", "rpm")})
+    )
+
+
 def deployment(args: HookArgs) -> Deployment | None:
     params: Final = litellm_params(args)
     metadata: Final = litellm_metadata(args)
     model_info: Final = metadata.get("model_info")
-    info_members: Final = mapping(model_info)
     original: Final = {**metadata, **(mapping(params.get("metadata")) or {})}.get("original_model_group")
     return coerce_record(
         Deployment,
         {
-            "model_info": model_info
-            if info_members is None
-            else coerce_record(ModelInfo, {name: info_members.get(name) for name in ("id", "tpm", "rpm")}),
+            "model_info": _model_info(model_info),
             "provider": params.get("custom_llm_provider"),
             "tpm": params.get("tpm"),
             "rpm": params.get("rpm"),
@@ -397,11 +528,11 @@ def mcp_tool_call(args: HookArgs) -> McpToolCall | None:
 
 
 def log_id(args: HookArgs) -> str | None:
-    return coerce_value("log_id", _TEXT, member(payload_of(args), "id"))
+    return _text(member(payload_of(args), "id"))
 
 
 def cold_storage_object_key(args: HookArgs) -> str | None:
-    return coerce_value("cold_storage_object_key", _TEXT, payload_metadata(args).get("cold_storage_object_key"))
+    return _text(payload_metadata(args).get("cold_storage_object_key"))
 
 
 def payload_copy(
@@ -415,7 +546,7 @@ RECORD_TYPES: Final[Mapping[Field, object]] = MappingProxyType(
     {
         Field.key_identity: KeyIdentity,
         Field.deployment: Deployment,
-        Field.request_tags: tuple[str, ...],
+        Field.request_tags: tuple[ScalarItem, ...],
         Field.guardrail_info: tuple[GuardrailEntry, ...],
         Field.outcome: Outcome,
         Field.usage: Usage,
@@ -431,12 +562,13 @@ RECORD_TYPES: Final[Mapping[Field, object]] = MappingProxyType(
         Field.mcp_tool_call: McpToolCall,
         Field.log_id: str,
         Field.cold_storage_object_key: str,
+        Field.logged_key_identity: LoggedKeyIdentity,
     }
 )
 
 LOGGING_SLOTS: Final[Mapping[Field, Slot]] = MappingProxyType(
     {
-        Field.key_identity: derived(key_identity),
+        Field.logged_key_identity: derived(logged_key_identity),
         Field.deployment: derived(deployment),
         Field.request_tags: derived(request_tags),
         Field.guardrail_info: derived(guardrail_info),
@@ -503,6 +635,7 @@ __all__ = [
     "key_identity",
     "key_limits",
     "log_id",
+    "logged_key_identity",
     "logged_request",
     "mapping",
     "mcp_tool_call",

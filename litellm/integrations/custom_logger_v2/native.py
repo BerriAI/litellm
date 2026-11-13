@@ -20,6 +20,7 @@ from litellm.integrations.custom_logger_v2.hooks import HOOK_SPECS
 from litellm.integrations.custom_logger_v2.logger import CustomLoggerV2, on
 from litellm.integrations.custom_logger_v2.outcomes import Abort, Patch
 from litellm.integrations.custom_logger_v2.selection import Selection
+from litellm.types.integrations.custom_logger_v2 import Strict
 
 
 class NativeHandle(Protocol):
@@ -140,7 +141,13 @@ def verdict(returned: object) -> Patch | Abort | None:
 
 
 def _plain(value: object) -> object:
-    return value.model_dump(mode="json") if isinstance(value, BaseModel) else value
+    if isinstance(value, Strict):
+        return value.model_dump(mode="python")
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json")
+    if isinstance(value, tuple):
+        return tuple(map(_plain, value))  # pyright: ignore[reportUnknownArgumentType]  # a typed field's tuple of records or scalars
+    return value
 
 
 _ABSENT: Final = object()

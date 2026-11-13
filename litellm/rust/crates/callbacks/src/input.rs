@@ -228,7 +228,10 @@ mod tests {
             )
             .with(Field::Outcome, json!("fallback_failure"));
         let identity = values.get::<typed::KeyIdentity>().unwrap().unwrap();
-        assert_eq!(identity.team_id.as_deref(), Some("t"));
+        assert_eq!(
+            identity.team_id,
+            Some(crate::scalar::Scalar::Text("t".to_owned()))
+        );
         assert_eq!(
             values.get::<typed::Outcome>().unwrap(),
             Some(crate::record::Outcome::FallbackFailure)

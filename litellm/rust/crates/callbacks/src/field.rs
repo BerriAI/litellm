@@ -65,7 +65,7 @@ fields! {
     KeyIdentity = 1, SmallRecord, crate::record::KeyIdentity;
     Deployment = 2, SmallRecord, crate::record::Deployment;
     CandidateDeployments = 3, SmallRecord, serde_json::Value;
-    RequestTags = 4, SmallRecord, std::vec::Vec<std::string::String>;
+    RequestTags = 4, SmallRecord, std::vec::Vec<std::option::Option<crate::scalar::Scalar>>;
     DynamicParams = 5, SmallRecord, serde_json::Value;
     GuardrailInfo = 6, SmallRecord, std::vec::Vec<crate::record::GuardrailEntry>;
     Outcome = 7, SmallRecord, crate::record::Outcome;
@@ -103,6 +103,7 @@ fields! {
     LogId = 39, SmallRecord, std::string::String;
     ColdStorageObjectKey = 40, SmallRecord, std::string::String;
     StandardLoggingPayloadRef = 41, Compatibility, u64;
+    LoggedKeyIdentity = 42, SmallRecord, crate::record::LoggedKeyIdentity;
 }
 
 impl Field {
@@ -136,6 +137,7 @@ pub const DERIVED_ONLY: FieldSet = FieldSet::of(&[
     Field::LogId,
     Field::ColdStorageObjectKey,
     Field::StandardLoggingPayloadRef,
+    Field::LoggedKeyIdentity,
 ]);
 
 pub const BY_REFERENCE: FieldSet = FieldSet::of(&[Field::StandardLoggingPayloadRef]);
@@ -227,7 +229,7 @@ mod tests {
     #[case::wire(Field::ProviderRequestBody, 24, "provider_request_body")]
     #[case::compatibility(Field::DeprecatedResponseObj, 29, "deprecated_response_obj")]
     #[case::typed(Field::KeyLimits, 30, "key_limits")]
-    #[case::last(Field::StandardLoggingPayloadRef, 41, "standard_logging_payload_ref")]
+    #[case::last(Field::LoggedKeyIdentity, 42, "logged_key_identity")]
     fn a_field_keeps_its_bit_and_its_snake_case_name(
         #[case] field: Field,
         #[case] bit: u8,

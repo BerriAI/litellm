@@ -1,171 +1,218 @@
 {
   "key_identity": {
-    "key_hash": "text",
-    "api_key": "text",
-    "key_alias": "text",
-    "key_name": "text",
-    "user_id": "text",
-    "user_email": "text",
-    "team_id": "text",
-    "team_alias": "text",
-    "org_id": "text",
-    "org_alias": "text",
-    "project_id": "text",
-    "project_alias": "text",
-    "end_user_id": "text",
-    "agent_id": "text",
-    "invoked_agent_id": "text",
-    "team_priority": "text",
-    "key_priority": "text",
+    "rejected": [
+      "member"
+    ],
+    "key_hash": 42,
+    "api_key": 42,
+    "key_alias": 42,
+    "key_name": 42,
+    "user_id": 42,
+    "user_email": 42,
+    "team_id": 42,
+    "team_alias": 42,
+    "org_id": 42,
+    "org_alias": 42,
+    "project_id": 42,
+    "project_alias": 42,
+    "end_user_id": 42,
+    "agent_id": 42,
+    "invoked_agent_id": 42,
+    "team_priority": 42,
+    "key_priority": 42,
     "model_preferences": [
       {
         "model": "text",
         "alternates": [
-          "text"
+          "member"
         ]
       }
     ]
   },
   "deployment": {
+    "rejected": [
+      "member"
+    ],
     "model_info": {
-      "id": "text",
-      "tpm": 7,
-      "rpm": 7
+      "rejected": [
+        "member"
+      ],
+      "id": 42,
+      "tpm": 42,
+      "rpm": 42
     },
-    "provider": "text",
-    "tpm": 7,
-    "rpm": 7,
+    "provider": 42,
+    "tpm": 42,
+    "rpm": 42,
     "original_model_group": "text",
     "params_present": true
   },
   "request_tags": [
-    "text"
+    " 7 "
   ],
   "guardrail_info": [
     {
-      "modes": [
-        "text"
+      "rejected": [
+        "member"
       ],
-      "duration": 1.5
+      "mapping": true,
+      "modes": [
+        " 7 "
+      ],
+      "duration": 42
     }
   ],
   "outcome": "fallback_failure",
   "usage": {
+    "rejected": [
+      "member"
+    ],
     "response": {
-      "prompt_tokens": 7,
-      "completion_tokens": 7,
-      "total_tokens": 7,
-      "cached_tokens": 7,
-      "prompt_audio_tokens": 7,
-      "cache_write_tokens": 7,
-      "cache_creation_tokens": 7,
-      "reasoning_tokens": 7,
-      "completion_audio_tokens": 7,
-      "cache_read_input_tokens": 7,
-      "cache_creation_input_tokens": 7,
-      "duration_seconds": 1.5,
-      "output_image_count": 7
+      "rejected": [
+        "member"
+      ],
+      "prompt_tokens": 42,
+      "completion_tokens": 42,
+      "total_tokens": 42,
+      "cached_tokens": 42,
+      "prompt_audio_tokens": 42,
+      "cache_write_tokens": 42,
+      "cache_creation_tokens": 42,
+      "reasoning_tokens": 42,
+      "completion_audio_tokens": 42,
+      "cache_read_input_tokens": 42,
+      "cache_creation_input_tokens": 42,
+      "duration_seconds": 42,
+      "output_image_count": 42
     },
     "streamed": {
-      "prompt_tokens": 7,
-      "completion_tokens": 7,
-      "total_tokens": 7,
-      "cached_tokens": 7,
-      "prompt_audio_tokens": 7,
-      "cache_write_tokens": 7,
-      "cache_creation_tokens": 7,
-      "reasoning_tokens": 7,
-      "completion_audio_tokens": 7,
-      "cache_read_input_tokens": 7,
-      "cache_creation_input_tokens": 7,
-      "duration_seconds": 1.5,
-      "output_image_count": 7
+      "rejected": [
+        "member"
+      ],
+      "prompt_tokens": 42,
+      "completion_tokens": 42,
+      "total_tokens": 42,
+      "cached_tokens": 42,
+      "prompt_audio_tokens": 42,
+      "cache_write_tokens": 42,
+      "cache_creation_tokens": 42,
+      "reasoning_tokens": 42,
+      "completion_audio_tokens": 42,
+      "cache_read_input_tokens": 42,
+      "cache_creation_input_tokens": 42,
+      "duration_seconds": 42,
+      "output_image_count": 42
     },
     "combined": {
-      "prompt_tokens": 7,
-      "completion_tokens": 7,
-      "total_tokens": 7,
-      "cached_tokens": 7,
-      "prompt_audio_tokens": 7,
-      "cache_write_tokens": 7,
-      "cache_creation_tokens": 7,
-      "reasoning_tokens": 7,
-      "completion_audio_tokens": 7,
-      "cache_read_input_tokens": 7,
-      "cache_creation_input_tokens": 7,
-      "duration_seconds": 1.5,
-      "output_image_count": 7
+      "rejected": [
+        "member"
+      ],
+      "prompt_tokens": 42,
+      "completion_tokens": 42,
+      "total_tokens": 42,
+      "cached_tokens": 42,
+      "prompt_audio_tokens": 42,
+      "cache_write_tokens": 42,
+      "cache_creation_tokens": 42,
+      "reasoning_tokens": 42,
+      "completion_audio_tokens": 42,
+      "cache_read_input_tokens": 42,
+      "cache_creation_input_tokens": 42,
+      "duration_seconds": 42,
+      "output_image_count": 42
     },
     "upstream": {
-      "prompt_tokens": 7,
-      "completion_tokens": 7,
-      "total_tokens": 7,
-      "cached_tokens": 7,
-      "prompt_audio_tokens": 7,
-      "cache_write_tokens": 7,
-      "cache_creation_tokens": 7,
-      "reasoning_tokens": 7,
-      "completion_audio_tokens": 7,
-      "cache_read_input_tokens": 7,
-      "cache_creation_input_tokens": 7,
-      "duration_seconds": 1.5,
-      "output_image_count": 7
+      "rejected": [
+        "member"
+      ],
+      "prompt_tokens": 42,
+      "completion_tokens": 42,
+      "total_tokens": 42,
+      "cached_tokens": 42,
+      "prompt_audio_tokens": 42,
+      "cache_write_tokens": 42,
+      "cache_creation_tokens": 42,
+      "reasoning_tokens": 42,
+      "completion_audio_tokens": 42,
+      "cache_read_input_tokens": 42,
+      "cache_creation_input_tokens": 42,
+      "duration_seconds": 42,
+      "output_image_count": 42
     },
     "socket_session": {
-      "prompt_tokens": 7,
-      "completion_tokens": 7,
-      "total_tokens": 7,
-      "cached_tokens": 7,
-      "prompt_audio_tokens": 7,
-      "cache_write_tokens": 7,
-      "cache_creation_tokens": 7,
-      "reasoning_tokens": 7,
-      "completion_audio_tokens": 7,
-      "cache_read_input_tokens": 7,
-      "cache_creation_input_tokens": 7,
-      "duration_seconds": 1.5,
-      "output_image_count": 7
+      "rejected": [
+        "member"
+      ],
+      "prompt_tokens": 42,
+      "completion_tokens": 42,
+      "total_tokens": 42,
+      "cached_tokens": 42,
+      "prompt_audio_tokens": 42,
+      "cache_write_tokens": 42,
+      "cache_creation_tokens": 42,
+      "reasoning_tokens": 42,
+      "completion_audio_tokens": 42,
+      "cache_read_input_tokens": 42,
+      "cache_creation_input_tokens": 42,
+      "duration_seconds": 42,
+      "output_image_count": 42
     },
     "logged": {
-      "prompt_tokens": 7,
-      "completion_tokens": 7,
-      "total_tokens": 7,
-      "cached_tokens": 7,
-      "prompt_audio_tokens": 7,
-      "cache_write_tokens": 7,
-      "cache_creation_tokens": 7,
-      "reasoning_tokens": 7,
-      "completion_audio_tokens": 7,
-      "cache_read_input_tokens": 7,
-      "cache_creation_input_tokens": 7,
-      "duration_seconds": 1.5,
-      "output_image_count": 7
+      "rejected": [
+        "member"
+      ],
+      "prompt_tokens": 42,
+      "completion_tokens": 42,
+      "total_tokens": 42,
+      "cached_tokens": 42,
+      "prompt_audio_tokens": 42,
+      "cache_write_tokens": 42,
+      "cache_creation_tokens": 42,
+      "reasoning_tokens": 42,
+      "completion_audio_tokens": 42,
+      "cache_read_input_tokens": 42,
+      "cache_creation_input_tokens": 42,
+      "duration_seconds": 42,
+      "output_image_count": 42
     }
   },
   "cost": {
-    "response_cost": 1.5,
+    "rejected": [
+      "member"
+    ],
+    "response_cost": 42,
     "zero_cost": {
-      "reason": "text"
+      "rejected": [
+        "member"
+      ],
+      "reason": 42,
+      "reason_present": true
     }
   },
   "key_limits": {
-    "rpm_limit": 7,
-    "tpm_limit": 7,
-    "max_parallel_requests": 7,
-    "budget_throttle_pct": 1.5,
-    "user_rpm_limit": 7,
-    "user_tpm_limit": 7,
-    "team_rpm_limit": 7,
-    "team_tpm_limit": 7,
-    "team_member_rpm_limit": 7,
-    "team_member_tpm_limit": 7,
-    "end_user_rpm_limit": 7,
-    "end_user_tpm_limit": 7,
-    "organization_rpm_limit": 7,
-    "organization_tpm_limit": 7,
+    "rejected": [
+      "member"
+    ],
+    "rpm_limit": 42,
+    "tpm_limit": 42,
+    "max_parallel_requests": 42,
+    "budget_throttle_pct": 42,
+    "user_rpm_limit": 42,
+    "user_tpm_limit": 42,
+    "team_rpm_limit": 42,
+    "team_tpm_limit": 42,
+    "team_member_rpm_limit": 42,
+    "team_member_tpm_limit": 42,
+    "end_user_rpm_limit": 42,
+    "end_user_tpm_limit": 42,
+    "organization_rpm_limit": 42,
+    "organization_tpm_limit": 42,
     "rpm_limit_type": "text",
     "tpm_limit_type": "text",
     "estimated_output_tokens": {
+      "rejected": [
+        "member"
+      ],
       "key_per_model": 7,
       "key_default": 7,
       "team_per_model": 7,
@@ -173,6 +220,9 @@
     }
   },
   "budget_plan": {
+    "rejected": [
+      "member"
+    ],
     "counters": [
       {
         "counter_key": "text",
@@ -192,6 +242,9 @@
     "reservation_id": "text"
   },
   "budget_reservation": {
+    "rejected": [
+      "member"
+    ],
     "reserved_cost": 1.5,
     "entries": [
       {
@@ -207,6 +260,9 @@
     "input_tokens": 7
   },
   "rate_limit_statuses": {
+    "rejected": [
+      "member"
+    ],
     "overall_code": "text",
     "statuses": [
       {
@@ -220,75 +276,122 @@
     ]
   },
   "output_cap": {
+    "rejected": [
+      "member"
+    ],
     "explicit": 7
   },
   "attempt_timing": {
+    "rejected": [
+      "member"
+    ],
     "start": {
-      "year": 7,
-      "month": 7,
-      "day": 7,
-      "hour": 7,
-      "minute": 7,
-      "second": 7,
-      "microsecond": 7,
-      "utc_offset_seconds": 7
+      "year": 2026,
+      "month": 11,
+      "day": 13,
+      "hour": 9,
+      "minute": 30,
+      "second": 15,
+      "microsecond": 250,
+      "utc_offset_seconds": -18000
     },
     "end": {
-      "year": 7,
-      "month": 7,
-      "day": 7,
-      "hour": 7,
-      "minute": 7,
-      "second": 7,
-      "microsecond": 7,
-      "utc_offset_seconds": 7
+      "year": 2026,
+      "month": 11,
+      "day": 13,
+      "hour": 9,
+      "minute": 30,
+      "second": 15,
+      "microsecond": 250,
+      "utc_offset_seconds": -18000
     },
     "api_call_start": {
-      "year": 7,
-      "month": 7,
-      "day": 7,
-      "hour": 7,
-      "minute": 7,
-      "second": 7,
-      "microsecond": 7,
-      "utc_offset_seconds": 7
+      "year": 2026,
+      "month": 11,
+      "day": 13,
+      "hour": 9,
+      "minute": 30,
+      "second": 15,
+      "microsecond": 250,
+      "utc_offset_seconds": -18000
     },
     "completion_start": {
-      "year": 7,
-      "month": 7,
-      "day": 7,
-      "hour": 7,
-      "minute": 7,
-      "second": 7,
-      "microsecond": 7,
-      "utc_offset_seconds": 7
+      "year": 2026,
+      "month": 11,
+      "day": 13,
+      "hour": 9,
+      "minute": 30,
+      "second": 15,
+      "microsecond": 250,
+      "utc_offset_seconds": -18000
     },
     "completion_start_present": true,
-    "queue_seconds": 1.5,
-    "overhead_ms": 1.5
+    "queue_seconds": 42,
+    "overhead_ms": 42
   },
   "rate_limit_state": {
-    "key_model_group": "text",
-    "key_remaining_requests": 1.5,
-    "key_remaining_tokens": 1.5,
+    "rejected": [
+      "member"
+    ],
+    "key_model_group": 42,
+    "key_remaining_requests": 42,
+    "key_remaining_tokens": 42,
     "limiter_headers": {
-      "x-ratelimit-key-remaining-requests": 1.5
+      "x-ratelimit-key-remaining-requests": 42
     },
-    "provider_remaining_requests": 1.5,
-    "provider_remaining_tokens": 1.5,
+    "provider_remaining_requests": 42,
+    "provider_remaining_tokens": 42,
     "hidden_params_present": true,
     "additional_headers_present": true
   },
   "logged_request": {
-    "client_ip": "text",
-    "user_agent": "text",
+    "rejected": [
+      "member"
+    ],
+    "client_ip": 42,
+    "user_agent": 42,
     "service_tier": "text",
-    "stream": true
+    "stream": 42
   },
   "mcp_tool_call": {
-    "name": "text",
-    "server_name": "text"
+    "rejected": [
+      "member"
+    ],
+    "name": 42,
+    "server_name": 42
   },
   "log_id": "text",
-  "cold_storage_object_key": "text"
+  "cold_storage_object_key": "text",
+  "logged_key_identity": {
+    "rejected": [
+      "member"
+    ],
+    "metadata_kind": "other",
+    "missing_keys": [
+      "member"
+    ],
+    "key_hash": 42,
+    "key_alias": 42,
+    "key_spend": 42,
+    "key_max_budget": 42,
+    "key_budget_reset_at": 42,
+    "user_id": 42,
+    "user_email": 42,
+    "user_spend": 42,
+    "user_max_budget": 42,
+    "team_id": 42,
+    "team_alias": 42,
+    "team_spend": 42,
+    "team_max_budget": 42,
+    "org_id": 42,
+    "org_alias": 42,
+    "project_id": 42,
+    "project_alias": 42,
+    "end_user_id": 42,
+    "request_route": 42,
+    "auth_metadata_priority": 42,
+    "agent_id": 42,
+    "request_user": 42,
+    "cost_tracking_end_user_id": 42
+  }
 }

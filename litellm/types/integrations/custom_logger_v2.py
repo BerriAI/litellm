@@ -3,9 +3,9 @@ from collections.abc import Mapping
 from datetime import datetime
 from enum import Enum
 from functools import cache
-from typing import Annotated, Final, TypeVar
+from typing import Annotated, Final, TypeAlias, TypeVar
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, BeforeValidator, ConfigDict, PlainValidator, TypeAdapter, ValidationError
 from pydantic import Field as Member
 
 _LOGGER: Final = logging.getLogger("LiteLLM")
@@ -14,13 +14,39 @@ RecordT: Final = TypeVar("RecordT", bound=BaseModel)
 ValueT: Final = TypeVar("ValueT")
 
 
-I64 = Annotated[int, Member(ge=-(2**63), le=2**63 - 1)]
-U16 = Annotated[int, Member(ge=0, le=2**16 - 1)]
-F64 = Annotated[float, Member(allow_inf_nan=False)]
+I64: TypeAlias = Annotated[int, Member(ge=-(2**63), le=2**63 - 1)]
+U16: TypeAlias = Annotated[int, Member(ge=0, le=2**16 - 1)]
+F64: TypeAlias = Annotated[float, Member(allow_inf_nan=False)]
+
+_I128_BOUND: Final = 2**127
 
 
-class Record(BaseModel):
+def _scalar(value: object) -> bool | int | float | str:
+    if isinstance(value, bool | float | str):
+        return value
+    if isinstance(value, int):
+        if -_I128_BOUND <= value < _I128_BOUND:
+            return value
+        raise ValueError("an integer outside the i128 range cannot cross into Rust")
+    raise ValueError(f"a {type(value).__name__} is not a bool, int, float or str")
+
+
+Scalar: TypeAlias = Annotated[bool | int | float | str, PlainValidator(_scalar)]
+
+
+def _scalar_or_none(value: object) -> object:
+    return value if isinstance(value, bool | int | float | str) else None
+
+
+ScalarItem: TypeAlias = Annotated[Scalar | None, BeforeValidator(_scalar_or_none)]
+
+
+class Strict(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class Record(Strict):
+    rejected: tuple[str, ...] | None = None
 
 
 class Outcome(str, Enum):
@@ -30,9 +56,14 @@ class Outcome(str, Enum):
     fallback_failure = "fallback_failure"
 
 
-def _moment_members(value: object) -> object:
-    if not isinstance(value, datetime):
-        return value
+class MetadataKind(str, Enum):
+    mapping = "mapping"
+    missing = "missing"
+    null = "null"
+    other = "other"
+
+
+def _datetime_members(value: datetime) -> Mapping[str, object]:
     offset: Final = value.utcoffset()
     return {
         "year": value.year,
@@ -46,7 +77,15 @@ def _moment_members(value: object) -> object:
     }
 
 
-class Moment(Record):
+def _moment_members(value: object) -> object:
+    if isinstance(value, Moment):
+        return value
+    if isinstance(value, datetime):
+        return _datetime_members(value)
+    raise ValueError(f"a {type(value).__name__} is not a datetime")
+
+
+class Moment(Strict):
     year: int
     month: int
     day: int
@@ -57,33 +96,61 @@ class Moment(Record):
     utc_offset_seconds: int | None = None
 
 
-MomentInput = Annotated[Moment, BeforeValidator(_moment_members)]
+MomentInput: TypeAlias = Annotated[Moment, BeforeValidator(_moment_members)]
 
 
-class ModelPreference(Record):
+class ModelPreference(Strict):
     model: str | None = None
     alternates: tuple[str, ...] | None = None
 
 
 class KeyIdentity(Record):
-    key_hash: str | None = None
-    api_key: str | None = None
-    key_alias: str | None = None
-    key_name: str | None = None
-    user_id: str | None = None
-    user_email: str | None = None
-    team_id: str | None = None
-    team_alias: str | None = None
-    org_id: str | None = None
-    org_alias: str | None = None
-    project_id: str | None = None
-    project_alias: str | None = None
-    end_user_id: str | None = None
-    agent_id: str | None = None
-    invoked_agent_id: str | None = None
-    team_priority: str | None = None
-    key_priority: str | None = None
+    key_hash: Scalar | None = None
+    api_key: Scalar | None = None
+    key_alias: Scalar | None = None
+    key_name: Scalar | None = None
+    user_id: Scalar | None = None
+    user_email: Scalar | None = None
+    team_id: Scalar | None = None
+    team_alias: Scalar | None = None
+    org_id: Scalar | None = None
+    org_alias: Scalar | None = None
+    project_id: Scalar | None = None
+    project_alias: Scalar | None = None
+    end_user_id: Scalar | None = None
+    agent_id: Scalar | None = None
+    invoked_agent_id: Scalar | None = None
+    team_priority: Scalar | None = None
+    key_priority: Scalar | None = None
     model_preferences: tuple[ModelPreference, ...] | None = None
+
+
+class LoggedKeyIdentity(Record):
+    metadata_kind: MetadataKind | None = None
+    missing_keys: tuple[str, ...] | None = None
+    key_hash: Scalar | None = None
+    key_alias: Scalar | None = None
+    key_spend: Scalar | None = None
+    key_max_budget: Scalar | None = None
+    key_budget_reset_at: Scalar | None = None
+    user_id: Scalar | None = None
+    user_email: Scalar | None = None
+    user_spend: Scalar | None = None
+    user_max_budget: Scalar | None = None
+    team_id: Scalar | None = None
+    team_alias: Scalar | None = None
+    team_spend: Scalar | None = None
+    team_max_budget: Scalar | None = None
+    org_id: Scalar | None = None
+    org_alias: Scalar | None = None
+    project_id: Scalar | None = None
+    project_alias: Scalar | None = None
+    end_user_id: Scalar | None = None
+    request_route: Scalar | None = None
+    auth_metadata_priority: Scalar | None = None
+    agent_id: Scalar | None = None
+    request_user: Scalar | None = None
+    cost_tracking_end_user_id: Scalar | None = None
 
 
 class EstimatedOutputTokens(Record):
@@ -94,26 +161,26 @@ class EstimatedOutputTokens(Record):
 
 
 class KeyLimits(Record):
-    rpm_limit: I64 | None = None
-    tpm_limit: I64 | None = None
-    max_parallel_requests: I64 | None = None
-    budget_throttle_pct: F64 | None = None
-    user_rpm_limit: I64 | None = None
-    user_tpm_limit: I64 | None = None
-    team_rpm_limit: I64 | None = None
-    team_tpm_limit: I64 | None = None
-    team_member_rpm_limit: I64 | None = None
-    team_member_tpm_limit: I64 | None = None
-    end_user_rpm_limit: I64 | None = None
-    end_user_tpm_limit: I64 | None = None
-    organization_rpm_limit: I64 | None = None
-    organization_tpm_limit: I64 | None = None
+    rpm_limit: Scalar | None = None
+    tpm_limit: Scalar | None = None
+    max_parallel_requests: Scalar | None = None
+    budget_throttle_pct: Scalar | None = None
+    user_rpm_limit: Scalar | None = None
+    user_tpm_limit: Scalar | None = None
+    team_rpm_limit: Scalar | None = None
+    team_tpm_limit: Scalar | None = None
+    team_member_rpm_limit: Scalar | None = None
+    team_member_tpm_limit: Scalar | None = None
+    end_user_rpm_limit: Scalar | None = None
+    end_user_tpm_limit: Scalar | None = None
+    organization_rpm_limit: Scalar | None = None
+    organization_tpm_limit: Scalar | None = None
     rpm_limit_type: str | None = None
     tpm_limit_type: str | None = None
     estimated_output_tokens: EstimatedOutputTokens | None = None
 
 
-class BudgetPlanCounter(Record):
+class BudgetPlanCounter(Strict):
     counter_key: str | None = None
     max_budget: F64 | None = None
     fallback_spend: F64 | None = None
@@ -133,7 +200,7 @@ class BudgetPlan(Record):
     reservation_id: str | None = None
 
 
-class ReservationEntry(Record):
+class ReservationEntry(Strict):
     counter_key: str | None = None
     entity_type: str | None = None
     entity_id: str | None = None
@@ -149,7 +216,7 @@ class BudgetReservation(Record):
     input_tokens: I64 | None = None
 
 
-class RateLimitStatus(Record):
+class RateLimitStatus(Strict):
     code: str | None = None
     current_limit: I64 | None = None
     limit_remaining: I64 | None = None
@@ -173,24 +240,24 @@ class AttemptTiming(Record):
     api_call_start: MomentInput | None = None
     completion_start: MomentInput | None = None
     completion_start_present: bool | None = None
-    queue_seconds: F64 | None = None
-    overhead_ms: F64 | None = None
+    queue_seconds: Scalar | None = None
+    overhead_ms: Scalar | None = None
 
 
 class UsageRecord(Record):
-    prompt_tokens: I64 | None = None
-    completion_tokens: I64 | None = None
-    total_tokens: I64 | None = None
-    cached_tokens: I64 | None = None
-    prompt_audio_tokens: I64 | None = None
-    cache_write_tokens: I64 | None = None
-    cache_creation_tokens: I64 | None = None
-    reasoning_tokens: I64 | None = None
-    completion_audio_tokens: I64 | None = None
-    cache_read_input_tokens: I64 | None = None
-    cache_creation_input_tokens: I64 | None = None
-    duration_seconds: F64 | None = None
-    output_image_count: I64 | None = None
+    prompt_tokens: Scalar | None = None
+    completion_tokens: Scalar | None = None
+    total_tokens: Scalar | None = None
+    cached_tokens: Scalar | None = None
+    prompt_audio_tokens: Scalar | None = None
+    cache_write_tokens: Scalar | None = None
+    cache_creation_tokens: Scalar | None = None
+    reasoning_tokens: Scalar | None = None
+    completion_audio_tokens: Scalar | None = None
+    cache_read_input_tokens: Scalar | None = None
+    cache_creation_input_tokens: Scalar | None = None
+    duration_seconds: Scalar | None = None
+    output_image_count: Scalar | None = None
 
 
 class Usage(Record):
@@ -203,58 +270,60 @@ class Usage(Record):
 
 
 class ZeroCost(Record):
-    reason: str | None = None
+    reason: Scalar | None = None
+    reason_present: bool | None = None
 
 
 class Cost(Record):
-    response_cost: F64 | None = None
+    response_cost: Scalar | None = None
     zero_cost: ZeroCost | None = None
 
 
 class ModelInfo(Record):
-    id: str | None = None
-    tpm: I64 | None = None
-    rpm: I64 | None = None
+    id: Scalar | None = None
+    tpm: Scalar | None = None
+    rpm: Scalar | None = None
 
 
 class Deployment(Record):
     model_info: ModelInfo | None = None
-    provider: str | None = None
-    tpm: I64 | None = None
-    rpm: I64 | None = None
+    provider: Scalar | None = None
+    tpm: Scalar | None = None
+    rpm: Scalar | None = None
     original_model_group: str | None = None
     params_present: bool | None = None
 
 
 class GuardrailEntry(Record):
-    modes: tuple[str, ...] | None = None
-    duration: F64 | None = None
+    mapping: bool | None = None
+    modes: tuple[ScalarItem, ...] | None = None
+    duration: Scalar | None = None
 
 
 class RateLimitState(Record):
-    key_model_group: str | None = None
-    key_remaining_requests: F64 | None = None
-    key_remaining_tokens: F64 | None = None
-    limiter_headers: Mapping[str, F64] | None = None
-    provider_remaining_requests: F64 | None = None
-    provider_remaining_tokens: F64 | None = None
+    key_model_group: Scalar | None = None
+    key_remaining_requests: Scalar | None = None
+    key_remaining_tokens: Scalar | None = None
+    limiter_headers: Mapping[str, Scalar] | None = None
+    provider_remaining_requests: Scalar | None = None
+    provider_remaining_tokens: Scalar | None = None
     hidden_params_present: bool | None = None
     additional_headers_present: bool | None = None
 
 
 class LoggedRequest(Record):
-    client_ip: str | None = None
-    user_agent: str | None = None
+    client_ip: Scalar | None = None
+    user_agent: Scalar | None = None
     service_tier: str | None = None
-    stream: bool | None = None
+    stream: Scalar | None = None
 
 
 class McpToolCall(Record):
-    name: str | None = None
-    server_name: str | None = None
+    name: Scalar | None = None
+    server_name: Scalar | None = None
 
 
-_REPORTED: Final[set[tuple[str, str]]] = set()  # mutable-ok: each coercion failure is logged once per process
+_REPORTED: Final[set[tuple[str, str]]] = set()  # mutable-ok: each rejected input is logged once per process
 
 
 def _report(owner: str, member: str, error: ValidationError) -> None:
@@ -262,7 +331,7 @@ def _report(owner: str, member: str, error: ValidationError) -> None:
         return
     _REPORTED.add((owner, member))
     _LOGGER.warning(
-        "custom logger v2: %s.%s could not be coerced, so it is left absent: %s",
+        "custom logger v2: %s.%s holds a value the contract cannot carry, so it is named in rejected: %s",
         owner,
         member,
         error.errors(include_url=False, include_input=False),
@@ -278,16 +347,28 @@ def _member_adapter(record: type[BaseModel], member: str) -> TypeAdapter[object]
     return TypeAdapter(record.model_fields[member].annotation)
 
 
-def coerce_record(record: type[RecordT], members: Mapping[str, object]) -> RecordT:
-    kept: Final[dict[str, object]] = {}  # mutable-ok: filled member by member
-    for member, raw in members.items():
-        if raw is None:
-            continue
-        try:
-            kept[member] = _member_adapter(record, member).validate_python(raw)
-        except ValidationError as error:
-            _report(record.__name__, member, error)
-    return record.model_validate(kept)
+_REJECTED: Final = object()
+
+
+def _carried(record: type[BaseModel], member: str, raw: object) -> object:
+    try:
+        return _member_adapter(record, member).validate_python(raw)
+    except ValidationError as error:
+        _report(record.__name__, member, error)
+        return _REJECTED
+
+
+def coerce_record(record: type[RecordT], members: Mapping[str, object], rejected: tuple[str, ...] = ()) -> RecordT:
+    carried: Final = tuple(
+        (member, _carried(record, member, raw)) for member, raw in members.items() if raw is not None
+    )
+    refused: Final = (*rejected, *(member for member, value in carried if value is _REJECTED))
+    return record.model_validate(
+        {
+            **{member: value for member, value in carried if value is not _REJECTED},
+            **({"rejected": refused} if refused else {}),
+        }
+    )
 
 
 def coerce_value(owner: str, adapter: TypeAdapter[ValueT], raw: object) -> ValueT | None:
@@ -311,8 +392,10 @@ __all__ = [
     "GuardrailEntry",
     "KeyIdentity",
     "KeyLimits",
+    "LoggedKeyIdentity",
     "LoggedRequest",
     "McpToolCall",
+    "MetadataKind",
     "ModelInfo",
     "ModelPreference",
     "Moment",
@@ -323,6 +406,9 @@ __all__ = [
     "RateLimitStatuses",
     "Record",
     "ReservationEntry",
+    "Scalar",
+    "ScalarItem",
+    "Strict",
     "Usage",
     "UsageRecord",
     "ZeroCost",

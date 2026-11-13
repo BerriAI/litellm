@@ -456,6 +456,11 @@
       "name": "standard_logging_payload_ref",
       "bit": 41,
       "tier": "compatibility"
+    },
+    {
+      "name": "logged_key_identity",
+      "bit": 42,
+      "tier": "small_record"
     }
   ],
   "tiers": [
@@ -485,6 +490,7 @@
     "key_identity",
     "key_limits",
     "log_id",
+    "logged_key_identity",
     "logged_request",
     "mcp_tool_call",
     "outcome",

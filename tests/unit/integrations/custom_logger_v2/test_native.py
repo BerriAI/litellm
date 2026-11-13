@@ -1,10 +1,11 @@
 import contextvars
 import copy
 import json
+import math
 from collections.abc import Awaitable, Callable, Generator, Mapping
 from datetime import datetime
 from pathlib import Path
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 from typing import Final
 
 import pytest
@@ -27,6 +28,7 @@ from litellm.integrations.custom_logger_v2 import (
     Patch,
     build_manifest,
 )
+from litellm.integrations.custom_logger_v2.call import CallContext
 from litellm.integrations.custom_logger_v2.dispatcher import HookResult
 from litellm.integrations.custom_logger_v2.host import (
     current_scope,
@@ -58,6 +60,7 @@ from litellm.litellm_core_utils.litellm_logging import LOGGING_KEYS, Logging
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import bind_v2_request_scope
 from litellm.proxy.utils import raise_v2_abort
+from litellm.types.integrations.custom_logger_v2 import Cost, GuardrailEntry, KeyIdentity, Outcome
 
 RUST: Final = Path(__file__).parents[4] / "litellm/rust/crates"
 CONTRACT: Final = RUST / "callbacks/contract.json"
@@ -344,3 +347,34 @@ def test_the_proxy_scope_is_bound_for_the_request_and_reaches_its_logging_object
     facts: Final = logging_obj.v2_call_facts()
     assert facts is not None
     assert (facts.ids.call_id, facts.kind.call_type, facts.target.model) == ("call-1", "acompletion", "gpt")
+
+
+async def test_typed_records_reach_the_native_with_the_python_values_json_mode_would_lose() -> None:
+    handle: Final = Handle()
+    logger: Final = native_logger(handle)
+    assert isinstance(logger, NativeLogger)
+    view: Final = SimpleNamespace(
+        cost=Cost(response_cost=float("nan")),
+        key_identity=KeyIdentity(team_id=10**20, end_user_id=float("inf"), rejected=("agent_id",)),
+        guardrail_info=(GuardrailEntry(mapping=True, modes=("pre_call", None)),),
+        outcome=Outcome.success,
+    )
+
+    _ = await logger.run_native(
+        Hook.attempt_ended,
+        frozenset({Field.cost, Field.key_identity, Field.guardrail_info, Field.outcome}),
+        view,
+        CallContext(hook=Hook.attempt_ended, call=None, state=None),
+    )
+
+    fields: Final = handle.calls[0][1]
+    cost: Final = _REQUEST.validate_python(fields["cost"])
+    identity: Final = _REQUEST.validate_python(fields["key_identity"])
+    response_cost: Final = cost["response_cost"]
+    assert isinstance(response_cost, float)
+    assert math.isnan(response_cost)
+    assert (identity["team_id"], identity["end_user_id"], identity["rejected"]) == (10**20, float("inf"), ("agent_id",))
+    assert fields["guardrail_info"] == (
+        {"rejected": None, "mapping": True, "modes": ("pre_call", None), "duration": None},
+    )
+    assert fields["outcome"] == "success"

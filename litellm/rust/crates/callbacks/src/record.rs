@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::scalar::Scalar;
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ModelPreference {
@@ -9,32 +11,74 @@ pub struct ModelPreference {
     pub alternates: Option<Vec<String>>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct KeyIdentity {
-    pub key_hash: Option<String>,
-    pub api_key: Option<String>,
-    pub key_alias: Option<String>,
-    pub key_name: Option<String>,
-    pub user_id: Option<String>,
-    pub user_email: Option<String>,
-    pub team_id: Option<String>,
-    pub team_alias: Option<String>,
-    pub org_id: Option<String>,
-    pub org_alias: Option<String>,
-    pub project_id: Option<String>,
-    pub project_alias: Option<String>,
-    pub end_user_id: Option<String>,
-    pub agent_id: Option<String>,
-    pub invoked_agent_id: Option<String>,
-    pub team_priority: Option<String>,
-    pub key_priority: Option<String>,
+    pub rejected: Option<Vec<String>>,
+    pub key_hash: Option<Scalar>,
+    pub api_key: Option<Scalar>,
+    pub key_alias: Option<Scalar>,
+    pub key_name: Option<Scalar>,
+    pub user_id: Option<Scalar>,
+    pub user_email: Option<Scalar>,
+    pub team_id: Option<Scalar>,
+    pub team_alias: Option<Scalar>,
+    pub org_id: Option<Scalar>,
+    pub org_alias: Option<Scalar>,
+    pub project_id: Option<Scalar>,
+    pub project_alias: Option<Scalar>,
+    pub end_user_id: Option<Scalar>,
+    pub agent_id: Option<Scalar>,
+    pub invoked_agent_id: Option<Scalar>,
+    pub team_priority: Option<Scalar>,
+    pub key_priority: Option<Scalar>,
     pub model_preferences: Option<Vec<ModelPreference>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MetadataKind {
+    Mapping,
+    Missing,
+    Null,
+    Other,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LoggedKeyIdentity {
+    pub rejected: Option<Vec<String>>,
+    pub metadata_kind: Option<MetadataKind>,
+    pub missing_keys: Option<Vec<String>>,
+    pub key_hash: Option<Scalar>,
+    pub key_alias: Option<Scalar>,
+    pub key_spend: Option<Scalar>,
+    pub key_max_budget: Option<Scalar>,
+    pub key_budget_reset_at: Option<Scalar>,
+    pub user_id: Option<Scalar>,
+    pub user_email: Option<Scalar>,
+    pub user_spend: Option<Scalar>,
+    pub user_max_budget: Option<Scalar>,
+    pub team_id: Option<Scalar>,
+    pub team_alias: Option<Scalar>,
+    pub team_spend: Option<Scalar>,
+    pub team_max_budget: Option<Scalar>,
+    pub org_id: Option<Scalar>,
+    pub org_alias: Option<Scalar>,
+    pub project_id: Option<Scalar>,
+    pub project_alias: Option<Scalar>,
+    pub end_user_id: Option<Scalar>,
+    pub request_route: Option<Scalar>,
+    pub auth_metadata_priority: Option<Scalar>,
+    pub agent_id: Option<Scalar>,
+    pub request_user: Option<Scalar>,
+    pub cost_tracking_end_user_id: Option<Scalar>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct EstimatedOutputTokens {
+    pub rejected: Option<Vec<String>>,
     pub key_per_model: Option<i64>,
     pub key_default: Option<i64>,
     pub team_per_model: Option<i64>,
@@ -44,20 +88,21 @@ pub struct EstimatedOutputTokens {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct KeyLimits {
-    pub rpm_limit: Option<i64>,
-    pub tpm_limit: Option<i64>,
-    pub max_parallel_requests: Option<i64>,
-    pub budget_throttle_pct: Option<f64>,
-    pub user_rpm_limit: Option<i64>,
-    pub user_tpm_limit: Option<i64>,
-    pub team_rpm_limit: Option<i64>,
-    pub team_tpm_limit: Option<i64>,
-    pub team_member_rpm_limit: Option<i64>,
-    pub team_member_tpm_limit: Option<i64>,
-    pub end_user_rpm_limit: Option<i64>,
-    pub end_user_tpm_limit: Option<i64>,
-    pub organization_rpm_limit: Option<i64>,
-    pub organization_tpm_limit: Option<i64>,
+    pub rejected: Option<Vec<String>>,
+    pub rpm_limit: Option<Scalar>,
+    pub tpm_limit: Option<Scalar>,
+    pub max_parallel_requests: Option<Scalar>,
+    pub budget_throttle_pct: Option<Scalar>,
+    pub user_rpm_limit: Option<Scalar>,
+    pub user_tpm_limit: Option<Scalar>,
+    pub team_rpm_limit: Option<Scalar>,
+    pub team_tpm_limit: Option<Scalar>,
+    pub team_member_rpm_limit: Option<Scalar>,
+    pub team_member_tpm_limit: Option<Scalar>,
+    pub end_user_rpm_limit: Option<Scalar>,
+    pub end_user_tpm_limit: Option<Scalar>,
+    pub organization_rpm_limit: Option<Scalar>,
+    pub organization_tpm_limit: Option<Scalar>,
     pub rpm_limit_type: Option<String>,
     pub tpm_limit_type: Option<String>,
     pub estimated_output_tokens: Option<EstimatedOutputTokens>,
@@ -77,6 +122,7 @@ pub struct BudgetPlanCounter {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct BudgetPlan {
+    pub rejected: Option<Vec<String>>,
     pub counters: Option<Vec<BudgetPlanCounter>>,
     pub reservation_cost: Option<f64>,
     pub input_cost: Option<f64>,
@@ -100,6 +146,7 @@ pub struct ReservationEntry {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct BudgetReservation {
+    pub rejected: Option<Vec<String>>,
     pub reserved_cost: Option<f64>,
     pub entries: Option<Vec<ReservationEntry>>,
     pub finalized: Option<bool>,
@@ -121,6 +168,7 @@ pub struct RateLimitStatus {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RateLimitStatuses {
+    pub rejected: Option<Vec<String>>,
     pub overall_code: Option<String>,
     pub statuses: Option<Vec<RateLimitStatus>>,
 }
@@ -128,6 +176,7 @@ pub struct RateLimitStatuses {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct OutputCap {
+    pub rejected: Option<Vec<String>>,
     pub explicit: Option<i64>,
 }
 
@@ -147,36 +196,39 @@ pub struct Moment {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AttemptTiming {
+    pub rejected: Option<Vec<String>>,
     pub start: Option<Moment>,
     pub end: Option<Moment>,
     pub api_call_start: Option<Moment>,
     pub completion_start: Option<Moment>,
     pub completion_start_present: Option<bool>,
-    pub queue_seconds: Option<f64>,
-    pub overhead_ms: Option<f64>,
+    pub queue_seconds: Option<Scalar>,
+    pub overhead_ms: Option<Scalar>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct UsageRecord {
-    pub prompt_tokens: Option<i64>,
-    pub completion_tokens: Option<i64>,
-    pub total_tokens: Option<i64>,
-    pub cached_tokens: Option<i64>,
-    pub prompt_audio_tokens: Option<i64>,
-    pub cache_write_tokens: Option<i64>,
-    pub cache_creation_tokens: Option<i64>,
-    pub reasoning_tokens: Option<i64>,
-    pub completion_audio_tokens: Option<i64>,
-    pub cache_read_input_tokens: Option<i64>,
-    pub cache_creation_input_tokens: Option<i64>,
-    pub duration_seconds: Option<f64>,
-    pub output_image_count: Option<i64>,
+    pub rejected: Option<Vec<String>>,
+    pub prompt_tokens: Option<Scalar>,
+    pub completion_tokens: Option<Scalar>,
+    pub total_tokens: Option<Scalar>,
+    pub cached_tokens: Option<Scalar>,
+    pub prompt_audio_tokens: Option<Scalar>,
+    pub cache_write_tokens: Option<Scalar>,
+    pub cache_creation_tokens: Option<Scalar>,
+    pub reasoning_tokens: Option<Scalar>,
+    pub completion_audio_tokens: Option<Scalar>,
+    pub cache_read_input_tokens: Option<Scalar>,
+    pub cache_creation_input_tokens: Option<Scalar>,
+    pub duration_seconds: Option<Scalar>,
+    pub output_image_count: Option<Scalar>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Usage {
+    pub rejected: Option<Vec<String>>,
     pub response: Option<UsageRecord>,
     pub streamed: Option<UsageRecord>,
     pub combined: Option<UsageRecord>,
@@ -194,34 +246,39 @@ pub enum Outcome {
     FallbackFailure,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ZeroCost {
-    pub reason: Option<String>,
+    pub rejected: Option<Vec<String>>,
+    pub reason: Option<Scalar>,
+    pub reason_present: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Cost {
-    pub response_cost: Option<f64>,
+    pub rejected: Option<Vec<String>>,
+    pub response_cost: Option<Scalar>,
     pub zero_cost: Option<ZeroCost>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ModelInfo {
-    pub id: Option<String>,
-    pub tpm: Option<i64>,
-    pub rpm: Option<i64>,
+    pub rejected: Option<Vec<String>>,
+    pub id: Option<Scalar>,
+    pub tpm: Option<Scalar>,
+    pub rpm: Option<Scalar>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Deployment {
+    pub rejected: Option<Vec<String>>,
     pub model_info: Option<ModelInfo>,
-    pub provider: Option<String>,
-    pub tpm: Option<i64>,
-    pub rpm: Option<i64>,
+    pub provider: Option<Scalar>,
+    pub tpm: Option<Scalar>,
+    pub rpm: Option<Scalar>,
     pub original_model_group: Option<String>,
     pub params_present: Option<bool>,
 }
@@ -229,37 +286,42 @@ pub struct Deployment {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct GuardrailEntry {
-    pub modes: Option<Vec<String>>,
-    pub duration: Option<f64>,
+    pub rejected: Option<Vec<String>>,
+    pub mapping: Option<bool>,
+    pub modes: Option<Vec<Option<Scalar>>>,
+    pub duration: Option<Scalar>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RateLimitState {
-    pub key_model_group: Option<String>,
-    pub key_remaining_requests: Option<f64>,
-    pub key_remaining_tokens: Option<f64>,
-    pub limiter_headers: Option<BTreeMap<String, f64>>,
-    pub provider_remaining_requests: Option<f64>,
-    pub provider_remaining_tokens: Option<f64>,
+    pub rejected: Option<Vec<String>>,
+    pub key_model_group: Option<Scalar>,
+    pub key_remaining_requests: Option<Scalar>,
+    pub key_remaining_tokens: Option<Scalar>,
+    pub limiter_headers: Option<BTreeMap<String, Scalar>>,
+    pub provider_remaining_requests: Option<Scalar>,
+    pub provider_remaining_tokens: Option<Scalar>,
     pub hidden_params_present: Option<bool>,
     pub additional_headers_present: Option<bool>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LoggedRequest {
-    pub client_ip: Option<String>,
-    pub user_agent: Option<String>,
+    pub rejected: Option<Vec<String>>,
+    pub client_ip: Option<Scalar>,
+    pub user_agent: Option<Scalar>,
     pub service_tier: Option<String>,
-    pub stream: Option<bool>,
+    pub stream: Option<Scalar>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct McpToolCall {
-    pub name: Option<String>,
-    pub server_name: Option<String>,
+    pub rejected: Option<Vec<String>>,
+    pub name: Option<Scalar>,
+    pub server_name: Option<Scalar>,
 }
 
 #[cfg(test)]
@@ -301,6 +363,7 @@ mod tests {
             Field::McpToolCall => round_trip::<typed::McpToolCall>(sample),
             Field::LogId => round_trip::<typed::LogId>(sample),
             Field::ColdStorageObjectKey => round_trip::<typed::ColdStorageObjectKey>(sample),
+            Field::LoggedKeyIdentity => round_trip::<typed::LoggedKeyIdentity>(sample),
             other => panic!("{other:?} has no typed record sample"),
         }
     }
@@ -314,13 +377,13 @@ mod tests {
             assert_eq!(&decoded(field, sample), sample, "{name}");
         }
         let typed: Vec<&str> = samples.keys().map(String::as_str).collect();
-        assert_eq!(typed.len(), 18);
+        assert_eq!(typed.len(), 19);
     }
 
     #[rstest]
     fn a_member_python_did_not_send_decodes_as_absent() {
         let identity: KeyIdentity = serde_json::from_value(json!({"team_id": "t"})).unwrap();
-        assert_eq!(identity.team_id.as_deref(), Some("t"));
+        assert_eq!(identity.team_id, Some(Scalar::Text("t".to_owned())));
         assert_eq!(identity.key_alias, None);
     }
 

@@ -87,6 +87,7 @@ class Field(str, Enum):
     log_id = ("log_id", 39, FieldTier.small_record)
     cold_storage_object_key = ("cold_storage_object_key", 40, FieldTier.small_record)
     standard_logging_payload_ref = ("standard_logging_payload_ref", 41, FieldTier.compatibility)
+    logged_key_identity = ("logged_key_identity", 42, FieldTier.small_record)
 
 
 class Activation(str, Enum):
@@ -118,6 +119,7 @@ DERIVED_ONLY: Final = frozenset(
         Field.log_id,
         Field.cold_storage_object_key,
         Field.standard_logging_payload_ref,
+        Field.logged_key_identity,
     }
 )
 BY_REFERENCE: Final = frozenset({Field.standard_logging_payload_ref})
