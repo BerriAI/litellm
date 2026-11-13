@@ -1,11 +1,13 @@
 use std::sync::Arc;
 
-use litellm_redis_store::{Error, deployment_health::DeploymentHealth};
+use litellm_redis_store::{
+    Error,
+    deployment_health::{DeploymentHealth, HealthStates},
+};
 use pyo3::prelude::*;
 
 use super::{
-    duration, kind_error, policy::router_tier_policies, redis_async, redis_sync, remote,
-    value::PyValue,
+    PyData, duration, kind_error, policy::router_tier_policies, redis_async, redis_sync, remote,
 };
 use crate::redis::client::NativeRedisClient;
 
@@ -37,25 +39,30 @@ impl NativeDeploymentHealth {
     fn get<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let store = self.0.clone();
         redis_async(py, "async_get_cache", kind_error, async move {
-            store.get().await.map(|states| states.map(PyValue))
+            store.get().await.map(|states| states.map(PyData))
         })
     }
 
-    fn get_sync(&self, py: Python<'_>) -> PyResult<Option<PyValue>> {
+    fn get_sync(&self, py: Python<'_>) -> PyResult<Option<PyData<HealthStates>>> {
         let store = self.0.clone();
         redis_sync(py, "get_cache", kind_error, async move {
-            store.get().await.map(|states| states.map(PyValue))
+            store.get().await.map(|states| states.map(PyData))
         })
     }
 
-    fn get_shared_sync(&self, py: Python<'_>) -> PyResult<Option<PyValue>> {
+    fn get_shared_sync(&self, py: Python<'_>) -> PyResult<Option<PyData<HealthStates>>> {
         let store = self.0.clone();
         redis_sync(py, "get_cache", kind_error, async move {
-            Ok::<_, Error>(store.get_shared().await.map(PyValue))
+            Ok::<_, Error>(store.get_shared().await.map(PyData))
         })
     }
 
-    fn set_sync(&self, py: Python<'_>, states: PyValue, ttl_seconds: f64) -> PyResult<()> {
+    fn set_sync(
+        &self,
+        py: Python<'_>,
+        states: PyData<HealthStates>,
+        ttl_seconds: f64,
+    ) -> PyResult<()> {
         let store = self.0.clone();
         let ttl = duration(ttl_seconds)?;
         redis_sync(py, "set_cache", kind_error, async move {

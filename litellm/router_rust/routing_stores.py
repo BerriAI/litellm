@@ -10,6 +10,7 @@ from typing_extensions import assert_never
 from litellm._logging import verbose_router_logger
 from litellm.constants import HEALTH_CHECKS_TARGET
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.redis.stores.deployment_health import DeploymentHealthStates
 from litellm.redis.stores.router_cooldowns import ROUTER_COOLDOWNS_TARGET
 from litellm.redis.stores.router_usage import ROUTER_USAGE_TARGET, RouterUsage, UsageCounter
 from litellm.redis.stores.router_usage.types import CounterKind
@@ -140,8 +141,8 @@ def service_target_of(step: StoreStep | LocalStep) -> str:
 
 
 class HealthStates(Protocol):
-    async def async_get_states(self) -> object: ...
-    def get_states(self) -> object: ...
+    async def async_get_states(self) -> DeploymentHealthStates | None: ...
+    def get_states(self) -> DeploymentHealthStates | None: ...
 
 
 def _aligned(model_ids: Sequence[str], active: Sequence[tuple[str, CooldownCacheValue]]) -> tuple[object, ...]:

@@ -6,14 +6,19 @@ import time
 
 import pytest
 
-from litellm.redis.stores.deployment_health import DeploymentHealthStore
+from litellm.redis.stores.deployment_health import DeploymentHealthStates, DeploymentHealthStore
 from litellm.router_utils.health_state_cache import DeploymentHealthCache
 from litellm.rust_bridge._native import NativeDeploymentHealth, NativeRedisClient
 
 
 @pytest.fixture
-def store():
-    return DeploymentHealthStore(NativeDeploymentHealth(None))
+def handle() -> NativeDeploymentHealth:
+    return NativeDeploymentHealth(None)
+
+
+@pytest.fixture
+def store(handle: NativeDeploymentHealth) -> DeploymentHealthStore:
+    return DeploymentHealthStore(handle)
 
 
 @pytest.fixture
@@ -101,15 +106,19 @@ def test_mixed_stale_and_fresh(health_cache):
     assert result == {"deploy-2"}
 
 
-def test_malformed_state_entries_are_skipped(health_cache):
-    """Non-dict entries in the cache should be skipped safely."""
+def test_malformed_state_entries_are_skipped(
+    health_cache: DeploymentHealthCache, handle: NativeDeploymentHealth
+) -> None:
+    """Records another writer left that are no dict are dropped alone when the store reads them."""
     now = time.time()
-    states = {
-        "deploy-1": {"is_healthy": False, "timestamp": now, "reason": "bad"},
-        "deploy-2": "not_a_dict",  # malformed
-        "deploy-3": None,  # malformed
-    }
-    health_cache.set_deployment_health_states(states)
+    handle.set_sync(
+        {
+            "deploy-1": {"is_healthy": False, "timestamp": now, "reason": "bad"},
+            "deploy-2": "not_a_dict",
+            "deploy-3": None,
+        },
+        90.0,
+    )
     result = health_cache.get_unhealthy_deployment_ids()
     assert result == {"deploy-1"}
 
@@ -142,7 +151,7 @@ class _SharedRedis:
     """The Redis entry every pod shares; a failed read reads as a miss, as the store's does."""
 
     def __init__(self):
-        self.states = None
+        self.states: DeploymentHealthStates | None = None
         self.fail_get = False
 
 
@@ -151,7 +160,7 @@ class _PodHandle:
 
     def __init__(self, redis: _SharedRedis):
         self._redis = redis
-        self._memory = None
+        self._memory: DeploymentHealthStates | None = None
 
     @property
     def has_redis(self) -> bool:
@@ -160,16 +169,16 @@ class _PodHandle:
     def attach(self, client: NativeRedisClient) -> bool:
         return False
 
-    async def get(self) -> object:
+    async def get(self) -> DeploymentHealthStates | None:
         return self.get_sync()
 
-    def get_sync(self) -> object:
+    def get_sync(self) -> DeploymentHealthStates | None:
         return self._memory if self._memory is not None else self.get_shared_sync()
 
-    def get_shared_sync(self) -> object:
+    def get_shared_sync(self) -> DeploymentHealthStates | None:
         return None if self._redis.fail_get else self._redis.states
 
-    def set_sync(self, states: object, ttl_seconds: float) -> None:
+    def set_sync(self, states: DeploymentHealthStates, ttl_seconds: float) -> None:
         self._memory = states
         self._redis.states = states
 
@@ -192,7 +201,7 @@ def test_scoped_writers_on_shared_redis_preserve_each_other():
     pod_a.set_deployment_health_states(
         {"prod-bad": {"is_healthy": False, "timestamp": time.time(), "reason": "check_failed"}}
     )
-    assert set(redis_fake.states) == {"prod-bad", "internal-bad"}
+    assert set(redis_fake.states or {}) == {"prod-bad", "internal-bad"}
     assert pod_a.get_unhealthy_deployment_ids() == {"prod-bad", "internal-bad"}
 
 
@@ -214,7 +223,7 @@ def test_failed_redis_read_falls_back_to_local_copy():
     pod_a.set_deployment_health_states(
         {"prod-bad": {"is_healthy": False, "timestamp": time.time(), "reason": "check_failed"}}
     )
-    assert set(redis_fake.states) == {"prod-bad", "internal-bad"}
+    assert set(redis_fake.states or {}) == {"prod-bad", "internal-bad"}
 
 
 class _UnreachableHealthHandle:
@@ -223,16 +232,16 @@ class _UnreachableHealthHandle:
     def attach(self, client: NativeRedisClient) -> bool:
         return True
 
-    async def get(self) -> object:
+    async def get(self) -> DeploymentHealthStates | None:
         raise ConnectionError("redis down")
 
-    def get_sync(self) -> object:
+    def get_sync(self) -> DeploymentHealthStates | None:
         raise ConnectionError("redis down")
 
-    def get_shared_sync(self) -> object:
+    def get_shared_sync(self) -> DeploymentHealthStates | None:
         raise ConnectionError("redis down")
 
-    def set_sync(self, states: object, ttl_seconds: float) -> None:
+    def set_sync(self, states: DeploymentHealthStates, ttl_seconds: float) -> None:
         raise ConnectionError("redis down")
 
 
