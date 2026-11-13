@@ -3854,17 +3854,31 @@ dependencies = [
 name = "litellm-config"
 version = "0.1.0"
 dependencies = [
- "litellm-error",
+ "litellm-python-compat",
  "litellm-router-types",
  "litellm-secret-value",
+ "litellm-starlette",
  "rstest",
  "serde",
  "serde_json",
+ "serde_with",
  "serde_yaml_ng",
  "strum",
- "tempfile",
  "thiserror 2.0.19",
  "veil",
+]
+
+[[package]]
+name = "litellm-config-load"
+version = "0.1.0"
+dependencies = [
+ "litellm-config",
+ "litellm-error",
+ "rstest",
+ "serde",
+ "serde_yaml_ng",
+ "tempfile",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -3979,6 +3993,7 @@ dependencies = [
  "http-body-util",
  "litellm-circuit-breaker",
  "litellm-config",
+ "litellm-config-load",
  "litellm-core-utils",
  "litellm-error",
  "litellm-gateway-auth",
@@ -4034,6 +4049,18 @@ dependencies = [
  "tower",
  "tower-sessions",
  "veil",
+]
+
+[[package]]
+name = "litellm-gateway-auth-core"
+version = "0.1.0"
+dependencies = [
+ "http 1.4.2",
+ "litellm-config",
+ "litellm-starlette",
+ "rstest",
+ "strum",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -4565,6 +4592,7 @@ dependencies = [
  "criterion",
  "fancy-regex 0.19.2",
  "futures-util",
+ "http 1.4.2",
  "indexmap 2.14.0",
  "litellm-auth",
  "litellm-auth-aws",
@@ -4577,9 +4605,11 @@ dependencies = [
  "litellm-callbacks-python",
  "litellm-callbacks-s3-log",
  "litellm-circuit-breaker",
+ "litellm-config",
  "litellm-core-utils",
  "litellm-db",
  "litellm-error",
+ "litellm-gateway-auth-core",
  "litellm-host",
  "litellm-host-python",
  "litellm-http",
@@ -4609,6 +4639,7 @@ dependencies = [
  "litellm-storage-clickhouse",
  "litellm-token-counter",
  "litellm-tracing",
+ "parking_lot",
  "prost",
  "pyo3",
  "pyo3-async-runtimes",
@@ -4641,6 +4672,7 @@ dependencies = [
  "serde",
  "serde-pickle",
  "serde_json",
+ "serde_with",
  "thiserror 2.0.19",
 ]
 
@@ -5024,6 +5056,15 @@ dependencies = [
  "tokio",
  "uuid",
  "wiremock",
+]
+
+[[package]]
+name = "litellm-starlette"
+version = "0.1.0"
+dependencies = [
+ "rstest",
+ "serde",
+ "strum",
 ]
 
 [[package]]

@@ -1,3 +1,4 @@
+mod auth;
 mod budgets;
 mod cache;
 mod callable;
@@ -27,6 +28,12 @@ mod _native {
     use litellm_host_python::{ForkedAfterNativeRuntimeStarted, ProcessReservedForForking};
     use pyo3::{prelude::*, types::PyModule};
 
+    #[pymodule_export]
+    use crate::auth::{
+        auth_allowed_routes_grant, auth_first_denied_route, auth_jwt_team_routes_grant,
+        auth_managed_agent_route_allowed, auth_managed_route, auth_route_matches_denied,
+        auth_route_matches_prefix, auth_route_matches_wildcard,
+    };
     #[pymodule_export]
     use crate::budgets::NativeBudgets;
     #[pymodule_export]
@@ -215,6 +222,14 @@ mod tests {
                 "NativeBudgets",
                 "budget_check_decision",
                 "NativeS3Log",
+                "auth_allowed_routes_grant",
+                "auth_first_denied_route",
+                "auth_jwt_team_routes_grant",
+                "auth_managed_agent_route_allowed",
+                "auth_managed_route",
+                "auth_route_matches_denied",
+                "auth_route_matches_prefix",
+                "auth_route_matches_wildcard",
             ];
             #[cfg(feature = "huggingface")]
             expected.push("HuggingFaceEncoding");
