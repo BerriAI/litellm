@@ -523,11 +523,14 @@ async def _unrequested_stream_delivered(
     return delivered
 
 
-def cached_stream(head: object, kwargs: dict[str, object]) -> None:  # mutable-ok: the call's own kwargs
-    """Hands the stream a cache hit or miss returns on Python back through the head: the cached replay, with the
-    metadata `@client` stamps on it, or the cache writer a miss is wrapped in."""
+def python_stream_types(head: object, kwargs: dict[str, object]) -> None:  # mutable-ok: the call's own kwargs
+    """Has the head hand back the stream types Python returns: its streaming response, the cached replay a hit
+    returns with the metadata `@client` stamps on it, or the cache writer a miss is wrapped in."""
     logger: Final = kwargs.get("litellm_logging_obj")
-    if not isinstance(head, MessagesStreamHead) or not isinstance(logger, LiteLLMLoggingObj):
+    if not isinstance(head, MessagesStreamHead):
+        return
+    head.python_types = True  # rebind-ok: the head carries it back
+    if not isinstance(logger, LiteLLMLoggingObj):
         return
     hit: Final = cache.stream_hit(logger)
     if hit is None:
@@ -706,7 +709,7 @@ def _transport_failure(
     if body_cut is not None:
         return str(_body_cut(*_BODY_CUT.validate_python(body_cut)))
     native: Final = str(error)
-    if native == _UNSENDABLE_HEADER:
+    if native == _UNSENDABLE_HEADER and request_provider not in _RUST_ONLY_PROVIDERS:
         # httpx names the header value in its text, which may be a credential.
         return _AIOHTTP_UNSENDABLE_HEADER if http_transport.uses_aiohttp_transport() else native
     if native == _TOO_MANY_REDIRECTS:

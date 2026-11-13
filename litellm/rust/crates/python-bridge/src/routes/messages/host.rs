@@ -832,8 +832,14 @@ impl PythonBinding for MessagesPythonHost {
         let head = module
             .getattr("stream_hidden_params")?
             .call1((to_py(py, &head.headers)?,))?;
-        if let Some(arguments) = self.arguments.as_ref().filter(|_| self.asynchronous) {
-            module.getattr("cached_stream")?.call1((&head, arguments))?;
+        if let Some(arguments) = self
+            .arguments
+            .as_ref()
+            .filter(|_| self.asynchronous && self.provider(py) == AZURE_AI_PROVIDER)
+        {
+            module
+                .getattr("python_stream_types")?
+                .call1((&head, arguments))?;
         }
         if let Some(arguments) = self
             .arguments

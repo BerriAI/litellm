@@ -4248,6 +4248,12 @@ ANTHROPIC_ON_AZURE_CLAUDE_ERROR_CASES: Final = (
     ),
 )
 
+AZURE_STREAM_CACHE_CASES: Final = tuple(
+    replace(case, name=f"azure_ai_{case.name}", model=AZURE_CLAUDE, rust_providers=AZURE_AI)
+    for case in CACHE_CASES
+    if case.name in ("cache_hit_stream", "cache_stream_without_output")
+)
+
 AZURE_NON_CLAUDE: Final = "azure_ai/Phi-4"
 MESSAGES_PASSTHROUGH: Final = MappingProxyType({"supported_endpoints": ["/v1/messages"]})
 
@@ -4297,6 +4303,7 @@ CASES: Final = (
     *AZURE_SHAPING_CASES,
     *AZURE_ERROR_CASES,
     *ANTHROPIC_ON_AZURE_CLAUDE_ERROR_CASES,
+    *AZURE_STREAM_CACHE_CASES,
 )
 
 
@@ -4905,7 +4912,7 @@ async def test_native_messages_match_python(
         case "tool_runs":
             assert native.tool_runs == python.tool_runs
         case "stream_type":
-            assert native.stream_type == python.stream_type
+            assert native.stream_type == _stream_type_reference(case, python.stream_type)
         case _:
             assert _comparable(native.callback_kwargs.get(aspect)) == _comparable(python.callback_kwargs.get(aspect))
 
@@ -4918,6 +4925,26 @@ def _anthropic_reference(outcome: Mapping[str, object], kwargs: Mapping[str, obj
         return outcome
     named: Final = with_deployment_debug_info(Exception(), model, "anthropic", kwargs)
     return {**outcome, "debug_info": _normalized(str(getattr(named, "litellm_debug_info", None)))}
+
+
+_PYTHON_HANDLER_STREAMS: Final = frozenset(
+    {
+        "AnthropicMessagesStreamingResponse",
+        "CachedAnthropicMessagesStreamIterator",
+        "AnthropicMessagesStreamCacheWriter",
+    }
+)
+
+
+def _stream_type_reference(case: Case, python: object) -> object:
+    """Anthropic has no Python path, and by the owner's ruling its native stream stays main's execution AsyncStream,
+    for a cache hit or miss too, where Python's handler returns its streaming response, cached replay or cache
+    writer. Main's agentic and short-circuit paths already hand back the stream Python returns."""
+    provider: Final = str(case.kwargs.get("custom_llm_provider") or case.model.partition("/")[0])
+    wrapped: Final = frozenset(wrapping.name for wrapping in (*AGENTIC_CASES, *SHORT_CIRCUIT_CASES))
+    if provider == "azure_ai" or case.name in wrapped or python not in _PYTHON_HANDLER_STREAMS:
+        return python
+    return "AsyncStream"
 
 
 def _comparable(value: object) -> object:
@@ -5541,16 +5568,17 @@ async def test_both_lanes_log_nothing_for_a_stream_never_read(
     assert native == python
 
 
-async def _entered_stream(server: RecordingServer, native: bool) -> str:
+async def _entered_stream(server: RecordingServer, native: bool, model: str) -> str:
     server.enqueue(_burst(TEXT_STREAM))
     acall: Final = _PUBLIC_AMESSAGES if native else _PYTHON_AMESSAGES
     with contextlib.ExitStack() as stack:
         stack.enter_context(isolated_callback_registries())
         stack.enter_context(_environment({}))
+        stack.enter_context(_served_natively(AZURE_AI))
         stream: Final = cast(
             AsyncGenerator[object],
             await acall(
-                model=SONNET,
+                model=model,
                 max_tokens=64,
                 messages=[dict(USER)],
                 api_key=API_KEY,
@@ -5576,11 +5604,21 @@ async def _enter(stream: object) -> str:
 
 
 @pytest.mark.asyncio
-async def test_both_lanes_treat_a_stream_as_an_async_context_manager_alike(
+async def test_an_azure_ai_stream_treats_async_with_as_python_s_does(
     parity_server: RecordingServer, native_messages: FallbackProbe
 ) -> None:
-    python: Final = await _entered_stream(parity_server, native=False)
-    native: Final = await _entered_stream(parity_server, native=True)
+    python: Final = await _entered_stream(parity_server, native=False, model=AZURE_CLAUDE)
+    native: Final = await _entered_stream(parity_server, native=True, model=AZURE_CLAUDE)
 
     assert native_messages.calls == 0
     assert native == python
+
+
+@pytest.mark.asyncio
+async def test_an_anthropic_stream_stays_main_s_execution_stream(
+    parity_server: RecordingServer, native_messages: FallbackProbe
+) -> None:
+    native: Final = await _entered_stream(parity_server, native=True, model=SONNET)
+
+    assert native_messages.calls == 0
+    assert native == "TypeError: 'AsyncStream' object does not support the asynchronous context manager protocol"

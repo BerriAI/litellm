@@ -772,16 +772,19 @@ def test_an_azure_ai_connect_failure_names_the_environment_base_the_host_sent_to
     assert mapped.message.endswith(f"Azure_aiException - {text}")
 
 
+_UNSENDABLE_HEADER: Final = "invalid request: failed to parse header value"
+
+
 @pytest.mark.parametrize(
     ("aiohttp", "text"),
     (
         pytest.param(
             True, "Forbidden control character detected in headers. Potential header injection attack.", id="aiohttp"
         ),
-        pytest.param(False, "invalid request: failed to parse header value", id="httpx"),
+        pytest.param(False, _UNSENDABLE_HEADER, id="httpx"),
     ),
 )
-def test_an_unsendable_header_value_fails_as_the_python_transport_refuses_it(
+def test_an_unsendable_azure_ai_header_value_fails_as_the_python_transport_refuses_it(
     monkeypatch: pytest.MonkeyPatch, aiohttp: bool, text: str
 ) -> None:
     from litellm.rust_bridge.host import http_transport
@@ -789,14 +792,34 @@ def test_an_unsendable_header_value_fails_as_the_python_transport_refuses_it(
     monkeypatch.setattr(http_transport, "uses_aiohttp_transport", lambda: aiohttp)
 
     mapped: Final = messages_host.map_failure(
-        ValueError("invalid request: failed to parse header value"),
-        {"model": _AZURE_CLAUDE, "api_base": "http://127.0.0.1:9/anthropic"},
-        "azure_ai",
+        ValueError(_UNSENDABLE_HEADER), {"model": _AZURE_CLAUDE, "api_base": "http://127.0.0.1:9/anthropic"}, "azure_ai"
     )
 
     assert type(mapped) is litellm.InternalServerError
     assert (mapped.status_code, *_provider_and_model(mapped)) == (500, "azure_ai", _AZURE_CLAUDE)
     assert mapped.message.endswith(f"Azure_aiException - {text}")
+
+
+@pytest.mark.parametrize("aiohttp", (True, False), ids=("aiohttp", "httpx"))
+def test_an_unsendable_anthropic_header_value_stays_main_s_connection_error(
+    monkeypatch: pytest.MonkeyPatch, aiohttp: bool
+) -> None:
+    from litellm.litellm_core_utils.error_normalization import PROVIDER_CONNECTION_ERROR, normalize_error
+    from litellm.rust_bridge.host import http_transport
+
+    monkeypatch.setattr(http_transport, "uses_aiohttp_transport", lambda: aiohttp)
+
+    mapped: Final = messages_host.map_failure(
+        ValueError(_UNSENDABLE_HEADER),
+        {"model": "claude-sonnet-4-5", "api_base": "http://127.0.0.1:9/anthropic"},
+        "anthropic",
+    )
+
+    assert type(mapped) is litellm.APIConnectionError
+    assert (mapped.status_code, *_provider_and_model(mapped)) == (500, "anthropic", "claude-sonnet-4-5")
+    assert str(mapped).startswith(f"litellm.APIConnectionError: {_UNSENDABLE_HEADER}\n")
+    assert "https://github.com/BerriAI/litellm/issues/new?template=bug_report.yml" in str(mapped)
+    assert normalize_error(mapped, "500", str(mapped)) == PROVIDER_CONNECTION_ERROR
 
 
 def _upstream_status(status: int, body: str) -> Exception:

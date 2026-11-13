@@ -13,6 +13,7 @@ from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMe
 class MessagesStreamHead(dict[str, object]):
     agentic: Callable[[execution.AsyncStream], object] | None = None
     deliver: Callable[[object], Awaitable[object]] | None = None
+    python_types: bool = False
     cached: object | None = None
     cache_writer: Callable[[object], object] | None = None
 
@@ -47,7 +48,9 @@ def _opened(native: execution.Execution, head: object) -> object:
         return cached
     stream: Final = execution.AsyncStream(native, head)
     agentic: Final = head.agentic if isinstance(head, MessagesStreamHead) else None
-    return _public_stream(stream) if agentic is None else agentic(stream)
+    if agentic is not None:
+        return agentic(stream)
+    return _public_stream(stream) if isinstance(head, MessagesStreamHead) and head.python_types else stream
 
 
 def _open_stream(native: execution.Execution, head: object) -> object:
