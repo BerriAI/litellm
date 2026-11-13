@@ -18,7 +18,7 @@ from litellm.types.videos.main import VideoObject
     [
         (8.0, "720p", 0.6),
         (5.0, "540p", 0.1),
-        (0.0, "720p", 0.3),
+        (0.0, "720p", 0.0),
         (7.7, "720p", 0.6),
         (8.0, "1080p", 0.08),
         (3.0, "720p", 0.03),
@@ -36,7 +36,7 @@ def test_video_clip_price_precedes_per_second(
 
 @pytest.mark.parametrize("duration", [5.0, None])
 @pytest.mark.parametrize("flat_price", [None, 0.0, 0.37])
-def test_completion_cost_multiplies_clip_price_without_duration(
+def test_completion_cost_multiplies_applicable_video_price(
     duration: float | None, flat_price: float | None, local_model_cost_map: None
 ) -> None:
     litellm.register_model(
@@ -63,12 +63,20 @@ def test_completion_cost_multiplies_clip_price_without_duration(
     )
     assert litellm.completion_cost(
         completion_response=response, model="test-video-clip", custom_llm_provider="fal_ai", call_type="create_video"
-    ) == pytest.approx(0.9)
+    ) == pytest.approx(0.9 if duration is not None else 3 * (flat_price or 0.0))
+
+
+@pytest.mark.parametrize(
+    "duration", [None, 0, 0.0, "0", "invalid", "auto", False, True, [], -1, float("nan"), float("inf")]
+)
+def test_video_clip_cost_does_not_guess_unknown_duration(duration: object) -> None:
+    info: Final = {"output_cost_per_video_clip": {"0s": {"720p": 0.01}, "5s": {"720p": 0.3}, "8s": {"720p": 0.6}}}
+    assert video_clip_cost(info, duration, "720p") is None
 
 
 @pytest.mark.parametrize("table", [None, {}, {"5s": {"720p": "invalid"}}, {"invalid": {"720p": 0.3}}])
 def test_video_clip_cost_ignores_empty_or_invalid_catalog_table(table: object) -> None:
-    assert video_clip_cost({"output_cost_per_video_clip": table}, None, "720p") is None
+    assert video_clip_cost({"output_cost_per_video_clip": table}, 5, "720p") is None
 
 
 def _register_stt(name: str, **pricing: float) -> None:
