@@ -109,7 +109,7 @@ function SettingsForm({ entity, organization, onSaved, onDeleted }: Props) {
     if (!templateId) return t("customerPortal.hierarchy.noTemplate");
     const template = organization.default_budgets.find((budget) => budget.budget_id === templateId);
     if (!template) return t("customerPortal.hierarchy.unknownTemplate", { id: templateId });
-    if (templateId === organization.default_budget_id)
+    if (templateId === organization.default_budget_template_id)
       return t("customerPortal.hierarchy.defaultTemplate", { name: template.name });
     return template.name;
   };
