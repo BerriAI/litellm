@@ -188,7 +188,7 @@ def _passthrough_cost_per_image(entry: Mapping[str, object], request_body: Mappi
 
 def fal_ai_passthrough_cost(model: str, request_body: Mapping[str, object]) -> float | None:
     entry: Final = _entry(f"{litellm.LlmProviders.FAL_AI.value}/{model}")
-    if entry is None or "output_cost_per_billable_unit" in entry:
+    if entry is None or entry.get("output_cost_per_billable_unit") is not None:
         return None
     clip_cost: Final = video_clip_cost(entry, request_body.get("duration"), request_body.get("resolution"))
     if clip_cost is not None:
