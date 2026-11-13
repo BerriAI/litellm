@@ -210,23 +210,15 @@ func resourceLiteLLMTeamRead(d *schema.ResourceData, m interface{}) error {
 
 	log.Printf("[INFO] Reading team with ID: %s", d.Id())
 
-	resp, err := MakeRequest(client, "GET", fmt.Sprintf("%s?team_id=%s", endpointTeamInfo, d.Id()), nil)
+	teamResp, err := getTeamInfo(client, d.Id())
 	if err != nil {
-		return fmt.Errorf("error reading team: %w", err)
+		return err
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusNotFound {
+	if teamResp == nil {
 		log.Printf("[WARN] Team with ID %s not found, removing from state", d.Id())
 		d.SetId("")
 		return nil
 	}
-
-	var infoResp TeamInfoResponse
-	if err := json.NewDecoder(resp.Body).Decode(&infoResp); err != nil {
-		return fmt.Errorf("error decoding team info response: %w", err)
-	}
-	teamResp := infoResp.TeamInfo
 
 	// Update the state with values from the response or fall back to the data passed in during creation
 	d.Set("team_id", d.Id())
@@ -319,6 +311,17 @@ func resourceLiteLLMTeamUpdate(d *schema.ResourceData, m interface{}) error {
 
 	teamData := buildTeamData(d, d.Id())
 	log.Printf("[DEBUG] Update team request payload: %+v", teamData)
+	if declared, ok := teamData["metadata"].(map[string]interface{}); ok {
+		current, err := getTeamInfo(client, d.Id())
+		if err != nil {
+			return err
+		}
+		if current == nil {
+			return fmt.Errorf("team %s not found", d.Id())
+		}
+		oldDeclared, _ := d.GetChange("metadata")
+		teamData["metadata"] = mergeTeamMetadata(current.Metadata, oldDeclared.(map[string]interface{}), declared)
+	}
 
 	resp, err := MakeRequest(client, "POST", endpointTeamUpdate, teamData)
 	if err != nil {
@@ -497,6 +500,41 @@ func buildTeamData(d *schema.ResourceData, teamID string) map[string]interface{}
 	}
 
 	return teamData
+}
+
+func getTeamInfo(client *Client, teamID string) (*TeamResponse, error) {
+	resp, err := MakeRequest(client, "GET", fmt.Sprintf("%s?team_id=%s", endpointTeamInfo, teamID), nil)
+	if err != nil {
+		return nil, fmt.Errorf("error reading team: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
+
+	var infoResp TeamInfoResponse
+	if err := json.NewDecoder(resp.Body).Decode(&infoResp); err != nil {
+		return nil, fmt.Errorf("error decoding team info response: %w", err)
+	}
+	return &infoResp.TeamInfo, nil
+}
+
+func mergeTeamMetadata(server, oldDeclared, newDeclared map[string]interface{}) map[string]interface{} {
+	owned := ResourceLiteLLMTeam().Schema
+	result := make(map[string]interface{}, len(server)+len(newDeclared))
+	for k, v := range server {
+		if _, ok := owned[k]; !ok {
+			result[k] = v
+		}
+	}
+	for k := range oldDeclared {
+		delete(result, k)
+	}
+	for k, v := range newDeclared {
+		result[k] = v
+	}
+	return result
 }
 
 // /team/update replaces metadata wholesale, so the full map must go out whenever either half changed.
