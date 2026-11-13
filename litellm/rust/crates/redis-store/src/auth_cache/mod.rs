@@ -26,9 +26,9 @@ const INCREMENT_IF_PRESENT: &str = "if redis.call('EXISTS', KEYS[1]) == 0 then r
 /// `SET` the entry only while its generation is the one the lease read.
 const SET_LEASED: &str = "if (redis.call('GET', KEYS[2]) or '') ~= ARGV[1] then return 0 end redis.call('SET', KEYS[1], ARGV[2], 'EX', ARGV[3]) return 1";
 
-/// A new generation and the `DEL` as one step, whatever order a batch sends its ops in.
-const DELETE_VOIDING_LEASES: &str =
-    "redis.call('SET', KEYS[2], ARGV[1], 'EX', ARGV[2]) return redis.call('DEL', KEYS[1])";
+/// The `DEL` and a new generation as one step, whatever order a batch sends its ops in. `DEL`
+/// leads so a Redis at its memory limit still deletes the entry.
+const DELETE_VOIDING_LEASES: &str = "local deleted = redis.call('DEL', KEYS[1]) redis.call('SET', KEYS[2], ARGV[1], 'EX', ARGV[2]) return deleted";
 
 const GENERATION_LABEL: &str = "auth_cache_generation";
 
