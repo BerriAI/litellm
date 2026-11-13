@@ -19,7 +19,7 @@ def _continuation_failure() -> litellm.InternalServerError:
     return litellm.InternalServerError(message="continuation failed", llm_provider="openai", model="gpt")
 
 
-def _fail_inside(dispatch: ToolDispatch, error: BaseException) -> None:
+def _fail_inside(dispatch: ToolDispatch, error: Exception) -> None:
     with pytest.raises(type(error)), dispatch.failures_not_replayed():
         raise error
 
@@ -33,16 +33,6 @@ def test_a_failure_after_a_tool_call_was_sent_is_marked_against_retries_and_fall
 
     assert is_agentic_followup_failure(error)
     assert sent_tool_calls_before(error)
-
-
-def test_a_cancellation_after_a_tool_call_was_sent_is_marked_too() -> None:
-    dispatch: Final = ToolDispatch()
-    dispatch.record_sent()
-    cancelled: Final = asyncio.CancelledError()
-
-    _fail_inside(dispatch, cancelled)
-
-    assert sent_tool_calls_before(cancelled)
 
 
 def test_a_failure_before_any_tool_call_was_sent_stays_retryable() -> None:

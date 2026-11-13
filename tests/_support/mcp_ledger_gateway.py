@@ -23,6 +23,7 @@ LEDGER_ANTHROPIC_MODEL: Final = "ledger-anthropic-model"
 LEDGER_TOOLS: Final = ({"type": "mcp", "server_url": "litellm_proxy/ledger", "require_approval": "never"},)
 _API_BASE: Final = "https://ledger-upstream.example.com/v1"
 _MESSAGES_API_BASE: Final = "https://ledger-messages.services.ai.azure.com"
+_CHAIN_HOST_SUFFIX: Final = ".ledger-chain.example.com"
 _ARGUMENTS: Final = json.dumps({"entry": "alpha"})
 
 
@@ -150,6 +151,52 @@ def ledger_router(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch,
     )
 
 
+class ChainUpstream:
+    """One OpenAI-compatible upstream per model group, told apart by host. A group in ``fails_before_tools``
+    fails its first model call, so no tool runs. Any other group asks for the ledger tool, then fails the
+    continuation with an error naming the group."""
+
+    def __init__(self, fails_before_tools: frozenset[str]) -> None:
+        self.fails_before_tools: Final = fails_before_tools
+        self.calls: tuple[tuple[str, str], ...] = ()
+
+    def chat(self, request: httpx.Request) -> httpx.Response:
+        group: Final = request.url.host.removesuffix(_CHAIN_HOST_SUFFIX)
+        body: Final = json.loads(request.content)
+        continuation: Final = any(message.get("role") == "tool" for message in body["messages"])
+        self.calls = (*self.calls, (group, "continuation" if continuation else "initial"))
+        if continuation:
+            return _server_error(f"{group} continuation failed")
+        if group in self.fails_before_tools:
+            return _server_error(f"{group} failed before any tool ran")
+        return _chat(_chat_tool_calls(1), "tool_calls")
+
+
+def chain_router(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    upstream: ChainUpstream,
+    groups: Sequence[str],
+    fallbacks: Sequence[Mapping[str, Sequence[str]]],
+) -> Router:
+    """A router with one deployment per group and no retries, so only the fallback walk can run a tool again."""
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx_mock.post(url__regex=rf"^https://[a-z-]+{_CHAIN_HOST_SUFFIX}/v1/chat/completions$").mock(
+        side_effect=upstream.chat
+    )
+    return Router(
+        model_list=[
+            _deployment(group, "openai/gpt-4.1-mini", f"https://{group}{_CHAIN_HOST_SUFFIX}/v1", f"sk-{group}")
+            for group in groups
+        ],
+        num_retries=0,
+        fallbacks=[dict(chain) for chain in fallbacks],
+        disable_cooldowns=True,
+    )
+
+
 def _deployment(model_name: str, model: str, api_base: str, api_key: str) -> Mapping[str, object]:
     return {"model_name": model_name, "litellm_params": {"model": model, "api_key": api_key, "api_base": api_base}}
 
@@ -177,8 +224,8 @@ def _anthropic_message(content: Sequence[Mapping[str, object]], stop_reason: str
     )
 
 
-def _server_error() -> httpx.Response:
-    return httpx.Response(500, json={"error": {"message": "continuation failed", "type": "server_error"}})
+def _server_error(message: str = "continuation failed") -> httpx.Response:
+    return httpx.Response(500, json={"error": {"message": message, "type": "server_error"}})
 
 
 def _chat_tool_calls(count: int) -> Mapping[str, object]:

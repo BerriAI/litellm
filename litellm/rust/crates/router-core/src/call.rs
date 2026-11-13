@@ -230,17 +230,15 @@ fn group_members(
     rows
 }
 
-/// What `_maybe_run_weighted_failover` catches and defers to the regular fallbacks:
-/// `openai.APIError` (every litellm provider error, a failure the host reported no classes for
-/// among them), `RouterRateLimitError` and `RouterRateLimitErrorBasic`. Anything else propagates.
-/// An MCP tool call reached its server before `error`: every later attempt, a retry or any
-/// fallback of any level, would run the tool again, so the whole walk raises it as it is.
 fn sent_tool_calls(error: &Error) -> bool {
     error
         .attempt()
         .is_some_and(|failure| failure.tool_calls_sent)
 }
 
+/// What `_maybe_run_weighted_failover` catches and defers to the regular fallbacks:
+/// `openai.APIError` (every litellm provider error, a failure the host reported no classes for
+/// among them), `RouterRateLimitError` and `RouterRateLimitErrorBasic`. Anything else propagates.
 fn defers_to_regular_fallbacks(error: &Error) -> bool {
     retried_failure(error).is_some_and(|failure| {
         failure.classes.is_empty()

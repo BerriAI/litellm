@@ -46,8 +46,10 @@ from litellm.utils import CustomStreamWrapper
 from tests._support.mcp_ledger_gateway import (
     LEDGER_MODEL,
     LEDGER_TOOLS,
+    ChainUpstream,
     Ledger,
     ModelUpstream,
+    chain_router,
     ledger_router,
     serve_ledger,
 )
@@ -3207,3 +3209,56 @@ async def test_a_continuation_that_succeeds_after_a_sent_mcp_tool_call_runs_the_
 
     assert ledger.calls == 1
     assert (upstream.initial_calls, upstream.continuation_calls) == (1, 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("fallbacks", "fails_before_tools", "expected_calls", "raising_group"),
+    [
+        (
+            ({"ledger-a": ["ledger-b", "ledger-c"]},),
+            frozenset({"ledger-a"}),
+            (("ledger-a", "initial"), ("ledger-b", "initial"), ("ledger-b", "continuation")),
+            "ledger-b",
+        ),
+        (
+            ({"ledger-a": ["ledger-b", "ledger-d"]}, {"ledger-b": ["ledger-c"]}),
+            frozenset({"ledger-a", "ledger-b"}),
+            (("ledger-a", "initial"), ("ledger-b", "initial"), ("ledger-c", "initial"), ("ledger-c", "continuation")),
+            "ledger-c",
+        ),
+        (
+            ({"ledger-a": ["ledger-b"]},),
+            frozenset({"ledger-a"}),
+            (("ledger-a", "initial"), ("ledger-b", "initial"), ("ledger-b", "continuation")),
+            "ledger-b",
+        ),
+    ],
+    ids=["sibling_fallback", "nested_fallback", "exhausted_fallbacks"],
+)
+async def test_a_fallback_that_sent_an_mcp_tool_call_ends_the_whole_fallback_walk_with_its_own_error(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    fallbacks: tuple[Mapping[str, Sequence[str]], ...],
+    fails_before_tools: frozenset[str],
+    expected_calls: tuple[tuple[str, str], ...],
+    raising_group: str,
+) -> None:
+    ledger: Final = Ledger()
+    auth: Final = serve_ledger(monkeypatch, ledger)
+    upstream: Final = ChainUpstream(fails_before_tools=fails_before_tools)
+    router: Final = chain_router(
+        respx_mock, monkeypatch, upstream, ("ledger-a", "ledger-b", "ledger-c", "ledger-d"), fallbacks
+    )
+
+    with pytest.raises(litellm.InternalServerError) as raised:
+        await router.acompletion(
+            model="ledger-a",
+            messages=[{"role": "user", "content": "write alpha"}],
+            tools=list(LEDGER_TOOLS),
+            user_api_key_auth=auth,
+        )
+
+    assert ledger.calls == 1
+    assert upstream.calls == expected_calls
+    assert f"{raising_group} continuation failed" in str(raised.value)
