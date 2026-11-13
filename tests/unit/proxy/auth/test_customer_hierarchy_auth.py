@@ -37,8 +37,8 @@ def _row(
         "customer_member_id": "member-1",
         "parent_team_id": "team-1",
         "spend": member_spend,
-        "budget": override,
-        "budget_template": template,
+        "budget": template,
+        "budget_override": override,
         "budget_override_expires_at": override_expires_at,
         "parent_team": {
             "customer_team_id": "team-1",

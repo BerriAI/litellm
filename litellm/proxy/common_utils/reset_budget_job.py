@@ -111,7 +111,7 @@ class _CustomerBudgetRow(BaseModel):
     spend: float
     budget_reset_at: datetime | None
     budget: BudgetRecord | None = None
-    budget_template: BudgetRecord | None = None
+    budget_override: BudgetRecord | None = None
     budget_override_expires_at: datetime | None = None
 
 
@@ -639,13 +639,13 @@ class ResetBudgetJob:
         duration_sources: Final = (
             (
                 {
-                    **budget_duration,
+                    "budget_override": {"is": {"budget_duration": {"not": None}}},
                     "OR": [
                         {"budget_override_expires_at": None},
                         {"budget_override_expires_at": {"gt": now}},
                     ],
                 },
-                {"budget_template": {"is": {"budget_duration": {"not": None}}}},
+                budget_duration,
             )
             if entity == "member"
             else (budget_duration,)
@@ -662,7 +662,7 @@ class ResetBudgetJob:
             records = await self._with_db_retry(
                 lambda: table.find_many(
                     where=where,
-                    include={"budget": True, **({"budget_template": True} if entity == "member" else {})},
+                    include={"budget": True, **({"budget_override": True} if entity == "member" else {})},
                     order={id_field: "asc"},
                     take=RESET_BUDGET_JOB_BATCH_SIZE,
                 ),
@@ -715,7 +715,7 @@ class ResetBudgetJob:
     ) -> None:
         async with customer_spend_reset_unit_of_work(self._new_batch, entity) as writes:
             for row in rows:
-                budget = effective_member_budget(row.budget_template, row.budget, row.budget_override_expires_at, now)
+                budget = effective_member_budget(row.budget, row.budget_override, row.budget_override_expires_at, now)
                 next_reset = (
                     compute_budget_reset_at(budget.budget_duration, self.reset_settings)
                     if budget.budget_duration is not None

@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 CUSTOMER_MEMBER_ID_HEADER: Final = "x-litellm-customer-member-id"
 _MEMBER_INCLUDE: Final = {
     "budget": True,
-    "budget_template": True,
+    "budget_override": True,
     "parent_team": {"include": {"budget": True, "parent_org": {"include": {"budget": True}}}},
 }
 _EXPIRY: Final[TypeAdapter[datetime | None]] = TypeAdapter(datetime | None)
@@ -66,7 +66,7 @@ class _MemberRow(BaseModel):
     customer_member_id: str
     spend: float = 0.0
     budget: Mapping[str, object] | None = None
-    budget_template: Mapping[str, object] | None = None
+    budget_override: Mapping[str, object] | None = None
     budget_override_expires_at: datetime | None = None
     parent_team: _TeamRow
 
@@ -108,8 +108,8 @@ def customer_hierarchy_from_member_row(row: Mapping[str, object], now: datetime)
     member: Final = _MemberRow.model_validate(row)
     team: Final = member.parent_team
     organization: Final = team.parent_org
-    template: Final = related_budget(member.budget_template, now)
-    override: Final = related_budget(member.budget, now, template.max_budget if template is not None else None)
+    template: Final = related_budget(member.budget, now)
+    override: Final = related_budget(member.budget_override, now, template.max_budget if template is not None else None)
     return CustomerHierarchyAuth(
         customer_member_id=member.customer_member_id,
         customer_team_id=team.customer_team_id,
