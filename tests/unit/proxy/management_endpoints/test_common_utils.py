@@ -1307,6 +1307,15 @@ class TestSetObjectMetadataFieldPremiumArg:
             mock_premium.assert_called_once_with("guardrails")
 
 
+class TestUpdateMetadataFieldLicenseError:
+    def test_license_error_names_the_blocking_field(self):
+        with patch("litellm.proxy.proxy_server.premium_user", False):
+            with pytest.raises(HTTPException) as exc_info:
+                update_metadata_fields({"team_id": "t1", "guardrails": ["g1"]})
+        assert exc_info.value.status_code == 403
+        assert "guardrails" in exc_info.value.detail["error"]
+
+
 class TestUpdateMetadataFieldMove:
     def test_none_valued_field_is_not_moved_into_metadata(self):
         """A None value must leave the field untouched (guard requires non-None)."""
