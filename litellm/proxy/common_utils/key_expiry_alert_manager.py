@@ -21,8 +21,8 @@ _SETTINGS: Final = TypeAdapter(dict[str, bool])
 _EXPIRING_KEYS_SQL: Final = """
 SELECT token, key_alias, key_name, user_id, expires, metadata
 FROM "LiteLLM_VerificationToken"
-WHERE metadata ? 'key_expiry_alert_days'
-  AND expires IS NOT NULL AND expires > $1::timestamp AND expires <= $2::timestamp
+WHERE expires IS NOT NULL AND expires > $1::timestamp AND expires <= $2::timestamp
+  AND (metadata ? 'key_expiry_alert_days' OR expires <= $3::timestamp)
   AND user_id IS NOT NULL AND (blocked = FALSE OR blocked IS NULL)
 """
 logger: Final = logging.getLogger(__name__)
@@ -96,8 +96,10 @@ class KeyExpiryAlertManager:
         cache: ExpiryAlertCache,
         email_logger: KeyExpiryEmailLogger,
         clock: Callable[[], datetime] = utc_now,
+        default_days: int | None = None,
     ) -> None:
         self.prisma_client = prisma_client
+        self.default_days = default_days
         self.cache = cache
         self.email_logger = email_logger
         self.clock = clock
@@ -112,7 +114,10 @@ class KeyExpiryAlertManager:
         now: Final = self.clock().astimezone(timezone.utc)
         rows: Final = _ROWS.validate_python(
             await self.prisma_client.db.query_raw(
-                _EXPIRING_KEYS_SQL, now, now + timedelta(days=KEY_EXPIRY_ALERT_MAX_DAYS)
+                _EXPIRING_KEYS_SQL,
+                now,
+                now + timedelta(days=KEY_EXPIRY_ALERT_MAX_DAYS),
+                now + timedelta(days=self.default_days or 0),
             )
         )
         keys: Final = tuple(key for row in rows if (key := _key_or_none(row)) is not None)
@@ -136,14 +141,17 @@ class KeyExpiryAlertManager:
         if remaining <= timedelta(0):
             return
         metadata: Final = _metadata(key.metadata)
-        thresholds: Final = key_expiry_alert_days(metadata.get("key_expiry_alert_days"))
-        due: Final = min((day for day in thresholds or () if remaining <= timedelta(days=day)), default=None)
-        if due is None:
+        days: Final = (
+            key_expiry_alert_days(metadata["key_expiry_alert_days"])
+            if "key_expiry_alert_days" in metadata
+            else self.default_days
+        )
+        if days is None or remaining > timedelta(days=days):
             return
         owner_email: Final = owner_emails.get(key.user_id)
         if not owner_email:
             return
-        claim: Final = f"key_expiry_alert:{key.token}:{expires.isoformat()}:{due}"
+        claim: Final = f"key_expiry_alert:{key.token}:{expires.isoformat()}:{days}"
         count: Final = await self.cache.async_increment_cache(
             key=claim, value=1, ttl=math.ceil(remaining.total_seconds()) + 60
         )

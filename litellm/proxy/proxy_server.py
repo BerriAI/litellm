@@ -12238,6 +12238,17 @@ class ProxyStartupEvent:
                 KeyExpiryEmailLogger,
                 key_expiry_email_logger_type,
             )
+            from litellm.proxy.common_utils.key_expiry_alerts import (
+                KEY_EXPIRY_ALERT_DAYS_ERROR,
+                key_expiry_alert_days,
+            )
+
+            configured_expiry_days: Final = _GENERAL_SETTINGS_VIEW.validate_python(general_settings).get(
+                "key_expiry_alert_days"
+            )
+            default_expiry_days: Final = key_expiry_alert_days(configured_expiry_days)
+            if configured_expiry_days is not None and default_expiry_days is None:
+                raise ValueError(f"general_settings.{KEY_EXPIRY_ALERT_DAYS_ERROR}")
 
             expiry_email_loggers: Final = litellm.logging_callback_manager.get_custom_loggers_for_type(
                 callback_type=key_expiry_email_logger_type()
@@ -12253,6 +12264,7 @@ class ProxyStartupEvent:
                         prisma_client=prisma_client,
                         cache=proxy_logging_obj.internal_usage_cache.dual_cache,
                         email_logger=expiry_email_logger,
+                        default_days=default_expiry_days,
                     )
                     scheduler.add_job(  # pyright: ignore[reportUnknownMemberType]  # APScheduler stubs are incomplete
                         expiry_alert_manager.process_alerts,

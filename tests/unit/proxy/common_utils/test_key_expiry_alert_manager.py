@@ -22,7 +22,7 @@ def _key(**updates: object) -> dict[str, object]:
         "user_id": "owner",
         "key_alias": "build key",
         "expires": NOW + timedelta(days=6),
-        "metadata": json.dumps({"key_expiry_alert_days": [7, 1]}),
+        "metadata": json.dumps({"key_expiry_alert_days": 7}),
         **updates,
     }
 
@@ -50,12 +50,12 @@ async def test_database_query_filters_opt_in_and_batches_distinct_owners(clock_t
     email: Final = MagicMock(send_key_expiring_email=AsyncMock())
     await KeyExpiryAlertManager(db, DualCache(), email, lambda: clock_time).process_alerts()
     db.db.query_raw.assert_awaited_once()
-    query, start, end = db.db.query_raw.call_args.args
+    query, start, end, default_end = db.db.query_raw.call_args.args
     assert "SELECT token, key_alias, key_name, user_id, expires, metadata" in query
-    assert "metadata ? 'key_expiry_alert_days'" in query
     assert "expires IS NOT NULL AND expires > $1::timestamp AND expires <= $2::timestamp" in query
+    assert "(metadata ? 'key_expiry_alert_days' OR expires <= $3::timestamp)" in query
     assert "user_id IS NOT NULL AND (blocked = FALSE OR blocked IS NULL)" in query
-    assert (start, end) == (NOW, NOW + timedelta(days=KEY_EXPIRY_ALERT_MAX_DAYS))
+    assert (start, end, default_end) == (NOW, NOW + timedelta(days=KEY_EXPIRY_ALERT_MAX_DAYS), NOW)
     assert start.tzinfo is timezone.utc
     assert end.tzinfo is timezone.utc
     db.db.litellm_usertable.find_many.assert_awaited_once_with(where={"user_id": {"in": ["owner", "second-owner"]}})
@@ -125,7 +125,7 @@ async def test_query_failure_does_not_send_or_fetch_owners() -> None:
 
 
 @pytest.mark.asyncio
-async def test_shared_claim_sends_once_per_due_threshold_and_new_expiry_rearms() -> None:
+async def test_shared_claim_sends_once_per_expiry_and_new_expiry_rearms() -> None:
     db: Final = _database((_key(),))
     cache: Final = DualCache()
     email: Final = MagicMock(send_key_expiring_email=AsyncMock())
@@ -136,11 +136,10 @@ async def test_shared_claim_sends_once_per_due_threshold_and_new_expiry_rearms()
     assert email.send_key_expiring_email.await_count == 1
     later: Final = KeyExpiryAlertManager(db, cache, email, lambda: NOW + timedelta(days=5))
     await later.process_alerts()
-    await later.process_alerts()
-    assert email.send_key_expiring_email.await_count == 2
+    assert email.send_key_expiring_email.await_count == 1
     db.db.query_raw.return_value = (_key(expires=NOW + timedelta(days=7)),)
     await first.process_alerts()
-    assert email.send_key_expiring_email.await_count == 3
+    assert email.send_key_expiring_email.await_count == 2
     assert email.send_key_expiring_email.call_args.kwargs == {
         "user_id": "owner",
         "user_email": "owner@example.com",
@@ -150,20 +149,33 @@ async def test_shared_claim_sends_once_per_due_threshold_and_new_expiry_rearms()
     }
 
 
+@pytest.mark.parametrize(
+    ("metadata", "default_days", "sends"),
+    [
+        ({}, 7, True),
+        ({}, 5, False),
+        ({}, None, False),
+        ({"key_expiry_alert_days": 1}, 7, False),
+        ({"key_expiry_alert_days": 7}, 1, True),
+        ({"key_expiry_alert_days": 7}, None, True),
+    ],
+)
 @pytest.mark.asyncio
-async def test_only_smallest_due_threshold_is_claimed() -> None:
-    db: Final = _database((_key(expires=NOW + timedelta(hours=12)),))
-    cache: Final = DualCache()
+async def test_key_metadata_overrides_global_default(
+    metadata: dict[str, int], default_days: int | None, sends: bool
+) -> None:
+    db: Final = _database((_key(metadata=json.dumps(metadata)),))
     email: Final = MagicMock(send_key_expiring_email=AsyncMock())
-    manager: Final = KeyExpiryAlertManager(db, cache, email, lambda: NOW)
-    await manager.process_alerts()
-    assert email.send_key_expiring_email.await_count == 1
-    assert email.send_key_expiring_email.call_args.kwargs["days_remaining"] == 1
-    seven_day_db: Final = _database(
-        (_key(expires=NOW + timedelta(hours=12), metadata=json.dumps({"key_expiry_alert_days": [7]})),)
-    )
-    await KeyExpiryAlertManager(seven_day_db, cache, email, lambda: NOW).process_alerts()
-    assert email.send_key_expiring_email.await_count == 2
+    await KeyExpiryAlertManager(db, DualCache(), email, lambda: NOW, default_days).process_alerts()
+    assert email.send_key_expiring_email.await_count == int(sends)
+
+
+@pytest.mark.asyncio
+async def test_global_default_widens_query_to_keys_without_metadata() -> None:
+    db: Final = _database(())
+    email: Final = MagicMock(send_key_expiring_email=AsyncMock())
+    await KeyExpiryAlertManager(db, DualCache(), email, lambda: NOW, 7).process_alerts()
+    assert db.db.query_raw.call_args.args[3] == NOW + timedelta(days=7)
 
 
 @pytest.mark.parametrize(
@@ -173,8 +185,8 @@ async def test_only_smallest_due_threshold_is_claimed() -> None:
         {"expires": NOW},
         {"expires": NOW - timedelta(seconds=1)},
         {"metadata": "{}"},
-        {"metadata": '{"key_expiry_alert_days": []}'},
-        {"metadata": '{"key_expiry_alert_days": [true]}'},
+        {"metadata": '{"key_expiry_alert_days": [7]}'},
+        {"metadata": '{"key_expiry_alert_days": true}'},
         {"expires": NOW + timedelta(days=8)},
     ],
 )
