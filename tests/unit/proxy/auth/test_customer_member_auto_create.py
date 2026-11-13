@@ -75,3 +75,20 @@ async def test_an_organization_without_a_default_budget_cannot_register_members(
 @pytest.mark.asyncio
 async def test_an_unknown_organization_cannot_register_members() -> None:
     assert await ensure_customer_member("ghost", "user-7", _prisma(Database())) == Failure(ErrorCode.PARENT_NOT_FOUND)
+
+
+@pytest.mark.asyncio
+async def test_a_default_team_id_owned_by_another_organization_cannot_receive_members() -> None:
+    database: Final = Database()
+    await _organization(database, "org-1")
+    await _organization(database, "org-2")
+    team: Final = await CustomerHierarchy(_prisma(database), clock=lambda: NOW).create_team(
+        TeamCreate(customer_team_id=default_team_id("org-1"), parent_org_id="org-2"), "admin"
+    )
+    assert not isinstance(team, Failure)
+
+    result: Final = await ensure_customer_member("org-1", "new-member", _prisma(database))
+
+    assert result == Failure(ErrorCode.FORBIDDEN)
+    assert database.litellm_customermembertable.rows == {}
+    assert tuple(database.litellm_customerteamtable.rows) == (team.customer_team_id,)

@@ -23,17 +23,25 @@ def default_team_id(customer_org_id: str) -> str:
     return f"{customer_org_id}:{DEFAULT_TEAM_ALIAS}"
 
 
+def _owned_default_team(team: Team | Failure, customer_org_id: str) -> Team | Failure:
+    if isinstance(team, Failure):
+        return team
+    if team.parent_org_id != customer_org_id:
+        return Failure(ErrorCode.FORBIDDEN)
+    return team
+
+
 async def _default_team(hierarchy: CustomerHierarchy, customer_org_id: str) -> Team | Failure:
     team_id: Final = default_team_id(customer_org_id)
     existing: Final = await hierarchy.get_team(team_id)
     if not isinstance(existing, Failure):
-        return existing
+        return _owned_default_team(existing, customer_org_id)
     created: Final = await hierarchy.create_team(
         TeamCreate(customer_team_id=team_id, alias=DEFAULT_TEAM_ALIAS, parent_org_id=customer_org_id),
         AUTO_CREATE_ACTOR,
     )
     if isinstance(created, Failure) and created.code is ErrorCode.ALREADY_EXISTS:
-        return await hierarchy.get_team(team_id)
+        return _owned_default_team(await hierarchy.get_team(team_id), customer_org_id)
     return created
 
 
