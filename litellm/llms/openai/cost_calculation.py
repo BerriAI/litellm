@@ -162,6 +162,10 @@ def video_generation_cost(
     if model_info is None:
         model_info = get_model_info(model=model, custom_llm_provider=custom_llm_provider or "openai")
 
+    video_cost: Final = model_info.get("output_cost_per_video")
+    if video_cost is not None:
+        return video_cost
+
     # Check for video-specific cost per second
     video_cost_per_second: Final = model_info.get("output_cost_per_video_per_second")
     if video_cost_per_second is not None:

@@ -24,6 +24,7 @@ from litellm.models.performance_alert import (
 )
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.repositories.alert_repository import record_alerts
+from litellm.repositories.config_repository import ConfigRepository
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -80,33 +81,18 @@ class _Source:
     resource_id: LiteralString
     requests: LiteralString
     filter: LiteralString
-    exists: LiteralString
 
 
 _SOURCES: Final[Mapping[PerformanceScope, _Source]] = {
-    "gateway": _Source('"LiteLLM_DailyModelUsage"', "'gateway'", "request_count", "", "true"),
-    "model": _Source('"LiteLLM_DailyModelUsage"', "model_group", "request_count", "", "true"),
-    "team": _Source(
-        '"LiteLLM_DailyTeamSpend"',
-        "team_id",
-        "api_requests",
-        "",
-        'EXISTS (SELECT 1 FROM "LiteLLM_TeamTable" t WHERE t.team_id = page.resource_id AND NOT t.blocked)',
-    ),
-    "user": _Source(
-        '"LiteLLM_DailyUserSpend"',
-        "user_id",
-        "api_requests",
-        "",
-        'EXISTS (SELECT 1 FROM "LiteLLM_UserTable" u WHERE u.user_id = page.resource_id)',
-    ),
+    "gateway": _Source('"LiteLLM_DailyModelUsage"', "'gateway'", "request_count", ""),
+    "model": _Source('"LiteLLM_DailyModelUsage"', "model_group", "request_count", ""),
+    "team": _Source('"LiteLLM_DailyTeamSpend"', "team_id", "api_requests", ""),
+    "user": _Source('"LiteLLM_DailyUserSpend"', "user_id", "api_requests", ""),
     "key": _Source(
         '"LiteLLM_DailyUserSpend"',
         "api_key",
         "api_requests",
         " AND api_key ~ '^[0-9a-f]{64}$'",
-        'EXISTS (SELECT 1 FROM "LiteLLM_VerificationToken" k WHERE k.token = page.resource_id'
-        " AND k.blocked IS NOT TRUE AND (k.expires IS NULL OR k.expires > now()))",
     ),
 }
 
@@ -127,8 +113,7 @@ def _page_sql(scope: PerformanceScope, wrapped: bool) -> LiteralString:
         if scope == "gateway"
         else f" GROUP BY {source.resource_id} ORDER BY {source.resource_id}"
     )
-    return f"""WITH page AS (
-    SELECT {source.resource_id} AS resource_id,
+    return f"""SELECT {source.resource_id} AS resource_id,
         COALESCE(SUM(spend) FILTER (WHERE date = $1), 0)::float8 AS spend,
         COALESCE(SUM(spend) FILTER (WHERE date < $1), 0)::float8 AS base_spend,
         COALESCE(SUM({source.requests}) FILTER (WHERE date = $1), 0)::bigint AS requests,
@@ -143,9 +128,7 @@ def _page_sql(scope: PerformanceScope, wrapped: bool) -> LiteralString:
         COUNT(DISTINCT date) FILTER (WHERE date < $1 AND timed_requests > 0) AS timed_days
     FROM {source.table}
     WHERE date BETWEEN $2 AND $1{where}{group}
-    LIMIT $3::int
-)
-SELECT page.*, {source.exists} AS exists FROM page ORDER BY resource_id"""
+    LIMIT $3::int"""
 
 
 def _next_id_sql(scope: PerformanceScope, wrapped: bool) -> LiteralString:
@@ -179,6 +162,7 @@ class PerformanceAlertRepository:
         )
         self._enterprise: Final = enterprise
         self._configured: Final = configured
+        self._config: Final = ConfigRepository(prisma_client, use_writer=True)
 
     async def _monitoring(self, transaction: _Transaction, *, lock: bool = False) -> AlertMonitoring:
         query: Final = 'SELECT enabled, alerts_used FROM "LiteLLM_PerformanceAlertState" WHERE id = 1'
@@ -208,7 +192,14 @@ class PerformanceAlertRepository:
 
     async def monitoring(self) -> AlertMonitoring:
         async with self._transaction() as transaction:
-            return await self._monitoring(transaction)
+            monitoring: Final = await self._monitoring(transaction)
+        return monitoring.model_copy(
+            update={"model_deprecations_enabled": await self._config.model_deprecations_enabled()}
+        )
+
+    async def set_model_deprecations_enabled(self, enabled: bool) -> AlertMonitoring:
+        await self._config.set_model_deprecations_enabled(enabled)
+        return await self.monitoring()
 
     async def set_enabled(self, enabled: bool) -> AlertMonitoring:
         async with self._database.tx(timeout=timedelta(seconds=10)) as transaction:
@@ -221,7 +212,7 @@ class PerformanceAlertRepository:
                 updated_at = now() AT TIME ZONE 'UTC' WHERE id = 1""",
                 enabled,
             )
-            return await self._monitoring(transaction)
+        return await self.monitoring()
 
     @asynccontextmanager
     async def _transaction(self) -> AsyncGenerator[_Transaction]:

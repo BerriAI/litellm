@@ -2,7 +2,7 @@ import json
 import asyncio
 import datetime
 import time
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 from typing import Final, Literal, cast
@@ -524,6 +524,204 @@ def test_completion_cost_bills_priced_response_model_over_priced_requested_model
     )
 
     assert cost == pytest.approx(_token_rates_cost(litellm.model_cost["openai/sol-requested-test-2099-01-01"], usage))
+
+
+_BEDROCK_PROFILE_GLOBAL_RATES: Final = MappingProxyType(
+    {
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 5e-6,
+        "cache_read_input_token_cost": 1e-7,
+        "cache_creation_input_token_cost": 1.25e-6,
+    }
+)
+_BEDROCK_PROFILE_MODEL: Final = "anthropic.bedrock-profile-test-v1:0"
+_BEDROCK_PROFILE_RATE_MULTIPLIERS: Final = MappingProxyType(
+    {
+        _BEDROCK_PROFILE_MODEL: 1.0,
+        f"eu.{_BEDROCK_PROFILE_MODEL}": 1.1,
+        f"us.{_BEDROCK_PROFILE_MODEL}": 1.2,
+        f"jp.{_BEDROCK_PROFILE_MODEL}": 1.3,
+        f"global.{_BEDROCK_PROFILE_MODEL}": 0.9,
+        "anthropic.bedrock-profile-other-test-v1:0": 3.0,
+        "anthropic.bedrock-profile-unpriced-test-v1:0": 1.0,
+        "bedrock-profile-router-test": 5.0,
+    }
+)
+_BEDROCK_PROFILE_CACHE_USAGE: Final = MappingProxyType(
+    {"cache_creation_input_tokens": 2000, "cache_read_input_tokens": 24000}
+)
+
+
+@pytest.fixture
+def _bedrock_profile_rows(_local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    for key, multiplier in _BEDROCK_PROFILE_RATE_MULTIPLIERS.items():
+        monkeypatch.setitem(
+            litellm.model_cost,
+            key,
+            {
+                "litellm_provider": "bedrock_converse",
+                "mode": "chat",
+                **{field: rate * multiplier for field, rate in _BEDROCK_PROFILE_GLOBAL_RATES.items()},
+            },
+        )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "eu.anthropic.bedrock-profile-unpriced-test-v1:0",
+        {"litellm_provider": "bedrock_converse", "mode": "chat"},
+    )
+
+
+def _bedrock_messages_body(model: str) -> dict[str, object]:
+    return {
+        "id": "msg_bdrk_profile",
+        "type": "message",
+        "role": "assistant",
+        "model": model,
+        "content": [{"type": "text", "text": "hi"}],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 18, "output_tokens": 4, **_BEDROCK_PROFILE_CACHE_USAGE},
+    }
+
+
+def _bedrock_stream_response(model: str) -> ModelResponse:
+    cached: Final = _BEDROCK_PROFILE_CACHE_USAGE["cache_read_input_tokens"]
+    written: Final = _BEDROCK_PROFILE_CACHE_USAGE["cache_creation_input_tokens"]
+    return ModelResponse(
+        model=model,
+        choices=[],
+        usage=Usage(
+            prompt_tokens=18 + cached + written,
+            completion_tokens=4,
+            total_tokens=22 + cached + written,
+            cache_creation_input_tokens=written,
+            cache_read_input_tokens=cached,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached),
+        ),
+    )
+
+
+def _bedrock_private_route_response(model: str) -> ModelResponse:
+    response: Final = _bedrock_stream_response("bedrock-profile-alias")
+    response._hidden_params = {"custom_llm_provider": "bedrock", "provider_response_model": model}
+    return response
+
+
+def _bedrock_global_cost(served_shape: Callable[[str], object]) -> float:
+    return completion_cost(
+        completion_response=served_shape(_BEDROCK_PROFILE_MODEL),
+        model=f"bedrock/{_BEDROCK_PROFILE_MODEL}",
+        custom_llm_provider="bedrock",
+    )
+
+
+_BEDROCK_SERVED_SHAPES: Final = (
+    pytest.param(_bedrock_messages_body, id="non-streaming"),
+    pytest.param(_bedrock_stream_response, id="streaming"),
+    pytest.param(_bedrock_private_route_response, id="private-provider-response-model"),
+)
+
+
+@pytest.mark.parametrize("served_shape", _BEDROCK_SERVED_SHAPES)
+@pytest.mark.parametrize("route", ["bedrock/", "bedrock/invoke/"])
+@pytest.mark.parametrize("region", ["eu", "us", "jp"])
+def test_completion_cost_bills_bedrock_cross_region_profile_when_bedrock_serves_the_region_stripped_id(
+    _bedrock_profile_rows: None, region: str, route: str, served_shape: Callable[[str], object]
+) -> None:
+    profile: Final = f"{region}.{_BEDROCK_PROFILE_MODEL}"
+
+    cost: Final = completion_cost(
+        completion_response=served_shape(_BEDROCK_PROFILE_MODEL),
+        model=f"{route}{profile}",
+        custom_llm_provider="bedrock",
+    )
+
+    assert cost == pytest.approx(_bedrock_global_cost(served_shape) * _BEDROCK_PROFILE_RATE_MULTIPLIERS[profile])
+
+
+@pytest.mark.parametrize("served_shape", _BEDROCK_SERVED_SHAPES)
+@pytest.mark.parametrize(
+    ("deployment", "served_model"),
+    [
+        pytest.param(f"bedrock/eu.{_BEDROCK_PROFILE_MODEL}", f"us.{_BEDROCK_PROFILE_MODEL}", id="other-region"),
+        pytest.param(f"bedrock/eu.{_BEDROCK_PROFILE_MODEL}", f"global.{_BEDROCK_PROFILE_MODEL}", id="global-profile"),
+        pytest.param(
+            f"bedrock/jp.{_BEDROCK_PROFILE_MODEL}", "anthropic.bedrock-profile-other-test-v1:0", id="other-model"
+        ),
+        pytest.param(
+            "bedrock/eu.anthropic.bedrock-profile-unpriced-test-v1:0",
+            "anthropic.bedrock-profile-unpriced-test-v1:0",
+            id="unpriced-profile",
+        ),
+    ],
+)
+def test_completion_cost_keeps_the_served_bedrock_row_unless_it_is_the_region_stripped_profile(
+    _bedrock_profile_rows: None, deployment: str, served_model: str, served_shape: Callable[[str], object]
+) -> None:
+    cost: Final = completion_cost(
+        completion_response=served_shape(served_model),
+        model=deployment,
+        custom_llm_provider="bedrock",
+    )
+
+    assert cost == pytest.approx(_bedrock_global_cost(served_shape) * _BEDROCK_PROFILE_RATE_MULTIPLIERS[served_model])
+
+
+@pytest.mark.parametrize(
+    ("base_model", "custom_pricing", "router_model_id", "priced_row"),
+    [
+        pytest.param(
+            "bedrock/anthropic.bedrock-profile-other-test-v1:0",
+            None,
+            None,
+            "anthropic.bedrock-profile-other-test-v1:0",
+            id="base-model",
+        ),
+        pytest.param(None, True, "bedrock-profile-router-test", "bedrock-profile-router-test", id="custom-pricing"),
+    ],
+)
+def test_completion_cost_explicit_pricing_precedes_the_bedrock_cross_region_profile(
+    _bedrock_profile_rows: None,
+    base_model: str | None,
+    custom_pricing: bool | None,
+    router_model_id: str | None,
+    priced_row: str,
+) -> None:
+    cost: Final = completion_cost(
+        completion_response=_bedrock_messages_body(_BEDROCK_PROFILE_MODEL),
+        model=f"bedrock/eu.{_BEDROCK_PROFILE_MODEL}",
+        custom_llm_provider="bedrock",
+        base_model=base_model,
+        custom_pricing=custom_pricing,
+        router_model_id=router_model_id,
+    )
+
+    assert cost == pytest.approx(
+        _bedrock_global_cost(_bedrock_messages_body) * _BEDROCK_PROFILE_RATE_MULTIPLIERS[priced_row]
+    )
+
+
+def test_completion_cost_keeps_the_served_row_for_a_region_dotted_name_outside_bedrock(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "openai/eu.profile-dotted-test",
+        {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 3e-6, "output_cost_per_token": 7e-6},
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "openai/profile-dotted-test",
+        {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 5e-6, "output_cost_per_token": 11e-6},
+    )
+    usage: Final = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+    cost: Final = completion_cost(
+        completion_response=ModelResponse(model="profile-dotted-test", choices=[], usage=usage),
+        model="openai/eu.profile-dotted-test",
+        custom_llm_provider="openai",
+    )
+
+    assert cost == pytest.approx(_token_rates_cost(litellm.model_cost["openai/profile-dotted-test"], usage))
 
 
 def test_completion_cost_keeps_response_pricing_when_requested_alias_has_no_rates(
@@ -5050,6 +5248,37 @@ def test_completion_cost_bills_interactions_google_search_per_query():
     assert model_info.get("web_search_billing_unit") == "per_query"
     assert cost == pytest.approx(expected)
     assert cost > 3 * per_query_cost
+
+
+def test_completion_cost_bills_an_agent_interaction_at_its_agent_row():
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    agent: Final = "deep-research-preview-04-2026"
+    model_info: Final = litellm.get_model_info(model=agent, custom_llm_provider="vertex_ai")
+    response: Final = InteractionsAPIResponse(
+        id="interactions/agent123",
+        agent=agent,
+        status="completed",
+        usage={
+            "total_input_tokens": 1000,
+            "input_tokens_by_modality": [{"modality": "text", "tokens": 1000}],
+            "total_cached_tokens": 200,
+            "total_output_tokens": 300,
+            "output_tokens_by_modality": [{"modality": "text", "tokens": 300}],
+            "total_thought_tokens": 100,
+            "grounding_tool_count": [{"type": "google_search", "count": 3}],
+        },
+    )
+
+    cost: Final = completion_cost(completion_response=response, custom_llm_provider="vertex_ai")
+
+    assert model_info["key"] == f"vertex_ai/{agent}"
+    assert cost == pytest.approx(
+        800 * model_info["input_cost_per_token"]
+        + 200 * model_info["cache_read_input_token_cost"]
+        + 400 * model_info["output_cost_per_token"]
+        + 3 * model_info["search_context_cost_per_query"]["search_context_size_medium"]
+    )
 
 
 def test_completion_cost_bills_interactions_video_output_at_video_rate():

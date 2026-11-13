@@ -1,6 +1,6 @@
 [project]
 name = "litellm"
-version = "1.110.0"
+version = "1.111.0"
 description = "Library to easily interface with LLM API providers"
 readme = "README.md"
 requires-python = ">=3.10, <3.16"
@@ -87,8 +87,8 @@ proxy = [
     "mcp>=2.3.0,<3",
     "httpx2>=2.10.0,<3",
     "pydantic>=2.12.0,<3",
-    "litellm-proxy-extras==0.4.114",
-    "litellm-enterprise==0.1.83",
+    "litellm-proxy-extras==0.4.115",
+    "litellm-enterprise==0.1.84",
     "RestrictedPython>=8.5,<9.0",
     "rich>=13.9.4,<14.0",
     "InquirerPy>=0.3.4,<1.0",
@@ -329,18 +329,22 @@ benchmarks = [
 
 [build-system]
 requires = ["maturin==1.15.0"]
-build-backend = "maturin"
+build-backend = "build_backend"
+backend-path = [".github/packaging"]
 
 [tool.maturin]
-manifest-path = "litellm-rust/crates/python-bridge/Cargo.toml"
+manifest-path = "litellm/rust/crates/python-bridge/Cargo.toml"
 module-name = "litellm.rust_bridge._native"
 python-source = "."
-python-packages = ["litellm_cli"]
+python-packages = ["litellm"]
 bindings = "pyo3"
 features = ["extension-module"]
 profile = "release"
 editable-profile = "dev"
 include = [
+    { path = ".github/packaging/*.py", format = "sdist" },
+    { path = "litellm/rust/rust-toolchain.toml", format = "sdist" },
+    { path = "litellm/rust/.cargo/config.toml", format = "sdist" },
     "litellm/integrations/prometheus_helpers/grafana_dashboards/**",
     "litellm/proxy/_experimental/out/**",
     "litellm/router_strategy/complexity_router/artifacts/*.json",
@@ -354,6 +358,26 @@ include = [
     { path = "model_prices_and_context_window.json", format = "sdist" },
 ]
 exclude = [
+    "litellm/scripts",
+    "litellm/scripts/**",
+    "litellm/runtime",
+    "litellm/runtime/**",
+    "litellm/schema.prisma",
+    "litellm/enterprise",
+    "litellm/enterprise/**",
+    "litellm/proxy-extras",
+    "litellm/proxy-extras/**",
+    "litellm/packaging",
+    "litellm/packaging/**",
+    { path = "litellm/rust", format = "wheel" },
+    { path = "litellm/rust/**", format = "wheel" },
+    "litellm/rust/target/**",
+    "litellm/deploy",
+    "litellm/deploy/**",
+    "litellm/ui",
+    "litellm/ui/**",
+    "litellm/vscode-extension",
+    "litellm/vscode-extension/**",
     "litellm/proxy/discovery_endpoints/skill_scanner_adapter",
     "litellm/proxy/discovery_endpoints/skill_scanner_adapter/**",
     "litellm/proxy/enterprise",
@@ -373,11 +397,11 @@ concurrent-builds = 1
 cache-keys = [
     { file = "pyproject.toml" },
     { env = "MATURIN_PEP517_ARGS" },
-    { file = "rust-toolchain.toml" },
-    { file = ".cargo/config.toml" },
-    { file = "litellm-rust/Cargo.lock" },
-    { file = "litellm-rust/Cargo.toml" },
-    { file = "litellm-rust/crates/**/*" },
+    { file = "litellm/rust/rust-toolchain.toml" },
+    { file = "litellm/rust/.cargo/config.toml" },
+    { file = "litellm/rust/Cargo.lock" },
+    { file = "litellm/rust/Cargo.toml" },
+    { file = "litellm/rust/crates/**/*" },
     { file = "model_prices_and_context_window.json" },
 ]
 constraint-dependencies = [
@@ -385,7 +409,8 @@ constraint-dependencies = [
     "tornado>=6.6; python_version >= '3.11'",
     "aiohttp>=3.14.2,<4.0",
     "packaging>=24.0",
-    "soupsieve>=2.8.4",
+    "soupsieve>=2.10",
+    "soupsieve>=4.0; python_full_version >= '3.11.5'",
     "httplib2>=0.32.0",
     "setuptools>=84.1.0",
     "dnspython>=2.9.0; python_version >= '3.11'",
@@ -414,16 +439,17 @@ litellm-proxy-extras = { workspace = true }
 litellm-enterprise = { workspace = true }
 
 [tool.uv.workspace]
-members = ["enterprise", "litellm-proxy-extras", "packaging/litellm-proxy"]
+members = ["litellm/enterprise", "litellm/proxy-extras", "litellm/packaging/litellm-proxy"]
 
 [tool.commitizen]
-version = "1.110.0"
+version = "1.111.0"
 version_files = [
     "pyproject.toml:^version",
 ]
 
 [tool.pytest.ini_options]
-pythonpath = ["scripts"]
+norecursedirs = ["*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules", "venv", "{arch}", "**/litellm/ui", "**/litellm/vscode-extension", "**/litellm/enterprise", "**/litellm/proxy-extras", "**/litellm/packaging", "**/litellm/rust", "**/litellm/scripts", "**/litellm/runtime"]
+pythonpath = ["litellm/scripts", "litellm/runtime"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 markers = [
@@ -490,6 +516,7 @@ source = ["litellm"]
 relative_files = true
 
 [tool.ruff]
+src = [".", "litellm/runtime"]
 lint.ignore = ["F405", "E402", "F403"]
 # The second group is the strict gate's graduates: rules the codebase already has zero
 # violations of, so they hard-fail here instead of being counted by the strict gate.
@@ -508,7 +535,7 @@ lint.extend-select = [
 # so RUF100 leaves their directives alone: the strict gate (.github/linters/ruff-strict.toml) and upstream
 # litellm's own ruff config both rely on suppressions this config can't see.
 lint.external = [
-    # Enforced by the strict-rule gate (scripts/ruff_strict_gate.py + .github/linters/ruff-strict.toml).
+    # Enforced by the strict-rule gate (litellm/scripts/ruff_strict_gate.py + .github/linters/ruff-strict.toml).
     # Family entries whose every strict rule graduated into extend-select above (FURB), and
     # standalone graduated codes (I001, RUF010, RUF022, RUF023, RUF051), are dropped so this
     # config's RUF100 polices their directives itself.
@@ -520,7 +547,7 @@ lint.external = [
 ]
 line-length = 120
 
-extend-exclude = ["litellm/proxy/discovery_endpoints/skill_scanner_adapter"]
+extend-exclude = ["litellm/scripts", "litellm/runtime", "litellm/deploy", "litellm/ui", "litellm/vscode-extension", "litellm/enterprise", "litellm/proxy-extras", "litellm/packaging", "litellm/rust", "litellm/proxy/discovery_endpoints/skill_scanner_adapter"]
 
 format.exclude = ["**/enterprise/**"]
 
@@ -550,9 +577,10 @@ banned-module-level-imports = ["prisma"]
 "litellm/proxy/utils.py" = ["F401"]
 
 [tool.pyright]
-include = ["litellm", "litellm_cli"]
+extraPaths = ["litellm/runtime"]
+include = ["litellm"]
 ignore = []
-exclude = ["**/node_modules", "**/__pycache__", "tests/e2e/claude_code", "tests/e2e_harness/claude_code", "tests/e2e/ui", "litellm/types/utils.py", "litellm/proxy/_types.py", "litellm/proxy/discovery_endpoints/skill_scanner_adapter"]
+exclude = ["**/node_modules", "**/__pycache__", "tests/e2e/claude_code", "tests/e2e_harness/claude_code", "tests/e2e/ui", "litellm/types/utils.py", "litellm/proxy/_types.py", "litellm/scripts", "litellm/runtime", "litellm/deploy", "litellm/ui", "litellm/vscode-extension", "litellm/enterprise", "litellm/proxy-extras", "litellm/packaging", "litellm/rust", "litellm/proxy/discovery_endpoints/skill_scanner_adapter"]
 pythonVersion = "3.12"
 typeCheckingMode = "strict"
 enableTypeIgnoreComments = false

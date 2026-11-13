@@ -12,7 +12,7 @@ from litellm.redis.stores.rate_limits import (
     RateLimitScope,
     RateLimitStore,
 )
-from tests.unit.caching.test_redis_batch import FakeNatives, fake_send
+from tests.unit.caching.redis_batch_double import FakeNatives, fake_send
 
 
 @dataclass(frozen=True, slots=True)

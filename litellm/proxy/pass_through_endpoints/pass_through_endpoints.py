@@ -4748,7 +4748,7 @@ async def update_pass_through_endpoints(
     # Find the index for updating the list
     endpoint_index = None
     for idx, endpoint in enumerate(pass_through_endpoint_data):
-        _endpoint = PassThroughGenericEndpoint(**endpoint) if isinstance(endpoint, dict) else endpoint
+        _endpoint = PassThroughGenericEndpoint.model_validate(endpoint) if isinstance(endpoint, dict) else endpoint
         if _endpoint.id == endpoint_id:
             endpoint_index = idx
             break
@@ -4981,7 +4981,7 @@ async def delete_pass_through_endpoints(
     # Find the index for deleting from the list
     endpoint_index = None
     for idx, endpoint in enumerate(pass_through_endpoint_data):
-        _endpoint = PassThroughGenericEndpoint(**endpoint) if isinstance(endpoint, dict) else endpoint
+        _endpoint = PassThroughGenericEndpoint.model_validate(endpoint) if isinstance(endpoint, dict) else endpoint
         if _endpoint.id == endpoint_id:
             endpoint_index = idx
             break
@@ -5029,7 +5029,7 @@ def _find_endpoint_by_id(
     for endpoint in endpoints_data:
         _endpoint: PassThroughGenericEndpoint | None = None
         if isinstance(endpoint, dict):
-            _endpoint = PassThroughGenericEndpoint(**endpoint)
+            _endpoint = PassThroughGenericEndpoint.model_validate(endpoint)
         elif isinstance(endpoint, PassThroughGenericEndpoint):
             _endpoint = endpoint
 
