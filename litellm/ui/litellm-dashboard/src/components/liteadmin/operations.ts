@@ -233,8 +233,8 @@ export function createLiteAdminOperations(context: OperationContext) {
         ? [
             operation("read", "usage")(
               "get_team_usage_data",
-              "View dated usage for your teams. The gateway restricts results to your permitted team usage.",
-              dated({}),
+              "View dated usage for your teams. Select comma-separated team_ids to query specific teams, or omit for all your teams. Query teams you administer separately to see their full permitted totals. The gateway enforces team membership and usage permissions.",
+              dated({ team_ids: optionalText }),
               (a) =>
                 apiClient.get<unknown>("/team/daily/activity/aggregated", {
                   ...auth,

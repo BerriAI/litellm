@@ -5,8 +5,19 @@ import { createQueryKeys } from "../common/queryKeysFactory";
 const uiSettingsKeys = createQueryKeys("uiSettings");
 
 export type AriaInternalUserAccess = "none" | "own_usage" | "own_and_team_usage";
-type UISettings = Record<string, any> & {
-  values?: Record<string, any> & { aria_internal_user_access?: AriaInternalUserAccess };
+type UISettings = {
+  values?: Record<string, unknown> & {
+    aria_internal_user_access?: AriaInternalUserAccess;
+    disable_aria?: boolean;
+    enabled_ui_pages_internal_users?: string[] | null;
+    usage_default_time_range?: string;
+    moyai_url?: string | null;
+  };
+  field_schema?: {
+    description?: string;
+    properties?: Record<string, { description?: string }>;
+  };
+  source?: Record<string, "config" | "db" | "env" | "default" | "unset">;
 };
 
 /**
