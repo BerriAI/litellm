@@ -67,8 +67,8 @@ class MemberPatch(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     alias: str | None = None
+    budget_id: str | None = None
     budget_override: Budget | None = None
-    budget_template_id: str | None = None
     budget_override_expires_at: AwareDatetime | None = None
 
 
@@ -109,7 +109,7 @@ class CustomerMember(AuditFields):
     customer_member_id: str
     parent_team_id: str
     budget_id: str | None = None
-    budget_template_id: str | None = None
+    budget_override_id: str | None = None
     budget_override: Budget | None = None
     budget_override_expires_at: datetime | None = None
     effective_budget: Budget

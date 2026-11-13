@@ -33137,10 +33137,10 @@ export interface components {
             budget_override?: components["schemas"]["Budget"] | null;
             /** Budget Override Expires At */
             budget_override_expires_at?: string | null;
+            /** Budget Override Id */
+            budget_override_id?: string | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
-            /** Budget Template Id */
-            budget_template_id?: string | null;
             /**
              * Created At
              * Format: date-time
@@ -40405,11 +40405,11 @@ export interface components {
         MemberCreate: {
             /** Alias */
             alias?: string | null;
+            /** Budget Id */
+            budget_id?: string | null;
             budget_override?: components["schemas"]["Budget"] | null;
             /** Budget Override Expires At */
             budget_override_expires_at?: string | null;
-            /** Budget Template Id */
-            budget_template_id?: string | null;
             /** Customer Member Id */
             customer_member_id?: string | null;
             /** Parent Team Id */
@@ -40419,11 +40419,11 @@ export interface components {
         MemberPatch: {
             /** Alias */
             alias?: string | null;
+            /** Budget Id */
+            budget_id?: string | null;
             budget_override?: components["schemas"]["Budget"] | null;
             /** Budget Override Expires At */
             budget_override_expires_at?: string | null;
-            /** Budget Template Id */
-            budget_template_id?: string | null;
         };
         /** MemoryCreateRequest */
         MemoryCreateRequest: {
