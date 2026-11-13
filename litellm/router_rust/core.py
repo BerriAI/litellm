@@ -569,9 +569,7 @@ def attempt_failure(error: BaseException) -> Mapping[str, object]:
 
 def _sent_tool_calls(error: BaseException) -> bool:
     wrapped: Final[object] = getattr(error, "original_exception", None)
-    return sent_tool_calls_before(error) or (
-        isinstance(wrapped, BaseException) and sent_tool_calls_before(wrapped)
-    )
+    return sent_tool_calls_before(error) or (isinstance(wrapped, BaseException) and sent_tool_calls_before(wrapped))
 
 
 def total_tokens(response: object) -> int:
