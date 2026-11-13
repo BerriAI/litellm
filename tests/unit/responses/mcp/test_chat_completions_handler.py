@@ -23,9 +23,13 @@ from starlette.responses import StreamingResponse
 from starlette.types import Message
 
 import litellm
+from litellm import Router
+from litellm.exceptions import GuardrailRaisedException
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.mcp_server.faults.list_outcomes import AggregateToolListing
 from litellm.responses.mcp import chat_completions_handler
 from litellm.responses.mcp.chat_completions_handler import (
@@ -35,9 +39,18 @@ from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.utils import ModelResponse, ModelResponseStream, StandardLoggingPayload, Usage
 from litellm.utils import CustomStreamWrapper
+from tests._support.mcp_ledger_gateway import (
+    LEDGER_MODEL,
+    LEDGER_TOOLS,
+    Ledger,
+    ModelUpstream,
+    ledger_router,
+    serve_ledger,
+)
 
 
 @pytest.mark.asyncio
@@ -3115,3 +3128,87 @@ async def test_a_gateway_mcp_entry_that_allows_no_converted_tool_sends_none_and_
 
     assert sent == ("none",)
     call_tool.assert_not_awaited()
+
+
+class _BlockEveryLedgerCall(CustomGuardrail):
+    async def async_pre_call_hook(
+        self, user_api_key_dict: object, cache: object, data: dict[str, object], call_type: object
+    ) -> dict[str, object]:
+        if self.should_run_guardrail(data, GuardrailEventHooks.pre_mcp_call):
+            raise GuardrailRaisedException(message="ledger writes are blocked", blocked_content=True)
+        return data
+
+
+async def _complete_through_the_router(router: Router, auth: UserAPIKeyAuth, stream: bool) -> object:
+    response: Final = await router.acompletion(
+        model=LEDGER_MODEL,
+        messages=[{"role": "user", "content": "write alpha"}],
+        tools=list(LEDGER_TOOLS),
+        user_api_key_auth=auth,
+        stream=stream,
+    )
+    if not stream:
+        return response
+    return [chunk async for chunk in cast(AsyncIterator[object], response)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
+@pytest.mark.parametrize(
+    ("tool_calls", "tool_error"),
+    [(1, None), (2, None), (1, ConnectionError("connection reset after the call was sent"))],
+    ids=["one_tool", "two_tools", "tool_outcome_unknown"],
+)
+async def test_a_failed_continuation_after_a_sent_mcp_tool_call_is_returned_without_running_the_tool_again(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    stream: bool,
+    tool_calls: int,
+    tool_error: Exception | None,
+) -> None:
+    ledger: Final = Ledger(raises=tool_error)
+    auth: Final = serve_ledger(monkeypatch, ledger)
+    upstream: Final = ModelUpstream(tool_calls=tool_calls, continuation_fails=True)
+    router: Final = ledger_router(respx_mock, monkeypatch, upstream)
+
+    with pytest.raises(litellm.InternalServerError):
+        await _complete_through_the_router(router, auth, stream)
+
+    assert ledger.calls == tool_calls
+    assert (upstream.initial_calls, upstream.continuation_calls) == (1, 1)
+
+
+@pytest.mark.asyncio
+async def test_a_failed_continuation_after_every_mcp_tool_call_was_blocked_is_still_retried(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ledger: Final = Ledger()
+    auth: Final = serve_ledger(monkeypatch, ledger)
+    monkeypatch.setattr(
+        litellm, "callbacks", [_BlockEveryLedgerCall(guardrail_name="block-ledger", event_hook="pre_mcp_call")]
+    )
+    upstream: Final = ModelUpstream(tool_calls=1, continuation_fails=True)
+    router: Final = ledger_router(respx_mock, monkeypatch, upstream)
+
+    with pytest.raises(litellm.InternalServerError):
+        await _complete_through_the_router(router, auth, stream=False)
+
+    assert ledger.calls == 0
+    assert upstream.continuation_calls > 1
+    assert upstream.initial_calls == upstream.continuation_calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
+async def test_a_continuation_that_succeeds_after_a_sent_mcp_tool_call_runs_the_tool_once(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, stream: bool
+) -> None:
+    ledger: Final = Ledger()
+    auth: Final = serve_ledger(monkeypatch, ledger)
+    upstream: Final = ModelUpstream(tool_calls=1, continuation_fails=False)
+    router: Final = ledger_router(respx_mock, monkeypatch, upstream)
+
+    await _complete_through_the_router(router, auth, stream)
+
+    assert ledger.calls == 1
+    assert (upstream.initial_calls, upstream.continuation_calls) == (1, 1)

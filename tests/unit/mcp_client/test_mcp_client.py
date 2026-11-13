@@ -5307,7 +5307,9 @@ async def test_a_skipped_validation_passes_the_upstreams_result_through_unchange
     assert result.structured_content == {"n": "not-an-integer"}
 
 
-def _answering_with_an_error(method: str, upstream: Callable[[httpx2.Request], httpx2.Response]):
+def _answering_with_an_error(
+    method: str, upstream: Callable[[httpx2.Request], httpx2.Response]
+) -> Callable[[httpx2.Request], httpx2.Response]:
     def respond(request: httpx2.Request) -> httpx2.Response:
         received: Final = upstream(request)
         if request.method != "POST":
