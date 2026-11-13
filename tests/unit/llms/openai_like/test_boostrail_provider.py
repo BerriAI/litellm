@@ -158,6 +158,42 @@ def test_boostrail_chat_completion_request():
     assert response.choices[0].message.content == "Hello from BoostRail"
 
 
+_WEATHER_TOOL: Final = {
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+    },
+}
+
+
+def test_boostrail_model_missing_from_cost_map_uses_provider_defaults():
+    from litellm.utils import supports_function_calling, supports_reasoning
+
+    assert supports_function_calling("boostrail/a-model-not-in-the-cost-map") is True
+    assert supports_reasoning("boostrail/a-model-not-in-the-cost-map") is True
+
+
+@pytest.mark.parametrize("reasoning_effort", ["none", "high"])
+def test_boostrail_chat_completion_forwards_tools_and_reasoning_effort(reasoning_effort: str):
+    with respx.mock() as upstream:
+        route: Final = upstream.post(f"{_BASE}/chat/completions").respond(200, json=_CHAT_COMPLETION)
+        litellm.completion(
+            model="boostrail/deepseek-v4.1-flash",
+            messages=[{"role": "user", "content": "What is the weather in Auckland?"}],
+            tools=[_WEATHER_TOOL],
+            tool_choice="required",
+            reasoning_effort=reasoning_effort,
+            api_key="boostrail-test-key",
+        )
+
+    body: Final = json.loads(route.calls.last.request.content)
+    assert route.call_count == 1
+    assert body["tools"] == [_WEATHER_TOOL]
+    assert body["tool_choice"] == "required"
+    assert body["reasoning_effort"] == reasoning_effort
+
+
 def test_boostrail_responses_request():
     with respx.mock() as upstream:
         route: Final = upstream.post(f"{_BASE}/responses").respond(

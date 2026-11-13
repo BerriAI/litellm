@@ -319,6 +319,10 @@
     "base_url": "https://api.boostrail.com/v1",
     "api_key_env": "BOOSTRAIL_API_KEY",
     "api_base_env": "BOOSTRAIL_API_BASE",
+    "provider_info": {
+      "supports_function_calling": true,
+      "supports_reasoning": true
+    },
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"]
   }
 }
