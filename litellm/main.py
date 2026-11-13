@@ -640,20 +640,15 @@ class AsyncCompletions:
         return response
 
 
-def _reject_decisions_only_chat_completion(model: str, request_kwargs: Mapping[str, object]) -> None:
+def _reject_decisions_only_chat_completion(model: str, model_info: object) -> None:
     """Fail fast when chat completions target a decisions-only deployment.
 
     A deployment whose model_info.mode is "decisions" or "evaluation" serves the Decisions
     API only. Without this check the call forwards to the upstream /chat/completions route
     the decision server does not expose and the caller gets an opaque upstream 404.
     """
-    model_info: object | None = request_kwargs.get("model_info")
-    info: Mapping[str, object] | None = (
-        cast(Mapping[str, object], model_info)  # cast-ok: isinstance narrows to a bare Mapping
-        if isinstance(model_info, Mapping)
-        else None
-    )
-    mode: object | None = info.get("mode") if info is not None else None
+    info: Final = as_str_mapping(model_info)
+    mode: Final = None if info is None else info.get("mode")
     if not isinstance(mode, str) or not is_decisions_model_mode(mode):
         return
     raise litellm.BadRequestError(
@@ -783,7 +778,7 @@ async def acompletion(
     custom_llm_provider = kwargs.get("custom_llm_provider", None)
     _ = _resolve_control_options(kwargs, model)
     caller_kwargs: Final = cast("Mapping[str, object]", {**kwargs})  # cast-ok: acompletion takes untyped kwargs
-    _reject_decisions_only_chat_completion(model, caller_kwargs)
+    _reject_decisions_only_chat_completion(model, kwargs.get("model_info"))
 
     ## PROMPT MANAGEMENT HOOKS ##
     #########################################################
@@ -5636,8 +5631,7 @@ def completion(
     ### VALIDATE Request ###
     if model is None:
         raise ValueError("model param not passed in.")
-    caller_kwargs: Final = cast("Mapping[str, object]", {**kwargs})  # cast-ok: completion takes untyped kwargs
-    _reject_decisions_only_chat_completion(model, caller_kwargs)
+    _reject_decisions_only_chat_completion(model, kwargs.get("model_info"))
     # validate messages
     messages = validate_and_fix_openai_messages(messages=messages)
     tools = validate_and_fix_openai_tools(tools=tools)
