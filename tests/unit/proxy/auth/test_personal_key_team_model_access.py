@@ -317,12 +317,15 @@ async def test_dashboard_lists_and_calls_own_and_team_models(
         token="dashboard-key",
         user_id="u1",
         team_id=UI_TEAM_ID,
-        models=own_models,
+        models=[],
         user_role=LitellmUserRoles.INTERNAL_USER,
     )
     assert set(await _list_models(monkeypatch, owner, token)) == expected
     for model in ("gpt-a", "gpt-b", "shared", "gpt-c"):
         if model in expected:
+            await auth_checks.can_key_call_model(
+                model=model, llm_model_list=None, valid_token=token, llm_router=_ROUTER
+            )
             await can_key_call_resolved_model(model=model, llm_model_list=None, valid_token=token, llm_router=_ROUTER)
             assert await _common_checks(model, owner, token) is True
         else:
@@ -331,6 +334,12 @@ async def test_dashboard_lists_and_calls_own_and_team_models(
                     model=model, llm_model_list=None, valid_token=token, llm_router=_ROUTER
                 )
             assert str(exc_info.value.code) == "403"
+            with pytest.raises(ModelAccessDeniedProxyException):
+                await auth_checks.can_key_call_model(
+                    model=model, llm_model_list=None, valid_token=token, llm_router=_ROUTER
+                )
+            with pytest.raises(ModelAccessDeniedProxyException):
+                await _common_checks(model, owner, token)
 
 
 @pytest.mark.asyncio
