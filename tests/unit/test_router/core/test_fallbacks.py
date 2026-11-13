@@ -9,6 +9,7 @@ import litellm
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.router_api import ChangeSet
 from litellm.router_core import RouterCore
+from litellm.router_rust.core import _start_fields
 from litellm.types.utils import Usage
 from tests.unit.test_router.core.construction_precall_helpers import windowed
 from tests.unit.test_router.core.scripted_host import (
@@ -47,6 +48,41 @@ def headers(response: object) -> Mapping[str, object]:
 
 def show_router_debug(host: ScriptedHost) -> None:
     host.set_dynamic(expose_router_debug_in_errors=True)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected"),
+    [
+        ("specific_deployment", True, True),
+        ("specific_deployment", 1, None),
+        ("specific_deployment", "true", None),
+        ("specific_deployment", False, None),
+        ("disable_fallbacks", True, True),
+        ("disable_fallbacks", 1, None),
+        ("disable_fallbacks", "true", None),
+        ("disable_fallbacks", False, None),
+    ],
+    ids=[
+        "specific-true",
+        "specific-integer",
+        "specific-string",
+        "specific-false",
+        "disable-true",
+        "disable-integer",
+        "disable-string",
+        "disable-false",
+    ],
+)
+def test_request_start_fields_preserve_literal_true_flags(field: str, value: object, expected: bool | None) -> None:
+    assert _start_fields({field: value}).get(field) is expected
+
+
+@pytest.mark.parametrize("field", ["fallbacks", "context_window_fallbacks", "content_policy_fallbacks"])
+def test_request_start_fields_omit_standalone_fallback_strings_without_mutating_request(field: str) -> None:
+    request: Final = {field: "unconfigured-scalar-model"}
+
+    assert field not in _start_fields(request)
+    assert request == {field: "unconfigured-scalar-model"}
 
 
 # --- where the fallback chain comes from -------------------------------------------------------
@@ -101,28 +137,39 @@ async def test_a_failed_group_falls_back_to_the_chain_from_the_winning_source(
     ],
     ids=["fallbacks", "context-window", "content-policy"],
 )
-async def test_request_fallback_string_is_a_single_fallback(
+async def test_request_fallback_string_is_ignored_and_router_chain_is_used(
     make_core: MakeCore, host: ScriptedHost, field: str, error: Callable[[], Exception]
 ) -> None:
-    core = build(make_core)
+    core = build(make_core, **{field: [{"a": ["b"]}]})
     host.answer("openai/a", error())
 
-    response = await complete(core, **{field: "c"})
+    response = await complete(core, **{field: "unconfigured-scalar-model"})
 
-    assert host.deployments_called("acompletion") == ["a", "c"]
-    assert headers(response)["x-litellm-model-group"] == "c"
+    assert host.deployments_called("acompletion") == ["a", "b"]
+    assert headers(response)["x-litellm-model-group"] == "b"
 
 
-def test_sync_request_fallback_string_is_a_single_fallback(make_core: MakeCore, host: ScriptedHost) -> None:
-    core = build(make_core)
-    host.answer("openai/a", rate_limit())
+@pytest.mark.parametrize(
+    ("field", "error"),
+    [
+        ("fallbacks", rate_limit),
+        ("context_window_fallbacks", context_window),
+        ("content_policy_fallbacks", content_policy),
+    ],
+    ids=["fallbacks", "context-window", "content-policy"],
+)
+def test_sync_request_fallback_string_is_ignored_and_router_chain_is_used(
+    make_core: MakeCore, host: ScriptedHost, field: str, error: Callable[[], Exception]
+) -> None:
+    core = build(make_core, **{field: [{"a": ["b"]}]})
+    host.answer("openai/a", error())
 
     response: Final = core.completion(  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
-        model="a", messages=MESSAGES, fallbacks="c"
+        model="a", messages=MESSAGES, **{field: "unconfigured-scalar-model"}
     )
 
-    assert host.deployments_called("completion") == ["a", "c"]
-    assert headers(response)["x-litellm-model-group"] == "c"
+    assert host.deployments_called("completion") == ["a", "b"]
+    assert headers(response)["x-litellm-model-group"] == "b"
 
 
 @pytest.mark.asyncio
@@ -134,6 +181,19 @@ async def test_an_empty_request_fallback_list_overrides_the_constructor_chain(
 
     with pytest.raises(litellm.RateLimitError):
         await complete(core, fallbacks=[])
+
+    assert host.deployments_called("acompletion") == ["a"]
+
+
+@pytest.mark.asyncio
+async def test_a_null_request_fallback_list_overrides_the_constructor_chain(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    core = build(make_core, fallbacks=[{"a": ["b"]}])
+    host.answer("openai/a", rate_limit())
+
+    with pytest.raises(litellm.RateLimitError):
+        await complete(core, fallbacks=None)
 
     assert host.deployments_called("acompletion") == ["a"]
 
@@ -335,14 +395,28 @@ async def test_max_fallbacks_applied_by_changeset_bounds_the_walk(make_core: Mak
 
 
 @pytest.mark.asyncio
-async def test_a_string_request_max_fallbacks_bounds_the_walk(make_core: MakeCore, host: ScriptedHost) -> None:
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (True, ["a", "b"]),
+        (False, ["a"]),
+        (1.0, ["a", "b"]),
+        ("1", ["a", "b"]),
+        ("1.0", ["a", "b"]),
+        (0, ["a"]),
+    ],
+    ids=["true", "false", "integral-float", "integer-string", "decimal-string", "zero"],
+)
+async def test_request_max_fallbacks_uses_bounded_integer_coercion(
+    make_core: MakeCore, host: ScriptedHost, value: object, expected: list[str]
+) -> None:
     core = build(make_core, model_list=GROUPS_ABCD, fallbacks=CHAIN_ABCD)
     host.answer("*", rate_limit())
 
     with pytest.raises(litellm.RateLimitError):
-        await complete(core, max_fallbacks="1")
+        await complete(core, max_fallbacks=value)
 
-    assert host.deployments_called("acompletion") == ["a", "b"]
+    assert host.deployments_called("acompletion") == expected
 
 
 @pytest.mark.asyncio
@@ -356,7 +430,9 @@ async def test_a_string_request_max_fallbacks_bounds_the_walk(make_core: MakeCor
         ("max_fallbacks", "not-an-integer"),
         ("max_fallbacks", -1),
         ("max_fallbacks", 2**32),
-        ("max_fallbacks", True),
+        ("max_fallbacks", 1.5),
+        ("max_fallbacks", float("nan")),
+        ("max_fallbacks", float("inf")),
     ],
     ids=[
         "fallbacks-not-a-list",
@@ -366,7 +442,9 @@ async def test_a_string_request_max_fallbacks_bounds_the_walk(make_core: MakeCor
         "max-fallbacks-invalid-string",
         "max-fallbacks-negative",
         "max-fallbacks-too-large",
-        "max-fallbacks-boolean",
+        "max-fallbacks-fractional",
+        "max-fallbacks-nan",
+        "max-fallbacks-infinite",
     ],
 )
 async def test_invalid_request_fallback_fields_raise_bad_request(
