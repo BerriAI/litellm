@@ -18,7 +18,7 @@ from litellm.proxy.common_utils.timezone_utils import (
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.list_api.common import escape_like
 from litellm.repositories.budget_repository import create_budget_row, update_budget_row
-from litellm.repositories.chunked_in import delete_many_in, find_many_in
+from litellm.repositories.chunked_in import count_in, delete_many_in, find_many_in
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.types.proxy.management_endpoints.customer_hierarchy import (
     Budget,
@@ -760,7 +760,7 @@ class CustomerHierarchyStore:
         if payload.default_budget_template is not None and payload.default_budget_template not in names:
             return Failure(ErrorCode.INVALID_DEFAULT_BUDGET)
         removed: Final = tuple(budget_id for budget_id in originals if budget_id not in retained)
-        if removed and await self.members.count(where={"budget_id": {"in": removed}}):
+        if await count_in(self.members, "budget_id", removed):
             return Failure(ErrorCode.TEMPLATE_IN_USE)
         ids: Final = tuple(
             [
