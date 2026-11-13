@@ -3072,7 +3072,8 @@
       "hourly": "hourly",
       "daily": "daily",
       "weekly": "weekly",
-      "monthly": "monthly"
+      "monthly": "monthly",
+      "annual": "annually"
     },
     "notSet": "Not set"
   },
