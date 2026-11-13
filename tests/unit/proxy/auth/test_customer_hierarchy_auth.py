@@ -178,6 +178,24 @@ def _row(
     }
 
 
+def test_customer_display_names_come_from_the_resolved_rows() -> None:
+    hierarchy: Final = customer_hierarchy_from_member_row(
+        {
+            "customer_member_id": "customer-member-1",
+            "alias": "Customer member display",
+            "parent_team_ids": ["customer-team-1"],
+            "teams": [{"customer_team_id": "customer-team-1", "alias": "Customer team display"}],
+            "parent_org": {"customer_org_id": "customer-org-1", "alias": "Customer org display"},
+        },
+        NOW,
+    )
+    assert (hierarchy.customer_org_alias, hierarchy.customer_team_alias, hierarchy.customer_member_alias) == (
+        "Customer org display",
+        "Customer team display",
+        "Customer member display",
+    )
+
+
 def _scopes(hierarchy: CustomerHierarchyAuth) -> Mapping[str, CustomerScopeAuth]:
     return {scope.key: scope for scope in hierarchy.scopes}
 
@@ -773,6 +791,30 @@ async def test_a_key_pinned_to_another_organization_is_refused_before_any_member
         )
 
     assert (denied.value.code, registrar.calls, members.rows) == ("403", (), {})
+
+
+@pytest.mark.asyncio
+async def test_a_key_pinned_to_another_organization_is_refused_before_an_unknown_alias_is_registered() -> None:
+    organizations: Final = _OrganizationTable((_organization("acme"),))
+    registrar: Final = _OrganizationRegistrar(organizations)
+    prisma: Final = _Prisma(_MemberTable({}), organizations)
+
+    with pytest.raises(ProxyException) as denied:
+        await _resolve(
+            prisma,
+            CustomerRequestIdentity(customer_org_alias="ghost"),
+            key_metadata={"customer_org_id": "org-1"},
+            register_organization=registrar,
+        )
+    assert (denied.value.code, registrar.calls, len(organizations.rows)) == ("403", (), 1)
+
+    own: Final = await _resolve(
+        prisma,
+        CustomerRequestIdentity(customer_org_alias="ghost"),
+        key_metadata={"customer_org_id": "ghost"},
+        register_organization=registrar,
+    )
+    assert own is not None and (own.customer_org_id, registrar.calls) == ("ghost", ("ghost",))
 
 
 @pytest.mark.asyncio

@@ -3884,6 +3884,12 @@ class SpendLogsRouterMetadata(TypedDict):
 
 
 class SpendLogsMetadata(TypedDict):
+    user_api_key_customer_org_id: ReadOnly[NotRequired[str | None]]
+    user_api_key_customer_org_alias: ReadOnly[NotRequired[str | None]]
+    user_api_key_customer_team_id: ReadOnly[NotRequired[str | None]]
+    user_api_key_customer_team_alias: ReadOnly[NotRequired[str | None]]
+    user_api_key_customer_member_id: ReadOnly[NotRequired[str | None]]
+    user_api_key_customer_member_alias: ReadOnly[NotRequired[str | None]]
     user_api_key_customer_usage: ReadOnly[NotRequired[str | None]]
     actor_agent_id: ReadOnly[NotRequired[str | None]]
     target_agent_id: ReadOnly[NotRequired[str | None]]

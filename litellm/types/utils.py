@@ -3148,6 +3148,9 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_customer_member_id: ReadOnly[str | None]
     user_api_key_customer_team_id: ReadOnly[str | None]
     user_api_key_customer_org_id: ReadOnly[str | None]
+    user_api_key_customer_org_alias: ReadOnly[NotRequired[str | None]]
+    user_api_key_customer_team_alias: ReadOnly[NotRequired[str | None]]
+    user_api_key_customer_member_alias: ReadOnly[NotRequired[str | None]]
     user_api_key_customer_budget_scopes: ReadOnly[NotRequired[str | None]]
     user_api_key_customer_hierarchy: NotRequired[ReadOnly[Mapping[str, object] | None]]
     user_api_key_request_route: str | None
