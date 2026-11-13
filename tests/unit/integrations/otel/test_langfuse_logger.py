@@ -13,8 +13,8 @@ pytest.importorskip("opentelemetry")
 
 from opentelemetry import trace  # noqa: E402  # needs the importorskip above
 from opentelemetry.context import Context  # noqa: E402  # needs the importorskip above
-from opentelemetry.sdk.trace import SpanLimits, TracerProvider  # noqa: E402
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor  # noqa: E402
+from opentelemetry.sdk.trace import SpanLimits, TracerProvider  # noqa: E402  # needs the importorskip above
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor  # noqa: E402  # needs the importorskip above
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter  # noqa: E402
 from opentelemetry.trace import SpanKind  # noqa: E402
 
@@ -718,14 +718,14 @@ def test_failed_generation_without_a_first_chunk_has_no_completion_start_time() 
 
 
 @pytest.mark.parametrize("room", [0, 1, 2], ids=["full", "one-free", "two-free"])
-def test_release_and_version_never_push_an_attribute_off_a_root_span_at_its_limit(room: int):
+def test_release_and_version_never_push_an_attribute_off_a_root_span_at_its_limit(room: int) -> None:
     server: Final = {"http.method": "POST", "http.scheme": "http", "http.route": "/v1/chat/completions"}
-    cfg = OpenTelemetryV2Config(exporter="in_memory", mapper_names=["genai", "langfuse"])
-    exporter = InMemorySpanExporter()
-    provider = TracerProvider(span_limits=SpanLimits(max_span_attributes=len(server) + 1 + room))
+    cfg: Final = OpenTelemetryV2Config(exporter="in_memory", mapper_names=["genai", "langfuse"])
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = TracerProvider(span_limits=SpanLimits(max_span_attributes=len(server) + 1 + room))
     provider.add_span_processor(SimpleSpanProcessor(exporter))
-    logger = build_otel_v2_logger(config=cfg, tracer_provider=provider)
-    root = provider.get_tracer("server").start_span("POST /v1/chat/completions")
+    logger: Final = build_otel_v2_logger(config=cfg, tracer_provider=provider)
+    root: Final = provider.get_tracer("server").start_span("POST /v1/chat/completions")
     root.set_attributes(server)
     set_request_root_span(root)
 
@@ -741,6 +741,6 @@ def test_release_and_version_never_push_an_attribute_off_a_root_span_at_its_limi
     )
     root.end()
 
-    stamped = dict(exporter.get_finished_spans()[0].attributes or {})
+    stamped: Final = dict(exporter.get_finished_spans()[0].attributes or {})
     assert stamped.items() >= {**server, TRACE_NAME_ATTR: "checkout"}.items()
     assert ("langfuse.release" in stamped, "langfuse.version" in stamped) == (room == 2, room == 2)
