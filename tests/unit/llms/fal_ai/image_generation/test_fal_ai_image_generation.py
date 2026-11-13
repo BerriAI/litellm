@@ -156,7 +156,7 @@ def _vcr_outcome_gate(request, vcr):
 def test_fal_ai_model_path_with_dot_segments_is_rejected_before_any_request(model: str) -> None:
     config: Final = get_fal_ai_image_generation_config(model)
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="dot path segment"):
         config.get_complete_url(
             api_base="https://fal.run", api_key=None, model=model, optional_params={}, litellm_params={}
         )
