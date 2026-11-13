@@ -1,8 +1,11 @@
+from collections.abc import Mapping
 from datetime import datetime
-from typing import Final
+from typing import Final, Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 
+from litellm.models.budget import validate_person_budget_limits
+from litellm.models.team import BudgetLimitEntry
 from litellm.proxy.common_utils.timezone_utils import budget_duration_error
 
 
@@ -15,6 +18,18 @@ class Budget(BaseModel):
     rpm_limit: int | None = Field(default=None, ge=0)
     allowed_models: tuple[str, ...] | None = None
     budget_duration: str | None = None
+    model_tpm_limit: Mapping[str, int] | None = None
+    model_rpm_limit: Mapping[str, int] | None = None
+    budget_limits: tuple[BudgetLimitEntry, ...] | None = None
+    cap_policy: Literal["pause_allow_increase", "pause_until_reset"] | None = None
+    temp_budget_increase: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    temp_budget_expiry: datetime | None = None
+    temp_budget_duration: Literal["1mo", "12mo"] | None = None
+
+    @field_validator("budget_limits")
+    @classmethod
+    def valid_budget_limits(cls, value: tuple[BudgetLimitEntry, ...] | None) -> tuple[BudgetLimitEntry, ...] | None:
+        return validate_person_budget_limits(value)
 
     @field_validator("budget_duration")
     @classmethod

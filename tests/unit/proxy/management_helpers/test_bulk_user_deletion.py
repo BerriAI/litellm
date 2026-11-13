@@ -126,6 +126,7 @@ class _Db:
         after_user_read: Callable[[dict[str, _UserRow]], None] = lambda _: None,
     ) -> None:
         self.litellm_usertable = _UserTable(users, after_user_read)
+        self.litellm_budgettable = _Rows()
         self.litellm_teamtable = _TeamTable(teams)
         self.litellm_teammembership = _Rows([{"team_id": t, "user_id": u} for t, u in memberships])
         self.litellm_verificationtoken = _Rows(tokens)
@@ -147,6 +148,7 @@ class _Tx:
         self._on_user_lock = on_user_lock
         self.litellm_teamtable = db.litellm_teamtable
         self.litellm_usertable = db.litellm_usertable
+        self.litellm_budgettable = db.litellm_budgettable
         self.litellm_teammembership = db.litellm_teammembership
         self.litellm_verificationtoken = db.litellm_verificationtoken
         self.litellm_deletedverificationtoken = db.litellm_deletedverificationtoken
@@ -297,6 +299,19 @@ async def _remove(
         user_api_key_cache=cache or UserApiKeyCache(),
         proxy_logging_obj=None,
     )
+
+
+@pytest.mark.asyncio
+async def test_user_deletion_removes_only_owned_override_and_preserves_shared_profile() -> None:
+    prisma: Final = _FakePrisma(
+        users=[_user("first").model_copy(update={"budget_id": "personal", "budget_template_id": "shared"}),
+               _user("second").model_copy(update={"budget_template_id": "shared"})],
+    )
+    prisma.db.litellm_budgettable.rows = [{"budget_id": "personal"}, {"budget_id": "shared"}]
+    results: Final = await _delete(prisma, ["first"])
+    assert results[0].success
+    assert prisma.db.litellm_budgettable.rows == [{"budget_id": "shared"}]
+    assert tuple(prisma.db.litellm_usertable.rows) == ("second",)
 
 
 @pytest.mark.asyncio

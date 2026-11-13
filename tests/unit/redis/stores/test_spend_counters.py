@@ -26,6 +26,7 @@ from litellm.redis.stores.spend_counters import (
     user_counter,
 )
 from litellm.redis.store_settings import RedisStoreSettings
+from litellm.redis.stores.spend_counters.types import person_window_counter
 from litellm.rust_bridge._native import NativeRedisClient, NativeRedisStoreError, NativeSpendCounters, SpendRead
 from tests.unit.caching.test_redis_batch import FakeNatives, fake_send
 
@@ -39,6 +40,10 @@ _KEYS: Final = (
     (key_window_counter("88dc28d0", "30d"), "spend:key:88dc28d0:window:30d"),
     (team_counter("team-a"), "spend:team:team-a"),
     (team_window_counter("team-a", "1h"), "spend:team:team-a:window:1h"),
+    (person_window_counter("user", "person:one", "1mo@2026-11-01"),
+     "spend:person:user:person%3Aone:window:1mo@2026-11-01"),
+    (person_window_counter("customer_member", "person/two", "12mo@2026-01-01"),
+     "spend:person:customer_member:person%2Ftwo:window:12mo@2026-01-01"),
     (team_member_counter("user:with:colons", "team-a"), "spend:team_member:user:with:colons:team-a"),
     (user_counter("user@example.com"), "spend:user:user@example.com"),
     (end_user_counter("customer é 1"), "spend:end_user:customer é 1"),

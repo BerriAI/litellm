@@ -12,6 +12,7 @@ export const useBudgetOptions = (accessToken: string | null, enabled = true): Us
   const queryOptions = {
     queryKey: [...budgetKeys.all, "options"],
     queryFn: () => apiClient.get<budgetItem[]>(BUDGET_OPTIONS_PATH, { accessToken }),
+    select: (budgets: budgetItem[]) => budgets.filter((budget) => !budget.is_profile && !budget.budget_limits?.length),
     enabled: Boolean(accessToken) && enabled,
     staleTime: 60_000,
   };

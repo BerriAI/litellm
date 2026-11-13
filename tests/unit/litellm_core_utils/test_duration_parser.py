@@ -195,6 +195,55 @@ class TestStandardizedResetTime(unittest.TestCase):
         self.assertEqual(result, expected)
 
 
+@pytest.mark.parametrize(
+    "now, zone, reset_time, expected",
+    [
+        (
+            datetime(2026, 11, 12, tzinfo=timezone.utc),
+            "UTC",
+            time(0),
+            datetime(2027, 1, 1, tzinfo=timezone.utc),
+        ),
+        (
+            datetime(2028, 2, 29, tzinfo=timezone.utc),
+            "UTC",
+            time(0),
+            datetime(2029, 1, 1, tzinfo=timezone.utc),
+        ),
+        (
+            datetime(2027, 1, 1, tzinfo=timezone.utc),
+            "UTC",
+            time(0),
+            datetime(2028, 1, 1, tzinfo=timezone.utc),
+        ),
+        (
+            datetime(2027, 1, 1, 8, tzinfo=timezone.utc),
+            "UTC",
+            time(12),
+            datetime(2027, 1, 1, 12, tzinfo=timezone.utc),
+        ),
+        (
+            datetime(2027, 1, 1, 12, tzinfo=timezone.utc),
+            "UTC",
+            time(12),
+            datetime(2028, 1, 1, 12, tzinfo=timezone.utc),
+        ),
+        (
+            datetime(2027, 1, 1, 2, tzinfo=timezone.utc),
+            "America/New_York",
+            time(0),
+            datetime(2027, 1, 1, tzinfo=ZoneInfo("America/New_York")),
+        ),
+    ],
+)
+def test_annual_reset_and_window_start(
+    now: datetime, zone: str, reset_time: time, expected: datetime
+) -> None:
+    reset: Final = get_next_standardized_reset_time("12mo", now, zone, reset_time)
+    assert reset == expected
+    assert get_budget_window_start("12mo", reset) == expected.replace(year=expected.year - 1)
+
+
 class TestResetTimeOfDay(unittest.TestCase):
     """A configurable reset_time_of_day shifts day/week/month resets off midnight."""
 

@@ -388,6 +388,12 @@ const menuGroups: MenuGroup[] = [
         roles: all_admin_roles,
       },
       {
+        key: "budget-requests",
+        page: "budget-requests",
+        label: "shell.nav.items.budgetRequests",
+        icon: <Wallet {...ICON} />,
+      },
+      {
         key: "budgets",
         page: "budgets",
         label: "shell.nav.items.budgets",

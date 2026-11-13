@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useUpdateBudget } from "@/app/(dashboard)/hooks/budgets/useBudgets";
 import { budgetItem } from "@/app/(dashboard)/hooks/budgets/useBudgets";
 import { applyBudgetPrecision } from "./budgetPrecision";
-import { BudgetFormFields, type BudgetFormValues, useBudgetForm } from "./BudgetFormFields";
+import { BudgetFormFields, type BudgetFormValues, useBudgetForm, budgetFormPayload } from "./BudgetFormFields";
 import { pickDirty } from "@/lib/forms/pickDirty";
 import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
@@ -16,6 +16,10 @@ const toFormValues = (budget: budgetItem) => ({
   tpd_limit: budget.tpd_limit,
   max_budget: budget.max_budget,
   budget_duration: budget.budget_duration,
+  is_profile: budget.is_profile,
+  monthly_budget: budget.budget_limits?.find((limit) => limit.budget_duration === "1mo")?.max_budget,
+  annual_budget: budget.budget_limits?.find((limit) => limit.budget_duration === "12mo")?.max_budget,
+  cap_policy: budget.cap_policy,
 });
 
 interface EditBudgetModalProps {
@@ -43,7 +47,14 @@ const EditBudgetModal: React.FC<EditBudgetModalProps> = ({ isModalVisible, setIs
     try {
       toast.info(t("budgets.editModal.toast.pending"));
       const changedValues = pickDirty(formValues, dirtyFields);
-      await updateBudget.mutateAsync(applyBudgetPrecision({ budget_id: formValues.budget_id, ...changedValues }));
+      await updateBudget.mutateAsync(
+        applyBudgetPrecision(
+          budgetFormPayload(formValues, {
+            budget_id: formValues.budget_id,
+            ...changedValues,
+          }),
+        ),
+      );
       toast.success(t("budgets.editModal.toast.updated"));
       form.reset();
       setIsModalVisible(false);

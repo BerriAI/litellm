@@ -89,4 +89,49 @@ describe("BudgetModal", () => {
     await waitFor(() => expect(screen.getByLabelText("Budget ID")).toHaveAttribute("aria-invalid", "true"));
     expect(createMock).not.toHaveBeenCalled();
   });
+
+  it("creates a profile with independent monthly and annual limits", async () => {
+    const user = userEvent.setup();
+    renderModal();
+    fireEvent.change(screen.getByLabelText("Budget ID"), { target: { value: "standard-profile" } });
+    await chooseSelectOption(user, screen.getByRole("combobox", { name: "Budget type" }), "Reusable profile");
+    fireEvent.change(screen.getByLabelText("Monthly limit per person (USD)"), { target: { value: "100" } });
+    fireEvent.change(screen.getByLabelText("Annual limit per person (USD)"), { target: { value: "1000" } });
+    await chooseSelectOption(
+      user,
+      screen.getByRole("combobox", { name: "At the cap" }),
+      "Pause, contact an admin for more",
+    );
+    await create(user);
+    await waitFor(() => expect(createMock).toHaveBeenCalledTimes(1));
+    const expected = {
+      budget_id: "standard-profile",
+      is_profile: true,
+      budget_limits: [
+        { budget_duration: "1mo", max_budget: 100 },
+        { budget_duration: "12mo", max_budget: 1000 },
+      ],
+      cap_policy: "pause_allow_increase",
+      max_budget: null,
+      budget_duration: null,
+      tpm_limit: null,
+      rpm_limit: null,
+      tpd_limit: null,
+    };
+    expect(createMock.mock.calls[0][0]).toEqual(expected);
+  });
+
+  it("requires a limit for a profile while allowing a zero-dollar cap", async () => {
+    const user = userEvent.setup();
+    renderModal();
+    fireEvent.change(screen.getByLabelText("Budget ID"), { target: { value: "paused-profile" } });
+    await chooseSelectOption(user, screen.getByRole("combobox", { name: "Budget type" }), "Reusable profile");
+    await create(user);
+    expect(await screen.findByText("Set a monthly or annual limit")).toBeVisible();
+    expect(createMock).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText("Monthly limit per person (USD)"), { target: { value: "0" } });
+    await create(user);
+    await waitFor(() => expect(createMock).toHaveBeenCalledTimes(1));
+    expect(createMock.mock.calls[0][0].budget_limits).toEqual([{ budget_duration: "1mo", max_budget: 0 }]);
+  });
 });

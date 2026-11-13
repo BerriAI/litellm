@@ -9545,6 +9545,134 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/budget_assignments/{subject_type}/{subject_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Budget Assignment
+         * @description Read a user's or customer member's profile, personal overrides and calendar limits. Proxy admins only.
+         */
+        get: operations["get_budget_assignment_management_v1_budget_assignments__subject_type___subject_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Budget Assignment
+         * @description Assign a profile or update a person's overrides, including a direct temporary increase. Proxy admins only.
+         */
+        patch: operations["update_budget_assignment_management_v1_budget_assignments__subject_type___subject_id__patch"];
+        trace?: never;
+    };
+    "/management/v1/budget_increase_requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Increases
+         * @description List owned requests. Proxy admins and admin viewers can read all requests.
+         */
+        get: operations["list_increases_management_v1_budget_increase_requests_get"];
+        put?: never;
+        /**
+         * Request Increase
+         * @description Request a temporary increase for the authenticated internal user. Only one request may be pending.
+         */
+        post: operations["request_increase_management_v1_budget_increase_requests_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/budget_increase_requests/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Own Budget
+         * @description Read the authenticated internal user's personal limits, even when inference is paused.
+         */
+        get: operations["own_budget_management_v1_budget_increase_requests_me_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/budget_increase_requests/{request_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Increase
+         * @description Read an owned request and its decision. Proxy admins and admin viewers may read any request.
+         */
+        get: operations["get_increase_management_v1_budget_increase_requests__request_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/budget_increase_requests/{request_id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Approve Increase
+         * @description Approve a pending request and apply its temporary increase atomically. A different proxy admin must review.
+         */
+        put: operations["approve_increase_management_v1_budget_increase_requests__request_id__approve_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/budget_increase_requests/{request_id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Reject Increase
+         * @description Reject a pending request with an explanation, without changing its budget. Proxy admins only.
+         */
+        put: operations["reject_increase_management_v1_budget_increase_requests__request_id__reject_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/budgets": {
         parameters: {
             query?: never;
@@ -29444,14 +29572,50 @@ export interface components {
             allowed_models?: string[] | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /** Cap Policy */
+            cap_policy?: ("pause_allow_increase" | "pause_until_reset") | null;
             /** Max Budget */
             max_budget?: number | null;
+            /** Model Rpm Limit */
+            model_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Model Tpm Limit */
+            model_tpm_limit?: {
+                [key: string]: number;
+            } | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Soft Budget */
             soft_budget?: number | null;
+            /** Temp Budget Duration */
+            temp_budget_duration?: ("1mo" | "12mo") | null;
+            /** Temp Budget Expiry */
+            temp_budget_expiry?: string | null;
+            /** Temp Budget Increase */
+            temp_budget_increase?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
+        };
+        /** BudgetAssignment */
+        BudgetAssignment: {
+            budget_override: components["schemas"]["Budget"] | null;
+            /** Budget Override Expires At */
+            budget_override_expires_at: string | null;
+            /** Budget Template Id */
+            budget_template_id: string | null;
+            effective_budget: components["schemas"]["Budget"];
+            /** Subject Id */
+            subject_id: string;
+            /**
+             * Subject Type
+             * @enum {string}
+             */
+            subject_type: "user" | "customer_member";
+            /** Windows */
+            windows: components["schemas"]["PersonBudgetWindow"][];
         };
         /** BudgetConfig */
         BudgetConfig: {
@@ -29468,6 +29632,88 @@ export interface components {
         BudgetDeleteRequest: {
             /** Id */
             id: string;
+        };
+        /** BudgetIncreaseInput */
+        BudgetIncreaseInput: {
+            /**
+             * Amount
+             * @description Temporary additional USD, without resetting spend.
+             */
+            amount: number;
+            /**
+             * Duration
+             * @description Personal calendar-month or calendar-year limit to increase.
+             * @enum {string}
+             */
+            duration: "1mo" | "12mo";
+            /**
+             * Expires At
+             * Format: date-time
+             * @description Absolute expiry with timezone, which must still be future at approval.
+             */
+            expires_at: string;
+            /**
+             * Reason
+             * @description Reason shown to the reviewing proxy administrator.
+             */
+            reason: string;
+        };
+        /** BudgetIncreaseList */
+        BudgetIncreaseList: {
+            /** Has More */
+            has_more: boolean;
+            /** Requests */
+            requests: components["schemas"]["BudgetIncreaseRequest"][];
+        };
+        /** BudgetIncreaseRejection */
+        BudgetIncreaseRejection: {
+            /**
+             * Reason
+             * @description Explanation visible to the requester.
+             */
+            reason: string;
+        };
+        /** BudgetIncreaseRequest */
+        BudgetIncreaseRequest: {
+            /**
+             * Amount
+             * @description Temporary additional USD, without resetting spend.
+             */
+            amount: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Duration
+             * @description Personal calendar-month or calendar-year limit to increase.
+             * @enum {string}
+             */
+            duration: "1mo" | "12mo";
+            /**
+             * Expires At
+             * Format: date-time
+             * @description Absolute expiry with timezone, which must still be future at approval.
+             */
+            expires_at: string;
+            /** Id */
+            id: string;
+            /**
+             * Reason
+             * @description Reason shown to the reviewing proxy administrator.
+             */
+            reason: string;
+            /** Rejection Reason */
+            rejection_reason?: string | null;
+            /** Reviewed At */
+            reviewed_at?: string | null;
+            /** Reviewed By */
+            reviewed_by?: string | null;
+            /** Status */
+            status: ("pending_review" | "approved" | "rejected" | "withdrawn") | "expired";
+            /** Submitted By */
+            submitted_by: string;
         };
         /**
          * BudgetLimitEntry
@@ -29494,19 +29740,39 @@ export interface components {
             budget_duration?: string | null;
             /** Budget Id */
             budget_id: string;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
+            /** Cap Policy */
+            cap_policy?: ("pause_allow_increase" | "pause_until_reset") | null;
             /**
              * Created At
              * Format: date-time
              */
             created_at: string;
+            /**
+             * Is Profile
+             * @default false
+             */
+            is_profile: boolean;
             /** Max Budget */
             max_budget?: number | null;
+            /**
+             * Member Count
+             * @default 0
+             */
+            member_count: number;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Soft Budget */
             soft_budget?: number | null;
+            /** Temp Budget Duration */
+            temp_budget_duration?: string | null;
+            /** Temp Budget Expiry */
+            temp_budget_expiry?: string | null;
+            /** Temp Budget Increase */
+            temp_budget_increase?: number | null;
             /** Tpd Limit */
             tpd_limit?: number | null;
             /** Tpm Limit */
@@ -29530,10 +29796,25 @@ export interface components {
              */
             budget_id?: string | null;
             /**
+             * Budget Limits
+             * @description Independent calendar-month (1mo) and calendar-year (12mo) dollar limits per person.
+             */
+            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /**
              * Budget Reset At
              * @description Datetime when the budget is reset
              */
             budget_reset_at?: string | null;
+            /**
+             * Cap Policy
+             * @description Pause at the cap and allow asking an admin for more, or pause until the next reset.
+             */
+            cap_policy?: ("pause_allow_increase" | "pause_until_reset") | null;
+            /**
+             * Is Profile
+             * @description A reusable per-person budget profile for users and customer members.
+             */
+            is_profile?: boolean | null;
             /**
              * Max Budget
              * @description Requests will fail if this budget (in USD) is exceeded.
@@ -29576,6 +29857,21 @@ export interface components {
              */
             soft_budget?: number | null;
             /**
+             * Temp Budget Duration
+             * @description The monthly or annual limit receiving the temporary increase.
+             */
+            temp_budget_duration?: ("1mo" | "12mo") | null;
+            /**
+             * Temp Budget Expiry
+             * @description When the temporary increase stops applying.
+             */
+            temp_budget_expiry?: string | null;
+            /**
+             * Temp Budget Increase
+             * @description Temporary additional dollars for this personal budget.
+             */
+            temp_budget_increase?: number | null;
+            /**
              * Tpd Limit
              * @description Max tokens per day, charged by batch submissions, allowed for this budget id.
              */
@@ -29597,6 +29893,10 @@ export interface components {
             allowed_models?: string[] | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /** Cap Policy */
+            cap_policy?: ("pause_allow_increase" | "pause_until_reset") | null;
             /**
              * Is Default
              * @default false
@@ -29604,12 +29904,26 @@ export interface components {
             is_default: boolean;
             /** Max Budget */
             max_budget?: number | null;
+            /** Model Rpm Limit */
+            model_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Model Tpm Limit */
+            model_tpm_limit?: {
+                [key: string]: number;
+            } | null;
             /** Name */
             name: string;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Soft Budget */
             soft_budget?: number | null;
+            /** Temp Budget Duration */
+            temp_budget_duration?: ("1mo" | "12mo") | null;
+            /** Temp Budget Expiry */
+            temp_budget_expiry?: string | null;
+            /** Temp Budget Increase */
+            temp_budget_increase?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
         };
@@ -32091,6 +32405,12 @@ export interface components {
              */
             reject_clientside_metadata_tags?: boolean | null;
             /**
+             * Reject Unknown Customer Member
+             * @description Reject unknown x-litellm-customer-member-id values with 401. Set false for best-effort tracking without creating members.
+             * @default true
+             */
+            reject_unknown_customer_member: boolean;
+            /**
              * Request Tag Mappings
              * @description Map W3C baggage values to request tags. Exact value/tag rules take precedence over tag_prefix fallbacks.
              */
@@ -33128,6 +33448,17 @@ export interface components {
              */
             type: "custom";
         };
+        /** CustomerHierarchyAuth */
+        CustomerHierarchyAuth: {
+            /** Customer Member Id */
+            customer_member_id: string;
+            /** Customer Org Id */
+            customer_org_id: string;
+            /** Customer Team Id */
+            customer_team_id: string;
+            /** Scopes */
+            scopes: components["schemas"]["CustomerScopeAuth"][];
+        };
         /** CustomerMember */
         CustomerMember: {
             /** Alias */
@@ -33198,6 +33529,40 @@ export interface components {
             spend: number;
             /** User Id */
             user_id: string;
+        };
+        /**
+         * CustomerScopeAuth
+         * @description One level of the customer hierarchy a request runs under, with the limits its budget row grants.
+         */
+        CustomerScopeAuth: {
+            /** Allowed Models */
+            allowed_models?: string[] | null;
+            /** Entity Id */
+            entity_id: string;
+            /**
+             * Key
+             * @enum {string}
+             */
+            key: "customer_org" | "customer_team" | "customer_member";
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Model Rpm Limit */
+            model_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Model Tpm Limit */
+            model_tpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
         };
         /**
          * CyberArkConfig
@@ -36309,6 +36674,12 @@ export interface components {
             budget_duration?: string | null;
             /** Budget Id */
             budget_id?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /** Cap Policy */
+            cap_policy?: ("pause_allow_increase" | "pause_until_reset") | null;
+            /** Is Profile */
+            is_profile?: boolean | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -36329,6 +36700,8 @@ export interface components {
             rpm_limit?: number | null;
             /** Soft Budget */
             soft_budget?: number | null;
+            /** Temp Budget Duration */
+            temp_budget_duration?: ("1mo" | "12mo") | null;
             /** Temp Budget Expiry */
             temp_budget_expiry?: string | null;
             /** Temp Budget Increase */
@@ -36349,13 +36722,19 @@ export interface components {
             budget_duration?: string | null;
             /** Budget Id */
             budget_id?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
+            /** Cap Policy */
+            cap_policy?: ("pause_allow_increase" | "pause_until_reset") | null;
             /**
              * Created At
              * Format: date-time
              */
             created_at: string;
+            /** Is Profile */
+            is_profile?: boolean | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -36376,6 +36755,8 @@ export interface components {
             rpm_limit?: number | null;
             /** Soft Budget */
             soft_budget?: number | null;
+            /** Temp Budget Duration */
+            temp_budget_duration?: ("1mo" | "12mo") | null;
             /** Temp Budget Expiry */
             temp_budget_expiry?: string | null;
             /** Temp Budget Increase */
@@ -41037,12 +41418,27 @@ export interface components {
             /** Budget Id */
             budget_id?: string | null;
             /**
+             * Budget Limits
+             * @description Independent calendar-month (1mo) and calendar-year (12mo) dollar limits per person.
+             */
+            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /**
              * Budget Reset At
              * @description Datetime when the budget is reset
              */
             budget_reset_at?: string | null;
+            /**
+             * Cap Policy
+             * @description Pause at the cap and allow asking an admin for more, or pause until the next reset.
+             */
+            cap_policy?: ("pause_allow_increase" | "pause_until_reset") | null;
             /** Default Model */
             default_model?: string | null;
+            /**
+             * Is Profile
+             * @description A reusable per-person budget profile for users and customer members.
+             */
+            is_profile?: boolean | null;
             /**
              * Max Budget
              * @description Requests will fail if this budget (in USD) is exceeded.
@@ -41089,6 +41485,21 @@ export interface components {
             soft_budget?: number | null;
             /** Spend */
             spend?: number | null;
+            /**
+             * Temp Budget Duration
+             * @description The monthly or annual limit receiving the temporary increase.
+             */
+            temp_budget_duration?: ("1mo" | "12mo") | null;
+            /**
+             * Temp Budget Expiry
+             * @description When the temporary increase stops applying.
+             */
+            temp_budget_expiry?: string | null;
+            /**
+             * Temp Budget Increase
+             * @description Temporary additional dollars for this personal budget.
+             */
+            temp_budget_increase?: number | null;
             /**
              * Tpd Limit
              * @description Max tokens per day, charged by batch submissions, allowed for this budget id.
@@ -41277,6 +41688,12 @@ export interface components {
             budget_duration?: string | null;
             /** Budget Id */
             budget_id?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /** Cap Policy */
+            cap_policy?: ("pause_allow_increase" | "pause_until_reset") | null;
+            /** Is Profile */
+            is_profile?: boolean | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -41311,6 +41728,8 @@ export interface components {
             rpm_limit?: number | null;
             /** Soft Budget */
             soft_budget?: number | null;
+            /** Temp Budget Duration */
+            temp_budget_duration?: ("1mo" | "12mo") | null;
             /** Temp Budget Expiry */
             temp_budget_expiry?: string | null;
             /** Temp Budget Increase */
@@ -41386,10 +41805,16 @@ export interface components {
             budget_duration?: string | null;
             /** Budget Id */
             budget_id?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /** Cap Policy */
+            cap_policy?: ("pause_allow_increase" | "pause_until_reset") | null;
             /** Description */
             description?: string | null;
             /** Guardrails */
             guardrails?: string[] | null;
+            /** Is Profile */
+            is_profile?: boolean | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -41438,6 +41863,8 @@ export interface components {
             tags?: string[] | null;
             /** Team Id */
             team_id: string;
+            /** Temp Budget Duration */
+            temp_budget_duration?: ("1mo" | "12mo") | null;
             /** Temp Budget Expiry */
             temp_budget_expiry?: string | null;
             /** Temp Budget Increase */
@@ -42348,6 +42775,10 @@ export interface components {
             budget_duration?: string | null;
             /** Budget Id */
             budget_id: string;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /** Cap Policy */
+            cap_policy?: ("pause_allow_increase" | "pause_until_reset") | null;
             /**
              * Is Default
              * @default false
@@ -42355,12 +42786,26 @@ export interface components {
             is_default: boolean;
             /** Max Budget */
             max_budget?: number | null;
+            /** Model Rpm Limit */
+            model_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Model Tpm Limit */
+            model_tpm_limit?: {
+                [key: string]: number;
+            } | null;
             /** Name */
             name: string;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Soft Budget */
             soft_budget?: number | null;
+            /** Temp Budget Duration */
+            temp_budget_duration?: ("1mo" | "12mo") | null;
+            /** Temp Budget Expiry */
+            temp_budget_expiry?: string | null;
+            /** Temp Budget Increase */
+            temp_budget_increase?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
         };
@@ -43142,6 +43587,39 @@ export interface components {
             user_email?: string | null;
             /** User Id */
             user_id: string;
+        };
+        /** PersonBudgetWindow */
+        PersonBudgetWindow: {
+            /**
+             * Budget Duration
+             * @enum {string}
+             */
+            budget_duration: "1mo" | "12mo";
+            /**
+             * Cap Policy
+             * @default pause_until_reset
+             * @enum {string}
+             */
+            cap_policy: "pause_allow_increase" | "pause_until_reset";
+            /** Entity Id */
+            entity_id: string;
+            /**
+             * Entity Type
+             * @enum {string}
+             */
+            entity_type: "user" | "customer_member";
+            /** Max Budget */
+            max_budget: number;
+            /**
+             * Reset At
+             * Format: date-time
+             */
+            reset_at: string;
+            /**
+             * Window Start
+             * Format: date-time
+             */
+            window_start: string;
         };
         /**
          * PiiAction
@@ -49999,16 +50477,34 @@ export interface components {
             allowed_models?: string[] | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /** Cap Policy */
+            cap_policy?: ("pause_allow_increase" | "pause_until_reset") | null;
             /** Is Default */
             is_default?: boolean | null;
             /** Max Budget */
             max_budget?: number | null;
+            /** Model Rpm Limit */
+            model_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Model Tpm Limit */
+            model_tpm_limit?: {
+                [key: string]: number;
+            } | null;
             /** Name */
             name?: string | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Soft Budget */
             soft_budget?: number | null;
+            /** Temp Budget Duration */
+            temp_budget_duration?: ("1mo" | "12mo") | null;
+            /** Temp Budget Expiry */
+            temp_budget_expiry?: string | null;
+            /** Temp Budget Increase */
+            temp_budget_increase?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
         };
@@ -51697,10 +52193,16 @@ export interface components {
             budget_duration?: string | null;
             /** Budget Id */
             budget_id?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /** Cap Policy */
+            cap_policy?: ("pause_allow_increase" | "pause_until_reset") | null;
             /** Description */
             description?: string | null;
             /** Guardrails */
             guardrails?: string[] | null;
+            /** Is Profile */
+            is_profile?: boolean | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -51746,6 +52248,8 @@ export interface components {
             tags?: string[] | null;
             /** Team Id */
             team_id?: string | null;
+            /** Temp Budget Duration */
+            temp_budget_duration?: ("1mo" | "12mo") | null;
             /** Temp Budget Expiry */
             temp_budget_expiry?: string | null;
             /** Temp Budget Increase */
@@ -52526,6 +53030,9 @@ export interface components {
             created_by?: string | null;
             /** Created By User */
             created_by_user?: unknown | null;
+            customer_hierarchy?: components["schemas"]["CustomerHierarchyAuth"] | null;
+            /** Customer Member Id */
+            customer_member_id?: string | null;
             /** End User Id */
             end_user_id?: string | null;
             /** End User Max Budget */
@@ -52634,6 +53141,11 @@ export interface components {
             permissions: {
                 [key: string]: unknown;
             };
+            /**
+             * Person Budget Windows
+             * @default []
+             */
+            person_budget_windows: components["schemas"]["PersonBudgetWindow"][];
             /** Project Alias */
             project_alias?: string | null;
             /** Project Id */
@@ -68068,6 +68580,258 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    get_budget_assignment_management_v1_budget_assignments__subject_type___subject_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                subject_type: "user" | "customer_member";
+                subject_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAssignment"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_budget_assignment_management_v1_budget_assignments__subject_type___subject_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                subject_type: "user" | "customer_member";
+                subject_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MemberPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAssignment"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_increases_management_v1_budget_increase_requests_get: {
+        parameters: {
+            query?: {
+                /** @description Maximum requests in this page. */
+                limit?: number;
+                /** @description Number of requests to skip. */
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetIncreaseList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    request_increase_management_v1_budget_increase_requests_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetIncreaseInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetIncreaseRequest"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    own_budget_management_v1_budget_increase_requests_me_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAssignment"];
+                };
+            };
+        };
+    };
+    get_increase_management_v1_budget_increase_requests__request_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetIncreaseRequest"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    approve_increase_management_v1_budget_increase_requests__request_id__approve_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetIncreaseRequest"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reject_increase_management_v1_budget_increase_requests__request_id__reject_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetIncreaseRejection"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetIncreaseRequest"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

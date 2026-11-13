@@ -36,6 +36,7 @@ from litellm.constants import (
     LITELLM_PROXY_BUDGET_NAME,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
     MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY,
+    STANDARD_CUSTOMER_MEMBER_ID_HEADER,
 )
 from litellm.integrations.otel.model.config import is_otel_v2_enabled
 from litellm.integrations.otel.runtime import phase_event, phase_span, seed_request_identity
@@ -102,7 +103,10 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     virtual_key_max_budget_check,
     virtual_key_soft_budget_check,
 )
-from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
+from litellm.proxy.auth.auth_exception_handler import (
+    DB_UNAVAILABLE_FALLBACK_USER_ID,
+    UserAPIKeyAuthExceptionHandler,
+)
 from litellm.proxy.auth.auth_method import AuthMethod
 from litellm.proxy.auth.auth_object_prefetch import (
     AUTH_OBJECTS_TARGET,
@@ -114,6 +118,7 @@ from litellm.proxy.auth.auth_utils import (
     abbreviate_api_key,
     checks_team_s3_buckets_in_handler,
     fallback_target_model_name,
+    get_customer_member_id_from_request_headers,
     get_end_user_id_from_request_body,
     get_model_from_request,
     get_request_route,
@@ -126,7 +131,11 @@ from litellm.proxy.auth.auth_utils import (
     pre_db_read_auth_checks,
     request_dispatched_to_pass_through_endpoint,
     request_dispatched_to_provider_pass_through,
+    resolve_customer_member,
     route_in_additonal_public_routes,
+)
+from litellm.proxy.auth.customer_hierarchy_auth import (
+    resolve_customer_hierarchy,
 )
 from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
 from litellm.proxy.auth.network import TrustedProxyConfig, resolve_network_context
@@ -299,6 +308,7 @@ _CLAUDE_MODEL_ROUTES: Final = frozenset(
 )
 _CLAUDE_MODEL_NORMALIZED: Final = "litellm.claude_model_normalized"
 _GENERAL_SETTINGS_ADAPTER: Final = TypeAdapter(dict[str, object])
+_KEY_METADATA_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
 async def _normalize_claude_model(
@@ -1515,6 +1525,8 @@ def update_valid_token_with_end_user_params(valid_token: UserAPIKeyAuth, end_use
         valid_token.end_user_model_tpm_limit = end_user_params["end_user_model_tpm_limit"]  # rebind-ok: in-place
     if "end_user_model_rpm_limit" in end_user_params:
         valid_token.end_user_model_rpm_limit = end_user_params["end_user_model_rpm_limit"]  # rebind-ok: in-place
+    if "customer_hierarchy" in end_user_params:
+        valid_token.customer_hierarchy = end_user_params["customer_hierarchy"]  # rebind-ok: in-place
     return valid_token
 
 
@@ -4359,6 +4371,7 @@ async def _reserve_budget_after_common_checks(
             fail_closed_budget_enforcement=(
                 general_settings.get("fail_closed_budget_enforcement") is True
                 or user_api_key_auth_obj.billing_agent_policy is not None
+                or bool(user_api_key_auth_obj.person_budget_windows)
             ),
             raw_body=await read_raw_json_body(request=request),
             path_params=reservation_path_params,
@@ -4456,6 +4469,50 @@ async def _authorize_authenticated_request(
             llm_router,
             prisma_client,
             user_model,
+        )
+
+        user_api_key_auth_obj.customer_member_id = None  # rebind-ok: clear request identity before failure logging
+        customer_member_id: Final = get_customer_member_id_from_request_headers(
+            _GENERAL_SETTINGS_ADAPTER.validate_python(safe_get_request_headers(request) or {})
+        )
+        member_settings: Final = _GENERAL_SETTINGS_ADAPTER.validate_python(general_settings)
+        if customer_member_id is not None and user_api_key_auth_obj.user_id == DB_UNAVAILABLE_FALLBACK_USER_ID:
+            raise ProxyException(
+                message="API key customer organization scope could not be verified. Please retry shortly.",
+                type="customer_member_lookup_failed",
+                param=STANDARD_CUSTOMER_MEMBER_ID_HEADER,
+                code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                openai_code="customer_member_lookup_failed",
+            )
+        user_api_key_auth_obj.customer_member_id = await resolve_customer_member(  # rebind-ok: legacy admission updates the request-owned auth object for its handler
+            customer_member_id,
+            prisma_client,
+            _GENERAL_SETTINGS_ADAPTER.validate_python(user_api_key_auth_obj.metadata or {}),  # pyright: ignore[reportUnknownMemberType]  # legacy key metadata is validated as a JSON mapping here
+            reject_unknown_customer_member=member_settings.get("reject_unknown_customer_member", True) is not False,
+        )
+        if user_api_key_auth_obj.customer_member_id is not None:
+            from litellm.proxy.proxy_server import user_api_key_cache
+
+            user_api_key_auth_obj.customer_hierarchy = (
+                await resolve_customer_hierarchy(  # rebind-ok: admission fills request-owned authentication state
+                    customer_member_id=user_api_key_auth_obj.customer_member_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    llm_router=llm_router,
+                    request_model=request_data.get("model"),
+                    route=route,
+                )
+            )
+        from litellm.proxy.auth.person_budget import prepare_person_budget_windows
+
+        user_api_key_auth_obj.person_budget_windows = (
+            await prepare_person_budget_windows(  # rebind-ok: admission fills request-owned authentication state
+                prisma_client,
+                user_api_key_auth_obj.user_id,
+                user_api_key_auth_obj.customer_member_id,
+                route,
+                datetime.now(timezone.utc),
+            )
         )
 
         grants: Final = await access_group_ids_for_identity(user_api_key_auth_obj)
@@ -4707,13 +4764,8 @@ async def user_api_key_auth(
             if body_parse_exception is not None:
                 raise body_parse_exception
             raise
-        from litellm.proxy.proxy_server import (
-            general_settings,  # pyright: ignore[reportUnknownVariableType]  # proxy global is validated below
-        )
-
-        settings: Final = _GENERAL_SETTINGS_ADAPTER.validate_python(general_settings)
-        user_api_key_auth_obj: Final = (
-            authenticated.model_copy() if settings.get("access_group_rules") else authenticated
+        user_api_key_auth_obj: Final = authenticated.model_copy(
+            update={"customer_member_id": None, "customer_hierarchy": None, "person_budget_windows": ()}
         )
         user_api_key_auth_obj.budget_reservation = None
         user_api_key_auth_obj.agent_caller = agent_caller_from_headers(

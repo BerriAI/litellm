@@ -5,12 +5,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from itertools import chain
 from types import MappingProxyType
-from typing import Annotated, Final
+from typing import Annotated, Final, Literal
 
 from fastapi import APIRouter, Depends, Request
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
+from litellm.models.team import BudgetLimitEntry
 from litellm.proxy._types import (
     CommonProxyErrors,
     UserAPIKeyAuth,
@@ -63,6 +64,13 @@ class BudgetListItem(LiteLLMBaseModel):
     tpd_limit: int | None = None
     budget_duration: str | None = None
     budget_reset_at: datetime | None = None
+    budget_limits: tuple[BudgetLimitEntry, ...] | None = None
+    is_profile: bool = False
+    cap_policy: Literal["pause_allow_increase", "pause_until_reset"] | None = None
+    temp_budget_increase: float | None = None
+    temp_budget_expiry: datetime | None = None
+    temp_budget_duration: str | None = None
+    member_count: int = 0
     created_at: datetime
     updated_at: datetime
 
@@ -74,7 +82,12 @@ class _RowCount(LiteLLMBaseModel):
 _BUDGET_ROWS: Final = TypeAdapter(tuple[BudgetListItem, ...])
 _ROW_COUNTS: Final = TypeAdapter(tuple[_RowCount, ...])
 
-SELECTED_COLUMNS: Final = ", ".join(f'"{name}"' for name in BudgetListItem.model_fields)
+SELECTED_COLUMNS: Final = ", ".join(f'"{name}"' for name in BudgetListItem.model_fields if name != "member_count")
+_MEMBER_COUNT: Final = (
+    '(SELECT count(*) FROM "LiteLLM_UserTable" u WHERE u.budget_template_id = "LiteLLM_BudgetTable".budget_id)'
+    ' + (SELECT count(*) FROM "LiteLLM_CustomerMemberTable" m'
+    ' WHERE m.budget_template_id = "LiteLLM_BudgetTable".budget_id)'
+)
 
 
 # Unicode 17.0 Nd zeroes, each followed by its other nine digits in UnicodeData.txt.
@@ -125,7 +138,7 @@ class PrismaBudgetListExecutor:
             for key in plan.order
         ).replace('"budget_duration"', _BUDGET_DURATION_SECONDS)
         sql: Final = (
-            f"SELECT {SELECTED_COLUMNS} FROM {BUDGET_TABLE}"
+            f"SELECT {SELECTED_COLUMNS}, ({_MEMBER_COUNT}) AS member_count FROM {BUDGET_TABLE}"
             + (f" WHERE {clauses}" if clauses else "")
             + f" ORDER BY {ordering}"
             + f" LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"

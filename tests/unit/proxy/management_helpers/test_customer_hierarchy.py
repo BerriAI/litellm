@@ -79,7 +79,7 @@ class Table:
                 "budget_names": {},
                 "created_at": NOW,
                 "updated_at": NOW,
-                **data,
+                **{key: value.data if isinstance(value, Json) else value for key, value in data.items()},
             }
         )
         self.rows = {**self.rows, str(data[self.id_field]): row}
@@ -137,11 +137,12 @@ class Database:
         self.litellm_customerorganizationtable = Table("customer_org_id", self)
         self.litellm_customerteamtable = Table("customer_team_id", self)
         self.litellm_customermembertable = Table("customer_member_id", self)
+        self.litellm_usertable = Table("user_id", self)
         self.litellm_budgettable = Table("budget_id", self)
         self.locked_organization_ids: tuple[str, ...] = ()
 
     async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
-        if "FOR UPDATE" in query:
+        if "FOR UPDATE" in query or "FOR KEY SHARE" in query:
             self.locked_organization_ids = (*self.locked_organization_ids, *(str(arg) for arg in args))
             return ()
         with sqlite3.connect(":memory:") as connection:
@@ -178,6 +179,7 @@ class Database:
             self.litellm_customerorganizationtable,
             self.litellm_customerteamtable,
             self.litellm_customermembertable,
+            self.litellm_usertable,
             self.litellm_budgettable,
         )
         snapshots: Final = tuple(table.rows for table in tables)

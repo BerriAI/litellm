@@ -1122,7 +1122,7 @@ from litellm.types.llms.openai import (
     ResponseInProgressEvent,
     ResponsesAPIResponse,
 )
-from litellm.types.proxy.carried_budget_state import EntitySpendCounterKeys
+from litellm.types.proxy.carried_budget_state import EntitySpendCounterKeys, PersonBudgetWindow
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
@@ -3680,6 +3680,7 @@ async def increment_spend_counters(
     project_id: str | None = None,
     committed_spend_scope: EntitySpendCounterKeys | None = None,
     windows_from_ledger: bool = False,
+    person_budget_windows: tuple[PersonBudgetWindow, ...] = (),
 ):
     """
     Atomically increment spend counters for budget enforcement.
@@ -3718,6 +3719,7 @@ async def increment_spend_counters(
             project_id=project_id,
             committed_spend_scope=committed_spend_scope,
             windows_from_ledger=windows_from_ledger,
+            person_budget_windows=person_budget_windows,
         )
 
 
@@ -3834,6 +3836,7 @@ async def _increment_spend_counters_batched(
     project_id: str | None = None,
     committed_spend_scope: EntitySpendCounterKeys | None = None,
     windows_from_ledger: bool = False,
+    person_budget_windows: tuple[PersonBudgetWindow, ...] = (),
 ):
     """Runs inside one spend counter batch: the reservation reconcile and the warm checks share a single MGET, and
     the reconcile adjustments go out in the same INCRBYFLOAT pipeline as the counter increments."""
@@ -3993,9 +3996,40 @@ async def _increment_spend_counters_batched(
             ),
         )
 
+    async def _person_windows() -> tuple[PendingSpendIncrement, ...]:
+        pending: Final = tuple(
+            [
+                await _prepare_window_spend_counter_increment(
+                    counter_key=window.counter_key,
+                    entity_type=window.counter_entity_type,
+                    entity_id=window.entity_id,
+                    window_duration=window.window_duration,
+                    window_start=window.window_start,
+                    increment=cost,
+                )
+                for window in person_budget_windows
+                if window.counter_key not in reserved_counter_keys
+            ]
+        )
+        if not windows_from_ledger:
+            for window in person_budget_windows:
+                await _enqueue_window_spend_row_update(
+                    entity_type=Litellm_EntityType.USER
+                    if window.entity_type == "user"
+                    else Litellm_EntityType.CUSTOMER_MEMBER,
+                    entity_id=window.entity_id,
+                    reset_at=window.reset_at,
+                    window_duration=window.window_duration,
+                    window_start=window.window_start,
+                    increment=cost,
+                    request_started_at=request_started_at,
+                )
+        return tuple(item for item in pending if item is not None)
+
     scope_coros: Final = tuple(
         coro
         for coro in (
+            _person_windows() if person_budget_windows else None,
             _key_scope(token) if token is not None else None,
             _team_scope(team_id) if team_id is not None else None,
             _team_member_scope(user_id, team_id) if user_id is not None and team_id is not None else None,

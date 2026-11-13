@@ -166,6 +166,13 @@ def test_template_edits_propagate_and_only_live_override_fields_win() -> None:
         "tpm_limit": None,
         "allowed_models": ["model-b"],
         "budget_duration": None,
+        "model_tpm_limit": None,
+        "model_rpm_limit": None,
+        "budget_limits": None,
+        "cap_policy": None,
+        "temp_budget_increase": None,
+        "temp_budget_expiry": None,
+        "temp_budget_duration": None,
     }
     fallback: Final = http.get("/management/v1/customer_members/expired")
     assert fallback.status_code == 200, fallback.text
@@ -571,3 +578,45 @@ def test_organization_list_counts_all_members_and_searches_before_paginating() -
     assert literal.json()["data"][0]["customer_org_id"] == "other"
     assert literal.json()["data"][0]["member_count"] == 0
     assert literal.json()["meta"]["total_count"] == 1
+
+
+def test_per_model_rate_limits_round_trip_at_every_level_and_override_the_template_map() -> None:
+    http: Final = client()
+    family(http)
+    team: Final = http.patch(
+        "/management/v1/customer_teams/team",
+        json={"budget": {"model_tpm_limit": {"model-a": 5000}, "model_rpm_limit": {"model-a": 50}}},
+    )
+    assert team.status_code == 200, team.text
+    assert team.json()["budget"]["model_tpm_limit"] == {"model-a": 5000}
+    assert team.json()["budget"]["model_rpm_limit"] == {"model-a": 50}
+    template: Final = http.patch(
+        "/management/v1/customer_organizations/org/default_budgets/" + family_default_budget_id(http),
+        json={"model_tpm_limit": {"model-a": 1000}},
+    )
+    assert template.status_code == 200, template.text
+    created: Final = http.post(
+        "/management/v1/customer_members",
+        json={
+            "customer_member_id": "member",
+            "parent_team_id": "team",
+            "budget_override": {"model_rpm_limit": {"model-a": 1}},
+        },
+    )
+    assert created.status_code == 201, created.text
+    effective: Final = created.json()["effective_budget"]
+    assert effective["model_tpm_limit"] == {"model-a": 1000}
+    assert effective["model_rpm_limit"] == {"model-a": 1}
+    overridden: Final = http.patch(
+        "/management/v1/customer_members/member", json={"budget_override": {"model_tpm_limit": {"model-a": 10}}}
+    )
+    assert overridden.status_code == 200, overridden.text
+    assert overridden.json()["effective_budget"]["model_tpm_limit"] == {"model-a": 10}
+    assert http.get("/management/v1/customer_members/member").json()["effective_budget"]["model_rpm_limit"] == {
+        "model-a": 1
+    }
+
+
+def family_default_budget_id(http: TestClient) -> str:
+    organization: Final = http.get("/management/v1/customer_organizations/org").json()
+    return str(organization["default_budget_id"])

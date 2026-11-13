@@ -7,10 +7,11 @@ Canonical definition for ``litellm_budgettable``. Re-exported from
 
 from collections.abc import Mapping
 from datetime import datetime, timezone
-from typing import Final
+from typing import Final, Literal
 
-from pydantic import ConfigDict
+from pydantic import ConfigDict, field_validator
 
+from litellm.models.team import BudgetLimitEntry
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
 
@@ -36,8 +37,17 @@ class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
     allowed_models: list[str] | None = None  # per-member model scope; empty = inherit team models
     temp_budget_increase: float | None = None
     temp_budget_expiry: datetime | None = None
+    temp_budget_duration: Literal["1mo", "12mo"] | None = None
+    budget_limits: tuple[BudgetLimitEntry, ...] | None = None
+    is_profile: bool | None = None
+    cap_policy: Literal["pause_allow_increase", "pause_until_reset"] | None = None
 
     model_config = ConfigDict(protected_namespaces=())
+
+    @field_validator("budget_limits")
+    @classmethod
+    def valid_budget_limits(cls, value: tuple[BudgetLimitEntry, ...] | None) -> tuple[BudgetLimitEntry, ...] | None:
+        return validate_person_budget_limits(value)
 
     def active_temp_budget_increase(self, now: datetime) -> float:
         if self.temp_budget_increase is None or self.temp_budget_expiry is None:
@@ -52,7 +62,27 @@ class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
     def effective_max_budget(self, now: datetime) -> float | None:
         if self.max_budget is None:
             return None
-        return self.max_budget + self.active_temp_budget_increase(now)
+        return self.max_budget + (self.active_temp_budget_increase(now) if self.temp_budget_duration is None else 0.0)
+
+
+def validate_person_budget_limits(
+    limits: tuple[BudgetLimitEntry, ...] | None,
+) -> tuple[BudgetLimitEntry, ...] | None:
+    import math
+
+    if limits is None:
+        return None
+    durations: Final = tuple(limit.budget_duration for limit in limits)
+    if len(set(durations)) != len(durations):
+        raise ValueError("Each budget duration may appear only once")
+    for limit in limits:
+        if limit.budget_duration not in ("1mo", "12mo"):
+            raise ValueError("Personal budget limits support calendar month (1mo) and calendar year (12mo)")
+        if not math.isfinite(limit.max_budget) or limit.max_budget < 0:
+            raise ValueError("Budget limits must be finite, non-negative amounts")
+        if limit.reset_at is not None:
+            raise ValueError("Personal budget windows reset automatically at calendar boundaries")
+    return limits
 
 
 class LiteLLM_BudgetTableFull(LiteLLM_BudgetTable):

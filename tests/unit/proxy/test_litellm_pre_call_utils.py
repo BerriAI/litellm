@@ -11822,3 +11822,22 @@ def test_stale_team_alias_bypass_flag_is_read_once_per_process(monkeypatch: pyte
     monkeypatch.setenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", "false")
 
     assert (first, pre_call_utils._stale_team_alias_bypass_enabled()) == (True, True)
+
+
+@pytest.mark.parametrize("metadata_bucket", ["metadata", "litellm_metadata"])
+@pytest.mark.parametrize("member_id", [None, "resolved-member"])
+def test_customer_member_spend_identity_cannot_be_forged_in_either_metadata_bucket(
+    metadata_bucket: str, member_id: str | None
+) -> None:
+    payload: Final = {
+        "metadata": {"user_api_key_customer_member_id": "forged-member", "application_tag": "kept"},
+        "litellm_metadata": {"user_api_key_customer_member_id": "another-forged-member"},
+    }
+    result: Final = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
+        data=payload,
+        user_api_key_dict=UserAPIKeyAuth(customer_member_id=member_id),
+        _metadata_variable_name=metadata_bucket,
+    )
+    assert result["metadata"]["user_api_key_customer_member_id"] == member_id
+    assert result["litellm_metadata"]["user_api_key_customer_member_id"] == member_id
+    assert result["metadata"]["application_tag"] == "kept"

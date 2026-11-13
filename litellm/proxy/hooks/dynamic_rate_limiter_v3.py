@@ -126,6 +126,7 @@ async def alternate_grant_for(user_api_key_dict: UserAPIKeyAuth, model: str) -> 
         get_team_membership,
         get_team_object,
     )
+    from litellm.proxy.auth.customer_hierarchy_auth import check_customer_hierarchy_model_access
     from litellm.proxy.auth.user_api_key_auth import (
         _is_fallback_model_authorized,  # pyright: ignore[reportPrivateUsage]  # steering shares the fallback contract
         _is_within_every_model_budget,  # pyright: ignore[reportPrivateUsage]  # steering shares the fallback contract
@@ -189,6 +190,8 @@ async def alternate_grant_for(user_api_key_dict: UserAPIKeyAuth, model: str) -> 
             can_customer_access_model(
                 model=model, end_user_object=end_user_object, llm_router=llm_router, valid_token=user_api_key_dict
             )
+        if user_api_key_dict.customer_hierarchy is not None:
+            check_customer_hierarchy_model_access(user_api_key_dict.customer_hierarchy, model, llm_router)
     except Exception:  # noqa: BLE001  # a failed team, member, project or customer lookup must not authorize an alternate
         return None
     if not await _is_fallback_model_authorized(

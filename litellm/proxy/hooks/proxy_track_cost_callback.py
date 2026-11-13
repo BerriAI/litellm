@@ -47,6 +47,7 @@ from litellm.proxy.db.db_spend_update_writer import (
 from litellm.proxy.hooks.search_free_tier import apply_search_free_tier
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, metadata_variable_name_for_request
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
+from litellm.proxy.spend_tracking.carried_budget_state import person_budget_windows_from_kwargs
 from litellm.proxy.spend_tracking.committed_spend import committed_spend_tracked, warm_committed_counter_keys
 from litellm.proxy.spend_tracking.spend_counter_batch import post_call_counter_keys, spend_counter_batch_scope
 from litellm.proxy.spend_tracking.spend_event import (
@@ -77,7 +78,7 @@ from litellm.proxy.utils import (
     ProxyUpdateSpend,
 )
 from litellm.types.proxy.auth.user_api_key_auth import committed_budget_spend_of_row
-from litellm.types.proxy.carried_budget_state import EntitySpendCounterKeys
+from litellm.types.proxy.carried_budget_state import EntitySpendCounterKeys, PersonBudgetWindow
 from litellm.types.router import Deployment
 from litellm.types.utils import (
     CallTypes,
@@ -1286,6 +1287,7 @@ class _IncrementSpendCounters(Protocol):
         project_id: str | None = None,
         committed_spend_scope: EntitySpendCounterKeys | None = None,
         windows_from_ledger: bool = False,
+        person_budget_windows: tuple[PersonBudgetWindow, ...] = (),
     ) -> None: ...
 
 
@@ -1446,6 +1448,7 @@ async def _update_database_and_spend_counters_in_batch(
             team_id=team_id,
             user_id=user_id,
             response_cost=response_cost,
+            person_budget_windows=person_budget_windows_from_kwargs(_BATCH_CALLBACK_FIELDS.validate_python(kwargs)),
             org_id=org_id,
             budget_reservation=budget_reservation,
             end_user_id=end_user_id,

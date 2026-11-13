@@ -18,6 +18,7 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, ClassVar, Final, Optional
+from urllib.parse import unquote
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
@@ -54,6 +55,8 @@ _WINDOW_SPEND_ENTITY_TYPES: Final[Mapping[str, str]] = MappingProxyType(
     {
         "Key": Litellm_EntityType.KEY.value,
         "Team": Litellm_EntityType.TEAM.value,
+        "User": Litellm_EntityType.USER.value,
+        "CustomerMember": Litellm_EntityType.CUSTOMER_MEMBER.value,
     }
 )
 
@@ -133,6 +136,8 @@ class SpendCounterReseed:
         """
         if prisma_client is None:
             return None
+        if counter_key.startswith("spend:person:"):
+            return await SpendCounterReseed._person_window_from_db(prisma_client, counter_key)
         # Per-window key/team counters share prefixes with primary counters
         # but don't correspond to a DB row. Do not reject arbitrary entity IDs
         # or tag names that merely contain ":window:".
@@ -148,6 +153,26 @@ class SpendCounterReseed:
         if row is None:
             return None
         return float(getattr(row, "spend", 0.0) or 0.0)
+
+    @staticmethod
+    async def _person_window_from_db(prisma_client: "PrismaClient", counter_key: str) -> float | None:
+        parts: Final = counter_key.split(":", 5)
+        if len(parts) != 6 or parts[4] != "window" or parts[2] not in ("user", "customer_member"):
+            return None
+        duration, separator, start = parts[5].partition("@")
+        if separator != "@" or duration not in ("1mo", "12mo"):
+            return None
+        try:
+            window_start: Final = datetime.fromisoformat(start).replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+        return await SpendCounterReseed.window_from_db(
+            prisma_client,
+            "User" if parts[2] == "user" else "CustomerMember",
+            unquote(parts[3]),
+            window_duration=parts[5],
+            window_start=window_start,
+        )
 
     @staticmethod
     async def _counter_row(prisma_client: "PrismaClient", counter_key: str) -> object | None:
@@ -320,7 +345,7 @@ class SpendCounterReseed:
             return None
 
         if row is None:
-            return None
+            return 0.0 if entity_type in ("User", "CustomerMember") else None
         if _as_utc(row.window_start) < _as_utc(expected_window_start):
             return None
         return float(row.spend or 0.0)

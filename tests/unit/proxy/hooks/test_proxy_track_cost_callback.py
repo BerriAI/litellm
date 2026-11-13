@@ -1424,6 +1424,7 @@ async def test_update_database_and_spend_counters_updates_counters_after_db_upda
         model_access_groups=("premium",),
         project_id=None,
         committed_spend_scope=EntitySpendCounterKeys(),
+        person_budget_windows=(),
     )
 
 

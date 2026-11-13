@@ -217,7 +217,7 @@ async def test_window_from_table_treats_naive_row_timestamp_as_utc():
     "prisma, entity_type",
     [
         (_FakePrismaClient(row=None), "Key"),
-        (_FakePrismaClient(row=_row(WINDOW_START, 1.0)), "User"),
+        (_FakePrismaClient(row=_row(WINDOW_START, 1.0)), "Unsupported"),
         (_FakePrismaClient(error=RuntimeError("connection reset")), "Key"),
         (None, "Key"),
     ],
