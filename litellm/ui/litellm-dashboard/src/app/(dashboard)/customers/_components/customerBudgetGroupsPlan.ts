@@ -1,6 +1,6 @@
 import type { components } from "@/lib/http/schema";
 import type { Organization } from "./customerHierarchyForms";
-import { limit, validateCustomerBudgetGroups, type CustomerBudgetGroupFields } from "./customerOrganizationForm";
+import { defaultCustomerCapPolicy, limit, validateCustomerBudgetGroups, type CustomerBudgetGroupFields } from "./customerOrganizationForm";
 
 type Template = components["schemas"]["BudgetTemplate"];
 type Patch = components["schemas"]["TemplatePatch"];
@@ -8,6 +8,7 @@ export const customerBudgetGroupRows = (organization: Organization): CustomerBud
   organization.default_budgets.map((group) => ({
     id: group.budget_id,
     name: group.name,
+    capPolicy: group.cap_policy ?? defaultCustomerCapPolicy,
     monthlyBudget: String(group.budget_limits?.find((entry) => entry.budget_duration === "1mo")?.max_budget ?? ""),
     yearlyBudget: String(group.budget_limits?.find((entry) => entry.budget_duration === "12mo")?.max_budget ?? ""),
   }));
@@ -30,6 +31,7 @@ export function planCustomerBudgetGroups(
       rowId: group.id,
       body: {
         name: group.name.trim(),
+        cap_policy: group.capPolicy,
         budget_limits: [...limit(group.monthlyBudget, "1mo"), ...limit(group.yearlyBudget, "12mo")],
       } satisfies Template,
     }));
@@ -46,6 +48,7 @@ export function planCustomerBudgetGroups(
       JSON.stringify([...editableLimits].sort((a, b) => a.budget_duration.localeCompare(b.budget_duration)));
     const body: Patch = {
       ...(group.name.trim() !== original.name ? { name: group.name.trim() } : {}),
+      ...(group.capPolicy !== (original.cap_policy ?? defaultCustomerCapPolicy) ? { cap_policy: group.capPolicy } : {}),
       ...(limitsChanged
         ? {
             budget_limits: [

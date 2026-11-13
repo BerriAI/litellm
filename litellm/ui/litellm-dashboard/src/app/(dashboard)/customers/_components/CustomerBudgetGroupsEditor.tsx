@@ -5,7 +5,8 @@ import { Input } from "@/components/ui/input";
 import { InputGroup, InputGroupAddon, InputGroupInput, InputGroupText } from "@/components/ui/input-group";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import type { CustomerBudgetGroupFields } from "./customerOrganizationForm";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { defaultCustomerCapPolicy, type CustomerBudgetGroupFields } from "./customerOrganizationForm";
 
 export function BudgetInput({
   id,
@@ -117,7 +118,35 @@ export default function CustomerBudgetGroupsEditor({
                 />
               </div>
             ))}
-            <Label className="flex gap-2 sm:justify-center">
+            <div className="col-span-2 min-w-0 space-y-1.5 sm:col-span-3 sm:row-start-2">
+              <Label htmlFor={`cc-cap-${group.id}`}>
+                {t("customerPortal.budgetGroups.atCap")}
+              </Label>
+              <Select
+                value={group.capPolicy}
+                disabled={disabled}
+                onValueChange={(value) => {
+                  if (value === "pause_until_reset" || value === "pause_allow_increase") {
+                    updateGroup(group.id, { capPolicy: value });
+                  }
+                }}
+              >
+                <SelectTrigger
+                  id={`cc-cap-${group.id}`}
+                  aria-label={t("customerPortal.budgetGroups.atCapLabel", { index: index + 1 })}
+                  className="w-full min-w-0 text-xs"
+                >
+                  <SelectValue>
+                    {t(group.capPolicy === "pause_allow_increase" ? "customerPortal.budgetGroups.pauseAllowIncrease" : "customerPortal.budgetGroups.pauseUntilReset")}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="pause_until_reset">{t("customerPortal.budgetGroups.pauseUntilReset")}</SelectItem>
+                  <SelectItem value="pause_allow_increase">{t("customerPortal.budgetGroups.pauseAllowIncrease")}</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <Label className="flex gap-2 sm:col-start-4 sm:row-start-1 sm:justify-center">
               <RadioGroupItem
                 value={group.id}
                 aria-label={t("customerPortal.createDialog.useDefault", { name: group.name || index + 1 })}
@@ -130,7 +159,7 @@ export default function CustomerBudgetGroupsEditor({
               type="button"
               variant="ghost"
               size="icon-sm"
-              className="justify-self-end"
+              className="justify-self-end sm:col-start-5 sm:row-start-1"
               disabled={groups.length === 1}
               onClick={() => removeGroup(group.id)}
               aria-label={t("customerPortal.createDialog.removeGroup", { name: group.name || index + 1 })}
@@ -146,7 +175,7 @@ export default function CustomerBudgetGroupsEditor({
         size="sm"
         onClick={() =>
           onChange(
-            [...groups, { id: crypto.randomUUID(), name: "", monthlyBudget: "", yearlyBudget: "" }],
+            [...groups, { id: crypto.randomUUID(), name: "", monthlyBudget: "", yearlyBudget: "", capPolicy: defaultCustomerCapPolicy }],
             defaultGroupId,
           )
         }

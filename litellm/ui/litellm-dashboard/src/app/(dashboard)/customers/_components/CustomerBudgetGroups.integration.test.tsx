@@ -49,6 +49,8 @@ describe("CustomerBudgetGroups", () => {
     fireEvent.change(screen.getByRole("spinbutton", { name: "Group 1 monthly budget (USD)" }), {
       target: { value: "15" },
     });
+    await user.click(screen.getByRole("combobox", { name: "Group 1 at the cap" }));
+    await user.click(screen.getByRole("option", { name: "Pause, they can request more" }));
     await user.click(screen.getByRole("button", { name: "Add budget group" }));
     fireEvent.change(screen.getByRole("textbox", { name: "Group 3 name" }), { target: { value: "New" } });
     fireEvent.change(screen.getByRole("spinbutton", { name: "Group 3 monthly budget (USD)" }), {
@@ -70,9 +72,13 @@ describe("CustomerBudgetGroups", () => {
     ]);
     expect(await requests[0].clone().json()).toEqual({
       name: "New",
+      cap_policy: "pause_until_reset",
       budget_limits: [{ budget_duration: "1mo", max_budget: 30 }],
     });
-    expect(await requests[1].clone().json()).toEqual({ budget_limits: [{ budget_duration: "1mo", max_budget: 15 }] });
+    expect(await requests[1].clone().json()).toEqual({
+      cap_policy: "pause_allow_increase",
+      budget_limits: [{ budget_duration: "1mo", max_budget: 15 }],
+    });
     expect(await requests[2].clone().json()).toEqual({ default_budget_template_id: "created-id" });
   });
 

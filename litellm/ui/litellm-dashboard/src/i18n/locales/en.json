@@ -20631,6 +20631,10 @@
   },
   "customerPortal": {
     "budgetGroups": {
+      "atCap": "At the cap",
+      "atCapLabel": "Group {{index}} at the cap",
+      "pauseUntilReset": "Pause until reset",
+      "pauseAllowIncrease": "Pause, they can request more",
       "title": "Budget groups",
       "renameCollision": "A group name is already in use. Save a different name first before reusing it.",
       "missingCreated": "The server did not return the new budget group. Refresh and try again."

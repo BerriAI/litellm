@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Organization } from "./customerHierarchyForms";
 import { customerBudgetGroupRows, planCustomerBudgetGroups } from "./customerBudgetGroupsPlan";
+import { defaultCustomerCapPolicy } from "./customerOrganizationForm";
 
 const organization: Organization = {
   customer_org_id: "org-1",
@@ -47,7 +48,7 @@ describe("planCustomerBudgetGroups", () => {
         organization,
         [
           { ...rows[0], name: "Renamed", monthlyBudget: "0", yearlyBudget: "" },
-          { id: "new", name: "New", monthlyBudget: "30", yearlyBudget: "300" },
+          { id: "new", name: "New", monthlyBudget: "30", yearlyBudget: "300", capPolicy: "pause_allow_increase" },
         ],
         "new",
       ),
@@ -59,6 +60,7 @@ describe("planCustomerBudgetGroups", () => {
           rowId: "new",
           body: {
             name: "New",
+            cap_policy: "pause_allow_increase",
             budget_limits: [
               { budget_duration: "1mo", max_budget: 30 },
               { budget_duration: "12mo", max_budget: 300 },
@@ -93,6 +95,33 @@ describe("planCustomerBudgetGroups", () => {
     });
   });
 
+  it("should patch only the cap policy when it is the only change", () => {
+    const rows = customerBudgetGroupRows(organization);
+    expect(rows[0].capPolicy).toBe("pause_allow_increase");
+    expect(rows[1].capPolicy).toBe("pause_until_reset");
+    const expected = {
+      ok: true,
+      creates: [],
+      updates: [{ budgetId: "standard", body: { cap_policy: "pause_until_reset" } }],
+      removes: [],
+      defaultChange: null,
+      changed: true,
+    };
+    expect(planCustomerBudgetGroups(organization, [{ ...rows[0], capPolicy: "pause_until_reset" }, rows[1]], "standard")).toEqual(expected);
+  });
+
+  it("should treat null and absent policies as an unchanged pause-until-reset policy", () => {
+    const original = {
+      ...organization,
+      default_budgets: organization.default_budgets.map((group) => ({ ...group, cap_policy: null })),
+    };
+    expect(planCustomerBudgetGroups(original, customerBudgetGroupRows(original), "standard")).toMatchObject({
+      ok: true,
+      updates: [],
+      changed: false,
+    });
+  });
+
   it("should reject swaps and reusing a removed name before sending requests", () => {
     const rows = customerBudgetGroupRows(organization);
     expect(
@@ -109,9 +138,9 @@ describe("planCustomerBudgetGroups", () => {
 
   it.each([
     [[], "", "defaultRequired"],
-    [[{ id: "a", name: "", monthlyBudget: "1", yearlyBudget: "" }], "a", "groupNameRequired"],
-    [[{ id: "a", name: "A", monthlyBudget: "", yearlyBudget: "" }], "a", "groupLimitRequired"],
-    [[{ id: "a", name: "A", monthlyBudget: "-1", yearlyBudget: "" }], "a", "invalidBudget"],
+    [[{ id: "a", name: "", monthlyBudget: "1", yearlyBudget: "", capPolicy: defaultCustomerCapPolicy }], "a", "groupNameRequired"],
+    [[{ id: "a", name: "A", monthlyBudget: "", yearlyBudget: "", capPolicy: defaultCustomerCapPolicy }], "a", "groupLimitRequired"],
+    [[{ id: "a", name: "A", monthlyBudget: "-1", yearlyBudget: "", capPolicy: defaultCustomerCapPolicy }], "a", "invalidBudget"],
   ] as const)("should validate invalid edits", (groups, defaultId, error) => {
     expect(planCustomerBudgetGroups(organization, [...groups], defaultId)).toEqual({ ok: false, error });
   });

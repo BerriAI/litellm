@@ -1,10 +1,14 @@
 import type { components } from "@/lib/http/schema";
 
+export type CustomerCapPolicy = NonNullable<components["schemas"]["BudgetTemplate"]["cap_policy"]>;
+export const defaultCustomerCapPolicy: CustomerCapPolicy = "pause_until_reset";
+
 export interface CustomerBudgetGroupFields {
   id: string;
   name: string;
   monthlyBudget: string;
   yearlyBudget: string;
+  capPolicy: CustomerCapPolicy;
 }
 
 export interface CustomerOrganizationFields {
@@ -24,9 +28,9 @@ export const initialCustomerOrganizationFields = (): CustomerOrganizationFields 
   tpm: "",
   rpm: "",
   groups: [
-    { id: "power", name: "power_user", monthlyBudget: "200", yearlyBudget: "2000" },
-    { id: "default", name: "default_user", monthlyBudget: "50", yearlyBudget: "500" },
-    { id: "low", name: "low_user", monthlyBudget: "10", yearlyBudget: "100" },
+    { id: "power", name: "power_user", monthlyBudget: "200", yearlyBudget: "2000", capPolicy: defaultCustomerCapPolicy },
+    { id: "default", name: "default_user", monthlyBudget: "50", yearlyBudget: "500", capPolicy: defaultCustomerCapPolicy },
+    { id: "low", name: "low_user", monthlyBudget: "10", yearlyBudget: "100", capPolicy: defaultCustomerCapPolicy },
   ],
   defaultGroupId: "default",
 });
@@ -95,6 +99,7 @@ export function buildCustomerOrganizationBody(fields: CustomerOrganizationFields
       : {}),
     default_budgets: fields.groups.map((group): components["schemas"]["BudgetTemplate"] => ({
       name: group.name.trim(),
+      cap_policy: group.capPolicy,
       budget_limits: [...limit(group.monthlyBudget, "1mo"), ...limit(group.yearlyBudget, "12mo")],
     })),
     default_budget_template: fields.groups.find((group) => group.id === fields.defaultGroupId)?.name.trim(),
