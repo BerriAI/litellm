@@ -19,6 +19,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { InputGroup, InputGroupAddon, InputGroupInput, InputGroupText } from "@/components/ui/input-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { getBudgetDurationLabel } from "@/components/common_components/budget_duration_dropdown";
 import i18n from "@/i18n/i18n";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { COMBINED_BUDGET_DURATION } from "./budgetLimits";
@@ -31,6 +32,8 @@ const budgetShape = {
   max_budget: z.number().nullish(),
   budget_duration: z.string().nullish(),
   annual_budget: z.number().nullish(),
+  additional_max_budget: z.number().nullish(),
+  additional_budget_duration: z.string().nullish(),
 };
 
 const budgetSchema = z.object(budgetShape).superRefine((values, context) => {
@@ -79,21 +82,34 @@ const OptionalBadge = () => {
   return <Badge variant="secondary">{t("budgets.form.optional")}</Badge>;
 };
 
-function SpendLimitField({ form }: { form: BudgetForm }) {
+function SpendLimitField({ form, additional = false }: { form: BudgetForm; additional?: boolean }) {
   const { t } = useTranslation();
   const amountId = useId();
-  const combined = useWatch({ control: form.control, name: "budget_duration" }) === COMBINED_BUDGET_DURATION;
-  const resetItems = RESET_OPTIONS.map(({ value, labelKey }) => ({ value, label: t(labelKey) }));
+  const amountField = additional ? "additional_max_budget" : "max_budget";
+  const durationField = additional ? "additional_budget_duration" : "budget_duration";
+  const duration = useWatch({ control: form.control, name: durationField });
+  const mixed = useWatch({ control: form.control, name: "additional_max_budget" }) !== undefined;
+  const combined = duration === COMBINED_BUDGET_DURATION;
+  const options = RESET_OPTIONS.filter(({ value }) => {
+    if (additional) return value !== COMBINED_BUDGET_DURATION;
+    const calendar = value === "30d" || value === "12mo" || value === COMBINED_BUDGET_DURATION;
+    return !mixed || calendar;
+  }).map(({ value, labelKey }) => ({ value, label: t(labelKey) }));
+  const resetItems =
+    duration && !options.some(({ value }) => value === duration)
+      ? [...options, { value: duration, label: getBudgetDurationLabel(duration, t) }]
+      : options;
+  const primaryLabel = combined ? "budgets.form.monthlyLimit" : "budgets.form.spendLimit";
   return (
     <Field className="gap-2">
       <FieldLabel htmlFor={amountId}>
-        {t(combined ? "budgets.form.monthlyLimit" : "budgets.form.spendLimit")}
+        {t(additional ? "budgets.form.additionalSpendLimit" : primaryLabel)}
         {!combined && <OptionalBadge />}
       </FieldLabel>
       <ButtonGroup className="w-full">
         <Controller
           control={form.control}
-          name="max_budget"
+          name={amountField}
           render={({ field, fieldState }) => (
             <InputGroup>
               <InputGroupAddon>
@@ -110,7 +126,7 @@ function SpendLimitField({ form }: { form: BudgetForm }) {
         />
         <Controller
           control={form.control}
-          name="budget_duration"
+          name={durationField}
           render={({ field }) => (
             <Select
               items={resetItems}
@@ -125,7 +141,10 @@ function SpendLimitField({ form }: { form: BudgetForm }) {
                 field.onChange(next === NO_RESET ? null : next);
               }}
             >
-              <SelectTrigger aria-label={t("budgets.form.resetPeriod")} className="w-44">
+              <SelectTrigger
+                aria-label={t(additional ? "budgets.form.additionalResetPeriod" : "budgets.form.resetPeriod")}
+                className="w-44"
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -139,7 +158,8 @@ function SpendLimitField({ form }: { form: BudgetForm }) {
           )}
         />
       </ButtonGroup>
-      <FieldError errors={[form.formState.errors.max_budget]} />
+      {additional && <FieldDescription>{t("budgets.form.additionalLimitHint")}</FieldDescription>}
+      <FieldError errors={[form.formState.errors[amountField]]} />
     </Field>
   );
 }
@@ -161,6 +181,7 @@ function RateLimitField({ form, name, label }: { form: BudgetForm; name: NumberF
 export function BudgetFormFields({ form, isEditing }: { form: BudgetForm; isEditing: boolean }) {
   const { t } = useTranslation();
   const combined = useWatch({ control: form.control, name: "budget_duration" }) === COMBINED_BUDGET_DURATION;
+  const mixed = useWatch({ control: form.control, name: "additional_max_budget" }) !== undefined;
   return (
     <FieldGroup className="gap-4">
       <FormField
@@ -183,6 +204,7 @@ export function BudgetFormFields({ form, isEditing }: { form: BudgetForm; isEdit
           {(field) => <Input {...numberProps(field)} min={0} step="any" />}
         </FormField>
       )}
+      {mixed && <SpendLimitField form={form} additional />}
       <FieldSeparator />
       <FieldSet className="gap-3">
         <FieldLegend className="mb-4 flex items-center gap-2 text-[15px] leading-[22px] font-semibold">

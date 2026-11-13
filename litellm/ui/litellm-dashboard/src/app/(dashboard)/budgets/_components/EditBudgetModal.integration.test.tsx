@@ -144,6 +144,60 @@ describe("EditBudgetModal", () => {
     },
   );
 
+  it.each([
+    { duration: "1mo", label: "per month" },
+    { duration: "12mo", label: "per year" },
+  ] as const)("edits both stored caps when a scalar and $duration window coexist", async ({ duration, label }) => {
+    const user = userEvent.setup();
+    const limit = { budget_duration: duration, max_budget: 100, reset_at: "2027-01-01T00:00:00Z" };
+    const row = { ...EXISTING_BUDGET, max_budget: 25, budget_duration: "24h", budget_limits: [limit] };
+    renderModal(row);
+
+    expect(screen.getByLabelText(/^Spend limit/)).toHaveValue(100);
+    expect(resetPeriod()).toHaveTextContent(label);
+    expect(screen.getByLabelText(/^Additional spend limit/)).toHaveValue(25);
+    expect(screen.getByRole("combobox", { name: "Additional reset period" })).toHaveTextContent("per day");
+
+    fireEvent.change(screen.getByLabelText(/^Spend limit/), { target: { value: "75" } });
+    fireEvent.change(screen.getByLabelText(/^Additional spend limit/), { target: { value: "0" } });
+    await save(user);
+    await waitFor(() => expect(network.write).toHaveBeenCalledTimes(1));
+    expect(network.write.mock.calls[0][0]).toEqual({
+      budget_id: "budget-alpha",
+      max_budget: 0,
+      budget_limits: [{ ...limit, max_budget: 75 }],
+    });
+  });
+
+  it("shows all three caps and clears a zero scalar cap without resending calendar limits", async () => {
+    const user = userEvent.setup();
+    const row: BudgetItem = {
+      ...EXISTING_BUDGET,
+      max_budget: 0,
+      budget_duration: "1h",
+      budget_limits: [
+        { budget_duration: "1mo", max_budget: 50 },
+        { budget_duration: "12mo", max_budget: 500 },
+      ],
+    };
+    renderModal(row);
+    expect(screen.getByLabelText(/^Monthly limit/)).toHaveValue(50);
+    expect(screen.getByLabelText("Annual limit (USD)")).toHaveValue(500);
+    expect(screen.getByLabelText(/^Additional spend limit/)).toHaveValue(0);
+    const scalarPeriod = screen.getByRole("combobox", { name: "Additional reset period" });
+    expect(scalarPeriod).toHaveTextContent("hourly");
+
+    fireEvent.change(screen.getByLabelText(/^Additional spend limit/), { target: { value: "" } });
+    await chooseSelectOption(user, scalarPeriod, "in total");
+    await save(user);
+    await waitFor(() => expect(network.write).toHaveBeenCalledTimes(1));
+    expect(network.write.mock.calls[0][0]).toEqual({
+      budget_id: "budget-alpha",
+      max_budget: null,
+      budget_duration: null,
+    });
+  });
+
   it("keeps a dirty combined budget on refresh and saves only the new annual cap", async () => {
     const user = userEvent.setup();
     const row: BudgetItem = {

@@ -115,6 +115,60 @@ describe("budgetFormPayload", () => {
     });
   });
 
+  it.each([0, null])("edits only the additional scalar cap to %s while preserving calendar caps", (amount) => {
+    const values = { ...combined, additional_max_budget: amount, additional_budget_duration: "24h" };
+    expect(budgetFormPayload(values, { additional_max_budget: true }, limits)).toEqual({
+      budget_id: "both",
+      max_budget: amount,
+    });
+  });
+
+  it("edits only the additional scalar reset period", () => {
+    const values = { ...combined, additional_max_budget: 25, additional_budget_duration: "7d" };
+    expect(budgetFormPayload(values, { additional_budget_duration: true }, limits)).toEqual({
+      budget_id: "both",
+      budget_duration: "7d",
+    });
+  });
+
+  it("does not resend the additional scalar cap when updating a calendar cap", () => {
+    const values = { ...combined, annual_budget: 200, additional_max_budget: 25, additional_budget_duration: "24h" };
+    expect(budgetFormPayload(values, { annual_budget: true }, limits)).toEqual({
+      budget_id: "both",
+      budget_limits: [limits[0], { ...limits[1], max_budget: 200 }],
+    });
+  });
+
+  it.each(["30d", "12mo"])("keeps the scalar cap when changing mixed calendar limits to %s", (duration) => {
+    const values = {
+      ...combined,
+      budget_duration: duration,
+      additional_max_budget: 25,
+      additional_budget_duration: "24h",
+    };
+    const remaining = duration === "30d" ? limits[0] : limits[1];
+    expect(budgetFormPayload(values, { budget_duration: true }, limits)).toEqual({
+      budget_id: "both",
+      budget_limits: [{ ...remaining, max_budget: 0 }],
+    });
+  });
+
+  it("adds a second calendar limit without clearing a coexisting scalar cap", () => {
+    const values = { ...combined, additional_max_budget: 0, additional_budget_duration: null };
+    expect(budgetFormPayload(values, { budget_duration: true, annual_budget: true }, [limits[0]])).toEqual({
+      budget_id: "both",
+      budget_limits: limits,
+    });
+  });
+
+  it("changes a single calendar period without keeping its old reset or overwriting the scalar cap", () => {
+    const values = { budget_id: "single", max_budget: 100, budget_duration: "12mo", additional_max_budget: 25 };
+    expect(budgetFormPayload(values, { budget_duration: true }, [limits[0]])).toEqual({
+      budget_id: "single",
+      budget_limits: [{ budget_duration: "12mo", max_budget: 100 }],
+    });
+  });
+
   it("removes the original window when changing to a different scalar period", () => {
     const values = { budget_id: "single", max_budget: 100, budget_duration: "7d" };
     const expected = {

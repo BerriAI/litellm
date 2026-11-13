@@ -1857,6 +1857,7 @@ def _key_generation_prisma_client(
 
     budget_table: Final = MagicMock()
     budget_table.create = AsyncMock(return_value=MagicMock(budget_id="created-budget-id"))
+    budget_table.find_unique = AsyncMock(return_value=LiteLLM_BudgetTable(budget_id="caller-budget-id"))
     budget_table.delete = AsyncMock()
     object_permission_table: Final = MagicMock()
     object_permission_table.create = AsyncMock(
@@ -1865,6 +1866,7 @@ def _key_generation_prisma_client(
     object_permission_table.delete = AsyncMock()
 
     prisma_client.db.litellm_budgettable = budget_table
+    prisma_client.writer_db.litellm_budgettable = budget_table
     prisma_client.db.litellm_objectpermissiontable = object_permission_table
     prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
     prisma_client.writer_db.litellm_projecttable.find_unique = AsyncMock(return_value=project_record)

@@ -7,16 +7,15 @@ Canonical definition for ``litellm_budgettable``. Re-exported from
 
 from collections.abc import Mapping
 from datetime import datetime, timezone
-from typing import Annotated, Final, Literal, TypeAlias
+from typing import TYPE_CHECKING, Annotated, Final, Literal, TypeAlias
 
 from pydantic import AfterValidator, ConfigDict, Field, model_validator
 
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
-from litellm.proxy.common_utils.timezone_utils import (
-    BudgetResetSettings,
-    compute_budget_reset_at,
-)
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
+
+if TYPE_CHECKING:
+    from litellm.proxy.common_utils.timezone_utils import BudgetResetSettings
 
 
 class BudgetLimit(LiteLLMPydanticObjectBase):
@@ -37,8 +36,10 @@ BudgetLimits: TypeAlias = Annotated[tuple[BudgetLimit, ...], AfterValidator(uniq
 
 
 def initialize_budget_limits(
-    limits: tuple[BudgetLimit, ...], settings: BudgetResetSettings, now: datetime
+    limits: tuple[BudgetLimit, ...], settings: "BudgetResetSettings", now: datetime
 ) -> tuple[BudgetLimit, ...]:
+    from litellm.proxy.common_utils.timezone_utils import compute_budget_reset_at
+
     return tuple(
         limit
         if limit.reset_at is not None

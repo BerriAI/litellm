@@ -14,6 +14,7 @@ const toFormValues = (budget: budgetItem) => {
   const combined = monthly != null && annual != null;
   const window = monthly ?? annual;
   const windowDuration = window?.budget_duration === "1mo" ? "30d" : window?.budget_duration;
+  const mixed = window != null && budget.max_budget != null;
   return {
     budget_id: budget.budget_id,
     tpm_limit: budget.tpm_limit,
@@ -22,6 +23,9 @@ const toFormValues = (budget: budgetItem) => {
     max_budget: window?.max_budget ?? budget.max_budget,
     budget_duration: combined ? COMBINED_BUDGET_DURATION : windowDuration ?? budget.budget_duration,
     annual_budget: annual?.max_budget,
+    ...(mixed
+      ? { additional_max_budget: budget.max_budget, additional_budget_duration: budget.budget_duration ?? null }
+      : {}),
   };
 };
 

@@ -35,6 +35,18 @@ function singlePeriodPayload(
 ): BudgetWriteRequest {
   if (!existingLimits?.length) return scalar;
   if (dirty?.budget_duration) {
+    if (values.additional_max_budget !== undefined) {
+      const { max_budget: _max, budget_duration: _duration, ...other } = scalar;
+      const duration = values.budget_duration === "12mo" ? "12mo" : "1mo";
+      const existing = existingLimits.find((limit) => limit.budget_duration === duration);
+      return {
+        ...other,
+        budget_limits:
+          values.max_budget == null
+            ? null
+            : [{ ...existing, budget_duration: duration, max_budget: values.max_budget }],
+      };
+    }
     return { ...scalar, max_budget: values.max_budget, budget_duration: values.budget_duration, budget_limits: null };
   }
   if (!dirty?.max_budget) return scalar;
@@ -48,32 +60,46 @@ function singlePeriodPayload(
   return { ...other, budget_limits: limits.length ? limits : null };
 }
 
+function combinedPeriodPayload(
+  scalar: BudgetWriteRequest,
+  values: BudgetFormValues,
+  dirty: DirtyFields | undefined,
+  existingLimits: BudgetWriteRequest["budget_limits"],
+): BudgetWriteRequest {
+  const monthly = existingLimits?.find((limit) => limit.budget_duration === "1mo");
+  const annual = existingLimits?.find((limit) => limit.budget_duration === "12mo");
+  const { max_budget: _max, budget_duration: _duration, ...other } = scalar;
+  const capsChanged = !dirty || Boolean(dirty.max_budget || dirty.annual_budget || dirty.budget_duration);
+  if (!capsChanged) {
+    return other;
+  }
+  return {
+    ...other,
+    ...(dirty?.budget_duration && values.additional_max_budget === undefined
+      ? { max_budget: null, budget_duration: null }
+      : {}),
+    budget_limits: [
+      calendarLimit(monthly, values, dirty, "max_budget"),
+      calendarLimit(annual, values, dirty, "annual_budget"),
+    ],
+  };
+}
+
 export function budgetFormPayload(
   values: BudgetFormValues,
   dirty?: DirtyFields,
   existingLimits?: BudgetWriteRequest["budget_limits"],
 ): BudgetWriteRequest {
   const selected = dirty ? pickDirty(values, dirty) : values;
-  const { annual_budget: _annual, ...fields } = selected;
+  const { annual_budget: _annual, additional_max_budget, additional_budget_duration, ...fields } = selected;
   const scalar = { ...fields, budget_id: values.budget_id };
-  if (values.budget_duration !== COMBINED_BUDGET_DURATION) {
-    return applyBudgetPrecision(singlePeriodPayload(scalar, values, dirty, existingLimits));
-  }
-  const monthly = existingLimits?.find((limit) => limit.budget_duration === "1mo");
-  const annual = existingLimits?.find((limit) => limit.budget_duration === "12mo");
-  const { max_budget: _max, budget_duration: _duration, ...other } = scalar;
-  const capsChanged = !dirty || Boolean(dirty.max_budget || dirty.annual_budget || dirty.budget_duration);
-  if (!capsChanged) {
-    return applyBudgetPrecision({ ...other, budget_id: values.budget_id });
-  }
-  const payload = {
-    ...other,
-    budget_id: values.budget_id,
-    ...(dirty?.budget_duration ? { max_budget: null, budget_duration: null } : {}),
-    budget_limits: [
-      calendarLimit(monthly, values, dirty, "max_budget"),
-      calendarLimit(annual, values, dirty, "annual_budget"),
-    ],
-  };
-  return applyBudgetPrecision(payload);
+  const payload =
+    values.budget_duration === COMBINED_BUDGET_DURATION
+      ? combinedPeriodPayload(scalar, values, dirty, existingLimits)
+      : singlePeriodPayload(scalar, values, dirty, existingLimits);
+  return applyBudgetPrecision({
+    ...payload,
+    ...(additional_max_budget !== undefined ? { max_budget: additional_max_budget } : {}),
+    ...(additional_budget_duration !== undefined ? { budget_duration: additional_budget_duration } : {}),
+  });
 }

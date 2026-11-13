@@ -711,7 +711,7 @@ class _ProxyDBLogger(CustomLogger):
                 end_time=datetime.now(),
                 org_id=user_api_key_dict.org_id,
                 project_id=user_api_key_dict.project_id,
-                customer_counters=customer_counters,
+                **_customer_counter_options(customer_counters),
             )
             for row_cost, row_kwargs in accounting_rows
         ]
