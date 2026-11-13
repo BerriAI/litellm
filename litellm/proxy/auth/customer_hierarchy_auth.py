@@ -263,7 +263,9 @@ async def get_customer_hierarchy(
     team_ids: Final = _TEAM_IDS.validate_python(row.model_dump().get("parent_team_ids") or ())
     teams: Final = (
         await _team_table(prisma_client).find_many(
-            where={"customer_team_id": {"in": list(team_ids)}}, include=_TEAM_INCLUDE
+            # bounded-ok: team_ids is one member's parent_team_ids, a handful of teams written by the management API
+            where={"customer_team_id": {"in": list(team_ids)}},
+            include=_TEAM_INCLUDE,
         )
         if team_ids
         else ()

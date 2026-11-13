@@ -7,7 +7,7 @@ from itertools import chain
 from typing import TYPE_CHECKING, Final, Generic, Protocol, TypeVar
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, model_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 from litellm.models.budget import BudgetLimit, BudgetLimits, LiteLLM_BudgetTable, initialize_budget_limits
 from litellm.proxy.common_utils.timezone_utils import (
