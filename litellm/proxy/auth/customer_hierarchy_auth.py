@@ -293,6 +293,7 @@ async def get_customer_hierarchy(
     cached: Final = await user_api_key_cache.async_get_cache(key=cache_key, model_type=CustomerHierarchyAuth)
     if cached is not None:
         return cached
+    lease: Final = await user_api_key_cache.lease(cache_key)
     row: Final = await _member_table(prisma_client).find_unique(
         where={"customer_member_id": customer_member_id}, include=_MEMBER_INCLUDE
     )
@@ -311,10 +312,8 @@ async def get_customer_hierarchy(
     )
     row_values: Final = {**row.model_dump(), "teams": tuple(team.model_dump() for team in teams)}
     hierarchy: Final = customer_hierarchy_from_member_row(row_values, loaded_at)
-    await user_api_key_cache.async_set_cache(
-        key=cache_key,
-        value=hierarchy,
-        ttl=_cache_ttl(row_values, loaded_at, get_management_object_ttl(user_api_key_cache)),
+    _ = await user_api_key_cache.async_set_leased(
+        lease, hierarchy, _cache_ttl(row_values, loaded_at, get_management_object_ttl(user_api_key_cache))
     )
     return hierarchy
 
@@ -383,6 +382,7 @@ async def get_customer_organization_hierarchy(
     cached: Final = await user_api_key_cache.async_get_cache(key=cache_key, model_type=CustomerHierarchyAuth)
     if cached is not None:
         return cached
+    lease: Final = await user_api_key_cache.lease(cache_key)
     rows: Final = await _organization_table(prisma_client).find_many(
         where={"alias": customer_org_alias}, include=_ORGANIZATION_INCLUDE, take=2
     )
@@ -393,9 +393,7 @@ async def get_customer_organization_hierarchy(
     hierarchy: Final = customer_hierarchy_from_organization_row(
         rows[0].model_dump(), now if now is not None else utc_now()
     )
-    await user_api_key_cache.async_set_cache(
-        key=cache_key, value=hierarchy, ttl=get_management_object_ttl(user_api_key_cache)
-    )
+    _ = await user_api_key_cache.async_set_leased(lease, hierarchy, get_management_object_ttl(user_api_key_cache))
     return hierarchy
 
 

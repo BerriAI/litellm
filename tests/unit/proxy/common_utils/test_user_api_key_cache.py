@@ -476,3 +476,100 @@ class TestManagementObjectTTL:
         )
 
         assert mem.last_ttl == 300
+
+
+async def _evict_by_delete(cache: UserApiKeyCache, key: str) -> None:
+    await cache.async_delete_cache(key)
+
+
+async def _evict_by_bulk_delete(cache: UserApiKeyCache, key: str) -> None:
+    await cache.async_delete_cache_keys((key,))
+
+
+async def _evict_by_broadcast(cache: UserApiKeyCache, key: str) -> None:
+    cache.delete_local(key)
+
+
+async def _evict_by_sync_delete(cache: UserApiKeyCache, key: str) -> None:
+    cache.delete_cache(key)
+
+
+async def _evict_by_flush(cache: UserApiKeyCache, key: str) -> None:
+    cache.flush_cache()
+
+
+def _memory_only() -> UserApiKeyCache:
+    return UserApiKeyCache()
+
+
+def _with_redis_auth_cache() -> UserApiKeyCache:
+    return shared_cache()[0]
+
+
+_EVICTIONS: Final = (_evict_by_delete, _evict_by_bulk_delete, _evict_by_broadcast, _evict_by_sync_delete, _evict_by_flush)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("new_cache", [_memory_only, _with_redis_auth_cache])
+@pytest.mark.parametrize("evict", _EVICTIONS)
+async def test_a_load_that_began_before_an_eviction_cannot_cache_what_it_read(new_cache, evict) -> None:
+    cache = new_cache()
+    lease = await cache.lease("customer_member_id:m")
+    await evict(cache, "customer_member_id:m")
+
+    assert await cache.async_set_leased(lease, {"spend": 5.0}, ttl=60) is False
+    assert await cache.async_get_cache("customer_member_id:m") is None
+
+    assert await cache.async_set_leased(await cache.lease("customer_member_id:m"), {"spend": 0.0}, ttl=60) is True
+    assert await cache.async_get_cache("customer_member_id:m") == {"spend": 0.0}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("new_cache", [_memory_only, _with_redis_auth_cache])
+async def test_a_load_caches_what_it_read_when_only_another_key_was_evicted(new_cache) -> None:
+    cache = new_cache()
+    lease = await cache.lease("customer_member_id:m")
+    await cache.async_delete_cache("customer_member_id:other")
+
+    assert await cache.async_set_leased(lease, {"spend": 5.0}, ttl=60) is True
+    assert await cache.async_get_cache("customer_member_id:m") == {"spend": 5.0}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("evict", [_evict_by_delete, _evict_by_bulk_delete, _evict_by_sync_delete])
+async def test_a_load_cannot_cache_what_it_read_before_another_worker_evicted_the_key(evict) -> None:
+    """The eviction broadcast has not reached the loading worker, so only Redis can refuse its write."""
+    resetter, shared = shared_cache()
+    loader, _ = shared_cache(FakeAuthCache(redis=shared.redis, generations=shared.generations))
+    lease = await loader.lease("customer_member_id:m")
+    await evict(resetter, "customer_member_id:m")
+
+    assert await loader.async_set_leased(lease, {"spend": 5.0}, ttl=60) is False
+    assert await loader.async_get_cache("customer_member_id:m") is None
+    assert await resetter.async_get_cache("customer_member_id:m") is None
+
+    assert await loader.async_set_leased(await loader.lease("customer_member_id:m"), {"spend": 0.0}, ttl=60) is True
+    assert await resetter.async_get_cache("customer_member_id:m") == {"spend": 0.0}
+
+
+class _EvictedMidWrite(FakeAuthCache):
+    """Redis takes the leased write, and this worker evicts the key before the reply is handled."""
+
+    cache: UserApiKeyCache | None = None
+
+    async def set_leased(self, key: str, lease: str | None, value: object, ttl_seconds: float | None = None) -> bool:
+        written = await super().set_leased(key, lease, value, ttl_seconds)
+        assert self.cache is not None
+        await self.cache.async_delete_cache(key)
+        return written
+
+
+@pytest.mark.asyncio
+async def test_an_eviction_that_lands_while_redis_takes_the_write_keeps_it_out_of_memory() -> None:
+    double = _EvictedMidWrite()
+    cache, _ = shared_cache(double)
+    double.cache = cache
+    lease = await cache.lease("customer_member_id:m")
+
+    assert await cache.async_set_leased(lease, {"spend": 5.0}, ttl=60) is False
+    assert await cache.async_get_cache("customer_member_id:m") is None

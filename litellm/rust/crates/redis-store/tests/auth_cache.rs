@@ -425,10 +425,10 @@ async fn pre_call_writes_and_reads_ride_one_pipeline_with_the_cooldown_read(
     let expected = match topology {
         Topology::Standalone => vec![Operation::Pipeline { ops: 4 }],
         Topology::Cluster => vec![
-            Operation::Command("DEL"),
             Operation::Command("MGET"),
             Operation::Command("MGET"),
             Operation::Command("SET"),
+            Operation::Script,
         ],
     };
     assert_eq!(seen, expected);
@@ -694,6 +694,118 @@ async fn without_redis_every_operation_is_memory_only() {
         Some(team("t"))
     );
     assert_eq!(store.get_local("team_id:t2").unwrap(), None);
+    assert_eq!(store.lease("team_id:t1").await, None);
+    assert!(store.set_leased("team_id:t1", None, team("t"), None).await);
+}
+
+#[derive(Clone, Copy)]
+enum Evict {
+    Delete,
+    DeclaredDelete,
+}
+
+async fn evict(store: &AuthCache, how: Evict, key: &str) {
+    match how {
+        Evict::Delete => store.delete(&[key.to_owned()]).await.unwrap(),
+        Evict::DeclaredDelete => store
+            .declare_delete(RedisSend::Now, key)
+            .unwrap()
+            .await
+            .unwrap(),
+    }
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_load_that_began_before_another_pods_delete_cannot_cache_what_it_read(
+    #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
+    #[values(Evict::Delete, Evict::DeclaredDelete)] how: Evict,
+    #[values("customer_member_id:m", KEY_OBJECT, "customer_org_alias:{a}b")] key: &str,
+) {
+    let deployment = RedisDeployment::start(topology).await.unwrap();
+    let raw = connect(&deployment);
+    let loader = store(Some(connect(&deployment)));
+    let resetter = store(Some(connect(&deployment)));
+
+    let before_reset = loader.lease(key).await;
+    evict(&resetter, how, key).await;
+    assert!(
+        !loader
+            .set_leased(key, before_reset.as_deref(), team("stale"), None)
+            .await
+    );
+    assert_eq!(raw.send(commands::get::<String>(key)).await.unwrap(), None);
+
+    let after_reset = loader.lease(key).await;
+    assert!(
+        loader
+            .set_leased(key, after_reset.as_deref(), team("fresh"), None)
+            .await
+    );
+    assert_eq!(resetter.get(None, key).await.unwrap(), Some(team("fresh")));
+    assert!(redis_ttl(&raw, key).await <= Duration::from_secs(60));
+
+    evict(&resetter, how, key).await;
+    assert!(
+        !loader
+            .set_leased(key, after_reset.as_deref(), team("stale"), None)
+            .await
+    );
+    assert_eq!(raw.send(commands::get::<String>(key)).await.unwrap(), None);
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_load_caches_what_it_read_when_only_another_key_was_deleted(
+    #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
+    #[values(Evict::Delete, Evict::DeclaredDelete)] how: Evict,
+) {
+    let deployment = RedisDeployment::start(topology).await.unwrap();
+    let loader = store(Some(connect(&deployment)));
+    let resetter = store(Some(connect(&deployment)));
+
+    let lease = loader.lease("customer_member_id:m").await;
+    evict(&resetter, how, "customer_member_id:other").await;
+
+    assert!(
+        loader
+            .set_leased("customer_member_id:m", lease.as_deref(), team("t"), None)
+            .await
+    );
+    assert_eq!(
+        resetter.get(None, "customer_member_id:m").await.unwrap(),
+        Some(team("t"))
+    );
+}
+
+// No hash tag can name the slot of a key that is hashed whole and holds a `}`, so it is written
+// and deleted as before, without a lease another pod can void
+#[rstest]
+#[tokio::test]
+async fn a_key_no_lease_can_share_a_slot_with_is_still_written_and_deleted(
+    #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
+    #[values(Evict::Delete, Evict::DeclaredDelete)] how: Evict,
+) {
+    let key = "customer_org_alias:a}b{";
+    let deployment = RedisDeployment::start(topology).await.unwrap();
+    let raw = connect(&deployment);
+    let store = store(Some(connect(&deployment)));
+
+    let lease = store.lease(key).await;
+    assert!(
+        store
+            .set_leased(key, lease.as_deref(), team("t"), None)
+            .await
+    );
+    assert!(
+        raw.send(commands::get::<String>(key))
+            .await
+            .unwrap()
+            .is_some()
+    );
+
+    evict(&store, how, key).await;
+    assert_eq!(raw.send(commands::get::<String>(key)).await.unwrap(), None);
 }
 
 // UserApiKeyCache writes the key-object partition, then the rest, and deletes both partitions
@@ -732,10 +844,15 @@ async fn the_auth_cache_sends_the_commands_user_api_key_cache_sends(
         .unwrap();
 
     assert_eq!(written, vec![Operation::Pipeline { ops: 1 }; 2]);
+    let deleted = &trips.seen()[written.len()..];
     assert_eq!(
-        trips.seen()[written.len()..written.len() + 2],
-        [Operation::Command("DEL"), Operation::Command("DEL")]
+        deleted
+            .iter()
+            .filter(|trip| **trip == Operation::Command("DEL"))
+            .count(),
+        2
     );
+    assert!(matches!(deleted[0], Operation::Pipeline { .. }));
     assert_eq!(support::calls(&deployment, "eval").await, 1);
     assert_eq!(support::calls(&deployment, "evalsha").await, 0);
 }
