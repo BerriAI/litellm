@@ -39,6 +39,14 @@ const activity = (id: string, spend: number): DailyActivityAggregatedResponse =>
     cache_creation_input_tokens: 0,
     total_response_time_ms: 1000,
     timed_requests: 4,
+    autorouter_savings_spend: 0,
+    compression_saved_tokens: 0,
+    compression_savings_spend: 0,
+    flat_cost: 0,
+    gateway_injected_caching_savings_spend: 0,
+    guardrail_spend: 0,
+    prompt_caching_savings_spend: 0,
+    ptu_hours: 0,
   };
   return {
     metadata: EMPTY_DAILY_ACTIVITY_METADATA,
