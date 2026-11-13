@@ -13,11 +13,11 @@ from types import MappingProxyType
 from typing import Final
 
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    billed_cache_read_rate,
     calculate_cache_writing_cost,
     call_context,
     parse_completion_tokens_details,
     parse_prompt_tokens_details,
-    reads_explicit_cache,
 )
 from litellm.rust_bridge._native import NativePrices
 from litellm.types.utils import CacheCreationTokenDetails, Usage
@@ -83,10 +83,9 @@ def cost_per_token(
     quote: Final = NativePrices(model_info, custom_llm_provider).quote(
         breakdown.total_input_tokens, call_context(None, None, None, current_time)
     )
-    cache_read_rate: Final = quote.explicit_cache_read if reads_explicit_cache(usage) else quote.cache_read
     prompt_cost: Final = (
         (breakdown.text_tokens * quote.input)
-        + (breakdown.cached_tokens * cache_read_rate)
+        + (breakdown.cached_tokens * billed_cache_read_rate(quote, usage))
         + calculate_cache_writing_cost(
             cache_creation_tokens=breakdown.cache_creation_tokens,
             cache_creation_token_details=breakdown.cache_creation_token_details,
