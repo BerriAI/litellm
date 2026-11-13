@@ -8,6 +8,7 @@ from litellm.repositories.unit_of_work import (
     LinkedSpendResetWrites,
     SpendResetWrites,
     budget_cascade_unit_of_work,
+    customer_spend_reset_unit_of_work,
     enduser_spend_reset_unit_of_work,
     spend_reset_unit_of_work,
 )
@@ -232,20 +233,38 @@ async def test_membership_total_spend_repair_is_queued_on_the_cascade_batch_ahea
 
 
 @pytest.mark.asyncio
-async def test_cascade_row_locks_cover_the_customer_hierarchy_by_both_budget_links():
-    """Customer org, team and member rows reset on their budget's window, so the
-    cascade has to take their row locks too, and a member is reachable through
-    its template or its override."""
+async def test_customer_page_resets_commit_on_their_own_batch_against_the_named_table():
+    """A page of customer members or teams lands in its own commit, apart from the
+    budget cascade, so a statement never grows with the rows a template governs."""
+    batch = FakeBatch()
+    async with customer_spend_reset_unit_of_work(lambda: batch, "litellm_customermembertable") as writes:
+        writes.queue_spend_zero(where={"customer_member_id": {"in": ["m-1"]}, "spend": {"gt": 0, "lte": 10.0}})
+        writes.queue_spend_decrement(where={"customer_member_id": {"in": ["m-1"]}, "spend": {"gt": 10.0}}, amount=10.0)
+        assert batch.commit_count == 0
+
+    assert batch.commit_count == 1
+    assert batch.calls == [
+        (
+            "litellm_customermembertable.update_many",
+            {"customer_member_id": {"in": ["m-1"]}, "spend": {"gt": 0, "lte": 10.0}},
+            {"spend": 0},
+        ),
+        (
+            "litellm_customermembertable.update_many",
+            {"customer_member_id": {"in": ["m-1"]}, "spend": {"gt": 10.0}},
+            {"spend": {"decrement": 10.0}},
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_budget_cascade_no_longer_writes_customer_teams_or_members():
+    """Their resets moved to the paged walk, so the cascade's transaction neither locks nor touches those tables."""
     batch = FakeBatch()
     async with budget_cascade_unit_of_work(lambda: batch) as uow:
         uow.row_locks.queue_row_locks(["budget-1"])
+        assert not hasattr(uow, "customer_members") and not hasattr(uow, "customer_teams")
 
-    locks = [call[1]["query"] for call in batch.calls if call[0] == "execute_raw"]
-    customer_locks = [query for query in locks if "LiteLLM_Customer" in query]
-    assert [query.split('"')[1] for query in customer_locks] == [
-        "LiteLLM_CustomerOrganizationTable",
-        "LiteLLM_CustomerTeamTable",
-        "LiteLLM_CustomerMemberTable",
-    ]
-    assert all("FOR UPDATE" in query for query in customer_locks)
-    assert "budget_override_id = ANY($1::text[])" in customer_locks[-1]
+    locked_tables = [call[1]["query"].split('"')[1] for call in batch.calls if call[0] == "execute_raw"]
+    assert "LiteLLM_CustomerOrganizationTable" in locked_tables
+    assert "LiteLLM_CustomerTeamTable" not in locked_tables and "LiteLLM_CustomerMemberTable" not in locked_tables

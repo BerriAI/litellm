@@ -93,9 +93,11 @@ from litellm.repositories.table_repositories import (
 )
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.unit_of_work import (
+    CustomerSpendTable,
     LinkedSpendResetWrites,
     SpendResetWrites,
     budget_cascade_unit_of_work,
+    customer_spend_reset_unit_of_work,
     enduser_spend_reset_unit_of_work,
     spend_reset_unit_of_work,
 )
@@ -112,17 +114,54 @@ class _CustomerOrgRow(Protocol):
     def customer_org_id(self) -> str: ...
 
 
-class _CustomerTeamRow(Protocol):
+class _BudgetCapRow(Protocol):
+    @property
+    def max_budget(self) -> float | None: ...
+
+
+class _CustomerScopedRow(Protocol):
+    """A customer team or member: spend governed by its template, or by an unexpired override."""
+
+    @property
+    def spend(self) -> float | None: ...
+
+    @property
+    def budget_override_id(self) -> str | None: ...
+
+    @property
+    def budget_override_expires_at(self) -> datetime | None: ...
+
+    @property
+    def budget(self) -> _BudgetCapRow | None: ...
+
+    @property
+    def budget_override(self) -> _BudgetCapRow | None: ...
+
+
+class _CustomerTeamRow(_CustomerScopedRow, Protocol):
     @property
     def customer_team_id(self) -> str: ...
 
 
-class _CustomerMemberRow(Protocol):
+class _CustomerMemberRow(_CustomerScopedRow, Protocol):
     @property
     def customer_member_id(self) -> str: ...
 
 
 _RowT = TypeVar("_RowT")
+_RowT_co = TypeVar("_RowT_co", covariant=True)
+_CustomerRowT = TypeVar("_CustomerRowT", bound=_CustomerScopedRow)
+
+
+class CustomerScopeTable(Protocol[_RowT_co]):
+    async def find_many(
+        self,
+        *,
+        where: Mapping[str, object],
+        include: Mapping[str, bool],
+        order: Mapping[str, str],
+        take: int,
+    ) -> Sequence[_RowT_co]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -272,17 +311,55 @@ def _budget_link_where(
     return {link: {"in": list(budget_ids)}, **extra}
 
 
-def _customer_override_link_where(budget_ids: Sequence[str]) -> Mapping[str, object]:
-    # bounded-ok: budget_ids is one RESET_BUDGET_JOB_BATCH_SIZE batch of due budget rows
-    return {"OR": [{"budget_id": {"in": list(budget_ids)}}, {"budget_override_id": {"in": list(budget_ids)}}]}
-
-
 def _active_override_where(now: datetime) -> Mapping[str, object]:
     """Teams or members whose unexpired override carries its own window, reset on the override's schedule."""
     return {
         **_SPENT_ROWS_WHERE,
         "OR": [{"budget_override_expires_at": None}, {"budget_override_expires_at": {"gt": now}}],
     }
+
+
+def _customer_due_where(budget_ids: Sequence[str], now: datetime) -> Mapping[str, object]:
+    """Teams or members one of the expiring tiers resets: governed by it as their template, or as their override."""
+    return {
+        "OR": [
+            {**_budget_link_where(budget_ids), **_template_governed_where(now)},
+            {**_budget_link_where(budget_ids, link="budget_override_id"), **_active_override_where(now)},
+        ]
+    }
+
+
+def _customer_effective_cap(row: _CustomerScopedRow, now: datetime) -> float | None:
+    """The limit the row is admitted against: an unexpired override's ``max_budget`` when it sets one, else the
+    template's. Rollover carries spend past this cap, not past whichever row happens to own the reset clock."""
+    expires_at: Final = row.budget_override_expires_at
+    override_active: Final = row.budget_override_id is not None and (expires_at is None or expires_at > now)
+    override: Final = row.budget_override if override_active else None
+    if override is not None and override.max_budget is not None:
+        return _rollover_cap(override.max_budget)
+    return _rollover_cap(row.budget.max_budget) if row.budget is not None else None
+
+
+def _customer_ids_by_cap(
+    rows: Sequence[_CustomerScopedRow], ids: Sequence[str], now: datetime
+) -> Mapping[float | None, tuple[str, ...]]:
+    caps: Final = tuple(_customer_effective_cap(row, now) if _rollover_enabled() else None for row in rows)
+    return MappingProxyType(
+        {cap: tuple(row_id for row_id, row_cap in zip(ids, caps) if row_cap == cap) for cap in dict.fromkeys(caps)}
+    )
+
+
+def _queue_customer_page_resets(
+    writes: LinkedSpendResetWrites, id_field: str, ids_by_cap: Mapping[float | None, tuple[str, ...]]
+) -> None:
+    """``_queue_enduser_tier_resets`` for one page of customer rows, grouped by the cap each row carries over."""
+    for cap, ids in ids_by_cap.items():
+        page = {id_field: {"in": list(ids)}}  # bounded-ok: one page of RESET_BUDGET_JOB_BATCH_SIZE ids
+        if cap is None:
+            writes.queue_spend_zero(where={**page, **_SPENT_ROWS_WHERE})
+            continue
+        writes.queue_spend_zero(where={**page, "spend": {"gt": 0, "lte": cap}})
+        writes.queue_spend_decrement(where={**page, "spend": {"gt": cap}}, amount=cap)
 
 
 def _template_governed_where(now: datetime) -> Mapping[str, object]:
@@ -906,16 +983,6 @@ class ResetBudgetJob:
             where=_budget_link_where(budget_ids, _SPENT_ROWS_WHERE),
             log_subject="customer organizations",
         )
-        customer_teams: Final[tuple[_CustomerTeamRow, ...]] = await self._fetch_linked_rows(
-            table=CustomerTeamRepository(self.prisma_client).table,
-            where={**_customer_override_link_where(budget_ids), **_SPENT_ROWS_WHERE},
-            log_subject="customer teams",
-        )
-        customer_members: Final[tuple[_CustomerMemberRow, ...]] = await self._fetch_linked_rows(
-            table=CustomerMemberRepository(self.prisma_client).table,
-            where={**_customer_override_link_where(budget_ids), **_SPENT_ROWS_WHERE},
-            log_subject="customer members",
-        )
         rollover_caps: Final[Mapping[str, float]] = MappingProxyType(
             {
                 b.budget_id: cap
@@ -951,13 +1018,7 @@ class ResetBudgetJob:
                 *((_project_counter_key(row), _row_carried_spend(row, rollover_caps)) for row in projects),
             ),
             rollover_caps=rollover_caps,
-            customer_ids=MappingProxyType(
-                {
-                    "org": tuple(row.customer_org_id for row in customer_orgs),
-                    "team": tuple(row.customer_team_id for row in customer_teams),
-                    "member": tuple(row.customer_member_id for row in customer_members),
-                }
-            ),
+            customer_ids=MappingProxyType({"org": tuple(row.customer_org_id for row in customer_orgs)}),
             cache_keys=(
                 *(key for row in team_memberships for key in _team_membership_cache_keys(row)),
                 *(key for row in keys for key in _key_cache_keys(row)),
@@ -1004,6 +1065,85 @@ class ResetBudgetJob:
             return _EndUserWalk(cursor=None, invalidated=walked)
         return _EndUserWalk(cursor=rows[-1].user_id, invalidated=walked)
 
+    async def _reset_customer_team_spend(self, cascade: _BudgetCascade) -> None:
+        table: Final[CustomerScopeTable[_CustomerTeamRow]] = CustomerTeamRepository(self.prisma_client).table
+        await self._reset_customer_scope_spend(
+            cascade,
+            entity="team",
+            table=table,
+            batch_table="litellm_customerteamtable",
+            id_field="customer_team_id",
+            row_id=lambda row: row.customer_team_id,
+        )
+
+    async def _reset_customer_member_spend(self, cascade: _BudgetCascade) -> None:
+        table: Final[CustomerScopeTable[_CustomerMemberRow]] = CustomerMemberRepository(self.prisma_client).table
+        await self._reset_customer_scope_spend(
+            cascade,
+            entity="member",
+            table=table,
+            batch_table="litellm_customermembertable",
+            id_field="customer_member_id",
+            row_id=lambda row: row.customer_member_id,
+        )
+
+    async def _reset_customer_scope_spend(
+        self,
+        cascade: _BudgetCascade,
+        entity: CustomerSpendEntity,
+        table: CustomerScopeTable[_CustomerRowT],
+        batch_table: CustomerSpendTable,
+        id_field: str,
+        row_id: Callable[[_CustomerRowT], str],
+    ) -> None:
+        """Reset the customer teams or members the expiring tiers govern, one committed page at a time.
+
+        Paged like ``_reset_enduser_spend``: an aliased request can register a member, so the rows on one
+        template are unbounded. Each row carries its own rollover cap, read with its budget rows, because an
+        override may set the limit while the template owns the reset clock, or the other way round."""
+        if not cascade.budget_ids:
+            return
+        now: Final = datetime.now(timezone.utc)
+        where: Final = _customer_due_where(cascade.budget_ids, now)
+        cursor: str | None = ""  # rebind-ok: keyset cursor advances one committed page at a time
+        while cursor is not None:
+            rows: tuple[_CustomerRowT, ...] = tuple(  # rebind-ok: one page per loop turn
+                await self._with_db_retry(
+                    lambda: table.find_many(
+                        where={**where, id_field: {"gt": cursor}},
+                        include={"budget": True, "budget_override": True},
+                        order={id_field: "asc"},
+                        take=RESET_BUDGET_JOB_BATCH_SIZE,
+                    ),
+                    reason=f"reset_budget_read_customer_{entity}s_failure",
+                )
+            )
+            if not rows:
+                return
+            ids = tuple(row_id(row) for row in rows)  # rebind-ok: one page per loop turn
+            ids_by_cap = _customer_ids_by_cap(rows, ids, now)  # rebind-ok: one page per loop turn
+            await self._with_db_write_retry(
+                lambda: self._commit_customer_page(batch_table, id_field, ids_by_cap),
+                reason=f"reset_budget_write_customer_{entity}s_failure",
+            )
+            await self._evict_customer_page(entity, ids)
+            cursor = ids[-1] if len(rows) == RESET_BUDGET_JOB_BATCH_SIZE else None
+
+    async def _evict_customer_page(self, entity: CustomerSpendEntity, ids: Sequence[str]) -> None:
+        try:
+            await self._invalidate_customer_budget_caches(entity, ids)
+        except Exception as e:  # noqa: BLE001  # the page is committed; a failed eviction must not stop the walk
+            verbose_proxy_logger.warning("Failed to invalidate customer %s hierarchy caches: %s", entity, e)
+
+    async def _commit_customer_page(
+        self, batch_table: CustomerSpendTable, id_field: str, ids_by_cap: Mapping[float | None, tuple[str, ...]]
+    ) -> None:
+        async with (
+            db_span("reset_budget_customers", batch_table),
+            customer_spend_reset_unit_of_work(self._new_batch, batch_table) as writes,
+        ):
+            _queue_customer_page_resets(writes, id_field, ids_by_cap)
+
     async def _commit_enduser_page(self, rows: Sequence[_EndUserRow], cascade: _BudgetCascade) -> None:
         async with (
             db_span("reset_budget_endusers", "LiteLLM_EndUserTable"),
@@ -1028,7 +1168,6 @@ class ResetBudgetJob:
         )
 
     async def _commit_budget_cascade_once(self, cascade: _BudgetCascade) -> None:
-        now: Final = datetime.now(timezone.utc)
         async with (
             db_span("reset_budget_cascade", "LiteLLM_BudgetTable"),
             budget_cascade_unit_of_work(self._new_batch) as uow,
@@ -1042,14 +1181,6 @@ class ResetBudgetJob:
             _queue_budget_linked_resets(uow.tags, cascade, extra=_SPENT_ROWS_WHERE)
             _queue_budget_linked_resets(uow.model_access_groups, cascade, extra=_SPENT_ROWS_WHERE)
             _queue_budget_linked_resets(uow.customer_organizations, cascade, extra=_SPENT_ROWS_WHERE)
-            _queue_budget_linked_resets(uow.customer_teams, cascade, extra=_template_governed_where(now))
-            _queue_budget_linked_resets(
-                uow.customer_teams, cascade, extra=_active_override_where(now), link="budget_override_id"
-            )
-            _queue_budget_linked_resets(uow.customer_members, cascade, extra=_template_governed_where(now))
-            _queue_budget_linked_resets(
-                uow.customer_members, cascade, extra=_active_override_where(now), link="budget_override_id"
-            )
             for budget_id, budget_reset_at in cascade.budget_resets:
                 uow.budgets.queue_window_advance(budget_id=budget_id, budget_reset_at=budget_reset_at)
 
@@ -1084,6 +1215,8 @@ class ResetBudgetJob:
 
         try:
             await self._reset_enduser_spend(cascade)
+            await self._reset_customer_team_spend(cascade)
+            await self._reset_customer_member_spend(cascade)
             await self._commit_budget_cascade(cascade)
         except Exception as e:
             return _BudgetCascadeFailed(cascade=cascade, error=e)

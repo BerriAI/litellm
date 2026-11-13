@@ -121,11 +121,24 @@ def window_reset_at(value: object) -> datetime | None:
     return None if window is None else window.budget_reset_at
 
 
-def budget_window_values(budget: Budget, patch: Collection[str]) -> Mapping[str, object]:
-    """``budget_reset_at`` follows ``budget_duration``: stamped when a duration is written, cleared when it is removed."""
+class _StoredWindow(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    budget_duration: str | None = None
+    budget_reset_at: datetime | None = None
+
+
+def budget_window_values(
+    budget: Budget, patch: Collection[str], current: _StoredWindow | None = None
+) -> Mapping[str, object]:
+    """``budget_reset_at`` follows ``budget_duration``: stamped when a duration is written, cleared when it is removed.
+    Resubmitting the duration a row already runs keeps its clock, or an edit landing after the window came due
+    would push the reset out another window without the job ever clearing the spend."""
     if "budget_duration" not in patch:
         return {}
     duration: Final = budget.budget_duration
+    if current is not None and current.budget_duration == duration and current.budget_reset_at is not None:
+        return {}
     return {"budget_reset_at": get_budget_reset_time(duration) if duration is not None else None}
 
 
@@ -437,13 +450,15 @@ class CustomerHierarchyStore:
 
             await validate_budget_windows_update(self.db, budget_id)
         patch: Final = _VALUES.validate_python(budget.model_dump(exclude_unset=True))
+        stored: Final = await self.budgets.find_unique(where={"budget_id": budget_id})
+        current: Final = _StoredWindow.model_validate(stored, from_attributes=True) if stored is not None else None
         await update_budget_row(
             self.budgets,
             budget_id,
             budget_row_values(
                 {
                     **patch,
-                    **budget_window_values(budget, patch),
+                    **budget_window_values(budget, patch, current),
                     **(
                         {"budget_limits": initialize_budget_limits(budget.budget_limits, self.settings, self.now)}
                         if budget.budget_limits is not None

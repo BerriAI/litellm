@@ -75,23 +75,40 @@ def family(http: TestClient) -> dict[str, object]:
 
 def test_member_can_reuse_global_budget_but_not_an_owned_override() -> None:
     database: Final = Database()
-    asyncio.run(database.litellm_budgettable.create(data={
-        "budget_id": "global", "budget_limits": [{"budget_duration": "12mo", "max_budget": 1000}],
-    }))
+    asyncio.run(
+        database.litellm_budgettable.create(
+            data={
+                "budget_id": "global",
+                "budget_limits": [{"budget_duration": "12mo", "max_budget": 1000}],
+            }
+        )
+    )
     http: Final = client(database=database)
     family(http)
-    created: Final = http.post("/management/v1/customer_members", json={
-        "customer_member_id": "global-member", "parent_team_ids": ["team"], "budget_id": "global",
-        "budget_override": {"budget_limits": [{"budget_duration": "1mo", "max_budget": 100}]},
-    })
+    created: Final = http.post(
+        "/management/v1/customer_members",
+        json={
+            "customer_member_id": "global-member",
+            "parent_team_ids": ["team"],
+            "budget_id": "global",
+            "budget_override": {"budget_limits": [{"budget_duration": "1mo", "max_budget": 100}]},
+        },
+    )
     assert created.status_code == 201, created.text
-    assert {row["budget_duration"]: row["max_budget"] for row in created.json()["effective_budget"]["budget_limits"]} == {
-        "1mo": 100, "12mo": 1000,
+    assert {
+        row["budget_duration"]: row["max_budget"] for row in created.json()["effective_budget"]["budget_limits"]
+    } == {
+        "1mo": 100,
+        "12mo": 1000,
     }
-    shared_override: Final = http.post("/management/v1/customer_members", json={
-        "customer_member_id": "other-member", "parent_team_ids": ["team"],
-        "budget_id": created.json()["budget_override_id"],
-    })
+    shared_override: Final = http.post(
+        "/management/v1/customer_members",
+        json={
+            "customer_member_id": "other-member",
+            "parent_team_ids": ["team"],
+            "budget_id": created.json()["budget_override_id"],
+        },
+    )
     assert shared_override.status_code == 422, shared_override.text
 
 
@@ -101,30 +118,47 @@ def test_member_window_override_round_trip_and_clear(clear_limits: object) -> No
     family(http)
     template: Final = http.post(
         "/management/v1/customer_organizations/org/default_budgets",
-        json={"name": "combined", "budget_limits": [
-            {"budget_duration": "1mo", "max_budget": 100},
-            {"budget_duration": "12mo", "max_budget": 1000},
-        ]},
+        json={
+            "name": "combined",
+            "budget_limits": [
+                {"budget_duration": "1mo", "max_budget": 100},
+                {"budget_duration": "12mo", "max_budget": 1000},
+            ],
+        },
     )
     assert template.status_code == 201, template.text
     budget_id: Final = next(row["budget_id"] for row in template.json()["default_budgets"] if row["name"] == "combined")
-    created: Final = http.post("/management/v1/customer_members", json={
-        "customer_member_id": "window-member", "parent_team_ids": ["team"], "budget_id": budget_id,
-        "budget_override": {"budget_limits": [{"budget_duration": "1mo", "max_budget": 0}]},
-    })
+    created: Final = http.post(
+        "/management/v1/customer_members",
+        json={
+            "customer_member_id": "window-member",
+            "parent_team_ids": ["team"],
+            "budget_id": budget_id,
+            "budget_override": {"budget_limits": [{"budget_duration": "1mo", "max_budget": 0}]},
+        },
+    )
     assert created.status_code == 201, created.text
-    assert {row["budget_duration"]: row["max_budget"] for row in created.json()["effective_budget"]["budget_limits"]} == {
-        "1mo": 0, "12mo": 1000,
+    assert {
+        row["budget_duration"]: row["max_budget"] for row in created.json()["effective_budget"]["budget_limits"]
+    } == {
+        "1mo": 0,
+        "12mo": 1000,
     }
     renamed: Final = http.patch("/management/v1/customer_members/window-member", json={"alias": "renamed"})
     assert renamed.status_code == 200, renamed.text
     assert renamed.json()["effective_budget"]["budget_limits"] == created.json()["effective_budget"]["budget_limits"]
-    cleared: Final = http.patch("/management/v1/customer_members/window-member", json={
-        "budget_override": {"budget_limits": clear_limits},
-    })
+    cleared: Final = http.patch(
+        "/management/v1/customer_members/window-member",
+        json={
+            "budget_override": {"budget_limits": clear_limits},
+        },
+    )
     assert cleared.status_code == 200, cleared.text
-    assert {row["budget_duration"]: row["max_budget"] for row in cleared.json()["effective_budget"]["budget_limits"]} == {
-        "1mo": 100, "12mo": 1000,
+    assert {
+        row["budget_duration"]: row["max_budget"] for row in cleared.json()["effective_budget"]["budget_limits"]
+    } == {
+        "1mo": 100,
+        "12mo": 1000,
     }
 
 
@@ -385,7 +419,8 @@ def test_missing_template_requires_custom_budget_and_wrong_org_is_rejected() -> 
     )
     assert wrong.status_code == 422, wrong.text
     custom: Final = http.post(
-        "/management/v1/customer_members", json={"parent_team_ids": ["empty-team"], "budget_override": {"max_budget": 2}}
+        "/management/v1/customer_members",
+        json={"parent_team_ids": ["empty-team"], "budget_override": {"max_budget": 2}},
     )
     assert custom.status_code == 201, custom.text
     assert custom.json()["budget_id"] is None
@@ -711,6 +746,50 @@ def family_default_budget_id(http: TestClient) -> str:
     return str(organization["default_budget_template_id"])
 
 
+def test_resubmitting_a_templates_duration_keeps_its_reset_clock() -> None:
+    """An edit that repeats the duration a template already runs must not push its window out: the reset job
+    owes that window a clearing, and a re-stamped clock would skip it. A changed duration starts a new window."""
+    http: Final = client()
+    org: Final = http.post(
+        "/management/v1/customer_organizations",
+        json={
+            "customer_org_id": "clocked",
+            "default_budgets": [{"name": "monthly", "max_budget": 100, "budget_duration": "30d", "is_default": True}],
+        },
+    )
+    assert org.status_code == 201, org.text
+    template_id: Final = org.json()["default_budget_template_id"]
+    team: Final = http.post(
+        "/management/v1/customer_teams", json={"customer_team_id": "clocked-team", "parent_org_id": "clocked"}
+    )
+    assert team.status_code == 201, team.text
+    member: Final = http.post(
+        "/management/v1/customer_members",
+        json={"customer_member_id": "clocked-member", "parent_team_ids": ["clocked-team"]},
+    )
+    assert member.status_code == 201, member.text
+    first_reset_at: Final = member.json()["budget_reset_at"]
+    assert first_reset_at is not None
+
+    same_duration: Final = http.patch(
+        f"/management/v1/customer_organizations/clocked/default_budgets/{template_id}",
+        json={"max_budget": 150, "budget_duration": "30d"},
+    )
+    assert same_duration.status_code == 200, same_duration.text
+    unchanged: Final = http.get("/management/v1/customer_members/clocked-member")
+    assert unchanged.json()["budget_reset_at"] == first_reset_at
+    assert unchanged.json()["effective_budget"]["max_budget"] == 150
+
+    new_duration: Final = http.patch(
+        f"/management/v1/customer_organizations/clocked/default_budgets/{template_id}",
+        json={"budget_duration": "7d"},
+    )
+    assert new_duration.status_code == 200, new_duration.text
+    rewound: Final = http.get("/management/v1/customer_members/clocked-member")
+    assert rewound.json()["budget_reset_at"] != first_reset_at
+    assert rewound.json()["budget_reset_at"] < first_reset_at
+
+
 def test_budget_reset_at_is_read_from_the_governing_budget_row() -> None:
     """Customer rows carry no reset clock: an org or team reports its budget's window, and a member reports
     its unexpired override's window when that override has a duration, otherwise its template's."""
@@ -872,7 +951,11 @@ def test_member_in_two_teams_is_listed_under_each_and_teams_from_another_organiz
     assert foreign.status_code == 201, foreign.text
     mixed: Final = http.post(
         "/management/v1/customer_members",
-        json={"customer_member_id": "mixed", "parent_team_ids": ["team", "foreign"], "budget_override": {"max_budget": 1}},
+        json={
+            "customer_member_id": "mixed",
+            "parent_team_ids": ["team", "foreign"],
+            "budget_override": {"max_budget": 1},
+        },
     )
     assert mixed.status_code == 404, mixed.text
     fetched: Final = http.get("/management/v1/customer_organizations/org")
