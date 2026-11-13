@@ -144,12 +144,28 @@ class MemberUpsert(MemberPatch):
         return self
 
 
+class CustomerBudgetUsage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    source: Literal["scalar", "window"]
+    budget_duration: str | None
+    max_budget: float
+    spend: float | None
+    window_start: datetime | None = None
+    reset_at: datetime | None = None
+
+
 class AuditFields(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     alias: str | None = None
     spend: float = 0.0
     budget_reset_at: datetime | None = None
+    budget_usage: tuple[CustomerBudgetUsage, ...] | None = Field(
+        default=None,
+        description="Recorded spend for each independent effective budget. Excludes pending reservations and updates "
+        "after accounting flushes. Window boundaries follow the configured reset timezone and time.",
+    )
     created_at: datetime
     created_by: str
     updated_at: datetime
