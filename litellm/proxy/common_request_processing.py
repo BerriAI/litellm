@@ -2457,10 +2457,12 @@ async def _fallback_grant(
     llm_router: Router | None,
     proxy_logging_obj: ProxyLogging,
     requested_model: str,
+    listed_as: str | None = None,
 ) -> list[str] | None:
     """The model access groups a pre-call fallback to ``fallback_model`` charges, or None when the caller may not use
-    it. The caller passes the group the fallback is served by, through every alias rewrite, so an alias never skips
-    the budgets of the model that answers: an agent-owned key never leaves the model it asked for, as at auth, then the key, team and project allowlists
+    it. The caller passes the group the fallback is served by, through every alias rewrite, and the name the fallback
+    list gave it as ``listed_as``, so an alias never skips the budgets of the model that answers nor those set on the
+    listed name: an agent-owned key never leaves the model it asked for, as at auth, then the key, team and project allowlists
     while ``enforce_fallback_model_access`` is on, the end user's allowlist, the pricing rules, every per-model budget layer, the budgets of the access groups that grant the model, and the budget auth reserved for
     ``requested_model``, the same checks a direct request passes at auth."""
     from litellm.proxy.auth.auth_checks import (
@@ -2500,12 +2502,17 @@ async def _fallback_grant(
             can_customer_access_model(
                 model=fallback_model, end_user_object=end_user, llm_router=llm_router, valid_token=user_api_key_dict
             )
-        if not is_model_cost_zero(
-            model=fallback_model, llm_router=llm_router
-        ) and not await _is_within_every_model_budget(
-            valid_token=user_api_key_dict, model_max_budget_limiter=model_max_budget_limiter, model=fallback_model
-        ):
-            return None
+        if not is_model_cost_zero(model=fallback_model, llm_router=llm_router):
+            budget_names: Final = tuple(
+                dict.fromkeys(
+                    (listed_as or fallback_model, fallback_model, llm_router.registry().resolve(fallback_model))
+                )
+            )
+            for budget_name in budget_names:
+                if not await _is_within_every_model_budget(
+                    valid_token=user_api_key_dict, model_max_budget_limiter=model_max_budget_limiter, model=budget_name
+                ):
+                    return None
         access_groups: Final = await _fallback_access_groups(
             fallback_model, user_api_key_dict, llm_router, proxy_logging_obj
         )
@@ -3282,6 +3289,7 @@ class ProxyBaseLLMRequestProcessing:
                             llm_router,
                             proxy_logging_obj,
                             original_model,
+                            listed_as=fallback_model,
                         )
                     ) is None:
                         continue

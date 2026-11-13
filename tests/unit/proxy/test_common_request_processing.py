@@ -8623,7 +8623,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
     @pytest.mark.asyncio
     async def test_a_fallback_aliased_to_a_model_over_its_budget_is_skipped(self, monkeypatch):
         """The walk grants the group an alias is served by, so ``fallbacks: [{A: [B]}]`` with
-        ``model_group_alias: {B: C}`` checks C's budget, not B's."""
+        ``model_group_alias: {B: C}`` checks C's budget as well as B's, as the auth-time fallback walk does."""
         from litellm.proxy._types import UserAPIKeyAuth as ProxyKey
         from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
         from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
@@ -8668,7 +8668,8 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             )
 
         assert processor.data["model"] == "claude-3-haiku"
-        assert budget_checked == ["pricey", "claude-3-haiku"]
+        assert budget_checked[:2] == ["gpt-3.5-turbo", "pricey"]
+        assert "claude-3-haiku" in budget_checked[2:]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
