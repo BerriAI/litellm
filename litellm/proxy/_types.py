@@ -37,6 +37,7 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_langfuse_span_scope_value,
     validate_no_callback_env_reference,
 )
+from litellm.models.budget import BudgetLimits
 from litellm.proxy.auth.access_group_rules import AccessGroupRule, _validate_rules
 from litellm.proxy.mcp_server.stdio_gate import MCP_STDIO_DISABLED_MESSAGE, is_mcp_stdio_enabled
 from litellm.types.agents import (
@@ -891,6 +892,7 @@ class LiteLLMRoutes(enum.Enum):
     )
 
     self_managed_routes = [
+        "/management/v1/customer_budget_increase_requests",
         "/lens",
         "/lens/{path:path}",
         "/telemetry/ui_events",
@@ -1853,6 +1855,15 @@ class BudgetNewRequest(LiteLLMPydanticObjectBase):
     budget_reset_at: datetime | None = Field(
         default=None,
         description="Datetime when the budget is reset",
+    )
+
+
+class BudgetWriteRequest(BudgetNewRequest):
+    model_config = ConfigDict(frozen=True)
+
+    budget_limits: BudgetLimits | None = Field(
+        default=None,
+        description="Independent budget windows. Omit to preserve, or pass null or an empty list to clear.",
     )
 
 
@@ -2951,8 +2962,8 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description="If True, stores request messages and responses in spend logs. Default is False.",
     )
     redact_tokens_in_spend_logs: bool = Field(
-        True,
-        description="Masks token-shaped secrets in stored spend log request and response content by default. Set False to opt out.",
+        False,
+        description="Set True to mask token-shaped secrets in stored spend log request and response content. Default is False.",
     )
     spend_logs_prompt_storage: Literal["latest_turn"] | None = Field(
         None,
@@ -3859,6 +3870,12 @@ class SpendLogsRouterMetadata(TypedDict):
 
 
 class SpendLogsMetadata(TypedDict):
+    user_api_key_customer_org_id: ReadOnly[NotRequired[str | None]]
+    user_api_key_customer_org_alias: ReadOnly[NotRequired[str | None]]
+    user_api_key_customer_team_id: ReadOnly[NotRequired[str | None]]
+    user_api_key_customer_team_alias: ReadOnly[NotRequired[str | None]]
+    user_api_key_customer_member_id: ReadOnly[NotRequired[str | None]]
+    user_api_key_customer_member_alias: ReadOnly[NotRequired[str | None]]
     user_api_key_customer_usage: ReadOnly[NotRequired[str | None]]
     actor_agent_id: ReadOnly[NotRequired[str | None]]
     target_agent_id: ReadOnly[NotRequired[str | None]]
@@ -4501,6 +4518,7 @@ class TeamAccessGroupModelGrant(LiteLLMPydanticObjectBase):
     mcp_server_ids: tuple[str, ...] = ()
     agent_ids: tuple[str, ...] = ()
     skill_names: tuple[str, ...] = ()
+    vector_store_ids: tuple[str, ...] = ()
 
 
 class TeamInfoMember(Member):
@@ -4540,6 +4558,7 @@ class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
     access_group_mcp_server_ids: list[str] | None = None
     access_group_agent_ids: list[str] | None = None
     access_group_skill_names: tuple[str, ...] | None = None
+    access_group_vector_store_ids: tuple[str, ...] | None = None
     # Listed group ids with no row; skill grants are suspended while this is non-empty.
     unresolved_access_group_ids: tuple[str, ...] | None = None
     access_group_details: tuple[TeamAccessGroupModelGrant, ...] | None = None

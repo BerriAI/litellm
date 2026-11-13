@@ -19,7 +19,7 @@ from typing import (
 )
 
 from fastapi import HTTPException, Request, status
-from pydantic import TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
 from typing_extensions import ReadOnly, TypedDict
@@ -98,6 +98,7 @@ from litellm.proxy.common_utils.customer_usage import (
     CUSTOMER_USAGE_METADATA_KEY,
     CustomerUsageDatabase,
     CustomerUsageFailure,
+    ResolvedCustomerUsage,
     customer_usage_fields,
     customer_usage_http_status,
     customer_usage_key_fields,
@@ -111,6 +112,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
 )
 from litellm.proxy.spend_tracking.carried_budget_state import carried_budget_metadata
 from litellm.types.integrations.anthropic_cache_control_hook import GATEWAY_INJECTED_CACHE_METADATA_KEY
+from litellm.types.proxy.auth.customer_hierarchy import customer_budget_scopes_metadata
 
 # Cache special headers as a frozenset for O(1) lookup performance
 _SPECIAL_HEADERS_CACHE: Final = frozenset(str(v.value).lower() for v in SpecialHeaders)
@@ -123,6 +125,68 @@ _CREDENTIAL_HEADER_NAMES: Final = SpecialHeaders.litellm_credential_header_names
 )
 _TRANSPORT_ONLY_CREDENTIAL_KEYS: Final = frozenset({"provider_specific_header", "headers", "api_key"})
 _REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object])
+
+
+class _CustomerPolicyCarrier(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    user_api_key_auth: object = None
+
+
+_CUSTOMER_REQUEST_MODELS: Final[TypeAdapter[str | tuple[str, ...] | None]] = TypeAdapter(str | tuple[str, ...] | None)
+
+
+def customer_request_auth(data: Mapping[str, object]) -> UserAPIKeyAuth | None:
+    carriers: Final = tuple(
+        _CustomerPolicyCarrier.model_validate(customer_usage_fields(data.get(field)))
+        for field in ("metadata", "litellm_metadata")
+    )
+    return next(
+        (carrier.user_api_key_auth for carrier in carriers if isinstance(carrier.user_api_key_auth, UserAPIKeyAuth)),
+        None,
+    )
+
+
+def check_customer_request_model_access(
+    data: Mapping[str, object], auth: UserAPIKeyAuth | None, llm_router: "Router | None"
+) -> None:
+    if auth is None or not auth.customer_model_scopes:
+        return
+    from litellm.proxy.auth.auth_checks import check_customer_model_access
+    from litellm.proxy.auth.auth_utils import request_fallback_model_names
+
+    requested: Final = _CUSTOMER_REQUEST_MODELS.validate_python(data.get("model"))
+    names: Final = (requested,) if isinstance(requested, str) else (requested or ())
+    for model in (*names, *request_fallback_model_names(data)):
+        check_customer_model_access(model=model, valid_token=auth, llm_router=llm_router)
+
+
+async def resolve_customer_request_usage(
+    metadata: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth, *, ledger_enabled: bool
+) -> ResolvedCustomerUsage | None:
+    from litellm.proxy.proxy_server import prisma_client
+
+    key_metadata: Final = customer_usage_key_fields(user_api_key_dict)
+    usage: Final = await resolve_customer_usage(
+        metadata=metadata,
+        key_metadata=key_metadata,
+        administrator=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
+        database=require_attributes(
+            prisma_client.db,
+            CustomerUsageDatabase,
+            "litellm_customerorganizationtable",
+            "litellm_customerteamtable",
+            "litellm_customermembertable",
+        )
+        if prisma_client is not None and customer_usage_requested(metadata, key_metadata)
+        else None,
+        ledger_enabled=ledger_enabled,
+    )
+    if isinstance(usage, CustomerUsageFailure):
+        raise HTTPException(status_code=customer_usage_http_status(usage.error), detail=usage.error.value)
+    return usage
+
+
 _REQUEST_ENTRIES: Final = TypeAdapter(tuple[object, ...])
 
 # Matches any header of the form x-<something>-session-id (case-insensitive).
@@ -2140,6 +2204,11 @@ class LiteLLMProxyRequestSetup:
             user_api_key_customer_member_id=customer.customer_member_id if customer else None,
             user_api_key_customer_team_id=customer.customer_team_id if customer else None,
             user_api_key_customer_org_id=customer.customer_org_id if customer else None,
+            user_api_key_customer_org_alias=customer.customer_org_alias if customer else None,
+            user_api_key_customer_team_alias=customer.customer_team_alias if customer else None,
+            user_api_key_customer_member_alias=customer.customer_member_alias if customer else None,
+            user_api_key_customer_budget_scopes=customer_budget_scopes_metadata(customer),
+            user_api_key_customer_hierarchy=customer.model_dump(mode="json") if customer else None,
             user_api_key_user_email=user_api_key_dict.user_email,
             user_api_key_request_route=user_api_key_dict.request_route,
             user_api_key_budget_reset_at=(
@@ -2746,7 +2815,7 @@ async def add_litellm_data_to_request(
 
     """
 
-    from litellm.proxy.proxy_server import llm_router, premium_user, prisma_client
+    from litellm.proxy.proxy_server import llm_router, premium_user
     from litellm.types.proxy.litellm_pre_call_utils import RedactedDict, SecretFields
 
     # Strip internal-only keys from user input before the proxy sets its own.
@@ -3024,35 +3093,24 @@ async def add_litellm_data_to_request(
         data.pop("litellm_metadata", None)
 
     _customer_metadata: Final = customer_usage_fields(_REQUEST_FIELDS.validate_python(data)[_metadata_variable_name])
-    _customer_key_metadata: Final = customer_usage_key_fields(user_api_key_dict)
-    _customer_usage: Final = await resolve_customer_usage(
-        metadata=_customer_metadata,
-        key_metadata=_customer_key_metadata,
-        administrator=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
-        database=require_attributes(
-            prisma_client.db,
-            CustomerUsageDatabase,
-            "litellm_customerorganizationtable",
-            "litellm_customerteamtable",
-            "litellm_customermembertable",
-        )
-        if prisma_client is not None and customer_usage_requested(_customer_metadata, _customer_key_metadata)
-        else None,
+    _customer_usage: Final = await resolve_customer_request_usage(
+        _customer_metadata,
+        user_api_key_dict,
         ledger_enabled=general_settings_view is None
         or general_settings_view.get("use_spend_logs_ledger", True) is not False,
     )
-    if isinstance(_customer_usage, CustomerUsageFailure):
-        raise HTTPException(
-            status_code=customer_usage_http_status(_customer_usage.error), detail=_customer_usage.error.value
-        )
     if _customer_usage is not None:
         data[_metadata_variable_name][CUSTOMER_USAGE_METADATA_KEY] = (  # rebind-ok: data is an out-param
-            _customer_usage.model_dump_json()
+            _customer_usage.attribution.model_dump_json()
         )
+
+    _customer_request_auth: Final = user_api_key_dict.with_customer_model_scopes(
+        _customer_usage.model_scopes if _customer_usage is not None else ()
+    )
 
     data = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
         data=data,
-        user_api_key_dict=user_api_key_dict,
+        user_api_key_dict=_customer_request_auth,
         _metadata_variable_name=_metadata_variable_name,
     )
     data[_metadata_variable_name]["litellm_api_version"] = version
@@ -3268,6 +3326,8 @@ async def add_litellm_data_to_request(
 
     if holds_api_key_secret_reference(data):  # pyright: ignore[reportUnknownArgumentType]  # data is an untyped dict
         raise HTTPException(status_code=400, detail=API_KEY_SECRET_REFERENCE_REJECTION)
+
+    check_customer_request_model_access(_REQUEST_FIELDS.validate_python(data), _customer_request_auth, llm_router)
 
     ## ENFORCED PARAMS CHECK
     # loop through each enforced param

@@ -88,6 +88,7 @@ from litellm.proxy.route_llm_request import ROUTE_ENDPOINT_MAPPING
 from litellm.proxy.spend_tracking.compression_savings import (
     extract_compression_saved_tokens,
 )
+from litellm.proxy.spend_tracking.customer_budget_alerts import CustomerBudgetAlerting
 from litellm.proxy.spend_tracking.savings import (
     compute_savings_spend,
     extract_cache_creation_tokens,
@@ -98,7 +99,11 @@ from litellm.proxy.spend_tracking.session_spend_total import SessionSpendTotals
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.repositories.prisma_protocols import BatchTable
 from litellm.responses.streaming_iterator import spawn_logging_task
-from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyIds, customer_hierarchy_ids_from_request
+from litellm.types.proxy.auth.customer_hierarchy import (
+    CustomerHierarchyIds,
+    customer_budget_scopes_from_request,
+    customer_hierarchy_ids_from_request,
+)
 from litellm.types.utils import CallTypes
 from litellm.types.videos.utils import VIDEO_COST_REQUEST_ID_SUFFIX, VIDEO_STATUS_CALL_TYPES
 
@@ -106,6 +111,7 @@ if TYPE_CHECKING:
     from litellm.accounting.projection import Contribution
     from litellm.proxy.db.autorouter_session_rollup import AutoRouterTurnTransaction
     from litellm.proxy.db.baseline_accounting import DailyBaselineAttribution
+    from litellm.proxy.spend_tracking.budget_reservation import BudgetCounter
     from litellm.proxy.utils import PrismaClient, ProxyLogging
     from litellm.router import Router
 else:
@@ -792,6 +798,7 @@ class DBSpendUpdateWriter:
         end_time: datetime,
         response_cost: float | None,
         project_id: str | None = None,
+        customer_counters: "Sequence[BudgetCounter] | None" = None,
     ) -> bool:
         """Record the request's spend, answering whether its cost still needs charging.
 
@@ -800,6 +807,7 @@ class DBSpendUpdateWriter:
         """
         from litellm.proxy.proxy_server import (
             accounting_window_keys,
+            customer_accounting_counters,
             disable_spend_logs,
             general_settings,  # pyright: ignore[reportUnknownVariableType]  # legacy proxy configuration is narrowed below
             litellm_proxy_budget_name,
@@ -880,7 +888,17 @@ class DBSpendUpdateWriter:
                     model_access_groups=debitable_model_access_groups(
                         get_request_model_access_groups(request_fields), payload["model_id"], llm_router
                     ),
-                    windows=await accounting_window_keys(hashed_token, team_id) if billable_cost else (),
+                    windows=await accounting_window_keys(
+                        hashed_token,
+                        team_id,
+                        customer_counters
+                        if customer_counters is not None
+                        else await customer_accounting_counters(
+                            customer_hierarchy, customer_budget_scopes_from_request(request_fields)
+                        ),
+                    )
+                    if billable_cost
+                    else (),
                     router=get_llm_router,
                 )
             keep_spend_logs: Final = disable_spend_logs is False and not (
@@ -2828,6 +2846,12 @@ class DBSpendUpdateWriter:
             )
             if on_table_committed is not None:
                 on_table_committed(level.transactions)
+            if outer_transaction is None and db_spend_update_transactions.get(level.transactions):
+                await CustomerBudgetAlerting.detect_committed_batch(
+                    {level.transactions: db_spend_update_transactions.get(level.transactions)},
+                    prisma_client,
+                    proxy_logging_obj.internal_usage_cache.dual_cache,
+                )
 
     @staticmethod
     async def _commit_customer_hierarchy_level(

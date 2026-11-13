@@ -102,7 +102,7 @@ ingress:
   # The target component only answers paths its own route allowlist keeps, so
   # a path here still has to be one that component serves.
   extraPaths: []
-  # - path: /watsonx
+  # - path: /hosted_vllm
   #   pathType: Prefix
   #   service: gateway
 
