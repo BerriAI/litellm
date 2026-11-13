@@ -56,6 +56,10 @@ def _sent_config(request: httpx.Request) -> Mapping[str, object]:
     return json.loads(_form_fields(request)["config"])
 
 
+def _rate(model: str) -> float:
+    return litellm.get_model_info(f"zoom_ai/{model}")["input_cost_per_second"]
+
+
 def test_transcription_sends_the_audio_and_config_to_scribe_fast(
     zoom_ai_env: None, respx_mock: respx.MockRouter
 ) -> None:
@@ -107,15 +111,29 @@ def test_api_base_override_keeps_the_scribe_route(zoom_ai_env: None, respx_mock:
 def test_spend_is_the_billed_seconds_times_the_model_rate(
     zoom_ai_env: None, local_model_cost_map: None, respx_mock: respx.MockRouter
 ) -> None:
-    respx_mock.post(ZOOM_AI_FAST_URL).respond(json={**SCRIBE_RESPONSE, "duration_sec": 6.0})
+    respx_mock.post(ZOOM_AI_FAST_URL).respond(
+        json={**SCRIBE_RESPONSE, "model": "zoom-scribe-multilingual", "duration_sec": 6.0}
+    )
 
     response: Final = litellm.transcription(model="zoom_ai/zoom-scribe-multilingual", file=AUDIO)
 
     cost: Final = litellm.completion_cost(
         completion_response=response, model="zoom_ai/zoom-scribe-multilingual", call_type="transcription"
     )
-    rate: Final = litellm.model_cost["zoom_ai/zoom-scribe-multilingual"]["input_cost_per_second"]
-    assert cost == pytest.approx(SCRIBE_RESPONSE["usage"]["input_units"] * rate)
+    assert cost == pytest.approx(SCRIBE_RESPONSE["usage"]["input_units"] * _rate("zoom-scribe-multilingual"))
+
+
+@pytest.mark.parametrize("served_model", ["zoom-scribe-en", "zoom-scribe-fr", "zoom-scribe-multilingual", "whisper"])
+def test_auto_model_lets_scribe_choose_and_is_billed_at_the_model_that_ran(
+    zoom_ai_env: None, local_model_cost_map: None, respx_mock: respx.MockRouter, served_model: str
+) -> None:
+    route: Final = respx_mock.post(ZOOM_AI_FAST_URL).respond(json={**SCRIBE_RESPONSE, "model": served_model})
+
+    response: Final = litellm.transcription(model="zoom_ai/auto", file=AUDIO, language="ko")
+
+    assert "model" not in _sent_config(route.calls.last.request)
+    cost: Final = litellm.completion_cost(completion_response=response, model="zoom_ai/auto", call_type="transcription")
+    assert cost == pytest.approx(SCRIBE_RESPONSE["usage"]["input_units"] * _rate(served_model))
 
 
 @pytest.mark.parametrize(
@@ -199,6 +217,7 @@ def test_unsupported_response_format_is_rejected_before_sending(
         ("zoom-scribe-xx", {"language": "xx"}, {"model": "zoom-scribe-xx", "language": "xx"}),
         ("zoom-scribe-fr", {}, {"model": "zoom-scribe-fr", "language": "fr-FR"}),
         ("zoom-scribe-de-pro", {}, {"model": "zoom-scribe-de-pro", "language": "de-DE"}),
+        ("zoom-scribe-en-pro-v2.1", {}, {"model": "zoom-scribe-en-pro-v2.1", "language": "en-US"}),
         ("zoom-scribe-fr", {"language": "en"}, {"model": "zoom-scribe-fr", "language": "en-US"}),
         (
             "zoom-scribe-multilingual",
@@ -216,6 +235,8 @@ def test_unsupported_response_format_is_rejected_before_sending(
             {"model": "zoom-scribe-multilingual", "language_detection": {"mode": "once"}},
         ),
         ("a-future-model", {}, {"model": "a-future-model"}),
+        ("auto", {"language": "ko"}, {"language": "ko-KR"}),
+        ("auto", {}, {}),
     ],
 )
 def test_recognition_config_language_and_model(

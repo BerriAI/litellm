@@ -44,10 +44,12 @@ ZOOM_AI_STR_CONFIG_PARAMS: Final = frozenset({"segmentation_mode", "vocabulary_i
 ZOOM_AI_CONFIG_PARAMS: Final = (
     ZOOM_AI_BOOL_CONFIG_PARAMS | ZOOM_AI_STR_CONFIG_PARAMS | {"vocabulary", "language_detection"}
 )
+# `zoom_ai/auto` leaves the model to Scribe, which picks one from the language and detection settings
+ZOOM_AI_AUTO_MODEL: Final = "auto"
 # Models documented with continuous language detection, which is what callers expect from a multilingual model
 CONTINUOUS_DETECTION_MODELS: Final = frozenset({"zoom-scribe-multilingual", "whisper"})
 
-_LANGUAGE_MODEL: Final = re.compile(r"zoom-scribe-(?P<language>[a-z]{2,3})(?:-pro)?")
+_LANGUAGE_MODEL: Final = re.compile(r"zoom-scribe-(?P<language>[a-z]{2,3})(?:-pro(?:-[a-z0-9.]+)*)?")
 _FORM_BOOL: Final = TypeAdapter(bool)
 _PHRASES: Final = TypeAdapter(tuple[str, ...])
 _DETECTION: Final = TypeAdapter(dict[str, object])
@@ -72,6 +74,7 @@ class _ScribeResponse(BaseModel):
 
     result: _ScribeResult
     duration_sec: float = 0.0
+    model: str | None = None
     usage: _ScribeUsage | None = None
 
     def billed_usage(self) -> TranscriptionUsageDurationObject | None:
@@ -137,11 +140,26 @@ def zoom_ai_recognition_config(model: str, optional_params: Mapping[str, object]
         else {}
     )
     return {
-        "model": model,
+        **({"model": model} if model != ZOOM_AI_AUTO_MODEL else {}),
         **({"language": locale} if locale is not None else {}),
         **detection,
         **provider_config,
     }
+
+
+def _transcription_response(scribe: _ScribeResponse) -> TranscriptionResponse:
+    text: Final = scribe.result.text_display
+    if scribe.result.language:
+        return TranscriptionResponse(
+            text=text,
+            usage=scribe.billed_usage(),
+            task="transcribe",
+            language=scribe.result.language,
+            duration=scribe.duration_sec,
+        )
+    return TranscriptionResponse(
+        text=text, usage=scribe.billed_usage(), task="transcribe", duration=scribe.duration_sec
+    )
 
 
 class ZoomAIAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
@@ -256,15 +274,7 @@ class ZoomAIAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             ) from None
-        text: Final = scribe.result.text_display
-        if scribe.result.language:
-            return TranscriptionResponse(
-                text=text,
-                usage=scribe.billed_usage(),
-                task="transcribe",
-                language=scribe.result.language,
-                duration=scribe.duration_sec,
-            )
-        return TranscriptionResponse(
-            text=text, usage=scribe.billed_usage(), task="transcribe", duration=scribe.duration_sec
-        )
+        response: Final = _transcription_response(scribe)
+        if scribe.model:
+            response.hidden_params = {**response.hidden_params, "provider_response_model": scribe.model}
+        return response

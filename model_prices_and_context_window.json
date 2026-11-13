@@ -63446,6 +63446,21 @@
         ],
         "supports_audio_input": true
     },
+    "zoom_ai/whisper": {
+        "input_cost_per_second": 9.667e-05,
+        "litellm_provider": "zoom_ai",
+        "metadata": {
+            "calculation": "$0.0058/60 seconds = $0.00009667 per second",
+            "original_pricing_per_minute": 0.0058,
+            "pricing_tier": "Scribe API Pro High-Accuracy / Multilingual Fast"
+        },
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://zoom.us/pricing/developer",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ]
+    },
     "zoom_ai/zoom-scribe-ar": {
         "input_cost_per_second": 5.5e-05,
         "litellm_provider": "zoom_ai",
