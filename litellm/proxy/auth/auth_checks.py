@@ -1164,7 +1164,7 @@ def check_opaque_inference_controls(value: object, *, depth: int = 0) -> None:
             continue
         if name in {"models", "team_models", "allowed_models"} and "*" not in (as_object_list(control) or ()):
             raise HTTPException(status_code=403, detail="Opaque inference cannot enforce model restrictions")
-        if name.endswith(("tpm_limit", "tpd_limit", "model_max_budget", "model_rpm_limit")) or name in {
+        if name.endswith(("tpm_limit", "tpd_limit", "max_budget", "model_rpm_limit")) or name in {
             "tpm_limit_per_model",
             "rpm_limit_per_model",
             "allowed_model_region",

@@ -358,6 +358,32 @@ def test_unenforceable_or_disallowed_key_policies_fail_closed(
     assert not respx_mock.calls
 
 
+@pytest.mark.parametrize(
+    "budget_field", ["max_budget", "team_max_budget", "user_max_budget", "organization_max_budget", "end_user_max_budget"]
+)
+@pytest.mark.parametrize("limit,spend", [(0, 0), (10, 0), (10, 11)])
+def test_spend_capped_keys_cannot_use_an_unmetered_cursor_relay(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    budget_field: str,
+    limit: int,
+    spend: int,
+) -> None:
+    key: Final = "sk-cursor-spend-capped"
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    proxy_server.user_api_key_cache.set_cache(
+        key=hash_token(key),
+        value=UserAPIKeyAuth.model_validate({"token": hash_token(key), budget_field: limit, "spend": spend}),
+    )
+    upstream: Final = respx_mock.post(f"{_BASE}/{_RUN}").respond(content=b"\x08\x01")
+    response: Final = client.post(
+        f"/cursor-cli/{_RUN}", headers={**_HEADERS, "x-litellm-api-key": key}, content=b"\xff"
+    )
+    assert response.status_code in (403, 422), response.text
+    assert not upstream.called
+
+
 @pytest.mark.parametrize("agent_id,status,forwarded", [(None, 200, True), ("scoped-agent", 403, False)])
 def test_agent_bound_keys_cannot_bypass_opaque_model_scopes(
     client: TestClient,

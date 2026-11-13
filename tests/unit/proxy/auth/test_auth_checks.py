@@ -76,7 +76,9 @@ def test_opaque_controls_reject_unchecked_nesting(container: str, at_limit: bool
     assert "nesting" in denied.value.detail
 
 
-@pytest.mark.parametrize("control", [{"models": ["restricted-model"]}, {"guardrails": ["required-guardrail"]}])
+@pytest.mark.parametrize(
+    "control", [{"models": ["restricted-model"]}, {"guardrails": ["required-guardrail"]}, {"max_budget": 0}]
+)
 def test_opaque_controls_reject_restrictions_nested_in_lists_and_mappings(control: dict[str, object]) -> None:
     with pytest.raises(HTTPException) as denied:
         check_opaque_inference_controls({"metadata": [{"budget": control}]})
