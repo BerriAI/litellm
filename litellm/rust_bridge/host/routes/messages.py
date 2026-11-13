@@ -242,6 +242,7 @@ _HANDLER: Final = cast(  # cast-ok: only the untyped handler's signature is read
     handler.anthropic_messages_handler,  # noqa: TID251  # reads the handler's signature, never calls it
 )
 _ENTRY_PARAMS: Final = frozenset(inspect.signature(_ENTRY).parameters) - {"kwargs"}
+_RUST_ONLY_PROVIDERS: Final = frozenset({"anthropic"})
 _HANDLER_PARAMS: Final = frozenset(inspect.signature(_HANDLER).parameters) - {"kwargs"}
 _JsonBlocks: TypeAlias = list[dict[str, JsonValue]]
 _Prepared: TypeAlias = tuple[_JsonBlocks, str | _JsonBlocks | None, Sequence[object] | None]
@@ -789,9 +790,14 @@ def _config_error(
     )
 
 
-def _entry_kwargs(request: Mapping[str, object]) -> dict[str, object]:  # mutable-ok: the legacy mapper takes a dict
-    """The `**kwargs` of Python's entry, which its exception mapping reads, so the named `api_base`
-    adds no API Base line to the debug info."""
+def _mapped_kwargs(
+    request: Mapping[str, object], request_provider: str
+) -> dict[str, object]:  # mutable-ok: the legacy mapper takes a dict
+    """What the exception mapping reads for the debug info. A provider with a Python path maps with its
+    entry's `**kwargs`, so the named `api_base` adds no API Base line. Anthropic has no Python path and
+    keeps the native route's mapping of the whole call, which names the `api_base`."""
+    if request_provider in _RUST_ONLY_PROVIDERS:
+        return dict(request)
     return {name: value for name, value in request.items() if name not in _ENTRY_PARAMS}
 
 
@@ -803,7 +809,7 @@ def _public_provider_error(
             model=str(request["model"]),
             custom_llm_provider=request_provider,
             original_exception=provider_error,
-            extra_kwargs=_entry_kwargs(request),
+            extra_kwargs=_mapped_kwargs(request, request_provider),
         )
     except Exception as mapped:  # noqa: BLE001  # exception_type raises the mapped public error
         mapped.__context__ = error
@@ -899,7 +905,7 @@ def map_failure(
             error,
             str(request["model"]),
             request_provider,
-            _entry_kwargs(request),
+            _mapped_kwargs(request, request_provider),
             optional_str(request.get("api_base")),
         )
     return _public_provider_error(provider_error, error, request, request_provider)
@@ -1470,7 +1476,7 @@ def map_transport_failure(error: Exception, request: Mapping[str, object], reque
                 model=str(request["model"]),
                 custom_llm_provider=request_provider,
                 original_exception=provider_error,
-                extra_kwargs=_entry_kwargs(request),
+                extra_kwargs=_mapped_kwargs(request, request_provider),
             )
         except Exception as mapped:  # noqa: BLE001  # exception_type raises the mapped public error
             mapped.__context__ = provider_error

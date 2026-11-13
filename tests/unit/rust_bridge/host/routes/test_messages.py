@@ -812,14 +812,25 @@ def _upstream_status(status: int, body: str) -> Exception:
         pytest.param(RuntimeError(_REFUSED), id="transport"),
     ),
 )
-def test_a_mapped_failure_names_the_model_but_not_the_call_s_api_base_like_the_python_entry(
-    native: Exception,
+@pytest.mark.parametrize(
+    ("provider", "debug_info"),
+    (
+        pytest.param("azure_ai", f"\nModel: {_AZURE_CLAUDE}", id="azure_ai-like-the-python-entry"),
+        pytest.param(
+            "anthropic",
+            f"\nModel: {_AZURE_CLAUDE}\nAPI Base: `http://127.0.0.1:9/anthropic`",
+            id="anthropic-without-a-python-path",
+        ),
+    ),
+)
+def test_a_mapped_failure_names_the_call_s_api_base_only_for_a_provider_without_a_python_path(
+    native: Exception, provider: str, debug_info: str
 ) -> None:
     mapped: Final = messages_host.map_failure(
-        native, {"model": _AZURE_CLAUDE, "api_base": "http://127.0.0.1:9/anthropic", "api_key": "k"}, "azure_ai"
+        native, {"model": _AZURE_CLAUDE, "api_base": "http://127.0.0.1:9/anthropic", "api_key": "k"}, provider
     )
 
-    assert getattr(mapped, "litellm_debug_info", None) == f"\nModel: {_AZURE_CLAUDE}"
+    assert getattr(mapped, "litellm_debug_info", None) == debug_info
 
 
 _CALL: Final = MappingProxyType({"messages": [{"role": "user", "content": "hi"}], "max_tokens": 8})

@@ -66,6 +66,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.websearch_interception.handler import WebSearchInterceptionLogger
 from litellm.litellm_core_utils import logging_utils
 from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
+from litellm.litellm_core_utils.exception_mapping_utils import with_deployment_debug_info
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.anthropic.messages.native import interceptors as messages_interceptors
 from litellm.llms.anthropic.messages.native.fake_stream_iterator import FakeAnthropicMessagesStreamIterator
@@ -4232,6 +4233,21 @@ AZURE_ERROR_CASES: Final = tuple(
     )
 )
 
+ANTHROPIC_ON_AZURE_CLAUDE_ERROR_CASES: Final = (
+    Case(
+        "anthropic_provider_on_an_azure_ai_model_upstream_404",
+        _kw(custom_llm_provider="anthropic"),
+        model=AZURE_CLAUDE,
+        upstream=(_failure(404, "not_found_error", "model not found"),),
+    ),
+    Case(
+        "anthropic_provider_on_an_azure_ai_model_upstream_404_stream",
+        _kw(custom_llm_provider="anthropic", stream=True),
+        model=AZURE_CLAUDE,
+        upstream=(_failure(404, "not_found_error", "model not found"),),
+    ),
+)
+
 AZURE_NON_CLAUDE: Final = "azure_ai/Phi-4"
 MESSAGES_PASSTHROUGH: Final = MappingProxyType({"supported_endpoints": ["/v1/messages"]})
 
@@ -4280,6 +4296,7 @@ CASES: Final = (
     *ANTHROPIC_URL_CASES,
     *AZURE_SHAPING_CASES,
     *AZURE_ERROR_CASES,
+    *ANTHROPIC_ON_AZURE_CLAUDE_ERROR_CASES,
 )
 
 
@@ -4872,7 +4889,7 @@ async def test_native_messages_match_python(
         case "request":
             assert _comparable(native.requests) == _comparable(python.requests)
         case "outcome":
-            assert native.outcome == python.outcome
+            assert native.outcome == _anthropic_reference(python.outcome, _kwargs(case, parity_server))
         case "hidden_params":
             assert native.hidden_params == python.hidden_params
         case "logged":
@@ -4891,6 +4908,16 @@ async def test_native_messages_match_python(
             assert native.stream_type == python.stream_type
         case _:
             assert _comparable(native.callback_kwargs.get(aspect)) == _comparable(python.callback_kwargs.get(aspect))
+
+
+def _anthropic_reference(outcome: Mapping[str, object], kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    """Anthropic has no Python path, and its native route names the caller's api_base in a failure's
+    debug info, which the legacy Python entry leaves out."""
+    model: Final = str(kwargs["model"])
+    if outcome.get("llm_provider") != "anthropic" or outcome.get("debug_info") != f"\nModel: {model}":
+        return outcome
+    named: Final = with_deployment_debug_info(Exception(), model, "anthropic", kwargs)
+    return {**outcome, "debug_info": _normalized(str(getattr(named, "litellm_debug_info", None)))}
 
 
 def _comparable(value: object) -> object:
