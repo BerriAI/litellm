@@ -725,13 +725,17 @@ class LiteLLMRoutes(enum.Enum):
             "/jwt/key/mapping/list",
             "/jwt/key/mapping/info",
             "/management/v1/customer_organizations",
+            "/management/v1/customer_organizations/daily/activity/aggregated",
             "/management/v1/customer_organizations/{customer_org_id}",
+            "/management/v1/customer_organizations/daily/activity",
             "/management/v1/customer_organizations/{customer_org_id}/default_budgets",
             "/management/v1/customer_organizations/{customer_org_id}/default_budgets/{budget_id}",
             "/management/v1/customer_teams",
             "/management/v1/customer_teams/{customer_team_id}",
+            "/management/v1/customer_teams/daily/activity",
             "/management/v1/customer_members",
             "/management/v1/customer_members/{customer_member_id}",
+            "/management/v1/customer_members/daily/activity",
         ]
         + key_management_routes
         + mcp_management_routes
@@ -3855,6 +3859,7 @@ class SpendLogsRouterMetadata(TypedDict):
 
 
 class SpendLogsMetadata(TypedDict):
+    user_api_key_customer_usage: ReadOnly[NotRequired[str | None]]
     actor_agent_id: ReadOnly[NotRequired[str | None]]
     target_agent_id: ReadOnly[NotRequired[str | None]]
     billing_agent_id: ReadOnly[NotRequired[str | None]]

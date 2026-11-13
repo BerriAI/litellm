@@ -38,6 +38,8 @@ vi.mock("@/app/(dashboard)/hooks/keys/useResetKeySpend", () => ({
 }));
 vi.mock("../networking", () => ({
   serverRootPath: "",
+  getProxyBaseUrl: vi.fn(() => ""),
+  getUiSettings: vi.fn().mockResolvedValue({ values: {} }),
   keyDeleteCall: vi.fn().mockResolvedValue({}),
   keyUpdateCall: vi.fn().mockResolvedValue({}),
   getPolicyInfoWithGuardrails: vi.fn().mockResolvedValue({ resolved_guardrails: [] }),

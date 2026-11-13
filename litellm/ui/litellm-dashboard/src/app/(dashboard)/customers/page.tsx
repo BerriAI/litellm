@@ -1,152 +1,243 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { parseAsString, useQueryState } from "nuqs";
 import { Plus } from "lucide-react";
-import { toast } from "sonner";
+import { createSerializer, parseAsString, useQueryState } from "nuqs";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { useCustomers, type EndUser } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import { $api } from "@/lib/http/api";
+import { customerUsageTotals } from "./_components/customerUsageTotals";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import CustomerDetail from "./_components/CustomerDetail";
+import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
+import { DataTablePagination, useUrlTableState } from "@/components/shared/DataTable";
+import { ErrorState } from "@/components/shared/ErrorState";
+import { uiHref } from "@/utils/uiHref";
 import CreateCustomerDialog from "./_components/CreateCustomerDialog";
-import StatusBadge from "./_components/StatusBadge";
-import { rankBySpend, useCustomerUsage } from "./_components/customerPortalData";
+import CustomerDetail from "./_components/CustomerDetail";
+import {
+  calendarDate,
+  CUSTOMER_USAGE_MAX_RANGE_DAYS,
+  customerUsagePresets,
+  useCustomerUsageRange,
+} from "./_components/customerUsageRange";
+
+const TABLE_OPTIONS = {
+  sortFields: ["created_at"],
+  defaultSort: { id: "created_at", desc: false },
+  defaultPageSize: 25,
+  filterColumns: [],
+};
+
+const usageHref = createSerializer({ org: parseAsString, from: parseAsString, to: parseAsString });
 
 export default function CustomersPage() {
+  const [selectedId, setSelectedId] = useQueryState("id", parseAsString);
+  if (selectedId) return <CustomerDetail customerId={selectedId} onBack={() => void setSelectedId(null)} />;
+  return <CustomerOrganizations />;
+}
+
+function CustomerSpend({
+  spend,
+  budgetSpend,
+  maxBudget,
+}: {
+  spend: number;
+  budgetSpend: number;
+  maxBudget: number | null;
+}) {
+  const { t } = useTranslation();
+  const spendLabel = t("format.usd", { val: spend });
+  if (maxBudget === null) {
+    return (
+      <>
+        <p className="font-medium">{spendLabel}</p>
+        <p className="text-xs text-muted-foreground">{t("customerPortal.list.noMaxBudget")}</p>
+      </>
+    );
+  }
+  const percentage =
+    maxBudget > 0
+      ? t("customerPortal.list.budgetUsed", {
+          percentage: t("format.number", {
+            val: budgetSpend / maxBudget,
+            style: "percent",
+            maximumFractionDigits: 1,
+          }),
+        })
+      : t("customerPortal.list.zeroBudgetPercentage");
+  const budgetSpendLabel = t("format.usd", { val: budgetSpend });
+  const budgetLabel = t("customerPortal.list.budgetUsage", {
+    spend: budgetSpendLabel,
+    max: t("format.usd", { val: maxBudget }),
+  });
+  const matchesBudgetSpend = spendLabel === budgetSpendLabel;
+  return (
+    <>
+      <p className="whitespace-nowrap font-medium">{matchesBudgetSpend ? budgetLabel : spendLabel}</p>
+      {!matchesBudgetSpend && (
+        <p className="text-xs text-muted-foreground">
+          {t("customerPortal.list.currentBudget", { budget: budgetLabel })}
+        </p>
+      )}
+      <p className="text-xs text-muted-foreground">{percentage}</p>
+    </>
+  );
+}
+
+function CustomerOrganizations() {
   const { t } = useTranslation();
   const { accessToken } = useAuthorized();
-  const [selectedId, setSelectedId] = useQueryState("id", parseAsString);
-  const [search, setSearch] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
-  const customersQuery = useCustomers(100, search || undefined);
-  const usageQuery = useCustomerUsage(accessToken);
-  const customers: EndUser[] = useMemo(() => customersQuery.data?.pages.flat() ?? [], [customersQuery.data]);
-  const rows = useMemo(() => rankBySpend(customers, usageQuery.data), [customers, usageQuery.data]);
-  const block = $api.useMutation("post", "/customer/block", {
-    onSuccess: () => {
-      toast.success(t("customerPortal.toasts.blocked"));
-      customersQuery.refetch();
+  const { dateValue, onDateChange, preset } = useCustomerUsageRange();
+  const { search, setSearch, pagination, onPaginationChange } = useUrlTableState(TABLE_OPTIONS);
+  const organizations = $api.useQuery(
+    "get",
+    "/management/v1/customer_organizations",
+    {
+      params: {
+        query: { q: search, page: pagination.pageIndex + 1, page_size: pagination.pageSize },
+      },
     },
-  });
-  const unblock = $api.useMutation("post", "/customer/update", {
-    onSuccess: () => {
-      toast.success(t("customerPortal.toasts.unblocked"));
-      customersQuery.refetch();
+    { enabled: Boolean(accessToken) },
+  );
+  const rows = organizations.data?.data ?? [];
+  const usage = $api.useQuery(
+    "get",
+    "/management/v1/customer_organizations/daily/activity/aggregated",
+    {
+      params: {
+        query: {
+          start_date: calendarDate(dateValue.from),
+          end_date: calendarDate(dateValue.to),
+          customer_org_ids: rows.map((customer) => customer.customer_org_id).join(","),
+        },
+      },
     },
-  });
-
-  if (selectedId) return <CustomerDetail customerId={selectedId} onBack={() => setSelectedId(null)} />;
+    { enabled: Boolean(accessToken) && rows.length > 0 },
+  );
+  const loading = organizations.isPending || (rows.length > 0 && usage.isPending);
+  const totals = customerUsageTotals(usage.data?.results ?? []);
 
   return (
     <div className="w-full space-y-4 px-6 py-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex min-w-0 items-baseline gap-3">
+        <div className="min-w-0 space-y-1">
           <h1 className="text-lg font-semibold tracking-tight">{t("customerPortal.list.title")}</h1>
-          <p className="truncate text-sm text-muted-foreground">{t("customerPortal.list.subtitle")}</p>
+          <p className="text-sm text-muted-foreground">{t("customerPortal.list.subtitle")}</p>
         </div>
         <Button onClick={() => setCreateOpen(true)}>
           <Plus className="size-4" /> {t("customerPortal.list.create")}
         </Button>
       </div>
-      <p className="text-xs text-muted-foreground">{t("customerPortal.common.blockHint")}</p>
       <div className="rounded-lg border bg-card">
-        <div className="border-b p-3">
+        <div className="flex flex-wrap items-end justify-between gap-3 border-b p-3">
           <Input
             className="max-w-xs"
+            aria-label={t("customerPortal.list.searchPlaceholder")}
             placeholder={t("customerPortal.list.searchPlaceholder")}
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(event) => setSearch(event.target.value)}
+          />
+          <AdvancedDatePicker
+            value={dateValue}
+            onValueChange={(value, selectedPreset) => {
+              onDateChange(value, selectedPreset);
+              onPaginationChange({ ...pagination, pageIndex: 0 });
+            }}
+            presetShortLabel={preset}
+            presets={customerUsagePresets}
+            maxRangeDays={CUSTOMER_USAGE_MAX_RANGE_DAYS}
+            label={t("customerPortal.range.label")}
+            showTimeRange={false}
+            compact
+            className="max-w-sm"
           />
         </div>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className="pl-4">{t("customerPortal.list.columns.customer")}</TableHead>
-              <TableHead className="text-right">{t("customerPortal.list.columns.spend")}</TableHead>
-              <TableHead className="text-right">{t("customerPortal.list.columns.budget")}</TableHead>
-              <TableHead className="text-right">{t("customerPortal.list.columns.keys")}</TableHead>
-              <TableHead>{t("customerPortal.list.columns.status")}</TableHead>
-              <TableHead className="w-28" />
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {customersQuery.isLoading && (
+        {organizations.isError || usage.isError ? (
+          <ErrorState
+            message={t("customerPortal.list.error")}
+            onRetry={() => void (organizations.isError ? organizations.refetch() : usage.refetch())}
+          />
+        ) : (
+          <Table aria-label={t("customerPortal.list.title")}>
+            <TableHeader>
               <TableRow>
-                <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
-                  {t("customerPortal.list.loading")}
-                </TableCell>
+                <TableHead className="pl-4">{t("customerPortal.list.columns.customer")}</TableHead>
+                <TableHead className="text-right">{t("customerPortal.list.columns.spend")}</TableHead>
+                <TableHead className="text-right">{t("customerPortal.list.columns.requests")}</TableHead>
+                <TableHead className="text-right">{t("customerPortal.list.columns.tokens")}</TableHead>
+                <TableHead className="pr-4 text-right">{t("customerPortal.list.columns.members")}</TableHead>
               </TableRow>
-            )}
-            {!customersQuery.isLoading && rows.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
-                  {t("customerPortal.list.empty")}
-                </TableCell>
-              </TableRow>
-            )}
-            {rows.map(({ c, spend, keys, status }) => {
-              const max = c.litellm_budget_table?.max_budget ?? null;
-              return (
-                <TableRow
-                  key={c.user_id}
-                  className="cursor-pointer"
-                  onClick={() => setSelectedId(c.user_id, { history: "push" })}
-                >
-                  <TableCell className="pl-4">
-                    <p className="font-medium">{c.alias || c.user_id}</p>
-                    <p className="font-mono text-[11px] text-muted-foreground">{c.user_id}</p>
-                  </TableCell>
-                  <TableCell className="text-right font-medium tabular-nums">
-                    {t("format.usd", { val: spend })}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums text-muted-foreground">
-                    {max === null
-                      ? t("customerPortal.common.noBudget")
-                      : t("customerPortal.list.budgetUsage", {
-                          spend: t("format.usd", { val: spend }),
-                          max: t("format.usd", { val: max }),
-                        })}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums">{keys}</TableCell>
-                  <TableCell>
-                    <StatusBadge status={status} />
-                  </TableCell>
-                  <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
-                    {c.blocked ? (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => unblock.mutate({ body: { user_id: c.user_id, blocked: false } })}
-                      >
-                        {t("customerPortal.common.unblock")}
-                      </Button>
-                    ) : (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => block.mutate({ body: { user_ids: [c.user_id] } })}
-                      >
-                        {t("customerPortal.common.block")}
-                      </Button>
-                    )}
+            </TableHeader>
+            <TableBody>
+              {loading && (
+                <TableRow>
+                  <TableCell colSpan={5} className="py-8 text-center text-muted-foreground">
+                    {t("customerPortal.list.loading")}
                   </TableCell>
                 </TableRow>
-              );
-            })}
-          </TableBody>
-        </Table>
+              )}
+              {!loading && rows.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={5} className="py-8 text-center text-muted-foreground">
+                    {t(search ? "customerPortal.list.noMatches" : "customerPortal.list.empty")}
+                  </TableCell>
+                </TableRow>
+              )}
+              {!loading &&
+                rows.map((customer) => (
+                  <TableRow key={customer.customer_org_id}>
+                    <TableCell className="pl-4">
+                      <a
+                        className="font-medium text-primary hover:underline"
+                        href={usageHref(uiHref("customers/usage"), {
+                          org: customer.customer_org_id,
+                          from: calendarDate(dateValue.from),
+                          to: calendarDate(dateValue.to),
+                        })}
+                      >
+                        {customer.alias || customer.customer_org_id}
+                      </a>
+                      <p className="font-mono text-[11px] text-muted-foreground">{customer.customer_org_id}</p>
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      <CustomerSpend
+                        spend={totals[customer.customer_org_id]?.spend ?? 0}
+                        budgetSpend={customer.spend}
+                        maxBudget={customer.budget?.max_budget ?? null}
+                      />
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {t("format.number", { val: totals[customer.customer_org_id]?.requests ?? 0 })}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {t("format.number", { val: totals[customer.customer_org_id]?.tokens ?? 0 })}
+                    </TableCell>
+                    <TableCell className="pr-4 text-right tabular-nums">
+                      {t("format.number", { val: customer.member_count })}
+                    </TableCell>
+                  </TableRow>
+                ))}
+            </TableBody>
+          </Table>
+        )}
+        <DataTablePagination
+          page={pagination.pageIndex}
+          pageSize={pagination.pageSize}
+          rowCount={organizations.data?.meta.total_count ?? 0}
+          onPageChange={(pageIndex) => onPaginationChange({ ...pagination, pageIndex })}
+          onPageSizeChange={(pageSize) => onPaginationChange({ pageSize, pageIndex: 0 })}
+          isLoading={organizations.isFetching || usage.isFetching}
+        />
       </div>
+      <p className="text-xs text-muted-foreground">{t("customerPortal.list.budgetAndMembersHelp")}</p>
+      <p className="text-xs text-muted-foreground">{t("customerPortal.list.attribution")}</p>
       <CreateCustomerDialog
         open={createOpen}
         onOpenChange={setCreateOpen}
-        onCreated={(id) => {
-          customersQuery.refetch();
-          setSelectedId(id, { history: "push" });
-        }}
+        onCreated={() => void organizations.refetch()}
       />
     </div>
   );

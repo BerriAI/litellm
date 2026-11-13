@@ -1,3 +1,5 @@
+import json
+import sqlite3
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -16,6 +18,29 @@ NOW: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
 class Record(BaseModel):
     model_config = ConfigDict(frozen=True, extra="allow")
+
+
+def matches_where(row: Mapping[str, object], where: Mapping[str, object]) -> bool:
+    def condition(key: str, value: object) -> bool:
+        if key in ("OR", "AND"):
+            nested: Final = TypeAdapter(tuple[Mapping[str, object], ...]).validate_python(value)
+            matched: Final = tuple(matches_where(row, part) for part in nested)
+            return any(matched) if key == "OR" else all(matched)
+        if isinstance(value, Mapping):
+            if "in" in value:
+                return row.get(key) in value["in"]
+            if "not" in value:
+                return not matches_where(row, {key: value["not"]})
+            if "contains" in value:
+                text: Final = str(value["contains"]).replace("\\%", "%").replace("\\_", "_").replace("\\\\", "\\")
+                return text.lower() in str(row.get(key) or "").lower()
+            return all(
+                str(row.get(key)) >= str(bound) if op == "gte" else str(row.get(key)) <= str(bound)
+                for op, bound in value.items()
+            )
+        return row.get(key) == value
+
+    return all(condition(key, value) for key, value in where.items())
 
 
 class Table:
@@ -77,18 +102,15 @@ class Table:
         skip: int = 0,
         take: int | None = None,
     ) -> tuple[Record, ...]:
-        matches: Final = tuple(
-            row
-            for row in self.rows.values()
-            if all(
-                row.model_dump().get(key) in value["in"]
-                if isinstance(value, Mapping)
-                else row.model_dump().get(key) == value
-                for key, value in (where or {}).items()
-            )
-        )
+        matches: Final = tuple(row for row in self.rows.values() if matches_where(row.model_dump(), where or {}))
         ordered: Final = reduce(
-            lambda rows, key: tuple(sorted(rows, key=lambda row: str(row.model_dump().get(next(iter(key)))))),
+            lambda rows, key: tuple(
+                sorted(
+                    rows,
+                    key=lambda row: str(row.model_dump().get(next(iter(key)))),
+                    reverse=next(iter(key.values())) == "desc",
+                )
+            ),
             reversed(order or ()),
             matches,
         )
@@ -118,10 +140,37 @@ class Database:
         self.litellm_budgettable = Table("budget_id", self)
         self.locked_organization_ids: tuple[str, ...] = ()
 
-    async def query_raw(self, query: str, *args: object) -> tuple[()]:
-        assert "FOR UPDATE" in query
-        self.locked_organization_ids = (*self.locked_organization_ids, *(str(arg) for arg in args))
-        return ()
+    async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
+        if "FOR UPDATE" in query:
+            self.locked_organization_ids = (*self.locked_organization_ids, *(str(arg) for arg in args))
+            return ()
+        with sqlite3.connect(":memory:") as connection:
+            connection.row_factory = sqlite3.Row
+            connection.executescript(
+                'CREATE TABLE "LiteLLM_CustomerTeamTable" (customer_team_id TEXT, parent_org_id TEXT);'
+                'CREATE TABLE "LiteLLM_CustomerMemberTable" (customer_member_id TEXT, parent_team_id TEXT);'
+            )
+            connection.executemany(
+                'INSERT INTO "LiteLLM_CustomerTeamTable" VALUES (?, ?)',
+                tuple(
+                    (row.model_dump()["customer_team_id"], row.model_dump()["parent_org_id"])
+                    for row in self.litellm_customerteamtable.rows.values()
+                ),
+            )
+            connection.executemany(
+                'INSERT INTO "LiteLLM_CustomerMemberTable" VALUES (?, ?)',
+                tuple(
+                    (row.model_dump()["customer_member_id"], row.model_dump()["parent_team_id"])
+                    for row in self.litellm_customermembertable.rows.values()
+                ),
+            )
+            return tuple(
+                dict(row)
+                for row in connection.execute(
+                    query.replace("= ANY($1::text[])", "IN (SELECT value FROM json_each($1))"),
+                    tuple(json.dumps(arg) for arg in args),
+                )
+            )
 
     @asynccontextmanager
     async def tx(self) -> AsyncIterator["Database"]:

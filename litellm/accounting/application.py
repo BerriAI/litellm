@@ -1,3 +1,5 @@
+from hashlib import sha256
+from json import dumps
 from typing import TYPE_CHECKING, Final
 
 from litellm.accounting.delivery_projection import entity_transactions, project_deliveries
@@ -30,6 +32,7 @@ async def apply_deliveries(
     await writer.apply_accounting_entities(
         prisma_client, proxy_logging_obj, transaction, entity_transactions(contributions)
     )
+    await _apply_customer_usage(transaction, contributions)
     for table in sorted(DAILY_SPEND_TABLES.values(), key=lambda item: item.name):
         rows = tuple(
             {**dict(item.key), **dict(item.values), **dict(item.increments)}
@@ -58,6 +61,45 @@ async def apply_deliveries(
     windows: Final = tuple(_window(item) for item in contributions if item.table == "LiteLLM_BudgetWindowSpend")
     await commit_window_spend_updates(prisma_client, windows, outer_transaction=transaction)
     return contributions
+
+
+async def _apply_customer_usage(transaction: LedgerTransaction, contributions: tuple[Contribution, ...]) -> None:
+    for item in contributions:
+        if item.table == "LiteLLM_DailyCustomerMemberSpend":
+            await _upsert_customer_daily(transaction, item)
+        if item.table == "LiteLLM_CustomerOrganizationTable":
+            await transaction.litellm_customerorganizationtable.update_many(
+                where=dict(item.key), data={"spend": {"increment": dict(item.increments)["spend"]}}
+            )
+        if item.table == "LiteLLM_CustomerTeamTable":
+            await transaction.litellm_customerteamtable.update_many(
+                where=dict(item.key), data={"spend": {"increment": dict(item.increments)["spend"]}}
+            )
+        if item.table == "LiteLLM_CustomerMemberTable":
+            await transaction.litellm_customermembertable.update_many(
+                where=dict(item.key), data={"spend": {"increment": dict(item.increments)["spend"]}}
+            )
+
+
+async def _upsert_customer_daily(transaction: LedgerTransaction, contribution: Contribution) -> None:
+    row_id: Final = _customer_daily_row_id(contribution.key)
+    await transaction.litellm_dailycustomermemberspend.upsert(
+        where={"id": row_id},
+        data={
+            "create": {
+                "id": row_id,
+                **dict(contribution.key),
+                **dict(contribution.values),
+                **dict(contribution.increments),
+            },
+            "update": {name: {"increment": value} for name, value in contribution.increments},
+        },
+    )
+
+
+def _customer_daily_row_id(key: tuple[tuple[str, str], ...]) -> str:
+    encoded: Final = dumps(sorted(key), separators=(",", ":")).encode("utf-8")
+    return sha256(encoded).hexdigest()
 
 
 def _window(item: Contribution) -> WindowSpendTransaction:
