@@ -4693,6 +4693,7 @@ class LlmProviders(str, Enum):
     XAI = "xai"
     ZAI = "zai"
     BIGMODEL = "bigmodel"
+    BINERIC = "bineric"
     CUSTOM_OPENAI = "custom_openai"
     TEXT_COMPLETION_OPENAI = "text-completion-openai"
     COHERE = "cohere"
