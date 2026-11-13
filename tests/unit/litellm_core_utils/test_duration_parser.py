@@ -270,7 +270,7 @@ def test_long_unit_spelling_resets_on_the_schedule_it_is_charged_for(long_spelli
 
 def test_long_month_spelling_without_a_calendar_schedule_keeps_its_nightly_reset() -> None:
     now: Final = datetime(2026, 11, 13, 18, 0, tzinfo=timezone.utc)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="1 month or 12 month"):
         get_next_standardized_reset_time("3mo", now, "UTC")
     reset: Final = get_next_standardized_reset_time("3months", now, "UTC")
     assert reset == datetime(2026, 11, 14, tzinfo=timezone.utc)
