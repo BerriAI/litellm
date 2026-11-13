@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import asdict
 from types import MappingProxyType
@@ -89,6 +90,8 @@ _VERDICT: Final[TypeAdapter[_WireVerdict | None]] = TypeAdapter(_WireVerdict | N
 
 AbortErrorFactory: TypeAlias = Callable[[WireAbort], Exception]
 
+_LOGGER: Final = logging.getLogger("LiteLLM")
+
 ABORT_ERRORS: Final[dict[str, AbortErrorFactory]] = {}  # mutable-ok: each port registers its error kind at import
 
 
@@ -107,7 +110,10 @@ def _exception(wire: WireAbort) -> Exception | None:
     if wire.error is None:
         return None
     factory: Final = ABORT_ERRORS.get(wire.error.kind)
-    return None if factory is None else factory(wire)
+    if factory is None:
+        _LOGGER.error("no abort error is registered for kind %r, raising the generic abort error", wire.error.kind)
+        return None
+    return factory(wire)
 
 
 def verdict(returned: object) -> Patch | Abort | None:

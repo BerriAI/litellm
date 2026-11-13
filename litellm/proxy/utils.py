@@ -2137,7 +2137,9 @@ def _keep_v2_abort(run: HookRun[Exception], abort: Abort) -> None:
     if isinstance(error, HTTPException):
         run.keep_first(error)
         return
-    verbose_proxy_logger.exception("[Non-Blocking] Error in async_post_call_failure_hook callback: %s", error)
+    verbose_proxy_logger.error(
+        "[Non-Blocking] Error in async_post_call_failure_hook callback: %s", error, exc_info=error
+    )
 
 
 def _proxy_call_facts(data: Mapping[str, object] | None, call_type: str) -> CallFacts:

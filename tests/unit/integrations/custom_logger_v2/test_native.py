@@ -243,6 +243,30 @@ def test_an_abort_carrying_a_registered_error_kind_raises_that_exception() -> No
     assert raised.value.max_budget == 1.0
 
 
+def test_an_abort_naming_an_unregistered_error_kind_logs_it_and_raises_the_generic_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    wire: Final = {
+        "status": 429,
+        "message": "slow down",
+        "code": None,
+        "headers": {},
+        "error": {"kind": "unknown", "fields": {}},
+    }
+
+    with caplog.at_level("ERROR", logger="LiteLLM"):
+        abort: Final = verdict({"abort": wire})
+
+    assert isinstance(abort, Abort)
+    assert abort.exception is None
+    assert [record.getMessage() for record in caplog.records] == [
+        "no abort error is registered for kind 'unknown', raising the generic abort error"
+    ]
+    with pytest.raises(HTTPException) as raised:
+        raise_v2_abort(HookResult(fields={}, outcome=abort))
+    assert raised.value.status_code == 429
+
+
 @pytest.mark.parametrize(
     ("wire", "expected"),
     [
