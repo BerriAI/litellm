@@ -9489,6 +9489,8 @@ class ProviderConfigManager:
             return litellm.LayaDecisionsConfig()
         if provider == LlmProviders.BESPOKE:
             return litellm.BespokeDecisionsConfig()
+        if provider == LlmProviders.BINERIC:
+            return litellm.BinericDecisionsConfig()
         if provider in (LlmProviders.OPENAI, LlmProviders.AZURE):
             configs: Final = {
                 LlmProviders.OPENAI: litellm.OpenAIDecisionsConfig,
