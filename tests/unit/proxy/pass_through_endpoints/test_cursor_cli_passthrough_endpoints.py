@@ -30,6 +30,8 @@ from litellm.proxy._types import (
     LiteLLM_ProjectTableCachedObj,
     LiteLLM_TagTable,
     LiteLLM_TeamTableCachedObj,
+    LiteLLM_TeamMembership,
+    LiteLLM_UserTable,
     LitellmUserRoles,
     RoleBasedPermissions,
     ScopeMapping,
@@ -38,7 +40,12 @@ from litellm.proxy._types import (
 from litellm.proxy.agent_endpoints import agent_registry
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.common_utils.http_parsing_utils import safe_set_request_parsed_body
-from litellm.proxy.common_utils.user_api_key_cache import project_cache_key, tag_cache_key
+from litellm.proxy.common_utils.user_api_key_cache import (
+    UserApiKeyCache,
+    project_cache_key,
+    tag_cache_key,
+    team_membership_reservation_cache_key,
+)
 from litellm.proxy.pass_through_endpoints.cursor_cli_passthrough_endpoints import cursor_cli_passthrough
 from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry
@@ -382,6 +389,111 @@ def test_spend_capped_keys_cannot_use_an_unmetered_cursor_relay(
     )
     assert response.status_code in (403, 422), response.text
     assert not upstream.called
+
+
+@pytest.fixture
+def member_gateway(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> tuple[str, MagicMock]:
+    database: Final = MagicMock()
+    database.db.litellm_budgettable.find_unique = AsyncMock(return_value=None)
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    cache: Final = UserApiKeyCache()
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    key: Final = "sk-cursor-default-member"
+    cache.set_cache(
+        key=hash_token(key),
+        value=UserAPIKeyAuth(token=hash_token(key), user_id="default-member", team_id="default-team"),
+    )
+    cache.set_cache(
+        key="default-member",
+        value=LiteLLM_UserTable(user_id="default-member", user_role=LitellmUserRoles.INTERNAL_USER),
+    )
+    cache.set_cache(
+        key="team_id:default-team",
+        value=LiteLLM_TeamTableCachedObj(
+            team_id="default-team", metadata={"team_member_budget_id": "default-member-budget"}
+        ),
+    )
+    cache.set_cache(
+        key=team_membership_reservation_cache_key(user_id="default-member", team_id="default-team"),
+        value=LiteLLM_TeamMembership(user_id="default-member", team_id="default-team"),
+    )
+    return key, database
+
+
+@pytest.mark.parametrize("linked_budget", [False, True])
+@pytest.mark.parametrize("default_limit", [None, 0, 10])
+@pytest.mark.parametrize("model_limited", [False, True])
+def test_effective_default_member_limits_control_opaque_admission(
+    client: TestClient,
+    member_gateway: tuple[str, MagicMock],
+    respx_mock: respx.MockRouter,
+    linked_budget: bool,
+    default_limit: int | None,
+    model_limited: bool,
+) -> None:
+    key, _ = member_gateway
+    proxy_server.user_api_key_cache.set_cache(
+        key=team_membership_reservation_cache_key(user_id="default-member", team_id="default-team"),
+        value=LiteLLM_TeamMembership(
+            user_id="default-member",
+            team_id="default-team",
+            budget_id="linked-member-budget" if linked_budget else None,
+            litellm_budget_table=LiteLLM_BudgetTable(budget_id="linked-member-budget") if linked_budget else None,
+        ),
+    )
+    proxy_server.user_api_key_cache.set_cache(
+        key="team_member_default_budget:default-member-budget",
+        value=LiteLLM_BudgetTable(
+            budget_id="default-member-budget",
+            max_budget=default_limit,
+            model_max_budget={"restricted-model": {"max_budget": 10}} if model_limited else {},
+        ),
+    )
+    upstream: Final = respx_mock.post(f"{_BASE}/{_RUN}").respond(content=b"\x08\x01")
+    response: Final = client.post(
+        f"/cursor-cli/{_RUN}", headers={**_HEADERS, "x-litellm-api-key": key}, content=b"\xff"
+    )
+    limited: Final = model_limited or (default_limit is not None and default_limit > 0)
+    assert response.status_code == (403 if limited else 200), response.text
+    assert upstream.called is not limited
+
+
+@pytest.mark.parametrize("lookup", ["missing", "error"])
+def test_unverifiable_default_member_budgets_block_opaque_admission(
+    client: TestClient, member_gateway: tuple[str, MagicMock], respx_mock: respx.MockRouter, lookup: str
+) -> None:
+    key, database = member_gateway
+    database.db.litellm_budgettable.find_unique = AsyncMock(
+        return_value=None, side_effect=ConnectionError("budget lookup unavailable") if lookup == "error" else None
+    )
+    upstream: Final = respx_mock.post(f"{_BASE}/{_RUN}").respond(content=b"\x08\x01")
+    response: Final = client.post(
+        f"/cursor-cli/{_RUN}", headers={**_HEADERS, "x-litellm-api-key": key}, content=b"\xff"
+    )
+    assert response.status_code in (403, 503), response.text
+    assert not upstream.called
+
+
+@pytest.mark.parametrize("caller", ["team-only", "master"])
+def test_default_member_limits_do_not_apply_without_a_member_identity(
+    client: TestClient, member_gateway: tuple[str, MagicMock], respx_mock: respx.MockRouter, caller: str
+) -> None:
+    key, _ = member_gateway
+    proxy_server.user_api_key_cache.set_cache(
+        key=hash_token(key), value=UserAPIKeyAuth(token=hash_token(key), team_id="default-team")
+    )
+    proxy_server.user_api_key_cache.set_cache(
+        key="team_member_default_budget:default-member-budget",
+        value=LiteLLM_BudgetTable(budget_id="default-member-budget", max_budget=10),
+    )
+    upstream: Final = respx_mock.post(f"{_BASE}/{_RUN}").respond(content=b"\x08\x01")
+    response: Final = client.post(
+        f"/cursor-cli/{_RUN}",
+        headers={**_HEADERS, "x-litellm-api-key": MASTER_KEY if caller == "master" else key},
+        content=b"\xff",
+    )
+    assert response.status_code == 200, response.text
+    assert upstream.called
 
 
 @pytest.mark.parametrize("agent_id,status,forwarded", [(None, 200, True), ("scoped-agent", 403, False)])

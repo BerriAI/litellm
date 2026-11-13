@@ -1176,6 +1176,39 @@ def check_opaque_inference_controls(value: object, *, depth: int = 0) -> None:
         check_opaque_inference_controls(control, depth=depth + 1)
 
 
+async def _check_opaque_team_member_budget(
+    valid_token: UserAPIKeyAuth,
+    team_object: LiteLLM_TeamTable | None,
+    membership: LiteLLM_TeamMembership | None,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+) -> None:
+    check_opaque_inference_controls({"model_max_budget": valid_token.team_member_model_max_budget})
+    if team_object is None or valid_token.user_id is None:
+        return
+    metadata: Final = _KEY_METADATA_ADAPTER.validate_python(team_object.model_dump().get("metadata"))
+    budget_id: Final = metadata.get("team_member_budget_id") if metadata is not None else None
+    if not isinstance(budget_id, str):
+        return
+    try:
+        default_budget: Final = await get_team_member_default_budget(
+            budget_id=budget_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            raise_on_lookup_error=True,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=403, detail="Opaque inference cannot verify default member policies") from exc
+    if default_budget is None:
+        raise HTTPException(status_code=403, detail="Opaque inference cannot verify default member policies")
+    effective_budget: Final = resolve_effective_team_member_budget(
+        member_budget=membership.litellm_budget_table if membership is not None else None,
+        team_default_budget=default_budget,
+        now=get_utc_datetime(),
+    )
+    check_opaque_inference_controls(default_budget.model_copy(update={"max_budget": effective_budget}).model_dump())
+
+
 async def common_checks(
     request_body: dict,
     team_object: LiteLLM_TeamTable | None,
@@ -1290,6 +1323,13 @@ async def common_checks(
         ):
             if source is not None:
                 check_opaque_inference_controls(source.model_dump())
+        await _check_opaque_team_member_budget(
+            valid_token=valid_token,
+            team_object=team_object,
+            membership=loaded_team_membership,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+        )
         opaque_tags: Final = tuple(
             dict.fromkeys(
                 (
