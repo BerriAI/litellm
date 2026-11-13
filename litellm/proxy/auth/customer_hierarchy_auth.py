@@ -573,11 +573,16 @@ async def _organization_named_by_alias(
     prisma_client: "PrismaClient | None",
     user_api_key_cache: UserApiKeyCache,
     register: OrganizationRegistrar,
+    key_metadata: Mapping[str, object],
 ) -> CustomerHierarchyAuth | None:
     if prisma_client is None:
         return _untracked(f"organization alias not found: {customer_org_alias}", CUSTOMER_ORG_ALIAS_HEADER)
     found: Final = await get_customer_organization_hierarchy(customer_org_alias, prisma_client, user_api_key_cache)
     if found is None:
+        if key_metadata.get("customer_org_id") not in (None, customer_org_alias):
+            raise _forbidden(
+                "API key is not allowed to register another customer organization", CUSTOMER_ORG_ALIAS_HEADER
+            )
         return await _register_organization(customer_org_alias, prisma_client, user_api_key_cache, register)
     return _organization_from_lookup(customer_org_alias, found)
 
@@ -669,7 +674,7 @@ async def load_customer_hierarchy(
     alone is charged. A key pinned to another organization is refused before any row is created."""
     organization: Final = (
         await _organization_named_by_alias(
-            identity.customer_org_alias, prisma_client, user_api_key_cache, register_organization
+            identity.customer_org_alias, prisma_client, user_api_key_cache, register_organization, key_metadata
         )
         if identity.customer_org_alias is not None
         else None
