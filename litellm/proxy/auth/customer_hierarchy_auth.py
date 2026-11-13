@@ -10,7 +10,7 @@ header it must agree with the member's organization.
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, TypeAlias
 
 from fastapi import status
 from pydantic import BaseModel, ConfigDict, TypeAdapter
@@ -319,7 +319,7 @@ async def _organization_named_by_alias(
     return organization
 
 
-MemberRegistrar = Callable[[str, str, "PrismaClient"], Awaitable[CustomerMember | Failure]]
+MemberRegistrar: TypeAlias = Callable[[str, str, "PrismaClient"], Awaitable[CustomerMember | Failure]]
 
 
 async def _register_member(
