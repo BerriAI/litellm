@@ -602,7 +602,7 @@ class CustomerHierarchyStore:
             await self.members.count(where={"budget_override_id": selected})
             or await self.teams.count(where={"budget_id": selected})
             or await self.organizations.count(
-                where={"OR": ({"budget_id": selected}, {"budget_ids": {"has": selected}})}
+                where={"OR": ({"budget_id": selected}, {"budget_template_ids": {"has": selected}})}
             )
         ):
             return Failure(ErrorCode.TEMPLATE_NOT_IN_ORG)
