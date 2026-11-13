@@ -33,7 +33,7 @@ from litellm.constants import (
     SESSION_ID_GENERATED_METADATA_KEY,
 )
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.integrations.dotprompt.dotprompt_manager import DotpromptManager
+from litellm.integrations.dotprompt import prompt_initializer as dotprompt_initializer
 from litellm.integrations.langfuse.langfuse_prompt_management import langfuse_client_init
 from litellm.litellm_core_utils import litellm_logging
 from litellm.router import as_output_cap, stamped_client_ceiling
@@ -91,6 +91,7 @@ from litellm.router_strategy.complexity_router.tier_predictor import (
     TrainedTierArtifact,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.prompts.init_prompts import PromptInfo, PromptLiteLLMParams, PromptSpec
 from litellm.types.router import (
     Deployment,
     LiteLLM_Params,
@@ -5592,12 +5593,30 @@ def _prompt_tier_router(integration: Literal["dotprompt", "langfuse"]) -> Router
     )
 
 
+def _registered_dotprompt(name: str, settings: Mapping[str, object], ignore_settings: bool) -> CustomLogger:
+    frontmatter: Final = "".join(f"{key}: {value}\n" for key, value in settings.items())
+    params: Final = PromptLiteLLMParams(
+        prompt_id=f"{name}-prompt",
+        prompt_integration="dotprompt",
+        dotprompt_content=f"---\n{frontmatter}---\nSystem: Prompt {name}.\n",
+        ignore_prompt_manager_optional_params=ignore_settings,
+    )
+    spec: Final = PromptSpec(
+        prompt_id=f"{name}-prompt", litellm_params=params, prompt_info=PromptInfo(prompt_type="config")
+    )
+    return dotprompt_initializer(params, spec)
+
+
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("langfuse_prompt_env")
-@pytest.mark.parametrize("integration", ["dotprompt", "langfuse"])
+@pytest.mark.parametrize(
+    ("integration", "ignore_settings"),
+    [("dotprompt", False), ("dotprompt", True), ("langfuse", False)],
+    ids=["dotprompt", "dotprompt-ignoring-settings", "langfuse"],
+)
 @pytest.mark.parametrize("tier", ["quick", "deep"])
-async def test_a_tiers_selected_prompt_sends_its_generation_settings_over_the_tier_output_ceiling(
-    monkeypatch: pytest.MonkeyPatch, integration: Literal["dotprompt", "langfuse"], tier: str
+async def test_a_tiers_selected_prompt_beats_the_tier_output_ceiling_unless_it_ignores_its_settings(
+    monkeypatch: pytest.MonkeyPatch, integration: Literal["dotprompt", "langfuse"], ignore_settings: bool, tier: str
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     if integration == "dotprompt":
@@ -5605,12 +5624,8 @@ async def test_a_tiers_selected_prompt_sends_its_generation_settings_over_the_ti
             litellm,
             "callbacks",
             [
-                DotpromptManager(
-                    prompt_data={
-                        f"{name}-prompt": {"content": f"System: Prompt {name}.", "metadata": dict(settings)}
-                        for name, settings in _PROMPT_TIER_SETTINGS.items()
-                    }
-                )
+                _registered_dotprompt(name, settings, ignore_settings)
+                for name, settings in _PROMPT_TIER_SETTINGS.items()
             ],
         )
     router: Final = _prompt_tier_router(integration)
@@ -5638,13 +5653,16 @@ async def test_a_tiers_selected_prompt_sends_its_generation_settings_over_the_ti
                 "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
             }
         )
-        await router.acompletion(model="smart-router", messages=[{"role": "user", "content": f"marker{tier}"}])
+        await router.acompletion(
+            model="smart-router", messages=[{"role": "user", "content": f"marker{tier}"}], temperature=0
+        )
 
     assert endpoint.call_count == 1
     sent: Final = json.loads(endpoint.calls[0].request.content)
     assert sent["model"] == f"{tier}-tier"
     assert sent["messages"][0] == {"role": "system", "content": f"Prompt {tier}."}
-    assert {key: sent.get(key) for key in _PROMPT_TIER_SETTINGS[tier]} == dict(_PROMPT_TIER_SETTINGS[tier])
+    expected: Final = {"temperature": 0, "max_tokens": 4096} if ignore_settings else dict(_PROMPT_TIER_SETTINGS[tier])
+    assert {key: sent.get(key) for key in _PROMPT_TIER_SETTINGS[tier]} == expected
 
 
 class TestAdaptiveSoftFloors:

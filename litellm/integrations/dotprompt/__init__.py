@@ -77,6 +77,7 @@ def prompt_initializer(litellm_params: "PromptLiteLLMParams", prompt_spec: "Prom
             prompt_data=prompt_data,
             prompt_file=prompt_file,
             prompt_id=registration_prompt_id,
+            ignore_prompt_manager_optional_params=litellm_params.ignore_prompt_manager_optional_params,
         )
 
         return dot_prompt_manager
