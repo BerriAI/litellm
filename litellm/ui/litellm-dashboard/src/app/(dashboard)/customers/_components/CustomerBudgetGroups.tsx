@@ -32,6 +32,7 @@ export default function CustomerBudgetGroups({
   const groups = draft?.groups ?? customerBudgetGroupRows(base);
   const defaultGroupId = draft?.defaultGroupId ?? base.default_budget_template_id ?? "";
   const plan = planCustomerBudgetGroups(base, groups, defaultGroupId);
+  const unchanged = plan.ok && !plan.changed;
   const changeGroups = (groups: CustomerBudgetGroupFields[], defaultGroupId: string) => {
     setDraft({ base, groups, defaultGroupId });
     setError(null);
@@ -92,7 +93,7 @@ export default function CustomerBudgetGroups({
         </p>
       )}
       <div className="flex gap-3">
-        <Button type="submit" disabled={pending || !draft || (plan.ok && !plan.changed)}>
+        <Button type="submit" disabled={pending || !draft || unchanged}>
           {t("customerPortal.hierarchy.save")}
         </Button>
         {draft && (
