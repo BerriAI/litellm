@@ -1408,6 +1408,7 @@ export interface paths {
          *     (``delivery=manual``). POST plus the per-flow HttpOnly cookie set at /authorize; an
          *     anonymous or bad-flow request just 400s. The native-client consent page adds
          *     ``decision`` (approve or deny) and the ``team_id`` the credential is attributed to.
+         *     Each ``server`` field is the id of a server the connect page shows as on.
          */
         post: operations["authorize_complete_authorize_complete_post"];
         delete?: never;
@@ -28742,6 +28743,11 @@ export interface components {
             delivery?: string | null;
             /** Flow */
             flow: string;
+            /**
+             * Server
+             * @default []
+             */
+            server: string[];
             /** Team Id */
             team_id?: string | null;
         };
