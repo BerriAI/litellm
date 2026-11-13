@@ -574,6 +574,7 @@ def free_and_paid_router() -> "litellm.Router":
         ]
     )
 
+
 @pytest.fixture
 def import_without_redis_installed(monkeypatch: pytest.MonkeyPatch) -> Callable[[str], ModuleType]:
     def _import(module_name: str) -> ModuleType:
