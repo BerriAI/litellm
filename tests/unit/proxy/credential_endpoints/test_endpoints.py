@@ -2076,10 +2076,10 @@ def test_update_credential_still_accepts_a_body_without_credential_values(creden
 
 from contextlib import contextmanager as _ctx
 
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-from tests.unit.redis.stores.auth_cache_double import shared_cache
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.credential_endpoints import user_provider_credentials as upc
+from tests.unit.redis.stores.auth_cache_double import shared_cache
 
 _DEVICE_CODE_URL = "https://github.com/login/device/code"
 _ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token"
@@ -3561,6 +3561,36 @@ def test_uploaded_app_key_is_encrypted_at_rest_and_masked_on_read(credential_sto
     assert app_pem not in listed.text
     assert app_pem.splitlines()[1] not in listed.text
     assert "****" in listed.json()["credentials"][0]["credential_values"]["github_copilot_app_private_key"]
+
+
+def test_uploaded_app_key_replaces_reference_with_explicit_deletion(
+    credential_store: _InstallCredentialStore, app_pem: str
+) -> None:
+    stored: Final = _encrypted_row(
+        CredentialItem(
+            credential_name="copilot-app",
+            credential_values=_github_app_values(),
+            credential_info={"custom_llm_provider": "github_copilot"},
+        )
+    )
+    update: Final = AsyncMock()
+    credential_store(find_by_name=AsyncMock(return_value=stored), update_by_name=update)
+    response: Final = _patch_credential(
+        "copilot-app",
+        {
+            "credential_info": {"custom_llm_provider": "github_copilot"},
+            "credential_values": {"github_copilot_app_private_key": app_pem},
+            "credential_values_to_delete": ["github_copilot_app_private_key_ref"],
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert _written_values(update) == {
+        "github_copilot_auth_type": "github_app",
+        "github_copilot_app_id": "test-client",
+        "github_copilot_app_installation_id": "123",
+        "github_copilot_app_private_key": app_pem,
+    }
+    assert app_pem not in update.await_args.kwargs["data"]["credential_values"]
 
 
 @pytest.mark.parametrize("pem", ["not-a-private-key", "x" * 16385, "-----BEGIN PRIVATE KEY----- secret-invalid"])

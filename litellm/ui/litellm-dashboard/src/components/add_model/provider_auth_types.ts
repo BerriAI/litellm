@@ -81,7 +81,9 @@ export const PROVIDER_AUTH_TYPES: Partial<Record<keyof typeof Providers, readonl
 export const authTypesFor = (provider: string | null): readonly ProviderAuthType[] => {
   const providerKeys: readonly (keyof typeof Providers)[] = Object.keys(Providers) as (keyof typeof Providers)[];
   const providerKey =
-    provider === null ? undefined : providerKeys.find((key) => key === provider || Providers[key] === provider);
+    provider === null
+      ? undefined
+      : providerKeys.find((key) => key.toLowerCase() === provider.toLowerCase() || Providers[key] === provider);
 
   return providerKey === undefined
     ? EMPTY_PROVIDER_AUTH_TYPES

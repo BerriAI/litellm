@@ -174,8 +174,20 @@ def test_app_installation_host_and_rotated_key_never_share_tokens(private_key: s
     assert auth.resolve(configs[1]).token == "token-6"
 
 
-@pytest.mark.parametrize("status", [401, 403, 404, 429, 500])
-def test_failed_refresh_never_returns_old_token_or_leaks_response(private_key: str, status: int) -> None:
+@pytest.mark.parametrize(
+    ("status", "error_type"),
+    [
+        (401, AuthenticationError),
+        (403, AuthenticationError),
+        (404, AuthenticationError),
+        (422, BadRequestError),
+        (429, RateLimitError),
+        (500, ServiceUnavailableError),
+    ],
+)
+def test_failed_refresh_never_returns_old_token_or_leaks_response(
+    private_key: str, status: int, error_type: type[Exception]
+) -> None:
     clock: Final = Clock()
     requests: Final[list[httpx.Request]] = []
 
@@ -188,9 +200,6 @@ def test_failed_refresh_never_returns_old_token_or_leaks_response(private_key: s
     auth: Final = manager(private_key, respond, clock)
     assert auth.resolve(_CONFIG).token == "installation-token"
     clock.advance(3480)
-    error_type: Final = (
-        RateLimitError if status == 429 else ServiceUnavailableError if status == 500 else AuthenticationError
-    )
     for _ in range(2):
         with pytest.raises(error_type) as error:
             auth.resolve(_CONFIG)

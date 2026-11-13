@@ -18,7 +18,7 @@ import {
   type MountedFormValues,
 } from "../common_components/MountedFormField";
 import { CredentialItem } from "../networking";
-import { Providers } from "../provider_info_helpers";
+import { getProviderLogoAndName, Providers } from "../provider_info_helpers";
 import { Logo } from "@/components/molecules/logo/Logo";
 import {
   displayNameChange,
@@ -219,19 +219,24 @@ export default function CredentialModal({
                 rules={{ validate: { required: requiredRule(t("modelAdd.credentialModal.required")) } }}
                 className="mb-4"
               >
-                {(control) => (
-                  <SearchSelect
-                    inputId={control.id}
-                    placeholder={t("modelAdd.credentialModal.selectProvider")}
-                    options={providerOptions}
-                    value={typeof control.value === "string" ? control.value : null}
-                    disabled={providerLocked}
-                    onValueChange={(value) => {
-                      control.onChange(value);
-                      changeProvider(value);
-                    }}
-                  />
-                )}
+                {(control) => {
+                  const provider = typeof control.value === "string" ? control.value : null;
+                  const displayName = getProviderLogoAndName(provider ?? "").displayName;
+                  const selectedOption = providerOptions.find(({ label }) => label === displayName);
+                  return (
+                    <SearchSelect
+                      inputId={control.id}
+                      placeholder={t("modelAdd.credentialModal.selectProvider")}
+                      options={providerOptions}
+                      value={selectedOption?.value ?? provider}
+                      disabled={providerLocked}
+                      onValueChange={(value) => {
+                        control.onChange(value);
+                        changeProvider(value);
+                      }}
+                    />
+                  );
+                }}
               </MountedFormField>
 
               {federatedProviderOf(selectedProvider) !== null && (

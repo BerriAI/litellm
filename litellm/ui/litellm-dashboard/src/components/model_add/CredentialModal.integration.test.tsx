@@ -641,6 +641,43 @@ describe("CredentialModal with GitHub Copilot auth types", () => {
     );
   });
 
+  it.each(["GITHUB_COPILOT", "github_copilot"])(
+    "replaces a stored %s secret reference with an uploaded PEM and deletes the reference",
+    async (provider) => {
+      const user = userEvent.setup();
+      const onSubmit = renderModal({
+        mode: "edit",
+        existingCredential: {
+          credential_name: "copilot-service",
+          credential_info: { custom_llm_provider: provider },
+          credential_values: {
+            github_copilot_auth_type: "github_app",
+            github_copilot_app_id: "test-client",
+            github_copilot_app_installation_id: "123",
+            github_copilot_app_private_key_ref: "os.e****",
+          },
+        },
+      });
+      const pem = "-----BEGIN PRIVATE KEY-----\nsynthetic-replacement\n-----END PRIVATE KEY-----";
+      expect(await screen.findByRole("combobox", { name: "Provider:" })).toHaveValue(Providers.GITHUB_COPILOT);
+      expect(screen.getByRole("img", { name: `${Providers.GITHUB_COPILOT} logo` })).toBeInTheDocument();
+      await user.upload(
+        await screen.findByLabelText("Private key (PEM)"),
+        new File([pem], "replacement.pem", { type: "application/x-pem-file" }),
+      );
+      await screen.findByText("Private key supplied. Upload a replacement to change it.");
+      await user.click(screen.getByRole("button", { name: "Update Credential" }));
+      expect(onSubmit).toHaveBeenCalledWith(
+        {
+          credential_name: "copilot-service",
+          custom_llm_provider: provider,
+          credential_values: { github_copilot_app_private_key: pem },
+        },
+        ["github_copilot_app_private_key_ref"],
+      );
+    },
+  );
+
   it("preserves a masked uploaded key on edit", async () => {
     const user = userEvent.setup();
     const onSubmit = renderModal({

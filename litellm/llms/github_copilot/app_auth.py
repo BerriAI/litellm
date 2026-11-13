@@ -164,6 +164,8 @@ def _raise_failure(failure: _Failure, now: float) -> NoReturn:
         )
     if failure.status in (401, 403, 404):
         raise AuthenticationError(message=failure.message, llm_provider="github_copilot", model="")
+    if failure.status == 422:
+        raise BadRequestError(message=failure.message, llm_provider="github_copilot", model="")
     raise ServiceUnavailableError(message=failure.message, llm_provider="github_copilot", model="")
 
 

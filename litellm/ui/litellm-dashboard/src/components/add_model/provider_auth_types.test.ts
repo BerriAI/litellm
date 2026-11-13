@@ -11,8 +11,10 @@ import {
 import { Providers } from "../provider_info_helpers";
 
 describe("provider auth types", () => {
-  it("resolves provider enum keys and display names", () => {
+  it("resolves provider enum keys, canonical names, and display names", () => {
     expect(authTypesFor("MICROSOFT_365_COPILOT")).toEqual(PROVIDER_AUTH_TYPES.MICROSOFT_365_COPILOT);
+    expect(authTypesFor("microsoft_365_copilot")).toEqual(PROVIDER_AUTH_TYPES.MICROSOFT_365_COPILOT);
+    expect(authTypesFor("github_copilot")).toEqual(PROVIDER_AUTH_TYPES.GITHUB_COPILOT);
     expect(authTypesFor(Providers.MICROSOFT_365_COPILOT)).toEqual(PROVIDER_AUTH_TYPES.MICROSOFT_365_COPILOT);
     expect(authTypesFor(null)).toEqual([]);
     expect(authTypesFor("unknown")).toEqual([]);
