@@ -9825,7 +9825,7 @@ export interface paths {
         post?: never;
         /**
          * Delete Customer Organization
-         * @description Delete a customer organization and its owned budgets. Parents with children return 409. Proxy admins only.
+         * @description Delete a customer organization and its owned budgets. Set cascade=true to also delete its customer teams and members; otherwise parents with children return 409. Proxy admins only.
          */
         delete: operations["delete_customer_organization_management_v1_customer_organizations__customer_org_id__delete"];
         options?: never;
@@ -9941,7 +9941,7 @@ export interface paths {
         post?: never;
         /**
          * Delete Customer Team
-         * @description Delete a customer team and its owned budgets. Parents with children return 409. Proxy admins only.
+         * @description Delete a customer team and its owned budgets. Set cascade=true to also delete its customer members; otherwise parents with children return 409. Proxy admins only.
          */
         delete: operations["delete_customer_team_management_v1_customer_teams__customer_team_id__delete"];
         options?: never;
@@ -68578,6 +68578,7 @@ export interface operations {
                 page?: number;
                 page_size?: number;
                 parent_team_id?: string | null;
+                parent_org_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -68947,7 +68948,10 @@ export interface operations {
     };
     delete_customer_organization_management_v1_customer_organizations__customer_org_id__delete: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Also delete this customer organization's teams and members. */
+                cascade?: boolean;
+            };
             header?: never;
             path: {
                 customer_org_id: string;
@@ -69247,7 +69251,10 @@ export interface operations {
     };
     delete_customer_team_management_v1_customer_teams__customer_team_id__delete: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Also delete this customer team's members. */
+                cascade?: boolean;
+            };
             header?: never;
             path: {
                 customer_team_id: string;

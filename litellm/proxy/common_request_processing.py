@@ -331,6 +331,8 @@ from litellm.proxy.litellm_pre_call_utils import (
     SCHEDULER_PRIORITY_HEADER,
     LiteLLMProxyRequestSetup,
     add_litellm_data_to_request,
+    check_customer_request_model_access,
+    customer_request_auth,
     get_metadata_variable_name,
     global_then_key_alias_target,
     pre_call_served_model,
@@ -2976,6 +2978,7 @@ class ProxyBaseLLMRequestProcessing:
             proxy_config=proxy_config,
         )
         request_fields: Final = _REQUEST_FIELDS.validate_python(self.data)
+        customer_auth: Final = customer_request_auth(request_fields)
         metadata_variable_name: Final = get_metadata_variable_name(request, request_fields)
         if logging_auth is not None:
             request_metadata: Final = request_fields.get(metadata_variable_name)
@@ -3168,6 +3171,12 @@ class ProxyBaseLLMRequestProcessing:
             self.data["model"] = llm_router.registry().resolve(
                 aliased_model, kind="served", served_model=self.served_model
             )
+
+        check_customer_request_model_access(
+            _REQUEST_FIELDS.validate_python(self.data),  # pyright: ignore[reportUnknownMemberType]  # validate the legacy request carrier at this boundary
+            customer_auth,
+            llm_router,
+        )
 
         return self.data, logging_obj
 
