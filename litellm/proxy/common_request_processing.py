@@ -3169,7 +3169,7 @@ class ProxyBaseLLMRequestProcessing:
         scrubbed: Final[dict] = self.data  # mutable-ok: caller-defined request-payload shape
         payload: Final = cast(MutableMapping[str, object], scrubbed)  # cast-ok: untyped caller payload
         drop_client_saturation_opt_in(payload)
-        arm_saturation_fallback_walk(payload, "litellm_metadata" if "litellm_metadata" in payload else "metadata")
+        arm_saturation_fallback_walk(payload)
         self.data = scrubbed
         pristine: Final = (
             independent_snapshot(scrubbed)

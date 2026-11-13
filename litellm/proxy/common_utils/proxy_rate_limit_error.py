@@ -127,10 +127,13 @@ def saturation_fallback_walk_armed(request_data: Mapping[str, object]) -> bool:
 
 def arm_saturation_fallback_walk(
     request_data: MutableMapping[str, object],  # mutable-ok: in-place edit keeps the caller's request object
-    bucket_name: str,
 ) -> None:
     """Mark the request as running under the fallback walk, so the limiter may hand a saturated model off to it.
-    Routes that call the hooks directly never set this and keep admitting or refusing as before."""
+    Routes that call the hooks directly never set this and keep admitting or refusing as before. A request that
+    carries no metadata bucket yet is left as it is, so no bucket is invented that would reach the provider."""
+    bucket_name: Final = next((name for name in ("litellm_metadata", "metadata") if name in request_data), None)
+    if bucket_name is None:
+        return
     bucket: Final = _metadata_bucket(request_data.get(bucket_name))
     request_data[bucket_name] = {**bucket, SATURATION_FALLBACK_WALK_METADATA_KEY: True}  # rebind-ok: same object
 

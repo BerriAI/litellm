@@ -89,7 +89,7 @@ def test_a_request_asks_for_saturation_fallbacks_until_the_walk_has_run(bucket: 
     assert not fallback_on_saturation_requested(direct)
 
     request: Final = dict(direct)
-    arm_saturation_fallback_walk(request, bucket)
+    arm_saturation_fallback_walk(request)
     assert request[bucket] == {"x": 1, "saturation_fallback_walk": True}
     assert fallback_on_saturation_requested(request)
     exhausted: Final = with_saturation_fallbacks_exhausted(request, bucket)
@@ -108,3 +108,11 @@ def test_only_the_saturation_descriptor_marks_a_fallback_walk_the_model_can_stil
     assert is_saturation_fallback(ProxyRateLimitError(detail="x", descriptor_key=SATURATION_FALLBACK_DESCRIPTOR_KEY))
     assert not is_saturation_fallback(ProxyRateLimitError(detail="x", descriptor_key="model_per_team"))
     assert not is_saturation_fallback(ProxyRateLimitError(detail="x"))
+
+
+def test_arming_the_walk_never_invents_a_metadata_bucket_for_the_provider() -> None:
+    bare: Final = {"model": "luna", "input": "Say hi", "router_settings_override": {"fallback_on_saturation": True}}
+    request: Final = dict(bare)
+    arm_saturation_fallback_walk(request)
+    assert request == bare
+    assert not fallback_on_saturation_requested(request)
