@@ -88,6 +88,10 @@ def _patched_init_cache(
 
     with (
         patch.object(ps, "user_api_key_cache", fresh_user_cache),
+        patch.object(ps, "hook_cache", DualCache()),
+        patch.object(ps, "mcp_state_cache", DualCache()),
+        patch.object(ps, "jwks_cache", DualCache()),
+        patch.object(ps, "ui_settings_cache", DualCache()),
         patch.object(ps, "spend_counter_cache", DualCache()),
         patch.object(ps, "spend_counter_store", fresh_spend_store),
         patch.object(ps, "cli_sso_session_cache", fresh_cli_sso_cache),

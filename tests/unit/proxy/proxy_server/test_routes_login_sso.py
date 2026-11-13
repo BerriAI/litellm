@@ -274,7 +274,7 @@ def test_v3_login_success_returns_code(client, monkeypatch):
     monkeypatch.setattr(ps, "redis_usage_cache", None)
     fake_cache = MagicMock()
     fake_cache.async_set_cache = AsyncMock()
-    monkeypatch.setattr(ps, "user_api_key_cache", fake_cache)
+    monkeypatch.setattr(ps, "sso_flow_cache", fake_cache)
 
     response = client.post(
         "/v3/login",
@@ -356,7 +356,7 @@ def test_v3_login_exchange_invalid_code_401(client, monkeypatch):
     fake_cache = MagicMock()
     fake_cache.async_get_cache = AsyncMock(return_value=None)
     fake_cache.async_delete_cache = AsyncMock()
-    monkeypatch.setattr(ps, "user_api_key_cache", fake_cache)
+    monkeypatch.setattr(ps, "sso_flow_cache", fake_cache)
 
     response = client.post("/v3/login/exchange", json={"code": "nope"})
     assert response.status_code == 401
@@ -379,7 +379,7 @@ def test_v3_login_exchange_success_returns_token_and_redirect(client, monkeypatc
     fake_cache = MagicMock()
     fake_cache.async_get_cache = AsyncMock(return_value=cached_payload)
     fake_cache.async_delete_cache = AsyncMock()
-    monkeypatch.setattr(ps, "user_api_key_cache", fake_cache)
+    monkeypatch.setattr(ps, "sso_flow_cache", fake_cache)
 
     response = client.post("/v3/login/exchange", json={"code": "valid-code"})
     assert response.status_code == 200

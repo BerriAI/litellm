@@ -398,19 +398,19 @@ async def test_invalidate_clears_every_identity_for_a_server():
 @pytest.mark.asyncio
 async def test_per_user_token_delete_evicts_locally_and_broadcasts_to_peer_workers():
     """Revoking a user's OAuth token must not leave peer workers serving it from their in-memory layer."""
+    from litellm.caching.dual_cache import DualCache
     from litellm.proxy import proxy_server
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.mcp_server.oauth2_token_cache import MCPPerUserTokenCache
 
-    local_cache = UserApiKeyCache()
+    local_cache = DualCache()
     publish = AsyncMock()
     token_cache = MCPPerUserTokenCache()
     key = token_cache._cache_key("mallory", "srv-oauth")  # pyright: ignore[reportPrivateUsage]  # asserting the broadcast names the stored key
     local_cache.in_memory_cache.set_cache(key, "encrypted-token")
 
     with (
-        patch.object(  # test-quality-ok: the token cache reads the module-level user_api_key_cache singleton; the suite's only seam
-            proxy_server, "user_api_key_cache", local_cache
+        patch.object(  # test-quality-ok: the token cache reads the module-level mcp_state_cache singleton; the suite's only seam
+            proxy_server, "mcp_state_cache", local_cache
         ),
         patch(  # test-quality-ok: the redis publisher is module-level; asserting the broadcast without a redis
             "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",

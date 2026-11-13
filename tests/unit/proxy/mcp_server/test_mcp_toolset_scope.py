@@ -657,7 +657,7 @@ class TestToolsetPrefixResolution:
                 return_value=server,
             ),
             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", cache),
+            patch("litellm.proxy.proxy_server.mcp_state_cache", cache),
             patch(
                 "litellm.proxy.mcp_server.toolset_db.list_mcp_toolsets",
                 new=AsyncMock(return_value=[toolset]),

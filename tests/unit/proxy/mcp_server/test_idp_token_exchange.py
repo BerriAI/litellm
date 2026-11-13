@@ -293,7 +293,7 @@ async def test_subject_exchange_applies_team_admission_before_returning_an_ident
     )
     signing_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     jwks_url: Final = "https://identity.invalid/exchange/jwks"
-    cache.set_cache(
+    handler.jwks_cache.set_cache(
         f"litellm_jwt_auth_keys_{jwks_url}",
         [json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(signing_key.public_key()))],
     )

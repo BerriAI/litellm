@@ -26,6 +26,7 @@ from fastapi.routing import APIRoute
 from fastapi.responses import Response
 import litellm
 from litellm.caching.caching import DualCache
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy._types import (
     LiteLLM_JWTAuth,
     LiteLLM_UserTable,
@@ -91,7 +92,7 @@ async def test_token_single_public_key(monkeypatch):
         value=backend_keys["keys"],
     )
 
-    jwt_handler.user_api_key_cache = cache
+    jwt_handler.jwks_cache = cache
 
     public_key = await jwt_handler.get_public_key(kid=None)
 
@@ -159,7 +160,7 @@ async def test_valid_invalid_token(audience, monkeypatch):
 
     jwt_handler = JWTHandler()
 
-    jwt_handler.user_api_key_cache = cache
+    jwt_handler.jwks_cache = cache
 
     # VALID TOKEN
     ## GENERATE A TOKEN
@@ -222,7 +223,7 @@ def prisma_client():
     from litellm.proxy.proxy_cli import append_query_params
     from litellm.proxy.utils import PrismaClient, ProxyLogging
 
-    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=UserApiKeyCache())
 
     ### add connection pool + pool timeout args
     params = {"connection_limit": 100, "pool_timeout": 60}
@@ -364,7 +365,7 @@ async def test_team_token_output(prisma_client, audience, monkeypatch):
 
     jwt_handler = JWTHandler()
 
-    jwt_handler.user_api_key_cache = cache
+    jwt_handler.jwks_cache = cache
 
     jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(team_id_jwt_field="client_id")
 
@@ -555,7 +556,7 @@ async def aaaatest_user_token_output(
 
     jwt_handler = JWTHandler()
 
-    jwt_handler.user_api_key_cache = cache
+    jwt_handler.jwks_cache = cache
 
     jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
 
@@ -785,7 +786,7 @@ async def test_allowed_routes_admin(
 
     jwt_handler = JWTHandler()
 
-    jwt_handler.user_api_key_cache = cache
+    jwt_handler.jwks_cache = cache
 
     if admin_allowed_routes:
         jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
@@ -940,7 +941,7 @@ async def test_allow_access_by_email(
 
     jwt_handler = JWTHandler()
 
-    jwt_handler.user_api_key_cache = cache
+    jwt_handler.jwks_cache = cache
 
     jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
         user_email_jwt_field="email",
@@ -1086,7 +1087,8 @@ async def test_end_user_jwt_auth(monkeypatch):
 
     jwt_handler.update_environment(
         prisma_client=None,
-        user_api_key_cache=cache,
+        user_api_key_cache=UserApiKeyCache(),
+        jwks_cache=cache,
         litellm_jwtauth=litellm_jwtauth,
         leeway=100000000000000,
     )
@@ -1618,7 +1620,8 @@ def _get_jwt_handler_with_issuer_keys(issuers: list, keys_by_url: dict) -> JWTHa
     jwt_handler = JWTHandler()
     jwt_handler.update_environment(
         prisma_client=None,
-        user_api_key_cache=cache,
+        user_api_key_cache=UserApiKeyCache(),
+        jwks_cache=cache,
         litellm_jwtauth=LiteLLM_JWTAuth(issuers=issuers),
     )
     return jwt_handler
@@ -1946,7 +1949,8 @@ async def test_global_jwt_ignores_user_supplied_internal_claims(monkeypatch):
     jwt_handler = JWTHandler()
     jwt_handler.update_environment(
         prisma_client=None,
-        user_api_key_cache=cache,
+        user_api_key_cache=UserApiKeyCache(),
+        jwks_cache=cache,
         litellm_jwtauth=LiteLLM_JWTAuth(
             user_id_jwt_field="email",
             user_email_jwt_field="email",
