@@ -3618,3 +3618,50 @@ async def test_a_request_a_hook_turned_streaming_runs_unbounded_under_a_header_t
 
     assert chunks
     assert deadline is not None and deadline.allows_wait(10**9)
+
+
+@pytest.mark.parametrize("stream_val", [True, "true", "True"])
+@pytest.mark.asyncio
+async def test_route_request_comma_separated_models_with_stream_raises_400(stream_val: object) -> None:
+    from litellm.proxy._types import ProxyException
+
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "g1", "litellm_params": {"model": "openai/gpt-4o", "mock_response": "hi"}},
+            {"model_name": "g2", "litellm_params": {"model": "openai/gpt-4o-mini", "mock_response": "hi"}},
+        ]
+    )
+    with pytest.raises(ProxyException) as exc_info:
+        await route_request(
+            data={"model": "g1,g2", "messages": [{"role": "user", "content": "hi"}], "stream": stream_val},
+            llm_router=router,
+            user_model=None,
+            route_type="acompletion",
+        )
+    assert exc_info.value.code == "400"
+    assert exc_info.value.param == "model"
+    assert (
+        "Streaming is not supported for comma-separated models without fastest_response=true" in exc_info.value.message
+    )
+
+
+@pytest.mark.asyncio
+async def test_route_request_comma_separated_models_with_stream_and_fastest_response_allowed() -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "g1", "litellm_params": {"model": "openai/gpt-4o", "mock_response": "hi"}},
+            {"model_name": "g2", "litellm_params": {"model": "openai/gpt-4o-mini", "mock_response": "hi"}},
+        ]
+    )
+    llm_call: Final = await route_request(
+        data={
+            "model": "g1,g2",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": True,
+            "fastest_response": True,
+        },
+        llm_router=router,
+        user_model=None,
+        route_type="acompletion",
+    )
+    assert llm_call is not None
