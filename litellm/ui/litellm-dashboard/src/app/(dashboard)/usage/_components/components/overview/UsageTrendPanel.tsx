@@ -43,7 +43,6 @@ const CHART_TITLE: Record<TrendMetric, ParseKeys> = {
 const MAX_LABELLED_BARS = 16;
 const Y_AXIS_WIDTH = 64;
 
-
 function Legend({ labels, colors }: { labels: readonly string[]; colors: readonly string[] }) {
   const { t } = useTranslation();
   return (
@@ -81,6 +80,87 @@ interface UsageTrendPanelProps {
   compact?: boolean;
 }
 
+type Trend = ReturnType<typeof usageTrend>;
+
+interface TrendChartsProps {
+  trend: Trend;
+  granularity: TrendGranularity;
+  metrics: readonly TrendMetric[];
+  chartHeight: string;
+}
+
+function TrendCharts({ trend, granularity, metrics, chartHeight }: TrendChartsProps) {
+  const { t } = useTranslation();
+  const syncId = useId();
+  const bucketByKey = new Map(trend.buckets.map((bucket) => [bucket.key, bucket]));
+  const tickByKey = new Map(trend.series.tokens.data.map((point) => [point.date, point.label]));
+  const tooltipLabel = (key: string) => {
+    const bucket = bucketByKey.get(key);
+    return bucket ? bucketTooltipLabel(bucket, granularity) : key;
+  };
+  const showTotals = trend.buckets.length <= MAX_LABELLED_BARS;
+  return (
+    <>
+      {metrics.map((metric) => {
+        const series = trend.series[metric];
+        const totals = trend.totals[metric];
+        return (
+          <figure key={metric} className="grid gap-1">
+            <figcaption className="text-xs font-medium text-muted-foreground">{t(CHART_TITLE[metric])}</figcaption>
+            <StackedUsageChart
+              data={series.data}
+              series={series.keys}
+              labels={series.labels}
+              colors={series.colors}
+              xKey="date"
+              xLabel={(key) => tickByKey.get(key) ?? key}
+              tooltipLabel={tooltipLabel}
+              format={COMPACT_FORMAT[metric]}
+              tooltipFormat={EXACT_FORMAT[metric]}
+              totalFor={(key) => totals.get(key)}
+              showTotals={showTotals}
+              syncId={syncId}
+              yAxisWidth={Y_AXIS_WIDTH}
+              ariaLabel={t("usage.trend.chartLabel", { metric: t(CHART_TITLE[metric]) })}
+              className={chartHeight}
+            />
+          </figure>
+        );
+      })}
+    </>
+  );
+}
+
+function TrendNotes({ trend, granularity }: { trend: Trend; granularity: TrendGranularity }) {
+  const { t } = useTranslation();
+  const partialBuckets = granularity === "day" ? [] : trend.buckets.filter((bucket) => bucket.partial);
+  const { spend, tokens } = trend.unattributed;
+  return (
+    <>
+      {partialBuckets.length > 0 && (
+        <Notice>
+          {t("usage.trend.partialNote", { periods: partialBuckets.map((bucket) => formatDayRange(bucket)).join(", ") })}
+        </Notice>
+      )}
+      {(spend !== 0 || tokens !== 0) && (
+        <Notice>
+          {t("usage.trend.unattributedNote", { spend: formatExactUsd(spend), tokens: formatExactCount(tokens) })}
+        </Notice>
+      )}
+    </>
+  );
+}
+
+function TrendLoading({ paired, chartHeight }: { paired: boolean; chartHeight: string }) {
+  const { t } = useTranslation();
+  return (
+    <div role="status" aria-label={t("usage.trend.loading")} className="grid gap-4">
+      <ChartSkeleton className={chartHeight} />
+      {paired && <ChartSkeleton className={chartHeight} />}
+    </div>
+  );
+}
+
 export default function UsageTrendPanel({
   results,
   range,
@@ -91,86 +171,34 @@ export default function UsageTrendPanel({
   compact = false,
 }: UsageTrendPanelProps) {
   const { t } = useTranslation();
-  const syncId = useId();
   const [view, setView] = useState<TrendView>("paired");
   const [chosenGranularity, setChosenGranularity] = useState<TrendGranularity | null>(null);
-  const covered = useMemo(() => (range ? coveringRange(range, results) : null), [range, results]);
-  const granularity = chosenGranularity ?? (covered ? defaultGranularity(covered) : "day");
+  const autoGranularity = useMemo(
+    () => (range ? defaultGranularity(coveringRange(range, results)) : "day"),
+    [range, results],
+  );
+  const granularity = chosenGranularity ?? autoGranularity;
   const colorByModel = useMemo(() => sharedColors ?? modelColorMap(results), [sharedColors, results]);
-  const trend = useMemo(
-    () => (range ? usageTrend({ results, range, granularity, colorByModel, dimension }) : null),
-    [results, range, granularity, colorByModel, dimension],
-  );
+  const trend = useMemo(() => {
+    if (range === null) return null;
+    const input = { results, range, granularity, colorByModel, dimension };
+    return usageTrend(input);
+  }, [results, range, granularity, colorByModel, dimension]);
   const chartHeight = compact ? "h-48" : "h-60";
-  const bucketByKey = useMemo(() => new Map((trend?.buckets ?? []).map((bucket) => [bucket.key, bucket])), [trend]);
-  const tickByKey = useMemo(
-    () => new Map((trend?.series.tokens.data ?? []).map((point) => [point.date, point.label])),
-    [trend],
-  );
   const metrics: readonly TrendMetric[] = view === "paired" ? ["tokens", "spend"] : ["requests"];
-  const partialBuckets = granularity === "day" ? [] : (trend?.buckets ?? []).filter((bucket) => bucket.partial);
-  const showTotals = (trend?.buckets.length ?? 0) <= MAX_LABELLED_BARS;
-  const legendSeries = trend?.series.tokens;
-  const empty = !loading && !failed && results.length === 0;
+  const ready = !loading && trend !== null;
+  const hasRows = results.length > 0;
+  const showTable = !failed && ready && hasRows;
 
   const body = () => {
     if (failed) return <Notice>{t("usage.trend.unavailable")}</Notice>;
-    if (loading || trend === null) {
-      return (
-        <div role="status" aria-label={t("usage.trend.loading")} className="grid gap-4">
-          <ChartSkeleton className={chartHeight} />
-          {view === "paired" && <ChartSkeleton className={chartHeight} />}
-        </div>
-      );
-    }
-    if (empty) return <p className="py-10 text-center text-sm text-muted-foreground">{t("usage.trend.empty")}</p>;
+    if (!ready || trend === null) return <TrendLoading paired={view === "paired"} chartHeight={chartHeight} />;
+    if (!hasRows) return <p className="py-10 text-center text-sm text-muted-foreground">{t("usage.trend.empty")}</p>;
     return (
       <div className="grid gap-4">
-        {legendSeries && <Legend labels={legendSeries.labels} colors={legendSeries.colors} />}
-        {metrics.map((metric) => {
-          const series = trend.series[metric];
-          const totals = trend.totals[metric];
-          return (
-            <figure key={metric} className="grid gap-1">
-              <figcaption className="text-xs font-medium text-muted-foreground">{t(CHART_TITLE[metric])}</figcaption>
-              <StackedUsageChart
-                data={series.data}
-                series={series.keys}
-                labels={series.labels}
-                colors={series.colors}
-                xKey="date"
-                xLabel={(key) => tickByKey.get(key) ?? key}
-                tooltipLabel={(key) => {
-                  const bucket = bucketByKey.get(key);
-                  return bucket ? bucketTooltipLabel(bucket, granularity) : key;
-                }}
-                format={COMPACT_FORMAT[metric]}
-                tooltipFormat={EXACT_FORMAT[metric]}
-                totalFor={(key) => totals.get(key)}
-                showTotals={showTotals}
-                syncId={syncId}
-                yAxisWidth={Y_AXIS_WIDTH}
-                ariaLabel={t("usage.trend.chartLabel", { metric: t(CHART_TITLE[metric]) })}
-                className={chartHeight}
-              />
-            </figure>
-          );
-        })}
-        {partialBuckets.length > 0 && (
-          <Notice>
-            {t("usage.trend.partialNote", {
-              periods: partialBuckets.map((bucket) => formatDayRange(bucket)).join(", "),
-            })}
-          </Notice>
-        )}
-        {(trend.unattributed.spend !== 0 || trend.unattributed.tokens !== 0) && (
-          <Notice>
-            {t("usage.trend.unattributedNote", {
-              spend: formatExactUsd(trend.unattributed.spend),
-              tokens: formatExactCount(trend.unattributed.tokens),
-            })}
-          </Notice>
-        )}
+        <Legend labels={trend.series.tokens.labels} colors={trend.series.tokens.colors} />
+        <TrendCharts trend={trend} granularity={granularity} metrics={metrics} chartHeight={chartHeight} />
+        <TrendNotes trend={trend} granularity={granularity} />
       </div>
     );
   };
@@ -199,7 +227,7 @@ export default function UsageTrendPanel({
       bodyClassName="px-0 pt-4 pb-0"
     >
       <div className={PANEL_INSET_X}>{body()}</div>
-      {!failed && !loading && !empty && trend !== null && (
+      {showTable && trend !== null && (
         <section aria-label={t("usage.trend.table.title")} className={cn("mt-4 border-t pt-3 pb-2", PANEL_INSET_X)}>
           <h4 className="text-sm leading-5 font-medium text-foreground">{t("usage.trend.table.title")}</h4>
           <ModelContributionTable rows={trend.rows} total={trend.total} />

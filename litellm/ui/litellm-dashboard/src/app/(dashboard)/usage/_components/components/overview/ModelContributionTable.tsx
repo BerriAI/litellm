@@ -19,7 +19,6 @@ import type { ContributionRow, ObservedRate } from "./usageTrendData";
 
 const ONE_DECIMAL = { minimumFractionDigits: 1, maximumFractionDigits: 1 } as const;
 
-
 const RATE_GAP_LABEL = {
   noTokens: "usage.trend.table.spendWithoutTokens",
   noSpend: "usage.trend.table.noMeteredSpend",

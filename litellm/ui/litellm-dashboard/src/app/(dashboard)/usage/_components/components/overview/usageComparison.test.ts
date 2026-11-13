@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { changeBetween, statComparison } from "./usageComparison";
+import type { DailyActivityMetadata } from "@/components/UsagePage/dailyActivityApi";
+import { changeBetween, statComparison, type ComparisonStatus } from "./usageComparison";
 
 const previousRange = { start: "2026-10-01", end: "2026-10-12" };
 const metadata = (spend: number, tokens: number, requests: number) => ({
@@ -7,6 +8,21 @@ const metadata = (spend: number, tokens: number, requests: number) => ({
   total_tokens: tokens,
   total_api_requests: requests,
 });
+const current = metadata(30, 3000, 300);
+
+interface Scenario {
+  current: DailyActivityMetadata | null;
+  previous: DailyActivityMetadata | null;
+  status: ComparisonStatus;
+  requestsComparable: boolean;
+}
+
+const READY: Scenario = { current, previous: null, status: "ready", requestsComparable: true };
+
+const compare = (scenario: Partial<Scenario>) => {
+  const input = { ...READY, ...scenario, previousRange };
+  return statComparison(input);
+};
 
 describe("changeBetween", () => {
   it("reads a zero baseline as New or unchanged, never an infinite percentage", () => {
@@ -24,16 +40,8 @@ describe("changeBetween", () => {
 });
 
 describe("statComparison", () => {
-  const current = metadata(30, 3000, 300);
-
   it("compares spend, tokens, requests and cost per request from the same aggregate on both sides", () => {
-    const comparison = statComparison({
-      current,
-      previous: metadata(20, 0, 100),
-      previousRange,
-      status: "ready",
-      requestsComparable: true,
-    });
+    const comparison = compare({ previous: metadata(20, 0, 100) });
     expect(comparison.spend).toEqual({ kind: "change", percent: 50 });
     expect(comparison.tokens).toEqual({ kind: "new" });
     expect(comparison.requests).toEqual({ kind: "change", percent: 200 });
@@ -42,48 +50,24 @@ describe("statComparison", () => {
   });
 
   it("leaves requests uncompared when the tile shows gateway counts the aggregate cannot match", () => {
-    const comparison = statComparison({
-      current,
-      previous: metadata(20, 10, 100),
-      previousRange,
-      status: "ready",
-      requestsComparable: false,
-    });
+    const comparison = compare({ previous: metadata(20, 10, 100), requestsComparable: false });
     expect(comparison.requests).toBeNull();
   });
 
   it("has no cost-per-request change when the previous period had no requests", () => {
-    const comparison = statComparison({
-      current,
-      previous: metadata(0, 0, 0),
-      previousRange,
-      status: "ready",
-      requestsComparable: true,
-    });
+    const comparison = compare({ previous: metadata(0, 0, 0) });
     expect(comparison.avgCostPerRequest).toEqual({ kind: "unavailable" });
     expect(comparison.spend).toEqual({ kind: "new" });
   });
 
   it("reads a total the response left out as unavailable, never as a zero baseline", () => {
-    const comparison = statComparison({
-      current,
-      previous: { total_tokens: 10 },
-      previousRange,
-      status: "ready",
-      requestsComparable: true,
-    });
+    const comparison = compare({ previous: { total_tokens: 10 } });
     expect(comparison.spend).toEqual({ kind: "unavailable" });
     expect(comparison.requests).toEqual({ kind: "unavailable" });
     expect(comparison.avgCostPerRequest).toEqual({ kind: "unavailable" });
     expect(comparison.tokens).toEqual({ kind: "change", percent: 29900 });
 
-    const withoutCurrent = statComparison({
-      current: null,
-      previous: metadata(20, 10, 100),
-      previousRange,
-      status: "ready",
-      requestsComparable: true,
-    });
+    const withoutCurrent = compare({ current: null, previous: metadata(20, 10, 100) });
     expect(withoutCurrent.spend).toEqual({ kind: "unavailable" });
   });
 
@@ -91,7 +75,7 @@ describe("statComparison", () => {
     ["loading", "pending"],
     ["failed", "unavailable"],
   ] as const)("marks every change %s as %s instead of comparing against zeros", (status, kind) => {
-    const comparison = statComparison({ current, previous: null, previousRange, status, requestsComparable: true });
+    const comparison = compare({ status });
     expect([comparison.spend, comparison.tokens, comparison.requests, comparison.avgCostPerRequest]).toEqual(
       Array(4).fill({ kind }),
     );

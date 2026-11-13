@@ -53,7 +53,7 @@ describe("StackedUsageChart bar totals", () => {
   ]);
 
   it("prints each bucket's total above its bar, including one whose top series is zero", () => {
-    const { container } = render(
+    render(
       <StackedUsageChart
         data={data}
         series={["a", "b"]}
@@ -63,13 +63,12 @@ describe("StackedUsageChart bar totals", () => {
         showTotals
       />,
     );
-    const labels = Array.from(container.querySelectorAll("text")).map((node) => node.textContent);
-    expect(labels).toContain("$13.00");
-    expect(labels).toContain("$17.00");
+    expect(screen.getByText("$13.00")).toBeInTheDocument();
+    expect(screen.getByText("$17.00")).toBeInTheDocument();
   });
 
   it("prints no totals on a log scale, where a stack top is not the sum", () => {
-    const { container } = render(
+    render(
       <StackedUsageChart
         data={data}
         series={["a", "b"]}
@@ -80,8 +79,7 @@ describe("StackedUsageChart bar totals", () => {
         scale="log"
       />,
     );
-    const labels = Array.from(container.querySelectorAll("text")).map((node) => node.textContent);
-    expect(labels).not.toContain("$13.00");
+    expect(screen.queryByText("$13.00")).not.toBeInTheDocument();
   });
 });
 

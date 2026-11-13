@@ -28,10 +28,10 @@ const reported = (metadata: DailyActivityMetadata | null, field: TotalField): nu
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 };
 
+const isKnown = (value: number | null): value is number => value !== null && Number.isFinite(value);
+
 export const changeBetween = (current: number | null, previous: number | null): Change => {
-  if (current === null || previous === null || !Number.isFinite(current) || !Number.isFinite(previous)) {
-    return UNAVAILABLE;
-  }
+  if (!isKnown(current) || !isKnown(previous)) return UNAVAILABLE;
   if (previous === 0) return current === 0 ? { kind: "same" } : { kind: "new" };
   return { kind: "change", percent: ((current - previous) / previous) * 100 };
 };

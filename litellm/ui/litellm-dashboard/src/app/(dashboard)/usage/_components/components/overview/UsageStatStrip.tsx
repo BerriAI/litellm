@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import { Trans, useTranslation } from "react-i18next";
 import { ArrowDownRight, ArrowUpRight } from "lucide-react";
@@ -50,9 +50,175 @@ function ChangeLine({ change, period }: { change: Change; period: string }) {
       title={`${text} ${vs}`}
     >
       {change.kind === "change" && <Icon aria-hidden="true" className="size-3 shrink-0" />}
-      <span className="font-medium tabular-nums text-foreground">{text}</span>{" "}
-      <span className="truncate">{vs}</span>
+      <span className="font-medium tabular-nums text-foreground">{text}</span> <span className="truncate">{vs}</span>
     </div>
+  );
+}
+
+interface CellProps {
+  totals: OverviewTotals;
+  loading: boolean;
+  failed: boolean;
+  daily: ReturnType<typeof dailyTotals>;
+  change: ReactNode;
+}
+
+function SpendCell({ totals, loading, failed, daily, change, hint }: CellProps & { hint: string | undefined }) {
+  const { t } = useTranslation();
+  const label = t("usage.statStrip.spend");
+  return (
+    <StatCell label={label} trend={<Sparkline data={daily} dataKey="spend" color={BRAND} className="h-14" />}>
+      <Stat
+        label={label}
+        value={failed ? t("usage.statStrip.unavailable") : t("format.usd", { val: totals.spend })}
+        pending={loading}
+        hint={hint}
+      />
+      {change}
+    </StatCell>
+  );
+}
+
+function RequestCounts({ totals }: { totals: OverviewTotals }) {
+  const { t } = useTranslation();
+  return (
+    <div className="mt-0.5 flex gap-3 text-xs leading-4 text-muted-foreground">
+      <span>
+        <Trans
+          i18nKey="usage.statStrip.successfulCount"
+          components={{
+            count: <span className="text-success tabular-nums">{t("format.number", { val: totals.successful })}</span>,
+          }}
+        />
+      </span>
+      <span>
+        <Trans
+          i18nKey="usage.statStrip.failedCount"
+          components={{
+            count: (
+              <span className={totals.failed > 0 ? "text-destructive tabular-nums" : "tabular-nums"}>
+                {t("format.number", { val: totals.failed })}
+              </span>
+            ),
+          }}
+        />
+      </span>
+    </div>
+  );
+}
+
+function RequestsCell({ totals, loading, failed, daily, change }: CellProps) {
+  const { t } = useTranslation();
+  const label = t("usage.statStrip.totalRequests");
+  return (
+    <StatCell label={label} trend={<Sparkline data={daily} dataKey="requests" color={BRAND} className="h-14" />}>
+      <Stat
+        label={label}
+        value={failed ? t("usage.statStrip.unavailable") : t("format.number", { val: totals.requests })}
+        pending={loading}
+      />
+      {!loading && change}
+      {!loading && !failed && <RequestCounts totals={totals} />}
+    </StatCell>
+  );
+}
+
+function TokenBreakdownPopover({ totals }: { totals: OverviewTotals }) {
+  const { t } = useTranslation();
+  return (
+    <Popover>
+      <PopoverTrigger className="mt-1 text-xs font-medium text-primary underline-offset-4 hover:underline">
+        {t("usage.statStrip.viewTokenBreakdown")}
+      </PopoverTrigger>
+      <PopoverContent side="right" align="start" className="w-80 gap-3">
+        <PopoverTitle>{t("usage.statStrip.tokenPopover.title")}</PopoverTitle>
+        <dl className="space-y-2 text-sm tabular-nums">
+          <div className="flex justify-between gap-4">
+            <dt>{t("usage.statStrip.tokenPopover.inputTokens")}</dt>
+            <dd>{t("format.number", { val: totals.inputTokens })}</dd>
+          </div>
+          <div className="flex justify-between gap-4 pl-3 text-xs text-muted-foreground">
+            <dt>{t("usage.statStrip.tokenPopover.cacheReads")}</dt>
+            <dd>{t("format.number", { val: totals.cacheReadTokens })}</dd>
+          </div>
+          <div className="flex justify-between gap-4 pl-3 text-xs text-muted-foreground">
+            <dt>{t("usage.statStrip.tokenPopover.cacheWrites")}</dt>
+            <dd>{t("format.number", { val: totals.cacheWriteTokens })}</dd>
+          </div>
+          <div className="flex justify-between gap-4">
+            <dt>{t("usage.statStrip.tokenPopover.outputTokens")}</dt>
+            <dd>{t("format.number", { val: totals.outputTokens })}</dd>
+          </div>
+          <div className="flex justify-between gap-4 border-t pt-2 font-medium">
+            <dt>{t("usage.statStrip.tokenPopover.totalTokens")}</dt>
+            <dd>{t("format.number", { val: totals.tokens })}</dd>
+          </div>
+        </dl>
+        <p className="text-xs leading-5 text-muted-foreground">{t("usage.statStrip.tokenPopover.pricingNote")}</p>
+        <p className="text-xs leading-5 text-muted-foreground">{t("usage.statStrip.tokenPopover.clientNote")}</p>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function TokensCell({ totals, loading, failed, daily, change }: CellProps) {
+  const { t } = useTranslation();
+  const label = t("usage.statStrip.totalTokens");
+  const ready = !loading && !failed;
+  const value = (() => {
+    if (failed) return t("usage.statStrip.unavailable");
+    if (loading) return null;
+    return t("format.compactNumber", { val: totals.tokens });
+  })();
+  return (
+    <StatCell label={label} trend={<Sparkline data={daily} dataKey="tokens" color={BRAND} className="h-14" />}>
+      <Stat
+        label={label}
+        value={value}
+        exact={
+          failed ? undefined : t("usage.statStrip.exactTokens", { tokens: t("format.number", { val: totals.tokens }) })
+        }
+        pending={loading}
+        hint={
+          ready
+            ? t("usage.statStrip.cacheReadHint", { tokens: t("format.compactNumber", { val: totals.cacheReadTokens }) })
+            : undefined
+        }
+      />
+      {change}
+      {ready && <TokenBreakdownPopover totals={totals} />}
+    </StatCell>
+  );
+}
+
+function AveragesCell({ totals, loading, failed, change }: CellProps) {
+  const { t } = useTranslation();
+  const label = t("usage.statStrip.avgCostPerRequest");
+  const successHint =
+    totals.successRate === null
+      ? undefined
+      : t("usage.statStrip.successRateHint", { rate: t("format.number", { val: totals.successRate, ...ONE_DECIMAL }) });
+  return (
+    <StatCell label={label}>
+      <div className="grid gap-3">
+        <Stat
+          label={label}
+          value={
+            failed
+              ? t("usage.statStrip.unavailable")
+              : t("format.usd", { val: totals.avgCostPerRequest, ...FOUR_DECIMALS })
+          }
+          pending={loading}
+        />
+        {change}
+        <Stat
+          label={t("usage.statStrip.avgLatency")}
+          value={totals.avgLatencyMs === null || failed ? "—" : latency(totals.avgLatencyMs, t)}
+          pending={loading}
+          hint={successHint}
+        />
+      </div>
+    </StatCell>
   );
 }
 
@@ -69,137 +235,25 @@ export default function UsageStatStrip({
   requestsFailed = failed,
 }: UsageStatStripProps) {
   const { t } = useTranslation();
+  const daily = useMemo(() => dailyTotals(results), [results]);
   const period = comparison ? formatDayRange(comparison.previous) : "";
   const changeFor = (change: Change | null | undefined) =>
     change && !loading && !failed ? <ChangeLine change={change} period={period} /> : null;
-  const unavailable = t("usage.statStrip.unavailable");
-  const exactTokens = t("usage.statStrip.exactTokens", { tokens: t("format.number", { val: totals.tokens }) });
-  const tokensValue = (() => {
-    if (failed) return unavailable;
-    if (loading) return null;
-    return t("format.compactNumber", { val: totals.tokens });
-  })();
-  const daily = useMemo(() => dailyTotals(results), [results]);
   const budgetHint = budget
     ? t("usage.statStrip.budgetHint", { budget: t("format.usd", { val: budget }) })
     : t("usage.statStrip.noBudget");
+  const shared = { totals, loading, failed, daily };
   return (
     <div className="grid grid-cols-1 overflow-hidden rounded-xl border bg-card sm:grid-cols-2 lg:grid-cols-4 lg:divide-x">
-      <StatCell trend={<Sparkline data={daily} dataKey="spend" color={BRAND} className="h-14" />}>
-        <Stat
-          label={t("usage.statStrip.spend")}
-          value={failed ? unavailable : t("format.usd", { val: totals.spend })}
-          pending={loading}
-          hint={showBudgetHint ? budgetHint : undefined}
-        />
-        {changeFor(comparison?.spend)}
-      </StatCell>
-      <StatCell trend={<Sparkline data={daily} dataKey="requests" color={BRAND} className="h-14" />}>
-        <Stat
-          label={t("usage.statStrip.totalRequests")}
-          value={requestsFailed ? unavailable : t("format.number", { val: totals.requests })}
-          pending={requestCountsPending}
-        />
-        {!requestCountsPending && changeFor(comparison?.requests)}
-        {!requestCountsPending && !requestsFailed && (
-          <div className="mt-0.5 flex gap-3 text-xs leading-4 text-muted-foreground">
-            <span>
-              <Trans
-                i18nKey="usage.statStrip.successfulCount"
-                components={{
-                  count: (
-                    <span className="text-success tabular-nums">{t("format.number", { val: totals.successful })}</span>
-                  ),
-                }}
-              />
-            </span>
-            <span>
-              <Trans
-                i18nKey="usage.statStrip.failedCount"
-                components={{
-                  count: (
-                    <span className={totals.failed > 0 ? "text-destructive tabular-nums" : "tabular-nums"}>
-                      {t("format.number", { val: totals.failed })}
-                    </span>
-                  ),
-                }}
-              />
-            </span>
-          </div>
-        )}
-      </StatCell>
-      <StatCell trend={<Sparkline data={daily} dataKey="tokens" color={BRAND} className="h-14" />}>
-        <Stat
-          label={t("usage.statStrip.totalTokens")}
-          value={tokensValue}
-          exact={failed ? undefined : exactTokens}
-          pending={loading}
-          hint={
-            loading || failed
-              ? undefined
-              : t("usage.statStrip.cacheReadHint", {
-                  tokens: t("format.compactNumber", { val: totals.cacheReadTokens }),
-                })
-          }
-        />
-        {changeFor(comparison?.tokens)}
-        {!loading && !failed && (
-          <Popover>
-            <PopoverTrigger className="mt-1 text-xs font-medium text-primary underline-offset-4 hover:underline">
-              {t("usage.statStrip.viewTokenBreakdown")}
-            </PopoverTrigger>
-            <PopoverContent side="right" align="start" className="w-80 gap-3">
-              <PopoverTitle>{t("usage.statStrip.tokenPopover.title")}</PopoverTitle>
-              <dl className="space-y-2 text-sm tabular-nums">
-                <div className="flex justify-between gap-4">
-                  <dt>{t("usage.statStrip.tokenPopover.inputTokens")}</dt>
-                  <dd>{t("format.number", { val: totals.inputTokens })}</dd>
-                </div>
-                <div className="flex justify-between gap-4 pl-3 text-xs text-muted-foreground">
-                  <dt>{t("usage.statStrip.tokenPopover.cacheReads")}</dt>
-                  <dd>{t("format.number", { val: totals.cacheReadTokens })}</dd>
-                </div>
-                <div className="flex justify-between gap-4 pl-3 text-xs text-muted-foreground">
-                  <dt>{t("usage.statStrip.tokenPopover.cacheWrites")}</dt>
-                  <dd>{t("format.number", { val: totals.cacheWriteTokens })}</dd>
-                </div>
-                <div className="flex justify-between gap-4">
-                  <dt>{t("usage.statStrip.tokenPopover.outputTokens")}</dt>
-                  <dd>{t("format.number", { val: totals.outputTokens })}</dd>
-                </div>
-                <div className="flex justify-between gap-4 border-t pt-2 font-medium">
-                  <dt>{t("usage.statStrip.tokenPopover.totalTokens")}</dt>
-                  <dd>{t("format.number", { val: totals.tokens })}</dd>
-                </div>
-              </dl>
-              <p className="text-xs leading-5 text-muted-foreground">{t("usage.statStrip.tokenPopover.pricingNote")}</p>
-              <p className="text-xs leading-5 text-muted-foreground">{t("usage.statStrip.tokenPopover.clientNote")}</p>
-            </PopoverContent>
-          </Popover>
-        )}
-      </StatCell>
-      <StatCell>
-        <div className="grid gap-3">
-          <Stat
-            label={t("usage.statStrip.avgCostPerRequest")}
-            value={failed ? unavailable : t("format.usd", { val: totals.avgCostPerRequest, ...FOUR_DECIMALS })}
-            pending={loading}
-          />
-          {changeFor(comparison?.avgCostPerRequest)}
-          <Stat
-            label={t("usage.statStrip.avgLatency")}
-            value={totals.avgLatencyMs === null || failed ? "—" : latency(totals.avgLatencyMs, t)}
-            pending={loading}
-            hint={
-              totals.successRate === null
-                ? undefined
-                : t("usage.statStrip.successRateHint", {
-                    rate: t("format.number", { val: totals.successRate, ...ONE_DECIMAL }),
-                  })
-            }
-          />
-        </div>
-      </StatCell>
+      <SpendCell {...shared} change={changeFor(comparison?.spend)} hint={showBudgetHint ? budgetHint : undefined} />
+      <RequestsCell
+        {...shared}
+        loading={requestCountsPending}
+        failed={requestsFailed}
+        change={changeFor(comparison?.requests)}
+      />
+      <TokensCell {...shared} change={changeFor(comparison?.tokens)} />
+      <AveragesCell {...shared} change={changeFor(comparison?.avgCostPerRequest)} />
     </div>
   );
 }
@@ -210,9 +264,11 @@ function latency(ms: number, t: TFunction): string {
     : t("format.number", { val: ms / 1000, ...SECONDS });
 }
 
-function StatCell({ children, trend }: { children: React.ReactNode; trend?: React.ReactNode }) {
+function StatCell({ label, children, trend }: { label: string; children: ReactNode; trend?: ReactNode }) {
   return (
     <div
+      role="group"
+      aria-label={label}
       className={cn(
         "flex min-w-0 flex-col justify-between gap-3 border-b py-4 last:border-b-0 lg:border-b-0",
         PANEL_INSET_X,

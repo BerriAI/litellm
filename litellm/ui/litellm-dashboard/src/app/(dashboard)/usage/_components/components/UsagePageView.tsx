@@ -40,7 +40,6 @@ import UserActivityPanel from "@/components/UsagePage/components/UserActivityPan
 import { filterModelActivity } from "@/components/UsagePage/modelActivityFilter";
 import { Team } from "@/components/key_team_helpers/key_list";
 import {
-  formatDate,
   gatewayDailyActivityCall,
   Organization,
   requestErrorActivityCall,
@@ -51,6 +50,7 @@ import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { Tag } from "@/components/tag_management/types";
 import UserAgentActivity from "@/components/user_agent_activity";
 import { useAggregatedDailyActivity } from "../hooks/useAggregatedDailyActivity";
+import { useOverviewComparison } from "../hooks/useOverviewComparison";
 import { ENTITY_API } from "./EntityUsage/entityFetchFns";
 import {
   EMPTY_DAILY_ACTIVITY_METADATA,
@@ -97,8 +97,6 @@ import {
   usageViewPatch,
 } from "../usageUrlState";
 import { overviewTotals, providerSpendRows } from "./overview/overviewData";
-import { statComparison, type ComparisonStatus } from "./overview/usageComparison";
-import { previousPeriod, type DayRange } from "./overview/usageTrendData";
 import TopAgents from "./overview/TopAgents";
 import { parseUsageClient, topAgents, type AgentRow } from "./overview/agentCatalog";
 import ClientUsagePanel from "./ClientUsagePanel";
@@ -112,20 +110,6 @@ import { Panel } from "./overview/Primitives";
 import UsageOverview from "./overview/UsageOverview";
 
 const GATEWAY_ENDPOINT_COLORS = ["#2b3fd6", "#ef4444"];
-
-const comparisonStatus = (loading: boolean, failed: boolean): ComparisonStatus => {
-  if (loading) return "loading";
-  return failed ? "failed" : "ready";
-};
-
-const dayStart = (date: string): Date => {
-  const [year, month, day] = date.split("-").map(Number);
-  return new Date(year, month - 1, day);
-};
-const dayEnd = (date: string): Date => {
-  const [year, month, day] = date.split("-").map(Number);
-  return new Date(year, month - 1, day, 23, 59, 59, 999);
-};
 
 interface UsagePageProps {
   teams: Team[];
@@ -291,33 +275,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
     enabled: dailyActivityRequest !== null,
     deps: [accessToken, startTime, endTime, effectiveUserId],
   });
-  const currentRange = useMemo<DayRange | null>(
-    () => (startTime && endTime ? { start: formatDate(startTime), end: formatDate(endTime) } : null),
-    [startTime, endTime],
-  );
-  const comparisonRange = useMemo(() => (currentRange ? previousPeriod(currentRange) : null), [currentRange]);
-  const showsComparison = (usageView === "global" || usageView === "my-usage") && selectedTab === "cost";
-  const comparisonRequest = useMemo<DailyActivityRequest | null>(
-    () =>
-      showsComparison && dailyActivityRequest && comparisonRange
-        ? {
-            ...dailyActivityRequest,
-            startTime: dayStart(comparisonRange.start),
-            endTime: dayEnd(comparisonRange.end),
-            apiKeyLimit: 1,
-          }
-        : null,
-    [showsComparison, dailyActivityRequest, comparisonRange],
-  );
-  const {
-    data: comparisonRaw,
-    loading: comparisonLoading,
-    failed: comparisonFailed,
-  } = useAggregatedDailyActivity({
-    fetch: () => ENTITY_API.user.aggregated(comparisonRequest as DailyActivityRequest),
-    enabled: comparisonRequest !== null,
-    deps: [accessToken, comparisonRange?.start, comparisonRange?.end, effectiveUserId],
-  });
   // Tag data is deployment-wide with no per-user dimension, so Top agents only appears where the
   // rest of the page is deployment-wide too: an admin's global view with no user selected.
   const showTopAgents = isAdmin && usageView === "global" && effectiveUserId === null;
@@ -424,27 +381,14 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
     () => overviewTotals(userSpendData.metadata, gatewayActivity),
     [userSpendData.metadata, gatewayActivity],
   );
-  const comparison = useMemo(
-    () =>
-      comparisonRange && comparisonRequest
-        ? statComparison({
-            current: aggregatedRaw.metadata ?? null,
-            previous: comparisonRaw.metadata ?? null,
-            previousRange: comparisonRange,
-            status: comparisonStatus(comparisonLoading, comparisonFailed),
-            requestsComparable: gatewayActivity === null,
-          })
-        : undefined,
-    [
-      aggregatedRaw,
-      comparisonRaw,
-      comparisonRange,
-      comparisonRequest,
-      comparisonLoading,
-      comparisonFailed,
-      gatewayActivity,
-    ],
-  );
+  const overviewComparisonInput = {
+    request: dailyActivityRequest,
+    current: aggregatedRaw,
+    view: usageView,
+    tab: selectedTab,
+    requestsComparable: gatewayActivity === null,
+  };
+  const { range: currentRange, comparison } = useOverviewComparison(overviewComparisonInput);
   const providerSpend = useMemo(() => providerSpendRows(userSpendData.results), [userSpendData.results]);
   const {
     data: tagSummary,
@@ -616,7 +560,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
                     totals={totals}
                     loading={loading}
                     failed={aggregatedFailed}
-                    requestsFailed={aggregatedFailed && gatewayActivity === null}
+                    requestsFromGateway={gatewayActivity !== null}
                     range={currentRange}
                     comparison={comparison}
                     requestCountsPending={requestCountsPending}

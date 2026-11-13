@@ -34,6 +34,9 @@ export function matchRelativeTimeOption(
   });
 }
 
+const presetOptions = (options: readonly RelativeTimeOption[] | undefined): readonly RelativeTimeOption[] =>
+  options ?? relativeTimeOptions;
+
 /**
  * Advanced Date Range Picker with dropdown, relative times, and custom inputs
  */
@@ -46,8 +49,9 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
   showTimeRange = true,
   align = "right",
   compact = false,
-  options = relativeTimeOptions,
+  options: customOptions,
 }) => {
+  const options = presetOptions(customOptions);
   const { t } = useTranslation();
   const inputId = useId();
   const [isOpen, setIsOpen] = useState(false);

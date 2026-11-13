@@ -16,7 +16,7 @@ interface UsageOverviewProps {
   totals: OverviewTotals;
   loading: boolean;
   failed: boolean;
-  requestsFailed: boolean;
+  requestsFromGateway: boolean;
   range: DayRange | null;
   comparison?: StatComparison;
   requestCountsPending: boolean;
@@ -34,7 +34,7 @@ export default function UsageOverview({
   totals,
   loading,
   failed,
-  requestsFailed,
+  requestsFromGateway,
   range,
   comparison,
   requestCountsPending,
@@ -57,7 +57,7 @@ export default function UsageOverview({
         budget={budget}
         comparison={comparison}
         failed={failed}
-        requestsFailed={requestsFailed}
+        requestsFailed={failed && !requestsFromGateway}
       />
 
       {subscriptionCosts}

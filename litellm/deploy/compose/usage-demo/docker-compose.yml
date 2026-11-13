@@ -26,11 +26,19 @@ services:
       context: ../../../..
       dockerfile: litellm/deploy/docker/Dockerfile
       target: runtime
-    command: ["--config", "/app/usage-demo-config.yaml", "--port", "4000", "--num_workers", "2"]
+    command:
+      [
+        "--config",
+        "/app/usage-demo-config.yaml",
+        "--port",
+        "4000",
+        "--num_workers",
+        "2",
+      ]
     ports:
       - "127.0.0.1:${USAGE_DEMO_PORT:-4000}:4000"
     volumes:
-      - ./config.yaml:/app/usage-demo-config.yaml:ro
+      - ./usage-demo-config.yaml:/app/usage-demo-config.yaml:ro
     environment:
       LITELLM_MASTER_KEY: ${USAGE_DEMO_MASTER_KEY:?export USAGE_DEMO_MASTER_KEY, see the header of this file}
       UI_USERNAME: admin

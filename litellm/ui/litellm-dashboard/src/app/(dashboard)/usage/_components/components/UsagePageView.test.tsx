@@ -1405,7 +1405,7 @@ describe("UsagePage", () => {
       });
       expect(await overview().findAllByText("+25.0%")).toHaveLength(2);
       expect(overview().getAllByText("vs Dec 1 – Dec 31").length).toBeGreaterThan(0);
-      expect(within(overview().getByText("Total Tokens").parentElement!.parentElement!).getByText("New")).toBeVisible();
+      expect(within(overview().getByRole("group", { name: "Total Tokens" })).getByText("New")).toBeVisible();
       expect(overview().queryByText(/Infinity/)).not.toBeInTheDocument();
     });
 

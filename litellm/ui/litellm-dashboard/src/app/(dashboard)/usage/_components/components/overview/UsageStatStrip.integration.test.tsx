@@ -85,7 +85,7 @@ describe("UsageStatStrip period comparison", () => {
         }}
       />,
     );
-    const cellOf = (label: string) => screen.getByText(label).parentElement?.parentElement as HTMLElement;
+    const cellOf = (label: string) => screen.getByRole("group", { name: label });
 
     expect(cellOf("Spend")).toHaveTextContent("+12.3% vs Oct 1 – Oct 12");
     expect(cellOf("Total Tokens")).toHaveTextContent("New vs Oct 1 – Oct 12");
@@ -98,7 +98,13 @@ describe("UsageStatStrip period comparison", () => {
     render(
       <UsageStatStrip
         {...defaultProps}
-        comparison={{ previous, spend: unavailable, tokens: unavailable, requests: null, avgCostPerRequest: unavailable }}
+        comparison={{
+          previous,
+          spend: unavailable,
+          tokens: unavailable,
+          requests: null,
+          avgCostPerRequest: unavailable,
+        }}
       />,
     );
 

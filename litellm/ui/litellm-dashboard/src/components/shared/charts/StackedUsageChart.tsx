@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Bar, BarChart, CartesianGrid, LabelList, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, ReferenceDot, XAxis, YAxis } from "recharts";
 import { type ChartConfig, ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
 import i18n from "@/i18n/i18n";
 import { cn } from "@/lib/cva.config";
@@ -25,13 +25,6 @@ export const STACKED_USAGE_PALETTE = [
 export const stackedUsageColor = (index: number) => STACKED_USAGE_PALETTE[index % STACKED_USAGE_PALETTE.length];
 
 export type StackedUsageScale = "linear" | "log";
-
-interface BarTotalLabelProps {
-  x?: number | string;
-  y?: number | string;
-  width?: number | string;
-  index?: number;
-}
 
 export interface StackedUsageChartProps {
   data: readonly Record<string, unknown>[];
@@ -83,6 +76,17 @@ export function StackedUsageTooltipRow({
   );
 }
 
+const bucketTotals = (
+  data: readonly Record<string, unknown>[],
+  xKey: string,
+  totalFor: (xValue: string) => number | undefined,
+): readonly { x: string; total: number }[] =>
+  data.flatMap((row) => {
+    const x = String(row[xKey] ?? "");
+    const total = totalFor(x);
+    return total === undefined ? [] : [{ x, total }];
+  });
+
 /** Daily usage stacked by series, with a tooltip listing each series and the bucket total. */
 export function StackedUsageChart({
   data,
@@ -115,22 +119,8 @@ export function StackedUsageChart({
       ? tooltipLabel(xValue)
       : `${tooltipLabel(xValue)} · ${totalLabel} ${tooltipFormat(total)}`;
   };
-  const totalsVisible = showTotals && scale === "linear" && totalFor !== undefined;
-  const renderTotal = ({ x, y, width, index }: BarTotalLabelProps) => {
-    const row = index === undefined ? undefined : data[index];
-    const total = row === undefined ? undefined : totalFor?.(String(row[xKey] ?? ""));
-    if (total === undefined) return null;
-    return (
-      <text
-        x={Number(x) + Number(width) / 2}
-        y={Number(y) - 6}
-        textAnchor="middle"
-        className="fill-muted-foreground text-[11px] tabular-nums"
-      >
-        {format(total)}
-      </text>
-    );
-  };
+  const barTotals = showTotals && scale === "linear" && totalFor ? bucketTotals(data, xKey, totalFor) : [];
+  const totalsVisible = barTotals.length > 0;
 
   return (
     <ChartContainer
@@ -187,9 +177,21 @@ export function StackedUsageChart({
             stackId="usage"
             fill={fill(index)}
             isAnimationActive={false}
-          >
-            {totalsVisible && index === series.length - 1 && <LabelList dataKey={key} content={renderTotal} />}
-          </Bar>
+          />
+        ))}
+        {barTotals.map(({ x, total }) => (
+          <ReferenceDot
+            key={x}
+            x={x}
+            y={total}
+            r={0}
+            ifOverflow="extendDomain"
+            label={{
+              value: format(total),
+              position: "top",
+              className: "fill-muted-foreground text-[11px] tabular-nums",
+            }}
+          />
         ))}
       </BarChart>
     </ChartContainer>

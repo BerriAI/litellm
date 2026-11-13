@@ -6,7 +6,7 @@ No provider credentials are needed and no model is ever called. The seed writes 
 
 Every service rotates its Docker logs at 10 MB with three files kept.
 
-Pinned images are `postgres:16.6` and `redis:7.4.2`. The proxy image is built locally as `litellm-usage-demo:local` and is never pulled.
+The proxy reads `usage-demo-config.yaml` from this directory, which points router state and coordination at the dedicated Redis and lists no models. Pinned images are `postgres:16.6` and `redis:7.4.2`. The proxy image is built locally as `litellm-usage-demo:local` and is never pulled.
 
 ## Start, seed, open
 

@@ -38,11 +38,7 @@ const sumUsage = (usages: readonly Usage[]): Usage => ({
   requests: usages.reduce((acc, usage) => acc + (usage.requests ?? 1), 0),
 });
 
-const day = (
-  date: string,
-  models: Record<string, Usage>,
-  total: Usage = sumUsage(Object.values(models)),
-): DailyData =>
+const day = (date: string, models: Record<string, Usage>, total: Usage = sumUsage(Object.values(models))): DailyData =>
   ({
     date,
     metrics: metricsOf(total),
@@ -62,8 +58,10 @@ const day = (
     },
   }) as DailyData;
 
-const trendOf = (results: readonly DailyData[], range: DayRange, granularity: TrendGranularity) =>
-  usageTrend({ results, range, granularity, colorByModel: modelColorMap(results) });
+const trendOf = (results: readonly DailyData[], range: DayRange, granularity: TrendGranularity) => {
+  const input = { results, range, granularity, colorByModel: modelColorMap(results) };
+  return usageTrend(input);
+};
 
 const valueOf = (trend: ReturnType<typeof trendOf>, metric: "tokens" | "spend", bucket: string, label: string) => {
   const series = trend.series[metric];
@@ -278,13 +276,14 @@ describe("usageTrend", () => {
       },
     } as DailyData;
     const october = { start: "2026-10-01", end: "2026-10-31" };
-    const trend = usageTrend({
+    const input = {
       results: [withModels],
       range: october,
       granularity: "month",
-      colorByModel: new Map(),
+      colorByModel: new Map<string, string>(),
       dimension: "models",
-    });
+    } as const;
+    const trend = usageTrend(input);
 
     expect(trend.series.spend.labels).toEqual(["claude-x"]);
     expect(trend.totals.tokens.get("2026-10")).toBe(300);

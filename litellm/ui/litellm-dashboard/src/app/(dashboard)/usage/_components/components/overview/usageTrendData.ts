@@ -157,8 +157,12 @@ const sumByKey = (items: readonly KeyedTotals[]): ReadonlyMap<string, Totals> =>
 
 const entriesOf = (day: DailyData, dimension: TrendDimension) => Object.entries(day.breakdown[dimension] ?? {});
 
-const byContribution = (a: KeyedTotals, b: KeyedTotals): number =>
-  b.spend - a.spend || b.tokens - a.tokens || b.requests - a.requests || byKey(a.key, b.key);
+const byContribution = (a: KeyedTotals, b: KeyedTotals): number => {
+  const larger = [b.spend - a.spend, b.tokens - a.tokens, b.requests - a.requests].find(
+    (difference) => difference !== 0,
+  );
+  return larger ?? byKey(a.key, b.key);
+};
 
 const modelTotals = (results: readonly DailyData[], dimension: TrendDimension): readonly KeyedTotals[] =>
   [
