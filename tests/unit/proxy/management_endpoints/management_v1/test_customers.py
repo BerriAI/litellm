@@ -349,6 +349,56 @@ def test_clearing_an_override_also_clears_its_expiry() -> None:
     assert renewed.json()["effective_budget"]["max_budget"] == 7
 
 
+_PAST_EXPIRY: Final = "2020-01-01T00:00:00Z"
+
+
+@pytest.mark.parametrize(
+    ("route", "created_without_override"),
+    (
+        ("/management/v1/customer_members", {"customer_member_id": "row", "parent_team_ids": ["team"]}),
+        ("/management/v1/customer_teams", {"customer_team_id": "row", "parent_org_id": "org"}),
+    ),
+    ids=("member", "team"),
+)
+def test_an_expiry_sent_without_an_override_is_not_stored_and_a_later_override_applies(
+    route: str, created_without_override: dict[str, object]
+) -> None:
+    http: Final = client()
+    family(http)
+    created: Final = http.post(route, json={**created_without_override, "budget_override_expires_at": _PAST_EXPIRY})
+    assert created.status_code == 201, created.text
+    assert created.json()["budget_override_expires_at"] is None
+    expiry_only: Final = http.patch(f"{route}/row", json={"budget_override_expires_at": _PAST_EXPIRY})
+    assert expiry_only.status_code == 200, expiry_only.text
+    assert expiry_only.json()["budget_override_expires_at"] is None
+    overridden: Final = http.patch(f"{route}/row", json={"budget_override": {"max_budget": 7}})
+    assert overridden.status_code == 200, overridden.text
+    assert overridden.json()["budget_override_expires_at"] is None
+    assert overridden.json()["effective_budget"]["max_budget"] == 7
+
+
+def test_an_override_added_to_a_row_holding_a_stale_expiry_does_not_inherit_it() -> None:
+    database: Final = Database()
+    http: Final = client(database=database)
+    family(http)
+    created: Final = http.post(
+        "/management/v1/customer_members", json={"customer_member_id": "member", "parent_team_ids": ["team"]}
+    )
+    assert created.status_code == 201, created.text
+    asyncio.run(
+        database.litellm_customermembertable.update(
+            where={"customer_member_id": "member"},
+            data={"budget_override_expires_at": NOW - timedelta(days=365)},
+        )
+    )
+    overridden: Final = http.patch(
+        "/management/v1/customer_members/member", json={"budget_override": {"max_budget": 7}}
+    )
+    assert overridden.status_code == 200, overridden.text
+    assert overridden.json()["budget_override_expires_at"] is None
+    assert overridden.json()["effective_budget"]["max_budget"] == 7
+
+
 def test_null_budget_clears_the_overall_budget_of_an_organization_and_a_team() -> None:
     http: Final = client()
     family(http)
