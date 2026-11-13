@@ -161,6 +161,44 @@ impl Reader<'_> {
             .ok()
     }
 
+    /// A malformed window is reported and the well-formed ones are kept, since main skips only the window it cannot read
+    fn utc_hours(&mut self, path: String, value: &Value) -> Option<UtcHours> {
+        self.value(path, value).or_else(|| well_formed_hours(value))
+    }
+
+    fn off_peak_windows(&mut self, path: String, value: &Value) -> Option<Vec<OffPeakWindow>> {
+        let Value::Array(rules) = value else {
+            return self.value(path, value);
+        };
+        Some(
+            rules
+                .iter()
+                .enumerate()
+                .filter_map(|(index, rule)| self.off_peak_window(format!("{path}/{index}"), rule))
+                .collect(),
+        )
+    }
+
+    /// A malformed rule is reported, then read the way main reads it: without hours it is dropped, a malformed
+    /// weekday is left out, and weekdays that are not a list match no day
+    fn off_peak_window(&mut self, path: String, value: &Value) -> Option<OffPeakWindow> {
+        self.value(path, value).or_else(|| {
+            let rule = value.as_object()?;
+            Some(OffPeakWindow {
+                hours_utc: well_formed_hours(rule.get("hours_utc")?)?,
+                weekdays: match rule.get("weekdays") {
+                    None | Some(Value::Null) => None,
+                    Some(Value::Array(days)) => Some(
+                        days.iter()
+                            .filter_map(|day| Weekday::deserialize(day).ok())
+                            .collect(),
+                    ),
+                    Some(_) => Some(Vec::new()),
+                },
+            })
+        })
+    }
+
     pub(crate) fn off_peak(&mut self, value: &Value) -> Option<OffPeakBlock> {
         let path = pointer_for_key("off_peak_pricing");
         let fields = self.object(&path, value)?;
@@ -169,8 +207,8 @@ impl Reader<'_> {
             let key = format!("off_peak_pricing.{name}");
             let child_path = pointer_child(&path, name);
             match name.as_str() {
-                "hours_utc" => block.hours_utc = self.value(child_path, value),
-                "windows" => block.windows = self.value(child_path, value),
+                "hours_utc" => block.hours_utc = self.utc_hours(child_path, value),
+                "windows" => block.windows = self.off_peak_windows(child_path, value),
                 "weekday_timezone" => block.weekday_timezone = self.value(child_path, value),
                 _ => block
                     .prices
@@ -178,5 +216,17 @@ impl Reader<'_> {
             }
         }
         Some(block)
+    }
+}
+
+fn well_formed_hours(value: &Value) -> Option<UtcHours> {
+    match value {
+        Value::Array(windows) => Some(UtcHours::Multiple(
+            windows
+                .iter()
+                .filter_map(|window| UtcWindow::deserialize(window).ok())
+                .collect(),
+        )),
+        single => UtcWindow::deserialize(single).ok().map(UtcHours::Single),
     }
 }

@@ -57,7 +57,7 @@ pub use catalog::*;
 pub use cost_map::*;
 pub use error::*;
 pub use fallback::*;
-pub use lower::billed_prices;
+pub use lower::{BilledPrices, billed_prices};
 pub use model::*;
 pub use model_info::*;
 pub use register::*;

@@ -64,7 +64,17 @@ The price vocabulary lives in `litellm-cost`, and only this crate knows JSON key
 
 A new `N`, image size or resolution in an existing key shape parses with no Rust change. A new unit, token kind, feature or tier needs a variant in `litellm-cost` plus its spelling in `wire/flat_key.rs` and `FLAT_KEY_PATTERN` in `schema.rs`
 
-`Prices::try_from` is the strict lowering the catalog checks use. `billed_prices` lowers the same row for billing and never fails, because a deployment's `model_info` merged over a catalog row can hold what the checks reject. When such a row has token tiers, the flat text token prices they replace are dropped the way Python's tiered path ignored them, and any other contradiction keeps the price read first
+`Prices::try_from` is the strict lowering the catalog checks use. `billed_prices` lowers the same row for billing and never fails, because a deployment's `model_info` merged over a catalog row can hold what the checks reject. It reads the row the way Python's two pricing paths did
+
+- A row whose token tiers price input bills the whole call from the tier
+  - The flat text token prices the tiers replace are dropped, and `BilledPrices::for_prompt(0)` is the only reader of them, since Python picks no tier for an empty prompt
+  - A tier's missing cache-read and cache-write rates are that tier's input rate, and its missing reasoning rate is that tier's output rate
+  - A token tier starts where the one before it ends, so a ladder written `[0, 128000], [128001, ...]` bills the second tier from token 128001
+- Result tiers are left out, since the search calculator prices them
+- A modality input token price that does not parse is 0, where a missing one borrows the text rate
+- Any other contradiction keeps the price read first
+
+`wire/blocks.rs` reports a malformed off-peak window or weekday and keeps the well-formed ones, so billing skips only what Python skipped while the catalog checks still reject the row
 
 ## Tests
 

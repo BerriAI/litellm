@@ -235,13 +235,15 @@ impl Adjustments {
         self.0.get(uplift).copied()
     }
 
-    /// The residency, FedRAMP and regional endpoint multipliers `call` picks, in the order main applies them
+    /// The multipliers `call` picks out of the ones the row carries, in the order main applies them
     pub fn for_call(&self, call: &CallContext) -> impl Iterator<Item = Multiplier> + '_ {
         [
             call.residency.map(Uplift::Residency),
             call.fedramp_endpoint.then_some(Uplift::FedrampEndpoint),
             call.non_global_endpoint
                 .then_some(Uplift::NonGlobalEndpoint),
+            call.speed.map(Uplift::Speed),
+            call.inference_geo.clone().map(Uplift::InferenceGeo),
         ]
         .into_iter()
         .flatten()
