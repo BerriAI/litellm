@@ -7,7 +7,7 @@ import pathlib
 import subprocess
 import sys
 import textwrap
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final, List, Optional, Tuple, cast
 from unittest.mock import MagicMock, patch
@@ -5864,3 +5864,42 @@ def test_cache_control_hook_reads_a_non_string_answer_id_as_answering_no_tool_ca
     assert _cache_marks_after_injection(_search_conversation_with(malformed)) == _cache_marks_after_injection(
         _search_conversation_with(well_formed)
     )
+
+
+def test_message_level_injection_accepts_tuple_messages_from_safeguards_classifier() -> None:
+    classifier_messages: Final = (
+        {"role": "system", "content": "You are the safety classifier."},
+        {"role": "user", "content": "Classify the next tool call."},
+    )
+    _, processed, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
+        model="gemini/gemini-2.0-flash",
+        messages=cast(list[AllMessageValues], classifier_messages),
+        non_default_params={
+            "cache_control_injection_points": [
+                {"location": "message", "role": "system"},
+                {"location": "message", "index": -1},
+            ]
+        },
+        prompt_id=None,
+        prompt_variables=None,
+        dynamic_callback_params={},
+    )
+    assert isinstance(processed, list)
+    assert len(processed) == 2
+    assert processed[0].get("cache_control") == {"type": "ephemeral"}
+    assert processed[1].get("cache_control") == {"type": "ephemeral"}
+
+
+def test_apply_message_injections_materializes_a_tuple_before_rewriting_indices() -> None:
+    messages: Final = (
+        {"role": "system", "content": "stable"},
+        {"role": "user", "content": "hi"},
+    )
+    processed: Final = AnthropicCacheControlHook._apply_message_injections(
+        points=[{"location": "message", "index": -1}],
+        messages=cast(Sequence[AllMessageValues], messages),
+        max_blocks=4,
+    )
+    assert isinstance(processed, list)
+    assert processed[0] == {"role": "system", "content": "stable"}
+    assert processed[1].get("cache_control") == {"type": "ephemeral"}
