@@ -1,7 +1,7 @@
 import React, { useId } from "react";
 import type { ParseKeys } from "i18next";
 import { useTranslation } from "react-i18next";
-import { Controller } from "react-hook-form";
+import { Controller, useWatch } from "react-hook-form";
 import { z } from "zod";
 import { FormField } from "@/components/shared/form/FormField";
 import { Badge } from "@/components/ui/badge";
@@ -9,6 +9,7 @@ import { ButtonGroup } from "@/components/ui/button-group";
 import {
   Field,
   FieldDescription,
+  FieldError,
   FieldGroup,
   FieldLabel,
   FieldLegend,
@@ -20,6 +21,7 @@ import { InputGroup, InputGroupAddon, InputGroupInput, InputGroupText } from "@/
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import i18n from "@/i18n/i18n";
 import { useZodForm } from "@/lib/forms/useZodForm";
+import { COMBINED_BUDGET_DURATION } from "./budgetLimits";
 
 const budgetShape = {
   budget_id: z.string().min(1, { error: () => i18n.t("budgets.form.errors.budgetIdRequired") }),
@@ -28,9 +30,17 @@ const budgetShape = {
   tpd_limit: z.number().nullish(),
   max_budget: z.number().nullish(),
   budget_duration: z.string().nullish(),
+  annual_budget: z.number().nullish(),
 };
 
-const budgetSchema = z.object(budgetShape);
+const budgetSchema = z.object(budgetShape).superRefine((values, context) => {
+  if (values.budget_duration !== COMBINED_BUDGET_DURATION) return;
+  for (const field of ["max_budget", "annual_budget"] as const) {
+    if (values[field] == null || values[field] < 0) {
+      context.addIssue({ code: "custom", path: [field], message: i18n.t("budgets.form.errors.invalidBudgetLimit") });
+    }
+  }
+});
 
 export type BudgetFormValues = z.output<typeof budgetSchema>;
 
@@ -48,6 +58,7 @@ const RESET_OPTIONS: readonly { value: string; labelKey: ParseKeys }[] = [
   { value: "7d", labelKey: "budgets.form.resetOptions.perWeek" },
   { value: "30d", labelKey: "budgets.form.resetOptions.perMonth" },
   { value: "12mo", labelKey: "budgets.form.resetOptions.perYear" },
+  { value: COMBINED_BUDGET_DURATION, labelKey: "budgets.form.resetOptions.perMonthAndYear" },
 ];
 
 const numberProps = <T extends { value?: number | null; onChange: (value: number | null) => void }>({
@@ -71,23 +82,29 @@ const OptionalBadge = () => {
 function SpendLimitField({ form }: { form: BudgetForm }) {
   const { t } = useTranslation();
   const amountId = useId();
+  const combined = useWatch({ control: form.control, name: "budget_duration" }) === COMBINED_BUDGET_DURATION;
   const resetItems = RESET_OPTIONS.map(({ value, labelKey }) => ({ value, label: t(labelKey) }));
   return (
     <Field className="gap-2">
       <FieldLabel htmlFor={amountId}>
-        {t("budgets.form.spendLimit")}
-        <OptionalBadge />
+        {t(combined ? "budgets.form.monthlyLimit" : "budgets.form.spendLimit")}
+        {!combined && <OptionalBadge />}
       </FieldLabel>
       <ButtonGroup className="w-full">
         <Controller
           control={form.control}
           name="max_budget"
-          render={({ field }) => (
+          render={({ field, fieldState }) => (
             <InputGroup>
               <InputGroupAddon>
                 <InputGroupText>$</InputGroupText>
               </InputGroupAddon>
-              <InputGroupInput {...numberProps(field)} id={amountId} step={0.01} />
+              <InputGroupInput
+                {...numberProps(field)}
+                id={amountId}
+                aria-invalid={fieldState.invalid || undefined}
+                step={combined ? "any" : 0.01}
+              />
             </InputGroup>
           )}
         />
@@ -98,9 +115,17 @@ function SpendLimitField({ form }: { form: BudgetForm }) {
             <Select
               items={resetItems}
               value={field.value ?? NO_RESET}
-              onValueChange={(next) => field.onChange(next === NO_RESET ? null : next)}
+              onValueChange={(next) => {
+                if (combined && next === "12mo") {
+                  form.setValue("max_budget", form.getValues("annual_budget"), { shouldDirty: true });
+                } else if (next === COMBINED_BUDGET_DURATION && field.value === "12mo") {
+                  form.setValue("annual_budget", form.getValues("max_budget"), { shouldDirty: true });
+                  form.setValue("max_budget", null, { shouldDirty: true });
+                }
+                field.onChange(next === NO_RESET ? null : next);
+              }}
             >
-              <SelectTrigger aria-label={t("budgets.form.resetPeriod")} className="w-32">
+              <SelectTrigger aria-label={t("budgets.form.resetPeriod")} className="w-44">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -114,6 +139,7 @@ function SpendLimitField({ form }: { form: BudgetForm }) {
           )}
         />
       </ButtonGroup>
+      <FieldError errors={[form.formState.errors.max_budget]} />
     </Field>
   );
 }
@@ -134,6 +160,7 @@ function RateLimitField({ form, name, label }: { form: BudgetForm; name: NumberF
 
 export function BudgetFormFields({ form, isEditing }: { form: BudgetForm; isEditing: boolean }) {
   const { t } = useTranslation();
+  const combined = useWatch({ control: form.control, name: "budget_duration" }) === COMBINED_BUDGET_DURATION;
   return (
     <FieldGroup className="gap-4">
       <FormField
@@ -146,6 +173,16 @@ export function BudgetFormFields({ form, isEditing }: { form: BudgetForm; isEdit
         {({ ref, ...field }) => <Input {...field} ref={ref} value={field.value ?? ""} disabled={isEditing} />}
       </FormField>
       <SpendLimitField form={form} />
+      {combined && (
+        <FormField
+          control={form.control}
+          name="annual_budget"
+          label={t("budgets.form.annualLimit")}
+          description={t("budgets.form.calendarLimitsHint")}
+        >
+          {(field) => <Input {...numberProps(field)} min={0} step="any" />}
+        </FormField>
+      )}
       <FieldSeparator />
       <FieldSet className="gap-3">
         <FieldLegend className="mb-4 flex items-center gap-2 text-[15px] leading-[22px] font-semibold">

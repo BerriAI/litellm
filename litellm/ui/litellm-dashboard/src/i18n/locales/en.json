@@ -3381,7 +3381,8 @@
       "cells": {
         "notApplicable": "n/a",
         "notSet": "Not set",
-        "unlimited": "Unlimited"
+        "unlimited": "Unlimited",
+        "windowLimit": "${{amount}} {{period}}"
       },
       "rowActions": {
         "open": "Open budget actions",
@@ -3401,18 +3402,23 @@
     },
     "form": {
       "errors": {
-        "budgetIdRequired": "Enter a budget ID"
+        "budgetIdRequired": "Enter a budget ID",
+        "invalidBudgetLimit": "Enter a non-negative budget limit"
       },
       "resetOptions": {
         "inTotal": "in total",
         "perDay": "per day",
         "perWeek": "per week",
         "perMonth": "per month",
-        "perYear": "per year"
+        "perYear": "per year",
+        "perMonthAndYear": "per month and year"
       },
       "noLimit": "No limit",
       "optional": "Optional",
       "spendLimit": "Spend limit",
+      "monthlyLimit": "Monthly limit (USD)",
+      "annualLimit": "Annual limit (USD)",
+      "calendarLimitsHint": "Both limits apply independently. Zero stops spending. Choose a single reset period to use just one limit.",
       "resetPeriod": "Reset period",
       "budgetId": "Budget ID",
       "budgetIdLocked": "Budget ID cannot be changed after creation",

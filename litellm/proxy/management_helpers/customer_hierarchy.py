@@ -9,7 +9,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
-from litellm.models.budget import LiteLLM_BudgetTable
+from litellm.models.budget import BudgetLimit, BudgetLimits, LiteLLM_BudgetTable, initialize_budget_limits
+from litellm.proxy.common_utils.timezone_utils import BudgetResetSettings, get_budget_reset_settings
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.list_api.common import escape_like
 from litellm.repositories.budget_repository import create_budget_row, update_budget_row
@@ -32,7 +33,7 @@ from litellm.types.proxy.management_endpoints.customer_hierarchy import (
 )
 
 if TYPE_CHECKING:
-    from prisma import Prisma
+    from prisma import Json, Prisma
 
 
 class ErrorCode(str, Enum):
@@ -84,6 +85,9 @@ class Page(Generic[T]):
 class BudgetRecord(Budget):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
+    temp_budget_increase: float | None = Field(default=None, exclude=True)
+    temp_budget_expiry: datetime | None = Field(default=None, exclude=True)
+
 
 class OrganizationMemberCount(BaseModel):
     model_config = ConfigDict(frozen=True)
@@ -99,13 +103,30 @@ _EXPIRY: Final[TypeAdapter[datetime | None]] = TypeAdapter(datetime | None)
 
 
 def budget_values(budget: Budget) -> Mapping[str, object]:
-    return _VALUES.validate_python(budget.model_dump())
+    return _VALUES.validate_python(budget.model_dump(include=set(Budget.model_fields)))
 
 
 _JSON_BUDGET_COLUMNS: Final = frozenset({"model_tpm_limit", "model_rpm_limit"})
 
 
 _MODEL_LIMIT_MAP: Final = TypeAdapter(dict[str, int])
+_BUDGET_LIMITS: Final[TypeAdapter[tuple[BudgetLimit, ...]]] = TypeAdapter(BudgetLimits)
+
+
+def budget_limit_json(value: object) -> "Json":
+    from prisma import Json
+
+    limits: Final = _BUDGET_LIMITS.validate_python(value)
+    return Json(
+        [
+            {
+                "budget_duration": limit.budget_duration,
+                "max_budget": limit.max_budget,
+                "reset_at": limit.reset_at.isoformat() if limit.reset_at is not None else None,
+            }
+            for limit in limits
+        ]
+    )
 
 
 def budget_row_values(values: Mapping[str, object]) -> Mapping[str, object]:
@@ -113,7 +134,11 @@ def budget_row_values(values: Mapping[str, object]) -> Mapping[str, object]:
     from prisma import Json
 
     return {
-        key: Json(_MODEL_LIMIT_MAP.validate_python(value)) if key in _JSON_BUDGET_COLUMNS else value
+        key: budget_limit_json(value)
+        if key == "budget_limits" and value is not None
+        else Json(_MODEL_LIMIT_MAP.validate_python(value))
+        if key in _JSON_BUDGET_COLUMNS
+        else value
         for key, value in values.items()
         if not (key in _JSON_BUDGET_COLUMNS and value is None)
     }
@@ -123,17 +148,22 @@ def related_budget(value: object, now: datetime | None = None, inherited_maximum
     record: Final = _BUDGET.validate_python(value)
     if record is None:
         return None
+    values: Final = budget_values(record)
     if now is None:
-        return Budget.model_validate(record.model_dump())
-    budget: Final = LiteLLM_BudgetTable.model_validate(value)
+        return Budget.model_validate(values)
+    budget: Final = LiteLLM_BudgetTable(
+        max_budget=record.max_budget,
+        temp_budget_increase=record.temp_budget_increase,
+        temp_budget_expiry=record.temp_budget_expiry,
+    )
     maximum: Final = budget.effective_max_budget(utc_datetime(now))
     if maximum is not None:
-        return Budget.model_validate({**record.model_dump(), "max_budget": maximum})
+        return Budget.model_validate({**values, "max_budget": maximum})
     if inherited_maximum is None:
-        return Budget.model_validate(record.model_dump())
+        return Budget.model_validate(values)
     return Budget.model_validate(
         {
-            **record.model_dump(),
+            **values,
             "max_budget": inherited_maximum + budget.active_temp_budget_increase(utc_datetime(now)),
         }
     )
@@ -200,9 +230,17 @@ def effective_member_budget(
         return inherited
     if expires_at is not None and utc_datetime(expires_at) <= utc_datetime(now):
         return inherited
-    values: Final = _VALUES.validate_python(override.model_dump(exclude_none=True, exclude={"allowed_models"}))
+    values: Final = _VALUES.validate_python(
+        override.model_dump(exclude_none=True, exclude={"allowed_models", "budget_limits"})
+    )
     models: Final[Mapping[str, object]] = {"allowed_models": override.allowed_models} if override.allowed_models else {}
-    return Budget.model_validate({**budget_values(inherited), **values, **models})
+    windows: Final = {
+        **{limit.budget_duration: limit for limit in inherited.budget_limits or ()},
+        **{limit.budget_duration: limit for limit in override.budget_limits or ()},
+    }
+    return Budget.model_validate(
+        {**budget_values(inherited), **values, **models, "budget_limits": tuple(windows.values()) or None}
+    )
 
 
 def member_response(row: PrismaRecord, now: datetime) -> CustomerMember:
@@ -249,9 +287,10 @@ def _member_ids(rows: Sequence[PrismaRecord]) -> tuple[str, ...]:
 
 
 class CustomerHierarchyStore:
-    def __init__(self, db: "Prisma", now: datetime) -> None:
+    def __init__(self, db: "Prisma", now: datetime, settings: BudgetResetSettings | None = None) -> None:
         self.db = db
         self.now = now
+        self.settings = settings if settings is not None else get_budget_reset_settings()
         self.organizations: TableActions[PrismaRecord] = db.litellm_customerorganizationtable  # pyright: ignore[reportAttributeAccessIssue]  # protocol accepts immutable query mappings
         self.teams: TableActions[PrismaRecord] = db.litellm_customerteamtable  # pyright: ignore[reportAttributeAccessIssue]  # protocol accepts immutable query mappings
         self.members: TableActions[PrismaRecord] = db.litellm_customermembertable  # pyright: ignore[reportAttributeAccessIssue]  # protocol accepts immutable query mappings
@@ -313,6 +352,11 @@ class CustomerHierarchyStore:
             budget_row_values(
                 {
                     **budget_values(budget),
+                    **(
+                        {"budget_limits": initialize_budget_limits(budget.budget_limits, self.settings, self.now)}
+                        if budget.budget_limits is not None
+                        else {}
+                    ),
                     "allowed_models": budget.allowed_models or (),
                     "budget_id": budget_id,
                 }
@@ -324,6 +368,10 @@ class CustomerHierarchyStore:
     async def update_budget(self, budget_id: str | None, budget: Budget, actor: str) -> str:
         if budget_id is None:
             return await self.create_budget(budget, actor)
+        if budget.budget_limits:
+            from litellm.proxy.management_helpers.utils import validate_budget_windows_update
+
+            await validate_budget_windows_update(self.db, budget_id)
         patch: Final = _VALUES.validate_python(budget.model_dump(exclude_unset=True))
         await update_budget_row(
             self.budgets,
@@ -331,6 +379,11 @@ class CustomerHierarchyStore:
             budget_row_values(
                 {
                     **patch,
+                    **(
+                        {"budget_limits": initialize_budget_limits(budget.budget_limits, self.settings, self.now)}
+                        if budget.budget_limits is not None
+                        else {}
+                    ),
                     **({"allowed_models": budget.allowed_models or ()} if "allowed_models" in patch else {}),
                 }
             ),
@@ -480,7 +533,17 @@ class CustomerHierarchyStore:
         selected: Final = template_id if template_id is not None else organization.default_budget_id
         if selected is None:
             return None
-        if not any(template.budget_id == selected for template in organization.default_budgets):
+        if any(template.budget_id == selected for template in organization.default_budgets):
+            return selected
+        if await self.budgets.find_unique(where={"budget_id": selected}) is None:
+            return Failure(ErrorCode.TEMPLATE_NOT_IN_ORG)
+        if (
+            await self.members.count(where={"budget_override_id": selected})
+            or await self.teams.count(where={"budget_id": selected})
+            or await self.organizations.count(
+                where={"OR": ({"budget_id": selected}, {"budget_ids": {"has": selected}})}
+            )
+        ):
             return Failure(ErrorCode.TEMPLATE_NOT_IN_ORG)
         return selected
 

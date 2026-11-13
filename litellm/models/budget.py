@@ -7,11 +7,52 @@ Canonical definition for ``litellm_budgettable``. Re-exported from
 
 from collections.abc import Mapping
 from datetime import datetime, timezone
-from typing import Final
+from typing import Annotated, Final, TypeAlias
 
-from pydantic import ConfigDict
+from pydantic import AfterValidator, ConfigDict, Field, field_validator, model_validator
 
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.models.team import BudgetLimitEntry
+from litellm.proxy.common_utils.timezone_utils import (
+    BudgetResetSettings,
+    budget_duration_error,
+    compute_budget_reset_at,
+)
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
+
+
+class BudgetLimit(BudgetLimitEntry):
+    model_config = ConfigDict(frozen=True)
+
+    max_budget: float = Field(ge=0, allow_inf_nan=False)
+
+    @field_validator("budget_duration")
+    @classmethod
+    def valid_duration(cls, value: str) -> str:
+        error: Final = budget_duration_error(value)
+        if error is not None:
+            raise ValueError(error)
+        return value
+
+
+def unique_budget_limits(limits: tuple[BudgetLimit, ...]) -> tuple[BudgetLimit, ...]:
+    if len({limit.budget_duration for limit in limits}) != len(limits):
+        raise ValueError("Each budget duration may appear only once")
+    return limits
+
+
+BudgetLimits: TypeAlias = Annotated[tuple[BudgetLimit, ...], AfterValidator(unique_budget_limits)]
+
+
+def initialize_budget_limits(
+    limits: tuple[BudgetLimit, ...], settings: BudgetResetSettings, now: datetime
+) -> tuple[BudgetLimit, ...]:
+    return tuple(
+        limit
+        if limit.reset_at is not None
+        else limit.model_copy(update={"reset_at": compute_budget_reset_at(limit.budget_duration, settings, now)})
+        for limit in limits
+    )
 
 
 class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
@@ -38,6 +79,14 @@ class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
     temp_budget_expiry: datetime | None = None
 
     model_config = ConfigDict(protected_namespaces=())
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_concurrent_windows(cls, value: object) -> object:
+        values: Final = as_str_mapping(value)
+        if values is not None and values.get("budget_limits"):
+            raise ValueError("Concurrent budget windows are supported only by customer hierarchies")
+        return value
 
     def active_temp_budget_increase(self, now: datetime) -> float:
         if self.temp_budget_increase is None or self.temp_budget_expiry is None:

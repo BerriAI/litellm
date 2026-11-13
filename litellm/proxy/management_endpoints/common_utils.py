@@ -694,6 +694,10 @@ async def upsert_budget_and_membership(
 
     if existing_budget_id is not None and not is_shared_default:
         existing_budget: Final = await tx.litellm_budgettable.find_unique(where={"budget_id": existing_budget_id})
+        if existing_budget is not None:
+            from litellm.proxy.management_helpers.utils import reject_budget_windows
+
+            reject_budget_windows(existing_budget.model_dump())
         merged: Final = existing_budget.model_dump() if existing_budget is not None else {}
         merged.update(write_data)
         if not _has_meaningful_budget_limit(merged):
@@ -708,6 +712,10 @@ async def upsert_budget_and_membership(
     source_row: Final = (
         await tx.litellm_budgettable.find_unique(where={"budget_id": existing_budget_id}) if is_shared_default else None
     )
+    if source_row is not None:
+        from litellm.proxy.management_helpers.utils import reject_budget_windows
+
+        reject_budget_windows(source_row.model_dump())
     source: Final[Mapping[str, object]] = (
         MappingProxyType(_BUDGET_COLUMNS.validate_python(source_row.model_dump()))
         if source_row is not None

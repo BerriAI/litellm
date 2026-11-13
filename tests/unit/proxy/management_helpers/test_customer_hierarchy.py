@@ -8,12 +8,27 @@ from typing import Final
 
 import pytest
 from prisma import Json
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
+from litellm.models.budget import BudgetLimit, LiteLLM_BudgetTable
+from litellm.proxy._types import BudgetWriteRequest
 from litellm.proxy.management_helpers.customer_hierarchy import effective_member_budget, related_budget
 from litellm.types.proxy.management_endpoints.customer_hierarchy import Budget
 
 NOW: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize("windows", (None, []))
+def test_scalar_budget_accepts_absent_windows(windows: object) -> None:
+    budget: Final = LiteLLM_BudgetTable.model_validate({"max_budget": 0, "budget_limits": windows})
+    assert budget.max_budget == 0
+
+
+def test_scalar_budget_rejects_concurrent_windows() -> None:
+    row: Final = {"budget_limits": [{"budget_duration": "1mo", "max_budget": 0}]}
+    with pytest.raises(ValidationError, match="customer hierarchies"):
+        LiteLLM_BudgetTable.model_validate(row)
+    assert Budget.model_validate(row).budget_limits == (BudgetLimit(budget_duration="1mo", max_budget=0),)
 
 
 class Record(BaseModel):
@@ -27,6 +42,9 @@ def matches_where(row: Mapping[str, object], where: Mapping[str, object]) -> boo
             matched: Final = tuple(matches_where(row, part) for part in nested)
             return any(matched) if key == "OR" else all(matched)
         if isinstance(value, Mapping):
+            if "has" in value:
+                items: Final = TypeAdapter(tuple[str, ...]).validate_python(row.get(key, ()))
+                return value["has"] in items
             if "in" in value:
                 return row.get(key) in value["in"]
             if "not" in value:
@@ -141,6 +159,8 @@ class Database:
         self.locked_organization_ids: tuple[str, ...] = ()
 
     async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
+        if "SELECT EXISTS" in query:
+            return ({"referenced": False},)
         if "FOR UPDATE" in query:
             self.locked_organization_ids = (*self.locked_organization_ids, *(str(arg) for arg in args))
             return ()
@@ -209,6 +229,39 @@ def test_expired_override_is_ignored_at_the_expiration_boundary(expires_at: date
 def test_custom_budget_and_missing_sources_resolve_without_a_template() -> None:
     assert effective_member_budget(None, Budget(max_budget=4), None, NOW) == Budget(max_budget=4, allowed_models=())
     assert effective_member_budget(None, None, None, NOW) == Budget(allowed_models=())
+
+
+@pytest.mark.parametrize("request_type", (Budget, BudgetWriteRequest))
+@pytest.mark.parametrize("maximum", (-1.0, float("nan"), float("inf")))
+def test_budget_windows_reject_invalid_caps(request_type: type[BaseModel], maximum: float) -> None:
+    with pytest.raises(ValidationError):
+        request_type.model_validate({"budget_limits": [{"budget_duration": "1mo", "max_budget": maximum}]})
+
+
+@pytest.mark.parametrize("request_type", (Budget, BudgetWriteRequest))
+def test_budget_windows_reject_duplicate_durations(request_type: type[BaseModel]) -> None:
+    with pytest.raises(ValidationError):
+        request_type.model_validate({"budget_limits": [
+            {"budget_duration": "1mo", "max_budget": 0},
+            {"budget_duration": "1mo", "max_budget": 10},
+        ]})
+
+
+def test_window_override_preserves_other_period_and_scalar_fields() -> None:
+    template: Final = Budget(max_budget=500, budget_duration="30d", budget_limits=(
+        BudgetLimit(budget_duration="1mo", max_budget=100),
+        BudgetLimit(budget_duration="12mo", max_budget=1000),
+    ))
+    override: Final = Budget(budget_limits=(BudgetLimit(budget_duration="1mo", max_budget=0),))
+    effective: Final = effective_member_budget(template, override, None, NOW)
+    assert effective.budget_limits == (
+        BudgetLimit(budget_duration="1mo", max_budget=0),
+        BudgetLimit(budget_duration="12mo", max_budget=1000),
+    )
+    assert effective.max_budget == template.max_budget
+    assert effective.budget_duration == template.budget_duration
+    assert effective_member_budget(template, override, NOW, NOW) == template
+    assert effective_member_budget(template, Budget(budget_limits=()), None, NOW) == template
 
 
 @pytest.mark.parametrize(

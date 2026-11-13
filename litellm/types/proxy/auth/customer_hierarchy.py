@@ -5,6 +5,7 @@ from typing import Final, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
+from litellm.models.budget import BudgetLimit
 from litellm.types.integrations.slack_alerting import Litellm_EntityType
 
 CustomerScopeKey: TypeAlias = Literal["customer_org", "customer_team", "customer_member"]
@@ -27,6 +28,7 @@ class CustomerScopeAuth(BaseModel):
     entity_id: str
     spend: float = 0.0
     max_budget: float | None = None
+    budget_limits: tuple[BudgetLimit, ...] = ()
     tpm_limit: int | None = None
     rpm_limit: int | None = None
     allowed_models: tuple[str, ...] | None = None

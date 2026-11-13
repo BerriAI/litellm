@@ -25,6 +25,7 @@ from litellm.proxy.auth.customer_member_auto_create import ensure_customer_membe
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, get_management_object_ttl
+from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
 from litellm.proxy.management_helpers.customer_hierarchy import (
     Failure,
     PrismaRecord,
@@ -32,9 +33,12 @@ from litellm.proxy.management_helpers.customer_hierarchy import (
     related_budget,
     utc_now,
 )
+from litellm.redis.stores.spend_counters import SpendCounterStore
 from litellm.repositories.prisma_protocols import TableActions
+from litellm.repositories.table_repositories import CustomerTeamRepository
 from litellm.types.proxy.auth.customer_hierarchy import (
     CustomerHierarchyAuth,
+    CustomerHierarchyIds,
     CustomerRequestIdentity,
     CustomerScopeAuth,
     CustomerScopeKey,
@@ -54,6 +58,7 @@ _MEMBER_INCLUDE: Final = {
     "parent_team": {"include": {"budget": True, "parent_org": {"include": {"budget": True}}}},
 }
 _EXPIRY: Final[TypeAdapter[datetime | None]] = TypeAdapter(datetime | None)
+_SPEND: Final = TypeAdapter(float)
 
 
 class _OrganizationRow(BaseModel):
@@ -137,6 +142,7 @@ def _scope(key: CustomerScopeKey, entity_id: str, spend: float, budget: Budget |
         entity_id=entity_id,
         spend=spend,
         max_budget=budget.max_budget,
+        budget_limits=budget.budget_limits or (),
         tpm_limit=budget.tpm_limit,
         rpm_limit=budget.rpm_limit,
         allowed_models=budget.allowed_models or None,
@@ -226,6 +232,58 @@ async def get_customer_hierarchy(
     return hierarchy
 
 
+async def get_customer_scopes_for_accounting(
+    ids: CustomerHierarchyIds,
+    prisma_client: "PrismaClient",
+    user_api_key_cache: UserApiKeyCache,
+) -> tuple[CustomerScopeAuth, ...]:
+    """Resolve policies for the stamped charge identities without running admission checks."""
+    now: Final = utc_now()
+    hierarchy: Final = (
+        await get_customer_hierarchy(ids.customer_member_id, prisma_client, user_api_key_cache, now)
+        if ids.customer_member_id is not None
+        else None
+    )
+    known: Final = () if hierarchy is None else hierarchy.scopes
+    identities: Final[tuple[tuple[CustomerScopeKey, str | None], ...]] = (
+        ("customer_org", ids.customer_org_id),
+        ("customer_team", ids.customer_team_id),
+        ("customer_member", ids.customer_member_id),
+    )
+    scopes: Final = tuple(
+        [
+            await _accounting_scope(key, entity_id, known, prisma_client, now)
+            for key, entity_id in identities
+            if entity_id is not None
+        ]
+    )
+    return tuple(scope for scope in scopes if scope is not None)
+
+
+async def _accounting_scope(
+    key: CustomerScopeKey,
+    entity_id: str,
+    known: tuple[CustomerScopeAuth, ...],
+    prisma_client: "PrismaClient",
+    now: datetime,
+) -> CustomerScopeAuth | None:
+    cached: Final = next((scope for scope in known if scope.key == key and scope.entity_id == entity_id), None)
+    if cached is not None or key == "customer_member":
+        return cached
+    # Organization-only requests and a member moved since admission still charge
+    # the original team/organization, never the member's new parents.
+    table: Final[TableActions[PrismaRecord]] = (
+        _organization_table(prisma_client) if key == "customer_org" else CustomerTeamRepository(prisma_client).table
+    )
+    row: Final = await table.find_unique(where={f"{key}_id": entity_id}, include=_ORGANIZATION_INCLUDE)
+    if row is None:
+        return None
+    values: Final = row.model_dump()
+    return _scope(
+        key, entity_id, _SPEND.validate_python(values.get("spend", 0)), related_budget(values.get("budget"), now)
+    )
+
+
 @with_service_target(AUTH_OBJECTS_TARGET)
 async def get_customer_organization_hierarchy(
     customer_org_alias: str,
@@ -277,6 +335,49 @@ def check_customer_hierarchy_budget(hierarchy: CustomerHierarchyAuth) -> None:
                 entity_type=scope.key,
                 entity_id=scope.entity_id,
             )
+
+
+async def check_customer_hierarchy_windows(
+    hierarchy: CustomerHierarchyAuth,
+    prisma_client: "PrismaClient | None",
+    spend_counter_store: SpendCounterStore,
+    now: datetime | None = None,
+) -> None:
+    from litellm.proxy.spend_tracking.budget_reservation import customer_window_counters
+
+    for scope in hierarchy.scopes:
+        for counter in customer_window_counters(scope.key, scope.entity_id, scope.budget_limits, now=now):
+            if counter.window_start is None:
+                raise ProxyException(
+                    message="Customer budget window is unavailable.",
+                    type=ProxyErrorTypes.internal_server_error,
+                    param="budget_limits",
+                    code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
+            spend = await SpendCounterReseed.coalesced_window(
+                prisma_client=prisma_client,
+                spend_counter_store=spend_counter_store,
+                counter_key=counter.counter_key,
+                entity_type=scope.key,
+                entity_id=scope.entity_id,
+                window_duration=counter.window_duration,
+                window_start=counter.window_start,
+            )
+            if spend is None:
+                raise ProxyException(
+                    message="Customer budget window spend is unavailable.",
+                    type=ProxyErrorTypes.internal_server_error,
+                    param="budget_limits",
+                    code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
+            if spend >= counter.max_budget:
+                raise litellm.BudgetExceededError(
+                    current_cost=spend,
+                    max_budget=counter.max_budget,
+                    message=f"ExceededBudget: {scope.key}={scope.entity_id} over {counter.window_duration} budget.",
+                    entity_type=scope.key,
+                    entity_id=scope.entity_id,
+                )
 
 
 def check_customer_hierarchy_model_access(
@@ -415,6 +516,10 @@ async def resolve_customer_hierarchy(
     check_customer_hierarchy_key_scope(hierarchy, key_metadata or {})
     if not RouteChecks.is_info_route(route):
         check_customer_hierarchy_budget(hierarchy)
+        if any(scope.budget_limits for scope in hierarchy.scopes):
+            from litellm.proxy.proxy_server import spend_counter_store
+
+            await check_customer_hierarchy_windows(hierarchy, prisma_client, spend_counter_store)
     requested: Final = (request_model,) if isinstance(request_model, str) else tuple(request_model or ())
     for model in requested:
         if model:

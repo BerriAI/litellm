@@ -37,6 +37,7 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_langfuse_span_scope_value,
     validate_no_callback_env_reference,
 )
+from litellm.models.budget import BudgetLimits
 from litellm.proxy.auth.access_group_rules import AccessGroupRule, _validate_rules
 from litellm.proxy.mcp_server.stdio_gate import MCP_STDIO_DISABLED_MESSAGE, is_mcp_stdio_enabled
 from litellm.types.agents import (
@@ -1853,6 +1854,15 @@ class BudgetNewRequest(LiteLLMPydanticObjectBase):
     budget_reset_at: datetime | None = Field(
         default=None,
         description="Datetime when the budget is reset",
+    )
+
+
+class BudgetWriteRequest(BudgetNewRequest):
+    model_config = ConfigDict(frozen=True)
+
+    budget_limits: BudgetLimits | None = Field(
+        default=None,
+        description="Independent budget windows. Omit to preserve, or pass null or an empty list to clear.",
     )
 
 

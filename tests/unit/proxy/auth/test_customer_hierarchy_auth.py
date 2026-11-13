@@ -13,6 +13,7 @@ from litellm.proxy.auth.customer_hierarchy_auth import (
     check_customer_hierarchy_budget,
     check_customer_hierarchy_key_scope,
     check_customer_hierarchy_model_access,
+    check_customer_hierarchy_windows,
     customer_hierarchy_from_member_row,
     customer_identity_from_headers,
     customer_member_id_from_headers,
@@ -23,12 +24,14 @@ from litellm.proxy.auth.customer_hierarchy_auth import (
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_helpers.customer_hierarchy import ErrorCode, Failure
+from litellm.proxy.spend_tracking.budget_reservation import customer_window_counters
 from litellm.types.proxy.auth.customer_hierarchy import (
     CustomerHierarchyAuth,
     CustomerRequestIdentity,
     CustomerScopeAuth,
 )
 from litellm.types.proxy.management_endpoints.customer_hierarchy import CustomerMember
+from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 NOW: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
@@ -463,3 +466,67 @@ async def test_an_unknown_member_stays_refused_without_an_alias_or_when_registra
         )
     assert (failed.value.code, failing.calls) == ("401", (("org-1", "user-7"),))
     assert "user-7" not in members.rows
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exhausted_duration", ("1mo", "12mo"))
+async def test_either_customer_cap_blocks_while_the_other_has_capacity(exhausted_duration: str) -> None:
+    hierarchy = customer_hierarchy_from_member_row(
+        _row(
+            template={
+                "budget_limits": [
+                    {"budget_duration": "1mo", "max_budget": 10},
+                    {"budget_duration": "12mo", "max_budget": 100},
+                ]
+            }
+        ),
+        NOW,
+    )
+    backend = FakeSpendCounters()
+    store = backend.store()
+    member = hierarchy.scopes[-1]
+    counters = customer_window_counters(member.key, member.entity_id, member.budget_limits, now=NOW)
+    for counter in counters:
+        await store.set(counter.counter_key, 1.0)
+    await check_customer_hierarchy_windows(hierarchy, None, store, NOW)
+    exhausted = next(counter for counter in counters if counter.window_duration == exhausted_duration)
+    await store.set(exhausted.counter_key, exhausted.max_budget)
+    with pytest.raises(litellm.BudgetExceededError) as error:
+        await check_customer_hierarchy_windows(hierarchy, None, store, NOW)
+    assert error.value.entity_id == member.entity_id
+    assert error.value.current_cost == exhausted.max_budget
+    assert exhausted_duration in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_missing_customer_window_balance_rejects_request() -> None:
+    hierarchy = customer_hierarchy_from_member_row(
+        _row(template={"budget_limits": [{"budget_duration": "1mo", "max_budget": 10}]}), NOW
+    )
+    with pytest.raises(ProxyException) as error:
+        await check_customer_hierarchy_windows(hierarchy, None, FakeSpendCounters().store(), NOW)
+    assert error.value.code == "503"
+    assert error.value.param == "budget_limits"
+
+
+@pytest.mark.asyncio
+async def test_customer_windows_are_independent_for_members_sharing_a_budget() -> None:
+    first = customer_hierarchy_from_member_row(
+        _row(template={"budget_limits": [{"budget_duration": "1mo", "max_budget": 10}]}), NOW
+    )
+    first_scope = first.scopes[-1]
+    second_scope = first_scope.model_copy(update={"entity_id": "member-2"})
+    second = first.model_copy(update={"customer_member_id": "member-2", "scopes": (second_scope,)})
+    backend = FakeSpendCounters()
+    store = backend.store()
+    first_counter = customer_window_counters(
+        first_scope.key, first_scope.entity_id, first_scope.budget_limits, now=NOW
+    )[0]
+    second_counter = customer_window_counters(
+        second_scope.key, second_scope.entity_id, second_scope.budget_limits, now=NOW
+    )[0]
+    await store.set(first_counter.counter_key, 10)
+    await store.set(second_counter.counter_key, 0)
+    with pytest.raises(litellm.BudgetExceededError):
+        await check_customer_hierarchy_windows(first, None, store, NOW)
+    await check_customer_hierarchy_windows(second, None, store, NOW)

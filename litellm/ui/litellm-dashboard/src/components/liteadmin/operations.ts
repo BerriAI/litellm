@@ -387,10 +387,10 @@ export function createLiteAdminOperations(context: OperationContext) {
       "budget_create",
       "Create a budget",
       object({ budget_id: optionalText, ...limits }),
-      (a) => apiClient.post<unknown>("/budget/new", { ...auth, body: a satisfies Schemas["BudgetNewRequest"] }),
+      (a) => apiClient.post<unknown>("/budget/new", { ...auth, body: a satisfies Schemas["BudgetWriteRequest"] }),
     ),
     operation("write", "budget")("budget_update", "Update a budget", object({ budget_id: text, ...limits }), (a) =>
-      apiClient.post<unknown>("/budget/update", { ...auth, body: a satisfies Schemas["BudgetNewRequest"] }),
+      apiClient.post<unknown>("/budget/update", { ...auth, body: a satisfies Schemas["BudgetWriteRequest"] }),
     ),
     operation("delete", "budget")("budget_delete", "Delete a budget", object({ id: text }), (a) =>
       apiClient.post<unknown>("/budget/delete", { ...auth, body: a satisfies Schemas["BudgetDeleteRequest"] }),
