@@ -95,7 +95,7 @@ def _get_spend_logs_metadata(request: Request) -> Mapping[str, object] | None:
         return None
     from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
-    return as_str_mapping(LiteLLMProxyRequestSetup.get_spend_logs_metadata_from_request_headers(dict(request.headers)))
+    return as_str_mapping(LiteLLMProxyRequestSetup.get_spend_logs_metadata_from_request_headers(request.headers))
 
 
 def _with_client_context(

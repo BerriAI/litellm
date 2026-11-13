@@ -1820,7 +1820,7 @@ class LiteLLMProxyRequestSetup:
         return None
 
     @staticmethod
-    def get_spend_logs_metadata_from_request_headers(headers: dict) -> dict[str, object] | None:
+    def get_spend_logs_metadata_from_request_headers(headers: Mapping[str, str]) -> object:
         """
         Get the `spend_logs_metadata` from the request headers.
         """

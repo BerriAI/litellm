@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import json
 from collections.abc import Mapping
 from typing import Final
@@ -1216,11 +1217,17 @@ async def test_auth_failure_spend_logs_metadata_header_precedence(
     body_metadata: dict[str, object],
     expected: dict[str, object] | None,
 ) -> None:
+    request_data: Final[dict[str, object]] = {
+        "model": "gpt-4o",
+        "metadata": {**body_metadata, "user_supplied": "keep-me"},
+    }
+    original_request_data: Final = copy.deepcopy(request_data)
+
     _, recorder = await _reject_and_record(
         monkeypatch,
         HTTPException(status_code=401, detail="Invalid API key"),
         {"x-litellm-spend-logs-metadata": header} if header is not None else {},
-        {"model": "gpt-4o", "metadata": {**body_metadata, "user_supplied": "keep-me"}},
+        request_data,
     )
 
     assert recorder.data is not None
@@ -1228,6 +1235,7 @@ async def test_auth_failure_spend_logs_metadata_header_precedence(
     assert isinstance(metadata, Mapping)
     assert metadata.get("spend_logs_metadata") == expected
     assert metadata["user_supplied"] == "keep-me"
+    assert request_data == original_request_data
 
 
 @pytest.mark.asyncio
