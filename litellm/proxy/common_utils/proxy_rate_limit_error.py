@@ -40,7 +40,7 @@ from collections.abc import Mapping, MutableMapping
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Literal, TypeAlias
 
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
@@ -78,7 +78,6 @@ def per_model_rate_limits_disable_fallbacks(general_settings: Mapping[str, objec
 
 FALLBACK_ON_SATURATION_SETTING: Final = "fallback_on_saturation"
 SATURATION_FALLBACK_DESCRIPTOR_KEY: Final = "model_saturation_fallback"
-SATURATION_FALLBACKS_EXHAUSTED_METADATA_KEY: Final = "saturation_fallbacks_exhausted"
 _FALLBACK_ON_SATURATION_FLAG: Final[TypeAdapter[bool | None]] = TypeAdapter(bool | None)
 
 
@@ -109,48 +108,46 @@ def drop_client_saturation_opt_in(
     }
 
 
-def saturation_fallbacks_exhausted(request_data: Mapping[str, object]) -> bool:
-    """Whether this request already tried every fallback at saturation and is back on the model it asked for."""
-    return any(
-        _metadata_bucket(request_data.get(bucket_name)).get(SATURATION_FALLBACKS_EXHAUSTED_METADATA_KEY) is True
-        for bucket_name in ("metadata", "litellm_metadata")
-    )
-
-
-_SATURATION_FALLBACK_WALK: Final[ContextVar[bool]] = ContextVar("litellm_saturation_fallback_walk", default=False)
+_SaturationWalkState: TypeAlias = Literal["off", "armed", "exhausted"]
+_SATURATION_FALLBACK_WALK: Final[ContextVar[_SaturationWalkState]] = ContextVar(
+    "litellm_saturation_fallback_walk", default="off"
+)
 
 
 def saturation_fallback_walk_armed() -> bool:
-    """Whether a caller that catches the handoff (``_pre_call_with_fallbacks``) is running this request's hooks."""
-    return _SATURATION_FALLBACK_WALK.get()
+    """Whether a caller that catches the handoff (``_pre_call_with_fallbacks``) is running this request's hooks and
+    has not walked the fallbacks yet."""
+    return _SATURATION_FALLBACK_WALK.get() == "armed"
 
 
-def arm_saturation_fallback_walk() -> Token[bool]:
+def saturation_fallbacks_exhausted() -> bool:
+    """Whether this request already tried every fallback at saturation and is back on the model it asked for."""
+    return _SATURATION_FALLBACK_WALK.get() == "exhausted"
+
+
+def arm_saturation_fallback_walk() -> Token[_SaturationWalkState]:
     """Mark the current request as running under the fallback walk, so the limiter may hand a saturated model off to
-    it. The marker lives in the request's context, never in its body, so nothing reaches the provider. Routes that
-    call the hooks directly never arm it and keep admitting or refusing as before."""
-    return _SATURATION_FALLBACK_WALK.set(True)
+    it. The state lives in the request's context, never in its body, so nothing reaches the provider and no client
+    field can arm, skip or exhaust the walk. Routes that call the hooks directly never arm it and keep admitting or
+    refusing as before."""
+    return _SATURATION_FALLBACK_WALK.set("armed")
 
 
-def disarm_saturation_fallback_walk(token: Token[bool]) -> None:
+def mark_saturation_fallbacks_exhausted() -> None:
+    _SATURATION_FALLBACK_WALK.set("exhausted")
+
+
+def disarm_saturation_fallback_walk(token: Token[_SaturationWalkState]) -> None:
     _SATURATION_FALLBACK_WALK.reset(token)
 
 
 def fallback_on_saturation_requested(request_data: Mapping[str, object]) -> bool:
     """Whether the dynamic rate limiter should hand a saturated model's request to the fallback walk instead of
-    admitting or refusing it: the key or team opted in through ``router_settings_override``, the fallback walk is
-    the caller, and it has not already run for this request."""
+    admitting or refusing it: the key or team opted in through ``router_settings_override`` and the fallback walk
+    is the caller and has not already run for this request."""
     return (
         fallback_on_saturation_enabled(request_data.get("router_settings_override"))
         and saturation_fallback_walk_armed()
-        and not saturation_fallbacks_exhausted(request_data)
-    )
-
-
-def with_saturation_fallbacks_exhausted(request_data: Mapping[str, object], bucket_name: str) -> Mapping[str, object]:
-    bucket: Final = _metadata_bucket(request_data.get(bucket_name))
-    return MappingProxyType(
-        {**request_data, bucket_name: {**bucket, SATURATION_FALLBACKS_EXHAUSTED_METADATA_KEY: True}}
     )
 
 

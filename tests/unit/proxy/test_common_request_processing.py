@@ -8113,7 +8113,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                 request=MagicMock(),
                 general_settings={},
                 proxy_logging_obj=MagicMock(),
-                user_api_key_dict=MagicMock(router_settings=None, agent_id=None),
+                user_api_key_dict=MagicMock(router_settings=None, agent_id=None, end_user_id=None),
                 version=None,
                 proxy_config=_proxy_config(),
                 user_model=None,
@@ -8208,7 +8208,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                     request=MagicMock(),
                     general_settings={},
                     proxy_logging_obj=MagicMock(),
-                    user_api_key_dict=MagicMock(router_settings=None, agent_id=None),
+                    user_api_key_dict=MagicMock(router_settings=None, agent_id=None, end_user_id=None),
                     version=None,
                     proxy_config=_proxy_config(),
                     user_model=None,
@@ -8247,7 +8247,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                     request=MagicMock(),
                     general_settings={},
                     proxy_logging_obj=MagicMock(),
-                    user_api_key_dict=MagicMock(router_settings=None, agent_id=None),
+                    user_api_key_dict=MagicMock(router_settings=None, agent_id=None, end_user_id=None),
                     version=None,
                     proxy_config=_proxy_config(),
                     user_model=None,
@@ -8280,7 +8280,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         mock_router = route_entry_points_to_stubs(MagicMock())
         mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo"]}]
 
-        user_api_key_dict = MagicMock(agent_id=None)
+        user_api_key_dict = MagicMock(agent_id=None, end_user_id=None)
         user_api_key_dict.router_settings = {"fallbacks": [{"gpt-4": ["claude-3-haiku"]}]}
 
         with patch.object(
@@ -8328,7 +8328,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                 request=MagicMock(),
                 general_settings={},
                 proxy_logging_obj=MagicMock(),
-                user_api_key_dict=MagicMock(router_settings=None, agent_id=None),
+                user_api_key_dict=MagicMock(router_settings=None, agent_id=None, end_user_id=None),
                 version=None,
                 proxy_config=_proxy_config(team_settings),
                 user_model=None,
@@ -8370,7 +8370,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                 request=MagicMock(),
                 general_settings={},
                 proxy_logging_obj=MagicMock(),
-                user_api_key_dict=MagicMock(router_settings=None, agent_id=None),
+                user_api_key_dict=MagicMock(router_settings=None, agent_id=None, end_user_id=None),
                 version=None,
                 proxy_config=_proxy_config(),
                 user_model=None,
@@ -8420,6 +8420,120 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                 route_type="acompletion",
                 llm_router=mock_router,
             )
+
+    @pytest.mark.asyncio
+    async def test_a_fallback_the_end_user_may_not_call_is_skipped(self, monkeypatch):
+        from litellm.proxy._types import LiteLLM_EndUserTable
+        from litellm.proxy._types import UserAPIKeyAuth as ProxyKey
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+
+        processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4"})
+
+        async def mock_pre_call_logic(**kwargs):
+            if processor.data.get("model") == "gpt-4":
+                raise ProxyRateLimitError(detail="TPM limit exceeded", headers={"retry-after": "30"})
+            return processor.data, MagicMock()
+
+        async def customer(**kwargs):
+            return LiteLLM_EndUserTable(user_id="cust-1", models=["gpt-3.5-turbo"], blocked=False)
+
+        monkeypatch.setattr("litellm.proxy.auth.auth_checks.get_end_user_object", customer)
+        router = litellm.Router(
+            model_list=[
+                {"model_name": name, "litellm_params": {"model": "openai/gpt-4.1-nano", "api_key": "fake"}}
+                for name in ("gpt-4", "claude-3-haiku", "gpt-3.5-turbo")
+            ],
+            fallbacks=[{"gpt-4": ["claude-3-haiku", "gpt-3.5-turbo"]}],
+        )
+
+        with patch.object(processor, "common_processing_pre_call_logic", side_effect=mock_pre_call_logic):
+            await processor._pre_call_with_fallbacks(
+                request=MagicMock(),
+                general_settings={},
+                proxy_logging_obj=MagicMock(),
+                user_api_key_dict=ProxyKey(end_user_id="cust-1"),
+                version=None,
+                proxy_config=_proxy_config(),
+                user_model=None,
+                user_temperature=None,
+                user_request_timeout=None,
+                user_max_tokens=None,
+                user_api_base=None,
+                model="gpt-4",
+                route_type="acompletion",
+                llm_router=router,
+            )
+
+        assert processor.data["model"] == "gpt-3.5-turbo"
+
+    @pytest.mark.asyncio
+    async def test_a_refused_fallbacks_rate_limit_hold_is_released_before_the_walk_moves_on(self):
+        from fastapi import HTTPException
+
+        from litellm.caching.caching import DualCache
+        from litellm.proxy._types import UserAPIKeyAuth as ProxyKey
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+        from litellm.proxy.common_utils.proxy_rate_limit_error import (
+            SATURATION_FALLBACK_DESCRIPTOR_KEY,
+            ProxyRateLimitError,
+            saturation_fallbacks_exhausted,
+        )
+        from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
+        from litellm.proxy.utils import InternalUsageCache
+
+        released: list[tuple[object, Exception]] = []
+
+        class RecordingLimiter(PROXY_MaxParallelRequestsHandler_v3):
+            async def async_post_call_failure_hook(
+                self,
+                request_data: dict,
+                original_exception: Exception,
+                user_api_key_dict: ProxyKey,
+                traceback_str: str | None = None,
+            ) -> None:
+                released.append((request_data["model"], original_exception))
+
+        processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4"})
+        refusal = HTTPException(status_code=400, detail="guardrail refused the fallback")
+
+        async def mock_pre_call_logic(**kwargs):
+            if processor.data.get("model") == "gpt-4" and not saturation_fallbacks_exhausted():
+                raise ProxyRateLimitError(
+                    detail="at saturation", headers={}, descriptor_key=SATURATION_FALLBACK_DESCRIPTOR_KEY
+                )
+            if processor.data.get("model") == "gpt-3.5-turbo":
+                raise refusal
+            return processor.data, MagicMock()
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.get_proxy_hook.return_value = RecordingLimiter(
+            internal_usage_cache=InternalUsageCache(DualCache())
+        )
+        mock_router = route_entry_points_to_stubs(MagicMock())
+        mock_router.fallbacks = []
+        settings = {"fallbacks": [{"gpt-4": ["gpt-3.5-turbo"]}], "fallback_on_saturation": True}
+
+        with patch.object(processor, "common_processing_pre_call_logic", side_effect=mock_pre_call_logic):
+            data, _ = await processor._pre_call_with_fallbacks(
+                request=MagicMock(),
+                general_settings={},
+                proxy_logging_obj=proxy_logging_obj,
+                user_api_key_dict=MagicMock(router_settings=None, agent_id=None, end_user_id=None),
+                version=None,
+                proxy_config=_proxy_config(settings),
+                user_model=None,
+                user_temperature=None,
+                user_request_timeout=None,
+                user_max_tokens=None,
+                user_api_base=None,
+                model="gpt-4",
+                route_type="acompletion",
+                llm_router=mock_router,
+            )
+
+        assert released == [("gpt-3.5-turbo", refusal)]
+        assert data["model"] == "gpt-4"
 
     @pytest.mark.asyncio
     async def test_a_fallback_over_its_model_budget_is_skipped(self, monkeypatch):
@@ -8788,7 +8902,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                 request=MagicMock(),
                 general_settings={},
                 proxy_logging_obj=MagicMock(),
-                user_api_key_dict=MagicMock(router_settings=None, agent_id=None),
+                user_api_key_dict=MagicMock(router_settings=None, agent_id=None, end_user_id=None),
                 version=None,
                 proxy_config=_proxy_config(),
                 user_model=None,
@@ -8820,7 +8934,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
 
         async def mock_pre_call_logic(**kwargs):
             attempted.append(processor.data.get("model"))
-            if processor.data.get("model") == "gpt-4" and not saturation_fallbacks_exhausted(processor.data):
+            if processor.data.get("model") == "gpt-4" and not saturation_fallbacks_exhausted():
                 raise ProxyRateLimitError(
                     detail="at saturation", headers={}, descriptor_key=SATURATION_FALLBACK_DESCRIPTOR_KEY
                 )
@@ -8837,7 +8951,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                 request=MagicMock(),
                 general_settings={},
                 proxy_logging_obj=MagicMock(),
-                user_api_key_dict=MagicMock(router_settings=None, agent_id=None),
+                user_api_key_dict=MagicMock(router_settings=None, agent_id=None, end_user_id=None),
                 version=None,
                 proxy_config=_proxy_config(settings),
                 user_model=None,
@@ -8882,7 +8996,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                 request=MagicMock(),
                 general_settings={},
                 proxy_logging_obj=MagicMock(),
-                user_api_key_dict=MagicMock(router_settings=None, agent_id=None),
+                user_api_key_dict=MagicMock(router_settings=None, agent_id=None, end_user_id=None),
                 version=None,
                 proxy_config=_proxy_config(settings),
                 user_model=None,
@@ -8918,7 +9032,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
 
         async def mock_pre_call_logic(**kwargs):
             attempted.append(processor.data.get("model"))
-            if saturation_fallbacks_exhausted(processor.data):
+            if saturation_fallbacks_exhausted():
                 return processor.data, MagicMock()
             raise ProxyRateLimitError(
                 detail="at saturation", headers={}, descriptor_key=SATURATION_FALLBACK_DESCRIPTOR_KEY
@@ -8932,7 +9046,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                 request=MagicMock(),
                 general_settings={},
                 proxy_logging_obj=MagicMock(),
-                user_api_key_dict=MagicMock(router_settings=None, agent_id=None),
+                user_api_key_dict=MagicMock(router_settings=None, agent_id=None, end_user_id=None),
                 version=None,
                 proxy_config=_proxy_config({"fallback_on_saturation": True}),
                 user_model=None,
@@ -8964,7 +9078,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
 
         async def mock_pre_call_logic(**kwargs):
             attempted.append(processor.data.get("model"))
-            if saturation_fallbacks_exhausted(processor.data):
+            if saturation_fallbacks_exhausted():
                 return processor.data, MagicMock()
             raise ProxyRateLimitError(
                 detail="at saturation", headers={}, descriptor_key=SATURATION_FALLBACK_DESCRIPTOR_KEY
@@ -8978,7 +9092,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                 request=MagicMock(),
                 general_settings={},
                 proxy_logging_obj=MagicMock(),
-                user_api_key_dict=MagicMock(router_settings=None, agent_id=None),
+                user_api_key_dict=MagicMock(router_settings=None, agent_id=None, end_user_id=None),
                 version=None,
                 proxy_config=_proxy_config({"fallback_on_saturation": True}),
                 user_model=None,
@@ -9006,7 +9120,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4"})
 
         async def mock_pre_call_logic(**kwargs):
-            if saturation_fallbacks_exhausted(processor.data):
+            if saturation_fallbacks_exhausted():
                 raise ProxyRateLimitError(detail="gpt-4 is out of capacity", headers={"retry-after": "30"})
             raise ProxyRateLimitError(
                 detail="at saturation", headers={}, descriptor_key=SATURATION_FALLBACK_DESCRIPTOR_KEY
@@ -9021,7 +9135,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                     request=MagicMock(),
                     general_settings={},
                     proxy_logging_obj=MagicMock(),
-                    user_api_key_dict=MagicMock(router_settings=None, agent_id=None),
+                    user_api_key_dict=MagicMock(router_settings=None, agent_id=None, end_user_id=None),
                     version=None,
                     proxy_config=_proxy_config({"fallback_on_saturation": True}),
                     user_model=None,
@@ -9060,7 +9174,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                     request=MagicMock(),
                     general_settings={},
                     proxy_logging_obj=MagicMock(),
-                    user_api_key_dict=MagicMock(router_settings=None, agent_id=None),
+                    user_api_key_dict=MagicMock(router_settings=None, agent_id=None, end_user_id=None),
                     version=None,
                     proxy_config=_proxy_config(),
                     user_model=None,
@@ -9104,7 +9218,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                     request=MagicMock(),
                     general_settings={},
                     proxy_logging_obj=MagicMock(),
-                    user_api_key_dict=MagicMock(router_settings=None, agent_id=None),
+                    user_api_key_dict=MagicMock(router_settings=None, agent_id=None, end_user_id=None),
                     version=None,
                     proxy_config=_proxy_config(),
                     user_model=None,

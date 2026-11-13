@@ -163,7 +163,10 @@ from litellm.proxy.common_utils.sse_keepalive import (
 )
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.guardrails.auto_router_compression import arm_pre_call as _arm_auto_router_compression
-from litellm.proxy.hooks.parallel_request_limiter_v3 import get_or_create_request_stash
+from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    PROXY_MaxParallelRequestsHandler_v3,
+    get_or_create_request_stash,
+)
 from litellm.proxy.hooks.proxy_track_cost_callback import failure_row_response_cost
 from litellm.proxy.native_compaction import with_proxy_compaction_executor
 from litellm.proxy.route_llm_request import (
@@ -2429,6 +2432,23 @@ def _fallback_pricing_admits(requested_model: str, fallback_model: str, llm_rout
     )
 
 
+async def _release_refused_fallback_attempt(
+    proxy_logging_obj: ProxyLogging,
+    request_data: Mapping[str, object],
+    refusal: Exception,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """Give back the slot and tokens the rate limiter holds for a fallback the proxy refused after admitting it, so the
+    walk's next attempt does not overwrite a hold that would otherwise stay charged until the window resets. The request
+    has not failed, so only the limiter's release runs, not the failure logging and alerting of ``post_call_failure_hook``."""
+    limiter: Final = proxy_logging_obj.get_proxy_hook("parallel_request_limiter")
+    if not isinstance(limiter, PROXY_MaxParallelRequestsHandler_v3):
+        return
+    await limiter.async_post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # the limiter hook takes the proxy's bare request dict
+        request_data=dict(request_data), original_exception=refusal, user_api_key_dict=user_api_key_dict
+    )
+
+
 async def _fallback_grant(
     fallback_model: str,
     user_api_key_dict: UserAPIKeyAuth,
@@ -2437,11 +2457,13 @@ async def _fallback_grant(
     requested_model: str,
 ) -> list[str] | None:
     """The model access groups a pre-call fallback to ``fallback_model`` charges, or None when the caller may not use
-    it: an agent-owned key never leaves the model it asked for, as at auth, then the key, team and project allowlists while ``enforce_fallback_model_access`` is on, the pricing rules, every
-    per-model budget layer, the budgets of the access groups that grant the model, and the budget auth reserved for
+    it: an agent-owned key never leaves the model it asked for, as at auth, then the key, team and project allowlists
+    while ``enforce_fallback_model_access`` is on, the end user's allowlist, the pricing rules, every per-model budget layer, the budgets of the access groups that grant the model, and the budget auth reserved for
     ``requested_model``, the same checks a direct request passes at auth."""
     from litellm.proxy.auth.auth_checks import (
         _model_access_group_max_budget_check,  # pyright: ignore[reportPrivateUsage]  # the pre-call walk shares the auth-time fallback contract
+        can_customer_access_model,
+        get_end_user_object,
     )
     from litellm.proxy.auth.fallback_model_access import is_model_authorized_for_token, router_fallback_access_check
     from litellm.proxy.auth.user_api_key_auth import (
@@ -2460,6 +2482,21 @@ async def _fallback_grant(
     if not _fallback_pricing_admits(requested_model, fallback_model, llm_router):
         return None
     try:
+        end_user: Final = (
+            await get_end_user_object(
+                end_user_id=user_api_key_dict.end_user_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=user_api_key_dict.parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            if user_api_key_dict.end_user_id is not None
+            else None
+        )
+        if end_user is not None and end_user.models:
+            can_customer_access_model(
+                model=fallback_model, end_user_object=end_user, llm_router=llm_router, valid_token=user_api_key_dict
+            )
         if not is_model_cost_zero(
             model=fallback_model, llm_router=llm_router
         ) and not await _is_within_every_model_budget(
@@ -2477,9 +2514,9 @@ async def _fallback_grant(
         )
         if not _reservation_covers(user_api_key_dict, access_groups, held, requested_model, fallback_model, llm_router):
             return None
-    except Exception as e:  # noqa: BLE001  # fail closed: a budget the walk cannot read must not admit the fallback
+    except Exception as e:  # noqa: BLE001  # fail closed: a grant the walk cannot settle must not admit the fallback
         verbose_proxy_logger.warning(
-            "Skipping fallback to model=%s: budget check failed: %s",
+            "Skipping fallback to model=%s: %s",
             fallback_model.replace("\r", "").replace("\n", ""),
             e,
         )
@@ -3144,9 +3181,9 @@ class ProxyBaseLLMRequestProcessing:
             drop_client_saturation_opt_in,
             fallback_on_saturation_enabled,
             is_saturation_fallback,
+            mark_saturation_fallbacks_exhausted,
             per_model_rate_limits_disable_fallbacks,
             with_rate_limit_fallback,
-            with_saturation_fallbacks_exhausted,
         )
 
         general_settings_view: Final = cast(  # cast-ok: this method keeps its legacy bare-dict settings parameter
@@ -3281,6 +3318,12 @@ class ProxyBaseLLMRequestProcessing:
                         user_api_key_dict.matched_model_access_groups = requested_groups  # rebind-ok: undo the fallback
                         if _fallback_refusal_ends_the_walk(fallback_exc, at_saturation, general_settings_view):
                             raise
+                        await _release_refused_fallback_attempt(
+                            proxy_logging_obj,
+                            self.data,  # pyright: ignore[reportUnknownMemberType]  # caller-defined request-payload shape
+                            fallback_exc,
+                            user_api_key_dict,
+                        )
                         continue
                     else:
                         admitted_data, admitted_logging_obj = admitted
@@ -3304,10 +3347,8 @@ class ProxyBaseLLMRequestProcessing:
                     "No fallback of model=%s is below the saturation threshold, serving the request on it",
                     original_model.replace("\r", "").replace("\n", ""),
                 )
-                snapshot: Final = _REQUEST_FIELDS.validate_python(pristine)
-                self.data = independent_snapshot(
-                    dict(with_saturation_fallbacks_exhausted(snapshot, get_metadata_variable_name(request, snapshot)))
-                )
+                mark_saturation_fallbacks_exhausted()
+                self.data = independent_snapshot(dict(_REQUEST_FIELDS.validate_python(pristine)))
                 return await self.common_processing_pre_call_logic(
                     request=request,
                     general_settings=general_settings,

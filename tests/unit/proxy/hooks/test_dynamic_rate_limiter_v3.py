@@ -1907,14 +1907,14 @@ async def test_a_key_without_fallback_on_saturation_is_admitted_on_the_saturated
 async def test_a_request_back_from_an_exhausted_fallback_walk_is_admitted_on_the_saturated_model(
     monkeypatch: pytest.MonkeyPatch, armed_walk: None
 ):
-    from litellm.proxy.common_utils.proxy_rate_limit_error import with_saturation_fallbacks_exhausted
+    from litellm.proxy.common_utils.proxy_rate_limit_error import mark_saturation_fallbacks_exhausted
 
     handler = _saturation_fallback_handler(monkeypatch)
     key: Final = _interactive_key("sk-flexible", "team-a")
     await _saturate_to_threshold(handler, key)
 
-    back: Final = dict(with_saturation_fallbacks_exhausted(_opted_in(metadata={}), "metadata"))
-    assert await handler.async_pre_call_hook(key, DualCache(), back, "acompletion") is None
+    mark_saturation_fallbacks_exhausted()
+    assert await handler.async_pre_call_hook(key, DualCache(), _opted_in(), "acompletion") is None
 
 
 def _borrowing_handler(
