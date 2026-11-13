@@ -373,7 +373,9 @@ def alias_patch(payload: OrganizationPatch | TeamPatch | MemberPatch) -> Mapping
     return {"alias": payload.alias} if "alias" in payload.model_fields_set else {}
 
 
-def default_template_patch(organization: Organization, payload: OrganizationPatch) -> Mapping[str, str | None] | Failure:
+def default_template_patch(
+    organization: Organization, payload: OrganizationPatch
+) -> Mapping[str, str | None] | Failure:
     if "default_budget_template_id" not in payload.model_fields_set:
         return {}
     selected: Final = payload.default_budget_template_id
