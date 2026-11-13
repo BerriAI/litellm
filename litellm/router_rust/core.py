@@ -29,9 +29,9 @@ from functools import partial
 from time import perf_counter
 from time import time as unix_time
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, TypeVar, final, overload
+from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeAlias, TypeVar, final, overload
 
-from pydantic import TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator, model_validator
 
 from litellm._internal_context import service_target
 from litellm.constants import DEFAULT_COOLDOWN_TIME_SECONDS, HEALTH_CHECKS_TARGET
@@ -1000,10 +1000,6 @@ def _listing_team_id(request: Mapping[str, object]) -> str | None:
     return team_id if isinstance(team_id, str) else None
 
 
-# Request fallback settings, which replace the router's for the call.
-_REQUEST_FALLBACK_KEYS: Final = ("fallbacks", "context_window_fallbacks", "content_policy_fallbacks", "max_fallbacks")
-
-
 def _strings(value: object) -> "tuple[str, ...]":
     """Every string in ``value``, a name or a fallback list of names and dict entries."""
     if isinstance(value, str):
@@ -1011,7 +1007,7 @@ def _strings(value: object) -> "tuple[str, ...]":
     if isinstance(value, Mapping):
         entries: Final[Mapping[object, object]] = value  # pyright: ignore[reportUnknownVariableType]  # read as objects
         return tuple(itertools.chain.from_iterable(map(_strings, itertools.chain.from_iterable(entries.items()))))
-    if isinstance(value, list | tuple):
+    if isinstance(value, Sequence):
         items: Final[Sequence[object]] = value  # pyright: ignore[reportUnknownVariableType]  # see above
         return tuple(itertools.chain.from_iterable(map(_strings, items)))  # pyright: ignore[reportUnknownArgumentType]  # read as objects
     return ()
@@ -1023,31 +1019,82 @@ def _routed_model(request: Mapping[str, object]) -> object:
     return model if model is None or isinstance(model, str) else str(model)
 
 
-def _start_fields(request: Mapping[str, object]) -> Mapping[str, object]:
-    """The request fields the Rust core routes on."""
-    fields: Final = {
-        **request_retry_fields(request.get("num_retries")),
-        **({"cooldown_time": request["cooldown_time"]} if request.get("cooldown_time") is not None else {}),
-    }
-    # `_common_checks_available_deployment`: only True names a litellm model.
-    specific: Final = {"specific_deployment": True} if request.get("specific_deployment") is True else {}
-    # `record_disable_fallbacks(kwargs, disable_fallbacks is True)`: only True turns them off.
-    disabled: Final = {"disable_fallbacks": True} if request.get("disable_fallbacks") is True else {}
-    lists: Final = {key: _plain(request[key]) for key in _REQUEST_FALLBACK_KEYS if key in request}
-    weights: Final = request.get("_router_weights")
-    team_id: Final = get_request_team_id(request)
-    listing_team_id: Final = _listing_team_id(request)
+class RequestStartFields(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    fallbacks: Sequence[str | Mapping[str, object]] | None = None
+    context_window_fallbacks: Sequence[str | Mapping[str, object]] | None = None
+    content_policy_fallbacks: Sequence[str | Mapping[str, object]] | None = None
+    max_fallbacks: Annotated[int, Field(ge=0, le=_U32_MAX)] | None = None
+    specific_deployment: bool = False
+    disable_fallbacks: bool = False
+    cooldown_time: object | None = None
+    router_weights: object | None = Field(default=None, validation_alias="_router_weights")
+    team_id: str | None = None
+    listing_team_id: str | None = None
+    routing_strategy: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def ignore_standalone_fallback_strings(cls, value: object) -> object:
+        request_fields: Final = as_str_mapping(value)
+        if request_fields is None:
+            return value
+        return {
+            key: item
+            for key, item in request_fields.items()
+            if key not in ("fallbacks", "context_window_fallbacks", "content_policy_fallbacks")
+            or not isinstance(item, str)
+        }
+
+    @field_validator("specific_deployment", "disable_fallbacks", mode="before")
+    @classmethod
+    def literal_true_only(cls, value: object) -> bool:
+        return value is True
+
+
+def _request_start_fields(request: Mapping[str, object]) -> RequestStartFields:
     strategy: Final = request.get("routing_strategy")
     override: Final = normalize_strategy(strategy) if isinstance(strategy, str | RoutingStrategy) else None
+    fields: Final = {
+        **request,
+        "team_id": get_request_team_id(request),
+        "listing_team_id": _listing_team_id(request),
+        "routing_strategy": override,
+    }
+    try:
+        return RequestStartFields.model_validate(fields)
+    except ValidationError:
+        import litellm.exceptions as litellm_exceptions
+
+        model: Final = request.get("model")
+        raise litellm_exceptions.BadRequestError(
+            message="Invalid router request fields",
+            model=model if isinstance(model, str) else None,
+            llm_provider="",
+        ) from None
+
+
+def _start_fields(request: Mapping[str, object]) -> Mapping[str, object]:
+    """The request fields the Rust core routes on."""
+    normalized: Final = _request_start_fields(request)
+    excluded: Final = {
+        name: True
+        for name, omit in (
+            ("specific_deployment", not normalized.specific_deployment),
+            ("disable_fallbacks", not normalized.disable_fallbacks),
+            ("cooldown_time", normalized.cooldown_time is None),
+            ("router_weights", normalized.router_weights is None),
+            ("team_id", not normalized.team_id),
+            ("listing_team_id", normalized.listing_team_id is None),
+            ("routing_strategy", normalized.routing_strategy is None),
+        )
+        if omit
+    }
+    request_fields: Final = normalized.model_dump(exclude_unset=True, exclude=excluded)
     return {
-        **fields,
-        **specific,
-        **({"routing_strategy": override} if override is not None else {}),
-        **disabled,
-        **({"router_weights": weights} if weights is not None else {}),
-        **lists,
-        **({"team_id": team_id} if team_id else {}),
-        **({"listing_team_id": listing_team_id} if listing_team_id is not None else {}),
+        **request_retry_fields(request.get("num_retries")),
+        **request_fields,
         **caller_fields(request),
     }
 
@@ -2820,11 +2867,14 @@ class RustCore(
         """The model names a retry policy lookup may run on (each hop looks up the name it calls):
         the requested one and every name in the fallback lists the walk may take."""
         resolved: Final = self._resolved
+        normalized: Final = _request_start_fields(request)
         lists: Final = (
             resolved.fallbacks,
             resolved.context_window_fallbacks,
             resolved.content_policy_fallbacks,
-            *(request.get(key) for key in _REQUEST_FALLBACK_KEYS),
+            normalized.fallbacks,
+            normalized.context_window_fallbacks,
+            normalized.content_policy_fallbacks,
         )
         return frozenset((*_strings(request.get("model")), *_strings(lists)))
 
