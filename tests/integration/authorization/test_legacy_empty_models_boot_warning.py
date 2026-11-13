@@ -90,3 +90,36 @@ def test_boot_logs_the_keys_and_teams_on_the_deprecated_empty_models_defaults(
     assert "2 keys with access groups have an empty models list." in log
     assert "1 team with access groups has an empty models list." in log
     assert "Keys without a team that list all-team-models have no team to inherit from" in log
+
+
+def _key_counts_in_flight(database_url: str) -> int:
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        row: Final = connection.execute(
+            "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' "
+            "AND query ILIKE '%COUNT(%LiteLLM_VerificationToken%'"
+        ).fetchone()
+    assert row is not None
+    return int(row[0])
+
+
+def test_boot_runs_the_deprecated_defaults_counts_one_at_a_time(gateway: Gateway, tmp_path: Path) -> None:
+    with owned_proxy_process(gateway, tmp_path / "seed", {}, state=OwnedState.PRIVATE) as seeding:
+        database_url: Final = seeding.gateway.database_url
+        assert database_url is not None
+        with psycopg.connect(database_url) as held_open, held_open.transaction():
+            held_open.execute('LOCK TABLE "LiteLLM_VerificationToken" IN ACCESS EXCLUSIVE MODE')
+            with owned_proxy_process(
+                gateway,
+                tmp_path / "reboot",
+                {"DATABASE_URL": database_url, "DISABLE_SCHEMA_UPDATE": "true"},
+                database_setup=(),
+            ):
+                eventually(lambda: _key_counts_in_flight(database_url), lambda waiting: waiting >= 1, seconds=60)
+                most_waiting: Final = eventually(
+                    lambda: _key_counts_in_flight(database_url),
+                    lambda waiting: waiting > 1,
+                    seconds=5,
+                    return_last_on_timeout=True,
+                )
+
+    assert most_waiting == 1

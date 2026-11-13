@@ -1,4 +1,3 @@
-import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final, Protocol
@@ -41,48 +40,39 @@ def _model_calling_keys(where: Mapping[str, object]) -> Mapping[str, object]:
 
 
 async def count_legacy_empty_models_rows(keys: CountTable, teams: CountTable) -> LegacyEmptyModelsCounts:
-    (
-        teamless_empty,
-        teamless_all_team,
-        team_keys_empty,
-        teams_empty,
-        keys_with_groups_empty,
-        teams_with_groups_empty,
-    ) = await asyncio.gather(
-        keys.count(
-            where=_model_calling_keys(
-                {"team_id": None, "models": {"isEmpty": True}, "access_group_ids": {"isEmpty": True}}
-            )
-        ),
-        keys.count(
-            where=_model_calling_keys(
-                {
-                    "team_id": None,
-                    "models": {"has": SpecialModelNames.all_team_models.value},
-                    "access_group_ids": {"isEmpty": True},
-                }
-            )
-        ),
-        keys.count(
-            where=_model_calling_keys(
-                {
-                    "AND": [{"team_id": {"not": None}}, {"team_id": {"not": UI_SESSION_TOKEN_TEAM_ID}}],
-                    "models": {"isEmpty": True},
-                    "access_group_ids": {"isEmpty": True},
-                }
-            )
-        ),
-        teams.count(where={"models": {"isEmpty": True}, "access_group_ids": {"isEmpty": True}}),
-        keys.count(
-            where=_model_calling_keys(
-                {
-                    "OR": [{"team_id": None}, {"team_id": {"not": UI_SESSION_TOKEN_TEAM_ID}}],
-                    "models": {"isEmpty": True},
-                    "NOT": {"access_group_ids": {"isEmpty": True}},
-                }
-            )
-        ),
-        teams.count(where={"models": {"isEmpty": True}, "NOT": {"access_group_ids": {"isEmpty": True}}}),
+    teamless_empty: Final = await keys.count(
+        where=_model_calling_keys({"team_id": None, "models": {"isEmpty": True}, "access_group_ids": {"isEmpty": True}})
+    )
+    teamless_all_team: Final = await keys.count(
+        where=_model_calling_keys(
+            {
+                "team_id": None,
+                "models": {"has": SpecialModelNames.all_team_models.value},
+                "access_group_ids": {"isEmpty": True},
+            }
+        )
+    )
+    team_keys_empty: Final = await keys.count(
+        where=_model_calling_keys(
+            {
+                "AND": [{"team_id": {"not": None}}, {"team_id": {"not": UI_SESSION_TOKEN_TEAM_ID}}],
+                "models": {"isEmpty": True},
+                "access_group_ids": {"isEmpty": True},
+            }
+        )
+    )
+    teams_empty: Final = await teams.count(where={"models": {"isEmpty": True}, "access_group_ids": {"isEmpty": True}})
+    keys_with_groups_empty: Final = await keys.count(
+        where=_model_calling_keys(
+            {
+                "OR": [{"team_id": None}, {"team_id": {"not": UI_SESSION_TOKEN_TEAM_ID}}],
+                "models": {"isEmpty": True},
+                "NOT": {"access_group_ids": {"isEmpty": True}},
+            }
+        )
+    )
+    teams_with_groups_empty: Final = await teams.count(
+        where={"models": {"isEmpty": True}, "NOT": {"access_group_ids": {"isEmpty": True}}}
     )
     return LegacyEmptyModelsCounts(
         teamless_keys_with_empty_models=teamless_empty,

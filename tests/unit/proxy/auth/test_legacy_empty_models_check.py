@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
@@ -10,6 +11,7 @@ from litellm.proxy.auth.legacy_empty_models_check import (
     DEPRECATION_DISCUSSION_URL,
     CountTableRepository,
     LegacyEmptyModelsCounts,
+    count_legacy_empty_models_rows,
     legacy_empty_models_warning,
     warn_about_legacy_empty_models,
 )
@@ -201,3 +203,29 @@ async def test_a_repository_without_a_connected_client_skips_the_boot_check_with
     await warn_about_legacy_empty_models(keys=_UnconnectedRepository(), teams=_repository(_FixedCountTable(1)))
 
     assert proxy_warnings == ["Skipped the deprecated model access defaults check: No DB Connected"]
+
+
+class _Database:
+    def __init__(self) -> None:
+        self.in_flight = 0
+        self.most_in_flight = 0
+        self.queries = 0
+
+    async def count(self, *, where: Mapping[str, object]) -> int:
+        self.queries += 1
+        self.in_flight += 1
+        self.most_in_flight = max(self.most_in_flight, self.in_flight)
+        await asyncio.sleep(0)
+        self.in_flight -= 1
+        return 1
+
+
+@pytest.mark.asyncio
+async def test_boot_check_never_has_more_than_one_count_in_flight() -> None:
+    database: Final = _Database()
+
+    counts: Final = await count_legacy_empty_models_rows(keys=database, teams=database)
+
+    assert counts == LegacyEmptyModelsCounts(1, 1, 1, 1, 1, 1)
+    assert database.queries == 6
+    assert database.most_in_flight == 1
