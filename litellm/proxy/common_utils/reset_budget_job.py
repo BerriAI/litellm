@@ -268,10 +268,12 @@ def _budget_link_where(
     extra: Mapping[str, object] = MappingProxyType({}),
     link: str = "budget_id",
 ) -> dict[str, object]:
+    # bounded-ok: budget_ids is one RESET_BUDGET_JOB_BATCH_SIZE batch of due budget rows
     return {link: {"in": list(budget_ids)}, **extra}
 
 
 def _customer_member_link_where(budget_ids: Sequence[str]) -> Mapping[str, object]:
+    # bounded-ok: budget_ids is one RESET_BUDGET_JOB_BATCH_SIZE batch of due budget rows
     return {"OR": [{"budget_id": {"in": list(budget_ids)}}, {"budget_override_id": {"in": list(budget_ids)}}]}
 
 
