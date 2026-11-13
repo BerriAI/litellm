@@ -129,7 +129,6 @@ from litellm.proxy.auth.auth_utils import (
     route_in_additonal_public_routes,
 )
 from litellm.proxy.auth.customer_hierarchy_auth import (
-    check_customer_hierarchy_key_scope,
     customer_member_id_from_headers,
     resolve_customer_hierarchy,
 )
@@ -220,7 +219,6 @@ from litellm.router_api import (
     request_fallback_chain,
 )
 from litellm.secret_managers.main import get_secret_bool
-from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth
 from litellm.types.services import ServiceTypes
 
 try:
@@ -1522,8 +1520,6 @@ def update_valid_token_with_end_user_params(valid_token: UserAPIKeyAuth, end_use
         valid_token.end_user_model_tpm_limit = end_user_params["end_user_model_tpm_limit"]  # rebind-ok: in-place
     if "end_user_model_rpm_limit" in end_user_params:
         valid_token.end_user_model_rpm_limit = end_user_params["end_user_model_rpm_limit"]  # rebind-ok: in-place
-    if "customer_hierarchy" in end_user_params:
-        valid_token.customer_hierarchy = end_user_params["customer_hierarchy"]  # rebind-ok: in-place
     return valid_token
 
 
@@ -2928,20 +2924,6 @@ async def user_api_key_auth_builder(
                     raise e
                 verbose_proxy_logger.debug("Unable to find user in db. Error - %s", e)
 
-        customer_member_id: Final = customer_member_id_from_headers(
-            safe_get_request_headers(request)  # pyright: ignore[reportUnknownArgumentType]  # request headers are untyped
-        )
-        if customer_member_id is not None:
-            with tracer.trace("litellm.proxy.auth.resolve_customer_hierarchy"):  # pyright: ignore[reportUnknownMemberType]  # tracer is the untyped proxy tracer
-                end_user_params["customer_hierarchy"] = await resolve_customer_hierarchy(
-                    customer_member_id=customer_member_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    llm_router=llm_router,
-                    request_model=request_data.get("model"),
-                    route=route,
-                )
-
         ### CHECK IF ADMIN ###
         # note: never string compare api keys, this is vulenerable to a time attack. Use secrets.compare_digest instead
         ### CHECK IF ADMIN ###
@@ -3580,15 +3562,6 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
 
         if _end_user_object is not None or litellm.max_end_user_budget_id is not None:
             valid_token_dict.update(end_user_params)
-        customer_hierarchy: Final = end_user_params.get("customer_hierarchy")
-        if isinstance(customer_hierarchy, CustomerHierarchyAuth):
-            check_customer_hierarchy_key_scope(
-                customer_hierarchy,
-                _KEY_METADATA_ADAPTER.validate_python(
-                    valid_token_dict.get("metadata") or {}  # pyright: ignore[reportUnknownMemberType]  # untyped key dump, validated here
-                ),
-            )
-            valid_token_dict["customer_hierarchy"] = customer_hierarchy
         if _end_user_object is not None:
             valid_token_dict["end_user_object_permission"] = _end_user_object.object_permission
 
@@ -4487,8 +4460,27 @@ async def _authorize_authenticated_request(
             llm_model_list,  # pyright: ignore[reportUnknownVariableType]  # proxy global has untyped deployment entries
             llm_router,
             prisma_client,
+            user_api_key_cache,
             user_model,
         )
+
+        customer_member_id: Final = customer_member_id_from_headers(
+            safe_get_request_headers(request)  # pyright: ignore[reportUnknownArgumentType]  # request headers are untyped
+        )
+        user_api_key_auth_obj.customer_hierarchy = None  # rebind-ok: the hierarchy is request state, never inherited from a cached key
+        if customer_member_id is not None:
+            with tracer.trace("litellm.proxy.auth.resolve_customer_hierarchy"):  # pyright: ignore[reportUnknownMemberType]  # tracer is the untyped proxy tracer
+                user_api_key_auth_obj.customer_hierarchy = await resolve_customer_hierarchy(  # rebind-ok: the gate updates the request-owned auth object in place
+                    customer_member_id=customer_member_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    llm_router=llm_router,
+                    request_model=_get_model_from_request_context(request_data, route, request, llm_router),
+                    route=route,
+                    key_metadata=_KEY_METADATA_ADAPTER.validate_python(
+                        user_api_key_auth_obj.metadata or {}  # pyright: ignore[reportUnknownMemberType]  # untyped key metadata, validated here
+                    ),
+                )
 
         grants: Final = await access_group_ids_for_identity(user_api_key_auth_obj)
         user_api_key_auth_obj.apply_access_group_rule_grants(grants)

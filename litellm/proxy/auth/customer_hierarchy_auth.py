@@ -31,7 +31,7 @@ from litellm.types.proxy.management_endpoints.customer_hierarchy import Budget
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
-    from litellm.router import Router
+    from litellm.router_api import RegistryReader
 
 CUSTOMER_MEMBER_ID_HEADER: Final = "x-litellm-customer-member-id"
 _MEMBER_INCLUDE: Final = {
@@ -151,11 +151,24 @@ async def get_customer_hierarchy(
     )
     if row is None:
         return None
-    hierarchy: Final = customer_hierarchy_from_member_row(row.model_dump(), now if now is not None else utc_now())
+    loaded_at: Final = now if now is not None else utc_now()
+    row_values: Final = row.model_dump()
+    hierarchy: Final = customer_hierarchy_from_member_row(row_values, loaded_at)
     await user_api_key_cache.async_set_cache(
-        key=cache_key, value=hierarchy, ttl=get_management_object_ttl(user_api_key_cache)
+        key=cache_key,
+        value=hierarchy,
+        ttl=_cache_ttl(row_values, loaded_at, get_management_object_ttl(user_api_key_cache)),
     )
     return hierarchy
+
+
+def _cache_ttl(row: Mapping[str, object], now: datetime, default_ttl: float) -> float:
+    """A cached hierarchy may not outlive the member's budget override, or an expired override would keep
+    granting its limits until the management-object TTL ran out."""
+    expires_at: Final = _MemberRow.model_validate(row).budget_override_expires_at
+    if expires_at is None or expires_at <= now:
+        return default_ttl
+    return max(1.0, min(default_ttl, (expires_at - now).total_seconds()))
 
 
 def check_customer_hierarchy_budget(hierarchy: CustomerHierarchyAuth) -> None:
@@ -175,7 +188,7 @@ def check_customer_hierarchy_budget(hierarchy: CustomerHierarchyAuth) -> None:
 
 
 def check_customer_hierarchy_model_access(
-    hierarchy: CustomerHierarchyAuth, model: str, llm_router: "Router | None"
+    hierarchy: CustomerHierarchyAuth, model: str, llm_router: "RegistryReader | None"
 ) -> None:
     """Every level with an ``allowed_models`` list must permit ``model``; a level without one permits every model."""
     for scope in hierarchy.scopes:
@@ -189,12 +202,14 @@ async def resolve_customer_hierarchy(
     customer_member_id: str,
     prisma_client: "PrismaClient | None",
     user_api_key_cache: UserApiKeyCache,
-    llm_router: "Router | None",
-    request_model: object,
+    llm_router: "RegistryReader | None",
+    request_model: str | list[str] | None,
     route: str,
+    key_metadata: Mapping[str, object] | None = None,
 ) -> CustomerHierarchyAuth:
     """Load the hierarchy the header names and admit the request against it. An unknown member is refused
-    rather than treated as unrestricted: the caller asked for a budgeted identity that does not exist."""
+    rather than treated as unrestricted: the caller asked for a budgeted identity that does not exist.
+    ``request_model`` is the model the route will actually serve, which may differ from the body."""
     hierarchy: Final = (
         await get_customer_hierarchy(customer_member_id, prisma_client, user_api_key_cache)
         if prisma_client is not None
@@ -207,10 +222,13 @@ async def resolve_customer_hierarchy(
             param=CUSTOMER_MEMBER_ID_HEADER,
             code=status.HTTP_401_UNAUTHORIZED,
         )
+    check_customer_hierarchy_key_scope(hierarchy, key_metadata or {})
     if not RouteChecks.is_info_route(route):
         check_customer_hierarchy_budget(hierarchy)
-    if isinstance(request_model, str) and request_model:
-        check_customer_hierarchy_model_access(hierarchy, request_model, llm_router)
+    requested: Final = (request_model,) if isinstance(request_model, str) else tuple(request_model or ())
+    for model in requested:
+        if model:
+            check_customer_hierarchy_model_access(hierarchy, model, llm_router)
     return hierarchy
 
 

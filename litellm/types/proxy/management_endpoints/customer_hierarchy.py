@@ -2,7 +2,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Final
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, NonNegativeInt, field_validator
 
 from litellm.proxy.common_utils.timezone_utils import budget_duration_error
 
@@ -16,8 +16,8 @@ class Budget(BaseModel):
     rpm_limit: int | None = Field(default=None, ge=0)
     allowed_models: tuple[str, ...] | None = None
     budget_duration: str | None = None
-    model_tpm_limit: Mapping[str, int] | None = None
-    model_rpm_limit: Mapping[str, int] | None = None
+    model_tpm_limit: Mapping[str, NonNegativeInt] | None = None
+    model_rpm_limit: Mapping[str, NonNegativeInt] | None = None
 
     @field_validator("budget_duration")
     @classmethod
