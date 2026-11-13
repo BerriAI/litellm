@@ -11784,7 +11784,7 @@ async def _run_db_sync_cycle(proxy: _DbBackedProxy) -> None:
 
 
 async def _send_through_proxy(
-    path: str, headers: Mapping[str, str], method: str = "POST"
+    path: str, headers: Mapping[str, str], method: str = "POST", body: Mapping[str, object] | None = None
 ) -> tuple[httpx.Response, list[httpx.Request]]:
     from litellm.proxy.proxy_server import app
 
@@ -11797,11 +11797,166 @@ async def _send_through_proxy(
     fake_client, cleanup = _inject_fake_passthrough_client(httpx.MockTransport(upstream), timeout=None)
     try:
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy.test") as client:
-            response = await client.request(method, path, headers=dict(headers), json={"q": 1})
+            response = await client.request(
+                method, path, headers=dict(headers), json={"q": 1} if body is None else body
+            )
     finally:
         cleanup()
         await fake_client.aclose()
     return response, upstream_requests
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path",
+    ["/cfg-rpc", "/cfg-sub/deeper", "/db-rpc", "/cfg-guarded"],
+    ids=["config", "config-subpath", "db", "config-with-pre-call-guardrail"],
+)
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"jsonrpc": "2.0", "id": 7, "method": "skills/list", "params": {}},
+        {"id": "rec-1", "name": "x", "tags": ["a"], "metadata": {"k": "v"}, "num_retries": 2},
+    ],
+    ids=["json-rpc", "litellm-param-names"],
+)
+async def test_configured_pass_through_forwards_the_client_body_unchanged(tmp_path, monkeypatch, path, body):
+    proxy: Final = await _boot_db_backed_proxy(
+        tmp_path,
+        monkeypatch,
+        config_pass_through_endpoints=[
+            {"path": "/cfg-rpc", "target": "http://upstream.test/mcp", "auth": False},
+            {
+                "path": "/cfg-sub",
+                "target": "http://upstream.test/sub",
+                "auth": False,
+                "include_subpath": True,
+            },
+            {
+                "path": "/cfg-guarded",
+                "target": "http://upstream.test/guarded",
+                "auth": False,
+                "guardrails": {"route-guard": {}},
+            },
+        ],
+        db_pass_through_endpoints=[
+            {
+                "id": "db-endpoint",
+                "path": "/db-rpc",
+                "target": "http://upstream.test/db",
+                "auth": False,
+            }
+        ],
+    )
+    await _run_db_sync_cycle(proxy)
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [CustomGuardrail(guardrail_name="route-guard", default_on=False, event_hook=GuardrailEventHooks.pre_call)],
+    )
+
+    response, upstream_requests = await _send_through_proxy(path, {}, body=body)
+
+    assert response.status_code == 200
+    assert [json.loads(request.content) for request in upstream_requests] == [body]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_configured_anthropic_base")
+@pytest.mark.parametrize(
+    "path, client_metadata, forwarded_metadata",
+    [
+        ("/cfg-anthropic", {"user_id": "user-1", "tags": ["a"]}, {"user_id": "user-1"}),
+        ("/cfg-anthropic", {"tags": ["a"], "foo": "bar"}, None),
+        ("/cfg-anthropic", {"user_id": "a@example.com"}, None),
+        ("/cfg-anthropic-guarded", {"user_id": "user-1"}, None),
+    ],
+    ids=["user-id-beside-other-keys", "no-user-id", "email-user-id", "guardrail-on-the-route"],
+)
+async def test_configured_anthropic_pass_through_forwards_only_an_acceptable_user_id(
+    tmp_path, monkeypatch, path, client_metadata, forwarded_metadata
+):
+    proxy: Final = await _boot_db_backed_proxy(
+        tmp_path,
+        monkeypatch,
+        config_pass_through_endpoints=[
+            {"path": "/cfg-anthropic", "target": _ANTHROPIC_MESSAGES, "auth": False},
+            {
+                "path": "/cfg-anthropic-guarded",
+                "target": _ANTHROPIC_MESSAGES,
+                "auth": False,
+                "guardrails": {"pii-guard": {}},
+            },
+        ],
+        db_pass_through_endpoints=[],
+    )
+    await _run_db_sync_cycle(proxy)
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [CustomGuardrail(guardrail_name="pii-guard", default_on=False, event_hook=GuardrailEventHooks.pre_call)],
+    )
+
+    response, upstream_requests = await _send_through_proxy(
+        path, {}, body={**_MESSAGES_BODY, "metadata": client_metadata}
+    )
+
+    assert response.status_code == 200
+    assert [json.loads(request.content).get("metadata") for request in upstream_requests] == [forwarded_metadata]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "default_on, body",
+    [
+        (True, {"id": 1, "metadata": {"user_api_key_metadata": {"disable_global_guardrails": True}}}),
+        (True, {"id": 1, "litellm_metadata": {"user_api_key_metadata": {"disable_global_guardrails": True}}}),
+        (False, {"id": 1, "guardrails": []}),
+    ],
+    ids=["default-on-via-metadata", "default-on-via-litellm-metadata", "route-selected-via-root-guardrails"],
+)
+async def test_configured_pass_through_body_cannot_switch_off_a_post_call_guardrail(
+    tmp_path, monkeypatch, default_on, body
+):
+    class RecordingPostCallGuardrail(CustomGuardrail):
+        def __init__(self) -> None:
+            super().__init__(
+                guardrail_name="post-guard", default_on=default_on, event_hook=GuardrailEventHooks.post_call
+            )
+            self.calls: list[object] = []
+
+        async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+            self.calls.append(response)
+            return response
+
+    post_call_guardrail: Final = RecordingPostCallGuardrail()
+    proxy: Final = await _boot_db_backed_proxy(
+        tmp_path,
+        monkeypatch,
+        config_pass_through_endpoints=[
+            {
+                "path": "/cfg-guarded",
+                "target": "http://upstream.test/mcp",
+                "auth": False,
+                "guardrails": {"route-guard": {}, "post-guard": {}},
+            }
+        ],
+        db_pass_through_endpoints=[],
+    )
+    await _run_db_sync_cycle(proxy)
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [
+            CustomGuardrail(guardrail_name="route-guard", default_on=False, event_hook=GuardrailEventHooks.pre_call),
+            post_call_guardrail,
+        ],
+    )
+
+    response, _ = await _send_through_proxy("/cfg-guarded", {}, body=body)
+
+    assert response.status_code == 200
+    assert post_call_guardrail.calls == [{"ok": True}]
 
 
 @pytest.mark.asyncio

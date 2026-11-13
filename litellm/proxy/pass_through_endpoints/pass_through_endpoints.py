@@ -713,7 +713,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         litellm_call_id: str | None = None,
     ) -> dict:
         """
-        Filter out litellm params from the request body
+        Filter out litellm params from the request body, except on configured pass-through routes
         """
         from litellm.proxy.proxy_server import llm_router
 
@@ -734,9 +734,12 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             team_id=user_api_key_dict.team_id,
         )
 
-        litellm_keys_in_body: Final = MappingProxyType(
-            {k: _parsed_body.pop(k) for k in types_utils.all_litellm_params if k in _parsed_body}
-        )
+        configured_route: Final = request_dispatched_to_pass_through_endpoint(request)
+        litellm_param_names_in_body: Final = tuple(k for k in types_utils.all_litellm_params if k in _parsed_body)
+        litellm_keys_in_body: Final = MappingProxyType({k: _parsed_body[k] for k in litellm_param_names_in_body})
+        keys_dropped_from_body: Final = ("litellm_logging_obj",) if configured_route else litellm_param_names_in_body
+        for k in keys_dropped_from_body:
+            _parsed_body.pop(k, None)
         kept_out_of_litellm_params: Final = (
             _KEPT_OUT_OF_LITELLM_PARAMS
             if _key_or_team_allows_client_pricing_override(user_api_key_dict)
@@ -790,7 +793,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         # charging a counter anyway would track spend that nothing can refuse, and
         # would attribute it to a budget the operator scoped to a LiteLLM model that
         # merely shares the name.
-        if not request_dispatched_to_pass_through_endpoint(request):
+        if not configured_route:
             _metadata["model_group"] = managed_model if isinstance(managed_model, str) else None
             _metadata["user_api_key_model_max_budget"] = user_api_key_dict.model_max_budget
             _metadata["user_api_key_team_model_max_budget"] = user_api_key_dict.team_model_max_budget
@@ -1300,10 +1303,31 @@ def _anthropic_user_id_to_forward(
     return user_id
 
 
-def _with_anthropic_user_id(body: Mapping[str, object] | None, user_id: str | None) -> Mapping[str, object] | None:
-    if body is None or user_id is None:
+def _with_anthropic_user_id(
+    body: Mapping[str, object] | None, user_id: str | None, url: str
+) -> Mapping[str, object] | None:
+    if body is None or anthropic_upstream_user_id_limit(url) is None:
         return body
-    return {**body, "metadata": {"user_id": user_id}}
+    body_without_metadata: Final = {k: v for k, v in body.items() if k != "metadata"}
+    return body_without_metadata if user_id is None else {**body_without_metadata, "metadata": {"user_id": user_id}}
+
+
+def _client_litellm_fields(
+    client_body: Mapping[str, object], builtin_provider_route: bool
+) -> Mapping[str, object] | None:
+    if builtin_provider_route:
+        return None
+    return MappingProxyType(
+        {k: copy.deepcopy(v) for k, v in client_body.items() if k in types_utils.all_litellm_params}
+    )
+
+
+def _with_client_litellm_fields(
+    body: Mapping[str, object] | None, client_fields: Mapping[str, object] | None
+) -> Mapping[str, object] | None:
+    if body is None or client_fields is None:
+        return body
+    return {**{k: v for k, v in body.items() if k not in types_utils.all_litellm_params}, **client_fields}
 
 
 def _eu_jev_client_body(custom_llm_provider: str | None, body: Mapping[str, object]) -> Mapping[str, object] | None:
@@ -1440,6 +1464,7 @@ async def pass_through_request(
         strip_client_guardrail_information(client_body)
         if not _key_or_team_allows_client_pricing_override(user_api_key_dict):
             _strip_client_pricing_overrides(client_body)
+        client_litellm_fields: Final = _client_litellm_fields(client_body, builtin_provider_route)
         eu_jev_client_body: Final = _eu_jev_client_body(custom_llm_provider, client_body)
         scoped_client_body: Final = {
             **client_body,
@@ -1719,7 +1744,9 @@ async def pass_through_request(
                 logging_url = str(url) + "?" + requested_query_params_str
 
         outgoing_body: Final = cast("Mapping[str, object] | None", _parsed_body)  # cast-ok: json
-        upstream_body: Final = _with_anthropic_user_id(outgoing_body, client_user_id)
+        upstream_body: Final = _with_anthropic_user_id(
+            _with_client_litellm_fields(outgoing_body, client_litellm_fields), client_user_id, str(url)
+        )
         logging_obj.pre_call(
             input=[{"role": "user", "content": safe_dumps(_parsed_body)}],
             api_key="",
@@ -2009,17 +2036,9 @@ async def pass_through_request(
         )
 
         if response.status_code < 400 and response_body is not None and guardrails_to_run:
-            # Build an enriched data dict: _parsed_body has been stripped of
-            # `metadata` by both pre_call_hook and _init_kwargs_for_pass_through_endpoint,
-            # so we re-attach the configured guardrails here so should_run_guardrail
-            # sees them.
-            hook_data: Final = dict(_parsed_body or {})
-            existing_metadata = hook_data.get("metadata")
-            if not isinstance(existing_metadata, dict):
-                existing_metadata = {}
-            hook_data["metadata"] = {
-                **existing_metadata,
-                "guardrails": guardrails_to_run,
+            hook_data: Final = {
+                **{k: v for k, v in _json_object(_parsed_body).items() if k not in types_utils.all_litellm_params},
+                "metadata": {"guardrails": guardrails_to_run},
             }
             post_call_guardrail_data = hook_data
             response_body = await proxy_logging_obj.post_call_success_hook(
