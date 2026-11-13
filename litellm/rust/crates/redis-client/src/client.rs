@@ -163,7 +163,6 @@ impl RedisClient {
         &self.0.namespace
     }
 
-    /// See [`Namespace::sibling`].
     pub fn sibling_key(&self, key: &str, label: &str) -> Option<String> {
         self.0.namespace.sibling(key, label)
     }

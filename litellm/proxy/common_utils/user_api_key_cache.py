@@ -49,8 +49,6 @@ def _ttl(kwargs: Mapping[str, object]) -> float | None:
 
 
 class CacheLease:
-    """See ``UserApiKeyCache.lease``."""
-
     __slots__ = ("__weakref__", "key", "shared")
 
     def __init__(self, key: str, shared: str | None) -> None:
