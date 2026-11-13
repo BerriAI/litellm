@@ -30,11 +30,11 @@ pub(super) fn failure_value(
                 }
                 FailureStage::Current(_) => format!(
                     "HTTP error occurred while checking current secret: {}",
-                    response_text(py, &response.body)?
+                    response_text(py, response.body.expose())?
                 ),
                 FailureStage::Replacement(_) => format!(
                     "HTTP error occurred while verifying new secret: {}",
-                    response_text(py, &response.body)?
+                    response_text(py, response.body.expose())?
                 ),
                 FailureStage::Mutation => {
                     http_message(py, &response.method, &response.url, response.status)?
@@ -42,7 +42,7 @@ pub(super) fn failure_value(
             }
         }
         (FailureKind::ValueMismatch { expected, actual }, _) => {
-            let actual = json_value(py, actual)?;
+            let actual = json_value(py, actual.expose())?;
             format!(
                 "New secret value mismatch. Expected: {}, Got: {}",
                 expected.expose(),
@@ -69,16 +69,19 @@ fn cause_message(py: Python<'_>, kind: &FailureKind, context: &ErrorContext) -> 
     Ok(match kind {
         FailureKind::Native(error) => native_message(py, error, context)?,
         FailureKind::UnsafeName(name) => {
-            format!("Invalid secret_name {}", name.into_pyobject(py)?.repr()?)
+            format!(
+                "Invalid secret_name {}",
+                name.expose().into_pyobject(py)?.repr()?
+            )
         }
         FailureKind::MissingGet(value) => {
-            let value = json_value(py, value)?;
+            let value = json_value(py, value.expose())?;
             match value.bind(py).getattr("get") {
                 Err(error) => error.value(py).str()?.extract()?,
                 Ok(_) => "HashiCorp Vault response payload is malformed".to_owned(),
             }
         }
-        FailureKind::Json(body) => match json_value(py, body) {
+        FailureKind::Json(body) => match json_value(py, body.expose()) {
             Err(error) => error.value(py).str()?.extract()?,
             Ok(_) => "HashiCorp Vault response payload is malformed".to_owned(),
         },

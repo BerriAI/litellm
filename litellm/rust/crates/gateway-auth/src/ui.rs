@@ -3,12 +3,11 @@ use std::{convert::Infallible, sync::Arc};
 use axum::extract::FromRequestParts;
 use axum::http::{header::AUTHORIZATION, request::Parts};
 use axum_login::{AuthUser, AuthnBackend, UserId};
-use litellm_secret_value::SecretValue;
+use litellm_secret_value::{Redacted, SecretValue};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use tower_sessions::Session;
-use veil::Redact;
 
 use crate::{
     AccessRequest, AuthenticatedRequest, Authentication, AuthenticationMethod, Error,
@@ -19,11 +18,10 @@ use crate::{
 pub const UI_CSRF_KEY: &str = "litellm.ui.csrf";
 pub type UiAuthSession = axum_login::AuthSession<UiBackend>;
 
-#[derive(Clone, Redact)]
+#[derive(Clone, Debug)]
 pub struct UiUser {
     pub username: String,
-    #[redact]
-    password_hash: [u8; 32],
+    password_hash: Redacted<[u8; 32]>,
 }
 
 impl AuthUser for UiUser {
@@ -34,7 +32,7 @@ impl AuthUser for UiUser {
     }
 
     fn session_auth_hash(&self) -> &[u8] {
-        &self.password_hash
+        self.password_hash.expose()
     }
 }
 
@@ -57,7 +55,7 @@ impl UiBackend {
         Ok(Self {
             user: UiUser {
                 username,
-                password_hash: Sha256::digest(password.expose()).into(),
+                password_hash: Redacted::new(Sha256::digest(password.expose()).into()),
             },
         })
     }
@@ -72,6 +70,7 @@ impl AuthnBackend for UiBackend {
         let password_matches = self
             .user
             .password_hash
+            .expose()
             .ct_eq(&Sha256::digest(credentials.password.expose()));
         let username_matches =
             Sha256::digest(&self.user.username).ct_eq(&Sha256::digest(credentials.username));

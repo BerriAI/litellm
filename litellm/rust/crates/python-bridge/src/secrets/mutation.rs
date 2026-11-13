@@ -1,6 +1,7 @@
 use super::operations::{PythonMutationError, PythonMutationResponse};
 use litellm_error::Report;
 use litellm_host_python::{json_loads, to_py};
+use litellm_secret_value::Redacted;
 use litellm_secrets::cyberark;
 use pyo3::prelude::*;
 
@@ -40,7 +41,7 @@ fn cyberark_failure(
             py,
             failure.source,
             failure.authentication,
-            failure.request_url.as_ref(),
+            failure.request_url.as_ref().map(Redacted::expose),
         )?
     };
     Ok(if failure.authentication {
@@ -69,7 +70,7 @@ fn cyberark_message(
                 .extract()?,
             None => Report::new(&cyberark::Error::Http(source)).to_string(),
         },
-        cyberark::Error::Http(source) if source.is_connect() => {
+        cyberark::Error::Http(source) if source.expose().is_connect() => {
             "All connection attempts failed".to_owned()
         }
         source => Report::new(&source).to_string(),

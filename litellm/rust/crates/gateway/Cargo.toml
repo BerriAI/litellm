@@ -37,7 +37,6 @@ serde.workspace = true
 tracing.workspace = true
 tokio = { workspace = true, features = ["signal"] }
 uuid.workspace = true
-veil.workspace = true
 tower-sessions-moka-store = "0.15.0"
 
 [dev-dependencies]

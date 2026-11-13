@@ -789,19 +789,23 @@ impl AwsCredentialSource {
 /// environment outranks explicit keys in [`classify_auth`] and the two sides
 /// would sign as different principals.
 pub fn host_supplied_credentials(params: &AwsParams) -> Option<Credentials> {
-    let value = |value: &Option<String>| {
+    let value = |value: Option<&str>| {
         value
-            .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(str::to_string)
     };
-    let access_key_id = value(&params.aws_access_key_id)?;
-    let secret_access_key = value(&params.aws_secret_access_key)?;
+    let access_key_id = value(params.aws_access_key_id.as_deref())?;
+    let secret_access_key = value(
+        params
+            .aws_secret_access_key
+            .as_ref()
+            .map(SecretValue::expose),
+    )?;
     Some(Credentials::new(
         access_key_id,
         secret_access_key,
-        value(&params.aws_session_token),
+        value(params.aws_session_token.as_ref().map(SecretValue::expose)),
         None,
         "litellm-host-supplied",
     ))
@@ -971,7 +975,7 @@ mod tests {
         #[case] expected: Option<&str>,
     ) {
         let params = AwsParams {
-            aws_secret_access_key: aws_secret_access_key.map(str::to_string),
+            aws_secret_access_key: aws_secret_access_key.map(SecretValue::new),
             ..AwsParams::default()
         };
         let env = |key: &str| {

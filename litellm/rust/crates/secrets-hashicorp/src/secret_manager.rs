@@ -12,7 +12,7 @@ use std::{
 };
 
 use litellm_core_utils::settings::Lookup;
-use litellm_secret_value::SecretValue;
+use litellm_secret_value::{Redacted, SecretValue};
 use litellm_secrets_types::{
     BaseSecretManager, HashicorpOperationContext, RotationError, SecretCache, SecretDeleter,
     SecretRotator, SecretWriteContext, SecretWriter, async_rotate_secret, validate_secret_name,
@@ -180,9 +180,9 @@ fn map_api_error(error: ClientError, context: ErrorContext) -> Error {
             ErrorContext::Read | ErrorContext::Secret => Error::Status { status: code },
         },
         error @ ClientError::JsonParseError { .. } => match context {
-            ErrorContext::Login => Error::MalformedLogin(error),
-            ErrorContext::Read => Error::MalformedPayload(error),
-            ErrorContext::Secret => Error::Client(error),
+            ErrorContext::Login => Error::MalformedLogin(Redacted::new(error)),
+            ErrorContext::Read => Error::MalformedPayload(Redacted::new(error)),
+            ErrorContext::Secret => Error::Client(Redacted::new(error)),
         },
         error @ (ClientError::ResponseEmptyError | ClientError::ResponseDataEmptyError) => {
             malformed_response(context, error)
@@ -213,8 +213,8 @@ fn api_status(error: &ClientError) -> Option<u16> {
 
 fn malformed_response(context: ErrorContext, error: ClientError) -> Error {
     match context {
-        ErrorContext::Login => Error::MalformedLogin(error),
-        ErrorContext::Read => Error::MalformedPayload(error),
-        ErrorContext::Secret => Error::Client(error),
+        ErrorContext::Login => Error::MalformedLogin(Redacted::new(error)),
+        ErrorContext::Read => Error::MalformedPayload(Redacted::new(error)),
+        ErrorContext::Secret => Error::Client(Redacted::new(error)),
     }
 }

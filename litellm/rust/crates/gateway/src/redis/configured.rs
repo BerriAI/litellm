@@ -4,7 +4,7 @@ use litellm_config::{RedisSettings, Value};
 use litellm_core_utils::settings::Lookup;
 use litellm_redis_resolve::{Expected, Kwargs};
 use litellm_redis_types::{ProviderHandle, Resolution};
-use veil::Redact;
+use litellm_secret_value::Redacted;
 
 use super::{layers, secrets::SecretSnapshot};
 use crate::Error;
@@ -22,10 +22,9 @@ const CACHE_ONLY: &[&str] = &[
 ];
 
 /// The redis-py kwargs one surface hands `_get_redis_client_logic`, before `REDIS_*` and secrets.
-#[derive(Clone, Redact)]
+#[derive(Clone, Debug)]
 pub(crate) struct ConfiguredRedis {
-    #[redact(with = "[REDACTED]")]
-    pub(super) fields: BTreeMap<String, Value>,
+    pub(super) fields: Redacted<BTreeMap<String, Value>>,
     pub(super) nulls: Nulls,
     pub(super) credential_provider: Option<ProviderHandle>,
 }
@@ -58,7 +57,7 @@ impl ConfiguredRedis {
             });
         }
         Ok(Self {
-            fields: settings.fields().clone(),
+            fields: Redacted::new(settings.fields().clone()),
             nulls: Nulls::Dropped,
             credential_provider: None,
         })
@@ -80,7 +79,7 @@ impl ConfiguredRedis {
             .chain(alias)
             .collect();
         Self {
-            fields,
+            fields: Redacted::new(fields),
             nulls: Nulls::KeptUnlessNamedByCache,
             credential_provider: None,
         }
@@ -90,7 +89,7 @@ impl ConfiguredRedis {
     #[cfg(test)]
     pub(crate) fn redis_cache_kwargs(fields: BTreeMap<String, Value>) -> Self {
         Self {
-            fields,
+            fields: Redacted::new(fields),
             nulls: Nulls::Kept,
             credential_provider: None,
         }
@@ -108,7 +107,7 @@ impl ConfiguredRedis {
     /// No configured settings, so only `REDIS_*` and the other environment fallbacks apply.
     pub(crate) fn environment_only() -> Self {
         Self {
-            fields: BTreeMap::new(),
+            fields: Redacted::default(),
             nulls: Nulls::Dropped,
             credential_provider: None,
         }

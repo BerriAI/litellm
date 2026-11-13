@@ -201,7 +201,7 @@ async fn trait_read_applies_cyberark_operation_timeout_to_authentication() {
 
     match result {
         Err(Error::Timeout) => {}
-        Err(Error::Http(error)) => assert_eq!(error.status(), Some(408)),
+        Err(Error::Http(error)) => assert_eq!(error.expose().status(), Some(408)),
         other => panic!("expected timeout, got {other:?}"),
     }
 }

@@ -1,4 +1,5 @@
 use litellm_config::{Config, Error, Spelled, TracingStoreSettings};
+use litellm_secret_value::SecretValue;
 use rstest::{fixture, rstest};
 use tempfile::TempDir;
 
@@ -240,7 +241,12 @@ future_section:
         Some("test-project")
     );
     assert_eq!(
-        model.litellm_params.vertex.vertex_credentials.as_deref(),
+        model
+            .litellm_params
+            .vertex
+            .vertex_credentials
+            .as_ref()
+            .map(SecretValue::expose),
         Some(r#"{"type":"service_account"}"#)
     );
     assert!(model.litellm_params.extra.contains_key("future_param"));

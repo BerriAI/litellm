@@ -38,7 +38,7 @@ A boundary renders anything that is not a provider answer with `litellm_error::R
 
 Provider bodies are passed through intact for gateway and Python error mapping. `litellm_http::Error::upstream(status, body)` retains the complete body, but its `Display`, `Debug` and `Report` diagnostics show only the first 256 characters and mark the cut. Do not log the raw body or `RustUpstreamError` args. OCR's `Provider` error also keeps the whole body for Python's `get_error_class`, bounded by the connection's response size limit
 
-Never format `Debug` of an error into a response or a Python exception. A type whose sources may hold secrets derives `veil::Redact`, so its `Debug` is safe to log
+Never format `Debug` of an error into a response or a Python exception. A type whose sources may hold secrets holds them as `Redacted<E>`, so its derived `Debug` is safe to log
 
 ## Logging
 

@@ -17,7 +17,6 @@ reqwest.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 url.workspace = true
-veil.workspace = true
 percent-encoding = "2.3"
 
 [dev-dependencies]

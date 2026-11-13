@@ -3,7 +3,7 @@ use std::sync::Arc;
 use litellm_auth_azure::{AzureAuthInputs, AzureAuthService, ConfigValue};
 use litellm_auth_types::{InputSource, Sourced};
 use litellm_core_utils::settings::Lookup;
-use litellm_secret_value::SecretValue;
+use litellm_secret_value::{Redacted, SecretValue};
 use litellm_secrets_types::{AzureOperationContext, BaseSecretManager, Secret};
 
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC};
@@ -105,7 +105,7 @@ impl AzureKeyVault {
             .header(reqwest::header::ACCEPT, "application/json")
             .send()
             .await
-            .map_err(|error| Error::Http(error.into()))?;
+            .map_err(|error| Error::Http(Redacted::new(error.into())))?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
@@ -115,7 +115,7 @@ impl AzureKeyVault {
         let payload: SecretResponse = response
             .json()
             .await
-            .map_err(|error| Error::Http(error.into()))?;
+            .map_err(|error| Error::Http(Redacted::new(error.into())))?;
         let value = payload.value.ok_or(Error::MissingValue)?;
         Ok(Some(SecretValue::new(value)))
     }

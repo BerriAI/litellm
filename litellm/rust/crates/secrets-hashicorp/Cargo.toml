@@ -19,7 +19,6 @@ serde_json = { workspace = true, features = ["raw_value"] }
 thiserror.workspace = true
 tokio.workspace = true
 vaultrs.workspace = true
-veil.workspace = true
 
 [dev-dependencies]
 rstest.workspace = true

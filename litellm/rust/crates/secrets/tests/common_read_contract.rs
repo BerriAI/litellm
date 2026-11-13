@@ -248,7 +248,7 @@ async fn python_read_failures_preserve_provider_fallback_rules(
         None
     } else {
         environment_value.map(|value| match value {
-            "True" => Secret::Bool(true),
+            "True" => Secret::Bool(true.into()),
             value => Secret::String(SecretValue::new(value)),
         })
     };

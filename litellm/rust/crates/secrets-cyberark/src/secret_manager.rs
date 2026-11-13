@@ -9,7 +9,7 @@ use litellm_core_utils::settings::Lookup;
 use litellm_http::{
     Client, ClientIdentity, ClientVariant, HttpClientConfig, HttpClientPool, TlsSource, Verify,
 };
-use litellm_secret_value::SecretValue;
+use litellm_secret_value::{Redacted, SecretValue};
 use litellm_secrets_types::{
     BaseSecretManager, CyberarkOperationContext, RotationError, SecretCache, SecretDeleter,
     SecretRotator, SecretWriteContext, SecretWriter, async_rotate_secret, validate_secret_name,

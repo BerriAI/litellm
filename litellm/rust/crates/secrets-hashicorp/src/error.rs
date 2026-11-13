@@ -1,7 +1,8 @@
+use litellm_secret_value::Redacted;
 use rustify::errors::ClientError as RustifyClientError;
 use vaultrs::error::ClientError;
 
-#[derive(thiserror::Error, veil::Redact)]
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("HashiCorp Vault requires an enterprise license")]
     EnterpriseRequired,
@@ -10,17 +11,9 @@ pub enum Error {
     #[error(transparent)]
     Operation(#[from] litellm_secrets_types::Error),
     #[error("HashiCorp Vault client failed")]
-    Client(
-        #[source]
-        #[redact]
-        vaultrs::error::ClientError,
-    ),
+    Client(#[source] Redacted<vaultrs::error::ClientError>),
     #[error("HashiCorp Vault request failed")]
-    Transport(
-        #[source]
-        #[redact]
-        litellm_http::Error,
-    ),
+    Transport(#[source] Redacted<litellm_http::Error>),
     #[error("HashiCorp Vault client settings are invalid")]
     ClientSettings(#[source] vaultrs::client::VaultClientSettingsBuilderError),
     #[error("HashiCorp Vault TLS identity could not be configured for {path}")]
@@ -31,21 +24,13 @@ pub enum Error {
     #[error("HashiCorp Vault login returned HTTP {status}")]
     LoginStatus { status: u16 },
     #[error("HashiCorp Vault login response is malformed")]
-    MalformedLogin(
-        #[source]
-        #[redact]
-        vaultrs::error::ClientError,
-    ),
+    MalformedLogin(#[source] Redacted<vaultrs::error::ClientError>),
     #[error("HashiCorp Vault authentication is not configured")]
     NoAuthConfigured,
     #[error("HashiCorp Vault returned HTTP {status}")]
     Status { status: u16 },
     #[error("HashiCorp Vault response payload is malformed")]
-    MalformedPayload(
-        #[source]
-        #[redact]
-        vaultrs::error::ClientError,
-    ),
+    MalformedPayload(#[source] Redacted<vaultrs::error::ClientError>),
     #[error("HashiCorp Vault secret value is not a string")]
     NonStringValue,
     #[error("HashiCorp Vault data key conflicts with description")]
@@ -109,11 +94,13 @@ impl From<ClientError> for Error {
     fn from(error: ClientError) -> Self {
         match error {
             ClientError::RestClientError { source } => match transport(source) {
-                Ok(error) => Self::Transport(error),
-                Err(source) => Self::Client(ClientError::RestClientError { source }),
+                Ok(error) => Self::Transport(Redacted::new(error)),
+                Err(source) => Self::Client(Redacted::new(ClientError::RestClientError { source })),
             },
-            ClientError::RestClientBuildError { source } => Self::Transport(source.into()),
-            error => Self::Client(error),
+            ClientError::RestClientBuildError { source } => {
+                Self::Transport(Redacted::new(source.into()))
+            }
+            error => Self::Client(Redacted::new(error)),
         }
     }
 }

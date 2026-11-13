@@ -8,7 +8,6 @@ repository.workspace = true
 [dependencies]
 serde.workspace = true
 subtle.workspace = true
-veil.workspace = true
 
 [dev-dependencies]
 rstest.workspace = true

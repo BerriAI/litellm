@@ -18,7 +18,6 @@ subtle.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 tower-sessions.workspace = true
-veil.workspace = true
 
 [dev-dependencies]
 futures-util.workspace = true

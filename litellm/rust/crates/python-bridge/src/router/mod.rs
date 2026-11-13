@@ -1737,7 +1737,13 @@ fn host_call_items(py: Python<'_>, dict: &Bound<'_, PyDict>, call: HostCall) -> 
         HostCall::AllowFallback { target } => dict.set_item("target", target),
         HostCall::RefuseFallbacks { level, targets } => {
             dict.set_item("level", level)?;
-            let targets = targets.0.iter().cloned().map(Value::Object).collect();
+            let targets = targets
+                .0
+                .expose()
+                .iter()
+                .cloned()
+                .map(Value::Object)
+                .collect();
             dict.set_item("targets", to_py(py, &Value::Array(targets))?)
         }
         HostCall::Select {

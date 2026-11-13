@@ -80,7 +80,7 @@ If the cause is not `Clone` and the error must be, hold it as `#[source] litellm
 .map_err(litellm_http::Error::from)
 ```
 
-A cause that must not be shown at all, such as a secret manager's response, is still a source. The type derives [`veil::Redact`](https://docs.rs/veil) with `#[redact]` on the field, so `Debug` hides it, and the boundary decides how much of the chain to show, see [boundaries](boundaries.md)
+A cause that must not be shown at all, such as a secret manager's response, is still a source. The field is `#[source] Redacted<E>` from `litellm-secret-value`, so `Debug` hides it while `Display`, the chain and `find` still see it, and the boundary decides how much of the chain to show, see [boundaries](boundaries.md)
 
 ## Strip reqwest URLs on entry
 

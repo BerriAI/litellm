@@ -444,8 +444,8 @@ fn python_secret_value(payload: PythonSecretRead, name: &str) -> PyResult<Py<PyA
     let value = match value {
         None => serde_json::Value::Null,
         Some(Secret::String(value)) => serde_json::Value::String(value.expose().to_owned()),
-        Some(Secret::Bool(value)) => serde_json::Value::Bool(value),
-        Some(Secret::Json(value)) => value,
+        Some(Secret::Bool(value)) => serde_json::Value::Bool(value.into_inner()),
+        Some(Secret::Json(value)) => value.into_inner(),
     };
     Python::attach(|py| to_py(py, &value))
 }

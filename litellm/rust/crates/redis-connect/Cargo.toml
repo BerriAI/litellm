@@ -22,7 +22,6 @@ futures-util.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-veil.workspace = true
 time.workspace = true
 url.workspace = true
 tokio = { workspace = true, features = ["sync", "time", "macros"] }
