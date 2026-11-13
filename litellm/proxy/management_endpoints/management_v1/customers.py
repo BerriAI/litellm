@@ -46,7 +46,7 @@ _ERROR_DETAILS: Final[Mapping[ErrorCode, tuple[int, str, str]]] = MappingProxyTy
         ErrorCode.INVALID_DEFAULT_BUDGET: (
             422,
             "Invalid default budget",
-            "Exactly one organization budget must be marked default.",
+            "default_budget_template must name one of default_budgets, or default_budgets must hold one template.",
         ),
         ErrorCode.TEMPLATE_NOT_IN_ORG: (
             422,

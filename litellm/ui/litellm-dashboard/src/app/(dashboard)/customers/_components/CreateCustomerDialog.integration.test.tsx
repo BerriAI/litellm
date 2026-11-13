@@ -61,11 +61,8 @@ describe("CreateCustomerDialog", () => {
     await waitFor(() => expect(onCreated).toHaveBeenCalledWith("created-org"));
     expect(creations).toHaveLength(1);
     expect(creations[0]).toMatchObject({
-      default_budgets: [
-        { name: "power_user", is_default: true },
-        { name: "default_user", is_default: false },
-        { name: "low_user", is_default: false },
-      ],
+      default_budgets: [{ name: "power_user" }, { name: "default_user" }, { name: "low_user" }],
+      default_budget_template: "power_user",
     });
   });
 

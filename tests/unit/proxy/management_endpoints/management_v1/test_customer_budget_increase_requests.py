@@ -25,7 +25,6 @@ def _paused_member(http: TestClient, cap_policy: str | None) -> str:
                     "name": "monthly",
                     "max_budget": 100,
                     "budget_duration": "30d",
-                    "is_default": True,
                     **({"cap_policy": cap_policy} if cap_policy is not None else {}),
                 }
             ],
@@ -246,7 +245,6 @@ def test_an_approved_increase_replaces_the_template_windows_as_the_members_cap()
                 {
                     "name": "monthly",
                     "budget_limits": [{"budget_duration": "1mo", "max_budget": 100}],
-                    "is_default": True,
                     "cap_policy": "pause_allow_increase",
                 }
             ],
