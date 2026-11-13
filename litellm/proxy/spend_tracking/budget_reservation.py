@@ -1798,7 +1798,7 @@ def _estimate_output_tokens(
     if _is_input_only_route(route=route):
         return 0
 
-    requested: Final = _requested_output_tokens(request_body)
+    requested: Final = _requested_output_tokens(request_body, route=route)
 
     # Clamp at min(requested-or-default, model_max-or-default). Two purposes:
     # (1) Without an explicit cap we still need a finite reservation so the
@@ -1808,20 +1808,62 @@ def _estimate_output_tokens(
     #     the reservation up to remaining team headroom and pin the counter
     #     at the cap — the model can only physically emit max_output_tokens
     #     anyway, so reserving more is both wasteful and a DoS surface.
-    model_ceiling: Final = _to_int(model_info.get("max_output_tokens")) or DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK
+    raw_model_ceiling: Final = _to_int(model_info.get("max_output_tokens"))
+    model_ceiling: Final = (
+        raw_model_ceiling
+        if raw_model_ceiling is not None and raw_model_ceiling > 0
+        else DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK
+    )
     return min(DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK if requested is None else requested, model_ceiling)
 
 
+_RESPONSES_CALL_TYPES: Final = frozenset({CallTypes.aresponses, CallTypes.responses})
+_COMPLETION_OUTPUT_TOKEN_CALL_TYPES: Final = frozenset(
+    {
+        CallTypes.acompletion,
+        CallTypes.completion,
+        CallTypes.atext_completion,
+        CallTypes.text_completion,
+        CallTypes.anthropic_messages,
+        CallTypes.aanthropic_messages,
+    }
+)
+_COMPLETION_OUTPUT_TOKEN_FIELDS: Final = ("max_completion_tokens", "max_tokens")
+_RESPONSES_OUTPUT_TOKEN_FIELDS: Final = ("max_output_tokens",)
 _OUTPUT_TOKEN_FIELDS: Final = ("max_completion_tokens", "max_tokens", "max_output_tokens")
 
 
-def _requested_output_tokens(request_body: Mapping[str, object]) -> int | None:
+def _output_token_fields_for_route(route: str | None) -> tuple[str, ...]:
+    if not route:
+        return _OUTPUT_TOKEN_FIELDS
+    call_types: Final = get_call_types_for_route(route)
+    if not call_types:
+        return _OUTPUT_TOKEN_FIELDS
+    if any(call_type in _RESPONSES_CALL_TYPES for call_type in call_types):
+        return _RESPONSES_OUTPUT_TOKEN_FIELDS
+    if any(call_type in _COMPLETION_OUTPUT_TOKEN_CALL_TYPES for call_type in call_types):
+        return _COMPLETION_OUTPUT_TOKEN_FIELDS
+    return _OUTPUT_TOKEN_FIELDS
+
+
+def _requested_output_tokens(
+    request_body: Mapping[str, object],
+    route: str | None = None,
+) -> int | None:
+    fields: Final = _output_token_fields_for_route(route)
     inference_config: Final = request_body.get("inferenceConfig")
     candidates: Final = (
-        *(request_body.get(field) for field in _OUTPUT_TOKEN_FIELDS),
-        inference_config.get("maxTokens") if isinstance(inference_config, Mapping) else None,
+        *(request_body.get(field) for field in fields),
+        (
+            inference_config.get("maxTokens")
+            if fields == _OUTPUT_TOKEN_FIELDS and isinstance(inference_config, Mapping)
+            else None
+        ),
     )
-    return next((tokens for tokens in map(_to_int, candidates) if tokens is not None), None)
+    parsed: Final[tuple[int, ...]] = tuple(
+        tokens for tokens in map(_non_negative_int, candidates) if tokens is not None
+    )
+    return max(parsed) if parsed else None
 
 
 def _get_output_multiplier(request_body: dict) -> int:
@@ -1853,12 +1895,19 @@ def _to_float(value: object) -> float | None:
         return None
 
 
+def _non_negative_int(value: object) -> int | None:
+    parsed: Final = _to_int(value)
+    return parsed if parsed is not None and parsed >= 0 else None
+
+
 def _to_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
     if not isinstance(value, (SupportsInt, SupportsIndex, str, bytes, bytearray)):
         return None
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
 
 

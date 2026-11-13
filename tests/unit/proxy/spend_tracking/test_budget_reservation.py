@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import math
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -374,7 +375,9 @@ async def test_release_unbound_budget_reservation_frees_the_counter(spend_counte
 
 
 @pytest.mark.asyncio
-async def test_release_unbound_budget_reservation_leaves_a_bound_one_to_its_callback(spend_counter_store: SpendCounterStore):
+async def test_release_unbound_budget_reservation_leaves_a_bound_one_to_its_callback(
+    spend_counter_store: SpendCounterStore,
+):
     counter_key: Final = f"spend:key:{TINY_BUDGET_KEY_TOKEN}"
     reservation: Final = await _reserve_for_tiny_budget_key(
         "/v1/chat/completions", {"model": "gpt-4o", "messages": [{"role": "user", "content": "hello"}]}
@@ -444,9 +447,7 @@ async def test_reservation_holds_cost_against_cached_org_and_project_budgets(spe
         },
     ]
     assert spend_counter_store.get_local("spend:org:org-budgeted") == pytest.approx(reserved_cost)
-    assert spend_counter_store.get_local("spend:project:project-budgeted") == pytest.approx(
-        reserved_cost
-    )
+    assert spend_counter_store.get_local("spend:project:project-budgeted") == pytest.approx(reserved_cost)
 
 
 @pytest.mark.parametrize(
@@ -716,3 +717,256 @@ def test_fixed_budget_window_requires_duration_and_reset_boundary(window: object
     from litellm.proxy.spend_tracking.budget_reservation import fixed_budget_window
 
     assert fixed_budget_window(window) is None
+
+
+def _priced_responses_router() -> Router:
+    return Router(
+        model_list=[
+            Deployment(
+                model_name="priced-model",
+                litellm_params=LiteLLM_Params(model="openai/priced-model", api_key="sk-fake"),
+                model_info=ModelInfo(
+                    id="priced-model-deployment",
+                    input_cost_per_token=0.0001,
+                    output_cost_per_token=0.0002,
+                    max_output_tokens=128000,
+                ),
+            ).model_dump()
+        ]
+    )
+
+
+@pytest.mark.parametrize("route", ["/v1/responses", "/responses", "/openai/v1/responses", "/v1/responses/compact"])
+@pytest.mark.parametrize(
+    "spoofed_fields",
+    [
+        {"max_tokens": 1, "max_output_tokens": 1000},
+        {"max_completion_tokens": 1, "max_output_tokens": 1000},
+        {"max_completion_tokens": 1, "max_tokens": 1, "max_output_tokens": 1000},
+    ],
+)
+def test_responses_routes_ignore_smaller_unforwarded_caps_when_max_output_tokens_set(
+    route: str,
+    spoofed_fields: dict[str, int],
+) -> None:
+    router: Final = _priced_responses_router()
+    baseline: Final = {"model": "priced-model", "input": "hi", "max_output_tokens": 1000}
+    spoofed: Final = {"model": "priced-model", "input": "hi", **spoofed_fields}
+
+    expected_cost: Final = estimate_request_max_cost(request_body=baseline, route=route, llm_router=router)
+    actual_cost: Final = estimate_request_max_cost(request_body=spoofed, route=route, llm_router=router)
+
+    assert expected_cost is not None
+    assert actual_cost == pytest.approx(expected_cost)
+
+
+@pytest.mark.parametrize("route", ["/v1/responses", "/v1/chat/completions", "/v1/messages"])
+@pytest.mark.parametrize(
+    "invalid_cap_body",
+    [
+        {"max_output_tokens": -100},
+        {"max_output_tokens": False},
+        {"max_output_tokens": True},
+        {"max_tokens": -50},
+        {"max_completion_tokens": False},
+    ],
+)
+def test_invalid_or_unforwarded_output_caps_never_under_reserve_below_default(
+    route: str,
+    invalid_cap_body: dict[str, object],
+) -> None:
+    router: Final = _priced_responses_router()
+    input_key: Final = "input" if "responses" in route else "messages"
+    input_val: Final = "hi" if "responses" in route else [{"role": "user", "content": "hi"}]
+    uncapped: Final[dict[str, object]] = {"model": "priced-model", input_key: input_val}
+    candidate: Final[dict[str, object]] = {"model": "priced-model", input_key: input_val, **invalid_cap_body}
+
+    uncapped_cost: Final = estimate_request_max_cost(request_body=uncapped, route=route, llm_router=router)
+    candidate_cost: Final = estimate_request_max_cost(request_body=candidate, route=route, llm_router=router)
+
+    assert uncapped_cost is not None
+    assert candidate_cost == pytest.approx(uncapped_cost)
+
+
+@pytest.mark.parametrize(
+    ("route", "decoy_body"),
+    [
+        ("/v1/responses", {"model": "priced-model", "input": "hi", "max_tokens": 1}),
+        ("/v1/responses", {"model": "priced-model", "input": "hi", "max_completion_tokens": 1}),
+        (
+            "/v1/chat/completions",
+            {
+                "model": "priced-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_output_tokens": 1,
+            },
+        ),
+        (
+            "/v1/messages",
+            {
+                "model": "priced-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_output_tokens": 1,
+            },
+        ),
+    ],
+)
+def test_unforwarded_only_output_cap_uses_default_fallback(
+    route: str,
+    decoy_body: dict[str, object],
+) -> None:
+    router: Final = _priced_responses_router()
+    uncapped: Final = {key: value for key, value in decoy_body.items() if key in ("model", "input", "messages")}
+
+    uncapped_cost: Final = estimate_request_max_cost(request_body=uncapped, route=route, llm_router=router)
+    decoy_cost: Final = estimate_request_max_cost(request_body=decoy_body, route=route, llm_router=router)
+
+    assert uncapped_cost is not None
+    assert decoy_cost == pytest.approx(uncapped_cost)
+
+
+def test_responses_explicit_zero_output_cap_is_preserved() -> None:
+    router: Final = _priced_responses_router()
+    zero_cost: Final = estimate_request_max_cost(
+        request_body={"model": "priced-model", "input": "hi", "max_output_tokens": 0},
+        route="/v1/responses",
+        llm_router=router,
+    )
+    one_token_cost: Final = estimate_request_max_cost(
+        request_body={"model": "priced-model", "input": "hi", "max_output_tokens": 1},
+        route="/v1/responses",
+        llm_router=router,
+    )
+    assert zero_cost is not None and one_token_cost is not None
+    assert 0.0 < zero_cost < one_token_cost
+
+
+@pytest.mark.parametrize(
+    ("route", "spoofed_body", "baseline_body"),
+    [
+        (
+            "/v1/messages",
+            {
+                "model": "priced-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_completion_tokens": 1,
+                "max_output_tokens": 1,
+                "max_tokens": 1000,
+            },
+            {"model": "priced-model", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1000},
+        ),
+        (
+            "/anthropic/v1/messages",
+            {
+                "model": "priced-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_completion_tokens": 1,
+                "max_tokens": 1000,
+            },
+            {"model": "priced-model", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1000},
+        ),
+        (
+            "/v1/chat/completions",
+            {
+                "model": "priced-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_output_tokens": 1,
+                "max_completion_tokens": 1000,
+            },
+            {"model": "priced-model", "messages": [{"role": "user", "content": "hi"}], "max_completion_tokens": 1000},
+        ),
+        (
+            "/v1/chat/completions",
+            {
+                "model": "priced-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_completion_tokens": 1,
+                "max_tokens": 1000,
+            },
+            {"model": "priced-model", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1000},
+        ),
+    ],
+)
+def test_chat_and_messages_routes_prevent_output_cap_shadowing(
+    route: str,
+    spoofed_body: dict[str, object],
+    baseline_body: dict[str, object],
+) -> None:
+    router: Final = _priced_responses_router()
+    expected: Final = estimate_request_max_cost(request_body=baseline_body, route=route, llm_router=router)
+    actual: Final = estimate_request_max_cost(request_body=spoofed_body, route=route, llm_router=router)
+    assert expected is not None
+    assert actual == pytest.approx(expected)
+
+
+def test_bedrock_converse_inference_config_max_tokens_scales_cost() -> None:
+    router: Final = _priced_responses_router()
+    route: Final = "/bedrock/model/priced-model/converse"
+    low: Final = estimate_request_max_cost(
+        request_body={
+            "model": "priced-model",
+            "messages": [{"role": "user", "content": [{"text": "hi"}]}],
+            "inferenceConfig": {"maxTokens": 100},
+        },
+        route=route,
+        llm_router=router,
+    )
+    high: Final = estimate_request_max_cost(
+        request_body={
+            "model": "priced-model",
+            "messages": [{"role": "user", "content": [{"text": "hi"}]}],
+            "inferenceConfig": {"maxTokens": 1000},
+        },
+        route=route,
+        llm_router=router,
+    )
+    assert low is not None and high is not None
+    assert high > low
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("token_id", "body", "expected_admitted"),
+    [
+        (
+            "responses-max-tokens-and-output",
+            {"model": "priced-model", "input": "hi", "max_tokens": 1, "max_output_tokens": 1000},
+            5,
+        ),
+        ("responses-decoy-max-tokens-only", {"model": "priced-model", "input": "hi", "max_tokens": 1}, 1),
+    ],
+)
+async def test_responses_concurrent_reservations_enforce_max_budget(
+    spend_counter_store: SpendCounterStore,
+    token_id: str,
+    body: dict[str, object],
+    expected_admitted: int,
+) -> None:
+    router: Final = _priced_responses_router()
+    cache: Final = UserApiKeyCache()
+    proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+    valid_token: Final = UserAPIKeyAuth(api_key=token_id, token=token_id, max_budget=1.0, spend=0.0)
+
+    outcomes: Final = await asyncio.gather(
+        *(
+            reserve_budget_for_request(
+                request_body=dict(body),
+                route="/v1/responses",
+                llm_router=router,
+                valid_token=valid_token,
+                team_object=None,
+                user_object=None,
+                prisma_client=None,
+                user_api_key_cache=cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            for _ in range(10)
+        ),
+        return_exceptions=True,
+    )
+
+    admitted: Final = sum(1 for item in outcomes if isinstance(item, dict))
+    rejected: Final = sum(1 for item in outcomes if isinstance(item, litellm.BudgetExceededError))
+    assert admitted == expected_admitted
+    assert rejected == 10 - expected_admitted
+    assert spend_counter_store.get_local(f"spend:key:{token_id}") == pytest.approx(1.0)
