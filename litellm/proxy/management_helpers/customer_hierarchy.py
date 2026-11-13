@@ -1,4 +1,4 @@
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -10,6 +10,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 from litellm.models.budget import LiteLLM_BudgetTable
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.list_api.common import escape_like
 from litellm.repositories.budget_repository import create_budget_row, update_budget_row
@@ -85,6 +86,15 @@ class BudgetRecord(Budget):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
 
+class BudgetWindow(BaseModel):
+    """The recurring window a budget row carries; customer rows read theirs from the budget they point at."""
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    budget_duration: str | None = None
+    budget_reset_at: datetime | None = None
+
+
 class OrganizationMemberCount(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -96,6 +106,20 @@ _VALUES: Final = TypeAdapter(Mapping[str, object])
 _MEMBER_COUNTS: Final = TypeAdapter(tuple[OrganizationMemberCount, ...])
 _BUDGET: Final[TypeAdapter[BudgetRecord | None]] = TypeAdapter(BudgetRecord | None)
 _EXPIRY: Final[TypeAdapter[datetime | None]] = TypeAdapter(datetime | None)
+_WINDOW: Final[TypeAdapter[BudgetWindow | None]] = TypeAdapter(BudgetWindow | None)
+
+
+def window_reset_at(value: object) -> datetime | None:
+    window: Final = _WINDOW.validate_python(value)
+    return None if window is None else window.budget_reset_at
+
+
+def budget_window_values(budget: Budget, patch: Collection[str]) -> Mapping[str, object]:
+    """``budget_reset_at`` follows ``budget_duration``: stamped when a duration is written, cleared when it is removed."""
+    if "budget_duration" not in patch:
+        return {}
+    duration: Final = budget.budget_duration
+    return {"budget_reset_at": get_budget_reset_time(duration) if duration is not None else None}
 
 
 def budget_values(budget: Budget) -> Mapping[str, object]:
@@ -181,7 +205,13 @@ def organization_response(
 
 def team_response(row: PrismaRecord) -> Team:
     values: Final = row.model_dump()
-    return Team.model_validate({**values, "budget": related_budget(values.get("budget"))})
+    return Team.model_validate(
+        {
+            **values,
+            "budget": related_budget(values.get("budget")),
+            "budget_reset_at": window_reset_at(values.get("budget")),
+        }
+    )
 
 
 def utc_now() -> datetime:
@@ -205,6 +235,17 @@ def effective_member_budget(
     return Budget.model_validate({**budget_values(inherited), **values, **models})
 
 
+def member_window_reset_at(
+    template: object, override: object, expires_at: datetime | None, now: datetime
+) -> datetime | None:
+    """An unexpired override with its own duration runs the member's window; otherwise the template does."""
+    active: Final = _WINDOW.validate_python(override)
+    unexpired: Final = expires_at is None or utc_datetime(expires_at) > utc_datetime(now)
+    if active is not None and active.budget_duration is not None and unexpired:
+        return active.budget_reset_at
+    return window_reset_at(template)
+
+
 def member_response(row: PrismaRecord, now: datetime) -> CustomerMember:
     values: Final = row.model_dump()
     override: Final = related_budget(values.get("budget_override"))
@@ -217,6 +258,7 @@ def member_response(row: PrismaRecord, now: datetime) -> CustomerMember:
         {
             **values,
             "budget_override": override,
+            "budget_reset_at": member_window_reset_at(values.get("budget"), values.get("budget_override"), expiry, now),
             "effective_budget": effective_member_budget(template, effective_override, expiry, now),
         }
     )
@@ -260,7 +302,11 @@ class CustomerHierarchyStore:
     async def organization_responses(self, rows: Sequence[PrismaRecord]) -> tuple[Organization, ...]:
         records: Final = tuple(
             OrganizationRecord.model_validate(
-                {**row.model_dump(), "budget": related_budget(row.model_dump().get("budget"), self.now)}
+                {
+                    **row.model_dump(),
+                    "budget": related_budget(row.model_dump().get("budget"), self.now),
+                    "budget_reset_at": window_reset_at(row.model_dump().get("budget")),
+                }
             )
             for row in rows
         )
@@ -313,6 +359,7 @@ class CustomerHierarchyStore:
             budget_row_values(
                 {
                     **budget_values(budget),
+                    **budget_window_values(budget, budget.model_fields_set),
                     "allowed_models": budget.allowed_models or (),
                     "budget_id": budget_id,
                 }
@@ -331,6 +378,7 @@ class CustomerHierarchyStore:
             budget_row_values(
                 {
                     **patch,
+                    **budget_window_values(budget, patch),
                     **({"allowed_models": budget.allowed_models or ()} if "allowed_models" in patch else {}),
                 }
             ),

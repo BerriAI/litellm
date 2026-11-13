@@ -6,7 +6,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime, timedelta, timezone
 from datetime import time as dt_time
 from typing import Any, Dict, Final, List, Optional
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import httpx
 import prisma
@@ -200,6 +200,9 @@ class MockBatcher:
         self.litellm_modelaccessgroupbudgettable = _Table("model_access_group", self)
         self.litellm_projecttable = _Table("project", self)
         self.litellm_endusertable = _Table("enduser", self)
+        self.litellm_customerorganizationtable = _Table("customer_org", self)
+        self.litellm_customerteamtable = _Table("customer_team", self)
+        self.litellm_customermembertable = _Table("customer_member", self)
 
     def execute_raw(self, query: str, *args: object) -> None:
         self.calls.append(
@@ -818,6 +821,80 @@ def test_budget_table_reset_zeroes_spend_on_every_linked_table(
     assert len(writes) == 1, f"expected exactly 1 {table} write, got {writes}"
     assert writes[0]["where"] == expected_where
     assert writes[0]["data"] == {"spend": 0}
+
+
+def test_budget_table_reset_zeroes_customer_hierarchy_rows_on_the_budget_window(reset_budget_job, mock_prisma_client):
+    """Customer org, team and member rows carry no reset clock of their own: the
+    budget row they point at does, so its cascade zeroes them. A member resets
+    with its template unless an unexpired override with its own duration runs
+    the member's window, in which case the override's cascade resets it."""
+    mock_prisma_client.data["budget"] = [_budget_row(budget_id="tier", budget_duration="7d")]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    for table in ("customer_org", "customer_team"):
+        writes = _batch_writes(mock_prisma_client, table)
+        assert writes == [
+            {
+                "table": table,
+                "op": "update_many",
+                "where": {"budget_id": {"in": ["tier"]}, "spend": {"gt": 0}},
+                "data": {"spend": 0},
+            }
+        ], writes
+    template_write, override_write = _batch_writes(mock_prisma_client, "customer_member")
+    assert template_write["data"] == override_write["data"] == {"spend": 0}
+    assert template_write["where"]["budget_id"] == {"in": ["tier"]}
+    assert template_write["where"]["spend"] == {"gt": 0}
+    assert template_write["where"]["OR"][:2] == [
+        {"budget_override_id": None},
+        {"budget_override_expires_at": {"lte": ANY}},
+    ]
+    assert template_write["where"]["OR"][2] == {"budget_override": {"is": {"budget_duration": None}}}
+    assert override_write["where"]["budget_override_id"] == {"in": ["tier"]}
+    assert override_write["where"]["spend"] == {"gt": 0}
+    assert override_write["where"]["OR"] == [
+        {"budget_override_expires_at": None},
+        {"budget_override_expires_at": {"gt": ANY}},
+    ]
+    assert "budget_id" not in override_write["where"]
+
+
+def test_budget_table_reset_evicts_cached_customer_hierarchies_after_commit(
+    reset_budget_job, mock_prisma_client, monkeypatch
+):
+    """A member's cached hierarchy holds the org, team and member spend the
+    request path checks, so every member a reset touches, directly or through
+    its team or org, is evicted once the cascade lands."""
+    from litellm.proxy.auth.customer_hierarchy_auth import customer_member_cache_key
+
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+    broadcasts: list[tuple[str, ...]] = []
+
+    async def _broadcast(keys):
+        broadcasts.append(tuple(keys))
+
+    monkeypatch.setattr(reset_budget_job_module, "broadcast_evictions", _broadcast)
+    mock_prisma_client.data["budget"] = [_budget_row(budget_id="tier", budget_duration="7d")]
+    mock_prisma_client.db.litellm_customerorganizationtable.set_find_many_results(
+        [types.SimpleNamespace(customer_org_id="org-1", spend=3.0, budget_id="tier")]
+    )
+    mock_prisma_client.db.litellm_customermembertable.set_find_many_results(
+        [types.SimpleNamespace(customer_member_id="member-1", spend=1.0, budget_id="tier")]
+    )
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    assert mock_prisma_client.db.batchers[-1].committed is True
+    evicted = {call.kwargs["key"] for call in counter_cache.user_api_key_cache.async_delete_cache.await_args_list}
+    assert customer_member_cache_key("member-1") in evicted
+    assert customer_member_cache_key("member-1") in {key for keys in broadcasts for key in keys}
+    descendant_reads = [
+        call["where"]
+        for call in mock_prisma_client.db.litellm_customermembertable.find_many_calls
+        if "parent_team" in call["where"]
+    ]
+    assert descendant_reads == [{"parent_team": {"is": {"parent_org_id": {"in": ["org-1"]}}}}]
 
 
 _POSTGRES_MAX_BIND_VARIABLES: Final = 32767
@@ -2238,6 +2315,9 @@ def test_budget_cascade_writes_land_in_a_single_transaction(reset_budget_job, mo
         ("tag", "update_many"),
         ("model_access_group", "update_many"),
         ("project", "update_many"),
+        ("customer_org", "update_many"),
+        ("customer_team", "update_many"),
+        ("customer_member", "update_many"),
         ("budget", "update_many"),
     }
     budget_write = next(call for call in batcher.calls if call["table"] == "budget")

@@ -74,7 +74,6 @@ class Table:
         row: Final = Record.model_validate(
             {
                 "spend": 0.0,
-                "budget_reset_at": None,
                 "budget_ids": (),
                 "budget_names": {},
                 "created_at": NOW,

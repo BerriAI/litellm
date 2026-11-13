@@ -39,6 +39,9 @@ class FakeBatch:
         self.litellm_modelaccessgroupbudgettable = FakeBatchTable("litellm_modelaccessgroupbudgettable", self.calls)
         self.litellm_projecttable = FakeBatchTable("litellm_projecttable", self.calls)
         self.litellm_endusertable = FakeBatchTable("litellm_endusertable", self.calls)
+        self.litellm_customerorganizationtable = FakeBatchTable("litellm_customerorganizationtable", self.calls)
+        self.litellm_customerteamtable = FakeBatchTable("litellm_customerteamtable", self.calls)
+        self.litellm_customermembertable = FakeBatchTable("litellm_customermembertable", self.calls)
 
     def execute_raw(self, query: str, *args: object) -> None:
         self.calls.append(("execute_raw", {"query": query}, {"args": args}))
@@ -226,3 +229,23 @@ async def test_membership_total_spend_repair_is_queued_on_the_cascade_batch_ahea
     assert repair[0] == "execute_raw"
     assert repair[2] == {"args": (["budget-1", "budget-2"],)}
     assert reset == ("litellm_teammembership.update_many", {"budget_id": "budget-1"}, {"spend": 0})
+
+
+@pytest.mark.asyncio
+async def test_cascade_row_locks_cover_the_customer_hierarchy_by_both_budget_links():
+    """Customer org, team and member rows reset on their budget's window, so the
+    cascade has to take their row locks too, and a member is reachable through
+    its template or its override."""
+    batch = FakeBatch()
+    async with budget_cascade_unit_of_work(lambda: batch) as uow:
+        uow.row_locks.queue_row_locks(["budget-1"])
+
+    locks = [call[1]["query"] for call in batch.calls if call[0] == "execute_raw"]
+    customer_locks = [query for query in locks if "LiteLLM_Customer" in query]
+    assert [query.split('"')[1] for query in customer_locks] == [
+        "LiteLLM_CustomerOrganizationTable",
+        "LiteLLM_CustomerTeamTable",
+        "LiteLLM_CustomerMemberTable",
+    ]
+    assert all("FOR UPDATE" in query for query in customer_locks)
+    assert "budget_override_id = ANY($1::text[])" in customer_locks[-1]

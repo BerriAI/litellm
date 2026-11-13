@@ -47,7 +47,6 @@ model LiteLLM_BudgetTable {
 
 model LiteLLM_CustomerOrganizationTable {
   spend Float @default(0.0)
-  budget_reset_at DateTime?
   budget_ids String[] @default([])
   budget_names Json @default("{}")
   budget_id String?
@@ -65,7 +64,6 @@ model LiteLLM_CustomerOrganizationTable {
 
 model LiteLLM_CustomerTeamTable {
   spend Float @default(0.0)
-  budget_reset_at DateTime?
   customer_team_id String @id @default(uuid())
   alias String?
   parent_org_id String
@@ -82,7 +80,6 @@ model LiteLLM_CustomerTeamTable {
 
 model LiteLLM_CustomerMemberTable {
   spend Float @default(0.0)
-  budget_reset_at DateTime?
   customer_member_id String @id @default(uuid())
   alias String?
   parent_team_id String

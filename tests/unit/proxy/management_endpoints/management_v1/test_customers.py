@@ -648,3 +648,59 @@ def test_organization_list_counts_all_members_and_searches_before_paginating() -
 def family_default_budget_id(http: TestClient) -> str:
     organization: Final = http.get("/management/v1/customer_organizations/org").json()
     return str(organization["default_budget_id"])
+
+
+def test_budget_reset_at_is_read_from_the_governing_budget_row() -> None:
+    """Customer rows carry no reset clock: an org or team reports its budget's window, and a member reports
+    its unexpired override's window when that override has a duration, otherwise its template's."""
+    http: Final = client()
+    org: Final = http.post(
+        "/management/v1/customer_organizations",
+        json={
+            "customer_org_id": "windowed",
+            "budget": {"max_budget": 1000, "budget_duration": "30d"},
+            "default_budgets": [{"name": "monthly", "max_budget": 100, "budget_duration": "30d", "is_default": True}],
+        },
+    )
+    assert org.status_code == 201, org.text
+    assert org.json()["budget_reset_at"] is not None
+    team: Final = http.post(
+        "/management/v1/customer_teams",
+        json={"customer_team_id": "windowed-team", "parent_org_id": "windowed", "budget": {"max_budget": 10}},
+    )
+    assert team.status_code == 201, team.text
+    assert team.json()["budget_reset_at"] is None
+    on_template: Final = http.post(
+        "/management/v1/customer_members",
+        json={"customer_member_id": "on-template", "parent_team_id": "windowed-team"},
+    )
+    assert on_template.status_code == 201, on_template.text
+    assert on_template.json()["budget_reset_at"] is not None
+    override: Final = http.post(
+        "/management/v1/customer_members",
+        json={
+            "customer_member_id": "overridden",
+            "parent_team_id": "windowed-team",
+            "budget_override": {"max_budget": 5, "budget_duration": "1d"},
+            "budget_override_expires_at": "2099-01-01T00:00:00Z",
+        },
+    )
+    assert override.status_code == 201, override.text
+    assert override.json()["budget_reset_at"] is not None
+    assert override.json()["budget_reset_at"] < on_template.json()["budget_reset_at"]
+    expired: Final = http.post(
+        "/management/v1/customer_members",
+        json={
+            "customer_member_id": "expired-override",
+            "parent_team_id": "windowed-team",
+            "budget_override": {"max_budget": 5, "budget_duration": "1d"},
+            "budget_override_expires_at": "2000-01-01T00:00:00Z",
+        },
+    )
+    assert expired.status_code == 201, expired.text
+    assert expired.json()["budget_reset_at"] == on_template.json()["budget_reset_at"]
+    cleared: Final = http.patch(
+        "/management/v1/customer_organizations/windowed", json={"budget": {"budget_duration": None}}
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["budget_reset_at"] is None
