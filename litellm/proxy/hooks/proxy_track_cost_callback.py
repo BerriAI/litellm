@@ -36,7 +36,7 @@ from litellm.proxy.auth.auth_checks import (
     get_key_object,
     get_team_object,
 )
-from litellm.proxy.auth.customer_spend import settle_customer_spend
+from litellm.proxy.auth.customer_spend import customer_spend_keys, settle_customer_spend
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
 from litellm.proxy.db.db_spend_update_writer import (
@@ -1388,6 +1388,11 @@ async def _update_database_and_spend_counters(
         )
     counter_keys: Final = (
         frozenset(counter.counter_key for counter in customer_counters)
+        | (
+            customer_spend_keys(_OBJECT_MAPPING.validate_python(get_litellm_metadata_from_kwargs(kwargs=kwargs)))
+            if response_cost
+            else frozenset()
+        )
         | frozenset(get_reserved_counter_keys(budget_reservation=budget_reservation))
         | post_call_counter_keys(
             token=user_api_key,

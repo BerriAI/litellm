@@ -18,9 +18,11 @@ from lifecycle import ResourceManager
 from models import KeyGenerateBody, TeamNewBody, UserNewBody, UserNewResponse
 from proxy_client import ProxyClient
 from pydantic import BaseModel, ConfigDict
+
+from setup.customer_hierarchy import provision_customer_hierarchy
 from setup.performance_test_case import MockProvider, PerformanceTestCase
 from setup.plan import Caller
-from setup.wire import TokenSource
+from setup.wire import CustomerHeaders, TokenSource
 
 MOCK_PROVIDERS: Final[tuple[MockProvider, ...]] = ("openai", "anthropic", "bedrock")
 
@@ -83,6 +85,7 @@ class CaseSetup:
     key_bearers: dict[str, str]
     token_sources: dict[str, TokenSource]
     user_ids: dict[str, str]
+    customer_headers: CustomerHeaders | None = None
 
     def authorization(self, caller: Caller) -> str | None:
         return f"Bearer {self.key_bearers[caller.name]}" if caller.kind == "key" else None
@@ -186,5 +189,10 @@ def build_setup(
         key_bearers[key.name] = generated
 
     return CaseSetup(
-        marker=marker, team_ids=team_ids, key_bearers=key_bearers, token_sources=token_sources, user_ids=user_ids
+        marker=marker,
+        team_ids=team_ids,
+        key_bearers=key_bearers,
+        token_sources=token_sources,
+        user_ids=user_ids,
+        customer_headers=provision_customer_hierarchy(proxy, resources, marker) if case.customer_hierarchy else None,
     )

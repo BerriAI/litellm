@@ -39,6 +39,23 @@ class WireShape(BaseModel):
     output_tokens: int
 
 
+class CustomerHeaders(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    organization: str
+    team: str
+    member: str
+
+    def headers(self) -> Mapping[str, str]:
+        return MappingProxyType(
+            {
+                "x-litellm-customer-org-alias": self.organization,
+                "x-litellm-customer-team-id": self.team,
+                "x-litellm-customer-member-id": self.member,
+            }
+        )
+
+
 class WireRequest(BaseModel):
     seq: int
     marker: str
@@ -53,6 +70,7 @@ class WireRequest(BaseModel):
     blocked: bool
     send_at_s: float | None = None
     """Seconds after the run starts to send this request, set when the case ramps; otherwise the users pace."""
+    customer_headers: CustomerHeaders | None = None
 
 
 class WireRecord(BaseModel):

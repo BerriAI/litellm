@@ -4,6 +4,7 @@ from typing import Final
 
 from pydantic import ValidationError
 
+from litellm.proxy.spend_tracking.spend_counter_batch import bind_spend_counter_keys, read_batched_spend_counter
 from litellm.redis.stores.spend_counters import SpendCounterStore
 from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerScopeAuth
 
@@ -13,41 +14,63 @@ def customer_spend_counter(scope: CustomerScopeAuth) -> str:
     return f"spend:{scope.key}:{scope.entity_id}:{period}"
 
 
-async def _current_scope(
-    scope: CustomerScopeAuth, current: float | None, store: SpendCounterStore
-) -> CustomerScopeAuth:
-    spend: Final = (
-        await store.seed(customer_spend_counter(scope), scope.spend, increment_if_lost=False)
-        if current is None
-        else current
-    )
-    return scope.model_copy(update={"spend": max(scope.spend, spend)})
+async def _seed_scope(scope: CustomerScopeAuth, current: float | None, store: SpendCounterStore) -> None:
+    if current is None:
+        _ = await store.seed(customer_spend_counter(scope), scope.spend, increment_if_lost=False)
 
 
 async def current_customer_spend(
     hierarchy: CustomerHierarchyAuth,
     read_spend: Callable[[str, float, float | None], Awaitable[float]],
 ) -> CustomerHierarchyAuth:
+    bind_spend_counter_keys(frozenset(customer_spend_counter(scope) for scope in hierarchy.scopes))
     readings: Final = await asyncio.gather(
         *(read_spend(customer_spend_counter(scope), scope.spend, scope.max_budget) for scope in hierarchy.scopes)
     )
     scopes: Final = tuple(
-        scope.model_copy(update={"spend": max(scope.spend, spend)})
+        scope.model_copy(update={"spend": spend}) if spend > scope.spend else scope
         for scope, spend in zip(hierarchy.scopes, readings, strict=True)
     )
-    return hierarchy.model_copy(update={"scopes": tuple(scopes)})
+    return (
+        hierarchy
+        if all(a is b for a, b in zip(scopes, hierarchy.scopes, strict=True))
+        else hierarchy.model_copy(update={"scopes": scopes})
+    )
+
+
+def customer_spend_hierarchy(metadata: Mapping[str, object]) -> CustomerHierarchyAuth | None:
+    snapshot: Final = metadata.get("user_api_key_customer_hierarchy")
+    if snapshot is None:
+        return None
+    try:
+        return CustomerHierarchyAuth.model_validate(snapshot)
+    except ValidationError:
+        return None
+
+
+def customer_spend_keys(metadata: Mapping[str, object]) -> frozenset[str]:
+    hierarchy: Final = customer_spend_hierarchy(metadata)
+    return (
+        frozenset(customer_spend_counter(scope) for scope in hierarchy.scopes) if hierarchy is not None else frozenset()
+    )
+
+
+async def _settlement_read(counter: str, store: SpendCounterStore) -> float | None:
+    batched: Final = await read_batched_spend_counter(counter)
+    return batched[0] if batched is not None else (await store.read(counter))[0]
 
 
 async def settle_customer_spend(metadata: Mapping[str, object], cost: float, store: SpendCounterStore) -> None:
-    snapshot: Final = metadata.get("user_api_key_customer_hierarchy")
-    if snapshot is None or cost == 0:
+    hierarchy: Final = customer_spend_hierarchy(metadata)
+    if hierarchy is None or cost == 0:
         return
-    try:
-        hierarchy: Final = CustomerHierarchyAuth.model_validate(snapshot)
-    except ValidationError:
-        return
-    readings: Final = await asyncio.gather(*(store.read(customer_spend_counter(scope)) for scope in hierarchy.scopes))
-    _ = await asyncio.gather(
-        *(_current_scope(scope, reading[0], store) for scope, reading in zip(hierarchy.scopes, readings, strict=True))
+    bind_spend_counter_keys(frozenset(customer_spend_counter(scope) for scope in hierarchy.scopes))
+    readings: Final = await asyncio.gather(
+        *(_settlement_read(customer_spend_counter(scope), store) for scope in hierarchy.scopes)
     )
-    _ = await store.increment_many(tuple((customer_spend_counter(scope), cost) for scope in hierarchy.scopes))
+    _ = await asyncio.gather(
+        *(_seed_scope(scope, reading, store) for scope, reading in zip(hierarchy.scopes, readings, strict=True))
+    )
+    increments: Final = tuple((customer_spend_counter(scope), cost) for scope in hierarchy.scopes)
+    if store.increment_many_post_call(increments) is None:
+        _ = await store.increment_many(increments)

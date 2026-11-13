@@ -2,15 +2,24 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
-from typing import Final, Literal, TypeAlias
+from typing import Annotated, Final, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, PlainSerializer, TypeAdapter, ValidationError
 
 from litellm.models.budget import BudgetLimit
 from litellm.types.integrations.slack_alerting import Litellm_EntityType
 from litellm.types.proxy.management_endpoints.customer_hierarchy import CapPolicy
 
 CustomerScopeKey: TypeAlias = Literal["customer_org", "customer_team", "customer_member"]
+
+
+def _frozen_limits(limits: Mapping[str, int]) -> Mapping[str, int]:
+    return MappingProxyType(dict(limits))
+
+
+ModelLimits: TypeAlias = Annotated[
+    Mapping[str, int], AfterValidator(_frozen_limits), PlainSerializer(dict, return_type=dict[str, int])
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,8 +46,8 @@ class CustomerScopeAuth(BaseModel):
     tpm_limit: int | None = None
     rpm_limit: int | None = None
     allowed_models: tuple[str, ...] | None = None
-    model_tpm_limit: Mapping[str, int] | None = None
-    model_rpm_limit: Mapping[str, int] | None = None
+    model_tpm_limit: ModelLimits | None = None
+    model_rpm_limit: ModelLimits | None = None
     cap_policy: CapPolicy | None = None
 
 
