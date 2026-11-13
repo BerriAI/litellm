@@ -13,6 +13,7 @@ import respx
 import litellm
 from litellm.litellm_core_utils.health_check_helpers import HealthCheckHelpers
 from litellm.litellm_core_utils.llm_request_utils import RankedChatModel
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.proxy import health_check as hc_module
 from litellm.proxy.health_check import (
     _is_strategy_router_deployment,
@@ -20,6 +21,7 @@ from litellm.proxy.health_check import (
     resolve_health_check_mode,
     update_litellm_params_for_health_check,
 )
+from tests.unit.proxy.conftest import SuccessLogRecorder
 
 
 @pytest.mark.asyncio
@@ -507,32 +509,53 @@ async def test_run_model_health_check_threads_resolved_mode_to_ahealth_check():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("model_info", "expected_metadata"),
+    ("model_info", "logged_identity"),
     [
-        (
-            {"id": "standby-deployment", "mode": "chat"},
-            {"model_info": {"id": "standby-deployment"}, "model_group": "plain"},
-        ),
-        ({"mode": "chat"}, None),
+        ({"id": "standby-deployment", "mode": "chat"}, ("standby-deployment", "plain")),
+        ({"mode": "chat"}, ("", "")),
     ],
 )
-async def test_run_model_health_check_stamps_the_deployment_identity_only_in_logging_metadata(
-    model_info: dict[str, object], expected_metadata: dict[str, object] | None
+async def test_a_probe_logs_its_deployment_identity_without_sending_it_upstream_or_to_cooldowns(
+    httpx_transport: None,
+    success_logs: SuccessLogRecorder,
+    model_info: dict[str, object],
+    logged_identity: tuple[str, str],
 ) -> None:
-    fake_ahealth_check: Final = AsyncMock(return_value={})
-
-    with patch.object(hc_module.litellm, "ahealth_check", fake_ahealth_check):
-        await hc_module._run_model_health_check(
+    with respx.mock(assert_all_called=True) as upstream:
+        chat_route: Final = upstream.post("https://probe-upstream.invalid/v1/chat/completions").respond(
+            200,
+            json={
+                "id": "chatcmpl-probe",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "provider-b-pay",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+        result: Final = await hc_module._run_model_health_check(
             {
                 "model_name": "plain",
-                "litellm_params": {"model": "openai/provider-b-pay", "api_key": "sk-fake"},
+                "litellm_params": {
+                    "model": "openai/provider-b-pay",
+                    "api_base": "https://probe-upstream.invalid/v1",
+                    "api_key": "sk-fake",
+                },
                 "model_info": model_info,
             }
         )
+    await GLOBAL_LOGGING_WORKER.flush()
+    delivered: Final = await success_logs.delivered(1)
 
-    probed_params: Final = fake_ahealth_check.call_args.args[0]
-    assert probed_params.get("litellm_metadata") == expected_metadata
-    assert probed_params["model_info"] == {"mode": "chat"}
+    assert "error" not in result, result
+    sent_body: Final = json.loads(chat_route.calls.last.request.content)
+    assert not {"metadata", "litellm_metadata", "model_info"} & sent_body.keys(), sent_body
+    logged: Final = [
+        (log["standard_logging_object"]["model_id"], log["standard_logging_object"]["model_group"]) for log in delivered
+    ]
+    assert logged == [logged_identity]
+    cooldown_ids: Final = [log["litellm_params"]["model_info"].get("id") for log in delivered]
+    assert cooldown_ids == [None], "the router's cooldown callbacks key on litellm_params.model_info.id"
 
 
 @pytest.mark.asyncio
