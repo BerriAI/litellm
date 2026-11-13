@@ -616,8 +616,9 @@ def _iter_provider_file_id_pairs(
 ) -> Iterator[tuple[str, str]]:
     unified_by_canonical_id: Final = dict(_iter_canonical_provider_file_ids(rows))
     for requested_provider_file_id in requested_provider_file_ids:
-        unified_file_id: Final = unified_by_canonical_id.get(canonical_provider_file_id(requested_provider_file_id))
-        if unified_file_id is not None:
+        if (
+            unified_file_id := unified_by_canonical_id.get(canonical_provider_file_id(requested_provider_file_id))
+        ) is not None:
             yield requested_provider_file_id, unified_file_id
 
 
