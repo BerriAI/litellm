@@ -202,7 +202,7 @@ def test_unsupported_response_format_is_rejected_before_sending(
     route: Final = respx_mock.post(ZOOM_AI_FAST_URL).respond(json=SCRIBE_RESPONSE)
 
     with pytest.raises(litellm.UnsupportedParamsError, match="response_format"):
-        litellm.transcription(model="zoom_ai/zoom-scribe-en", file=AUDIO, response_format="srt")
+        litellm.transcription(model="zoom_ai/zoom-scribe-en", file=AUDIO, response_format="text")
 
     assert not route.called
 
@@ -237,6 +237,25 @@ def test_unsupported_response_format_is_rejected_before_sending(
         ("a-future-model", {}, {"model": "a-future-model"}),
         ("auto", {"language": "ko"}, {"language": "ko-KR"}),
         ("auto", {}, {}),
+        ("whisper", {"language": "es"}, {"model": "whisper", "language": "es-ES"}),
+        (
+            "zoom-scribe-multilingual",
+            {"language_detection": {"mode": "continuous", "candidate_languages": ["en-US", "es-ES"]}},
+            {
+                "model": "zoom-scribe-multilingual",
+                "language_detection": {"mode": "continuous", "candidate_languages": ["en-US", "es-ES"]},
+            },
+        ),
+        (
+            "zoom-scribe-en",
+            {"response_format": "diarized_json", "diarization": "false"},
+            {"model": "zoom-scribe-en", "language": "en-US", "diarization": False},
+        ),
+        (
+            "zoom-scribe-en",
+            {"response_format": "diarized_json"},
+            {"model": "zoom-scribe-en", "language": "en-US", "diarization": True},
+        ),
     ],
 )
 def test_recognition_config_language_and_model(
@@ -279,6 +298,167 @@ def test_an_option_scribe_cannot_parse_is_a_bad_request() -> None:
         zoom_ai_recognition_config("zoom-scribe-en", {"diarization": "sometimes"})
 
     assert error.value.status_code == 400
+
+
+def test_diarized_json_returns_scribes_speaker_segments(zoom_ai_env: None, respx_mock: respx.MockRouter) -> None:
+    segments: Final = [
+        {"speaker": "Speaker 1", "start": 0.0, "end": 3.9, "text": "I'd like to return a mug."},
+        {"speaker": "Speaker 2", "start": 4.1, "end": 6.0, "text": "Sure, which order?"},
+    ]
+    route: Final = respx_mock.post(ZOOM_AI_FAST_URL).respond(
+        json={
+            **SCRIBE_RESPONSE,
+            "result": {"text_display": "I'd like to return a mug. Sure, which order?", "segments": segments},
+        }
+    )
+
+    response: Final = litellm.transcription(model="zoom_ai/zoom-scribe-en", file=AUDIO, response_format="diarized_json")
+
+    assert _sent_config(route.calls.last.request)["diarization"] is True
+    assert [(s["speaker"], s["start"], s["end"], s["text"]) for s in response["segments"]] == [
+        (s["speaker"], s["start"], s["end"], s["text"]) for s in segments
+    ]
+
+
+WORDED_SEGMENTS: Final = [
+    {
+        "id": "utt_0000",
+        "start": 0.0,
+        "end": 1.2,
+        "channel": 0,
+        "speaker": "",
+        "text": "Four score",
+        "words": [{"word": "Four", "start": 0.0, "end": 0.6}, {"word": "score", "start": 0.6, "end": 1.2}],
+    },
+    {
+        "id": "utt_0001",
+        "start": 1.5,
+        "end": 2.4,
+        "channel": 1,
+        "speaker": "",
+        "text": "and seven",
+        "words": [{"word": "and", "start": 1.5, "end": 1.8}, {"word": "seven", "start": 1.8, "end": 2.4}],
+    },
+]
+
+
+def _worded_response() -> Mapping[str, object]:
+    return {**SCRIBE_RESPONSE, "result": {"text_display": "Four score and seven", "segments": WORDED_SEGMENTS}}
+
+
+def test_verbose_json_with_word_timestamps_returns_segments_and_words(
+    zoom_ai_env: None, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(ZOOM_AI_FAST_URL).respond(json=_worded_response())
+
+    response: Final = litellm.transcription(
+        model="zoom_ai/zoom-scribe-en",
+        file=AUDIO,
+        response_format="verbose_json",
+        timestamp_granularities=["word", "segment"],
+    )
+
+    assert _sent_config(route.calls.last.request)["word_time_offsets"] is True
+    assert [(s["start"], s["end"], s["text"], s["channel"]) for s in response["segments"]] == [
+        (s["start"], s["end"], s["text"], s["channel"]) for s in WORDED_SEGMENTS
+    ]
+    assert "speaker" not in response["segments"][0]
+    assert response["words"] == [word for segment in WORDED_SEGMENTS for word in segment["words"]]
+
+
+@pytest.mark.parametrize("response_format", ["srt", "vtt"])
+def test_subtitles_are_built_from_scribes_word_timings(
+    zoom_ai_env: None, respx_mock: respx.MockRouter, response_format: str
+) -> None:
+    route: Final = respx_mock.post(ZOOM_AI_FAST_URL).respond(json=_worded_response())
+
+    response: Final = litellm.transcription(model="zoom_ai/zoom-scribe-en", file=AUDIO, response_format=response_format)
+
+    assert _sent_config(route.calls.last.request)["word_time_offsets"] is True
+    assert "Four score and seven" in response.text
+    assert "-->" in response.text
+
+
+def test_text_polishing_is_requested_in_outputs_and_returned_beside_the_transcript(
+    zoom_ai_env: None, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(ZOOM_AI_FAST_URL).respond(
+        json={**SCRIBE_RESPONSE, "outputs": {"text_polishing": {"text": "Hi there. What is the capital of France?"}}}
+    )
+
+    response: Final = litellm.transcription(model="zoom_ai/zoom-scribe-en", file=AUDIO, text_polishing="true")
+
+    assert json.loads(_form_fields(route.calls.last.request)["outputs"]) == {"text_polishing": {"enabled": True}}
+    assert response.text == SCRIBE_RESPONSE["result"]["text_display"]
+    assert response["polished_text"] == "Hi there. What is the capital of France?"
+
+
+def test_a_failed_polish_is_not_returned_as_text() -> None:
+    response: Final = ZoomAIAudioTranscriptionConfig().transform_audio_transcription_response(
+        httpx.Response(
+            200, json={**SCRIBE_RESPONSE, "outputs": {"text_polishing": {"text": "[polishing_failed: timeout]"}}}
+        )
+    )
+
+    assert "polished_text" not in response.model_dump()
+
+
+def test_segments_carry_the_language_scribe_detected() -> None:
+    response: Final = ZoomAIAudioTranscriptionConfig().transform_audio_transcription_response(
+        httpx.Response(
+            200,
+            json={
+                **SCRIBE_RESPONSE,
+                "result": {"text_display": "Hola", "language": "es", "segments": [{"text": "Hola", "language": "es"}]},
+            },
+        )
+    )
+
+    assert response["language"] == "es"
+    assert response["segments"][0]["language"] == "es"
+
+
+def test_text_polishing_off_sends_no_outputs_field(zoom_ai_env: None, respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(ZOOM_AI_FAST_URL).respond(json=SCRIBE_RESPONSE)
+
+    litellm.transcription(model="zoom_ai/zoom-scribe-en", file=AUDIO, text_polishing="false")
+
+    assert "outputs" not in _form_fields(route.calls.last.request)
+
+
+def test_drop_params_drops_an_unsupported_response_format_and_still_transcribes(
+    zoom_ai_env: None, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(ZOOM_AI_FAST_URL).respond(json=SCRIBE_RESPONSE)
+
+    response: Final = litellm.transcription(
+        model="zoom_ai/zoom-scribe-en", file=AUDIO, response_format="text", drop_params=True
+    )
+
+    assert route.called
+    assert response.text == SCRIBE_RESPONSE["result"]["text_display"]
+
+
+def test_spend_falls_back_to_the_audio_duration_when_scribe_reports_no_usage(
+    local_model_cost_map: None,
+) -> None:
+    response: Final = ZoomAIAudioTranscriptionConfig().transform_audio_transcription_response(
+        httpx.Response(200, json={key: value for key, value in SCRIBE_RESPONSE.items() if key != "usage"})
+    )
+
+    cost: Final = litellm.completion_cost(
+        completion_response=response, model="zoom_ai/zoom-scribe-en", call_type="transcription"
+    )
+    assert cost == pytest.approx(SCRIBE_RESPONSE["duration_sec"] * _rate("zoom-scribe-en"))
+
+
+def test_the_upload_names_only_the_file_not_its_directory(zoom_ai_env: None, respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(ZOOM_AI_FAST_URL).respond(json=SCRIBE_RESPONSE)
+
+    litellm.transcription(model="zoom_ai/zoom-scribe-en", file=("../clips/speech.wav", AUDIO[1], "audio/wav"))
+
+    disposition: Final = route.calls.last.request.content.split(b'name="file"; filename="', 1)[1].split(b'"', 1)[0]
+    assert disposition == b"speech.wav"
 
 
 @pytest.mark.parametrize(

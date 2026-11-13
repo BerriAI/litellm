@@ -6,15 +6,18 @@ https://developers.zoom.us/docs/ai-services/scribe/fast-mode/
 
 import json
 import re
-from collections.abc import Mapping
-from typing import Final
+from collections.abc import Iterator, Mapping
+from pathlib import PurePath
+from typing import Final, Literal
 
 from httpx import Headers, Response
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import ZOOM_AI_DEFAULT_API_BASE
 from litellm.exceptions import UnsupportedParamsError
+from litellm.litellm_core_utils.audio_utils.subtitle_utils import SUBTITLE_RESPONSE_FORMATS
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.audio_transcription.transformation import (
@@ -36,18 +39,20 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import FileTypes, TranscriptionResponse, TranscriptionUsageDurationObject
 
-SUPPORTED_RESPONSE_FORMATS: Final = ("json",)
+SUPPORTED_RESPONSE_FORMATS: Final = ("json", "verbose_json", "diarized_json", "srt", "vtt")
 ZOOM_AI_BOOL_CONFIG_PARAMS: Final = frozenset(
     {"diarization", "word_time_offsets", "channel_separation", "profanity_filter"}
 )
+POLISHING_FAILED_PREFIX: Final = "[polishing_failed:"
 ZOOM_AI_STR_CONFIG_PARAMS: Final = frozenset({"segmentation_mode", "vocabulary_id"})
 ZOOM_AI_CONFIG_PARAMS: Final = (
     ZOOM_AI_BOOL_CONFIG_PARAMS | ZOOM_AI_STR_CONFIG_PARAMS | {"vocabulary", "language_detection"}
 )
 # `zoom_ai/auto` leaves the model to Scribe, which picks one from the language and detection settings
 ZOOM_AI_AUTO_MODEL: Final = "auto"
-# Models documented with continuous language detection, which is what callers expect from a multilingual model
-CONTINUOUS_DETECTION_MODELS: Final = frozenset({"zoom-scribe-multilingual", "whisper"})
+# The multilingual model detects the language continuously, which is what callers expect from it. whisper is left
+# out because Scribe refuses continuous detection on it unless exactly one candidate language is named
+CONTINUOUS_DETECTION_MODELS: Final = frozenset({"zoom-scribe-multilingual"})
 
 _LANGUAGE_MODEL: Final = re.compile(r"zoom-scribe-(?P<language>[a-z]{2,3})(?:-pro(?:-[a-z0-9.]+)*)?")
 _FORM_BOOL: Final = TypeAdapter(bool)
@@ -55,11 +60,57 @@ _PHRASES: Final = TypeAdapter(tuple[str, ...])
 _DETECTION: Final = TypeAdapter(dict[str, object])
 
 
+class _ScribeWord(BaseModel):
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
+
+    word: str
+    start: float
+    end: float
+
+
+class _ScribeSegment(BaseModel):
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
+
+    id: str = ""
+    text: str = ""
+    start: float = 0.0
+    end: float = 0.0
+    channel: int = 0
+    speaker: str = ""
+    language: str | None = None
+    words: tuple[_ScribeWord, ...] = ()
+
+
 class _ScribeResult(BaseModel):
     model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
 
     text_display: str = ""
     language: str | None = None
+    segments: tuple[_ScribeSegment, ...] = ()
+
+
+class _Segment(TypedDict):
+    id: ReadOnly[str]
+    type: ReadOnly[Literal["transcript.text.segment"]]
+    start: ReadOnly[float]
+    end: ReadOnly[float]
+    text: ReadOnly[str]
+    channel: ReadOnly[int]
+    speaker: NotRequired[ReadOnly[str]]
+    language: NotRequired[ReadOnly[str]]
+
+
+class _Word(TypedDict):
+    word: ReadOnly[str]
+    start: ReadOnly[float]
+    end: ReadOnly[float]
+
+
+class _OptionalFields(TypedDict, total=False):
+    language: ReadOnly[str]
+    segments: ReadOnly[list[_Segment]]  # writable-ok: never written, list is the OpenAI response shape
+    words: ReadOnly[list[_Word]]  # writable-ok: never written, list is the OpenAI response shape
+    polished_text: ReadOnly[str]
 
 
 class _ScribeUsage(BaseModel):
@@ -69,6 +120,18 @@ class _ScribeUsage(BaseModel):
     unit_type: str
 
 
+class _ScribePolishing(BaseModel):
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
+
+    text: str = ""
+
+
+class _ScribeOutputs(BaseModel):
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
+
+    text_polishing: _ScribePolishing | None = None
+
+
 class _ScribeResponse(BaseModel):
     model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
 
@@ -76,6 +139,14 @@ class _ScribeResponse(BaseModel):
     duration_sec: float = 0.0
     model: str | None = None
     usage: _ScribeUsage | None = None
+    outputs: _ScribeOutputs | None = None
+
+    def polished_text(self) -> str | None:
+        """Scribe reports a failed polish as a `[polishing_failed: ...]` marker, which is not text to show."""
+        polishing: Final = self.outputs.text_polishing if self.outputs is not None else None
+        if polishing is None or not polishing.text or polishing.text.startswith(POLISHING_FAILED_PREFIX):
+            return None
+        return polishing.text
 
     def billed_usage(self) -> TranscriptionUsageDurationObject | None:
         if self.usage is None or self.usage.unit_type != "seconds":
@@ -102,7 +173,7 @@ def _language_detection(value: object) -> object:
 
 
 def _decoded_param(key: str, value: object) -> object:
-    if key in ZOOM_AI_BOOL_CONFIG_PARAMS:
+    if key in ZOOM_AI_BOOL_CONFIG_PARAMS or key == "text_polishing":
         return _bool_param(value)
     if key == "vocabulary":
         return _vocabulary(value)
@@ -129,10 +200,19 @@ def _model_locale(model: str) -> str | None:
 def zoom_ai_recognition_config(model: str, optional_params: Mapping[str, object]) -> Mapping[str, object]:
     language: Final = optional_params.get("language")
     locale: Final = zoom_ai_locale(language) if isinstance(language, str) and language.strip() else _model_locale(model)
+    response_format: Final = optional_params.get("response_format")
+    granularities: Final = optional_params.get("timestamp_granularities")
+    wants_words: Final = response_format in SUBTITLE_RESPONSE_FORMATS or (
+        isinstance(granularities, (list, tuple)) and "word" in granularities
+    )
     provider_config: Final = {
-        key: _config_param(key, value)
-        for key, value in optional_params.items()
-        if key in ZOOM_AI_CONFIG_PARAMS and value is not None
+        **({"diarization": True} if response_format == "diarized_json" else {}),
+        **({"word_time_offsets": True} if wants_words else {}),
+        **{
+            key: _config_param(key, value)
+            for key, value in optional_params.items()
+            if key in ZOOM_AI_CONFIG_PARAMS and value is not None
+        },
     }
     detection: Final[Mapping[str, object]] = (
         {"language_detection": {"mode": "continuous"}}
@@ -147,18 +227,64 @@ def zoom_ai_recognition_config(model: str, optional_params: Mapping[str, object]
     }
 
 
+class _SegmentLabels(TypedDict, total=False):
+    speaker: ReadOnly[str]
+    language: ReadOnly[str]
+
+
+def _segment(index: int, segment: _ScribeSegment) -> _Segment:
+    """One shape for every format: OpenAI's segment fields, plus Scribe's channel, speaker and language."""
+    speaker: Final[_SegmentLabels] = {"speaker": segment.speaker} if segment.speaker else {}
+    language: Final[_SegmentLabels] = {"language": segment.language} if segment.language else {}
+    base: Final[_Segment] = {
+        "id": segment.id or f"seg_{index}",
+        "type": "transcript.text.segment",
+        "start": segment.start,
+        "end": segment.end,
+        "text": segment.text,
+        "channel": segment.channel,
+    }
+    labelled: Final[_Segment] = {**base, **speaker, **language}
+    return labelled
+
+
+def _words(segments: tuple[_ScribeSegment, ...]) -> list[_Word]:  # mutable-ok: OpenAI response shape
+    return [_Word(word=word.word, start=word.start, end=word.end) for word in _flattened_words(segments)]
+
+
+def _flattened_words(segments: tuple[_ScribeSegment, ...]) -> Iterator[_ScribeWord]:
+    for segment in segments:
+        yield from segment.words
+
+
+def _optional_fields(scribe: _ScribeResponse) -> _OptionalFields:
+    result: Final = scribe.result
+    segments: Final = [_segment(index, segment) for index, segment in enumerate(result.segments)]
+    words: Final = _words(result.segments)
+    polished: Final = scribe.polished_text()
+    language: Final[_OptionalFields] = {"language": result.language} if result.language else {}
+    with_segments: Final[_OptionalFields] = {"segments": segments} if segments else {}
+    with_words: Final[_OptionalFields] = {"words": words} if words else {}
+    with_polished: Final[_OptionalFields] = {"polished_text": polished} if polished is not None else {}
+    merged: Final[_OptionalFields] = {**language, **with_segments, **with_words, **with_polished}
+    return merged
+
+
+def zoom_ai_outputs(optional_params: Mapping[str, object]) -> Mapping[str, str]:
+    """Text Polishing is requested in Scribe's top-level `outputs` field, next to `config`."""
+    requested: Final = optional_params.get("text_polishing")
+    if requested is None or not _config_param("text_polishing", requested):
+        return {}
+    return {"outputs": json.dumps({"text_polishing": {"enabled": True}})}
+
+
 def _transcription_response(scribe: _ScribeResponse) -> TranscriptionResponse:
-    text: Final = scribe.result.text_display
-    if scribe.result.language:
-        return TranscriptionResponse(
-            text=text,
-            usage=scribe.billed_usage(),
-            task="transcribe",
-            language=scribe.result.language,
-            duration=scribe.duration_sec,
-        )
     return TranscriptionResponse(
-        text=text, usage=scribe.billed_usage(), task="transcribe", duration=scribe.duration_sec
+        text=scribe.result.text_display,
+        usage=scribe.billed_usage(),
+        task="transcribe",
+        duration=scribe.duration_sec,
+        **_optional_fields(scribe),
     )
 
 
@@ -167,13 +293,17 @@ class ZoomAIAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     def custom_llm_provider(self) -> str:
         return litellm.LlmProviders.ZOOM_AI.value
 
+    @property
+    def supports_subtitle_synthesis(self) -> bool:
+        return True
+
     def get_supported_openai_params(
         self,
         model: str,
     ) -> list[  # mutable-ok: overrides the BaseAudioTranscriptionConfig signature
         OpenAIAudioTranscriptionOptionalParams
     ]:
-        return ["language", "response_format"]
+        return ["language", "response_format", "timestamp_granularities"]
 
     def map_openai_params(
         self,
@@ -252,10 +382,13 @@ class ZoomAIAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     ) -> AudioTranscriptionRequestData:
         processed_audio: Final = process_audio_file(audio_file)
         return AudioTranscriptionRequestData(
-            data={"config": json.dumps(zoom_ai_recognition_config(model, optional_params))},
+            data={
+                "config": json.dumps(zoom_ai_recognition_config(model, optional_params)),
+                **zoom_ai_outputs(optional_params),
+            },
             files={
                 "file": (
-                    processed_audio.filename,
+                    PurePath(processed_audio.filename).name,
                     processed_audio.file_content,
                     processed_audio.content_type,
                 )
