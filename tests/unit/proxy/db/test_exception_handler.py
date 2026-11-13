@@ -169,7 +169,21 @@ def test_is_database_service_unavailable_error_cached_plan_escapes_as_503():
     assert PrismaDBExceptionHandler.is_database_service_unavailable_error(cached_plan_error) is True
 
 
-def test_is_database_service_unavailable_error_prisma_engine_malformed_payload():
+@pytest.mark.parametrize(
+    "error_code, transient",
+    (
+        ("P1001", True),
+        ("P1017", True),
+        ("P1000", False),
+        ("P2002", False),
+        ("P2009", False),
+        ("", False),
+        (None, False),
+    ),
+)
+def test_is_database_service_unavailable_error_prisma_engine_malformed_payload(
+    error_code: str | None, transient: bool
+) -> None:
     """Real-world regression: at the instant the DB socket drops, the prisma
     query engine returns a malformed error payload (``user_facing_error.meta``
     is ``null``). prisma-client-py's ``handle_response_errors`` then crashes
@@ -183,11 +197,15 @@ def test_is_database_service_unavailable_error_prisma_engine_malformed_payload()
     malformed_payload = [
         {
             "error": "Can't reach database server",
-            "user_facing_error": {
-                "error_code": "P1001",
-                "message": "Can't reach database server at `localhost`:`5503`",
-                "meta": None,
-            },
+            "user_facing_error": (
+                {
+                    "error_code": error_code,
+                    "message": "Can't reach database server at `localhost`:`5503`",
+                    "meta": None,
+                }
+                if error_code is not None
+                else None
+            ),
         }
     ]
     with pytest.raises(AttributeError) as exc_info:
@@ -195,6 +213,8 @@ def test_is_database_service_unavailable_error_prisma_engine_malformed_payload()
 
     assert "no attribute 'get'" in str(exc_info.value)
     assert PrismaDBExceptionHandler.is_database_service_unavailable_error(exc_info.value) is True
+    assert PrismaDBExceptionHandler.is_database_connection_error(exc_info.value) is transient
+    assert PrismaDBExceptionHandler.is_database_transport_error(exc_info.value) is transient
 
 
 def test_is_prisma_engine_internal_error_excludes_application_attributeerror():
@@ -978,7 +998,7 @@ def test_is_statement_timeout_error(error: Exception, expected: bool) -> None:
         ("invalid engine response", False),
     ],
 )
-def test_engine_connection_closure_is_recoverable_without_allowing_unverified_auth(
+def test_engine_connection_closure_allows_fail_open_but_permanent_engine_faults_do_not(
     body: str,
     retryable: bool,
 ) -> None:
@@ -987,7 +1007,7 @@ def test_engine_connection_closure_is_recoverable_without_allowing_unverified_au
     error: Final = EngineRequestError(Response(httpx.Response(500)), body)
     assert PrismaDBExceptionHandler.is_database_transport_error(error) is retryable
     assert PrismaDBExceptionHandler.is_permanent_database_fault(error) is not retryable
-    assert PrismaDBExceptionHandler.is_database_connection_error(error) is False
+    assert PrismaDBExceptionHandler.is_database_connection_error(error) is retryable
 
 
 def test_connection_closure_code_survives_prisma_data_error_wrapping() -> None:

@@ -1,6 +1,7 @@
 import re
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from http import HTTPStatus
+from traceback import walk_tb
 from typing import Final, Protocol, TypeVar
 
 from pydantic import TypeAdapter, ValidationError
@@ -107,6 +108,9 @@ class _FrameGlobals(Protocol):
     @property
     def f_globals(self) -> Mapping[str, object]: ...
 
+    @property
+    def f_locals(self) -> Mapping[str, object]: ...
+
 
 class _PrefixMatchable(Protocol):
     def startswith(self, prefix: str, /) -> bool: ...
@@ -116,12 +120,30 @@ def _frame_module_name(frame: _FrameGlobals) -> _PrefixMatchable:
     return require_attributes(frame.f_globals.get("__name__", ""), _PrefixMatchable, "startswith")
 
 
+def _prisma_frame_error_code(frame: _FrameGlobals) -> str | None:
+    try:
+        payload: Final = _DATABASE_ERROR_META.validate_python(frame.f_locals.get("user_facing"))
+    except ValidationError:
+        return None
+    code: Final = payload.get("error_code")
+    return code if isinstance(code, str) else None
+
+
+def _prisma_response_error_code(e: AttributeError) -> str | None:
+    for frame, _ in walk_tb(e.__traceback__):
+        if _frame_module_name(frame) == "prisma.engine.utils" and frame.f_code.co_name == "handle_response_errors":
+            return _prisma_frame_error_code(frame)
+    return None
+
+
 def _prisma_error_code(e: Exception) -> str | None:
     import prisma.engine.errors
 
     if isinstance(e, _exception_types(prisma.errors.DataError)):
         code: Final[object] = getattr(e, "code", None)
         return code if isinstance(code, str) else None
+    if isinstance(e, AttributeError):
+        return _prisma_response_error_code(e)
     if not isinstance(e, _exception_types(prisma.engine.errors.EngineRequestError)):
         return None
     try:
@@ -178,6 +200,8 @@ class PrismaDBExceptionHandler:
         if isinstance(e, (*DB_CONNECTION_ERROR_TYPES, DBLookupDeadlineExceeded)):
             return True
         if isinstance(e, _exception_types(prisma.engine.errors.EngineConnectionError)):
+            return True
+        if _prisma_error_code(e) in (_UNREACHABLE_PRISMA_CODE, "P1017"):
             return True
         if PrismaDBExceptionHandler.is_database_capacity_error(e):
             return True
@@ -282,7 +306,7 @@ class PrismaDBExceptionHandler:
             return True
         if PrismaDBExceptionHandler.is_database_capacity_error(e):
             return False
-        if _prisma_error_code(e) == "P1017":
+        if _prisma_error_code(e) in (_UNREACHABLE_PRISMA_CODE, "P1017"):
             return True
         if isinstance(e, _exception_types(prisma.errors.PrismaError)):
             error_message: Final = str(e).lower()

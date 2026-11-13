@@ -4550,19 +4550,32 @@ async def _authorize_authenticated_request(
         user_api_key_auth_obj.customer_hierarchy = None  # rebind-ok: request state, never inherited from a cached key
         if customer_identity is not None:
             with tracer.trace("litellm.proxy.auth.resolve_customer_hierarchy"):  # pyright: ignore[reportUnknownMemberType]  # tracer is the untyped proxy tracer
-                user_api_key_auth_obj.customer_hierarchy = await resolve_customer_hierarchy(  # rebind-ok: the gate updates the request-owned auth object in place
-                    identity=customer_identity,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    llm_router=llm_router,
-                    request_model=_get_model_from_request_context(
-                        request_data, route, request, llm_router, team_id=user_api_key_auth_obj.team_id
-                    ),
-                    route=route,
-                    key_metadata=_KEY_METADATA_ADAPTER.validate_python(
-                        user_api_key_auth_obj.metadata or {}  # pyright: ignore[reportUnknownMemberType]  # untyped key metadata, validated here
-                    ),
-                )
+                try:
+                    user_api_key_auth_obj.customer_hierarchy = await resolve_customer_hierarchy(  # rebind-ok: the gate updates the request-owned auth object in place
+                        identity=customer_identity,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                        llm_router=llm_router,
+                        request_model=_get_model_from_request_context(
+                            request_data, route, request, llm_router, team_id=user_api_key_auth_obj.team_id
+                        ),
+                        route=route,
+                        key_metadata=_KEY_METADATA_ADAPTER.validate_python(
+                            user_api_key_auth_obj.metadata or {}  # pyright: ignore[reportUnknownMemberType]  # untyped key metadata, validated here
+                        ),
+                    )
+                except Exception as e:
+                    if not (
+                        PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
+                        and PrismaDBExceptionHandler.is_database_connection_error(e)
+                    ):
+                        raise
+                    verbose_proxy_logger.warning(
+                        "DB unavailable, admitting request without customer hierarchy. "
+                        "customer org alias=%s, customer member id=%s",
+                        customer_identity.customer_org_alias,
+                        customer_identity.customer_member_id,
+                    )
 
         grants: Final = await access_group_ids_for_identity(user_api_key_auth_obj)
         user_api_key_auth_obj.apply_access_group_rule_grants(grants)

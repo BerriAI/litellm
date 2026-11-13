@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException, WebSocket, status
+from prisma.engine import utils as prisma_engine_utils
 from starlette.datastructures import URL
 from starlette.requests import Request as StarletteRequest
 from starlette.types import Message
@@ -2692,6 +2693,63 @@ async def test_customer_hierarchy_survives_virtual_key_auth_without_legacy_end_u
     assert identity.customer_hierarchy == hierarchy
     assert identity.end_user_id is None
     assert loader.await_args is not None and loader.await_args.args[0] == "m1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("allow_requests", (True, False))
+@pytest.mark.parametrize("error_code", ("P1001", "P1017", "P1000"))
+async def test_customer_hierarchy_database_outage_respects_fail_open_setting(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, allow_requests: bool, error_code: str
+) -> None:
+    server: Final = litellm.proxy.proxy_server
+    key: Final = "sk-hierarchy-db-outage"
+    stored: Final = UserAPIKeyAuth(token=server.hash_token(key))
+    with pytest.raises(AttributeError) as decoder_error:
+        prisma_engine_utils.handle_response_errors(
+            None,
+            [
+                {
+                    "error": "database query failed",
+                    "user_facing_error": {
+                        "error_code": error_code,
+                        "message": "database query failed",
+                        "meta": None,
+                    },
+                }
+            ],
+        )
+    prisma: Final = MagicMock(get_data=AsyncMock(return_value=stored))
+    prisma.db.litellm_customerorganizationtable.find_many = AsyncMock(side_effect=decoder_error.value)
+    monkeypatch.setattr(server, "master_key", MASTER_KEY)
+    monkeypatch.setattr(server, "general_settings", {"allow_requests_on_db_unavailable": allow_requests})
+    monkeypatch.setattr(server, "user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr(server, "prisma_client", prisma)
+    monkeypatch.setattr(server, "llm_router", None)
+    monkeypatch.setattr(server, "user_custom_auth", None)
+    request: Final = StarletteRequest(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/chat/completions",
+            "headers": [(b"x-litellm-customer-member-id", b"m1"), (b"x-litellm-customer-org-alias", b"customer-a")],
+        },
+        receive=AsyncMock(
+            return_value={
+                "type": "http.request",
+                "body": json.dumps({"model": "gpt-4o-mini", "messages": []}).encode(),
+                "more_body": False,
+            }
+        ),
+    )
+    if allow_requests and error_code in ("P1001", "P1017"):
+        identity: Final = await user_api_key_auth(request=request, api_key=f"Bearer {key}")
+        assert identity.customer_hierarchy is None
+        assert identity.token == stored.token
+        assert "customer org alias=customer-a, customer member id=m1" in caplog.text
+    else:
+        with pytest.raises(ProxyException) as denied:
+            await user_api_key_auth(request=request, api_key=f"Bearer {key}")
+        assert denied.value.code == "503"
 
 
 @pytest.mark.asyncio
