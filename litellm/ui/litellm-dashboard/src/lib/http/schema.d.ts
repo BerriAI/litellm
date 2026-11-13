@@ -29483,8 +29483,11 @@ export interface components {
         };
         /** BudgetLimit */
         BudgetLimit: {
-            /** Budget Duration */
-            budget_duration: string;
+            /**
+             * Budget Duration
+             * @enum {string}
+             */
+            budget_duration: "1mo" | "12mo";
             /** Max Budget */
             max_budget: number;
             /** Reset At */

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { components } from "@/lib/http/schema";
 import { budgetFormPayload, COMBINED_BUDGET_DURATION } from "./budgetLimits";
 
 const combined = {
@@ -11,7 +12,7 @@ const combined = {
 const limits = [
   { budget_duration: "1mo", max_budget: 0, reset_at: "2027-01-01T00:00:00Z" },
   { budget_duration: "12mo", max_budget: 100 },
-];
+] satisfies NonNullable<components["schemas"]["BudgetWriteRequest"]["budget_limits"]>;
 
 describe("budgetFormPayload", () => {
   it.each(["30d", "12mo"])("preserves the scalar representation for %s", (duration) => {
@@ -84,11 +85,44 @@ describe("budgetFormPayload", () => {
     });
   });
 
-  it("preserves other existing windows when changing a calendar cap", () => {
-    const hourly = { budget_duration: "1h", max_budget: 5 };
-    expect(budgetFormPayload(combined, { annual_budget: true }, [...limits, hourly])).toEqual({
-      budget_id: "both",
-      budget_limits: [hourly, ...limits],
+  it.each(["1mo", "12mo"] as const)("updates a single %s window in place, including zero", (duration) => {
+    const existing = { budget_duration: duration, max_budget: 100, reset_at: "2027-01-01T00:00:00Z" };
+    const values = { budget_id: "single", max_budget: 0, budget_duration: duration === "1mo" ? "30d" : duration };
+    expect(budgetFormPayload(values, { max_budget: true }, [existing])).toEqual({
+      budget_id: "single",
+      budget_limits: [{ ...existing, max_budget: 0 }],
     });
+  });
+
+  it("does not resend a single window for a rate-only edit", () => {
+    const values = { budget_id: "single", max_budget: 100, budget_duration: "12mo", rpm_limit: 20 };
+    expect(budgetFormPayload(values, { rpm_limit: true }, [limits[1]])).toEqual({ budget_id: "single", rpm_limit: 20 });
+  });
+
+  it("preserves a second window received on refresh while editing a single monthly cap", () => {
+    const values = { budget_id: "single", max_budget: 50, budget_duration: "30d" };
+    expect(budgetFormPayload(values, { max_budget: true }, limits)).toEqual({
+      budget_id: "single",
+      budget_limits: [{ ...limits[0], max_budget: 50 }, limits[1]],
+    });
+  });
+
+  it("clears the existing single window when the amount is blank", () => {
+    const values = { budget_id: "single", max_budget: null, budget_duration: "30d" };
+    expect(budgetFormPayload(values, { max_budget: true }, [limits[0]])).toEqual({
+      budget_id: "single",
+      budget_limits: null,
+    });
+  });
+
+  it("removes the original window when changing to a different scalar period", () => {
+    const values = { budget_id: "single", max_budget: 100, budget_duration: "7d" };
+    const expected = {
+      budget_id: "single",
+      max_budget: 100,
+      budget_duration: "7d",
+      budget_limits: null,
+    };
+    expect(budgetFormPayload(values, { budget_duration: true }, [limits[1]])).toEqual(expected);
   });
 });

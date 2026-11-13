@@ -12,13 +12,15 @@ const toFormValues = (budget: budgetItem) => {
   const monthly = budget.budget_limits?.find((limit) => limit.budget_duration === "1mo");
   const annual = budget.budget_limits?.find((limit) => limit.budget_duration === "12mo");
   const combined = monthly != null && annual != null;
+  const window = monthly ?? annual;
+  const windowDuration = window?.budget_duration === "1mo" ? "30d" : window?.budget_duration;
   return {
     budget_id: budget.budget_id,
     tpm_limit: budget.tpm_limit,
     rpm_limit: budget.rpm_limit,
     tpd_limit: budget.tpd_limit,
-    max_budget: combined ? monthly.max_budget : budget.max_budget,
-    budget_duration: combined ? COMBINED_BUDGET_DURATION : budget.budget_duration,
+    max_budget: window?.max_budget ?? budget.max_budget,
+    budget_duration: combined ? COMBINED_BUDGET_DURATION : windowDuration ?? budget.budget_duration,
     annual_budget: annual?.max_budget,
   };
 };

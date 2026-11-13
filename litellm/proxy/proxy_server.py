@@ -1124,7 +1124,7 @@ from litellm.types.llms.openai import (
     ResponseInProgressEvent,
     ResponsesAPIResponse,
 )
-from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyIds
+from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyIds, CustomerScopeAuth
 from litellm.types.proxy.carried_budget_state import EntitySpendCounterKeys
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
@@ -3755,15 +3755,24 @@ def _finish_pending_read(absent_key: str, pending_read: str, remember_absent: bo
 
 async def customer_accounting_counters(
     ids: CustomerHierarchyIds | None,
+    admitted_scopes: tuple[CustomerScopeAuth, ...] | None = None,
 ) -> tuple[BudgetCounter, ...]:
-    if ids is None or prisma_client is None:
+    if ids is None:
         return ()
     from itertools import chain
 
     from litellm.proxy.auth.customer_hierarchy_auth import get_customer_scopes_for_accounting
 
     try:
-        scopes: Final = await get_customer_scopes_for_accounting(ids, prisma_client, user_api_key_cache)
+        scopes: Final = (
+            admitted_scopes
+            if admitted_scopes is not None
+            else (
+                await get_customer_scopes_for_accounting(ids, prisma_client, user_api_key_cache)
+                if prisma_client is not None
+                else ()
+            )
+        )
     except Exception:
         logging.getLogger(verbose_proxy_logger.name).exception(
             "Unable to load customer budget windows for spend accounting"

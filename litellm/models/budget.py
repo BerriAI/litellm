@@ -7,32 +7,24 @@ Canonical definition for ``litellm_budgettable``. Re-exported from
 
 from collections.abc import Mapping
 from datetime import datetime, timezone
-from typing import Annotated, Final, TypeAlias
+from typing import Annotated, Final, Literal, TypeAlias
 
-from pydantic import AfterValidator, ConfigDict, Field, field_validator, model_validator
+from pydantic import AfterValidator, ConfigDict, Field, model_validator
 
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
-from litellm.models.team import BudgetLimitEntry
 from litellm.proxy.common_utils.timezone_utils import (
     BudgetResetSettings,
-    budget_duration_error,
     compute_budget_reset_at,
 )
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
 
-class BudgetLimit(BudgetLimitEntry):
+class BudgetLimit(LiteLLMPydanticObjectBase):
     model_config = ConfigDict(frozen=True)
 
+    budget_duration: Literal["1mo", "12mo"]
     max_budget: float = Field(ge=0, allow_inf_nan=False)
-
-    @field_validator("budget_duration")
-    @classmethod
-    def valid_duration(cls, value: str) -> str:
-        error: Final = budget_duration_error(value)
-        if error is not None:
-            raise ValueError(error)
-        return value
+    reset_at: datetime | None = None
 
 
 def unique_budget_limits(limits: tuple[BudgetLimit, ...]) -> tuple[BudgetLimit, ...]:

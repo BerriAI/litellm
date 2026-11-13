@@ -5,6 +5,7 @@ from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi import Request
 
 import litellm
 import litellm.proxy.proxy_server as ps
@@ -14,16 +15,20 @@ from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.customer_hierarchy_auth import (
     check_customer_hierarchy_windows,
     customer_member_cache_key,
+    customer_org_alias_cache_key,
     get_customer_scopes_for_accounting,
+    resolve_customer_hierarchy,
 )
 from litellm.proxy.common_utils.timezone_utils import BudgetResetSettings
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
 from litellm.proxy.hooks.proxy_track_cost_callback import (
+    ProxyDBLogger,
     _update_database_and_spend_counters,
     _update_database_and_spend_counters_in_batch,
 )
+from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 from litellm.proxy.spend_tracking.budget_reservation import (
     _counter_to_reservation_entry,
     _reserve_counters,
@@ -35,7 +40,12 @@ from litellm.proxy.spend_tracking.budget_reservation import (
 from litellm.proxy.utils import ProxyLogging
 from litellm.redis.stores.spend_counters.types import parse_customer_window_counter
 from litellm.responses.streaming_iterator import drain_logging_tasks
-from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerHierarchyIds, CustomerScopeAuth
+from litellm.types.proxy.auth.customer_hierarchy import (
+    CustomerHierarchyAuth,
+    CustomerHierarchyIds,
+    CustomerRequestIdentity,
+    CustomerScopeAuth,
+)
 from litellm.types.utils import ModelResponse, Usage
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
@@ -458,3 +468,116 @@ async def test_auth_rejects_redis_outage_with_503(accounting_state):
     with pytest.raises(ProxyException) as error:
         await check_customer_hierarchy_windows(hierarchy, prisma, ps.spend_counter_store)
     assert error.value.code == "503"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("member", (False, True))
+@pytest.mark.parametrize("ledger", (False, True))
+@pytest.mark.parametrize("failure", (False, True))
+async def test_admitted_windows_are_charged_during_policy_outage(accounting_state, monkeypatch, member, ledger, failure):
+    backend, writer, prisma = accounting_state
+    scopes: Final = (
+        CustomerScopeAuth(key="customer_org", entity_id="org", budget_limits=LIMITS),
+        *(
+            (
+                CustomerScopeAuth(key="customer_team", entity_id="team", budget_limits=LIMITS),
+                CustomerScopeAuth(key="customer_member", entity_id="member", budget_limits=LIMITS),
+            )
+            if member
+            else ()
+        ),
+    )
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(
+        key=customer_member_cache_key("member") if member else customer_org_alias_cache_key("org-alias"),
+        value=CustomerHierarchyAuth(
+            customer_org_id="org",
+            customer_team_id="team" if member else None,
+            customer_member_id="member" if member else None,
+            scopes=scopes,
+        ),
+    )
+    for table in (
+        prisma.db.litellm_customerorganizationtable,
+        prisma.db.litellm_customerteamtable,
+        prisma.db.litellm_customermembertable,
+    ):
+        table.find_unique = AsyncMock(side_effect=ConnectionError("policy database unavailable"))
+        table.find_many = AsyncMock(side_effect=ConnectionError("policy database unavailable"))
+    monkeypatch.setattr(ps, "general_settings", {"use_spend_logs_ledger": ledger})
+    monkeypatch.setattr(ps, "disable_spend_logs", True)
+    admitted: Final = await resolve_customer_hierarchy(
+        identity=CustomerRequestIdentity(customer_member_id="member")
+        if member
+        else CustomerRequestIdentity(customer_org_alias="org-alias"),
+        prisma_client=prisma,
+        user_api_key_cache=cache,
+        llm_router=None,
+        request_model="gpt-4o-mini",
+        route="/chat/completions",
+    )
+    auth: Final = UserAPIKeyAuth(customer_hierarchy=admitted)
+    request_data: Final = await add_litellm_data_to_request(
+        data={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}]},
+        request=Request({"type": "http", "method": "POST", "path": "/chat/completions", "headers": []}),
+        user_api_key_dict=auth,
+        proxy_config=ps.ProxyConfig(),
+        general_settings={},
+    )
+    monkeypatch.setattr(ps, "user_api_key_cache", UserApiKeyCache())
+    now: Final = datetime.now(timezone.utc)
+    usage: Final = Usage(prompt_tokens=2, completion_tokens=3)
+    prisma.get_request_status.return_value = "failure" if failure else "success"
+    if failure:
+        await ProxyDBLogger().async_post_call_failure_hook(
+            request_data={**request_data, "combined_usage_object": usage, "response_cost": 0.75},
+            original_exception=RuntimeError("provider disconnected after billing"),
+            user_api_key_dict=auth,
+        )
+    else:
+        assert await _update_database_and_spend_counters(
+            proxy_logging_obj=ps.proxy_logging_obj,
+            spend_writer=writer,
+            increment_spend_counters=ps.increment_spend_counters,
+            user_api_key=None,
+            user_id=None,
+            end_user_id=None,
+            team_id=None,
+            org_id=None,
+            kwargs={
+                "model": "gpt-4o-mini",
+                "call_type": "acompletion",
+                "litellm_call_id": "policy-outage",
+                "litellm_params": {"metadata": request_data["metadata"]},
+            },
+            completion_response=ModelResponse(model="gpt-4o-mini", usage=usage),
+            start_time=now,
+            end_time=now,
+            response_cost=0.75,
+            budget_reservation=None,
+        )
+    await drain_logging_tasks()
+    for scope in scopes:
+        for counter in customer_window_counters(scope.key, scope.entity_id, LIMITS):
+            assert backend.redis[counter.counter_key] == 0.75
+    queued: Final = await writer.window_spend_update_queue.flush_and_get_aggregated_window_spend_transactions()
+    if ledger:
+        assert queued == ()
+        assert len(prisma.spend_log_transactions) == 1
+        contributions: Final = project(prisma.spend_log_transactions[0]["accounting_payload"])
+        rows: Final = tuple(row for row in contributions if row.table == "LiteLLM_BudgetWindowSpend")
+        assert len(rows) == 2 * len(scopes)
+        assert {dict(row.key)["entity_id"] for row in rows} == {scope.entity_id for scope in scopes}
+        assert {dict(row.key)["window_duration"] for row in rows} == {"1mo", "12mo"}
+        assert all(dict(row.increments)["spend"] == 0.75 for row in rows)
+        scalar: Final = tuple(row for row in contributions if row.table.startswith("LiteLLM_Customer"))
+        assert len(scalar) == len(scopes)
+        assert all(dict(row.increments)["spend"] == 0.75 for row in scalar)
+    else:
+        assert len(queued) == 2 * len(scopes)
+        assert {row["entity_id"] for row in queued} == {scope.entity_id for scope in scopes}
+        assert {row["window_duration"] for row in queued} == {"1mo", "12mo"}
+        assert all(row["spend"] == 0.75 for row in queued)
+        scalar_queued: Final = await writer.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
+        for scope in scopes:
+            assert scalar_queued[f"{scope.key}_list_transactions"] == {scope.entity_id: 0.75}

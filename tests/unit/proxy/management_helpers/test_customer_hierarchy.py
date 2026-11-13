@@ -247,6 +247,13 @@ def test_budget_windows_reject_duplicate_durations(request_type: type[BaseModel]
         ]})
 
 
+@pytest.mark.parametrize("request_type", (Budget, BudgetWriteRequest))
+@pytest.mark.parametrize("duration", ("2d", "14d", "30d", "1y", "1h"))
+def test_budget_windows_reject_noncanonical_durations(request_type: type[BaseModel], duration: str) -> None:
+    with pytest.raises(ValidationError, match="literal_error"):
+        request_type.model_validate({"budget_limits": [{"budget_duration": duration, "max_budget": 0}]})
+
+
 def test_window_override_preserves_other_period_and_scalar_fields() -> None:
     template: Final = Budget(max_budget=500, budget_duration="30d", budget_limits=(
         BudgetLimit(budget_duration="1mo", max_budget=100),

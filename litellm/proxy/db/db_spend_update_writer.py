@@ -98,7 +98,11 @@ from litellm.proxy.spend_tracking.session_spend_total import SessionSpendTotals
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.repositories.prisma_protocols import BatchTable
 from litellm.responses.streaming_iterator import spawn_logging_task
-from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyIds, customer_hierarchy_ids_from_request
+from litellm.types.proxy.auth.customer_hierarchy import (
+    CustomerHierarchyIds,
+    customer_budget_scopes_from_request,
+    customer_hierarchy_ids_from_request,
+)
 from litellm.types.utils import CallTypes
 from litellm.types.videos.utils import VIDEO_COST_REQUEST_ID_SUFFIX, VIDEO_STATUS_CALL_TYPES
 
@@ -888,7 +892,9 @@ class DBSpendUpdateWriter:
                         team_id,
                         customer_counters
                         if customer_counters is not None
-                        else await customer_accounting_counters(customer_hierarchy),
+                        else await customer_accounting_counters(
+                            customer_hierarchy, customer_budget_scopes_from_request(request_fields)
+                        ),
                     )
                     if billable_cost
                     else (),

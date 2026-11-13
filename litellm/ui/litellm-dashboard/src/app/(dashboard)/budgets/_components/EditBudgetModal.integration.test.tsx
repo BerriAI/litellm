@@ -117,6 +117,33 @@ describe("EditBudgetModal", () => {
     expect(screen.getByLabelText("Budget ID")).toBeDisabled();
   });
 
+  it.each([
+    { duration: "1mo", label: "per month", amount: 0 },
+    { duration: "12mo", label: "per year", amount: 120 },
+  ] as const)(
+    "edits the existing $duration window without adding a scalar cap",
+    async ({ duration, label, amount }) => {
+      const user = userEvent.setup();
+      const limit = { budget_duration: duration, max_budget: amount, reset_at: "2027-01-01T00:00:00Z" };
+      const row: BudgetItem = {
+        ...EXISTING_BUDGET,
+        max_budget: null,
+        budget_duration: null,
+        budget_limits: [limit],
+      };
+      renderModal(row);
+      expect(screen.getByLabelText(/^Spend limit/)).toHaveValue(amount);
+      expect(resetPeriod()).toHaveTextContent(label);
+      fireEvent.change(screen.getByLabelText(/^Spend limit/), { target: { value: "75" } });
+      await save(user);
+      await waitFor(() => expect(network.write).toHaveBeenCalledTimes(1));
+      expect(network.write.mock.calls[0][0]).toEqual({
+        budget_id: "budget-alpha",
+        budget_limits: [{ ...limit, max_budget: 75 }],
+      });
+    },
+  );
+
   it("keeps a dirty combined budget on refresh and saves only the new annual cap", async () => {
     const user = userEvent.setup();
     const row: BudgetItem = {

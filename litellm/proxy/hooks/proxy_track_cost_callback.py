@@ -76,7 +76,10 @@ from litellm.proxy.utils import (
     BilledFailedAttempt,
     ProxyUpdateSpend,
 )
-from litellm.types.proxy.auth.customer_hierarchy import customer_hierarchy_ids_from_request
+from litellm.types.proxy.auth.customer_hierarchy import (
+    customer_budget_scopes_from_request,
+    customer_hierarchy_ids_from_request,
+)
 from litellm.types.proxy.auth.user_api_key_auth import committed_budget_spend_of_row
 from litellm.types.proxy.carried_budget_state import EntitySpendCounterKeys
 from litellm.types.router import Deployment
@@ -687,7 +690,10 @@ class _ProxyDBLogger(CustomLogger):
         from litellm.proxy.proxy_server import customer_accounting_counters
 
         customer_counters: Final = (
-            await customer_accounting_counters(customer_hierarchy_ids_from_request(spend_rows[0][1]))
+            await customer_accounting_counters(
+                customer_hierarchy_ids_from_request(spend_rows[0][1]),
+                customer_budget_scopes_from_request(spend_rows[0][1]),
+            )
             if any(cost > 0 for cost, _ in spend_rows)
             else ()
         )
@@ -1367,8 +1373,11 @@ async def _update_database_and_spend_counters(
     from litellm.proxy.proxy_server import customer_accounting_counters, spend_counter_store
     from litellm.proxy.spend_tracking.budget_reservation import get_reserved_counter_keys
 
+    request_fields: Final = _OBJECT_MAPPING.validate_python(kwargs)
     customer_counters: Final = (
-        await customer_accounting_counters(customer_hierarchy_ids_from_request(_OBJECT_MAPPING.validate_python(kwargs)))
+        await customer_accounting_counters(
+            customer_hierarchy_ids_from_request(request_fields), customer_budget_scopes_from_request(request_fields)
+        )
         if response_cost
         else ()
     )

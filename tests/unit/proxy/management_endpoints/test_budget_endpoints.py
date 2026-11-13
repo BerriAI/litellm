@@ -92,6 +92,27 @@ def test_budget_update_can_clear_windows(
     assert response.json()["budget_limits"] == clear
 
 
+@pytest.mark.parametrize("path", ("/budget/new", "/budget/update"))
+@pytest.mark.parametrize("duration", ("2d", "14d", "30d", "1h"))
+def test_concurrent_windows_reject_noncanonical_durations_but_scalar_budgets_preserve_them(
+    client_and_mocks: tuple[TestClient, MagicMock, MagicMock], path: str, duration: str,
+) -> None:
+    client, _, table = client_and_mocks
+    rejected: Final = client.post(path, json={
+        "budget_id": "duration-test",
+        "budget_limits": [{"budget_duration": duration, "max_budget": 10}],
+    })
+    assert rejected.status_code == 422, rejected.text
+    table.create.assert_not_awaited()
+    table.update.assert_not_awaited()
+
+    accepted: Final = client.post(path, json={
+        "budget_id": "duration-test", "max_budget": 10, "budget_duration": duration,
+    })
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["budget_duration"] == duration
+
+
 def test_budget_update_rejects_windows_on_an_existing_scalar_consumer(
     client_and_mocks: tuple[TestClient, MagicMock, MagicMock],
 ) -> None:
