@@ -66,7 +66,7 @@ export const getBudgetDurationLabel = (value: string | null | undefined, t: TFun
     "24h": "budgetDurationDropdown.periods.daily",
     "7d": "budgetDurationDropdown.periods.weekly",
     "30d": "budgetDurationDropdown.periods.monthly",
-  "12mo": "budgetDurationDropdown.periods.annual",
+    "12mo": "budgetDurationDropdown.periods.annual",
   };
 
   return Object.hasOwn(budgetDurationMap, value) ? t(budgetDurationMap[value]) : value;

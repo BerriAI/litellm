@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from datetime import datetime, timedelta, timezone
 from typing import Final
+from unittest.mock import patch
 
 import pytest
 
@@ -463,6 +464,23 @@ async def test_reservation_holds_cost_against_cached_org_and_project_budgets(spe
 )
 def test_budget_window_start_reads_json_encoded_windows(window: str, expected: datetime | None) -> None:
     assert get_budget_window_start(window) == expected
+
+
+@pytest.mark.parametrize("today", ["2028-03-01", "2029-03-01"])
+@pytest.mark.parametrize(
+    ("duration", "reset_at", "expected"),
+    [
+        ("12mo", "2029-01-01T00:00:00Z", datetime(2028, 1, 1, tzinfo=timezone.utc)),
+        ("12mo", "2028-01-01T00:00:00", datetime(2027, 1, 1, tzinfo=timezone.utc)),
+        ("1mo", "2028-03-01T00:00:00Z", datetime(2028, 2, 1, tzinfo=timezone.utc)),
+        ("30d", "2028-03-01T00:00:00Z", datetime(2028, 2, 1, tzinfo=timezone.utc)),
+    ],
+)
+def test_calendar_window_keeps_all_spend_from_its_reset_boundary(
+    today: str, duration: str, reset_at: str, expected: datetime
+) -> None:
+    with patch("time.time", return_value=datetime.fromisoformat(today).replace(tzinfo=timezone.utc).timestamp()):
+        assert get_budget_window_start({"budget_duration": duration, "reset_at": reset_at}) == expected
 
 
 @pytest.mark.asyncio

@@ -12,6 +12,8 @@ from datetime import datetime, time, timedelta, timezone, tzinfo
 from typing import Final
 from zoneinfo import ZoneInfo
 
+from dateutil.relativedelta import relativedelta
+
 from litellm._logging import verbose_logger
 
 _BUDGET_DURATION_WORD_ALIASES: Final[dict[str, str]] = {
@@ -160,11 +162,7 @@ def get_next_standardized_reset_time(
 
 
 def _shift_months(moment: datetime, months: int) -> datetime:
-    """`moment` moved by `months` calendar months, back when negative, clamped to the target month's last day."""
-    total_months: Final = moment.year * 12 + moment.month - 1 + months
-    year, month_index = divmod(total_months, 12)
-    month: Final = month_index + 1
-    return moment.replace(year=year, month=month, day=min(moment.day, get_last_day_of_month(year, month)))
+    return moment + relativedelta(months=months)
 
 
 def get_budget_window_start(duration: str, reset_at: datetime) -> datetime:

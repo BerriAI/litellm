@@ -28,9 +28,38 @@ from litellm.proxy.common_utils.reset_budget_job import (
     _write_team_windows,
 )
 from litellm.proxy.common_utils.timezone_utils import BudgetResetSettings
+from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.utils import PrismaClient
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("today", ["2028-03-01", "2029-03-01"])
+async def test_annual_reset_persists_the_same_calendar_start_as_admission(today: str) -> None:  # test-quality-ok: the SQL write is the reset job's observable persistence contract
+    client: Final = MagicMock(spec=PrismaClient)
+    client.db = MagicMock()
+    client.db.execute_raw = AsyncMock(return_value=1)
+
+    with patch("time.time", return_value=datetime.fromisoformat(today).replace(tzinfo=timezone.utc).timestamp()):
+        await ResetBudgetJob._roll_window_spend_row(
+            prisma_client=client,
+            entity_type=reset_budget_job_module.Litellm_EntityType.KEY,
+            entity_id="annual-key",
+            budget_duration="12mo",
+            next_reset_at=datetime(2029, 1, 1, tzinfo=timezone.utc),
+        )
+
+    assert client.db.execute_raw.await_count == 1
+    assert client.db.execute_raw.await_args.args[1:5] == (
+        "key",
+        "annual-key",
+        "12mo",
+        datetime(2028, 1, 1),
+    )
+    assert get_budget_window_start(
+        {"budget_duration": "12mo", "reset_at": datetime(2029, 1, 1, tzinfo=timezone.utc)}
+    ) == client.db.execute_raw.await_args.args[4].replace(tzinfo=timezone.utc)
 
 
 # Mock classes for testing

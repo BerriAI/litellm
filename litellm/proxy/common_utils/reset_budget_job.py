@@ -4,7 +4,7 @@ import math
 import time
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from enum import Enum
 from itertools import chain
 from types import MappingProxyType
@@ -30,7 +30,7 @@ from litellm.constants import (
     RESET_BUDGET_JOB_MAX_CHUNKS_PER_RUN,
     RESET_BUDGET_JOB_NAME,
 )
-from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.litellm_core_utils.duration_parser import get_budget_window_start
 from litellm.proxy._types import (
     DB_RETRY_SAFE_ERROR_TYPES,
     LiteLLM_BudgetTableFull,
@@ -1551,8 +1551,8 @@ class ResetBudgetJob:
         windows from having their counters reset.
         """
         try:
-            window_start: Final = next_reset_at - timedelta(seconds=duration_in_seconds(budget_duration))
-        except Exception as e:  # noqa: BLE001  # duration_in_seconds raises bare exceptions on bad input
+            window_start: Final = get_budget_window_start(budget_duration, next_reset_at)
+        except Exception as e:  # noqa: BLE001  # malformed persisted durations must not stop other resets
             verbose_proxy_logger.warning("Unparseable budget_duration %s: %s", budget_duration, e)
             return
         try:

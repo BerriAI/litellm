@@ -40,7 +40,6 @@ describe("BudgetDurationDropdown", () => {
   });
 });
 
-
 it("saves and displays an annual budget period", async () => {
   const user = userEvent.setup();
   const onChange = vi.fn();

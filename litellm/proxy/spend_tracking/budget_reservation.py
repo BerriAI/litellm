@@ -19,6 +19,7 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.litellm_core_utils.duration_parser import get_budget_window_start as calendar_budget_window_start
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import select_tier_for_input, tier_rate
 from litellm.proxy._types import (
     Litellm_EntityType,
@@ -1292,17 +1293,15 @@ def get_budget_window_start(window: object) -> datetime | None:
     budget_duration: Final = window_dict.get("budget_duration")
     if budget_duration is None:
         return None
+    reset_at: Final = _coerce_datetime(window_dict.get("reset_at"))
     try:
         duration_seconds: Final = duration_in_seconds(str(budget_duration))
+        if reset_at is not None:
+            boundary: Final = reset_at if reset_at.tzinfo is not None else reset_at.replace(tzinfo=timezone.utc)
+            return calendar_budget_window_start(str(budget_duration), boundary)
     except Exception:
         return None
-
-    reset_at = _coerce_datetime(window_dict.get("reset_at"))
-    if reset_at is None:
-        return datetime.now(timezone.utc) - timedelta(seconds=duration_seconds)
-    if reset_at.tzinfo is None:
-        reset_at = reset_at.replace(tzinfo=timezone.utc)
-    return reset_at - timedelta(seconds=duration_seconds)
+    return datetime.now(timezone.utc) - timedelta(seconds=duration_seconds)
 
 
 def _coerce_datetime(value: object) -> datetime | None:

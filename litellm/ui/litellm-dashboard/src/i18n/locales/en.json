@@ -3407,7 +3407,8 @@
         "inTotal": "in total",
         "perDay": "per day",
         "perWeek": "per week",
-        "perMonth": "per month"
+        "perMonth": "per month",
+        "perYear": "per year"
       },
       "noLimit": "No limit",
       "optional": "Optional",
