@@ -98,6 +98,7 @@ from litellm.proxy.common_utils.customer_usage import (
     CUSTOMER_USAGE_METADATA_KEY,
     CustomerUsageDatabase,
     CustomerUsageFailure,
+    ResolvedCustomerUsage,
     customer_usage_fields,
     customer_usage_http_status,
     customer_usage_key_fields,
@@ -157,6 +158,32 @@ def check_customer_request_model_access(
     names: Final = (requested,) if isinstance(requested, str) else (requested or ())
     for model in (*names, *request_fallback_model_names(data)):
         check_customer_model_access(model=model, valid_token=auth, llm_router=llm_router)
+
+
+async def resolve_customer_request_usage(
+    metadata: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth, *, ledger_enabled: bool
+) -> ResolvedCustomerUsage | None:
+    from litellm.proxy.proxy_server import prisma_client
+
+    key_metadata: Final = customer_usage_key_fields(user_api_key_dict)
+    usage: Final = await resolve_customer_usage(
+        metadata=metadata,
+        key_metadata=key_metadata,
+        administrator=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
+        database=require_attributes(
+            prisma_client.db,
+            CustomerUsageDatabase,
+            "litellm_customerorganizationtable",
+            "litellm_customerteamtable",
+            "litellm_customermembertable",
+        )
+        if prisma_client is not None and customer_usage_requested(metadata, key_metadata)
+        else None,
+        ledger_enabled=ledger_enabled,
+    )
+    if isinstance(usage, CustomerUsageFailure):
+        raise HTTPException(status_code=customer_usage_http_status(usage.error), detail=usage.error.value)
+    return usage
 
 
 _REQUEST_ENTRIES: Final = TypeAdapter(tuple[object, ...])
@@ -2759,7 +2786,7 @@ async def add_litellm_data_to_request(
 
     """
 
-    from litellm.proxy.proxy_server import llm_router, premium_user, prisma_client
+    from litellm.proxy.proxy_server import llm_router, premium_user
     from litellm.types.proxy.litellm_pre_call_utils import RedactedDict, SecretFields
 
     # Strip internal-only keys from user input before the proxy sets its own.
@@ -3037,27 +3064,12 @@ async def add_litellm_data_to_request(
         data.pop("litellm_metadata", None)
 
     _customer_metadata: Final = customer_usage_fields(_REQUEST_FIELDS.validate_python(data)[_metadata_variable_name])
-    _customer_key_metadata: Final = customer_usage_key_fields(user_api_key_dict)
-    _customer_usage: Final = await resolve_customer_usage(
-        metadata=_customer_metadata,
-        key_metadata=_customer_key_metadata,
-        administrator=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
-        database=require_attributes(
-            prisma_client.db,
-            CustomerUsageDatabase,
-            "litellm_customerorganizationtable",
-            "litellm_customerteamtable",
-            "litellm_customermembertable",
-        )
-        if prisma_client is not None and customer_usage_requested(_customer_metadata, _customer_key_metadata)
-        else None,
+    _customer_usage: Final = await resolve_customer_request_usage(
+        _customer_metadata,
+        user_api_key_dict,
         ledger_enabled=general_settings_view is None
         or general_settings_view.get("use_spend_logs_ledger", True) is not False,
     )
-    if isinstance(_customer_usage, CustomerUsageFailure):
-        raise HTTPException(
-            status_code=customer_usage_http_status(_customer_usage.error), detail=_customer_usage.error.value
-        )
     if _customer_usage is not None:
         data[_metadata_variable_name][CUSTOMER_USAGE_METADATA_KEY] = (  # rebind-ok: data is an out-param
             _customer_usage.attribution.model_dump_json()

@@ -98,7 +98,11 @@ class Table:
     def matches(self, row: Record, where: Mapping[str, object]) -> bool:
         values: Final = row.model_dump()
         for key, value in where.items():
-            if isinstance(value, Mapping) and "none" in value:
+            if key == "AND":
+                clauses: Final = TypeAdapter(tuple[Mapping[str, object], ...]).validate_python(value)
+                if not all(self.matches(row, clause) for clause in clauses):
+                    return False
+            elif isinstance(value, Mapping) and "none" in value:
                 if self.database.has_budget_reference(str(values[self.id_field]), key):
                     return False
             elif isinstance(value, Mapping) and "is" in value:

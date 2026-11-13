@@ -35,3 +35,8 @@ ecosystem = "PyPI"
 vulnerability.ignore = true
 effectiveUntil = 2027-02-01
 reason = "pillow 13.0.0 requires Python >= 3.11, so the Python 3.10 resolution of the ci and dev groups and of the mlflow extra stays on 12.3.0; 3.11+ is on 13.0.0; pillow has never shipped an older-major release after the next major (no 10.x after 11.0.0, no 11.x after 12.0.0), so 13.x is the only fix line; extended to 2027-02-01 with maintainer approval, same date as every other Python 3.10 entry; remove once 3.10 is dropped"
+
+[[IgnoredVulns]]
+id = "GHSA-mmhr-3c5m-f64f"
+ignoreUntil = 2027-02-01
+reason = "Soup Sieve 4.0 fixes descendant-selector CPU exhaustion and requires Python >= 3.11.5. Newer interpreters resolve 4.0+, while Python 3.10 and 3.11.0-3.11.4 resolve 2.10, which fixes the separate :has sibling advisory. Beautiful Soup is a ci-group dependency only; the repository's sole use is the manual tests/code_coverage_tests/bedrock_pricing.py parser, which calls find/find_all against the fixed AWS pricing page and never evaluates CSS selectors. No production SDK or proxy module imports Beautiful Soup or Soup Sieve. Remove when the minimum supported interpreter is 3.11.5 or a compatible fix ships"

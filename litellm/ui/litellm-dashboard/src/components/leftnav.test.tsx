@@ -181,7 +181,11 @@ describe("Sidebar (leftnav)", () => {
   it("should make customer organizations reachable from the Customer Portal sidebar", () => {
     localStorage.setItem("litellm_plugin_mode", "customer-portal");
     navState.pathname = "/ui/customers/manage";
-    renderWithProviders(<PluginModeProvider><Sidebar {...defaultProps} /></PluginModeProvider>);
+    renderWithProviders(
+      <PluginModeProvider>
+        <Sidebar {...defaultProps} />
+      </PluginModeProvider>,
+    );
     expect(screen.getByRole("link", { name: "Customer organizations" })).toHaveAttribute("href", "/ui/customers");
     expect(screen.getByRole("link", { name: "Customer organizations" })).toHaveAttribute("data-active", "true");
     expect(screen.queryByRole("link", { name: "End users" })).not.toBeInTheDocument();
@@ -760,8 +764,14 @@ describe("Sidebar (leftnav)", () => {
 
 describe("getBreadcrumb", () => {
   it("should identify the customer organizations list and its hierarchy routes", () => {
-    expect(getBreadcrumb("/ui/customers/usage")).toEqual({ section: "Customer Portal", title: "Customer organizations" });
-    expect(getBreadcrumb("/ui/customers/manage")).toEqual({ section: "Customer Portal", title: "Customer organizations" });
+    expect(getBreadcrumb("/ui/customers/usage")).toEqual({
+      section: "Customer Portal",
+      title: "Customer organizations",
+    });
+    expect(getBreadcrumb("/ui/customers/manage")).toEqual({
+      section: "Customer Portal",
+      title: "Customer organizations",
+    });
     expect(getBreadcrumb("/ui/customers/")).toEqual({ section: "Customer Portal", title: "Customer organizations" });
   });
   it("resolves a top-level route to its section + title", () => {

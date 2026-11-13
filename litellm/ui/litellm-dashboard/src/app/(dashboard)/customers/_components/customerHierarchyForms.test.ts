@@ -44,6 +44,32 @@ const member: Member = {
 };
 
 describe("customer hierarchy settings payloads", () => {
+  it("should load the member template from the API response", () => {
+    expect(customerHierarchyFields({ kind: "member", record: member }).templateId).toBe(member.budget_id);
+  });
+
+  it("should allow an alias-only edit for a member using a template without an override", () => {
+    const entity: CustomerHierarchyEntity = {
+      kind: "member",
+      record: { ...member, budget_override: null, budget_override_expires_at: null },
+    };
+    expect(buildCustomerHierarchyPatch(entity, { ...customerHierarchyFields(entity), alias: "Updated" })).toEqual({
+      ok: true,
+      patch: { kind: "member", body: { alias: "Updated" } },
+    });
+  });
+
+  it.each([
+    ["template-2", "template-2"],
+    ["", null],
+  ])("should submit template selection %s without changing the override", (templateId, budgetId) => {
+    const entity: CustomerHierarchyEntity = { kind: "member", record: member };
+    expect(buildCustomerHierarchyPatch(entity, { ...customerHierarchyFields(entity), templateId })).toEqual({
+      ok: true,
+      patch: { kind: "member", body: { budget_id: budgetId } },
+    });
+  });
+
   it("should leave untouched settings out of the patch", () => {
     const entity: CustomerHierarchyEntity = { kind: "organization", record: organization };
     expect(buildCustomerHierarchyPatch(entity, customerHierarchyFields(entity))).toEqual({

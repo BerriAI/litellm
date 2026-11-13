@@ -13,7 +13,7 @@ from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.list_api.common import escape_like
 from litellm.repositories.budget_repository import create_budget_row, update_budget_row
-from litellm.repositories.chunked_in import find_many_in
+from litellm.repositories.chunked_in import delete_many_in, find_many_in
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.types.proxy.management_endpoints.customer_hierarchy import (
     Budget,
@@ -642,41 +642,51 @@ class CustomerHierarchyStore:
         return Page(tuple(member_response(row, self.now) for row in rows), count)
 
     async def _delete_unused_budgets(self, budget_ids: Sequence[str]) -> None:
-        for start in range(0, len(budget_ids), _DELETE_BATCH_SIZE):
-            batch: Final = budget_ids[start : start + _DELETE_BATCH_SIZE]
-            where: Final = {
-                "budget_id": {"in": batch},
-                **{field: {"none": {}} for field in _BUDGET_REFERENCE_FIELDS},
-            }
-            await self.budgets.delete_many(where=where)
+        where: Final[Mapping[str, object]] = {field: {"none": {}} for field in _BUDGET_REFERENCE_FIELDS}
+        await delete_many_in(
+            self.budgets,
+            "budget_id",
+            budget_ids,
+            atomicity="caller_transaction",
+            where=where,
+            chunk_size=_DELETE_BATCH_SIZE,
+        )
+
+    async def _delete_team_member_batch(self, team_id: str) -> bool:
+        rows: Final = await self.members.find_many(where={"parent_team_id": team_id}, take=_DELETE_BATCH_SIZE)
+        members: Final = tuple(_MemberDeletionRow.model_validate(row) for row in rows)
+        if not members:
+            return False
+        member_ids: Final = tuple(member.customer_member_id for member in members)
+        budget_ids: Final = tuple(
+            member.budget_override_id for member in members if member.budget_override_id is not None
+        )
+        await delete_many_in(self.members, "customer_member_id", member_ids, atomicity="caller_transaction")
+        await self._delete_unused_budgets(budget_ids)
+        return True
 
     async def _delete_team_members(self, team_id: str) -> None:
         while True:
-            rows: Final = await self.members.find_many(where={"parent_team_id": team_id}, take=_DELETE_BATCH_SIZE)
-            members: Final = tuple(_MemberDeletionRow.model_validate(row) for row in rows)
-            if not members:
+            if not await self._delete_team_member_batch(team_id):
                 return
-            member_ids: Final = tuple(member.customer_member_id for member in members)
-            budget_ids: Final = tuple(
-                member.budget_override_id for member in members if member.budget_override_id is not None
-            )
-            await self.members.delete_many(where={"customer_member_id": {"in": member_ids}})
-            if budget_ids:
-                await self._delete_unused_budgets(budget_ids)
+
+    async def _delete_organization_team_batch(self, organization_id: str) -> bool:
+        rows: Final = await self.teams.find_many(where={"parent_org_id": organization_id}, take=_DELETE_BATCH_SIZE)
+        teams: Final = tuple(_TeamDeletionRow.model_validate(row) for row in rows)
+        if not teams:
+            return False
+        for team in teams:
+            await self._delete_team_members(team.customer_team_id)
+        team_ids: Final = tuple(team.customer_team_id for team in teams)
+        budget_ids: Final = tuple(team.budget_id for team in teams if team.budget_id is not None)
+        await delete_many_in(self.teams, "customer_team_id", team_ids, atomicity="caller_transaction")
+        await self._delete_unused_budgets(budget_ids)
+        return True
 
     async def _delete_organization_teams(self, organization_id: str) -> None:
         while True:
-            rows: Final = await self.teams.find_many(where={"parent_org_id": organization_id}, take=_DELETE_BATCH_SIZE)
-            teams: Final = tuple(_TeamDeletionRow.model_validate(row) for row in rows)
-            if not teams:
+            if not await self._delete_organization_team_batch(organization_id):
                 return
-            for team in teams:
-                await self._delete_team_members(team.customer_team_id)
-            team_ids: Final = tuple(team.customer_team_id for team in teams)
-            budget_ids: Final = tuple(team.budget_id for team in teams if team.budget_id is not None)
-            await self.teams.delete_many(where={"customer_team_id": {"in": team_ids}})
-            if budget_ids:
-                await self._delete_unused_budgets(budget_ids)
 
     async def delete_member(self, member_id: str) -> None | Failure:
         member: Final = await self.get_member(member_id)

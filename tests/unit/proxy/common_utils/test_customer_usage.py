@@ -1,4 +1,7 @@
-from collections.abc import Mapping
+import asyncio
+import importlib
+import json
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -7,7 +10,12 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+import respx
+from fastapi import FastAPI, Request
+from fastapi.testclient import TestClient
 
+from litellm.proxy import proxy_server
+from litellm.proxy._types import PassThroughGenericEndpoint, ProxyException, UserAPIKeyAuth
 from litellm.proxy.common_utils.customer_usage import (
     CustomerUsageAttribution,
     CustomerUsageDatabase,
@@ -16,6 +24,7 @@ from litellm.proxy.common_utils.customer_usage import (
     ResolvedCustomerUsage,
     resolve_customer_usage,
 )
+from tests._master_key import MASTER_KEY
 
 
 @dataclass(frozen=True, slots=True)
@@ -440,3 +449,155 @@ async def test_request_enrichment_replaces_forged_stamps_and_preserves_valid_att
     assert CustomerUsageAttribution.model_validate_json(stamp) == CustomerUsageAttribution(
         customer_org_id="org-1", customer_team_id="team-1", customer_member_id="member-1"
     )
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerPassthrough:
+    client: TestClient
+    token: UserAPIKeyAuth
+    headers: Mapping[str, str]
+
+
+@pytest.fixture
+def customer_passthrough(monkeypatch: pytest.MonkeyPatch, httpx_transport: None) -> Iterator[CustomerPassthrough]:
+    from litellm.proxy.pass_through_endpoints import pass_through_endpoints
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import router
+    from litellm.proxy.pass_through_endpoints.openai_passthrough_endpoints import router as dedicated_router
+
+    auth_module: Final = importlib.import_module("litellm.proxy.auth.user_api_key_auth")
+    token: Final = UserAPIKeyAuth(
+        api_key="hashed-customer-test-key",
+        models=["gpt-4.1-mini", "gpt-5.5"],
+        metadata={"customer_org_id": "org-1", "customer_member_id": "member-1"},
+    )
+
+    async def authenticate(request: Request, **kwargs: object) -> UserAPIKeyAuth:
+        request.state.requires_key_model_check = True
+        return token
+
+    monkeypatch.setattr(auth_module, "user_api_key_auth_builder", authenticate)
+    monkeypatch.setattr(auth_module, "run_centralized_common_checks", AsyncMock())
+    monkeypatch.setattr(proxy_server, "master_key", MASTER_KEY)
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(
+        proxy_server, "prisma_client", SimpleNamespace(db=_budget_database(organization=("gpt-4.1-mini",)))
+    )
+    monkeypatch.setenv("OPENAI_API_BASE", "https://customer-provider.test")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-provider-key")
+    app: Final = FastAPI(exception_handlers={ProxyException: proxy_server.openai_exception_handler})
+    app.include_router(router)
+    app.include_router(dedicated_router)
+    monkeypatch.setattr(
+        pass_through_endpoints,
+        "_registered_pass_through_routes",
+        dict(pass_through_endpoints._registered_pass_through_routes),
+    )
+    asyncio.run(
+        pass_through_endpoints._register_pass_through_endpoint(
+            PassThroughGenericEndpoint(
+                path="/customer-configured", target="https://customer-provider.test/external", methods=["POST"]
+            ),
+            app=app,
+            premium_user=False,
+            visited_endpoints=set(),
+        )
+    )
+    with TestClient(app) as client:
+        yield CustomerPassthrough(client, token, {"Authorization": f"Bearer {MASTER_KEY}"})
+
+
+@pytest.mark.parametrize(
+    "database",
+    [
+        pytest.param(_budget_database(organization=("gpt-4.1-mini",)), id="organization"),
+        pytest.param(_budget_database(team=("gpt-4.1-mini",)), id="team"),
+        pytest.param(_budget_database(template=("gpt-4.1-mini",)), id="member-template"),
+        pytest.param(_budget_database(override=("gpt-4.1-mini",)), id="member-override"),
+    ],
+)
+@pytest.mark.parametrize("prefix", ["openai", "openai_passthrough"])
+def test_passthrough_rejects_customer_model_without_contacting_provider(
+    customer_passthrough: CustomerPassthrough,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    database: CustomerUsageDatabase,
+    prefix: str,
+) -> None:
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=database))
+    response: Final = customer_passthrough.client.post(
+        f"/{prefix}/v1/chat/completions",
+        headers=customer_passthrough.headers,
+        json={"model": "gpt-5.5", "messages": [{"role": "user", "content": "Hello"}]},
+    )
+    assert response.status_code == 403, response.text
+    assert response.json()["error"]["type"] == "customer_model_access_denied"
+    assert not respx_mock.calls
+    assert customer_passthrough.token.customer_model_scopes == ()
+
+
+def test_passthrough_allows_customer_model_and_preserves_provider_body(
+    customer_passthrough: CustomerPassthrough, respx_mock: respx.MockRouter
+) -> None:
+    body: Final = {"model": "gpt-4.1-mini", "messages": [{"role": "user", "content": "Hello"}]}
+    upstream: Final = respx_mock.post("https://customer-provider.test/v1/chat/completions").respond(
+        json={"id": "chat-test"}
+    )
+    response: Final = customer_passthrough.client.post(
+        "/openai/v1/chat/completions", headers=customer_passthrough.headers, json=body
+    )
+    assert response.status_code == 200, response.text
+    assert upstream.call_count == 1
+    assert json.loads(upstream.calls.last.request.content) == body
+    assert customer_passthrough.token.customer_model_scopes == ()
+
+
+def test_passthrough_customer_models_do_not_grant_key_access(
+    customer_passthrough: CustomerPassthrough, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    customer_passthrough.token.models = ["gpt-4.1-mini"]
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=_budget_database(organization=("gpt-5.5",))))
+    response: Final = customer_passthrough.client.post(
+        "/openai/v1/chat/completions", headers=customer_passthrough.headers, json={"model": "gpt-5.5", "messages": []}
+    )
+    assert response.status_code == 403, response.text
+    assert response.json()["error"]["type"] == "key_model_access_denied"
+    assert not respx_mock.calls
+
+
+def test_passthrough_checks_customer_model_after_hook_rewrite(
+    customer_passthrough: CustomerPassthrough, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    async def rewrite(*, data: Mapping[str, object], **kwargs: object) -> dict[str, object]:
+        return {**data, "model": "gpt-5.5"}
+
+    monkeypatch.setattr(proxy_server.proxy_logging_obj, "pre_call_hook", rewrite)
+    response: Final = customer_passthrough.client.post(
+        "/openai/v1/chat/completions",
+        headers=customer_passthrough.headers,
+        json={"model": "gpt-4.1-mini", "messages": []},
+    )
+    assert response.status_code == 403, response.text
+    assert not respx_mock.calls
+
+
+def test_passthrough_allows_model_less_retrieval(
+    customer_passthrough: CustomerPassthrough, respx_mock: respx.MockRouter
+) -> None:
+    upstream: Final = respx_mock.get("https://customer-provider.test/v1/files").respond(json={"data": []})
+    response: Final = customer_passthrough.client.get("/openai/v1/files", headers=customer_passthrough.headers)
+    assert response.status_code == 200, response.text
+    assert upstream.call_count == 1
+
+
+def test_configured_passthrough_preserves_upstream_model_semantics(
+    customer_passthrough: CustomerPassthrough, respx_mock: respx.MockRouter
+) -> None:
+    upstream: Final = respx_mock.post("https://customer-provider.test/external").respond(json={"id": "external-test"})
+    response: Final = customer_passthrough.client.post(
+        "/customer-configured",
+        headers=customer_passthrough.headers,
+        json={"model": "external-model"},
+    )
+    assert response.status_code == 200, response.text
+    assert upstream.call_count == 1
