@@ -10815,20 +10815,28 @@ class TestFalAIPassthroughRoute:
             assert encoded.status_code == 400, encoded.text
             assert [str(call.request.url) for call in route.calls] == ["https://queue.fal.run/fal-ai/trellis-2"]
 
+    @pytest.mark.parametrize(
+        ("queue_base", "sent_base"),
+        (
+            ("https://queue.example/base", "https://queue.example/base"),
+            ("https://queue.example/fal%2Dqueue", "https://queue.example/fal-queue"),
+            ("https://queue.example/fal%252Dqueue", "https://queue.example/fal%2Dqueue"),
+        ),
+    )
     def test_submit_gate_strips_the_queue_base_path_before_pricing(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, queue_base: str, sent_base: str
     ) -> None:
-        monkeypatch.setenv("FAL_AI_QUEUE_API_BASE", "https://queue.example/base")
+        monkeypatch.setenv("FAL_AI_QUEUE_API_BASE", queue_base)
         monkeypatch.setitem(
             litellm.model_cost,
             "fal_ai/acme/unit-billed-model",
             {"litellm_provider": "fal_ai", "mode": "image_generation", "output_cost_per_billable_unit": 1.0},
         )
         with respx.mock(assert_all_called=False) as upstream:
-            priced_route: Final = upstream.post("https://queue.example/base/fal-ai/trellis-2").mock(
+            priced_route: Final = upstream.post(f"{sent_base}/fal-ai/trellis-2").mock(
                 return_value=httpx.Response(200, json={"request_id": "req-1"})
             )
-            unit_billed_route: Final = upstream.post("https://queue.example/base/acme/unit-billed-model").mock(
+            unit_billed_route: Final = upstream.post(f"{sent_base}/acme/unit-billed-model").mock(
                 return_value=httpx.Response(200, json={"request_id": "req-2"})
             )
             priced: Final = client.post(
