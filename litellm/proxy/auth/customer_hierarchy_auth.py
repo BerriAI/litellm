@@ -10,6 +10,7 @@ header it must agree with the member's organization.
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from hashlib import sha256
 from typing import TYPE_CHECKING, Final, TypeAlias
 
 from fastapi import status
@@ -21,7 +22,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy.auth.auth_checks import can_object_call_model
 from litellm.proxy.auth.auth_object_prefetch import AUTH_OBJECTS_TARGET
-from litellm.proxy.auth.customer_member_auto_create import ensure_customer_member
+from litellm.proxy.auth.customer_member_auto_create import ensure_customer_member, ensure_customer_member_by_email
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, get_management_object_ttl
@@ -39,13 +40,18 @@ from litellm.types.proxy.auth.customer_hierarchy import (
     CustomerScopeAuth,
     CustomerScopeKey,
 )
-from litellm.types.proxy.management_endpoints.customer_hierarchy import Budget, CustomerMember
+from litellm.types.proxy.management_endpoints.customer_hierarchy import (
+    Budget,
+    CustomerMember,
+    normalize_customer_member_email,
+)
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
     from litellm.router_api import RegistryReader
 
 CUSTOMER_MEMBER_ID_HEADER: Final = "x-litellm-customer-member-id"
+CUSTOMER_MEMBER_EMAIL_HEADER: Final = "x-litellm-customer-member-email"
 CUSTOMER_ORG_ALIAS_HEADER: Final = "x-litellm-customer-org-alias"
 _ORGANIZATION_INCLUDE: Final = {"budget": True}
 _MEMBER_INCLUDE: Final = {
@@ -77,6 +83,7 @@ class _MemberRow(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     customer_member_id: str
+    email: str | None = None
     spend: float = 0.0
     budget: Mapping[str, object] | None = None
     budget_override: Mapping[str, object] | None = None
@@ -97,6 +104,11 @@ def customer_member_cache_key(customer_member_id: str) -> str:
 
 def customer_org_alias_cache_key(customer_org_alias: str) -> str:
     return f"customer_org_alias:{customer_org_alias}"
+
+
+def customer_member_email_cache_key(customer_org_id: str, email: str) -> str:
+    digest: Final = sha256(normalize_customer_member_email(email).encode()).hexdigest()
+    return f"customer_member_email:{customer_org_id}:{digest}"
 
 
 def _header_value(headers: Mapping[str, object] | None, header: str) -> str | None:
@@ -123,7 +135,23 @@ def customer_identity_from_headers(headers: Mapping[str, object] | None) -> Cust
     identity: Final = CustomerRequestIdentity(
         customer_member_id=customer_member_id_from_headers(headers),
         customer_org_alias=customer_org_alias_from_headers(headers),
+        customer_member_email=(
+            normalize_customer_member_email(_header_value(headers, CUSTOMER_MEMBER_EMAIL_HEADER) or "")
+            if headers is not None and any(name.lower() == CUSTOMER_MEMBER_EMAIL_HEADER for name in headers)
+            else None
+        ),
     )
+    if identity.customer_member_email is not None and (
+        not identity.customer_member_email
+        or len(identity.customer_member_email) > 254
+        or identity.customer_org_alias is None
+    ):
+        raise ProxyException(
+            message=f"{CUSTOMER_MEMBER_EMAIL_HEADER} requires a nonempty email and {CUSTOMER_ORG_ALIAS_HEADER}",
+            type=ProxyErrorTypes.bad_request_error,
+            param=CUSTOMER_MEMBER_EMAIL_HEADER,
+            code=status.HTTP_400_BAD_REQUEST,
+        )
     if identity.customer_member_id is None and identity.customer_org_alias is None:
         return None
     return identity
@@ -155,6 +183,7 @@ def customer_hierarchy_from_member_row(row: Mapping[str, object], now: datetime)
     override: Final = related_budget(member.budget_override, now, template.max_budget if template is not None else None)
     return CustomerHierarchyAuth(
         customer_member_id=member.customer_member_id,
+        customer_member_email=member.email,
         customer_team_id=team.customer_team_id,
         customer_org_id=organization.customer_org_id,
         scopes=(
@@ -365,6 +394,40 @@ async def _hierarchy_named_by_member(
     return hierarchy
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
+async def _hierarchy_named_by_email(
+    identity: CustomerRequestIdentity,
+    organization: CustomerHierarchyAuth,
+    prisma_client: "PrismaClient | None",
+    user_api_key_cache: UserApiKeyCache,
+) -> CustomerHierarchyAuth:
+    email: Final = identity.customer_member_email
+    if prisma_client is None or email is None:
+        raise _not_found("customer member email could not be resolved", CUSTOMER_MEMBER_EMAIL_HEADER)
+    key: Final = customer_member_email_cache_key(organization.customer_org_id, email)
+    cached: Final = await user_api_key_cache.async_get_cache(key=key)
+    if isinstance(cached, str):
+        known: Final = await get_customer_hierarchy(cached, prisma_client, user_api_key_cache)
+        if (
+            known is not None
+            and known.customer_org_id == organization.customer_org_id
+            and known.customer_member_email == email
+        ):
+            return known
+    registered: Final = await ensure_customer_member_by_email(
+        organization.customer_org_id, email, prisma_client, identity.customer_member_id
+    )
+    if isinstance(registered, Failure):
+        raise _not_found("customer member email could not be resolved", CUSTOMER_MEMBER_EMAIL_HEADER)
+    hierarchy: Final = await get_customer_hierarchy(registered.customer_member_id, prisma_client, user_api_key_cache)
+    if hierarchy is None:
+        raise _not_found("customer member email could not be resolved", CUSTOMER_MEMBER_EMAIL_HEADER)
+    await user_api_key_cache.async_set_cache(
+        key=key, value=registered.customer_member_id, ttl=get_management_object_ttl(user_api_key_cache)
+    )
+    return hierarchy
+
+
 async def load_customer_hierarchy(
     identity: CustomerRequestIdentity,
     prisma_client: "PrismaClient | None",
@@ -379,13 +442,43 @@ async def load_customer_hierarchy(
         if identity.customer_org_alias is not None
         else None
     )
-    if identity.customer_member_id is None:
+    if identity.customer_member_email is not None and organization is None:
+        raise ProxyException(
+            message=f"{CUSTOMER_MEMBER_EMAIL_HEADER} requires {CUSTOMER_ORG_ALIAS_HEADER}",
+            type=ProxyErrorTypes.bad_request_error,
+            param=CUSTOMER_MEMBER_EMAIL_HEADER,
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+    if identity.customer_member_id is None and identity.customer_member_email is None:
         if organization is None:
             raise _not_found("request named no customer member or organization", CUSTOMER_MEMBER_ID_HEADER)
         return organization
-    hierarchy: Final = await _hierarchy_named_by_member(
-        identity.customer_member_id, organization, prisma_client, user_api_key_cache, register
+    known_member: Final = (
+        await get_customer_hierarchy(identity.customer_member_id, prisma_client, user_api_key_cache)
+        if identity.customer_member_email is not None
+        and identity.customer_member_id is not None
+        and prisma_client is not None
+        else None
     )
+    hierarchy: Final = (
+        known_member
+        if known_member is not None
+        else await _hierarchy_named_by_email(identity, organization, prisma_client, user_api_key_cache)
+        if identity.customer_member_email is not None and organization is not None
+        else await _hierarchy_named_by_member(
+            identity.customer_member_id or "", organization, prisma_client, user_api_key_cache, register
+        )
+    )
+    if identity.customer_member_email is not None and (
+        hierarchy.customer_member_email != identity.customer_member_email
+        or (identity.customer_member_id is not None and hierarchy.customer_member_id != identity.customer_member_id)
+    ):
+        raise ProxyException(
+            message=f"{CUSTOMER_MEMBER_ID_HEADER} and {CUSTOMER_MEMBER_EMAIL_HEADER} identify different customer members",
+            type=ProxyErrorTypes.auth_error,
+            param=CUSTOMER_MEMBER_EMAIL_HEADER,
+            code=status.HTTP_403_FORBIDDEN,
+        )
     if organization is not None and organization.customer_org_id != hierarchy.customer_org_id:
         raise ProxyException(
             message=(
@@ -439,6 +532,17 @@ def check_customer_hierarchy_key_scope(hierarchy: CustomerHierarchyAuth, key_met
 async def forget_customer_hierarchies(customer_member_ids: Sequence[str], user_api_key_cache: UserApiKeyCache) -> None:
     """Drop the cached hierarchies of members whose own, team, org or template budget changed so auth reloads them."""
     await evict_and_broadcast(tuple(customer_member_cache_key(m) for m in customer_member_ids), user_api_key_cache)
+
+
+@with_service_target(AUTH_OBJECTS_TARGET)
+async def forget_customer_member_emails(
+    customer_org_id: str, emails: Sequence[str | None], user_api_key_cache: UserApiKeyCache
+) -> None:
+    keys: Final = tuple(
+        customer_member_email_cache_key(customer_org_id, email) for email in dict.fromkeys(emails) if email
+    )
+    if keys:
+        await evict_and_broadcast(keys, user_api_key_cache)
 
 
 @with_service_target(AUTH_OBJECTS_TARGET)

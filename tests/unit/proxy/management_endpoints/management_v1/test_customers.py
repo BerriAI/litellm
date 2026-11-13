@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.auth.customer_hierarchy_auth import customer_member_cache_key
+from litellm.proxy.auth.customer_hierarchy_auth import customer_member_cache_key, customer_member_email_cache_key
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.list_api.common import ManagementProblem, problem_response
@@ -66,6 +66,75 @@ def family(http: TestClient) -> dict[str, object]:
     )
     assert team.status_code == 201, team.text
     return org.json()
+
+
+def test_customer_member_email_round_trips_and_invalidates_old_and_new_email_lookups() -> None:
+    cache: Final = UserApiKeyCache()
+    http: Final = client(cache=cache)
+    family(http)
+    created: Final = http.post(
+        "/management/v1/customer_members",
+        json={
+            "customer_member_id": "customer-member",
+            "parent_team_id": "team",
+            "email": " Person@EXAMPLE.test ",
+        },
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["email"] == "person@example.test"
+    assert http.get("/management/v1/customer_members/customer-member").json()["email"] == "person@example.test"
+    assert http.get("/management/v1/customer_members").json()["data"][0]["email"] == "person@example.test"
+    old_key: Final = customer_member_email_cache_key("org", "person@example.test")
+    new_key: Final = customer_member_email_cache_key("org", "new@example.test")
+    asyncio.run(cache.async_set_cache(key=old_key, value="customer-member"))
+    asyncio.run(cache.async_set_cache(key=new_key, value="stale-customer-member"))
+    patched: Final = http.patch("/management/v1/customer_members/customer-member", json={"email": " NEW@Example.test "})
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["email"] == "new@example.test"
+    assert asyncio.run(cache.async_get_cache(key=old_key)) is None
+    assert asyncio.run(cache.async_get_cache(key=new_key)) is None
+    cleared: Final = http.patch("/management/v1/customer_members/customer-member", json={"email": None})
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["email"] is None
+    assert cleared.json()["budget_id"] == created.json()["budget_id"]
+
+
+def test_customer_member_email_conflicts_return_409_on_create_and_update() -> None:
+    http: Final = client()
+    family(http)
+    created: Final = tuple(
+        http.post(
+            "/management/v1/customer_members",
+            json={
+                "customer_member_id": member_id,
+                "parent_team_id": "team",
+                "email": email,
+            },
+        )
+        for member_id, email in (("customer-member-a", "person@example.test"), ("customer-member-b", None))
+    )
+    assert tuple(response.status_code for response in created) == (201, 201), tuple(
+        response.text for response in created
+    )
+    duplicate: Final = http.post(
+        "/management/v1/customer_members", json={"parent_team_id": "team", "email": " PERSON@Example.test "}
+    )
+    assert duplicate.status_code == 409, duplicate.text
+    assert "customer org" in duplicate.json()["detail"]
+    changed: Final = http.patch(
+        "/management/v1/customer_members/customer-member-b", json={"email": "person@example.test"}
+    )
+    assert changed.status_code == 409, changed.text
+    unchanged: Final = http.patch(
+        "/management/v1/customer_members/customer-member-a", json={"email": "person@example.test"}
+    )
+    assert unchanged.status_code == 200, unchanged.text
+
+
+@pytest.mark.parametrize("email", ("", "   ", "x" * 255))
+def test_customer_member_empty_or_oversized_email_is_rejected(email: str) -> None:
+    response: Final = client().post("/management/v1/customer_members", json={"parent_team_id": "team", "email": email})
+    assert response.status_code == 422, response.text
 
 
 @pytest.mark.parametrize("role", (LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY))

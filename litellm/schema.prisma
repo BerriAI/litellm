@@ -85,6 +85,7 @@ model LiteLLM_CustomerMemberTable {
   budget_reset_at DateTime?
   customer_member_id String @id @default(uuid())
   alias String?
+  email String?
   parent_team_id String
   parent_team LiteLLM_CustomerTeamTable @relation(fields: [parent_team_id], references: [customer_team_id])
   budget_id String?
@@ -97,6 +98,7 @@ model LiteLLM_CustomerMemberTable {
   updated_at DateTime @default(now()) @updatedAt
   updated_by String
   @@index([parent_team_id])
+  @@index([parent_team_id, email])
   @@index([budget_id])
 }
 

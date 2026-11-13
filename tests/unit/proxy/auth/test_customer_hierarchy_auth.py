@@ -1,6 +1,6 @@
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
-from typing import Final
+from typing import TYPE_CHECKING, Final, cast
 
 import pytest
 
@@ -8,6 +8,7 @@ import litellm
 from litellm.proxy._types import ProxyException
 from litellm.proxy.auth.customer_hierarchy_auth import (
     CUSTOMER_MEMBER_ID_HEADER,
+    CUSTOMER_MEMBER_EMAIL_HEADER,
     CUSTOMER_ORG_ALIAS_HEADER,
     AmbiguousOrganizationAlias,
     check_customer_hierarchy_budget,
@@ -16,6 +17,7 @@ from litellm.proxy.auth.customer_hierarchy_auth import (
     customer_hierarchy_from_member_row,
     customer_identity_from_headers,
     customer_member_id_from_headers,
+    customer_member_email_cache_key,
     forget_customer_organization_aliases,
     get_customer_hierarchy,
     get_customer_organization_hierarchy,
@@ -30,7 +32,70 @@ from litellm.types.proxy.auth.customer_hierarchy import (
 )
 from litellm.types.proxy.management_endpoints.customer_hierarchy import CustomerMember
 
+if TYPE_CHECKING:
+    from litellm.proxy.utils import PrismaClient
+
 NOW: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize(
+    "headers",
+    (
+        {CUSTOMER_MEMBER_EMAIL_HEADER: "person@example.test"},
+        {CUSTOMER_MEMBER_EMAIL_HEADER: "   ", CUSTOMER_ORG_ALIAS_HEADER: "customer-alias"},
+        {CUSTOMER_MEMBER_EMAIL_HEADER: "a" * 255, CUSTOMER_ORG_ALIAS_HEADER: "customer-alias"},
+    ),
+)
+def test_email_header_requires_a_nonempty_email_and_customer_org_alias(headers: Mapping[str, str]) -> None:
+    with pytest.raises(ProxyException) as denied:
+        customer_identity_from_headers(headers)
+    assert denied.value.code == "400"
+    assert denied.value.param == CUSTOMER_MEMBER_EMAIL_HEADER
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("member_email", ("person@example.test", "other@example.test", None))
+async def test_email_resolution_uses_the_same_customer_scopes_and_member_id_takes_precedence(
+    member_email: str | None,
+) -> None:
+    cache: Final = UserApiKeyCache()
+    prisma: Final = _Prisma(
+        _MemberTable({"member-1": {**_row(template={"max_budget": 10}), "email": member_email}}),
+        _OrganizationTable((_organization("customer-alias"),)),
+    )
+    await cache.async_set_cache(key=customer_member_email_cache_key("org-1", "person@example.test"), value="member-1")
+    identity: Final = customer_identity_from_headers(
+        {
+            CUSTOMER_ORG_ALIAS_HEADER: "customer-alias",
+            CUSTOMER_MEMBER_ID_HEADER: "member-1",
+            CUSTOMER_MEMBER_EMAIL_HEADER: " PERSON@Example.test ",
+        }
+    )
+    assert identity is not None
+    typed_prisma: Final = cast("PrismaClient", prisma)  # cast-ok: in-memory Prisma edge
+
+    async def resolve() -> CustomerHierarchyAuth | None:
+        return await resolve_customer_hierarchy(identity, typed_prisma, cache, None, "model-a", "/v1/responses")
+
+    if member_email != "person@example.test":
+        with pytest.raises(ProxyException) as denied:
+            await resolve()
+        assert denied.value.code == "403"
+        assert CUSTOMER_MEMBER_ID_HEADER in denied.value.message
+        assert CUSTOMER_MEMBER_EMAIL_HEADER in denied.value.message
+    else:
+        hierarchy: Final = await resolve()
+        assert hierarchy is not None
+        assert hierarchy.customer_member_id == "member-1"
+        assert tuple(scope.key for scope in hierarchy.scopes) == ("customer_org", "customer_team", "customer_member")
+        assert hierarchy.scopes[-1].max_budget == 10
+        email_only: Final = CustomerRequestIdentity(
+            customer_org_alias="customer-alias", customer_member_email="person@example.test"
+        )
+        assert (
+            await resolve_customer_hierarchy(email_only, typed_prisma, cache, None, "model-a", "/v1/messages")
+            == hierarchy
+        )
 
 
 def _row(

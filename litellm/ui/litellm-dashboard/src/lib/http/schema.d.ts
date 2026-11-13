@@ -33149,6 +33149,8 @@ export interface components {
          * @description The levels a request is charged to. A request that named only an organization alias has no team or member.
          */
         CustomerHierarchyAuth: {
+            /** Customer Member Email */
+            customer_member_email?: string | null;
             /** Customer Member Id */
             customer_member_id?: string | null;
             /** Customer Org Id */
@@ -33181,6 +33183,8 @@ export interface components {
             /** Customer Member Id */
             customer_member_id: string;
             effective_budget: components["schemas"]["Budget"];
+            /** Email */
+            email?: string | null;
             /** Parent Team Id */
             parent_team_id: string;
             /**
@@ -40476,6 +40480,8 @@ export interface components {
             budget_override_expires_at?: string | null;
             /** Customer Member Id */
             customer_member_id?: string | null;
+            /** Email */
+            email?: string | null;
             /** Parent Team Id */
             parent_team_id: string;
         };
@@ -40488,6 +40494,8 @@ export interface components {
             budget_override?: components["schemas"]["Budget"] | null;
             /** Budget Override Expires At */
             budget_override_expires_at?: string | null;
+            /** Email */
+            email?: string | null;
         };
         /** MemoryCreateRequest */
         MemoryCreateRequest: {

@@ -39,6 +39,7 @@ class ErrorCode(str, Enum):
     NOT_FOUND = "not_found"
     PARENT_NOT_FOUND = "parent_not_found"
     ALREADY_EXISTS = "already_exists"
+    EMAIL_IN_USE = "email_in_use"
     INVALID_DEFAULT_BUDGET = "invalid_default_budget"
     TEMPLATE_NOT_IN_ORG = "template_not_in_org"
     HAS_CHILDREN = "has_children"
@@ -514,7 +515,32 @@ class CustomerHierarchyStore:
         await self.delete_released_budget(team.budget_id, budget_id)
         return await self.get_team(team_id)
 
+    async def get_member_by_email(self, organization_id: str, email: str) -> CustomerMember | Failure:
+        teams: Final = await self.teams.find_many(where={"parent_org_id": organization_id})
+        team_ids: Final = tuple(_ID.validate_python(team.model_dump()["customer_team_id"]) for team in teams)
+        members: Final = await find_many_in(self.members, "parent_team_id", team_ids, where={"email": email})
+        if len(members) != 1:
+            return Failure(ErrorCode.EMAIL_IN_USE if members else ErrorCode.NOT_FOUND)
+        return await self.get_member(_ID.validate_python(members[0].model_dump()["customer_member_id"]))
+
+    async def member_email_conflict(
+        self, team_id: str, email: str | None, member_id: str | None = None
+    ) -> Failure | None:
+        if email is None:
+            return None
+        team: Final = await self.get_team(team_id)
+        if isinstance(team, Failure):
+            return Failure(ErrorCode.PARENT_NOT_FOUND)
+        await self.lock_organization(team.parent_org_id)
+        existing: Final = await self.get_member_by_email(team.parent_org_id, email)
+        if isinstance(existing, Failure):
+            return None if existing.code is ErrorCode.NOT_FOUND else existing
+        return None if existing.customer_member_id == member_id else Failure(ErrorCode.EMAIL_IN_USE)
+
     async def create_member(self, payload: MemberCreate, actor: str) -> CustomerMember | Failure:
+        conflict: Final = await self.member_email_conflict(payload.parent_team_id, payload.email)
+        if conflict is not None:
+            return conflict
         template_id: Final = await self.resolve_member_template(payload.parent_team_id, payload.budget_id)
         if isinstance(template_id, Failure):
             return template_id
@@ -528,6 +554,7 @@ class CustomerHierarchyStore:
             data={
                 "customer_member_id": member_id,
                 "alias": payload.alias,
+                "email": payload.email,
                 "parent_team_id": payload.parent_team_id,
                 "budget_id": template_id,
                 "budget_override_id": override_id,
@@ -556,6 +583,9 @@ class CustomerHierarchyStore:
         member: Final = await self.get_member(member_id)
         if isinstance(member, Failure):
             return member
+        conflict: Final = await self.member_email_conflict(member.parent_team_id, payload.email, member_id)
+        if conflict is not None:
+            return conflict
         selected: Final = await self.member_template_patch(member, payload)
         if isinstance(selected, Failure):
             return selected
@@ -576,6 +606,7 @@ class CustomerHierarchyStore:
             where={"customer_member_id": member_id},
             data={
                 **alias_patch(payload),
+                **({"email": payload.email} if "email" in payload.model_fields_set else {}),
                 "budget_id": selected,
                 "budget_override_id": override_id,
                 "budget_override_expires_at": expiry,
@@ -735,6 +766,9 @@ class CustomerHierarchy:
 
     async def get_member(self, entity_id: str) -> CustomerMember | Failure:
         return await self.transaction(lambda store: store.get_member(entity_id))
+
+    async def get_member_by_email(self, organization_id: str, email: str) -> CustomerMember | Failure:
+        return await self.transaction(lambda store: store.get_member_by_email(organization_id, email))
 
     async def update_member(self, entity_id: str, payload: MemberPatch, actor: str) -> CustomerMember | Failure:
         return await self.transaction(lambda store: store.update_member(entity_id, payload, actor))

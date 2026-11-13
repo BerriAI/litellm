@@ -2,11 +2,16 @@ from typing import TYPE_CHECKING, Final, cast
 
 import pytest
 
-from litellm.proxy.auth.customer_member_auto_create import default_team_id, ensure_customer_member
+from litellm.proxy.auth.customer_member_auto_create import (
+    default_team_id,
+    ensure_customer_member,
+    ensure_customer_member_by_email,
+)
 from litellm.proxy.management_helpers.customer_hierarchy import CustomerHierarchy, ErrorCode, Failure
 from litellm.types.proxy.management_endpoints.customer_hierarchy import (
     BudgetTemplate,
     CustomerMember,
+    MemberCreate,
     OrganizationCreate,
     TeamCreate,
 )
@@ -18,6 +23,42 @@ if TYPE_CHECKING:
 
 def _prisma(database: Database) -> "PrismaClient":
     return cast("PrismaClient", database)  # cast-ok: in-memory Prisma edge
+
+
+@pytest.mark.asyncio
+async def test_email_lookup_reuses_a_customer_member_in_any_customer_team_and_registers_unknown_email() -> None:
+    database: Final = Database()
+    prisma: Final = _prisma(database)
+    await _organization(database, "customer-org")
+    hierarchy: Final = CustomerHierarchy(prisma, clock=lambda: NOW)
+    await hierarchy.create_team(
+        TeamCreate(customer_team_id="custom-customer-team", parent_org_id="customer-org"), "actor"
+    )
+    existing: Final = await hierarchy.create_member(
+        MemberCreate(
+            customer_member_id="stable-customer-member",
+            parent_team_id="custom-customer-team",
+            email="known@example.test",
+        ),
+        "actor",
+    )
+    found: Final = await ensure_customer_member_by_email("customer-org", " KNOWN@Example.test ", prisma)
+    assert found == existing
+    created: Final = await ensure_customer_member_by_email("customer-org", " NEW@Example.test ", prisma)
+    assert isinstance(created, CustomerMember)
+    assert (created.email, created.parent_team_id) == ("new@example.test", default_team_id("customer-org"))
+    assert await ensure_customer_member_by_email("customer-org", "new@example.test", prisma) == created
+    assert len(database.litellm_customermembertable.rows) == 2
+
+
+@pytest.mark.asyncio
+async def test_email_registration_without_a_customer_budget_fails_without_creating_a_customer_member() -> None:
+    database: Final = Database()
+    await _organization(database, "customer-org", default_budget=False)
+    assert await ensure_customer_member_by_email("customer-org", "new@example.test", _prisma(database)) == Failure(
+        ErrorCode.BUDGET_REQUIRED
+    )
+    assert database.litellm_customermembertable.rows == {}
 
 
 async def _organization(database: Database, org_id: str, default_budget: bool = True) -> None:

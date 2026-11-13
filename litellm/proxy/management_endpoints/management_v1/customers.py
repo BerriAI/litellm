@@ -5,7 +5,11 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 from typing_extensions import assert_never
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.auth.customer_hierarchy_auth import forget_customer_hierarchies, forget_customer_organization_aliases
+from litellm.proxy.auth.customer_hierarchy_auth import (
+    forget_customer_hierarchies,
+    forget_customer_member_emails,
+    forget_customer_organization_aliases,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.list_api.common import (
@@ -45,6 +49,8 @@ def error_details(code: ErrorCode) -> tuple[int, str, str]:
             return 404, "Parent not found", "Customer parent not found."
         case ErrorCode.ALREADY_EXISTS:
             return 409, "Already exists", "Customer entity ID already exists."
+        case ErrorCode.EMAIL_IN_USE:
+            return 409, "Customer member email in use", "Another customer member in this customer org uses this email."
         case ErrorCode.INVALID_DEFAULT_BUDGET:
             return (
                 422,
@@ -355,8 +361,11 @@ async def update_customer_member(
     hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
     cache: AuthCache,
 ) -> CustomerMember:
+    previous: Final = resolve(await hierarchy.get_member(customer_member_id))
+    team: Final = resolve(await hierarchy.get_team(previous.parent_team_id))
     member: Final = resolve(await hierarchy.update_member(customer_member_id, data, actor))
     await forget_customer_hierarchies((customer_member_id,), cache)
+    await forget_customer_member_emails(team.parent_org_id, (previous.email, member.email), cache)
     return member
 
 
@@ -371,8 +380,11 @@ async def delete_customer_member(
     hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
     cache: AuthCache,
 ) -> Response:
+    previous: Final = resolve(await hierarchy.get_member(customer_member_id))
+    team: Final = resolve(await hierarchy.get_team(previous.parent_team_id))
     resolve(await hierarchy.delete_member(customer_member_id))
     await forget_customer_hierarchies((customer_member_id,), cache)
+    await forget_customer_member_emails(team.parent_org_id, (previous.email,), cache)
     return Response(status_code=204)
 
 

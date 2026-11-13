@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from functools import reduce
-from typing import Final
+from typing import TYPE_CHECKING, Final, cast
 
 import pytest
 from prisma import Json
@@ -13,7 +13,68 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter
 from litellm.proxy.management_helpers.customer_hierarchy import effective_member_budget, related_budget
 from litellm.types.proxy.management_endpoints.customer_hierarchy import Budget
 
+if TYPE_CHECKING:
+    from prisma import Prisma
+
 NOW: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_customer_member_email_is_normalized_and_unique_across_a_customer_org() -> None:
+    from litellm.proxy.management_helpers.customer_hierarchy import CustomerHierarchy, ErrorCode, Failure
+    from litellm.types.proxy.management_endpoints.customer_hierarchy import (
+        BudgetTemplate,
+        CustomerMember,
+        MemberCreate,
+        MemberPatch,
+        OrganizationCreate,
+        TeamCreate,
+    )
+
+    hierarchy: Final = CustomerHierarchy(
+        cast("Prisma", Database()), clock=lambda: NOW
+    )  # cast-ok: in-memory Prisma edge
+    for org_id in ("customer-org-a", "customer-org-b"):
+        await hierarchy.create_organization(
+            OrganizationCreate(
+                customer_org_id=org_id, default_budgets=(BudgetTemplate(name="default", max_budget=10),)
+            ),
+            "actor",
+        )
+        await hierarchy.create_team(TeamCreate(customer_team_id=org_id + "-team", parent_org_id=org_id), "actor")
+    await hierarchy.create_team(
+        TeamCreate(customer_team_id="second-customer-team", parent_org_id="customer-org-a"), "actor"
+    )
+    member: Final = await hierarchy.create_member(
+        MemberCreate(
+            customer_member_id="customer-member-a", parent_team_id="customer-org-a-team", email=" User@EXAMPLE.test "
+        ),
+        "actor",
+    )
+    assert isinstance(member, CustomerMember)
+    assert member.email == "user@example.test"
+    duplicate: Final = await hierarchy.create_member(
+        MemberCreate(parent_team_id="second-customer-team", email="USER@example.test"), "actor"
+    )
+    assert duplicate == Failure(ErrorCode.EMAIL_IN_USE)
+    other_org: Final = await hierarchy.create_member(
+        MemberCreate(
+            customer_member_id="customer-member-b", parent_team_id="customer-org-b-team", email="user@example.test"
+        ),
+        "actor",
+    )
+    assert isinstance(other_org, CustomerMember)
+    assert other_org.email == member.email
+    updated: Final = await hierarchy.update_member(
+        member.customer_member_id, MemberPatch(email=" OTHER@Example.test "), "actor"
+    )
+    assert isinstance(updated, CustomerMember)
+    assert updated.email == "other@example.test"
+    assert await hierarchy.get_member_by_email("customer-org-a", "other@example.test") == updated
+    cleared: Final = await hierarchy.update_member(member.customer_member_id, MemberPatch(email=None), "actor")
+    assert isinstance(cleared, CustomerMember)
+    assert cleared.email is None
+    assert await hierarchy.get_member_by_email("customer-org-a", "other@example.test") == Failure(ErrorCode.NOT_FOUND)
 
 
 class Record(BaseModel):

@@ -7,6 +7,10 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, NonNegativeInt
 from litellm.proxy.common_utils.timezone_utils import budget_duration_error
 
 
+def normalize_customer_member_email(value: str) -> str:
+    return value.strip().lower()
+
+
 class Budget(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -70,9 +74,20 @@ class MemberPatch(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     alias: str | None = None
+    email: str | None = None
     budget_id: str | None = None
     budget_override: Budget | None = None
     budget_override_expires_at: AwareDatetime | None = None
+
+    @field_validator("email")
+    @classmethod
+    def normalized_email(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized: Final = normalize_customer_member_email(value)
+        if not normalized or len(normalized) > 254:
+            raise ValueError("Customer member email must contain 1 to 254 characters")
+        return normalized
 
 
 class MemberCreate(MemberPatch):
@@ -110,6 +125,7 @@ class Team(AuditFields):
 
 class CustomerMember(AuditFields):
     customer_member_id: str
+    email: str | None = None
     parent_team_id: str
     budget_id: str | None = None
     budget_override_id: str | None = None

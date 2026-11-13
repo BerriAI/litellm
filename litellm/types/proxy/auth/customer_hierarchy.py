@@ -16,6 +16,7 @@ class CustomerRequestIdentity:
 
     customer_member_id: str | None = None
     customer_org_alias: str | None = None
+    customer_member_email: str | None = None
 
 
 class CustomerScopeAuth(BaseModel):
@@ -43,6 +44,7 @@ class CustomerHierarchyAuth(BaseModel):
     customer_team_id: str | None = None
     customer_member_id: str | None = None
     scopes: tuple[CustomerScopeAuth, ...]
+    customer_member_email: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
