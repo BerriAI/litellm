@@ -28,7 +28,7 @@ const bots: Bot[] = ["Support bot", "Research bot"].map((name, index) => ({
   first_seen_at: "2026-01-01T00:00:00Z",
   last_seen_at: "2026-01-01T00:00:00Z",
   request_count: 5,
-  issues: ["no team", "no owner", "unmapped member"],
+  issues: ["no team", "no owner"],
 }));
 const summary = {
   discovered: 2,
@@ -55,24 +55,21 @@ beforeEach(() => {
 });
 
 describe("external agent administration", () => {
-  it("saves the optional admin key and displays the automatic member sync result", async () => {
-    vi.mocked(apiClient.request).mockResolvedValue({
-      ...source,
-      sync_result: { matched: 2, unmatched: 1, already_mapped: 1 },
-    });
+  it("saves optional signing hardening without requiring member setup", async () => {
     renderWithProviders(<ExternalAgentsPanel token="test-token" teams={[]} />);
     fireEvent.click(await screen.findByRole("button", { name: "Show setup" }));
-    fireEvent.click(screen.getByText("Auto-match members (recommended)"));
-    const form = screen.getByRole("form", { name: "Auto-match members (recommended)" });
-    fireEvent.change(within(form).getByLabelText("GrokBot Admin API key"), { target: { value: "admin-key" } });
+    fireEvent.click(screen.getByText("Signing secret (optional hardening)"));
+    const form = screen.getByRole("form", { name: "Signing secret (optional hardening)" });
+    fireEvent.change(within(form).getByLabelText("GrokBot signing secret"), { target: { value: "whsec_a2V5" } });
     fireEvent.click(within(form).getByRole("button", { name: "Save", exact: true }));
-    expect(await screen.findByText("Matched 3 of 4 members")).toBeInTheDocument();
+    expect(await screen.findByText("Saved")).toBeInTheDocument();
     expect(apiClient.request).toHaveBeenCalledWith(
       "PATCH",
       "/v1/external_agents/sources/source-1",
-      expect.objectContaining({ body: { admin_api_key: "admin-key" } }),
+      expect.objectContaining({ body: { signing_secret: "whsec_a2V5" } }),
     );
   });
+
   it("shows owner labels with user IDs as fallback", async () => {
     vi.mocked(apiClient.get).mockImplementation(async (path) => {
       if (path.endsWith("/sources")) return [source];
@@ -139,6 +136,7 @@ describe("external agent administration", () => {
       if (path.endsWith("/sources")) return connected ? [{ ...source, last_event_at: null }] : [];
       if (path.endsWith("/summary")) return summary;
       if (path.endsWith("/connection")) return { ...source, ingest_key: "litellm_ingest_test" };
+      if (path.endsWith("/policies")) return [];
       return bots;
     });
     vi.mocked(apiClient.request).mockImplementation(async () => {
@@ -153,6 +151,11 @@ describe("external agent administration", () => {
     );
     expect(screen.getByLabelText("Custom Header name")).toHaveValue("Authorization");
     expect(screen.getByLabelText("Custom Header value")).toHaveValue("Bearer litellm_ingest_test");
+    expect(screen.queryByText("Auto-match members (recommended)")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Sync members" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Policies", exact: true }));
+    expect(await screen.findByRole("button", { name: "Add team policy" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Map members" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Show setup" }));
     fireEvent.click(screen.getByRole("button", { name: "Show setup" }));
     expect(screen.getAllByLabelText("Endpoint URL")).toHaveLength(1);
@@ -199,28 +202,6 @@ describe("external agent administration", () => {
         "/v1/external_agents/bulk",
         expect.objectContaining({
           body: { agent_ids: ["bot-0"], team_id: "team-1" },
-        }),
-      ),
-    );
-  });
-
-  it("maps CSV members to the selected source and rejects malformed rows before posting", async () => {
-    renderWithProviders(<ExternalAgentsPanel token="test-token" teams={[]} />, {
-      searchParams: { external_tab: "policies" },
-    });
-    fireEvent.click(await screen.findByRole("button", { name: "Map members" }));
-    fireEvent.change(screen.getByLabelText("Member mappings"), { target: { value: "member-only" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save mappings" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Line 1 must contain");
-    expect(apiClient.request).not.toHaveBeenCalled();
-    fireEvent.change(screen.getByLabelText("Member mappings"), { target: { value: "member-one,user-one" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save mappings" }));
-    await waitFor(() =>
-      expect(apiClient.request).toHaveBeenCalledWith(
-        "POST",
-        "/v1/external_agents/actors/bulk",
-        expect.objectContaining({
-          body: { source_id: source.source_id, mappings: [{ external_actor_id: "member-one", user_id: "user-one" }] },
         }),
       ),
     );

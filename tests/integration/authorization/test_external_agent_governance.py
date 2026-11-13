@@ -48,7 +48,7 @@ def test_zero_input_source_authentication_and_default_coverage(gateway: Gateway)
         sources: Final = OBJECTS.validate_json(sources_response.content)
         saved: Final = next(item for item in sources if item["source_id"] == identity)
         assert saved["last_event_at"] is not None
-        assert not {"ingest_key", "signing_secret", "admin_api_key"}.intersection(saved)
+        assert not {"ingest_key", "signing_secret"}.intersection(saved)
         assert hook.agents() == ()
         assert hook.send("bot", authorization="").status_code == 401
         assert hook.send("bot", authorization="Bearer wrong").status_code == 401
@@ -300,7 +300,7 @@ def test_blocked_mcp_toolset_is_logged_and_shadow_mode_allows(
         1,
     )
     assert len(hook.agents(exceptions_only=True)) == 1
-    assert hook.agents()[0]["issues"] == ["no team", "no owner", "unmapped member", "denied recently"]
+    assert hook.agents()[0]["issues"] == ["no team", "no owner", "denied recently"]
 
 
 def test_summary_counts_distinct_unmapped_members_even_after_bot_invokers_change(hook: Hook) -> None:
@@ -310,7 +310,7 @@ def test_summary_counts_distinct_unmapped_members_even_after_bot_invokers_change
     assert hook.send("bot-two", actor="first-member").status_code == 200
     shared: Final = hook.gateway.get("/v1/external_agents/summary", {"source_id": hook.source_id})
     assert (shared["discovered"], shared["unmapped_actors"]) == (2, 1)
-    assert all("unmapped member" in agent["issues"] for agent in hook.agents(exceptions_only=True))
+    assert all(agent["issues"] == ["no team", "no owner"] for agent in hook.agents(exceptions_only=True))
     assert hook.send("bot-one", actor="second-member").status_code == 200
     assert hook.send("bot-two", actor="second-member").status_code == 200
     distinct: Final = hook.gateway.get("/v1/external_agents/summary", {"source_id": hook.source_id})
@@ -323,7 +323,24 @@ def test_summary_counts_distinct_unmapped_members_even_after_bot_invokers_change
         )
         mapped: Final = hook.gateway.get("/v1/external_agents/summary", {"source_id": hook.source_id})
         assert mapped["unmapped_actors"] == 1
-        assert all("unmapped member" not in agent["issues"] for agent in hook.agents())
+        assert all(agent["issues"] == ["no team", "no owner"] for agent in hook.agents())
+
+
+def test_unmapped_invoker_alone_does_not_need_attention(hook: Hook) -> None:
+    assert hook.send("owned-bot", actor="unmapped-member").status_code == 200
+    with hook.gateway.scenario() as scenario:
+        owner: Final = scenario.user()
+        team: Final = scenario.team()
+        response: Final = hook.gateway.request(
+            "PATCH",
+            "/v1/external_agents/bulk",
+            {"agent_ids": [agent["id"] for agent in hook.agents()], "team_id": team, "owner_user_id": owner},
+        )
+        assert response.status_code == 200, response.text
+        assert hook.agents()[0]["issues"] == []
+        assert hook.agents(exceptions_only=True) == ()
+        summary: Final = hook.gateway.get("/v1/external_agents/summary", {"source_id": hook.source_id})
+        assert (summary["discovered"], summary["unmapped_actors"], summary["needs_attention"]) == (1, 1, 0)
 
 
 def test_secret_rotation_retains_previous_signatures_without_returning_secrets(hook: Hook) -> None:

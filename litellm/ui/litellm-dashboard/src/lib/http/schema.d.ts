@@ -21829,26 +21829,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/external_agents/sources/{id}/sync_members": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Sync Source Members
-         * @description Match vendor members by email without replacing existing mappings.
-         */
-        post: operations["sync_source_members_v1_external_agents_sources__id__sync_members_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/v1/external_agents/summary": {
         parameters: {
             query?: never;
@@ -27421,7 +27401,7 @@ export interface components {
              * Issues
              * @default []
              */
-            issues: ("no team" | "no owner" | "owner inferred" | "unmapped member" | "denied recently")[];
+            issues: ("no team" | "no owner" | "owner inferred" | "denied recently")[];
             /** Last Actor Id */
             last_actor_id?: string | null;
             /** Last Model */
@@ -41110,17 +41090,6 @@ export interface components {
             /** Budget Override Expires At */
             budget_override_expires_at?: string | null;
         };
-        /** MemberSyncRequest */
-        MemberSyncRequest: Record<string, never>;
-        /** MemberSyncResult */
-        MemberSyncResult: {
-            /** Already Mapped */
-            already_mapped: number;
-            /** Matched */
-            matched: number;
-            /** Unmatched */
-            unmatched: number;
-        };
         /** MemberUpsert */
         MemberUpsert: {
             /** Alias */
@@ -49442,7 +49411,6 @@ export interface components {
             mode: "shadow" | "enforce";
             /** Source Id */
             source_id: string;
-            sync_result?: components["schemas"]["MemberSyncResult"] | null;
             /** Tenant Id */
             tenant_id?: string | null;
             /**
@@ -49454,8 +49422,6 @@ export interface components {
         };
         /** SourceCreate */
         SourceCreate: {
-            /** Admin Api Key */
-            admin_api_key?: string | null;
             /**
              * Display Name
              * @default GrokBot
@@ -49472,8 +49438,6 @@ export interface components {
         };
         /** SourcePatch */
         SourcePatch: {
-            /** Admin Api Key */
-            admin_api_key?: string | null;
             /** Display Name */
             display_name?: string | null;
             /** Mode */
@@ -49497,7 +49461,6 @@ export interface components {
             mode: "shadow" | "enforce";
             /** Source Id */
             source_id: string;
-            sync_result?: components["schemas"]["MemberSyncResult"] | null;
             /** Tenant Id */
             tenant_id?: string | null;
             /**
@@ -86625,41 +86588,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SourceConnection"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    sync_source_members_v1_external_agents_sources__id__sync_members_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": components["schemas"]["MemberSyncRequest"] | null;
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MemberSyncResult"];
                 };
             };
             /** @description Validation Error */

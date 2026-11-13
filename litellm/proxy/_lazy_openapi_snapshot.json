@@ -16009,7 +16009,6 @@
                   "no team",
                   "no owner",
                   "owner inferred",
-                  "unmapped member",
                   "denied recently"
                 ],
                 "type": "string"
@@ -16384,34 +16383,6 @@
           "title": "HTTPValidationError",
           "type": "object"
         },
-        "MemberSyncRequest": {
-          "properties": {},
-          "title": "MemberSyncRequest",
-          "type": "object"
-        },
-        "MemberSyncResult": {
-          "properties": {
-            "already_mapped": {
-              "title": "Already Mapped",
-              "type": "integer"
-            },
-            "matched": {
-              "title": "Matched",
-              "type": "integer"
-            },
-            "unmatched": {
-              "title": "Unmatched",
-              "type": "integer"
-            }
-          },
-          "required": [
-            "matched",
-            "unmatched",
-            "already_mapped"
-          ],
-          "title": "MemberSyncResult",
-          "type": "object"
-        },
         "Policy": {
           "properties": {
             "allow_unmapped_actors": {
@@ -16619,16 +16590,6 @@
               "title": "Source Id",
               "type": "string"
             },
-            "sync_result": {
-              "anyOf": [
-                {
-                  "$ref": "#/components/schemas/MemberSyncResult"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
             "tenant_id": {
               "anyOf": [
                 {
@@ -16658,19 +16619,6 @@
         },
         "SourceCreate": {
           "properties": {
-            "admin_api_key": {
-              "anyOf": [
-                {
-                  "format": "password",
-                  "type": "string",
-                  "writeOnly": true
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Admin Api Key"
-            },
             "display_name": {
               "default": "GrokBot",
               "maxLength": 200,
@@ -16706,19 +16654,6 @@
         },
         "SourcePatch": {
           "properties": {
-            "admin_api_key": {
-              "anyOf": [
-                {
-                  "format": "password",
-                  "type": "string",
-                  "writeOnly": true
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Admin Api Key"
-            },
             "display_name": {
               "anyOf": [
                 {
@@ -16805,16 +16740,6 @@
             "source_id": {
               "title": "Source Id",
               "type": "string"
-            },
-            "sync_result": {
-              "anyOf": [
-                {
-                  "$ref": "#/components/schemas/MemberSyncResult"
-                },
-                {
-                  "type": "null"
-                }
-              ]
             },
             "tenant_id": {
               "anyOf": [
@@ -17609,71 +17534,6 @@
             }
           ],
           "summary": "Source Connection",
-          "tags": [
-            "external_agents"
-          ]
-        }
-      },
-      "/v1/external_agents/sources/{id}/sync_members": {
-        "post": {
-          "description": "Match vendor members by email without replacing existing mappings.",
-          "operationId": "sync_source_members_v1_external_agents_sources__id__sync_members_post",
-          "parameters": [
-            {
-              "in": "path",
-              "name": "id",
-              "required": true,
-              "schema": {
-                "title": "Id",
-                "type": "string"
-              }
-            }
-          ],
-          "requestBody": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/components/schemas/MemberSyncRequest"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ],
-                  "title": "Data"
-                }
-              }
-            }
-          },
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/MemberSyncResult"
-                  }
-                }
-              },
-              "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
-                  }
-                }
-              },
-              "description": "Validation Error"
-            }
-          },
-          "security": [
-            {
-              "APIKeyHeader": []
-            }
-          ],
-          "summary": "Sync Source Members",
           "tags": [
             "external_agents"
           ]

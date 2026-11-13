@@ -45,7 +45,6 @@ def test_source_response_never_serializes_current_or_previous_secret() -> None:
         signing_secret="encrypted-current",
         previous_signing_secret="encrypted-previous",
         ingest_key="encrypted-ingest",
-        admin_api_key="encrypted-admin",
     )
     assert source.model_dump(mode="json") == {
         "source_id": "source",
@@ -68,7 +67,6 @@ async def test_create_without_body_returns_setup_credentials_but_list_redacts_th
         "ingest_key": "encrypted-ingest",
         "signing_secret": "encrypted-current",
         "previous_signing_secret": "encrypted-previous",
-        "admin_api_key": "encrypted-admin",
     }
     async with endpoint_client(([stored], [stored])) as client:
         created: Final = await client.post("/v1/external_agents/sources")
@@ -79,7 +77,6 @@ async def test_create_without_body_returns_setup_credentials_but_list_redacts_th
         **row,
         "ingest_key": "redacted",
         "hook_path": "/grok_bot/inference_hook/new-source",
-        "sync_result": None,
     }
     assert listed.json() == [row]
 
@@ -103,29 +100,16 @@ async def test_revealing_connection_requires_write_admin_access(
         **source.model_dump(),
         "ingest_key": "test-ingest",
         "hook_path": "/grok_bot/inference_hook/connection",
-        "sync_result": None,
     }
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("path", ("connection", "sync_members"))
-async def test_connection_actions_report_unknown_sources(path: str, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_connection_reports_unknown_sources(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITELLM_SALT_KEY", "external-agent-endpoint-test-key")
     async with endpoint_client(([],)) as client:
-        response: Final = await client.request(
-            "GET" if path == "connection" else "POST", f"/v1/external_agents/sources/missing/{path}"
-        )
+        response: Final = await client.get("/v1/external_agents/sources/missing/connection")
     assert response.status_code == 404
     assert response.json() == {"detail": "Unknown source"}
-
-
-@pytest.mark.asyncio
-async def test_sync_without_admin_key_returns_actionable_error() -> None:
-    row: Final = Source(source_id="source", display_name="Bots").model_dump()
-    async with endpoint_client(([row],)) as client:
-        response: Final = await client.post("/v1/external_agents/sources/source/sync_members")
-    assert response.status_code == 400
-    assert response.json() == {"detail": "Save a GrokBot Admin API key before syncing members"}
 
 
 @pytest.mark.asyncio

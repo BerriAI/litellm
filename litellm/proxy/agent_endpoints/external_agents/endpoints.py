@@ -4,9 +4,6 @@ from typing import Annotated, Final, Literal, TypeAlias, TypeVar
 from anyio import fail_after
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from litellm.llms.custom_httpx.http_handler import (
-    get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # shared client factory has untyped params
-)
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.agent_endpoints.external_agents.cache import metadata
 from litellm.proxy.agent_endpoints.external_agents.database import Database, ProxyDatabase
@@ -19,8 +16,6 @@ from litellm.proxy.agent_endpoints.external_agents.models import (
     Decision,
     ExternalAgentSummary,
     HookFailure,
-    MemberSyncRequest,
-    MemberSyncResult,
     ObservedAgentEvent,
     Policy,
     PolicyPut,
@@ -35,7 +30,6 @@ from litellm.proxy.agent_endpoints.external_agents.models import (
 from litellm.proxy.agent_endpoints.external_agents.source import GrokBotHookSource, verify_ingest
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
-from litellm.types.llms.custom_http import httpxSpecialProvider
 
 router: Final = APIRouter(tags=["External agent governance"])
 T: Final = TypeVar("T")
@@ -66,7 +60,7 @@ DB: TypeAlias = Annotated[Database, Depends(database)]
 
 
 def management(db: DB) -> ExternalAgentManagement:
-    return ExternalAgentManagement(db, metadata, get_async_httpx_client(llm_provider=httpxSpecialProvider.A2A).client)
+    return ExternalAgentManagement(db, metadata)
 
 
 Management: TypeAlias = Annotated[ExternalAgentManagement, Depends(management)]
@@ -120,14 +114,6 @@ async def create_source(auth: Admin, service: Management, data: SourceCreate | N
 async def source_connection(id: str, auth: Admin, service: Management) -> SourceConnection:
     """Show connection credentials to a proxy administrator."""
     return raise_public(await service.connection(id))
-
-
-@router.post("/v1/external_agents/sources/{id}/sync_members", response_model=MemberSyncResult)
-async def sync_source_members(
-    id: str, auth: Admin, service: Management, data: MemberSyncRequest | None = None
-) -> MemberSyncResult:
-    """Match vendor members by email without replacing existing mappings."""
-    return raise_public(await service.sync_members(id))
 
 
 @router.get("/v1/external_agents/sources", response_model=tuple[Source, ...])

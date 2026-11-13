@@ -744,7 +744,6 @@ class LiteLLMRoutes(enum.Enum):
             "/v1/external_agents/sources",
             "/v1/external_agents/sources/{id}",
             "/v1/external_agents/sources/{id}/connection",
-            "/v1/external_agents/sources/{id}/sync_members",
             "/v1/external_agents/summary",
             "/v1/external_agents/bulk",
             "/v1/external_agents/policies",

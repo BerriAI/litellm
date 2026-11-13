@@ -2,7 +2,7 @@ import { useTranslation } from "react-i18next";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Connection, SyncResult, hookUrl, useExternalMutation, useExternalQuery } from "./useExternalAgents";
+import { Connection, hookUrl, useExternalMutation, useExternalQuery } from "./useExternalAgents";
 
 const modes = ["shadow", "enforce"] as const;
 const secretPattern = "whsec_.+";
@@ -69,13 +69,12 @@ function CopyField({ label, value, password = false }: { label: string; value: s
   );
 }
 
-function OptionalCredential({ token, sourceId, memberKey }: { token: string; sourceId: string; memberKey: boolean }) {
+function OptionalSigningSecret({ token, sourceId }: { token: string; sourceId: string }) {
   const { t } = useTranslation();
   const [value, setValue] = useState("");
   const [saved, setSaved] = useState(false);
-  const [sync, setSync] = useState<SyncResult | null>(null);
   const mutation = useExternalMutation(token);
-  const title = memberKey ? t("agents.external.autoMatchMembers") : t("agents.external.optionalSigningSecret");
+  const title = t("agents.external.optionalSigningSecret");
   return (
     <details className="rounded-lg border p-4">
       <summary className="cursor-pointer font-medium">{title}</summary>
@@ -85,9 +84,11 @@ function OptionalCredential({ token, sourceId, memberKey }: { token: string; sou
         onSubmit={async (event) => {
           event.preventDefault();
           try {
-            const body = memberKey ? { admin_api_key: value } : { signing_secret: value };
-            const result = await mutation.mutateAsync({ method: "PATCH", path: `/sources/${sourceId}`, body });
-            setSync((result as { sync_result?: SyncResult }).sync_result ?? null);
+            await mutation.mutateAsync({
+              method: "PATCH",
+              path: `/sources/${sourceId}`,
+              body: { signing_secret: value },
+            });
             setValue("");
             setSaved(true);
           } catch {
@@ -96,29 +97,20 @@ function OptionalCredential({ token, sourceId, memberKey }: { token: string; sou
         }}
       >
         <label className="grid gap-2 text-sm">
-          {memberKey ? t("agents.external.adminApiKey") : t("agents.external.grokBotSigningSecret")}
+          {t("agents.external.grokBotSigningSecret")}
           <Input
             required
             type="password"
             autoComplete="new-password"
             value={value}
-            pattern={memberKey ? undefined : secretPattern}
+            pattern={secretPattern}
             onChange={(event) => setValue(event.target.value)}
           />
         </label>
         <Button type="submit" disabled={mutation.isPending}>
           {t("agents.external.save")}
         </Button>
-        {saved && (
-          <p role="status">
-            {sync
-              ? t("agents.external.membersMatched", {
-                  matched: sync.matched + sync.already_mapped,
-                  total: sync.matched + sync.already_mapped + sync.unmatched,
-                })
-              : t("agents.external.saved")}
-          </p>
-        )}
+        {saved && <p role="status">{t("agents.external.saved")}</p>}
         {mutation.error && (
           <p role="alert" className="text-destructive">
             {mutation.error.message}
@@ -159,8 +151,7 @@ export function SetupCard({ token, sourceId, status }: { token: string; sourceId
       <p className="text-xs text-muted-foreground">
         {t("agents.external.shadowAllowsRequestsAndRecordsWhatWouldBeDenied")}
       </p>
-      <OptionalCredential token={token} sourceId={sourceId} memberKey />
-      <OptionalCredential token={token} sourceId={sourceId} memberKey={false} />
+      <OptionalSigningSecret token={token} sourceId={sourceId} />
     </div>
   );
 }

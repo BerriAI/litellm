@@ -48,7 +48,6 @@ class SourceDetails(FrozenModel):
 class Source(SourceDetails):
     signing_secret: str | None = Field(default=None, repr=False, exclude=True)
     ingest_key: str | None = Field(default=None, repr=False, exclude=True)
-    admin_api_key: str | None = Field(default=None, repr=False, exclude=True)
     previous_signing_secret: str | None = Field(default=None, repr=False, exclude=True)
 
 
@@ -67,7 +66,7 @@ class Agent(FrozenModel):
     request_count: int
     last_actor_id: str | None = None
     last_model: str | None = None
-    issues: tuple[Literal["no team", "no owner", "owner inferred", "unmapped member", "denied recently"], ...] = ()
+    issues: tuple[Literal["no team", "no owner", "owner inferred", "denied recently"], ...] = ()
 
 
 class Policy(FrozenModel):
@@ -101,29 +100,17 @@ class Decision(FrozenModel):
 class SourceCreate(FrozenModel):
     display_name: str = Field(default="GrokBot", min_length=1, max_length=200)
     signing_secret: SecretStr | None = None
-    admin_api_key: SecretStr | None = None
     mode: Literal["shadow", "enforce"] = "shadow"
 
 
 class SourcePatch(FrozenModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=200)
     signing_secret: SecretStr | None = None
-    admin_api_key: SecretStr | None = None
     mode: Literal["shadow", "enforce"] | None = None
 
 
-class MemberSyncResult(FrozenModel):
-    matched: int
-    unmatched: int
-    already_mapped: int
-
-
-class MemberSyncRequest(FrozenModel):
-    pass
-
-
 class SourceSaved(SourceDetails):
-    sync_result: MemberSyncResult | None = None
+    pass
 
 
 class SourceConnection(SourceSaved):

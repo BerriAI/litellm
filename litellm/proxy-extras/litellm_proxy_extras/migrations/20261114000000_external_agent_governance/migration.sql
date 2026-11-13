@@ -7,7 +7,6 @@ CREATE TABLE IF NOT EXISTS "LiteLLM_ExternalAgentSource" (
     "tenant_id" TEXT,
     "signing_secret" TEXT,
     "ingest_key" TEXT,
-    "admin_api_key" TEXT,
     "last_event_at" TIMESTAMP(3),
     "previous_signing_secret" TEXT,
     "mode" TEXT NOT NULL DEFAULT 'shadow',

@@ -5,7 +5,6 @@ import type { QueryParams, HttpMethod } from "@/lib/http/client";
 
 export type Source = components["schemas"]["Source"];
 export type Connection = components["schemas"]["SourceConnection"];
-export type SyncResult = components["schemas"]["MemberSyncResult"];
 export type Bot = components["schemas"]["Agent"];
 export type Policy = components["schemas"]["Policy"];
 export type Decision = components["schemas"]["Decision"];

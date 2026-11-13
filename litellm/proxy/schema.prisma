@@ -5,7 +5,6 @@ model LiteLLM_ExternalAgentSource {
   tenant_id String?
   signing_secret String?
   ingest_key String?
-  admin_api_key String?
   last_event_at DateTime?
   previous_signing_secret String?
   mode String @default("shadow")

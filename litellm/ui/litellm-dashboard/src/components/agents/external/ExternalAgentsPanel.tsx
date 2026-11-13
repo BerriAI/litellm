@@ -3,15 +3,13 @@ import { useTranslation } from "react-i18next";
 import { useState } from "react";
 import { parseAsString, parseAsStringLiteral, useQueryState } from "nuqs";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Source, Summary, SyncResult, useExternalMutation, useExternalQuery } from "./useExternalAgents";
+import { Source, Summary, useExternalMutation, useExternalQuery } from "./useExternalAgents";
 import { SetupCard, ModeControl } from "./ConnectionDialogs";
 import { PoliciesPanel, TeamOption, selectClass } from "./PoliciesPanel";
 import { BotsPanel } from "./BotsPanel";
 import { DecisionsPanel } from "./DecisionsPanel";
-import { displayTime, memberMappings } from "./forms";
+import { displayTime } from "./forms";
 
 const tabs = ["bots", "policies", "decisions"] as const;
 
@@ -82,7 +80,6 @@ function SourceWorkspace({
   const [tab, setTab] = useQueryState("external_tab", parseAsStringLiteral(tabs).withDefault("bots"));
   const summary = useExternalQuery<Summary>(token, "/summary", { source_id: source.source_id });
   const [setup, setSetup] = useState(false);
-  const [mapping, setMapping] = useState(false);
   const lastEvent = summary.data?.last_event_at || source.last_event_at;
   const connected = Boolean(lastEvent);
   const status = connected
@@ -133,16 +130,8 @@ function SourceWorkspace({
         </TabsList>
       </Tabs>
       {tab === "bots" && <BotsPanel token={token} sourceId={source.source_id} teams={teams} />}
-      {tab === "policies" && (
-        <div className="space-y-4">
-          <Button variant="outline" onClick={() => setMapping(true)}>
-            {t("agents.external.mapMembers")}
-          </Button>
-          <PoliciesPanel token={token} sourceId={source.source_id} teams={teams} />
-        </div>
-      )}
+      {tab === "policies" && <PoliciesPanel token={token} sourceId={source.source_id} teams={teams} />}
       {tab === "decisions" && <DecisionsPanel token={token} sourceId={source.source_id} />}
-      {mapping && <MemberMappingDialog token={token} sourceId={source.source_id} onClose={() => setMapping(false)} />}
     </>
   );
 }
@@ -182,7 +171,6 @@ function ConnectedHeader({
 }) {
   const { t } = useTranslation();
   const mutation = useExternalMutation(token);
-  const [sync, setSync] = useState<SyncResult | null>(null);
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -207,99 +195,13 @@ function ConnectedHeader({
           <Button variant="outline" onClick={onSetup}>
             {t("agents.external.showSetup")}
           </Button>
-          <Button
-            variant="outline"
-            disabled={mutation.isPending}
-            onClick={async () => {
-              try {
-                setSync(
-                  (await mutation.mutateAsync({
-                    method: "POST",
-                    path: `/sources/${source.source_id}/sync_members`,
-                    body: {},
-                  })) as SyncResult,
-                );
-              } catch {
-                return;
-              }
-            }}
-          >
-            {t("agents.external.syncMembers")}
-          </Button>
         </div>
       </div>
-      {sync && (
-        <p role="status">
-          {t("agents.external.membersMatched", {
-            matched: sync.matched + sync.already_mapped,
-            total: sync.matched + sync.already_mapped + sync.unmatched,
-          })}
-        </p>
-      )}
       {mutation.error && (
         <p role="alert" className="text-destructive">
           {mutation.error.message}
         </p>
       )}
     </div>
-  );
-}
-
-function MemberMappingDialog({ token, sourceId, onClose }: { token: string; sourceId: string; onClose: () => void }) {
-  const { t } = useTranslation();
-  const [csv, setCsv] = useState("");
-  const [error, setError] = useState("");
-  const mutation = useExternalMutation(token);
-  const submitMappings = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setError("");
-    const parsed = memberMappings(csv);
-    if (!parsed.ok) {
-      setError(parsed.error);
-      return;
-    }
-    try {
-      const body = { source_id: sourceId, mappings: parsed.mappings };
-      await mutation.mutateAsync({ method: "POST", path: "/actors/bulk", body });
-      onClose();
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "Could not map members.");
-    }
-  };
-  return (
-    <Dialog
-      open
-      onOpenChange={(open) => {
-        if (!open) onClose();
-      }}
-    >
-      <DialogContent showCloseButton={false} className="sm:max-w-xl">
-        <DialogHeader>
-          <DialogTitle>{t("agents.external.mapMembers")}</DialogTitle>
-          <DialogDescription>
-            {t("agents.external.mapGrokBotMembersToExistingLiteLLMUsersPasteUpTo1000LinesWithoutAHeader")}
-          </DialogDescription>
-        </DialogHeader>
-        <form className="space-y-5" onSubmit={submitMappings}>
-          <label className="grid gap-2">
-            {t("agents.external.memberMappings")}
-            <Textarea required rows={8} value={csv} onChange={(e) => setCsv(e.target.value)} />
-          </label>
-          {error && (
-            <p role="alert" className="text-destructive">
-              {error}
-            </p>
-          )}
-          <div className="flex justify-end gap-2">
-            <Button type="button" variant="outline" onClick={onClose}>
-              {t("agents.external.cancel")}
-            </Button>
-            <Button type="submit" disabled={mutation.isPending}>
-              {t("agents.external.saveMappings")}
-            </Button>
-          </div>
-        </form>
-      </DialogContent>
-    </Dialog>
   );
 }
