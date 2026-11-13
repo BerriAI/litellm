@@ -22,7 +22,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy.auth.auth_checks import can_object_call_model
 from litellm.proxy.auth.auth_object_prefetch import AUTH_OBJECTS_TARGET
-from litellm.proxy.auth.customer_member_auto_create import ensure_customer_member
+from litellm.proxy.auth.customer_member_auto_create import ensure_customer_member, ensure_customer_organization
 from litellm.proxy.auth.customer_spend import current_customer_spend
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
@@ -45,7 +45,12 @@ from litellm.types.proxy.auth.customer_hierarchy import (
     CustomerScopeAuth,
     CustomerScopeKey,
 )
-from litellm.types.proxy.management_endpoints.customer_hierarchy import INCREASE_REQUEST_ROUTE, Budget, CustomerMember
+from litellm.types.proxy.management_endpoints.customer_hierarchy import (
+    INCREASE_REQUEST_ROUTE,
+    Budget,
+    CustomerMember,
+    Organization,
+)
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -66,6 +71,7 @@ class _OrganizationRow(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     customer_org_id: str
+    alias: str | None = None
     spend: float = 0.0
     budget: Mapping[str, object] | None = None
 
@@ -74,6 +80,7 @@ class _TeamRow(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     customer_team_id: str
+    alias: str | None = None
     spend: float = 0.0
     budget: Mapping[str, object] | None = None
     budget_override: Mapping[str, object] | None = None
@@ -84,6 +91,7 @@ class _MemberRow(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     customer_member_id: str
+    alias: str | None = None
     spend: float = 0.0
     budget: Mapping[str, object] | None = None
     budget_override: Mapping[str, object] | None = None
@@ -98,6 +106,19 @@ class AmbiguousOrganizationAlias:
     """More than one customer organization carries the alias, so the request cannot be charged to one of them."""
 
     alias: str
+
+
+class CustomerBudgetExceededError(litellm.BudgetExceededError):
+    def __init__(self, hierarchy: CustomerHierarchyAuth, error: litellm.BudgetExceededError) -> None:
+        super().__init__(
+            current_cost=error.current_cost,
+            max_budget=error.max_budget,
+            message=error.message,
+            llm_provider=error.llm_provider,
+            entity_type=error.entity_type,
+            entity_id=error.entity_id,
+        )
+        self.customer_hierarchy: Final = hierarchy
 
 
 def customer_member_cache_key(customer_member_id: str) -> str:
@@ -173,7 +194,7 @@ def _team_scope(team: _TeamRow, now: datetime) -> CustomerScopeAuth:
         team.spend,
         effective_member_budget(budget, override, team.budget_override_expires_at, now),
         customer_row_reset_at(team, now),
-    )
+    ).model_copy(update={"alias": team.alias})
 
 
 def customer_hierarchy_from_member_row(row: Mapping[str, object], now: datetime) -> CustomerHierarchyAuth:
@@ -190,8 +211,11 @@ def customer_hierarchy_from_member_row(row: Mapping[str, object], now: datetime)
     )
     return CustomerHierarchyAuth(
         customer_member_id=member.customer_member_id,
+        customer_member_alias=member.alias,
         customer_team_id=team_scopes[0].entity_id if team_scopes else None,
+        customer_team_alias=team_scopes[0].alias if team_scopes else None,
         customer_org_id=organization.customer_org_id,
+        customer_org_alias=organization.alias,
         scopes=(
             _scope(
                 "customer_org",
@@ -221,6 +245,7 @@ def select_customer_team(hierarchy: CustomerHierarchyAuth, customer_team_id: str
     return hierarchy.model_copy(
         update={
             "customer_team_id": customer_team_id,
+            "customer_team_alias": selected.alias,
             "scopes": tuple(selected if scope.key == "customer_team" else scope for scope in hierarchy.scopes),
         }
     )
@@ -231,6 +256,7 @@ def customer_hierarchy_from_organization_row(row: Mapping[str, object], now: dat
     organization: Final = _OrganizationRow.model_validate(row)
     return CustomerHierarchyAuth(
         customer_org_id=organization.customer_org_id,
+        customer_org_alias=organization.alias,
         scopes=(
             _scope(
                 "customer_org",
@@ -491,14 +517,12 @@ def _untracked(message: str, header: str) -> None:
     verbose_proxy_logger.warning("Customer %s not tracked, %s", header, message)
 
 
-async def _organization_named_by_alias(
-    customer_org_alias: str, prisma_client: "PrismaClient | None", user_api_key_cache: UserApiKeyCache
+OrganizationRegistrar: TypeAlias = Callable[[str, "PrismaClient"], Awaitable[Organization | Failure]]
+
+
+def _organization_from_lookup(
+    customer_org_alias: str, organization: CustomerHierarchyAuth | AmbiguousOrganizationAlias | None
 ) -> CustomerHierarchyAuth | None:
-    organization: Final = (
-        await get_customer_organization_hierarchy(customer_org_alias, prisma_client, user_api_key_cache)
-        if prisma_client is not None
-        else None
-    )
     if organization is None:
         return _untracked(f"organization alias not found: {customer_org_alias}", CUSTOMER_ORG_ALIAS_HEADER)
     if isinstance(organization, AmbiguousOrganizationAlias):
@@ -509,6 +533,50 @@ async def _organization_named_by_alias(
             code=status.HTTP_400_BAD_REQUEST,
         )
     return organization
+
+
+async def _register_organization(
+    customer_org_alias: str,
+    prisma_client: "PrismaClient",
+    user_api_key_cache: UserApiKeyCache,
+    register: OrganizationRegistrar,
+    key_metadata: Mapping[str, object],
+) -> CustomerHierarchyAuth | None:
+    """An alias the proxy has never seen becomes an organization with that id and alias, so a customer's first
+    request is charged to it instead of running untracked. A key pinned to another organization is refused first."""
+    if not _registrable(customer_org_alias):
+        verbose_proxy_logger.warning(
+            "Could not register customer organization: alias is not a valid customer identifier"
+        )
+        return _untracked(f"organization alias not found: {customer_org_alias}", CUSTOMER_ORG_ALIAS_HEADER)
+    _check_key_scope(customer_org_alias, key_metadata)
+    registered: Final = await register(customer_org_alias, prisma_client)
+    if isinstance(registered, Failure):
+        verbose_proxy_logger.warning(
+            "Could not register customer organization %s: %s", customer_org_alias, registered.code.value
+        )
+        return _untracked(f"organization alias not found: {customer_org_alias}", CUSTOMER_ORG_ALIAS_HEADER)
+    return _organization_from_lookup(
+        customer_org_alias,
+        await get_customer_organization_hierarchy(customer_org_alias, prisma_client, user_api_key_cache),
+    )
+
+
+async def _organization_named_by_alias(
+    customer_org_alias: str,
+    prisma_client: "PrismaClient | None",
+    user_api_key_cache: UserApiKeyCache,
+    register: OrganizationRegistrar,
+    key_metadata: Mapping[str, object],
+) -> CustomerHierarchyAuth | None:
+    if prisma_client is None:
+        return _untracked(f"organization alias not found: {customer_org_alias}", CUSTOMER_ORG_ALIAS_HEADER)
+    found: Final = await get_customer_organization_hierarchy(customer_org_alias, prisma_client, user_api_key_cache)
+    if found is None:
+        return await _register_organization(
+            customer_org_alias, prisma_client, user_api_key_cache, register, key_metadata
+        )
+    return _organization_from_lookup(customer_org_alias, found)
 
 
 MemberRegistrar: TypeAlias = Callable[[str, str, "PrismaClient"], Awaitable[CustomerMember | Failure]]
@@ -583,13 +651,16 @@ async def load_customer_hierarchy(
     user_api_key_cache: UserApiKeyCache,
     register: MemberRegistrar = ensure_customer_member,
     key_metadata: Mapping[str, object] = MappingProxyType({}),
+    register_organization: OrganizationRegistrar = ensure_customer_organization,
 ) -> CustomerHierarchyAuth | None:
     """The hierarchy the headers name, or None when the proxy knows none of the ids, in which case the request runs
-    untracked. A member header next to an alias header must name a member of that organization; a member the
+    untracked. An alias the proxy has never seen is registered as a new organization first. A member header next to an alias header must name a member of that organization; a member the
     organization has never seen is registered in its default team first, and when that fails the organization
     alone is charged. A key pinned to another organization is refused before any row is created."""
     organization: Final = (
-        await _organization_named_by_alias(identity.customer_org_alias, prisma_client, user_api_key_cache)
+        await _organization_named_by_alias(
+            identity.customer_org_alias, prisma_client, user_api_key_cache, register_organization, key_metadata
+        )
         if identity.customer_org_alias is not None
         else None
     )
@@ -634,32 +705,53 @@ async def resolve_customer_hierarchy(
     route: str,
     key_metadata: Mapping[str, object] | None = None,
     register: MemberRegistrar = ensure_customer_member,
+    register_organization: OrganizationRegistrar = ensure_customer_organization,
 ) -> CustomerHierarchyAuth | None:
     """Load the hierarchy the headers name and admit the request against it, or None when no id is known.
     ``request_model`` is the model the route will actually serve, which may differ from the body."""
     from litellm.proxy.proxy_server import get_current_spend
 
     metadata: Final = key_metadata or {}
-    cached: Final = await load_customer_hierarchy(identity, prisma_client, user_api_key_cache, register, metadata)
+    cached: Final = await load_customer_hierarchy(
+        identity, prisma_client, user_api_key_cache, register, metadata, register_organization
+    )
     if cached is None:
         return None
     hierarchy: Final = await current_customer_spend(cached, get_current_spend)
-    check_customer_hierarchy_key_scope(hierarchy, metadata)
-    if not RouteChecks.is_info_route(route):
-        check_customer_hierarchy_budget(hierarchy)
-        if any(scope.budget_limits for scope in hierarchy.scopes):
-            await check_customer_hierarchy_windows(hierarchy)
+    try:
+        await check_customer_hierarchy_access(hierarchy, llm_router, request_model, route, key_metadata)
+    except litellm.BudgetExceededError as error:
+        raise CustomerBudgetExceededError(hierarchy, error) from error
+    return hierarchy
+
+
+async def check_customer_hierarchy_access(
+    hierarchy: CustomerHierarchyAuth,
+    llm_router: "RegistryReader | None",
+    request_model: str | Sequence[str] | None,
+    route: str,
+    key_metadata: Mapping[str, object] | None = None,
+) -> None:
+    check_customer_hierarchy_key_scope(hierarchy, key_metadata or {})
     requested: Final = (request_model,) if isinstance(request_model, str) else tuple(request_model or ())
     for model in requested:
         if model:
             check_customer_hierarchy_model_access(hierarchy, model, llm_router)
-    return hierarchy
+    if RouteChecks.is_info_route(route):
+        return
+    check_customer_hierarchy_budget(hierarchy)
+    if any(scope.budget_limits for scope in hierarchy.scopes):
+        await check_customer_hierarchy_windows(hierarchy)
 
 
 def check_customer_hierarchy_key_scope(hierarchy: CustomerHierarchyAuth, key_metadata: Mapping[str, object]) -> None:
     """A key whose metadata pins ``customer_org_id`` may only act for members of that organization."""
+    _check_key_scope(hierarchy.customer_org_id, key_metadata)
+
+
+def _check_key_scope(customer_org_id: str, key_metadata: Mapping[str, object]) -> None:
     key_customer_org_id: Final = key_metadata.get("customer_org_id")
-    if key_customer_org_id is None or key_customer_org_id == hierarchy.customer_org_id:
+    if key_customer_org_id is None or key_customer_org_id == customer_org_id:
         return
     raise ProxyException(
         message="API key is not allowed to act for this customer member's organization",
