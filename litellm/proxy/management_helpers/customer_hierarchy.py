@@ -16,6 +16,7 @@ from litellm.proxy.common_utils.timezone_utils import (
     get_budget_reset_time,
 )
 from litellm.proxy.db.db_span import db_span
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.list_api.common import escape_like
 from litellm.proxy.management_helpers.customer_budget_usage import customer_budget_usage
 from litellm.repositories.budget_repository import create_budget_row, update_budget_row
@@ -46,6 +47,7 @@ if TYPE_CHECKING:
 
 class ErrorCode(str, Enum):
     FREE_TIER_LIMIT = "free_tier_limit"
+    CAPACITY_BUSY = "capacity_busy"
     NOT_FOUND = "not_found"
     PARENT_NOT_FOUND = "parent_not_found"
     ALREADY_EXISTS = "already_exists"
@@ -76,6 +78,7 @@ FREE_ORGANIZATION_LIMIT: Final = 5
 FREE_TEAMS_PER_ORGANIZATION_LIMIT: Final = 5
 FREE_MEMBERS_PER_TEAM_LIMIT: Final = 5
 FREE_CAPACITY_ADVISORY_LOCK: Final = 714023581
+FREE_CAPACITY_LOCK_TIMEOUT_MS: Final = 1000
 
 
 class CustomerPortalLimits(BaseModel):
@@ -501,14 +504,22 @@ class CustomerHierarchyStore:
         self.budgets: TableActions[PrismaRecord] = db.litellm_budgettable  # pyright: ignore[reportAttributeAccessIssue]  # protocol accepts immutable query mappings
         self.window_spend: TableActions[LiteLLM_BudgetWindowSpend] = db.litellm_budgetwindowspend  # pyright: ignore[reportAttributeAccessIssue]  # protocol accepts immutable query mappings
 
-    async def lock_free_capacity(self) -> None:
-        await self.db.query_raw("SELECT 1 AS locked FROM pg_advisory_xact_lock($1)", FREE_CAPACITY_ADVISORY_LOCK)
+    async def lock_free_capacity(self, scope: str | None = None) -> None:
+        await self.db.query_raw("SELECT set_config('lock_timeout', $1, true)", f"{FREE_CAPACITY_LOCK_TIMEOUT_MS}ms")
+        if scope is None:
+            await self.db.query_raw("SELECT 1 AS locked FROM pg_advisory_xact_lock($1)", FREE_CAPACITY_ADVISORY_LOCK)
+            return
+        await self.db.query_raw(
+            "SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtextextended($1, $2))",
+            scope,
+            FREE_CAPACITY_ADVISORY_LOCK,
+        )
 
     async def member_capacity_reached(self, team_ids: Sequence[str]) -> bool:
         if self.premium_user or not team_ids:
             return False
-        await self.lock_free_capacity()
-        for team_id in team_ids:
+        for team_id in sorted(frozenset(team_ids)):
+            await self.lock_free_capacity(f"members:{team_id}")
             if await self.members.count(where={"parent_team_ids": {"has": team_id}}) >= FREE_MEMBERS_PER_TEAM_LIMIT:
                 return True
         return False
@@ -876,7 +887,7 @@ class CustomerHierarchyStore:
         if parent is None:
             return Failure(ErrorCode.PARENT_NOT_FOUND)
         if not self.premium_user:
-            await self.lock_free_capacity()
+            await self.lock_free_capacity(f"teams:{payload.parent_org_id}")
             if await self.teams.count(
                 where={"parent_org_id": payload.parent_org_id}
             ) >= FREE_TEAMS_PER_ORGANIZATION_LIMIT and (
@@ -1192,7 +1203,7 @@ class CustomerHierarchy:
         *,
         operation_type: TransactionOperation = TransactionOperation.READ_WRITE,
     ) -> T | Failure:
-        from prisma.errors import ForeignKeyViolationError, RecordNotFoundError, UniqueViolationError
+        from prisma.errors import DataError, ForeignKeyViolationError, RecordNotFoundError, UniqueViolationError
 
         try:
             async with self.db.tx() as tx:
@@ -1205,6 +1216,10 @@ class CustomerHierarchy:
             return Failure(
                 ErrorCode.HAS_CHILDREN if operation_type is TransactionOperation.DELETE else ErrorCode.PARENT_NOT_FOUND
             )
+        except DataError as error:
+            if PrismaDBExceptionHandler.is_lock_timeout_error(error):
+                return Failure(ErrorCode.CAPACITY_BUSY)
+            raise
 
     async def create_organization(self, payload: OrganizationCreate, actor: str) -> Organization | Failure:
         return await self.transaction(lambda store: store.create_organization(payload, actor))

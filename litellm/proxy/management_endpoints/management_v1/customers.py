@@ -52,6 +52,11 @@ T: Final = TypeVar("T")
 
 _ERROR_DETAILS: Final[Mapping[ErrorCode, tuple[int, str, str]]] = MappingProxyType(
     {
+        ErrorCode.CAPACITY_BUSY: (
+            503,
+            "Customer portal busy",
+            "Customer portal capacity is being updated. Retry the request.",
+        ),
         ErrorCode.FREE_TIER_LIMIT: (
             403,
             "Free customer portal limit reached",

@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Final, cast
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
+from prisma.errors import DataError, RawQueryError
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.customer_hierarchy_auth import customer_member_cache_key, customer_org_alias_cache_key
@@ -19,6 +20,7 @@ from litellm.types.proxy.management_endpoints.customer_hierarchy import Customer
 from tests.unit.proxy.management_helpers.test_customer_hierarchy import (
     NOW,
     BoundedChildrenTable,
+    CapacityErrorDatabase,
     Database,
     DeleteConflictTable,
     Record,
@@ -127,6 +129,15 @@ def test_member_upsert_respects_capacity_for_default_team_creation_and_added_mem
         "/management/v1/customer_members", json={"customer_member_id": "moving", "parent_team_ids": ["extra-0"]}
     )
     assert original.status_code == 201, original.text
+    for patch in ({}, {"alias": "renamed"}):
+        kept: Final = http.post(
+            "/management/v1/customer_members/upsert",
+            json={"customer_org_id": "org", "customer_member_id": "moving", **patch},
+        )
+        assert kept.status_code == 200, kept.text
+        assert kept.json()["created"] is False
+        assert kept.json()["parent_team_ids"] == ["extra-0"]
+        assert kept.json()["alias"] == patch.get("alias")
     moved: Final = http.post(
         "/management/v1/customer_members/upsert",
         json={"customer_org_id": "org", "customer_member_id": "moving", "parent_team_id": "team"},
@@ -137,9 +148,61 @@ def test_member_upsert_respects_capacity_for_default_team_creation_and_added_mem
         assert http.get("/management/v1/customer_teams/org:default").status_code == 404
 
 
+@pytest.mark.parametrize("error_code", ("55P03", "XX000"))
+def test_capacity_contention_is_retryable_without_hiding_other_database_errors(error_code: str) -> None:
+    http: Final = client(database=CapacityErrorDatabase(error_code, "members:team"), premium_user=False)
+    family(http)
+    payload: Final = {"customer_member_id": "blocked", "parent_team_ids": ["team"]}
+    if error_code != "55P03":
+        with pytest.raises(RawQueryError, match="advisory lock failed"):
+            http.post("/management/v1/customer_members", json=payload)
+        return
+    response: Final = http.post("/management/v1/customer_members", json=payload)
+    assert response.status_code == 503, response.text
+    assert response.json() == {
+        "type": "urn:litellm:error:customer-hierarchy-capacity-busy",
+        "title": "Customer portal busy",
+        "status": 503,
+        "detail": "Customer portal capacity is being updated. Retry the request.",
+    }
+    assert http.get("/management/v1/customer_members/blocked").status_code == 404
+
+
 def test_customer_portal_limits_require_admin() -> None:
     response: Final = client(role=LitellmUserRoles.INTERNAL_USER).get("/management/v1/customer_portal/limits")
     assert response.status_code == 403, response.text
+
+
+@pytest.mark.parametrize(
+    ("error", "retryable"),
+    (
+        (DataError({"user_facing_error": {"meta": {"code": "55P03", "message": "lock unavailable"}}}), True),
+        (DataError({"user_facing_error": {"message": "canceling statement due to lock timeout"}}), True),
+        (DataError({"user_facing_error": {"message": "other database error", "meta": {"code": "XX000"}}}), False),
+    ),
+    ids=("sqlstate", "message-only", "other-error"),
+)
+def test_team_model_write_contention_is_retryable_and_rolls_back(error: DataError, retryable: bool) -> None:
+    database: Final = Database(team_create_error=error)
+    http: Final = client(database=database, premium_user=False)
+    created: Final = http.post("/management/v1/customer_organizations", json={"customer_org_id": "org"})
+    assert created.status_code == 201, created.text
+    payload: Final = {"customer_team_id": "blocked", "parent_org_id": "org", "budget": {"max_budget": 10}}
+    if not retryable:
+        with pytest.raises(DataError, match="other database error") as raised:
+            http.post("/management/v1/customer_teams", json=payload)
+        assert raised.value is error
+    else:
+        response: Final = http.post("/management/v1/customer_teams", json=payload)
+        assert response.status_code == 503, response.text
+        assert response.json() == {
+            "type": "urn:litellm:error:customer-hierarchy-capacity-busy",
+            "title": "Customer portal busy",
+            "status": 503,
+            "detail": "Customer portal capacity is being updated. Retry the request.",
+        }
+    assert http.get("/management/v1/customer_teams/blocked").status_code == 404
+    assert not database.litellm_budgettable.rows
 
 
 def family(http: TestClient) -> dict[str, object]:
