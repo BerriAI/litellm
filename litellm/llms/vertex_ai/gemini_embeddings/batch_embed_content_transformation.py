@@ -5,9 +5,11 @@ Why separate file? Make it easy to see how transformation works
 """
 
 from collections.abc import Iterator, Mapping, Sequence
+from types import MappingProxyType
 from typing import Annotated, Final, Literal, cast
 
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.exceptions import BadRequestError
 from litellm.llms.base_llm.embedding.transformation import extra_body_fields
@@ -21,8 +23,6 @@ from litellm.types.llms.vertex_ai import (
     GeminiEmbeddingElement,
     GeminiEmbeddingInput,
     PartType,
-    PromptTokensDetails,
-    UsageMetadata,
     VertexAIBatchEmbeddingsRequestBody,
     VertexAIBatchEmbeddingsResponseObject,
     VideoMetadataType,
@@ -378,16 +378,59 @@ def _build_part_for_input(
 
 
 _SUPPORTED_EMBED_PARAMS: Final = {"outputDimensionality", "taskType", "title"}
+_GEMINI_PARAM_BY_OPENAI_PARAM: Final = (("dimensions", "outputDimensionality"), ("task_type", "taskType"))
+_EMBED_CONTENT_CONFIG_FIELD: Final = "embedContentConfig"
+_STRING_KEYED_FIELDS: Final = TypeAdapter(Mapping[str, object])
+_EMBED_CONTENT_CONFIG_FIELD_BY_PARAM: Final = MappingProxyType(
+    {
+        "document_ocr": "documentOcr",
+        "documentOcr": "documentOcr",
+        "audio_track_extraction": "audioTrackExtraction",
+        "audioTrackExtraction": "audioTrackExtraction",
+        "auto_truncate": "autoTruncate",
+        "autoTruncate": "autoTruncate",
+    }
+)
+
+
+def embed_content_config_fields(request_body: Mapping[str, object]) -> Mapping[str, object]:
+    """The `embedContentConfig` object of a Gemini embedding request body, empty when the body has none."""
+    config: Final = request_body.get(_EMBED_CONTENT_CONFIG_FIELD)
+    return _STRING_KEYED_FIELDS.validate_python(config) if isinstance(config, Mapping) else {}
+
+
+def _embed_content_config(optional_params: Mapping[str, object]) -> Mapping[str, object]:
+    """The named config params under `embedContentConfig`, on top of any config the caller sent in `extra_body`."""
+    named_config: Final = {
+        field: optional_params[param]
+        for param, field in _EMBED_CONTENT_CONFIG_FIELD_BY_PARAM.items()
+        if optional_params.get(param) is not None
+    }
+    if not named_config:
+        return {}
+    return {
+        _EMBED_CONTENT_CONFIG_FIELD: {
+            **embed_content_config_fields(extra_body_fields(optional_params)),
+            **named_config,
+        }
+    }
 
 
 def _filter_embed_params(optional_params: dict) -> dict:
     """Map and filter optional_params to only include Gemini embedding fields."""
-    gemini_params: Final = optional_params.copy()
-    if "dimensions" in gemini_params:
-        gemini_params["outputDimensionality"] = gemini_params.pop("dimensions")
-    if "task_type" in gemini_params:
-        gemini_params["taskType"] = gemini_params.pop("task_type")
-    return {k: v for k, v in gemini_params.items() if k in _SUPPORTED_EMBED_PARAMS}
+    params: Final = _STRING_KEYED_FIELDS.validate_python(optional_params)
+    gemini_params: Final = {
+        **params,
+        **{
+            gemini_param: params[openai_param]
+            for openai_param, gemini_param in _GEMINI_PARAM_BY_OPENAI_PARAM
+            if openai_param in params
+        },
+    }
+    return {
+        **{k: v for k, v in gemini_params.items() if k in _SUPPORTED_EMBED_PARAMS},
+        **_embed_content_config(params),
+    }
 
 
 def transform_openai_input_gemini_content(
@@ -486,11 +529,23 @@ def transform_openai_input_gemini_embed_content(
     return request_body
 
 
+class _ModalityTokenCount(TypedDict):
+    modality: ReadOnly[str]
+    tokenCount: ReadOnly[int]
+
+
+class _EmbedContentUsageMetadata(TypedDict, total=False):
+    promptTokenCount: ReadOnly[int]
+    totalTokenCount: ReadOnly[int]
+    promptTokensDetails: ReadOnly[Sequence[_ModalityTokenCount]]
+
+
 _IMAGE_MIME_TYPES: Final = frozenset({"image/png", "image/jpeg"})
-_usage_metadata_adapter: Final = TypeAdapter(UsageMetadata)
+_SEPARATELY_PRICED_MODALITIES: Final = frozenset({"AUDIO", "IMAGE", "VIDEO"})
+_usage_metadata_adapter: Final = TypeAdapter(_EmbedContentUsageMetadata)
 
 
-def _parse_usage_metadata(raw_usage_metadata: object) -> UsageMetadata | None:
+def _parse_usage_metadata(raw_usage_metadata: object) -> _EmbedContentUsageMetadata | None:
     if not isinstance(raw_usage_metadata, dict):
         return None
     try:
@@ -521,8 +576,13 @@ def _is_image_only_input(
     return bool(elements) and all(_is_image_element(element, resolved_files) for element in elements)
 
 
-def _tokens_for_modality(details: Sequence[PromptTokensDetails], modality: str) -> int:
+def _tokens_for_modality(details: Sequence[_ModalityTokenCount], modality: str) -> int:
     return sum(detail["tokenCount"] for detail in details if detail["modality"] == modality)
+
+
+def _tokens_billed_as_text(details: Sequence[_ModalityTokenCount]) -> int:
+    """Text tokens plus every modality without a rate of its own, such as the DOCUMENT tokens of a PDF."""
+    return sum(detail["tokenCount"] for detail in details if detail["modality"] not in _SEPARATELY_PRICED_MODALITIES)
 
 
 def _fallback_usage(input: GeminiEmbeddingInput, model: str) -> Usage:
@@ -546,7 +606,7 @@ def _usage_from_embed_content_response(
     prompt_tokens: Final = usage_metadata.get("promptTokenCount", 0)
     total_tokens: Final = usage_metadata.get("totalTokenCount") or prompt_tokens
 
-    details: Final[Sequence[PromptTokensDetails]] = usage_metadata.get("promptTokensDetails") or ()
+    details: Final[Sequence[_ModalityTokenCount]] = usage_metadata.get("promptTokensDetails") or ()
     if not details:
         return Usage(
             prompt_tokens=prompt_tokens,
@@ -557,7 +617,7 @@ def _usage_from_embed_content_response(
             ),
         )
 
-    text_tokens: Final = _tokens_for_modality(details, "TEXT")
+    text_tokens: Final = _tokens_billed_as_text(details)
     audio_tokens: Final = _tokens_for_modality(details, "AUDIO")
     image_tokens: Final = _tokens_for_modality(details, "IMAGE")
     video_tokens: Final = _tokens_for_modality(details, "VIDEO")
