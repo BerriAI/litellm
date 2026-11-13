@@ -1229,3 +1229,109 @@ async def test_previous_response_id_pin_holds_even_after_its_deployment_failed()
         },
         parent_otel_span=None,
     ) == [healthy_deployments[0]]
+
+
+_AFFINITY_REQUESTS: Final = (
+    ("session_affinity", {"session_id": "sess-budget"}),
+    ("deployment_affinity", {"user_api_key_hash": "hashed-key-budget"}),
+)
+
+
+def _budget_and_affinity_router(affinity_check: str, budget_registered_first: bool) -> litellm.Router:
+    model_list: Final = [
+        {
+            "model_name": "agent-auto",
+            "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "mock", "mock_response": "ok", "weight": 0},
+            "model_info": {"id": "openai-sibling"},
+        },
+        {
+            "model_name": "agent-auto",
+            "litellm_params": {
+                "model": "anthropic/claude-sonnet-5-5",
+                "api_key": "mock",
+                "mock_response": "ok",
+                "weight": 1,
+            },
+            "model_info": {"id": "anthropic-budgeted"},
+        },
+    ]
+    provider_budget_config: Final = {"anthropic": {"budget_limit": 3.0, "time_period": "30m"}}
+    if not budget_registered_first:
+        return litellm.Router(
+            model_list=model_list,
+            routing_strategy="simple-shuffle",
+            provider_budget_config=provider_budget_config,
+            optional_pre_call_checks=[affinity_check],
+        )
+    router: Final = litellm.Router(
+        model_list=model_list,
+        routing_strategy="simple-shuffle",
+        provider_budget_config=provider_budget_config,
+    )
+    router.add_optional_pre_call_checks([affinity_check])
+    return router
+
+
+async def _set_anthropic_spend(router: litellm.Router, spend: float) -> None:
+    budget_limiter: Final = router.router_budget_logger
+    assert budget_limiter is not None
+    await budget_limiter.dual_cache.async_set_cache(key="provider_spend:anthropic:30m", value=spend)
+
+
+async def _served_by(router: litellm.Router, metadata: dict[str, str]) -> str:
+    response: Final = await router.acompletion(
+        model="agent-auto",
+        messages=[{"role": "user", "content": "hi"}],
+        metadata=dict(metadata),
+    )
+    return response._hidden_params["model_id"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("budget_registered_first", [False, True])
+@pytest.mark.parametrize(("affinity_check", "metadata"), _AFFINITY_REQUESTS)
+async def test_pin_to_deployment_over_provider_budget_yields_to_in_budget_sibling(
+    affinity_check: str, metadata: dict[str, str], budget_registered_first: bool
+):
+    router: Final = _budget_and_affinity_router(affinity_check, budget_registered_first)
+
+    first: Final = await _served_by(router, metadata)
+    await _set_anthropic_spend(router, 10.0)
+    second: Final = await _served_by(router, metadata)
+
+    assert (first, second) == ("anthropic-budgeted", "openai-sibling")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("budget_registered_first", [False, True])
+@pytest.mark.parametrize(("affinity_check", "metadata"), _AFFINITY_REQUESTS)
+async def test_pin_to_deployment_within_provider_budget_still_holds(
+    affinity_check: str, metadata: dict[str, str], budget_registered_first: bool
+):
+    router: Final = _budget_and_affinity_router(affinity_check, budget_registered_first)
+
+    await _set_anthropic_spend(router, 10.0)
+    first: Final = await _served_by(router, metadata)
+    await _set_anthropic_spend(router, 0.0)
+    second: Final = await _served_by(router, metadata)
+
+    assert (first, second) == ("openai-sibling", "openai-sibling")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("budget_registered_first", [False, True])
+async def test_callback_filter_drops_over_budget_pin_for_in_budget_sibling(budget_registered_first: bool):
+    router: Final = _budget_and_affinity_router("session_affinity", budget_registered_first)
+    metadata: Final = {"session_id": "sess-filter"}
+    assert await _served_by(router, metadata) == "anthropic-budgeted"
+    await _set_anthropic_spend(router, 10.0)
+
+    remaining: Final = await router.async_callback_filter_deployments(
+        model="agent-auto",
+        healthy_deployments=router.get_model_list(model_name="agent-auto"),
+        messages=[{"role": "user", "content": "hi"}],
+        parent_otel_span=None,
+        request_kwargs={"metadata": dict(metadata)},
+    )
+
+    assert [deployment["model_info"]["id"] for deployment in remaining] == ["openai-sibling"]
