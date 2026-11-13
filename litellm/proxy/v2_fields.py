@@ -1,5 +1,5 @@
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from types import MappingProxyType
 from typing import Final
@@ -14,7 +14,7 @@ from litellm.integrations.custom_logger_v2.derivations import (
 )
 from litellm.integrations.custom_logger_v2.enums import Field
 from litellm.integrations.custom_logger_v2.slots import HookArgs, Slot, derived, mapped
-from litellm.types.integrations.custom_logger_v2 import OutputCap, RateLimitStatuses, coerce_record
+from litellm.types.integrations.custom_logger_v2 import LimiterRequest, OutputCap, RateLimitStatuses, coerce_record
 
 
 def _call_id(args: HookArgs) -> str | None:
@@ -56,11 +56,49 @@ def output_cap(args: HookArgs) -> OutputCap | None:
     return coerce_record(OutputCap, {"explicit": explicit})
 
 
+def _raised(error: Exception | None, prefix: str) -> Mapping[str, object]:
+    if error is None:
+        return {}
+    return {f"{prefix}_error_type": type(error).__name__, f"{prefix}_error_text": str(error)}
+
+
+def _attempt(read: Callable[[], object]) -> tuple[object, Exception | None]:
+    try:
+        return read(), None
+    except Exception as error:  # noqa: BLE001  # the port reproduces what the limiter does when its reader raises
+        return None, error
+
+
+def limiter_request(args: HookArgs) -> LimiterRequest | None:
+    from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+        _PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage]  # the limiter's own readers
+    )
+
+    request: Final = mapping(args.request)
+    if request is None:
+        return None
+    limiter: Final = _PROXY_MaxParallelRequestsHandler_v3
+    session_id, session_error = _attempt(lambda: limiter._get_session_id_from_data(None, request))  # pyright: ignore[reportPrivateUsage, reportArgumentType]  # the reader never touches the instance
+    agent_id, agent_error = _attempt(lambda: limiter._get_resolved_agent_id(None, args.auth, request))  # pyright: ignore[reportPrivateUsage, reportArgumentType]  # the reader never touches the instance
+    return coerce_record(
+        LimiterRequest,
+        {
+            "tags": tuple(get_tags_from_request_body(request)),
+            "session_id": session_id,
+            "resolved_agent_id": agent_id,
+            **_raised(session_error, "session_id"),
+            **_raised(agent_error, "resolved_agent_id"),
+        },
+    )
+
+
 PRE_CALL_SLOTS: Final[Mapping[Field, Slot]] = MappingProxyType(
     {
         **PRE_CALL_AUTH_SLOTS,
         Field.rate_limit_statuses: mapped(rate_limit_statuses, write_rate_limit_statuses),
         Field.output_cap: derived(output_cap),
+        Field.limiter_request: derived(limiter_request),
     }
 )
 POST_CALL_SUCCESS_SLOTS: Final = AUTH_SLOTS
@@ -110,6 +148,7 @@ __all__ = [
     "POST_CALL_SUCCESS_SLOTS",
     "PRE_CALL_SLOTS",
     "RESPONSE_HEADERS_SLOTS",
+    "limiter_request",
     "output_cap",
     "post_call_facts",
     "proxy_call_facts",

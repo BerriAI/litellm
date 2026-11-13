@@ -481,6 +481,11 @@
       "name": "input_sequence_length",
       "bit": 46,
       "tier": "small_record"
+    },
+    {
+      "name": "limiter_request",
+      "bit": 47,
+      "tier": "small_record"
     }
   ],
   "tiers": [
@@ -510,6 +515,7 @@
     "input_sequence_length",
     "key_identity",
     "key_limits",
+    "limiter_request",
     "log_id",
     "logged_key_identity",
     "logged_model_group",

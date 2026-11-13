@@ -92,6 +92,7 @@ class Field(str, Enum):
     logged_payload_not_a_mapping = ("logged_payload_not_a_mapping", 44, FieldTier.small_record)
     metadata_labels = ("metadata_labels", 45, FieldTier.small_record)
     input_sequence_length = ("input_sequence_length", 46, FieldTier.small_record)
+    limiter_request = ("limiter_request", 47, FieldTier.small_record)
 
 
 class Activation(str, Enum):
@@ -128,6 +129,7 @@ DERIVED_ONLY: Final = frozenset(
         Field.logged_payload_not_a_mapping,
         Field.metadata_labels,
         Field.input_sequence_length,
+        Field.limiter_request,
     }
 )
 BY_REFERENCE: Final = frozenset({Field.standard_logging_payload_ref})

@@ -8,6 +8,7 @@ from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY, RESPONSES_WEBSO
 from litellm.integrations.custom_logger_v2.enums import Field
 from litellm.integrations.custom_logger_v2.slots import HookArgs, Slot, derived, mapped
 from litellm.types.integrations.custom_logger_v2 import (
+    AgentPolicy,
     AttemptTiming,
     BudgetPlan,
     BudgetReservation,
@@ -18,6 +19,7 @@ from litellm.types.integrations.custom_logger_v2 import (
     InputSequenceLength,
     KeyIdentity,
     KeyLimits,
+    LimiterRequest,
     LoggedKeyIdentity,
     LoggedModelGroup,
     LoggedRequest,
@@ -253,6 +255,15 @@ _LIMIT_ATTRIBUTES: Final = (
 )
 
 
+_AGENT_POLICY_LIMITS: Final = ("rpm_limit", "tpm_limit", "session_rpm_limit", "session_tpm_limit")
+
+
+def _agent_policy(policy: object) -> AgentPolicy | None:
+    if policy is None:
+        return None
+    return coerce_record(AgentPolicy, {name: getattr(policy, name, None) for name in _AGENT_POLICY_LIMITS})
+
+
 def key_limits(args: HookArgs) -> KeyLimits | None:
     auth: Final = auth_of(args)
     if auth is None:
@@ -266,6 +277,8 @@ def key_limits(args: HookArgs) -> KeyLimits | None:
             "rpm_limit_type": _text(_metadata_value(metadata, "rpm_limit_type")),
             "tpm_limit_type": _text(_metadata_value(metadata, "tpm_limit_type")),
             "estimated_output_tokens": _estimated_output_tokens(auth, model if isinstance(model, str) else None),
+            "managed_agent_policy": _agent_policy(getattr(auth, "managed_agent_policy", None)),
+            "invoked_agent_policy": _agent_policy(getattr(auth, "invoked_agent_policy", None)),
         },
     )
 
@@ -701,6 +714,7 @@ RECORD_TYPES: Final[Mapping[Field, object]] = MappingProxyType(
         Field.logged_payload_not_a_mapping: Scalar,
         Field.metadata_labels: tuple[MetadataLabel, ...],
         Field.input_sequence_length: InputSequenceLength,
+        Field.limiter_request: LimiterRequest,
     }
 )
 

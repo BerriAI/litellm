@@ -211,6 +211,13 @@ class EstimatedOutputTokens(Record):
     team_default: I64 | None = None
 
 
+class AgentPolicy(Record):
+    rpm_limit: Scalar | None = None
+    tpm_limit: Scalar | None = None
+    session_rpm_limit: Scalar | None = None
+    session_tpm_limit: Scalar | None = None
+
+
 class KeyLimits(Record):
     rpm_limit: Scalar | None = None
     tpm_limit: Scalar | None = None
@@ -229,6 +236,8 @@ class KeyLimits(Record):
     rpm_limit_type: str | None = None
     tpm_limit_type: str | None = None
     estimated_output_tokens: EstimatedOutputTokens | None = None
+    managed_agent_policy: AgentPolicy | None = None
+    invoked_agent_policy: AgentPolicy | None = None
 
 
 class BudgetPlanCounter(Strict):
@@ -282,6 +291,16 @@ class RateLimitStatus(Strict):
 class RateLimitStatuses(Record):
     overall_code: str | None = None
     statuses: tuple[RateLimitStatus, ...] | None = None
+
+
+class LimiterRequest(Record):
+    session_id: str | None = None
+    session_id_error_type: str | None = None
+    session_id_error_text: str | None = None
+    tags: tuple[str, ...] | None = None
+    resolved_agent_id: Scalar | None = None
+    resolved_agent_id_error_type: str | None = None
+    resolved_agent_id_error_text: str | None = None
 
 
 class OutputCap(Record):
@@ -457,6 +476,7 @@ def coerce_value(owner: str, adapter: TypeAdapter[ValueT], raw: object) -> Value
 
 
 __all__ = [
+    "AgentPolicy",
     "AttemptTiming",
     "BudgetPlan",
     "BudgetPlanCounter",
@@ -468,6 +488,7 @@ __all__ = [
     "InputSequenceLength",
     "KeyIdentity",
     "KeyLimits",
+    "LimiterRequest",
     "LoggedKeyIdentity",
     "LoggedModelGroup",
     "LoggedRequest",

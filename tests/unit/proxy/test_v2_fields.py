@@ -11,11 +11,12 @@ from litellm.integrations.custom_logger_v2.host import reset_host_for_tests
 from litellm.integrations.custom_logger_v2.slots import HookArgs
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
-from litellm.proxy.v2_fields import output_cap
+from litellm.proxy.v2_fields import limiter_request, output_cap
 from litellm.types.integrations.custom_logger_v2 import (
     BudgetPlan,
     BudgetReservation,
     KeyIdentity,
+    LimiterRequest,
     OutputCap,
     RateLimitStatus,
     RateLimitStatuses,
@@ -212,3 +213,60 @@ def test_the_output_cap_carries_the_int_the_limiter_parses_however_wide(
     request_data: dict[str, object], explicit: object
 ) -> None:
     assert output_cap(HookArgs(request=request_data, call_type="acompletion")) == OutputCap(explicit=explicit)
+
+
+@pytest.mark.parametrize(
+    ("request_data", "expected"),
+    [
+        pytest.param(
+            {"litellm_session_id": 7, "metadata": {"session_id": "m", "tags": ["a", 3, "b"]}, "tags": ["c", "a"]},
+            LimiterRequest(tags=("a", "b", "c", "a"), session_id="7"),
+            id="session_from_litellm_session_id",
+        ),
+        pytest.param(
+            {"metadata": {"session_id": ""}, "litellm_metadata": {"session_id": "l", "agent_id": "agent-l"}},
+            LimiterRequest(tags=(), session_id="l", resolved_agent_id="agent-l"),
+            id="session_and_agent_from_litellm_metadata",
+        ),
+        pytest.param(
+            {"metadata": "not json", "tags": "t"},
+            LimiterRequest(
+                tags=(),
+                session_id_error_type="AttributeError",
+                session_id_error_text="'str' object has no attribute 'get'",
+                resolved_agent_id_error_type="AttributeError",
+                resolved_agent_id_error_text="'str' object has no attribute 'get'",
+            ),
+            id="metadata_not_a_mapping",
+        ),
+        pytest.param(
+            {"metadata": {"agent_id": ["a1"]}},
+            LimiterRequest(
+                tags=(),
+                resolved_agent_id=Stringified(
+                    text="['a1']",
+                    truthy=True,
+                    hashable=False,
+                    integer=False,
+                    type_name="list",
+                    hash_error="unhashable type: 'list'",
+                ),
+            ),
+            id="list_agent_id",
+        ),
+    ],
+)
+def test_limiter_request_serves_the_tags_session_and_agent_the_limiter_reads_from_the_body(
+    request_data: dict[str, object], expected: LimiterRequest
+) -> None:
+    auth: Final = UserAPIKeyAuth(api_key="sk-real")
+
+    assert limiter_request(HookArgs(auth=auth, request=request_data)) == expected
+
+
+def test_limiter_request_resolves_the_key_agent_before_the_body_agent() -> None:
+    auth: Final = UserAPIKeyAuth(api_key="sk-real", agent_id="key-agent")
+
+    served: Final = limiter_request(HookArgs(auth=auth, request={"metadata": {"agent_id": "body-agent"}}))
+
+    assert served == LimiterRequest(tags=(), resolved_agent_id="key-agent")

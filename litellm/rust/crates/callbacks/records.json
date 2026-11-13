@@ -218,6 +218,24 @@
       "key_default": 7,
       "team_per_model": 7,
       "team_default": 7
+    },
+    "managed_agent_policy": {
+      "rejected": [
+        "member"
+      ],
+      "rpm_limit": 42,
+      "tpm_limit": 42,
+      "session_rpm_limit": 42,
+      "session_tpm_limit": 42
+    },
+    "invoked_agent_policy": {
+      "rejected": [
+        "member"
+      ],
+      "rpm_limit": 42,
+      "tpm_limit": 42,
+      "session_rpm_limit": 42,
+      "session_tpm_limit": 42
     }
   },
   "budget_plan": {
@@ -443,5 +461,19 @@
     "bucket": "text",
     "error_type": "text",
     "error_text": "text"
+  },
+  "limiter_request": {
+    "rejected": [
+      "member"
+    ],
+    "session_id": "text",
+    "session_id_error_type": "text",
+    "session_id_error_text": "text",
+    "tags": [
+      "member"
+    ],
+    "resolved_agent_id": 42,
+    "resolved_agent_id_error_type": "text",
+    "resolved_agent_id_error_text": "text"
   }
 }

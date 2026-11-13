@@ -20,6 +20,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import get_model_group_from_litellm_kwargs
 from litellm.proxy.hooks.dynamic_rate_limiter_v3 import alternates_for
 from litellm.types.integrations.custom_logger_v2 import (
+    AgentPolicy,
     AttemptTiming,
     BudgetPlan,
     BudgetPlanCounter,
@@ -1587,3 +1588,27 @@ def test_a_falsy_logged_end_is_absent_so_the_port_falls_back_to_now_like_prometh
 
     assert timing is not None
     assert (timing.logged_end, timing.rejected) == (None, None)
+
+
+def test_key_limits_carry_the_agent_policy_limits_the_limiter_reads_raw() -> None:
+    auth: Final = _auth()
+    auth.managed_agent_policy = SimpleNamespace(rpm_limit=5, tpm_limit="9", session_rpm_limit=None)  # pyright: ignore[reportAttributeAccessIssue]  # the limiter reads the policy with getattr
+    auth.invoked_agent_policy = SimpleNamespace(session_tpm_limit=[1])  # pyright: ignore[reportAttributeAccessIssue]  # the limiter reads the policy with getattr
+
+    limits: Final = derivations.key_limits(HookArgs(auth=auth))
+
+    assert limits is not None
+    assert (limits.managed_agent_policy, limits.invoked_agent_policy) == (
+        AgentPolicy(rpm_limit=5, tpm_limit="9"),
+        AgentPolicy(
+            session_tpm_limit=Stringified(
+                text="[1]",
+                truthy=True,
+                hashable=False,
+                integer=False,
+                type_name="list",
+                hash_error="unhashable type: 'list'",
+            )
+        ),
+    )
+    assert derivations.key_limits(HookArgs(auth=_auth())) == KeyLimits(estimated_output_tokens=EstimatedOutputTokens())

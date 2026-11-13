@@ -88,6 +88,16 @@ pub struct EstimatedOutputTokens {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
+pub struct AgentPolicy {
+    pub rejected: Option<Vec<String>>,
+    pub rpm_limit: Option<Scalar>,
+    pub tpm_limit: Option<Scalar>,
+    pub session_rpm_limit: Option<Scalar>,
+    pub session_tpm_limit: Option<Scalar>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct KeyLimits {
     pub rejected: Option<Vec<String>>,
     pub rpm_limit: Option<Scalar>,
@@ -107,6 +117,8 @@ pub struct KeyLimits {
     pub rpm_limit_type: Option<String>,
     pub tpm_limit_type: Option<String>,
     pub estimated_output_tokens: Option<EstimatedOutputTokens>,
+    pub managed_agent_policy: Option<AgentPolicy>,
+    pub invoked_agent_policy: Option<AgentPolicy>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -184,6 +196,19 @@ pub struct RateLimitStatuses {
     pub rejected: Option<Vec<String>>,
     pub overall_code: Option<String>,
     pub statuses: Option<Vec<RateLimitStatus>>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LimiterRequest {
+    pub rejected: Option<Vec<String>>,
+    pub session_id: Option<String>,
+    pub session_id_error_type: Option<String>,
+    pub session_id_error_text: Option<String>,
+    pub tags: Option<Vec<String>>,
+    pub resolved_agent_id: Option<Scalar>,
+    pub resolved_agent_id_error_type: Option<String>,
+    pub resolved_agent_id_error_text: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -410,6 +435,7 @@ mod tests {
             }
             Field::MetadataLabels => round_trip::<typed::MetadataLabels>(sample),
             Field::InputSequenceLength => round_trip::<typed::InputSequenceLength>(sample),
+            Field::LimiterRequest => round_trip::<typed::LimiterRequest>(sample),
             other => panic!("{other:?} has no typed record sample"),
         }
     }
@@ -423,7 +449,7 @@ mod tests {
             assert_eq!(&decoded(field, sample), sample, "{name}");
         }
         let typed: Vec<&str> = samples.keys().map(String::as_str).collect();
-        assert_eq!(typed.len(), 23);
+        assert_eq!(typed.len(), 24);
     }
 
     #[rstest]
