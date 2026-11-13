@@ -162,6 +162,8 @@ ROUTE_ENDPOINT_MAPPING: Final = {
     "amoderation": "/moderations",
     "arerank": "/rerank",
     "aresponses": "/responses",
+    "anthropic_messages": "/messages",
+    "aanthropic_messages": "/messages",
     "_aresponses_websocket": "/responses",
     "alist_input_items": "/responses/{response_id}/input_items",
     "aimage_edit": "/images/edits",

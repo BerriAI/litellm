@@ -48,7 +48,18 @@ def test_customer_daily_totals_stay_separate_per_model_alias_and_provider() -> N
 
 
 @pytest.mark.parametrize("retry", [False, True])
-def test_customer_usage_survives_logging_and_accounting_with_correct_request_counts(retry: bool) -> None:
+@pytest.mark.parametrize(
+    "call_type, endpoint",
+    [
+        ("acompletion", "/chat/completions"),
+        ("aresponses", "/responses"),
+        ("anthropic_messages", "/messages"),
+        ("aanthropic_messages", "/messages"),
+    ],
+)
+def test_customer_usage_survives_logging_and_accounting_with_correct_request_counts(
+    retry: bool, call_type: str, endpoint: str
+) -> None:
     attribution: Final = CustomerUsageAttribution(
         customer_org_id="org-1", customer_team_id="team-1", customer_member_id="member-1"
     )
@@ -56,7 +67,7 @@ def test_customer_usage_survives_logging_and_accounting_with_correct_request_cou
         kwargs={
             "model": "usage-model",
             "custom_llm_provider": "openai",
-            "call_type": "acompletion",
+            "call_type": call_type,
             "litellm_call_id": "usage-request",
             "litellm_params": {
                 "metadata": {
@@ -87,7 +98,7 @@ def test_customer_usage_survives_logging_and_accounting_with_correct_request_cou
         "custom_llm_provider": payload["custom_llm_provider"],
         "api_key": payload["api_key"],
         "mcp_namespaced_tool_name": "",
-        "endpoint": "/chat/completions",
+        "endpoint": endpoint,
         "model_group": payload["model_group"],
     }
     assert dict(usage.increments) == {
