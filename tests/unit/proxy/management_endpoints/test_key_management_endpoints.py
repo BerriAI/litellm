@@ -54,7 +54,6 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import AuthCacheI
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
-    budget_windows_absent_cache_key,
     project_cache_key,
 )
 from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
@@ -108,7 +107,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     validate_key_list_check,
     validate_key_team_change,
 )
-from litellm.proxy.proxy_server import app
+from litellm.proxy.proxy_server import app, budget_windows_absent_cache_key
 from litellm.types.proxy.management_endpoints.key_management_endpoints import (
     BulkUpdateKeyRequest,
     BulkUpdateKeyResponse,

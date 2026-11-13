@@ -1058,6 +1058,7 @@ def _team_jwt(monkeypatch: pytest.MonkeyPatch, team_allowed_routes: list[str]) -
             team_ids_jwt_field="groups",
             team_allowed_routes=team_allowed_routes,
         ),
+        jwks_cache=keys_cache,
     )
     monkeypatch.setattr(proxy_server, "jwt_handler", handler)
     monkeypatch.setattr(proxy_server, "general_settings", {"enable_jwt_auth": True})

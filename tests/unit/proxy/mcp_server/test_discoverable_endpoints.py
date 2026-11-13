@@ -12739,7 +12739,7 @@ async def test_enforced_login_warms_verified_token_readable_without_database_loo
     proof = await current_binding_proof(server.oauth_identity_binding, "alice", "srv")
     cache = DualCache()
     monkeypatch.setenv("LITELLM_SALT_KEY", "test-cache-warm-encryption-salt")
-    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "mcp_state_cache", cache)
     monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
     monkeypatch.setattr(
         mcp_server_manager, "global_mcp_server_manager", SimpleNamespace(invalidate_user_oauth_token_cache=AsyncMock())
@@ -12922,12 +12922,12 @@ def jwt_oauth_identity(monkeypatch: pytest.MonkeyPatch) -> tuple["JWTHandler", "
 
     signing_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     cache: Final = UserApiKeyCache()
-    cache.set_cache(
+    cache.set_cache("jwt-owner", LiteLLM_UserTable(user_id="jwt-owner", user_email="owner@example.test"))
+    handler: Final = JWTHandler()
+    handler.jwks_cache.set_cache(
         "litellm_jwt_auth_keys_https://idp.example.test/jwks",
         [json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(signing_key.public_key()))],
     )
-    cache.set_cache("jwt-owner", LiteLLM_UserTable(user_id="jwt-owner", user_email="owner@example.test"))
-    handler: Final = JWTHandler()
     handler.update_environment(
         prisma_client=None,
         user_api_key_cache=cache,

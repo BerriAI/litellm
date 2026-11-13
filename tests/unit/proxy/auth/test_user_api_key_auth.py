@@ -1188,6 +1188,7 @@ async def test_jwt_user_api_key_auth_builder_enforce_rbac(enforce_rbac, monkeypa
         prisma_client=None,
         user_api_key_cache=local_cache,
         litellm_jwtauth=litellm_jwtauth,
+        jwks_cache=local_cache,
         leeway=10000000000000,
     )
     args = {

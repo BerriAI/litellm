@@ -216,7 +216,6 @@ async def evict_shared(cache_keys: Sequence[str], cache: "DualCache") -> None:
         )
 
 
-@with_service_target(AUTH_OBJECTS_TARGET)
 async def evict_and_broadcast(cache_keys: Sequence[str], user_api_key_cache: "UserApiKeyCache") -> None:
     """
     Drop cached management objects here and on every other worker.
@@ -226,9 +225,18 @@ async def evict_and_broadcast(cache_keys: Sequence[str], user_api_key_cache: "Us
     stale object enforced until its TTL expires (LIT-3803). Best-effort: the DB write has already
     committed, so a cache backend error must not fail the endpoint.
     """
+    await _evict_and_broadcast(cache_keys, user_api_key_cache)
+
+
+async def evict_state_and_broadcast(cache_keys: Sequence[str], cache: "DualCache") -> None:
+    await _evict_and_broadcast(cache_keys, cache)
+
+
+@with_service_target(AUTH_OBJECTS_TARGET)
+async def _evict_and_broadcast(cache_keys: Sequence[str], cache: "UserApiKeyCache | DualCache") -> None:
     for cache_key in cache_keys:
         try:
-            await user_api_key_cache.async_delete_cache(key=cache_key)
+            await cache.async_delete_cache(key=cache_key)
         except Exception as e:  # noqa: BLE001  # best-effort eviction: any cache backend error must not fail the mutation
             verbose_proxy_logger.warning(
                 "Failed to evict cached entry %s; a stale object may be served until its TTL expires: %s",
@@ -239,7 +247,14 @@ async def evict_and_broadcast(cache_keys: Sequence[str], user_api_key_cache: "Us
 
 
 class AuthCacheInvalidationSubscriber:
-    __slots__ = ("_additional_in_memory_caches", "_redis_cache", "_spend_counters", "_task", "_user_api_key_cache")
+    __slots__ = (
+        "_additional_in_memory_caches",
+        "_evicted_caches",
+        "_redis_cache",
+        "_spend_counters",
+        "_task",
+        "_user_api_key_cache",
+    )
 
     def __init__(
         self,
@@ -247,10 +262,12 @@ class AuthCacheInvalidationSubscriber:
         user_api_key_cache: "UserApiKeyCache",
         additional_in_memory_caches: Sequence["InMemoryCache"] = (),
         spend_counters: SpendCounterCopies | None = None,
+        evicted_caches: Sequence["InMemoryCache"] = (),
     ) -> None:
         self._redis_cache = redis_cache
         self._user_api_key_cache = user_api_key_cache
         self._additional_in_memory_caches = tuple(additional_in_memory_caches)
+        self._evicted_caches: Final = tuple(evicted_caches)
         self._spend_counters: Final = spend_counters
         self._task: asyncio.Task[None] | None = None
 
@@ -313,8 +330,8 @@ class AuthCacheInvalidationSubscriber:
                 additional_cache.set_cache(parsed.cache_key, parsed.new_value, ttl=parsed.ttl)
             return
         _drop_from_memory(parsed.cache_key, self._user_api_key_cache)
-        for additional_cache in self._additional_in_memory_caches:
-            additional_cache.delete_cache(parsed.cache_key)
+        for cache in (*self._additional_in_memory_caches, *self._evicted_caches):
+            cache.delete_cache(parsed.cache_key)
 
     @staticmethod
     async def _close_pubsub(pubsub: ConfigSyncPubSub) -> None:

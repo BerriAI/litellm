@@ -243,7 +243,7 @@ class TestComputePerUserTokenTtl:
 class TestMCPPerUserTokenCache:
     """Tests for Redis-backed per-user token cache.
 
-    Patches ``user_api_key_cache`` to avoid needing a real Redis instance.
+    Patches ``mcp_state_cache`` to avoid needing a real Redis instance.
     Patches ``encrypt_value_helper`` / ``decrypt_value_helper`` to verify
     encryption is applied before Redis writes and decryption after reads.
     """
@@ -265,7 +265,7 @@ class TestMCPPerUserTokenCache:
             patch(
                 "litellm.proxy.mcp_server.oauth2_token_cache.decrypt_value_helper"
             ) as mock_decrypt,
-            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_dual_cache),
+            patch("litellm.proxy.proxy_server.mcp_state_cache", mock_dual_cache),
         ):
             mock_dual_cache.async_get_cache.return_value = None
             result = await cache.get("alice", "slack-test")
@@ -281,7 +281,7 @@ class TestMCPPerUserTokenCache:
                 "litellm.proxy.mcp_server.oauth2_token_cache.decrypt_value_helper",
                 return_value=fake_plaintext,
             ) as mock_decrypt,
-            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_dual_cache),
+            patch("litellm.proxy.proxy_server.mcp_state_cache", mock_dual_cache),
         ):
             mock_dual_cache.async_get_cache.return_value = fake_encrypted
             result = await cache.get("alice", "slack-test")
@@ -301,7 +301,7 @@ class TestMCPPerUserTokenCache:
                 "litellm.proxy.mcp_server.oauth2_token_cache.encrypt_value_helper",
                 return_value=fake_encrypted,
             ) as mock_encrypt,
-            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_dual_cache),
+            patch("litellm.proxy.proxy_server.mcp_state_cache", mock_dual_cache),
         ):
             await cache.set("alice", "slack-test", "xoxb-token", ttl=3540)
 
@@ -318,7 +318,7 @@ class TestMCPPerUserTokenCache:
                 "litellm.proxy.mcp_server.oauth2_token_cache.encrypt_value_helper",
                 return_value="enc",
             ),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_dual_cache),
+            patch("litellm.proxy.proxy_server.mcp_state_cache", mock_dual_cache),
         ):
             await cache.set("bob", "github-server", "ghp_token", ttl=3600)
 
@@ -328,7 +328,7 @@ class TestMCPPerUserTokenCache:
     @pytest.mark.asyncio
     async def test_delete_calls_async_delete_cache(self, cache, mock_dual_cache):
         mock_dual_cache.async_delete_cache = AsyncMock()
-        with patch("litellm.proxy.proxy_server.user_api_key_cache", mock_dual_cache):
+        with patch("litellm.proxy.proxy_server.mcp_state_cache", mock_dual_cache):
             await cache.delete("alice", "slack-test")
 
         mock_dual_cache.async_delete_cache.assert_called_once_with(key="mcp:per_user_token:alice:slack-test")
@@ -342,7 +342,7 @@ class TestMCPPerUserTokenCache:
                 "litellm.proxy.mcp_server.oauth2_token_cache.decrypt_value_helper",
                 return_value=None,  # decrypt returns None on failure
             ),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_dual_cache),
+            patch("litellm.proxy.proxy_server.mcp_state_cache", mock_dual_cache),
         ):
             mock_dual_cache.async_get_cache.return_value = "bad_encrypted_data"
             result = await cache.get("alice", "slack-test")
@@ -358,7 +358,7 @@ class TestMCPPerUserTokenCache:
                 "litellm.proxy.mcp_server.oauth2_token_cache.encrypt_value_helper",
                 return_value="enc",
             ),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_dual_cache),
+            patch("litellm.proxy.proxy_server.mcp_state_cache", mock_dual_cache),
         ):
             # Should not raise
             await cache.set("alice", "slack-test", "token", ttl=3600)

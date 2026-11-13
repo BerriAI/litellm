@@ -30,6 +30,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.dual_cache import DualCache
 from litellm.litellm_core_utils.core_helpers import json_contains, subscript
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
@@ -116,6 +117,7 @@ STALE_CACHE_KEY_PREFIX: Final = "litellm_stale_"
 STALE_WRITTEN_AT_CACHE_KEY_PREFIX: Final = "litellm_stale_written_at_"
 UNREACHABLE_CACHE_KEY_PREFIX: Final = "litellm_jwks_unreachable_"
 _CACHED_VALUE: Final = TypeAdapter(object)
+_CACHED_USERINFO: Final[TypeAdapter[dict[str, object] | None]] = TypeAdapter(dict[str, object] | None)
 
 _CachedValueT = TypeVar("_CachedValueT", bound=JWKKeyValue | str)
 
@@ -249,6 +251,7 @@ class JWTHandler:
 
     prisma_client: PrismaClient | None
     user_api_key_cache: UserApiKeyCache
+    jwks_cache: DualCache
     # Supported algos: https://pyjwt.readthedocs.io/en/stable/algorithms.html
     # "Warning: Make sure not to mix symmetric and asymmetric algorithms that interpret
     #   the key in different ways (e.g. HS* and RS*)."
@@ -285,6 +288,7 @@ class JWTHandler:
         self,
     ) -> None:
         self.http_handler = HTTPHandler()
+        self.jwks_cache = DualCache()
         self.leeway = 0
         # Per-cache-key locks so a TTL lapse triggers one refresh instead of one per in-flight request.
         self._refresh_locks: dict[str, asyncio.Lock] = {}  # mutable-ok: lock registry, keyed by JWKS url
@@ -299,9 +303,14 @@ class JWTHandler:
         user_api_key_cache: UserApiKeyCache,
         litellm_jwtauth: LiteLLM_JWTAuth,
         leeway: int = 0,
+        *,
+        jwks_cache: DualCache | None = None,
     ) -> None:
+        """``jwks_cache`` is the cache shared across workers; without one the handler keeps its own memory cache."""
         self.prisma_client = prisma_client
         self.user_api_key_cache = user_api_key_cache
+        if jwks_cache is not None:
+            self.jwks_cache = jwks_cache
         self.litellm_jwtauth = litellm_jwtauth
         self.leeway = leeway
 
@@ -815,18 +824,18 @@ class JWTHandler:
 
     @with_service_target(AUTH_OBJECTS_TARGET)
     async def _get_cached_value(self, cache_key: str) -> _CachedValueT | None:
-        cached: Final = _CACHED_VALUE.validate_python(await self.user_api_key_cache.async_get_cache(cache_key))
+        cached: Final = _CACHED_VALUE.validate_python(await self.jwks_cache.async_get_cache(cache_key))
         return cast("_CachedValueT | None", cached)  # cast-ok: cache reads are untyped
 
     @with_service_target(AUTH_OBJECTS_TARGET)
     async def _get_cached_timestamp(self, cache_key: str) -> float | None:
-        cached: Final = _CACHED_VALUE.validate_python(await self.user_api_key_cache.async_get_cache(cache_key))
+        cached: Final = _CACHED_VALUE.validate_python(await self.jwks_cache.async_get_cache(cache_key))
         # A JSON round-trip through Redis hands a whole-number epoch back as an int.
         return float(cached) if isinstance(cached, (int, float)) else None
 
     @with_service_target(AUTH_OBJECTS_TARGET)
     async def _put_cached_value(self, cache_key: str, value: JWKKeyValue | str | float, ttl: float) -> None:
-        await self.user_api_key_cache.async_set_cache(key=cache_key, value=value, ttl=ttl)
+        await self.jwks_cache.async_set_cache(key=cache_key, value=value, ttl=ttl)
 
     async def _cached_with_stale_fallback(
         self,
@@ -1062,7 +1071,7 @@ class JWTHandler:
 
         # Check cache first
         cache_key: Final = f"oidc_userinfo_{hashlib.sha256(token.encode()).hexdigest()}"
-        cached_userinfo: Final = await self.user_api_key_cache.async_get_cache(cache_key)
+        cached_userinfo: Final = _CACHED_USERINFO.validate_python(await self.jwks_cache.async_get_cache(cache_key))
 
         if cached_userinfo is not None:
             verbose_proxy_logger.debug("Returning cached OIDC UserInfo")
@@ -1087,7 +1096,7 @@ class JWTHandler:
             verbose_proxy_logger.debug("Received OIDC UserInfo: %s", userinfo)
 
             # Cache the userinfo response
-            await self.user_api_key_cache.async_set_cache(
+            await self.jwks_cache.async_set_cache(
                 key=cache_key,
                 value=userinfo,
                 ttl=self.litellm_jwtauth.oidc_userinfo_cache_ttl,

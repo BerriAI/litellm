@@ -339,6 +339,7 @@ from litellm._logging import (
     verbose_router_logger,
 )
 from litellm.caching.caching import DualCache, RedisCache
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_batch import drain_post_call_redis_batches
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError, is_redis_timeout_failure
 from litellm.caching.redis_cluster_cache import RedisClusterCache
@@ -351,6 +352,7 @@ from litellm.constants import (
     CLI_SSO_SESSION_TTL_SECONDS,
     DAYS_IN_A_MONTH,
     DEFAULT_HEALTH_CHECK_INTERVAL,
+    DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
     DEFAULT_MAX_LRU_CACHE_SIZE,
     DEFAULT_MODEL_CREATED_AT_TIME,
     GLOBAL_PROXY_SPEND_CACHE_KEY,
@@ -631,7 +633,6 @@ from litellm.proxy.common_utils.token_count_log import (
 )
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
-    budget_windows_absent_cache_key,
     end_user_cache_key,
     get_management_object_ttl,
     model_access_group_cache_key,
@@ -3207,6 +3208,15 @@ shared_aiohttp_session: Optional["ClientSession"] = None  # Global shared sessio
 user_api_key_cache: UserApiKeyCache = UserApiKeyCache(
     default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
 )
+hook_cache: Final = DualCache(default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value)
+mcp_state_cache: Final = DualCache(default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value)
+jwks_cache: Final = DualCache(default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value)
+ui_settings_cache: Final = DualCache(default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value)
+sso_flow_cache: Final = DualCache(default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value)
+budget_windows_absent_cache: Final = DualCache(
+    in_memory_cache=InMemoryCache(default_ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL),
+    default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value,
+)
 spend_counter_cache: Final = DualCache(default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value)
 spend_counter_store: Final = SpendCounterStore(connect(None).spend_counters())
 cli_sso_session_cache: Final = DualCache(default_in_memory_ttl=CLI_SSO_SESSION_TTL_SECONDS)
@@ -3287,7 +3297,9 @@ open_telemetry_logger: OpenTelemetry | None = None
 # LiteLLM_DailyGatewayRequests by the update_gateway_requests scheduler job.
 gateway_request_accumulator: Final = GatewayRequestAccumulator()
 ### INITIALIZE GLOBAL LOGGING OBJECT ###
-proxy_logging_obj: ProxyLogging = ProxyLogging(user_api_key_cache=user_api_key_cache, premium_user=premium_user)
+proxy_logging_obj: ProxyLogging = ProxyLogging(
+    user_api_key_cache=user_api_key_cache, hook_cache=hook_cache, premium_user=premium_user
+)
 
 
 def _gateway_request_redis_buffer() -> GatewayRequestRedisBuffer | None:
@@ -3733,17 +3745,21 @@ def _has_budget_windows(budget_limits: object) -> bool:
     return isinstance(budget_limits, list) and budget_limits != []
 
 
+def budget_windows_absent_cache_key(entity_type: str, entity_id: str) -> str:
+    return f"budget_windows_absent:{entity_type}:{entity_id}"
+
+
 def _budget_windows_absent_marker(absent_key: str) -> object:
-    return _UNTYPED_VALUE.validate_python(user_api_key_cache.budget_windows_absent_cache.get_cache(key=absent_key))
+    return _UNTYPED_VALUE.validate_python(budget_windows_absent_cache.get_cache(key=absent_key))
 
 
 def _finish_pending_read(absent_key: str, pending_read: str, remember_absent: bool) -> None:
     if _budget_windows_absent_marker(absent_key) != pending_read:
         return
     if remember_absent:
-        user_api_key_cache.budget_windows_absent_cache.set_cache(key=absent_key, value=True)
+        budget_windows_absent_cache.set_cache(key=absent_key, value=True)
         return
-    user_api_key_cache.budget_windows_absent_cache.delete_cache(absent_key)
+    budget_windows_absent_cache.delete_cache(absent_key)
 
 
 async def accounting_window_keys(token: str | None, team_id: str | None) -> tuple[Mapping[str, object], ...]:
@@ -3798,7 +3814,7 @@ async def _stored_budget_limits(entity_type: Litellm_EntityType, entity_id: str)
     if _budget_windows_absent_marker(absent_key) is True:
         return None
     pending_read: Final = f"reading:{secrets.token_hex(8)}"
-    user_api_key_cache.budget_windows_absent_cache.set_cache(key=absent_key, value=pending_read)
+    budget_windows_absent_cache.set_cache(key=absent_key, value=pending_read)
     try:
         row: Final[SupportsModelDump | None] = (
             await VerificationTokenRepository(prisma_client).table.find_unique(where={"token": entity_id})
@@ -5485,6 +5501,8 @@ def _attach_redis_usage_cache(redis_cache: RedisCache, enable_redis_auth_cache: 
             redis_cache,
             default_redis_ttl=litellm.default_redis_ttl,
         )
+        for shared_cache in (hook_cache, mcp_state_cache, jwks_cache, ui_settings_cache):
+            shared_cache.attach_redis_cache(redis_cache, default_redis_ttl=litellm.default_redis_ttl)
         verbose_proxy_logger.info(
             "enable_redis_auth_cache=True: attached Redis to "
             "user_api_key_cache — virtual-key lookups are now "
@@ -9070,6 +9088,13 @@ class ProxyConfig:
             redis_cache=redis_cache,
             user_api_key_cache=user_api_key_cache,
             additional_in_memory_caches=(spend_counter_cache.in_memory_cache, byok_credential_cache),
+            evicted_caches=(
+                budget_windows_absent_cache.in_memory_cache,
+                hook_cache.in_memory_cache,
+                mcp_state_cache.in_memory_cache,
+                jwks_cache.in_memory_cache,
+                ui_settings_cache.in_memory_cache,
+            ),
             spend_counters=spend_counter_store,
         )
         self.auth_cache_invalidation_subscriber = subscriber
@@ -11442,6 +11467,7 @@ class ProxyStartupEvent:
         jwt_handler.update_environment(
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
+            jwks_cache=jwks_cache,
             litellm_jwtauth=litellm_jwtauth,
         )
         from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
@@ -19572,7 +19598,7 @@ async def login(request: Request):
                 return_to=cp_return_to,
                 jwt_token=jwt_token,
                 redis_usage_cache=redis_usage_cache,
-                user_api_key_cache=user_api_key_cache,
+                sso_flow_cache=sso_flow_cache,
                 request=request,
             )
         except Exception:  # noqa: BLE001  # resuming must NEVER block a completed sign-in
@@ -19706,7 +19732,7 @@ async def login_v3(request: Request):
         if redis_usage_cache is not None:
             await redis_usage_cache.async_set_cache(key=cache_key, value=cache_value, ttl=60)
         else:
-            await user_api_key_cache.async_set_cache(key=cache_key, value=cache_value, ttl=60)
+            await sso_flow_cache.async_set_cache(key=cache_key, value=cache_value, ttl=60)
 
         return JSONResponse(
             content={"code": code, "expires_in": 60},
@@ -19760,7 +19786,7 @@ async def login_v3_exchange(request: Request):
         cached_data: Final[object] = _UNTYPED_VALUE.validate_python(
             await redis_usage_cache.async_get_cache(key=cache_key)
             if redis_usage_cache is not None
-            else await user_api_key_cache.async_get_cache(key=cache_key)
+            else await sso_flow_cache.async_get_cache(key=cache_key)
         )
 
         if not cached_data or not isinstance(cached_data, dict):
@@ -19775,7 +19801,7 @@ async def login_v3_exchange(request: Request):
         if redis_usage_cache is not None:
             await redis_usage_cache.async_delete_cache(key=cache_key)
         else:
-            await user_api_key_cache.async_delete_cache(key=cache_key)
+            await sso_flow_cache.async_delete_cache(key=cache_key)
 
         json_response: Final = JSONResponse(
             content={
@@ -22934,11 +22960,11 @@ async def _is_mcp_access_group_cached(name: str) -> bool:
     )
 
     cache_key: Final = f"mcp_access_group_exists:{name}"
-    cached: Final[object] = _UNTYPED_VALUE.validate_python(await user_api_key_cache.async_get_cache(key=cache_key))
+    cached: Final[object] = _UNTYPED_VALUE.validate_python(await mcp_state_cache.async_get_cache(key=cache_key))
     if cached is not None:
         return bool(cached)
     result: Final = bool(await MCPRequestHandler.get_mcp_servers_from_access_groups([name]))
-    await user_api_key_cache.async_set_cache(
+    await mcp_state_cache.async_set_cache(
         key=cache_key,
         value=result,
         ttl=(get_management_object_ttl(user_api_key_cache) if result else DEFAULT_MCP_ACCESS_GROUP_NEGATIVE_CACHE_TTL),

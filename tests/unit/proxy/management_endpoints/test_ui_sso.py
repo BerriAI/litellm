@@ -2649,7 +2649,7 @@ async def test_get_generic_sso_response_pkce_merges_token_claims_and_excludes_cr
 
     with (
         patch("litellm.proxy.proxy_server.redis_usage_cache", None),
-        patch("litellm.proxy.proxy_server.user_api_key_cache", pkce_cache),
+        patch("litellm.proxy.proxy_server.sso_flow_cache", pkce_cache),
         patch(
             "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client",
             side_effect=[token_client, userinfo_client],
@@ -5835,7 +5835,7 @@ class TestPKCEFunctionality:
 
         with (
             patch("litellm.proxy.proxy_server.redis_usage_cache", None),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+            patch("litellm.proxy.proxy_server.sso_flow_cache", mock_cache),
             patch.dict(os.environ, {"GENERIC_CLIENT_USE_PKCE": "true"}),
         ):
             # Act
@@ -5884,7 +5884,7 @@ class TestPKCEFunctionality:
         with patch.dict(os.environ, {"GENERIC_CLIENT_USE_PKCE": "true"}):
             with (
                 patch("litellm.proxy.proxy_server.redis_usage_cache", None),
-                patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+                patch("litellm.proxy.proxy_server.sso_flow_cache", mock_cache),
             ):
                 # Act
                 result = await SSOAuthenticationHandler.get_generic_sso_redirect_response(
@@ -5957,7 +5957,7 @@ class TestPKCEFunctionality:
         with patch.dict(os.environ, {"GENERIC_CLIENT_USE_PKCE": "true"}):
             with patch("litellm.proxy.proxy_server.redis_usage_cache", mock_redis):
                 with patch(
-                    "litellm.proxy.proxy_server.user_api_key_cache", mock_in_memory
+                    "litellm.proxy.proxy_server.sso_flow_cache", mock_in_memory
                 ):
                     # Pod A: start login, store code_verifier in "Redis"
                     await SSOAuthenticationHandler.get_generic_sso_redirect_response(
@@ -5995,13 +5995,13 @@ class TestPKCEFunctionality:
     async def test_pkce_fallback_in_memory_roundtrip_when_redis_none(self):
         """
         Regression: When redis_usage_cache is None (no Redis configured),
-        code_verifier is stored and retrieved via user_api_key_cache.
+        code_verifier is stored and retrieved via sso_flow_cache.
         Roundtrip works when callback hits same pod (same in-memory cache).
         Single-pod or no-Redis deployments must continue to work.
         """
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
-        # In-memory store (simulates user_api_key_cache on one pod)
+        # In-memory store (simulates sso_flow_cache on one pod)
         in_memory_store = {}
 
         async def async_set_cache(key, value, **kwargs):
@@ -6030,7 +6030,7 @@ class TestPKCEFunctionality:
         with patch.dict(os.environ, {"GENERIC_CLIENT_USE_PKCE": "true"}):
             with patch("litellm.proxy.proxy_server.redis_usage_cache", None):
                 with patch(
-                    "litellm.proxy.proxy_server.user_api_key_cache", mock_in_memory
+                    "litellm.proxy.proxy_server.sso_flow_cache", mock_in_memory
                 ):
                     # Pod A: start login, store code_verifier in in-memory cache
                     await SSOAuthenticationHandler.get_generic_sso_redirect_response(
@@ -6080,7 +6080,7 @@ class TestPKCEFunctionality:
 
         with (
             patch("litellm.proxy.proxy_server.redis_usage_cache", mock_redis),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_in_memory),
+            patch("litellm.proxy.proxy_server.sso_flow_cache", mock_in_memory),
             patch.dict(os.environ, {"GENERIC_CLIENT_USE_PKCE": "true"}, clear=False),
         ):
             mock_request = MagicMock(spec=Request)
@@ -6409,7 +6409,7 @@ class TestPKCEFunctionality:
 
         with (
             patch("litellm.proxy.proxy_server.redis_usage_cache", None),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+            patch("litellm.proxy.proxy_server.sso_flow_cache", mock_cache),
             patch.dict(
                 os.environ,
                 {"GENERIC_CLIENT_USE_PKCE": "true", "PKCE_STRICT_CACHE_MISS": "true"},
@@ -6503,7 +6503,7 @@ class TestPKCEFunctionality:
         # Should NOT raise even though the underlying cache delete fails
         with (
             patch("litellm.proxy.proxy_server.redis_usage_cache", None),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", failing_cache),
+            patch("litellm.proxy.proxy_server.sso_flow_cache", failing_cache),
         ):
             await SSOAuthenticationHandler._delete_pkce_verifier(
                 "pkce_verifier:test_state"
@@ -6536,7 +6536,7 @@ class TestPKCEFunctionality:
 
         with (
             patch("litellm.proxy.proxy_server.redis_usage_cache", None),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+            patch("litellm.proxy.proxy_server.sso_flow_cache", mock_cache),
             patch.dict(
                 os.environ,
                 {"GENERIC_CLIENT_USE_PKCE": "true", "PKCE_STRICT_CACHE_MISS": "true"},
@@ -6581,7 +6581,7 @@ class TestPKCEFunctionality:
         with (
             caplog.at_level(logging.WARNING),
             patch("litellm.proxy.proxy_server.redis_usage_cache", None),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+            patch("litellm.proxy.proxy_server.sso_flow_cache", mock_cache),
             patch.dict(
                 os.environ,
                 {"GENERIC_CLIENT_USE_PKCE": "true", "PKCE_STRICT_CACHE_MISS": "false"},
@@ -6670,7 +6670,7 @@ class TestPKCEFunctionality:
         with (
             caplog.at_level(logging.WARNING),
             patch("litellm.proxy.proxy_server.redis_usage_cache", None),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+            patch("litellm.proxy.proxy_server.sso_flow_cache", mock_cache),
             patch.dict(
                 os.environ,
                 {"GENERIC_CLIENT_USE_PKCE": "true", "PKCE_STRICT_CACHE_MISS": "false"},
@@ -6717,7 +6717,7 @@ class TestPKCEFunctionality:
 
         with (
             patch("litellm.proxy.proxy_server.redis_usage_cache", None),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+            patch("litellm.proxy.proxy_server.sso_flow_cache", mock_cache),
             patch.dict(os.environ, {"GENERIC_CLIENT_USE_PKCE": "true"}, clear=False),
         ):
             result = await SSOAuthenticationHandler.prepare_token_exchange_parameters(

@@ -1368,7 +1368,7 @@ class _SingleUseGuard:
         from litellm.proxy.proxy_server import redis_usage_cache  # noqa: PLC0415  # circular import at module load
 
         # Resolve the shared authority HERE rather than trusting the injected cache: callers pass
-        # user_api_key_cache, which only carries a redis_cache when enable_redis_auth_cache is set
+        # mcp_state_cache, which only carries a redis_cache when enable_redis_auth_cache is set
         # (off by default), so a guard that read its injected cache silently degraded every claim to
         # a per-worker count on a stock multi-worker deployment. redis_usage_cache is the store the
         # proxy already treats as cross-worker, so no call site can wire the guarantee away.

@@ -72,11 +72,13 @@ async def _jwt_team_selection_identity(
     role_models: tuple[str, ...] | None = None,
 ) -> UserAPIKeyAuth:
     cache: Final = UserApiKeyCache()
+    jwks_cache: Final = DualCache()
     database: Final = MagicMock()
     handler: Final = JWTHandler()
     handler.update_environment(
         prisma_client=database,
         user_api_key_cache=cache,
+        jwks_cache=jwks_cache,
         litellm_jwtauth=LiteLLM_JWTAuth(
             user_id_jwt_field="sub",
             team_ids_jwt_field="groups",
@@ -91,7 +93,7 @@ async def _jwt_team_selection_identity(
     )
     private_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     jwks_url: Final = "https://identity.invalid/selection/jwks"
-    cache.set_cache(
+    jwks_cache.set_cache(
         f"litellm_jwt_auth_keys_{jwks_url}",
         [json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(private_key.public_key()))],
     )
@@ -4464,6 +4466,7 @@ def _get_jwt_handler_with_issuer_keys(issuers: list, keys_by_url: dict) -> JWTHa
         prisma_client=None,
         user_api_key_cache=cache,
         litellm_jwtauth=LiteLLM_JWTAuth(issuers=issuers),
+        jwks_cache=cache,
     )
     return jwt_handler
 
@@ -4480,6 +4483,7 @@ async def test_get_public_key_fetches_and_caches_jwks_response():
         prisma_client=None,
         user_api_key_cache=cache,
         litellm_jwtauth=LiteLLM_JWTAuth(public_key_ttl=123),
+        jwks_cache=cache,
     )
     expected_key_id = "cached-key"
     _, jwk = _get_rsa_key_and_jwk(kid=expected_key_id)
@@ -4550,6 +4554,7 @@ def _get_jwt_handler_with_scripted_endpoint(
             public_key_ttl=public_key_ttl,
             public_key_stale_ttl=public_key_stale_ttl,
         ),
+        jwks_cache=cache,
     )
     jwt_handler.http_handler = endpoint
     return jwt_handler
@@ -5072,6 +5077,7 @@ async def test_get_public_key_tries_next_jwks_url_when_kid_missing(monkeypatch):
         prisma_client=None,
         user_api_key_cache=cache,
         litellm_jwtauth=LiteLLM_JWTAuth(),
+        jwks_cache=cache,
     )
 
     public_key = await jwt_handler.get_public_key(kid="second-key")
@@ -5534,6 +5540,7 @@ async def test_global_jwt_ignores_user_supplied_internal_claims(monkeypatch):
     jwt_handler.update_environment(
         prisma_client=None,
         user_api_key_cache=cache,
+        jwks_cache=cache,
         litellm_jwtauth=LiteLLM_JWTAuth(
             user_id_jwt_field="email",
             user_email_jwt_field="email",
@@ -7765,7 +7772,8 @@ async def test_jwt_identity_and_authorization_keep_provisioning_in_admission(
 
     private_key, jwk = _get_rsa_key_and_jwk("identity-mode")
     cache: Final = UserApiKeyCache()
-    cache.set_cache("litellm_jwt_auth_keys_https://identity.example/jwks", [jwk])
+    jwks_cache: Final = DualCache()
+    jwks_cache.set_cache("litellm_jwt_auth_keys_https://identity.example/jwks", [jwk])
     user_id: Final = f"identity-mode-{operation}-{existing_user}-{model_allowed}"
     user: Final = LiteLLM_UserTable(user_id=user_id, organization_memberships=[])
     if existing_user:
@@ -7779,6 +7787,7 @@ async def test_jwt_identity_and_authorization_keep_provisioning_in_admission(
     handler.update_environment(
         prisma_client=database,
         user_api_key_cache=cache,
+        jwks_cache=jwks_cache,
         litellm_jwtauth=LiteLLM_JWTAuth(
             user_id_jwt_field="sub",
             user_id_upsert=True,
@@ -7940,13 +7949,14 @@ def _entra_signed_app_token(monkeypatch, azp: str, scope: str) -> tuple[JWTHandl
     monkeypatch.setenv("JWT_PUBLIC_KEY_URL", jwks_url)
     monkeypatch.delenv("JWT_AUDIENCE", raising=False)
     private_key, jwk = _get_rsa_key_and_jwk(kid="entra-kid")
-    cache = UserApiKeyCache()
+    cache = DualCache()
     cache.set_cache(key=f"litellm_jwt_auth_keys_{jwks_url}", value=[jwk])
     jwt_handler = JWTHandler()
     jwt_handler.update_environment(
         prisma_client=None,
-        user_api_key_cache=cache,
+        user_api_key_cache=UserApiKeyCache(),
         litellm_jwtauth=LiteLLM_JWTAuth(agent_id_jwt_field="azp"),
+        jwks_cache=cache,
     )
     token = _encode_rsa_jwt(
         private_key,
@@ -8166,7 +8176,8 @@ async def test_scope_admin_admission_resolves_existing_user_without_provisioning
 
     private_key, jwk = _get_rsa_key_and_jwk("admin-status")
     cache: Final = UserApiKeyCache()
-    cache.set_cache("litellm_jwt_auth_keys_https://admin.example/jwks", [jwk])
+    jwks_cache: Final = DualCache()
+    jwks_cache.set_cache("litellm_jwt_auth_keys_https://admin.example/jwks", [jwk])
     user_id: Final = f"admin-status-{existing_user}-{warm_cache}-{email}"
     user: Final = LiteLLM_UserTable(user_id=user_id, user_email="admin@allowed.example", metadata={"scim_active": False}, organization_memberships=[])
     if existing_user and warm_cache:
@@ -8180,6 +8191,7 @@ async def test_scope_admin_admission_resolves_existing_user_without_provisioning
     handler.update_environment(
         prisma_client=database,
         user_api_key_cache=cache,
+        jwks_cache=jwks_cache,
         litellm_jwtauth=LiteLLM_JWTAuth(
             user_id_jwt_field="sub", user_id_upsert=True, user_email_jwt_field="email",
             user_allowed_email_domain="allowed.example",
@@ -8234,7 +8246,7 @@ async def test_managed_application_uses_persisted_identity_without_provisioning_
     cache: Final = DualCache()
     cache.set_cache(key=f"litellm_jwt_auth_keys_{jwks_url}", value=[jwk])
     handler: Final = JWTHandler()
-    handler.update_environment(None, cache, LiteLLM_JWTAuth(user_id_upsert=True))
+    handler.update_environment(None, cache, LiteLLM_JWTAuth(user_id_upsert=True), jwks_cache=cache)
     binding: Final = AgentIdentityBinding(
         agent_id="stable-id",
         provider="microsoft_entra",
@@ -8353,7 +8365,12 @@ async def test_database_free_jwt_admission_with_entra_shaped_claims(monkeypatch:
         )
     )
     handler: Final = JWTHandler()
-    handler.update_environment(None, cache, LiteLLM_JWTAuth(agent_id_jwt_field="agent", admin_allowed_routes=["llm_api_routes"]))
+    handler.update_environment(
+        None,
+        cache,
+        LiteLLM_JWTAuth(agent_id_jwt_field="agent", admin_allowed_routes=["llm_api_routes"]),
+        jwks_cache=cache,
+    )
     handler.bind_agent_lookup(registry)
     token: Final = _encode_rsa_jwt(
         private_key,
@@ -8431,7 +8448,8 @@ async def test_managed_jwt_reuses_binding_lookup_but_rechecks_disabled_policy(
     jwks_url: Final = "https://identity.example/managed-jwks"
     private_key, jwk = _get_rsa_key_and_jwk("managed-cache")
     cache: Final = UserApiKeyCache()
-    cache.set_cache(f"litellm_jwt_auth_keys_{jwks_url}", [jwk])
+    jwks_cache: Final = DualCache()
+    jwks_cache.set_cache(f"litellm_jwt_auth_keys_{jwks_url}", [jwk])
     monkeypatch.setenv("JWT_PUBLIC_KEY_URL", jwks_url)
     monkeypatch.setenv("JWT_ISSUER", issuer)
     monkeypatch.setenv("JWT_AUDIENCE", "gateway")
@@ -8447,7 +8465,7 @@ async def test_managed_jwt_reuses_binding_lookup_but_rechecks_disabled_policy(
     database.writer_db.litellm_agentidentity.update_many = AsyncMock(return_value=1)
     database.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=agent)
     handler: Final = JWTHandler()
-    handler.update_environment(database, cache, LiteLLM_JWTAuth())
+    handler.update_environment(database, cache, LiteLLM_JWTAuth(), jwks_cache=jwks_cache)
     token: Final = _encode_rsa_jwt(
         private_key, issuer, "gateway", "managed-cache", {"tid": "tenant", "azp": "client", "oid": "principal"}
     )
@@ -8503,7 +8521,8 @@ async def test_delegated_jwt_uses_granting_team_policy_before_route_authorizatio
     jwks_url: Final = "https://identity.example/delegated-jwks"
     private_key, jwk = _get_rsa_key_and_jwk("delegated-team")
     cache: Final = UserApiKeyCache()
-    cache.set_cache(f"litellm_jwt_auth_keys_{jwks_url}", [jwk])
+    jwks_cache: Final = DualCache()
+    jwks_cache.set_cache(f"litellm_jwt_auth_keys_{jwks_url}", [jwk])
     monkeypatch.setenv("JWT_PUBLIC_KEY_URL", jwks_url)
     monkeypatch.setenv("JWT_ISSUER", issuer)
     monkeypatch.setenv("JWT_AUDIENCE", "gateway")
@@ -8513,7 +8532,8 @@ async def test_delegated_jwt_uses_granting_team_policy_before_route_authorizatio
     handler.update_environment(
         database,
         cache,
-        LiteLLM_JWTAuth(
+        jwks_cache=jwks_cache,
+        litellm_jwtauth=LiteLLM_JWTAuth(
             team_allowed_routes=["/chat/completions" if team_route_allowed else "/embeddings"],
             team_id_jwt_field="team" if team_claim is not None else None,
             team_alias_jwt_field="team_alias" if team_claim is not None else None,
@@ -8706,7 +8726,9 @@ def _assertion_handler(jwk, litellm_jwtauth, jwks_url=ASSERTION_JWKS_URL):
     handler: Final = JWTHandler()
     cache: Final = DualCache()
     cache.set_cache(f"litellm_jwt_auth_keys_{jwks_url}", [jwk])
-    handler.update_environment(prisma_client=None, user_api_key_cache=cache, litellm_jwtauth=litellm_jwtauth)
+    handler.update_environment(
+        prisma_client=None, user_api_key_cache=cache, litellm_jwtauth=litellm_jwtauth, jwks_cache=cache
+    )
     return handler
 
 

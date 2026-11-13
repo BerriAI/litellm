@@ -2634,8 +2634,9 @@ async def test_team_block_unblock_reach_warmed_auth_on_every_worker(
     from litellm.proxy._types import BlockTeamRequest
     from litellm.proxy.auth.auth_checks import get_team_object
     from litellm.proxy.auth.team_grants import team_model_aliases
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, budget_windows_absent_cache_key
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.management_endpoints import team_endpoints
+    from litellm.proxy.proxy_server import budget_windows_absent_cache_key
 
     team_id: Final = "team-kill-switch"
     columns: Final = {"team_id": team_id, "team_alias": "kill-switch", "blocked": not blocked}

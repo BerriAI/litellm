@@ -2024,7 +2024,7 @@ async def test_jwt_customer_budget_rate_limits_reach_enforcement(
     )
     private_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     jwks_url: Final = "https://identity.invalid/rate-limits/jwks"
-    cache.set_cache(
+    handler.jwks_cache.set_cache(
         f"litellm_jwt_auth_keys_{jwks_url}",
         [json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(private_key.public_key()))],
     )
