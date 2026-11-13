@@ -98,13 +98,6 @@ def _decides(hook: Hook, entry: Entry, result: object) -> bool:
             return False
 
 
-async def _settle(running: Awaitable[object]) -> object:
-    try:
-        return await running
-    except Exception as error:
-        return error
-
-
 def _loop_running() -> bool:
     try:
         _ = asyncio.get_running_loop()
@@ -347,8 +340,10 @@ class RequestScope:
             return self._fold(hook, (entry,), (_legacy_start(entry, binding, done.fields),), done)
         if not blocking:
             return done
-        settled: Final = asyncio.run(_settle(self._invoke(hook, entry, done.fields, call, self._state(entry))))
-        folded: Final = self._fold(hook, (entry,), (settled,), done)
+        settled: Final = asyncio.run(
+            _gather_started((self._invoke(hook, entry, done.fields, call, self._state(entry)),), False)
+        )
+        folded: Final = self._fold(hook, (entry,), settled, done)
         if folded.terminal is not None:
             raise ContractViolation(f"{hook.value} runs synchronously here, so it cannot end the hook")
         return folded

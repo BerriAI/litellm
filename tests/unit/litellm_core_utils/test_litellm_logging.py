@@ -15646,7 +15646,7 @@ async def test_a_failing_v2_log_prepare_writer_is_contained_and_async_success_st
     )
     logging_obj.stream = False
     logging_obj.update_environment_variables(litellm_params={"acompletion": True}, optional_params={})
-    now: Final = datetime.datetime.now()
+    now: Final = datetime.datetime.now(datetime.timezone.utc)
 
     await logging_obj.async_success_handler(result=ModelResponse(id="served"), start_time=now, end_time=now)
 
@@ -15659,7 +15659,7 @@ async def test_a_failing_v2_log_prepare_writer_is_contained_and_async_success_st
 def _sync_success(logging_obj: LitellmLogging) -> None:
     logging_obj.stream = False
     logging_obj.update_environment_variables(litellm_params={}, optional_params={})
-    now: Final = datetime.datetime.now()
+    now: Final = datetime.datetime.now(datetime.timezone.utc)
     logging_obj.success_handler(result=ModelResponse(id="served"), start_time=now, end_time=now)
 
 
@@ -15741,7 +15741,7 @@ async def test_a_no_log_request_skips_a_v2_observer_that_honors_no_log(
     _plane_lists(monkeypatch, _async_success_callback=[_Entry("legacy", journal), observer])
     logging_obj.stream = False
     logging_obj.update_environment_variables(litellm_params={"acompletion": True, "no-log": True}, optional_params={})
-    now: Final = datetime.datetime.now()
+    now: Final = datetime.datetime.now(datetime.timezone.utc)
     logging_obj.start_time = now
     if bound:
         logging_obj.v2_scope = get_dispatcher().open_scope(RequestSelection(no_log=True))
@@ -15760,7 +15760,7 @@ async def test_a_logged_request_still_reaches_a_v2_observer_that_honors_no_log(
     _plane_lists(monkeypatch, _async_success_callback=[observer])
     logging_obj.stream = False
     logging_obj.update_environment_variables(litellm_params={"acompletion": True}, optional_params={})
-    now: Final = datetime.datetime.now()
+    now: Final = datetime.datetime.now(datetime.timezone.utc)
 
     await logging_obj.async_success_handler(result=ModelResponse(id="served"), start_time=now, end_time=now)
 
