@@ -61,6 +61,31 @@ def test_rate_limited_key_is_refused_before_its_body_arrives(gateway: Gateway) -
         assert _status_before_body_completes(gateway, model, key) == 429
 
 
+@pytest.mark.parametrize(
+    "method, path, with_body",
+    [
+        ("GET", "/v1/models", False),
+        ("GET", "/models", False),
+        ("POST", "/utils/token_counter", True),
+    ],
+)
+def test_rate_limited_key_still_reaches_routes_the_limiter_never_meters(
+    gateway: Gateway, method: str, path: str, with_body: bool
+) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        key: Final = scenario.key(models=[model], rpm_limit=1)
+        admitted: Final = _small_chat(gateway, model, key)
+        assert admitted.status_code == 200, admitted.text
+        refused: Final = _small_chat(gateway, model, key)
+        assert refused.status_code == 429, refused.text
+
+        body: Final = {"model": model, "messages": [{"role": "user", "content": "count me"}]} if with_body else None
+        unmetered: Final = gateway.request(method, path, body, key=key)
+
+        assert unmetered.status_code == 200, unmetered.text
+
+
 def test_blocked_key_is_refused_before_its_body_arrives(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         model: Final = scenario.model()

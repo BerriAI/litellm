@@ -14322,15 +14322,17 @@ async def test_should_skip_budget_checks_spares_only_zero_spend_mcp_discovery(
     )
 
 
-def _request_whose_body_must_not_be_read(api_key: str) -> Request:
+def _request_whose_body_must_not_be_read(
+    api_key: str, method: str = "POST", path: str = "/v1/chat/completions"
+) -> Request:
     async def receive() -> dict[str, object]:
         raise AssertionError("the body was read before the request was refused")
 
     return Request(
         {
             "type": "http",
-            "method": "POST",
-            "path": "/v1/chat/completions",
+            "method": method,
+            "path": path,
             "headers": [(b"authorization", f"Bearer {api_key}".encode()), (b"content-length", b"8388608")],
         },
         receive=receive,
@@ -14384,6 +14386,58 @@ async def test_rate_limited_cached_key_is_refused_before_the_body_is_read() -> N
 
     assert refusal.code == "429", refusal.message
     assert refusal.headers["rate_limited_by"] == "api_key"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "method, path",
+    [
+        ("GET", "/v1/models"),
+        ("GET", "/models"),
+        ("GET", "/v1/mcp/tools"),
+        ("GET", "/vector_store/list"),
+        ("POST", "/utils/token_counter"),
+        ("POST", "/v1beta/models/gemini-3-pro:countTokens"),
+    ],
+)
+async def test_exhausted_cached_key_passes_the_preflight_on_routes_the_limiter_never_meters(
+    method: str, path: str
+) -> None:
+    from litellm.proxy.auth.user_api_key_auth import _reject_from_headers_before_reading_body
+    from litellm.proxy.utils import hash_token
+
+    api_key: Final = "sk-exhausted-key"
+    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
+    await limiter.async_pre_call_hook(
+        UserAPIKeyAuth(api_key=hash_token(api_key), rpm_limit=1),
+        DualCache(),
+        {"model": "gpt-5.6", "messages": []},
+        "acompletion",
+    )
+    user_api_key_cache: Final = DualCache()
+    await cache_key_object(
+        hashed_token=hash_token(api_key),
+        user_api_key_obj=UserAPIKeyAuth(token=hash_token(api_key), rpm_limit=1, models=["gpt-5.6"]),
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=None,
+    )
+    proxy_logging_obj: Final = MagicMock()
+    proxy_logging_obj.get_proxy_hook.return_value = limiter
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    with (
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj),
+    ):
+        admitted: Final = await _reject_from_headers_before_reading_body(
+            request=_request_whose_body_must_not_be_read(api_key, method, path),
+            api_key=f"Bearer {api_key}",
+            custom_litellm_key_header=None,
+            route=path,
+        )
+
+    assert admitted is None
 
 
 @pytest.mark.asyncio
