@@ -1189,6 +1189,12 @@ def inject_stream_cost(frames: bytes, model: str, request: Mapping[str, object])
     )
 
 
+def azure_ad_token(arguments: Mapping[str, object]) -> str:
+    from litellm.llms.azure.common_utils import get_azure_ad_token
+
+    return get_azure_ad_token(_handler_params(arguments)) or ""
+
+
 def workload_identity_token(params: Mapping[str, object], api_base: str | None) -> str | None:
     litellm_params: Final = GenericLiteLLMParams(**params)
     return get_anthropic_wif_token(dict(litellm_params), api_base, "")

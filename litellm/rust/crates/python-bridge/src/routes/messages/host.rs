@@ -17,7 +17,10 @@ use litellm_inference_messages::{
     route::{Messages, MessagesStreamHead},
 };
 use litellm_llms::{
-    azure_ai::common_utils::ENTRA_ID_PARAMS, base_llm::messages::context::MessagesModelCapabilities,
+    azure_ai::common_utils::{
+        CALLABLE_TOKEN_PROVIDER, CALLER_TOKEN_PROVIDER_PARAM, ENTRA_ID_PARAMS,
+    },
+    base_llm::messages::context::MessagesModelCapabilities,
 };
 use litellm_llms_types::headers::ProviderSpecificHeaders;
 use litellm_router_types::LitellmParams;
@@ -174,6 +177,32 @@ fn project_litellm_params<'a, 'py>(
     Ok(litellm_params(
         fields.into_iter().chain(folded).chain(settled).collect(),
     ))
+}
+
+/// The refresh switch Python reads from `litellm`, and whether the call names a token provider
+/// Python would call or only count as present.
+fn azure_settled_params(
+    azure: AzureModuleSettings,
+    provider: Option<Bound<'_, PyAny>>,
+) -> PyResult<Map<String, Value>> {
+    let provider = provider
+        .map(|provider| -> PyResult<Value> {
+            Ok(Value::String(
+                match provider.is_truthy()? && provider.is_callable() {
+                    true => CALLABLE_TOKEN_PROVIDER,
+                    false => "uncallable",
+                }
+                .to_string(),
+            ))
+        })
+        .transpose()?;
+    Ok([(
+        ENABLE_TOKEN_REFRESH.to_string(),
+        Value::Bool(azure.token_refresh),
+    )]
+    .into_iter()
+    .chain(provider.map(|provider| (CALLER_TOKEN_PROVIDER_PARAM.to_string(), provider)))
+    .collect())
 }
 
 /// What Python's Azure config reads from `litellm` itself: `litellm.api_key or litellm.azure_key`
@@ -530,15 +559,10 @@ impl MessagesPythonHost {
             Some(AZURE_AI_PROVIDER) => ENTRA_ID_PARAMS.to_vec(),
             _ => Vec::new(),
         };
-        let settled = azure
-            .map(|azure| {
-                (
-                    ENABLE_TOKEN_REFRESH.to_string(),
-                    Value::Bool(azure.token_refresh),
-                )
-            })
-            .into_iter()
-            .collect();
+        let settled = match azure {
+            Some(azure) => azure_settled_params(azure, argument(CALLER_TOKEN_PROVIDER_PARAM)?)?,
+            None => Map::new(),
+        };
         let litellm_params = project_litellm_params(provider_fields, settled, argument, |name| {
             module_global(py, name)
         })?;
@@ -1116,6 +1140,43 @@ mod tests {
             .unwrap();
             assert_eq!(settings.api_key.as_ref().map(SecretValue::expose), api_key);
             assert_eq!(settings.token_refresh, token_refresh);
+        });
+    }
+
+    #[rstest]
+    #[case::absent(c"provider = None", None)]
+    #[case::callable(c"provider = lambda: 'tok'", Some("callable"))]
+    #[case::not_callable(c"provider = 'tok'", Some("uncallable"))]
+    #[case::falsy_callable(
+        c"class Falsy:\n    def __call__(self):\n        return 'tok'\n    def __bool__(self):\n        return False\nprovider = Falsy()\n",
+        Some("uncallable")
+    )]
+    fn azure_marks_a_token_provider_as_python_would_treat_it(
+        #[case] source: &std::ffi::CStr,
+        #[case] expected: Option<&str>,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = PyDict::new(py);
+            py.run(source, Some(&locals), Some(&locals)).unwrap();
+            let provider = locals
+                .get_item("provider")
+                .unwrap()
+                .filter(|provider| !provider.is_none());
+            let settled = azure_settled_params(
+                AzureModuleSettings {
+                    api_key: None,
+                    token_refresh: false,
+                },
+                provider,
+            )
+            .unwrap();
+            assert_eq!(
+                settled
+                    .get(CALLER_TOKEN_PROVIDER_PARAM)
+                    .and_then(Value::as_str),
+                expected
+            );
         });
     }
 

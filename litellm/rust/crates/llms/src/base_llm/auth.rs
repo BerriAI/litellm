@@ -32,6 +32,10 @@ pub enum AuthScheme {
     /// Python's `get_azure_ad_token` does. Inputs that yield no token leave the call
     /// unauthenticated.
     AzureAdToken { inputs: Box<AzureAuthInputs> },
+    /// An Entra ID token only Python's `get_azure_ad_token` can mint (username and password,
+    /// OIDC references, token refresh), asked of the host when the request is sent. A host
+    /// answer without a token leaves the call unauthenticated.
+    HostAzureAdToken,
     /// A Google access token for the Vertex AI project the config names, acquired when the
     /// request is sent through the shared GCP token cache.
     GcpAccessToken { config: Box<VertexConfig> },
@@ -52,17 +56,38 @@ pub struct ValidatedEnvironment {
     pub auth: AuthScheme,
 }
 
+/// The Entra ID token sources a call's host supplies: the caller's `azure_ad_token_provider`
+/// and the host's own `get_azure_ad_token`.
+#[derive(Clone, Debug, Default)]
+pub struct AzureAdTokenHosts {
+    pub caller: Option<TokenProviderHandle>,
+    pub host: Option<TokenProviderHandle>,
+}
+
 impl ValidatedEnvironment {
-    /// Hands the caller's `azure_ad_token_provider` to an Entra ID scheme, which consults it
-    /// before minting a token of its own. Other schemes never read it.
+    /// Hands an Entra ID scheme the token source it names. Other schemes never read them.
     #[must_use]
-    pub fn with_azure_ad_token_provider(self, provider: Option<TokenProviderHandle>) -> Self {
+    pub fn with_azure_ad_token_hosts(self, hosts: AzureAdTokenHosts) -> Self {
+        let provider = match &self.auth {
+            AuthScheme::AzureAdToken { .. } => hosts.caller,
+            AuthScheme::HostAzureAdToken => hosts.host,
+            _ => None,
+        };
         match (self.auth, provider) {
             (AuthScheme::AzureAdToken { inputs }, Some(provider)) => Self {
                 auth: AuthScheme::AzureAdToken {
                     inputs: Box::new(AzureAuthInputs {
                         azure_ad_token_provider: Some(provider),
                         ..*inputs
+                    }),
+                },
+                headers: self.headers,
+            },
+            (AuthScheme::HostAzureAdToken, Some(provider)) => Self {
+                auth: AuthScheme::AzureAdToken {
+                    inputs: Box::new(AzureAuthInputs {
+                        azure_ad_token_provider: Some(provider),
+                        ..AzureAuthInputs::default()
                     }),
                 },
                 headers: self.headers,
@@ -128,6 +153,11 @@ pub async fn resolve_auth(
                 signer: None,
             })
         }
+        AuthScheme::HostAzureAdToken => Err(litellm_auth::Error::CredentialAcquisition(
+            litellm_auth::ErrorDetail::Unresolved {
+                subject: "Azure AD token without a Python host",
+            },
+        )),
         AuthScheme::GcpAccessToken { config } => {
             let token = services.gcp.access_token(&config, env_lookup).await?;
             Ok(Authenticated {
@@ -293,11 +323,50 @@ mod tests {
                 inputs: Box::new(entra_inputs(token)),
             },
         }
-        .with_azure_ad_token_provider(
-            provider.map(|token| TokenProviderHandle::new(Arc::new(StaticToken(token)))),
-        );
+        .with_azure_ad_token_hosts(AzureAdTokenHosts {
+            caller: provider.map(|token| TokenProviderHandle::new(Arc::new(StaticToken(token)))),
+            host: None,
+        });
         let authenticated = resolve(validated.headers, validated.auth).await;
         assert_eq!(authenticated.headers, headers(expected));
+    }
+
+    #[rstest]
+    #[case::the_host_token_is_sent_as_a_bearer(Some("from-python"), &[("authorization", "Bearer from-python")])]
+    #[case::no_host_token_sends_no_credential(Some(""), &[])]
+    #[tokio::test]
+    async fn a_host_entra_scheme_sends_the_token_python_minted(
+        #[case] host: Option<&'static str>,
+        #[case] expected: &[(&str, &str)],
+    ) {
+        let validated = ValidatedEnvironment {
+            headers: Vec::new(),
+            auth: AuthScheme::HostAzureAdToken,
+        }
+        .with_azure_ad_token_hosts(AzureAdTokenHosts {
+            caller: Some(TokenProviderHandle::new(Arc::new(StaticToken("caller")))),
+            host: host.map(|token| TokenProviderHandle::new(Arc::new(StaticToken(token)))),
+        });
+        let authenticated = resolve(validated.headers, validated.auth).await;
+        assert_eq!(authenticated.headers, headers(expected));
+    }
+
+    #[tokio::test]
+    async fn a_host_entra_scheme_without_a_host_fails() {
+        let error = resolve_auth(
+            &AuthServices::default(),
+            ValidatedEnvironment {
+                headers: Vec::new(),
+                auth: AuthScheme::HostAzureAdToken,
+            },
+            &no_env,
+        )
+        .await
+        .expect_err("no host to ask");
+        assert!(matches!(
+            error,
+            litellm_auth::Error::CredentialAcquisition(_)
+        ));
     }
 
     #[tokio::test]

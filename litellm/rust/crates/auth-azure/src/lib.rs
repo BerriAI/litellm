@@ -4,4 +4,4 @@ mod resolve;
 mod types;
 
 pub use resolve::{AzureAuthService, AzureIdentity, SECRET_NAMES};
-pub use types::{AzureAuthInputs, ConfigValue};
+pub use types::{AzureAuthInputs, ConfigValue, DEFAULT_AZURE_SCOPE};

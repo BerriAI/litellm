@@ -123,6 +123,14 @@ async fn credentials_become_exactly_one_auth_header(
     &[],
     &[("authorization", "Bearer entra-token")],
 )]
+#[case::entra_token_from_the_secret_source(
+    None,
+    &[],
+    json!({}),
+    None,
+    &[("AZURE_AD_TOKEN", "secret-token")],
+    &[("authorization", "Bearer secret-token")],
+)]
 #[case::a_key_outranks_an_entra_token(
     Some("sk-call"),
     &[],

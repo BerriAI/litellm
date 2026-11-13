@@ -42,12 +42,18 @@ fn run_messages(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyR
             .with_workload_identity(std::sync::Arc::new(
                 workload_identity::PythonWorkloadIdentity::new(context.clone()),
             ));
-            let route = match crate::credentials::azure_ad_token_provider(arguments)? {
-                Some(provider) => route.with_azure_ad_token_provider(
-                    workload_identity::azure_ad_token_provider(context, provider),
-                ),
-                None => route,
-            };
+            let route =
+                route.with_azure_ad_token_hosts(litellm_llms::base_llm::auth::AzureAdTokenHosts {
+                    caller: crate::credentials::azure_ad_token_provider(arguments)?.map(
+                        |provider| {
+                            workload_identity::azure_ad_token_provider(context.clone(), provider)
+                        },
+                    ),
+                    host: Some(workload_identity::host_azure_ad_token(
+                        context,
+                        arguments.clone().unbind(),
+                    )),
+                });
             Ok(litellm_host::call::hosted_call(
                 request,
                 None,

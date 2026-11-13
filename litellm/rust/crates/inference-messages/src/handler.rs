@@ -14,7 +14,7 @@ use litellm_host::interceptors::{
     ResponseHead, ResultSource, WireRequest,
 };
 use litellm_llms::base_llm::{
-    auth::{Authenticated, ValidatedEnvironment, resolve_auth},
+    auth::{Authenticated, AzureAdTokenHosts, ValidatedEnvironment, resolve_auth},
     messages::{
         context::MessagesTransformContext,
         streaming::{self, ByteStream, StreamDecoder},
@@ -182,7 +182,7 @@ pub(super) async fn execute(
         CallerCredentials {
             auth: &route.auth,
             workload_identity: route.workload_identity.as_deref(),
-            azure_ad_token_provider: route.azure_ad_token_provider.clone(),
+            azure_ad_token_hosts: route.azure_ad_token_hosts.clone(),
         },
         provider,
         model,
@@ -249,11 +249,11 @@ fn execution_facts(
 }
 
 /// What a provider call may authenticate with beyond its config: the shared token caches, a
-/// workload identity federation host and the caller's Azure AD token provider.
+/// workload identity federation host and the Entra ID token sources of the caller and host.
 struct CallerCredentials<'a> {
     auth: &'a AuthServices,
     workload_identity: Option<&'a dyn WorkloadIdentity>,
-    azure_ad_token_provider: Option<litellm_auth::TokenProviderHandle>,
+    azure_ad_token_hosts: AzureAdTokenHosts,
 }
 
 async fn provider_call(
@@ -332,7 +332,7 @@ async fn provider_call(
             None => return Err(missing.into()),
         },
     }
-    .with_azure_ad_token_provider(credentials.azure_ad_token_provider);
+    .with_azure_ad_token_hosts(credentials.azure_ad_token_hosts);
 
     let tool_custom_field = config.tool_custom_field(&trimmed.model);
     let requested_output_format = trimmed.params.output_format.clone();
@@ -1113,7 +1113,7 @@ mod tests {
             CallerCredentials {
                 auth: &AuthServices::default(),
                 workload_identity,
-                azure_ad_token_provider: None,
+                azure_ad_token_hosts: AzureAdTokenHosts::default(),
             },
             config,
             model,

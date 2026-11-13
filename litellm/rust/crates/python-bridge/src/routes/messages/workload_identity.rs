@@ -8,7 +8,7 @@ use litellm_host_python::{PythonContext, attach_blocking, to_py};
 use litellm_inference_messages::WorkloadIdentity;
 use litellm_router_types::{ExtraParams, LitellmParams};
 use litellm_secret_value::SecretValue;
-use pyo3::{exceptions::PyBaseException, prelude::*};
+use pyo3::{exceptions::PyBaseException, prelude::*, types::PyDict};
 
 use crate::credentials::CallerTokenProvider;
 
@@ -63,6 +63,42 @@ pub(super) fn azure_ad_token_provider(
             .map_err(|error| Python::attach(|py| raised(py, error)))
             .and_then(|acquired| acquired)
         }
+    })
+}
+
+/// Python's own `get_azure_ad_token` over the call's arguments, for the Entra ID flows only
+/// Python implements. No token comes back as an empty one, which sends the call unauthenticated.
+pub(super) fn host_azure_ad_token(
+    context: PythonContext,
+    arguments: Py<PyDict>,
+) -> TokenProviderHandle {
+    let arguments = Arc::new(arguments);
+    TokenProviderHandle::from_callback(move || {
+        let context = context.clone();
+        let arguments = Arc::clone(&arguments);
+        async move {
+            attach_blocking(context, move |py| {
+                azure_ad_token(py, arguments.bind(py)).map_err(|error| raised(py, error))
+            })
+            .await
+            .map_err(|error| Python::attach(|py| raised(py, error)))
+            .and_then(|minted| minted)
+        }
+    })
+}
+
+fn azure_ad_token(
+    py: Python<'_>,
+    arguments: &Bound<'_, PyDict>,
+) -> PyResult<litellm_auth::ResolvedCredential> {
+    let token: String = py
+        .import(MODULE)?
+        .getattr("azure_ad_token")?
+        .call1((arguments,))?
+        .extract()?;
+    Ok(litellm_auth::ResolvedCredential::AccessToken {
+        token: SecretValue::new(token),
+        expires_on: None,
     })
 }
 

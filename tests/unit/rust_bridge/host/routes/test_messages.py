@@ -212,6 +212,32 @@ _ADAPTIVE_OPUS: Final = "anthropic/claude-opus-4-7"
 
 
 @pytest.mark.parametrize(
+    ("arguments", "expected"),
+    [
+        pytest.param({"model": "azure_ai/claude-sonnet-4-5"}, "", id="no_token_is_empty"),
+        pytest.param(
+            {"model": "azure_ai/claude-sonnet-4-5", "azure_ad_token": "entra-token"}, "entra-token", id="static_token"
+        ),
+        pytest.param(
+            {
+                "model": "azure_ai/claude-sonnet-4-5",
+                "azure_ad_token": "entra-token",
+                "azure_ad_token_provider": lambda: "minted",
+            },
+            "minted",
+            id="provider_wins",
+        ),
+    ],
+)
+def test_azure_ad_token_is_the_one_python_mints(
+    arguments: dict[str, object], expected: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("AZURE_AD_TOKEN", raising=False)
+    monkeypatch.setattr(litellm, "enable_azure_ad_token_refresh", False)
+    assert messages_host.azure_ad_token(arguments) == expected
+
+
+@pytest.mark.parametrize(
     ("call", "expected"),
     [
         pytest.param({"model": "azure_ai/claude-sonnet-4-5"}, "azure_ai", id="model_prefix"),

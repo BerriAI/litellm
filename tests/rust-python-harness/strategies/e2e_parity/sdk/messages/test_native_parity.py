@@ -546,6 +546,9 @@ KNOWN_GAPS: Final[Mapping[str, Mapping[str, str | None]]] = MappingProxyType(
                 "int_top_p_on_adaptive_model",
                 "int_speed_on_model_without_speed",
                 "azure_ai_entra_token_provider_raises",
+                "azure_ai_oidc_reference_is_minted_by_python",
+                "azure_ai_token_refresh_outranks_a_static_token",
+                "azure_ai_username_and_password_are_minted_by_python",
             )
         },
     }
@@ -3411,6 +3414,32 @@ AZURE_AUTH_CASES: Final = tuple(
             upstream=(),
         ),
         Case(
+            "azure_ai_uncallable_token_provider_keeps_the_token",
+            _kw(api_key=None, azure_ad_token="entra-token", azure_ad_token_provider="not-callable"),
+            model=AZURE_CLAUDE,
+        ),
+        Case(
+            "azure_ai_oidc_reference_is_minted_by_python",
+            _kw(api_key=None, azure_ad_token="oidc/env/AZURE_PARITY_MISSING_ASSERTION", tenant_id="t", client_id="c"),
+            model=AZURE_CLAUDE,
+            upstream=(),
+        ),
+        Case(
+            "azure_ai_token_refresh_outranks_a_static_token",
+            _kw(api_key=None, azure_ad_token="entra-token"),
+            model=AZURE_CLAUDE,
+            settings=MappingProxyType({"enable_azure_ad_token_refresh": True}),
+            env=MappingProxyType({"AZURE_CREDENTIAL": "ClientSecretCredential"}),
+            upstream=(),
+        ),
+        Case(
+            "azure_ai_username_and_password_are_minted_by_python",
+            _kw(api_key=None, azure_username="u", azure_password="p", client_id="c"),
+            model=AZURE_CLAUDE,
+            env=MappingProxyType({"AZURE_AUTHORITY_HOST": "http://127.0.0.1:9"}),
+            upstream=(),
+        ),
+        Case(
             "azure_ai_no_credential",
             _kw(api_key=None),
             model=AZURE_CLAUDE,
@@ -3539,6 +3568,7 @@ def _environment(env: Mapping[str, str]) -> Generator[None]:
         "AZURE_SCOPE",
         "AZURE_CREDENTIAL",
         "AZURE_FEDERATED_TOKEN_FILE",
+        "AZURE_AUTHORITY_HOST",
     )
     with pytest.MonkeyPatch.context() as patch:
         for name in names:

@@ -1,7 +1,6 @@
 use crate::anthropic::messages::transformation::retry_anthropic_messages_after_http_error;
-use std::collections::BTreeMap;
-
-use litellm_auth_azure::AzureAuthInputs;
+use litellm_auth::{CredentialPlacement, InputSource, Sourced};
+use litellm_auth_azure::{AzureAuthInputs, ConfigValue, DEFAULT_AZURE_SCOPE};
 use litellm_host::interceptors::RetriedRequest;
 use litellm_http::request::{has_bearer_auth, has_header};
 use litellm_llms_types::{
@@ -22,8 +21,11 @@ use crate::{
         },
     },
     azure_ai::common_utils::{
-        AZURE_API_BASE_ENV, AZURE_API_KEY_ENV, AZURE_OPENAI_API_KEY_ENV, ENTRA_ID_PARAMS,
-        resolve_azure_api_base, resolve_azure_api_key,
+        AZURE_AD_TOKEN_ENV, AZURE_API_BASE_ENV, AZURE_API_KEY_ENV, AZURE_CLIENT_ID_ENV,
+        AZURE_CLIENT_SECRET_ENV, AZURE_OPENAI_API_KEY_ENV, AZURE_PASSWORD_ENV, AZURE_SCOPE_ENV,
+        AZURE_TENANT_ID_ENV, AZURE_USERNAME_ENV, CALLABLE_TOKEN_PROVIDER,
+        CALLER_TOKEN_PROVIDER_PARAM, TOKEN_REFRESH_PARAM, resolve_azure_api_base,
+        resolve_azure_api_key,
     },
     base_llm::{
         auth::{AuthScheme, Headers, ValidatedEnvironment},
@@ -37,7 +39,8 @@ use crate::{
 
 const ANTHROPIC_PATH_SEGMENT: &str = "/anthropic";
 const AZURE_API_KEY_HEADER: &str = "api-key";
-const ENABLE_TOKEN_REFRESH_PARAM: &str = "enable_azure_ad_token_refresh";
+const OIDC_PREFIX: &str = "oidc/";
+const ENVIRONMENT_REFERENCE_PREFIX: &str = "os.environ/";
 
 pub struct AzureAnthropicMessagesConfig;
 
@@ -102,6 +105,13 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
             AZURE_OPENAI_API_KEY_ENV,
             AZURE_API_KEY_ENV,
             AZURE_API_BASE_ENV,
+            AZURE_AD_TOKEN_ENV,
+            AZURE_TENANT_ID_ENV,
+            AZURE_CLIENT_ID_ENV,
+            AZURE_CLIENT_SECRET_ENV,
+            AZURE_USERNAME_ENV,
+            AZURE_PASSWORD_ENV,
+            AZURE_SCOPE_ENV,
         ]
     }
 
@@ -134,9 +144,7 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
                 placement: API_KEY_PLACEMENT,
                 secret: SecretValue::new(key),
             },
-            None => AuthScheme::AzureAdToken {
-                inputs: Box::new(entra_id_inputs(litellm_params)?),
-            },
+            None => entra_id_auth(litellm_params, env_lookup),
         };
         Ok(ValidatedEnvironment { headers, auth })
     }
@@ -162,21 +170,97 @@ fn with_azure_key_as_x_api_key(headers: Headers) -> Headers {
         .collect()
 }
 
-fn entra_id_inputs(litellm_params: &LitellmParams) -> Result<AzureAuthInputs, Error> {
-    let params = ENTRA_ID_PARAMS
-        .iter()
-        .chain(&[ENABLE_TOKEN_REFRESH_PARAM])
-        .filter_map(|name| {
-            litellm_params
-                .extra
-                .get(*name)
-                .map(|value| (name.to_string(), value.clone()))
-        })
-        .collect();
-    Ok(AzureAuthInputs::from_sourced_optional_params(
-        &params,
-        &BTreeMap::new(),
-    )?)
+/// Python's `get_azure_ad_token` order, with each setting read from the call and then the
+/// secret lookup. Flows only Python implements (username and password, OIDC references,
+/// `os.environ/` references, token refresh) are left to the host's `get_azure_ad_token`, so
+/// Python both orders and mints them.
+fn entra_id_auth(
+    litellm_params: &LitellmParams,
+    env_lookup: &dyn Fn(&str) -> Option<String>,
+) -> AuthScheme {
+    let param = |name: &str| {
+        litellm_params
+            .extra
+            .get(name)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+    let setting = |name: &str, environment: &str| {
+        param(name).or_else(|| env_lookup(environment).filter(|value| !value.is_empty()))
+    };
+    let flag = |name: &str| litellm_params.extra.get(name) == Some(&Value::Bool(true));
+    let token = setting("azure_ad_token", AZURE_AD_TOKEN_ENV);
+    let tenant_id = setting("tenant_id", AZURE_TENANT_ID_ENV);
+    let client_id = setting("client_id", AZURE_CLIENT_ID_ENV);
+    let client_secret = setting("client_secret", AZURE_CLIENT_SECRET_ENV);
+    let username = setting("azure_username", AZURE_USERNAME_ENV);
+    let password = setting("azure_password", AZURE_PASSWORD_ENV);
+    let named_provider = litellm_params.extra.get(CALLER_TOKEN_PROVIDER_PARAM);
+    let caller_provider = named_provider.is_some();
+
+    let client_secret_flow = match (&tenant_id, &client_id, &client_secret) {
+        (Some(tenant_id), Some(client_id), Some(client_secret)) if !caller_provider => {
+            Some((tenant_id, client_id, client_secret))
+        }
+        _ => None,
+    };
+    let username_flow = !caller_provider
+        && client_secret_flow.is_none()
+        && username.is_some()
+        && password.is_some()
+        && client_id.is_some();
+    let oidc = client_id.is_some()
+        && tenant_id.is_some()
+        && token
+            .as_deref()
+            .is_some_and(|token| token.starts_with(OIDC_PREFIX));
+    let refresh = !oidc
+        && !caller_provider
+        && client_secret_flow.is_none()
+        && !username_flow
+        && flag(TOKEN_REFRESH_PARAM);
+    let referenced = client_secret_flow.is_some_and(|(tenant_id, client_id, client_secret)| {
+        [tenant_id, client_id, client_secret]
+            .iter()
+            .any(|value| value.starts_with(ENVIRONMENT_REFERENCE_PREFIX))
+    });
+    let uncallable = named_provider.is_some_and(|provider| provider != CALLABLE_TOKEN_PROVIDER);
+    if username_flow || oidc || refresh || referenced || uncallable {
+        return AuthScheme::HostAzureAdToken;
+    }
+    if caller_provider {
+        return AuthScheme::AzureAdToken {
+            inputs: Box::default(),
+        };
+    }
+    if let Some((tenant_id, client_id, client_secret)) = client_secret_flow {
+        let configured = |value: &str| {
+            ConfigValue::Value(Sourced::new(value.to_string(), InputSource::Deployment))
+        };
+        let scope = param("azure_scope")
+            .or_else(|| env_lookup(AZURE_SCOPE_ENV))
+            .unwrap_or_else(|| DEFAULT_AZURE_SCOPE.to_string());
+        return AuthScheme::AzureAdToken {
+            inputs: Box::new(AzureAuthInputs {
+                tenant_id: configured(tenant_id),
+                client_id: configured(client_id),
+                client_secret: ConfigValue::Value(Sourced::new(
+                    SecretValue::new(client_secret.as_str()),
+                    InputSource::Deployment,
+                )),
+                azure_scope: configured(&scope),
+                ..AzureAuthInputs::default()
+            }),
+        };
+    }
+    match token {
+        Some(token) => AuthScheme::Credential {
+            placement: CredentialPlacement::Bearer,
+            secret: SecretValue::new(token),
+        },
+        None => AuthScheme::Forwarded,
+    }
 }
 
 pub fn complete_azure_anthropic_url(
@@ -362,38 +446,145 @@ mod tests {
         );
     }
 
-    #[rstest]
-    #[case::without_entra_params(json!({}), None)]
-    #[case::with_an_entra_token(json!({"azure_ad_token": "entra-token"}), Some("entra-token"))]
-    fn without_a_key_an_entra_token_is_minted_from_the_call(
-        #[case] params: serde_json::Value,
-        #[case] token: Option<&str>,
-    ) {
-        let AuthScheme::AzureAdToken { inputs } = validated_with(&[], None, params).auth else {
-            panic!("an Entra ID scheme")
+    fn entra_flow(params: serde_json::Value, env: &[(&str, &str)]) -> String {
+        let lookup = |name: &str| {
+            env.iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| value.to_string())
         };
-        assert_eq!(
-            inputs
-                .azure_ad_token
-                .as_value()
-                .map(|token| token.value().expose().to_string())
-                .as_deref(),
-            token
-        );
+        let validated = AZURE_ANTHROPIC_MESSAGES_CONFIG
+            .validate_environment(
+                Vec::new(),
+                None,
+                "claude",
+                &MessagesOptionalParams::default(),
+                &litellm_params(params),
+                &lookup,
+            )
+            .unwrap();
+        match validated.auth {
+            AuthScheme::HostAzureAdToken => "host".to_string(),
+            AuthScheme::AzureAdToken { inputs } => match inputs.tenant_id.as_value() {
+                Some(tenant_id) => format!(
+                    "client_secret:{}:{}",
+                    tenant_id.value(),
+                    inputs
+                        .azure_scope
+                        .as_value()
+                        .map(|scope| scope.value().as_str())
+                        .unwrap_or_default()
+                ),
+                None => "caller".to_string(),
+            },
+            AuthScheme::Credential {
+                placement: CredentialPlacement::Bearer,
+                secret,
+            } => format!("bearer:{}", secret.expose()),
+            AuthScheme::Forwarded => "unauthenticated".to_string(),
+            other => panic!("unexpected scheme {other:?}"),
+        }
     }
 
+    const SECRET: &str = "client_secret:t:https://cognitiveservices.azure.com/.default";
+
     #[rstest]
-    #[case::global_on(json!({"enable_azure_ad_token_refresh": true}), true)]
-    #[case::global_off(json!({"enable_azure_ad_token_refresh": false}), false)]
-    #[case::unset(json!({}), false)]
-    fn token_refresh_follows_the_projected_setting(
+    #[case::nothing_is_unauthenticated(json!({}), &[], "unauthenticated")]
+    #[case::a_provider_python_would_not_call_is_left_to_python(
+        json!({"azure_ad_token": "tok", "azure_ad_token_provider": "uncallable"}),
+        &[],
+        "host"
+    )]
+    #[case::a_static_token(json!({"azure_ad_token": "tok"}), &[], "bearer:tok")]
+    #[case::a_static_token_from_the_secret_lookup(json!({}), &[("AZURE_AD_TOKEN", "env-tok")], "bearer:env-tok")]
+    #[case::an_empty_token_param_falls_to_the_lookup(json!({"azure_ad_token": ""}), &[("AZURE_AD_TOKEN", "env-tok")], "bearer:env-tok")]
+    #[case::the_caller_provider_outranks_a_token(
+        json!({"azure_ad_token": "tok", "azure_ad_token_provider": "callable"}),
+        &[],
+        "caller"
+    )]
+    #[case::client_secret(json!({"tenant_id": "t", "client_id": "c", "client_secret": "s"}), &[], SECRET)]
+    #[case::client_secret_from_the_secret_lookup(
+        json!({}),
+        &[("AZURE_TENANT_ID", "t"), ("AZURE_CLIENT_ID", "c"), ("AZURE_CLIENT_SECRET", "s")],
+        SECRET
+    )]
+    #[case::client_secret_with_the_scope_python_reads(
+        json!({"tenant_id": "t", "client_id": "c", "client_secret": "s"}),
+        &[("AZURE_SCOPE", "api://scope/.default")],
+        "client_secret:t:api://scope/.default"
+    )]
+    #[case::client_secret_outranks_a_token(
+        json!({"tenant_id": "t", "client_id": "c", "client_secret": "s", "azure_ad_token": "tok"}),
+        &[],
+        SECRET
+    )]
+    #[case::the_caller_provider_skips_client_secret(
+        json!({"tenant_id": "t", "client_id": "c", "client_secret": "s", "azure_ad_token_provider": "callable"}),
+        &[],
+        "caller"
+    )]
+    #[case::an_environment_reference_is_left_to_python(
+        json!({"tenant_id": "t", "client_id": "c", "client_secret": "os.environ/SECRET"}),
+        &[],
+        "host"
+    )]
+    #[case::username_and_password_are_left_to_python(
+        json!({"azure_username": "u", "azure_password": "p", "client_id": "c"}),
+        &[],
+        "host"
+    )]
+    #[case::username_without_a_client_id_is_not_a_flow(
+        json!({"azure_username": "u", "azure_password": "p", "azure_ad_token": "tok"}),
+        &[],
+        "bearer:tok"
+    )]
+    #[case::client_secret_outranks_username_and_password(
+        json!({"tenant_id": "t", "client_id": "c", "client_secret": "s", "azure_username": "u", "azure_password": "p"}),
+        &[],
+        SECRET
+    )]
+    #[case::the_caller_provider_skips_username_and_password(
+        json!({"azure_username": "u", "azure_password": "p", "client_id": "c", "azure_ad_token_provider": "callable"}),
+        &[],
+        "caller"
+    )]
+    #[case::an_oidc_reference_is_left_to_python(
+        json!({"azure_ad_token": "oidc/env/ASSERTION", "tenant_id": "t", "client_id": "c"}),
+        &[],
+        "host"
+    )]
+    #[case::an_oidc_reference_with_a_caller_provider_is_left_to_python(
+        json!({"azure_ad_token": "oidc/env/ASSERTION", "tenant_id": "t", "client_id": "c", "azure_ad_token_provider": "callable"}),
+        &[],
+        "host"
+    )]
+    #[case::an_oidc_reference_without_a_tenant_is_sent_as_a_token(
+        json!({"azure_ad_token": "oidc/env/ASSERTION", "client_id": "c"}),
+        &[],
+        "bearer:oidc/env/ASSERTION"
+    )]
+    #[case::token_refresh_with_a_static_token_is_left_to_python(
+        json!({"azure_ad_token": "tok", "enable_azure_ad_token_refresh": true}),
+        &[],
+        "host"
+    )]
+    #[case::token_refresh_alone_is_left_to_python(json!({"enable_azure_ad_token_refresh": true}), &[], "host")]
+    #[case::token_refresh_after_the_caller_provider(
+        json!({"enable_azure_ad_token_refresh": true, "azure_ad_token_provider": "callable"}),
+        &[],
+        "caller"
+    )]
+    #[case::token_refresh_after_client_secret(
+        json!({"tenant_id": "t", "client_id": "c", "client_secret": "s", "enable_azure_ad_token_refresh": true}),
+        &[],
+        SECRET
+    )]
+    fn entra_id_flows_follow_pythons_get_azure_ad_token_order(
         #[case] params: serde_json::Value,
-        #[case] enabled: bool,
+        #[case] env: &[(&str, &str)],
+        #[case] expected: &str,
     ) {
-        let AuthScheme::AzureAdToken { inputs } = validated_with(&[], None, params).auth else {
-            panic!("an Entra ID scheme")
-        };
-        assert_eq!(*inputs.enable_azure_ad_token_refresh.value(), enabled);
+        assert_eq!(entra_flow(params, env), expected);
     }
 
     #[test]
