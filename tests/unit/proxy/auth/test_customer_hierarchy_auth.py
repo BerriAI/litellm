@@ -22,11 +22,13 @@ from litellm.proxy.auth.customer_hierarchy_auth import (
     resolve_customer_hierarchy,
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.management_helpers.customer_hierarchy import ErrorCode, Failure
 from litellm.types.proxy.auth.customer_hierarchy import (
     CustomerHierarchyAuth,
     CustomerRequestIdentity,
     CustomerScopeAuth,
 )
+from litellm.types.proxy.management_endpoints.customer_hierarchy import CustomerMember
 
 NOW: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
@@ -217,7 +219,41 @@ def _organization(
     return {"customer_org_id": org_id, "alias": alias, "spend": spend, "budget": budget}
 
 
-def _resolve(prisma: _Prisma, identity: CustomerRequestIdentity, route: str = "/chat/completions"):
+class _Registrar:
+    """Stands in for ensure_customer_member: records the ask and adds the member row, or fails."""
+
+    def __init__(self, members: _MemberTable, failure: Failure | None = None) -> None:
+        self.members = members
+        self.failure = failure
+        self.calls: tuple[tuple[str, str], ...] = ()
+
+    async def __call__(self, org_id: str, member_id: str, prisma_client: object) -> CustomerMember | Failure:
+        self.calls = (*self.calls, (org_id, member_id))
+        if self.failure is not None:
+            return self.failure
+        self.members.rows = {
+            **self.members.rows,
+            member_id: {**_row(template={"max_budget": 10.0}), "customer_member_id": member_id},
+        }
+        return CustomerMember.model_validate(
+            {
+                "customer_member_id": member_id,
+                "parent_team_id": "team-1",
+                "effective_budget": {"max_budget": 10.0},
+                "created_at": NOW,
+                "created_by": "x",
+                "updated_at": NOW,
+                "updated_by": "x",
+            }
+        )
+
+
+def _resolve(
+    prisma: _Prisma,
+    identity: CustomerRequestIdentity,
+    route: str = "/chat/completions",
+    register: _Registrar | None = None,
+):
     return resolve_customer_hierarchy(
         identity=identity,
         prisma_client=prisma,  # pyright: ignore[reportArgumentType]  # test double
@@ -225,6 +261,7 @@ def _resolve(prisma: _Prisma, identity: CustomerRequestIdentity, route: str = "/
         llm_router=None,
         request_model="gpt-4o",
         route=route,
+        register=register if register is not None else _Registrar(_MemberTable({}), Failure(ErrorCode.NOT_FOUND)),
     )
 
 
@@ -393,3 +430,36 @@ async def test_an_organization_alias_is_loaded_once_then_served_from_the_cache_u
         await get_customer_organization_hierarchy("acme", shared, UserApiKeyCache(), now=NOW),  # pyright: ignore[reportArgumentType]  # test double
         AmbiguousOrganizationAlias,
     )
+
+
+@pytest.mark.asyncio
+async def test_a_member_the_aliased_organization_has_never_seen_is_registered_there_and_served() -> None:
+    members: Final = _MemberTable({})
+    registrar: Final = _Registrar(members)
+    prisma: Final = _Prisma(members, _OrganizationTable((_organization("acme"),)))
+
+    hierarchy: Final = await _resolve(
+        prisma, CustomerRequestIdentity(customer_member_id="user-7", customer_org_alias="acme"), register=registrar
+    )
+
+    assert registrar.calls == (("org-1", "user-7"),)
+    assert (hierarchy.customer_org_id, hierarchy.customer_member_id) == ("org-1", "user-7")
+    assert _scopes(hierarchy)["customer_member"].max_budget == 10.0
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_member_stays_refused_without_an_alias_or_when_registration_fails() -> None:
+    members: Final = _MemberTable({})
+    registrar: Final = _Registrar(members)
+    with pytest.raises(ProxyException) as no_alias:
+        await _resolve(_Prisma(members), CustomerRequestIdentity(customer_member_id="user-7"), register=registrar)
+    assert (no_alias.value.code, registrar.calls) == ("401", ())
+
+    failing: Final = _Registrar(members, Failure(ErrorCode.BUDGET_REQUIRED))
+    prisma: Final = _Prisma(members, _OrganizationTable((_organization("acme"),)))
+    with pytest.raises(ProxyException) as failed:
+        await _resolve(
+            prisma, CustomerRequestIdentity(customer_member_id="user-7", customer_org_alias="acme"), register=failing
+        )
+    assert (failed.value.code, failing.calls) == ("401", (("org-1", "user-7"),))
+    assert "user-7" not in members.rows

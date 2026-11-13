@@ -7,7 +7,7 @@ with ``x-litellm-customer-org-alias``: alone it charges the organization level o
 header it must agree with the member's organization.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Final
@@ -17,13 +17,16 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 import litellm
 from litellm._internal_context import with_service_target
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy.auth.auth_checks import can_object_call_model
 from litellm.proxy.auth.auth_object_prefetch import AUTH_OBJECTS_TARGET
+from litellm.proxy.auth.customer_member_auto_create import ensure_customer_member
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, get_management_object_ttl
 from litellm.proxy.management_helpers.customer_hierarchy import (
+    Failure,
     PrismaRecord,
     effective_member_budget,
     related_budget,
@@ -36,7 +39,7 @@ from litellm.types.proxy.auth.customer_hierarchy import (
     CustomerScopeAuth,
     CustomerScopeKey,
 )
-from litellm.types.proxy.management_endpoints.customer_hierarchy import Budget
+from litellm.types.proxy.management_endpoints.customer_hierarchy import Budget, CustomerMember
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -316,13 +319,46 @@ async def _organization_named_by_alias(
     return organization
 
 
+MemberRegistrar = Callable[[str, str, "PrismaClient"], Awaitable[CustomerMember | Failure]]
+
+
+async def _register_member(
+    customer_member_id: str,
+    organization: CustomerHierarchyAuth | None,
+    prisma_client: "PrismaClient",
+    user_api_key_cache: UserApiKeyCache,
+    register: MemberRegistrar,
+) -> CustomerHierarchyAuth | None:
+    """A member the request named for the first time joins the aliased organization's default team. Without an
+    alias there is no organization to place it in, and the member stays unknown."""
+    if organization is None:
+        return None
+    registered: Final = await register(organization.customer_org_id, customer_member_id, prisma_client)
+    if isinstance(registered, Failure):
+        verbose_proxy_logger.warning(
+            "Could not register customer member %s in organization %s: %s",
+            customer_member_id,
+            organization.customer_org_id,
+            registered.code.value,
+        )
+        return None
+    return await get_customer_hierarchy(customer_member_id, prisma_client, user_api_key_cache)
+
+
 async def _hierarchy_named_by_member(
-    customer_member_id: str, prisma_client: "PrismaClient | None", user_api_key_cache: UserApiKeyCache
+    customer_member_id: str,
+    organization: CustomerHierarchyAuth | None,
+    prisma_client: "PrismaClient | None",
+    user_api_key_cache: UserApiKeyCache,
+    register: MemberRegistrar,
 ) -> CustomerHierarchyAuth:
+    if prisma_client is None:
+        raise _not_found(f"customer member not found: {customer_member_id}", CUSTOMER_MEMBER_ID_HEADER)
+    known: Final = await get_customer_hierarchy(customer_member_id, prisma_client, user_api_key_cache)
     hierarchy: Final = (
-        await get_customer_hierarchy(customer_member_id, prisma_client, user_api_key_cache)
-        if prisma_client is not None
-        else None
+        known
+        if known is not None
+        else await _register_member(customer_member_id, organization, prisma_client, user_api_key_cache, register)
     )
     if hierarchy is None:
         raise _not_found(f"customer member not found: {customer_member_id}", CUSTOMER_MEMBER_ID_HEADER)
@@ -330,11 +366,14 @@ async def _hierarchy_named_by_member(
 
 
 async def load_customer_hierarchy(
-    identity: CustomerRequestIdentity, prisma_client: "PrismaClient | None", user_api_key_cache: UserApiKeyCache
+    identity: CustomerRequestIdentity,
+    prisma_client: "PrismaClient | None",
+    user_api_key_cache: UserApiKeyCache,
+    register: MemberRegistrar = ensure_customer_member,
 ) -> CustomerHierarchyAuth:
-    """The hierarchy the headers name. An unknown member or alias is refused rather than treated as unrestricted:
-    the caller asked for a budgeted identity that does not exist. A member header next to an alias header must
-    name a member of that organization."""
+    """The hierarchy the headers name. An unknown alias is refused rather than treated as unrestricted: the caller
+    asked for a budgeted identity that does not exist. A member header next to an alias header must name a member
+    of that organization; a member the organization has never seen is registered in its default team first."""
     organization: Final = (
         await _organization_named_by_alias(identity.customer_org_alias, prisma_client, user_api_key_cache)
         if identity.customer_org_alias is not None
@@ -344,7 +383,9 @@ async def load_customer_hierarchy(
         if organization is None:
             raise _not_found("request named no customer member or organization", CUSTOMER_MEMBER_ID_HEADER)
         return organization
-    hierarchy: Final = await _hierarchy_named_by_member(identity.customer_member_id, prisma_client, user_api_key_cache)
+    hierarchy: Final = await _hierarchy_named_by_member(
+        identity.customer_member_id, organization, prisma_client, user_api_key_cache, register
+    )
     if organization is not None and organization.customer_org_id != hierarchy.customer_org_id:
         raise ProxyException(
             message=(
@@ -366,10 +407,11 @@ async def resolve_customer_hierarchy(
     request_model: str | Sequence[str] | None,
     route: str,
     key_metadata: Mapping[str, object] | None = None,
+    register: MemberRegistrar = ensure_customer_member,
 ) -> CustomerHierarchyAuth:
     """Load the hierarchy the headers name and admit the request against it. ``request_model`` is the model the
     route will actually serve, which may differ from the body."""
-    hierarchy: Final = await load_customer_hierarchy(identity, prisma_client, user_api_key_cache)
+    hierarchy: Final = await load_customer_hierarchy(identity, prisma_client, user_api_key_cache, register)
     check_customer_hierarchy_key_scope(hierarchy, key_metadata or {})
     if not RouteChecks.is_info_route(route):
         check_customer_hierarchy_budget(hierarchy)
