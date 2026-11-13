@@ -666,9 +666,11 @@ pub fn drop_unsupported_params(
     let speed = match &params.speed {
         Some(speed) if !capabilities.supports_speed => {
             reject("speed", speed_repr(speed), "")?;
-            litellm_tracing::warn!(
-                "Dropping unsupported `speed` for model={model} (drop_params=True). Fast mode is only supported on select Opus models."
-            );
+            if context.logs_dropped_params {
+                litellm_tracing::warn!(
+                    "Dropping unsupported `speed` for model={model} (drop_params=True). Fast mode is only supported on select Opus models."
+                );
+            }
             None
         }
         _ => params.speed.clone(),
@@ -1271,6 +1273,7 @@ mod tests {
                     drop_params: true,
                     drops_unsupported_params: false,
                     unparsed: UnparsedMessages::Skipped,
+                    logs_dropped_params: false,
                 }
             );
             return;

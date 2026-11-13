@@ -160,6 +160,8 @@ pub struct MessagesTransformContext {
     pub drop_params: bool,
     pub drops_unsupported_params: bool,
     pub unparsed: UnparsedMessages,
+    /// Logs Python's warning for a param `drop_params` drops because the model lacks it.
+    pub logs_dropped_params: bool,
 }
 impl MessagesTransformContext {
     pub fn new(capabilities: MessagesModelCapabilities, drop_params: bool) -> Self {
@@ -181,6 +183,7 @@ impl MessagesTransformContext {
             drop_params,
             drops_unsupported_params: false,
             unparsed: UnparsedMessages::Skipped,
+            logs_dropped_params: false,
         }
     }
 

@@ -53,6 +53,11 @@ pub trait BaseMessagesConfig: Sync {
         ToolCustomField::Keep
     }
 
+    /// Whether a param `drop_params` drops because the model lacks it logs Python's warning.
+    fn logs_dropped_params(&self) -> bool {
+        false
+    }
+
     fn transform_anthropic_messages_response(
         &self,
         _model: &str,

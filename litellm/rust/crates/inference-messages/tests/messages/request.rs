@@ -875,6 +875,63 @@ async fn unsupported_params_are_dropped_under_drop_params_and_rejected_without_i
     assert_eq!(sent["max_tokens"], 16);
 }
 
+#[derive(Clone, Default)]
+struct Warnings(Arc<Mutex<Vec<String>>>);
+
+impl litellm_tracing::Sink for Warnings {
+    fn enabled(&self, metadata: &litellm_tracing::Metadata<'_>) -> bool {
+        *metadata.level() == litellm_tracing::Level::WARN
+    }
+
+    fn emit(&self, record: &litellm_tracing::Record) {
+        self.0.lock().unwrap().push(record.message.clone());
+    }
+}
+
+#[rstest]
+#[case::anthropic_logs_as_main("anthropic", false)]
+#[case::azure_ai_logs_python_s_warning("azure_ai", true)]
+#[tokio::test]
+async fn a_speed_dropped_under_drop_params_is_logged_only_on_azure_ai(
+    call: MessagesCall,
+    #[case] provider: &str,
+    #[case] logged: bool,
+) {
+    let upstream = upstream([message_response()]).await;
+    let warnings = Warnings::default();
+
+    litellm_tracing::Logger::new(warnings.clone())
+        .instrument(run_message(MessagesCall {
+            custom_llm_provider: Some(provider.into()),
+            api_key: Some("sk".into()),
+            api_base: Some(upstream.uri()),
+            shaping: MessagesShaping {
+                settings: MessagesSettings {
+                    drop_params: true,
+                    ..MessagesSettings::default()
+                },
+                ..MessagesShaping::default()
+            },
+            ..with_fields(call, json!({"speed": "fast"}))
+        }))
+        .await;
+
+    assert_eq!(only_request(&upstream).await.json().get("speed"), None);
+    let speed_warnings: Vec<String> = warnings
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|message| message.starts_with("Dropping unsupported `speed`"))
+        .cloned()
+        .collect();
+    assert_eq!(
+        speed_warnings.len(),
+        usize::from(logged),
+        "{speed_warnings:?}"
+    );
+}
+
 #[rstest]
 #[tokio::test]
 async fn additional_drop_params_clear_a_param_the_model_does_not_support(call: MessagesCall) {

@@ -59,6 +59,10 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
         }
     }
 
+    fn logs_dropped_params(&self) -> bool {
+        true
+    }
+
     fn retry_after_http_error(
         &self,
         status: u16,
