@@ -1,3 +1,4 @@
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -126,8 +127,8 @@ async def test_fal_ai_image_generation_basic(model, expected_endpoint):
         ("fal-ai/flux/dev", "https://fal.run/fal-ai/flux/dev"),
     ],
 )
-def test_fal_ai_seedream_and_flux_pro_models_post_to_the_endpoint_they_name(model, expected_url):
-    config = get_fal_ai_image_generation_config(model)
+def test_fal_ai_seedream_and_flux_pro_models_post_to_the_endpoint_they_name(model: str, expected_url: str) -> None:
+    config: Final = get_fal_ai_image_generation_config(model)
 
     assert (
         config.get_complete_url(
@@ -142,3 +143,20 @@ def _vcr_outcome_gate(request, vcr):
     install_live_call_probe(request, vcr)
     yield
     record_vcr_outcome(request, vcr)
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "fal-ai/flux-pro/../../bytedance/seedream/v5.5/text-to-image",
+        "fal-ai/flux-pro/./v1/vto",
+        "fal-ai/bytedance/seedream/..",
+    ],
+)
+def test_fal_ai_model_path_with_dot_segments_is_rejected_before_any_request(model: str) -> None:
+    config: Final = get_fal_ai_image_generation_config(model)
+
+    with pytest.raises(ValueError):
+        config.get_complete_url(
+            api_base="https://fal.run", api_key=None, model=model, optional_params={}, litellm_params={}
+        )

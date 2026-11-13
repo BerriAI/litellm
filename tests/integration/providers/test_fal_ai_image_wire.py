@@ -245,6 +245,7 @@ def test_fal_versioned_image_model_posts_to_its_own_endpoint_and_charges_its_own
     prompt: Final = f"{_PROMPT} {fal_model}"
 
     def respond(request: Request) -> Reply:
+        assert _JSON_OBJECT.validate_json(request.body) == {"prompt": prompt}
         return Reply(body=_image_response(((f"{wire_url}/files/versioned.png", 1024, 1024),), prompt))
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
@@ -253,7 +254,7 @@ def test_fal_versioned_image_model_posts_to_its_own_endpoint_and_charges_its_own
         response: Final = gateway.request("POST", "/v1/images/generations", {"model": model, "prompt": prompt})
         assert response.status_code == 200, response.text
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", f"/{fal_model}")]
-        assert _response_cost(response) > 0
+        assert _response_cost(response) == _approx(_catalog_cost(f"fal_ai/{fal_model}"))
 
 
 @pytest.mark.covers("other.provider_wire.fal_ai.image_edit_json_data_urls_and_keyed_pricing")

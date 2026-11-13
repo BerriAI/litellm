@@ -5,7 +5,7 @@ import httpx
 from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
-from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.litellm_core_utils.url_utils import encode_url_path_segments, join_api_base
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
@@ -93,7 +93,7 @@ class FalAIBaseConfig(BaseImageGenerationConfig):
         return join_api_base(base_url, self._endpoint_for_model(model))
 
     def _endpoint_for_model(self, model: str) -> str:
-        path: Final = model.strip("/")
+        path: Final = encode_url_path_segments(model.strip("/"), field_name="model")
         names_default_endpoint: Final = path.lower().removeprefix(
             "fal-ai/"
         ) == self.IMAGE_GENERATION_ENDPOINT.removeprefix("fal-ai/")
