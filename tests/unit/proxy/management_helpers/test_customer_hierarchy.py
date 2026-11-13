@@ -243,6 +243,7 @@ class Database:
         self.litellm_customerteamtable = Table("customer_team_id", self)
         self.litellm_customermembertable = Table("customer_member_id", self)
         self.litellm_budgettable = Table("budget_id", self)
+        self.litellm_budgetwindowspend = Table("entity_id", self)
         self.litellm_verificationtoken = Table("token", self)
         self.litellm_projecttable = Table("project_id", self)
         self.litellm_customerbudgetincreaserequest = Table("request_id", self)
