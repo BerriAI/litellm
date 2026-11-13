@@ -1,0 +1,122 @@
+suite: test gateway/backend/ui command and args overrides
+templates:
+  - gateway/configmap.yaml
+  - gateway/deployment.yaml
+  - backend/deployment.yaml
+  - ui/deployment.yaml
+  - monolith/deployment.yaml
+values:
+  - ./values/required.yaml
+tests:
+  - it: gateway keeps its default args and has no command when unset
+    asserts:
+      - isNull:
+          path: spec.template.spec.containers[0].command
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value:
+            - gateway
+            - --host
+            - "0.0.0.0"
+            - --port
+            - "4000"
+        template: gateway/deployment.yaml
+
+  - it: monolith keeps its default proxy args and has no command when unset
+    set:
+      monolith.enabled: true
+    asserts:
+      - isNull:
+          path: spec.template.spec.containers[0].command
+        template: monolith/deployment.yaml
+      - isNotNull:
+          path: spec.template.spec.containers[0].args
+        template: monolith/deployment.yaml
+
+  - it: backend keeps its default args and has no command when unset
+    asserts:
+      - isNull:
+          path: spec.template.spec.containers[0].command
+        template: backend/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value:
+            - backend
+            - --host
+            - "0.0.0.0"
+            - --port
+            - "4001"
+        template: backend/deployment.yaml
+
+  - it: ui keeps its default args and has no command when unset
+    asserts:
+      - isNull:
+          path: spec.template.spec.containers[0].command
+        template: ui/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value:
+            - ui
+        template: ui/deployment.yaml
+
+  - it: overrides the gateway container's command and args, tpl-rendering entries
+    set:
+      gateway.command:
+        - sh
+        - -c
+      gateway.args:
+        - |
+          set -a; [ -f /etc/secrets/.env ] && . /etc/secrets/.env; set +a
+          exec gateway --host 0.0.0.0 --port 4000 # {{ .Release.Name }}
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].command
+          value:
+            - sh
+            - -c
+        template: gateway/deployment.yaml
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "(?s)# RELEASE-NAME\\s*$"
+        template: gateway/deployment.yaml
+
+  - it: overrides the backend container's command and args
+    set:
+      backend.command:
+        - sh
+        - -c
+      backend.args:
+        - "exec backend --host 0.0.0.0 --port 4001"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].command
+          value:
+            - sh
+            - -c
+        template: backend/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value:
+            - "exec backend --host 0.0.0.0 --port 4001"
+        template: backend/deployment.yaml
+
+  - it: overrides the ui container's command and args
+    set:
+      ui.command:
+        - sh
+        - -c
+      ui.args:
+        - "exec ui"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].command
+          value:
+            - sh
+            - -c
+        template: ui/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value:
+            - "exec ui"
+        template: ui/deployment.yaml

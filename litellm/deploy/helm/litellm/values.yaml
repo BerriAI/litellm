@@ -604,6 +604,20 @@ gateway:
   extraContainers: []
   # Init containers, rendered through `tpl` the same way.
   extraInitContainers: []
+  # Override the gateway container's command / args. Both are rendered
+  # through `tpl`, same as extraInitContainers/extraContainers. When unset,
+  # the chart's default args (`[gateway, --host, 0.0.0.0, --port, "4000"]`,
+  # or the monolith proxy args when monolith.enabled) are used unchanged.
+  # Useful for wrapping the real entrypoint, e.g. to source environment
+  # variables written by a custom extraInitContainers entry before exec'ing
+  # it, without needing a Deployment-level strategic-merge patch:
+  #   command: ["sh", "-c"]
+  #   args:
+  #     - |
+  #       set -a; [ -f /etc/secrets/.env ] && . /etc/secrets/.env; set +a
+  #       exec <the chart's normal entrypoint and args>
+  command: []
+  args: []
   # Container lifecycle hooks (postStart / preStop) for the gateway container.
   #
   # Prefer the proxy's /health/drain preStop hook over a fixed `sleep`: it
@@ -693,6 +707,9 @@ backend:
   securityContext: {}
   extraContainers: []
   extraInitContainers: []
+  # Same shape as the gateway blocks of the same name.
+  command: []
+  args: []
   lifecycle: {}
   terminationGracePeriodSeconds: ""
   nodeSelector: {}
@@ -769,6 +786,9 @@ ui:
   securityContext: {}
   extraContainers: []
   extraInitContainers: []
+  # Same shape as the gateway blocks of the same name.
+  command: []
+  args: []
   lifecycle: {}
   terminationGracePeriodSeconds: ""
   nodeSelector: {}

@@ -64,8 +64,16 @@ spec:
           securityContext:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          {{- with .Values.ui.command }}
+          command:
+            {{- tpl (toYaml .) $ | nindent 12 }}
+          {{- end }}
           args:
+            {{- if .Values.ui.args }}
+            {{- tpl (toYaml .Values.ui.args) $ | nindent 12 }}
+            {{- else }}
             - ui
+            {{- end }}
           ports:
             - name: http
               containerPort: 3000
