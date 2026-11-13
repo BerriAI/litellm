@@ -969,6 +969,15 @@ async def aresponses(
     """
     local_vars: Final = locals()
     try:
+        normalized_input, normalized_extra_body = ResponsesAPIRequestUtils.normalize_responses_input_and_extra_body(
+            input=input,
+            extra_body=extra_body,
+        )
+        input = normalized_input  # rebind-ok: normalize extra_body.input into top-level input
+        extra_body = normalized_extra_body  # rebind-ok: prune collided input from extra_body
+        local_vars["input"] = normalized_input
+        local_vars["extra_body"] = normalized_extra_body
+
         loop: Final = asyncio.get_event_loop()
         kwargs["aresponses"] = True
 
@@ -1549,6 +1558,15 @@ def responses(
     local_vars: Final = locals()
 
     try:
+        normalized_input, normalized_extra_body = ResponsesAPIRequestUtils.normalize_responses_input_and_extra_body(
+            input=input,
+            extra_body=extra_body,
+        )
+        input = normalized_input  # rebind-ok: normalize extra_body.input into top-level input
+        extra_body = normalized_extra_body  # rebind-ok: prune collided input from extra_body
+        local_vars["input"] = normalized_input
+        local_vars["extra_body"] = normalized_extra_body
+
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("aresponses", False) is True

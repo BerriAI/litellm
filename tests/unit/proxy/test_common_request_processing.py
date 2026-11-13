@@ -489,6 +489,122 @@ class TestProxyBaseLLMRequestProcessing:
         assert data_passed["litellm_call_id"] == returned_data["litellm_call_id"]
 
     @pytest.mark.asyncio
+    async def test_common_processing_pre_call_logic_normalizes_responses_extra_body_input(self, monkeypatch):
+        caller_extra: Final = {"input": "overridden input", "custom_param": "custom_val"}
+        processing_obj: Final = ProxyBaseLLMRequestProcessing(
+            data={"model": "gpt-4o", "input": "initial input", "extra_body": caller_extra}
+        )
+        mock_request: Final = MagicMock(spec=Request)
+        mock_request.headers = {}
+
+        async def mock_add_litellm_data_to_request(data, *args, **kwargs):
+            return data
+
+        async def mock_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
+            return copy.deepcopy(data)
+
+        mock_proxy_logging_obj: Final = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "add_litellm_data_to_request",
+            mock_add_litellm_data_to_request,
+        )
+
+        returned_data, _ = await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=ProxyUserAPIKeyAuth(),
+            proxy_logging_obj=mock_proxy_logging_obj,
+            proxy_config=MagicMock(spec=ProxyConfig),
+            route_type="aresponses",
+        )
+
+        mock_proxy_logging_obj.pre_call_hook.assert_called_once()
+        _, call_kwargs = mock_proxy_logging_obj.pre_call_hook.call_args
+        scanned_data: Final = call_kwargs["data"]
+        assert scanned_data["input"] == "overridden input"
+        assert scanned_data["extra_body"] == {"custom_param": "custom_val"}
+        assert returned_data["input"] == "overridden input"
+        assert returned_data["extra_body"] == {"custom_param": "custom_val"}
+        assert caller_extra == {"input": "overridden input", "custom_param": "custom_val"}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "invalid_extra_body",
+        [
+            [["input", "blocked"]],
+            [("input", "blocked")],
+            "not-a-mapping",
+            123,
+        ],
+    )
+    async def test_common_processing_pre_call_logic_rejects_non_mapping_extra_body(
+        self, monkeypatch, invalid_extra_body: object
+    ):
+        processing_obj: Final = ProxyBaseLLMRequestProcessing(
+            data={"model": "gpt-4o", "input": "initial input", "extra_body": invalid_extra_body}
+        )
+        mock_request: Final = MagicMock(spec=Request)
+        mock_request.headers = {}
+
+        mock_proxy_logging_obj: Final = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging_obj.pre_call_hook = AsyncMock()
+
+        with pytest.raises(litellm.BadRequestError, match="extra_body must be a mapping"):
+            await processing_obj.common_processing_pre_call_logic(
+                request=mock_request,
+                general_settings={},
+                user_api_key_dict=ProxyUserAPIKeyAuth(),
+                proxy_logging_obj=mock_proxy_logging_obj,
+                proxy_config=MagicMock(spec=ProxyConfig),
+                route_type="aresponses",
+            )
+
+        mock_proxy_logging_obj.pre_call_hook.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_common_processing_pre_call_logic_leaves_chat_completions_untouched(self, monkeypatch):
+        caller_extra: Final = {"input": "not a responses call"}
+        processing_obj: Final = ProxyBaseLLMRequestProcessing(
+            data={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}], "extra_body": caller_extra}
+        )
+        mock_request: Final = MagicMock(spec=Request)
+        mock_request.headers = {}
+
+        async def mock_add_litellm_data_to_request(data, *args, **kwargs):
+            return data
+
+        async def mock_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
+            return copy.deepcopy(data)
+
+        mock_proxy_logging_obj: Final = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "add_litellm_data_to_request",
+            mock_add_litellm_data_to_request,
+        )
+
+        returned_data, _ = await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=ProxyUserAPIKeyAuth(),
+            proxy_logging_obj=mock_proxy_logging_obj,
+            proxy_config=MagicMock(spec=ProxyConfig),
+            route_type="acompletion",
+        )
+
+        mock_proxy_logging_obj.pre_call_hook.assert_called_once()
+        _, call_kwargs = mock_proxy_logging_obj.pre_call_hook.call_args
+        scanned_data: Final = call_kwargs["data"]
+        assert "input" not in scanned_data
+        assert scanned_data["extra_body"] == {"input": "not a responses call"}
+        assert "input" not in returned_data
+        assert returned_data["extra_body"] == {"input": "not a responses call"}
+
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("requested_model", [{"bad": "value"}, ["gpt-5.2"], 1])
     async def test_common_processing_pre_call_logic_rejects_a_non_string_model_with_400(
         self, monkeypatch, requested_model: dict[str, str] | list[str] | int

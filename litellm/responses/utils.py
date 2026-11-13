@@ -199,6 +199,43 @@ class ResponsesAPIRequestUtils:
         return [item for item in input if isinstance(item, dict) and "role" in item]
 
     @staticmethod
+    def normalize_responses_input_and_extra_body(
+        input: str | ResponseInputParam | None,
+        extra_body: object | None,
+    ) -> tuple[str | ResponseInputParam | None, dict[str, object] | None]:
+        if extra_body is None:
+            return input, None
+        if not isinstance(extra_body, Mapping):
+            raise litellm.BadRequestError(
+                message="extra_body must be a mapping",
+                model="",
+                llm_provider="",
+            )
+        if "input" not in extra_body:
+            return input, dict(extra_body)
+        effective_input: Final = cast(  # cast-ok: wire input parsed downstream
+            str | ResponseInputParam | None, extra_body["input"]
+        )
+        remaining_extra_body: Final[dict[str, object]] = {
+            key: value for key, value in extra_body.items() if key != "input"
+        }
+        return effective_input, remaining_extra_body
+
+    @staticmethod
+    def normalize_responses_request_data(data: dict[str, object]) -> dict[str, object]:
+        if "extra_body" not in data or data.get("extra_body") is None:
+            return data
+        extra_body: Final = data["extra_body"]
+        effective_input, remaining_extra_body = ResponsesAPIRequestUtils.normalize_responses_input_and_extra_body(
+            input=cast(str | ResponseInputParam | None, data.get("input")),  # cast-ok: wire input parsed downstream
+            extra_body=extra_body,
+        )
+        if "input" in data or "input" in extra_body:
+            data["input"] = effective_input  # rebind-ok: update request data with effective responses input
+        data["extra_body"] = remaining_extra_body  # rebind-ok: update request data with normalized extra_body
+        return data
+
+    @staticmethod
     def merge_prompt_management_input(
         original_input: str | ResponseInputParam,
         client_input: list[AllMessageValues],

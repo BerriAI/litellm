@@ -108,6 +108,7 @@ from litellm.responses.streaming_iterator import (
     spawn_logging_task,
     turn_refusal_frame,
 )
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router import Router
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
@@ -2322,12 +2323,13 @@ def _responses_ws_frame_guard(
         try:
             _reject_guarded_field_beside_nested_response(frame_obj, nested)
             await _check_frame_may_modify_guardrails(selection_sources, user_api_key_dict, team_object)
-            frame_data: Final = {
+            raw_frame_data: Final = {
                 **turn_data,
                 metadata_key: await _metadata_with_frame_guardrails(
                     bucket, selection_sources, model, metadata_key, user_api_key_dict
                 ),
             }
+            frame_data: Final = ResponsesAPIRequestUtils.normalize_responses_request_data(raw_frame_data)
         except Exception as e:
             raise await rejection(e, turn_data) from e
         try:

@@ -2987,6 +2987,9 @@ class ProxyBaseLLMRequestProcessing:
         if not general_settings.get("expose_fallback_errors_to_caller"):
             self.data.pop("include_fallback_errors", None)
         if route_type in {"aresponses", "_aresponses_websocket"}:
+            from litellm.responses.utils import ResponsesAPIRequestUtils
+
+            self.data = ResponsesAPIRequestUtils.normalize_responses_request_data(self.data)
             await _authorize_response_file_search_vector_stores(
                 data=self.data,
                 user_api_key_dict=user_api_key_dict,
