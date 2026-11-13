@@ -1225,7 +1225,7 @@ def test_batch_dump_applies_exclude_none_to_provider_usage_detail_fields() -> No
     assert (python_usage["prompt_tokens"], python_usage["input_tokens"]) == (21, 21)
 
 
-def test_parallel_first_usage_construction_does_not_race_schema_build() -> None:
+def test_parallel_first_response_model_construction_does_not_race_schema_build() -> None:
     probe: Final = r"""
 import inspect
 import sys
@@ -1234,7 +1234,29 @@ from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, sys.argv[1])
 from pydantic import BaseModel
-from litellm.types.utils import Usage, PromptTokensDetailsWrapper, CompletionTokensDetailsWrapper
+from litellm.types.utils import (
+    ChatCompletionDeltaToolCall,
+    ChatCompletionMessageCustomToolCall,
+    ChatCompletionMessageToolCall,
+    ChatCompletionTokenLogprob,
+    Choices,
+    CompletionTokensDetailsWrapper,
+    Delta,
+    Embedding,
+    EmbeddingResponse,
+    Function,
+    FunctionCall,
+    Logprobs,
+    Message,
+    ModelResponse,
+    ModelResponseStream,
+    PromptTokensDetailsWrapper,
+    StreamingChoices,
+    TextChoices,
+    TextCompletionResponse,
+    TopLogprob,
+    Usage,
+)
 
 try:
     rebuild_code = BaseModel.model_rebuild.__func__.__code__
@@ -1248,6 +1270,24 @@ cases = (
     (Usage, {"prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8}),
     (PromptTokensDetailsWrapper, {"cached_tokens": 2, "text_tokens": 3}),
     (CompletionTokensDetailsWrapper, {"reasoning_tokens": 4, "text_tokens": 1}),
+    (ModelResponse, {"id": "chatcmpl-race", "created": 7, "model": "race-model", "object": "chat.completion"}),
+    (ModelResponseStream, {"id": "chatcmpl-race", "created": 7, "model": "race-model"}),
+    (Message, {"content": "race reply", "role": "assistant"}),
+    (Delta, {"content": "race reply", "role": "assistant"}),
+    (Choices, {"finish_reason": "stop", "index": 2}),
+    (StreamingChoices, {"finish_reason": "stop", "index": 2}),
+    (EmbeddingResponse, {"model": "race-model", "object": "list"}),
+    (Embedding, {"embedding": [0.5, 0.25], "index": 2, "object": "embedding"}),
+    (TextCompletionResponse, {"id": "cmpl-race", "created": 7, "model": "race-model"}),
+    (TextChoices, {"finish_reason": "stop", "index": 2, "text": "race reply"}),
+    (Logprobs, {"text_offset": [0], "token_logprobs": [-0.5], "tokens": ["race"], "top_logprobs": [{"race": -0.5}]}),
+    (TopLogprob, {"token": "race", "logprob": -0.5}),
+    (ChatCompletionTokenLogprob, {"token": "race", "logprob": -0.5, "top_logprobs": []}),
+    (FunctionCall, {"arguments": "{}", "name": "race_tool"}),
+    (Function, {"arguments": "{}", "name": "race_tool"}),
+    (ChatCompletionMessageToolCall, {"id": "call_race", "type": "function", "function": {"arguments": "{}", "name": "race_tool"}}),
+    (ChatCompletionDeltaToolCall, {"id": "call_race", "type": "function", "index": 2, "function": {"arguments": "{}", "name": "race_tool"}}),
+    (ChatCompletionMessageCustomToolCall, {"id": "call_race", "type": "custom", "custom": {"input": "race", "name": "race_tool"}}),
 )
 for model, fields in cases:
     barrier = threading.Barrier(8, timeout=5)
@@ -1276,6 +1316,6 @@ for model, fields in cases:
 """
     root: Final = str(Path(__file__).resolve().parents[3])
     result: Final = subprocess.run(
-        [sys.executable, "-I", "-c", probe, root], capture_output=True, text=True, timeout=30
+        [sys.executable, "-I", "-c", probe, root], capture_output=True, text=True, timeout=120
     )
     assert result.returncode == 0, result.stdout + result.stderr
