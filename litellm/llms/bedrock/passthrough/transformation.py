@@ -23,7 +23,7 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
     bedrock_invoke_guardrail_headers,
 )
 from litellm.types.llms.openai import ChatCompletionSystemMessage, ChatCompletionUserMessage
-from litellm.types.utils import ModelResponseStream
+from litellm.types.utils import EmbeddingResponse, ModelResponseStream
 
 from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import (
@@ -575,6 +575,13 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
         from litellm.utils import ProviderConfigManager
 
         if "invoke" in endpoint:
+            embedding_response: Final = self._logging_invoke_embedding_response(
+                model=model,
+                httpx_response=httpx_response,
+                logging_obj=logging_obj,
+            )
+            if embedding_response is not None:
+                return embedding_response
             chat_config_model = "invoke/" + model
         elif "converse" in endpoint:
             chat_config_model = "converse/" + model
@@ -605,6 +612,40 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
             logging_obj.record_native_bedrock_guardrail(_invoke_guardrail_trace(httpx_response))
 
         return _with_served_service_tier(litellm_model_response, _served_service_tier(httpx_response.headers))
+
+    def _logging_invoke_embedding_response(
+        self,
+        model: str,
+        httpx_response: Response,
+        logging_obj: Logging,
+    ) -> EmbeddingResponse | None:
+        """`/invoke` serves the embedding models too, and their reply is one vector plus a token count: no
+        `results[0].outputText`, so the chat transformer raises on it and the call logs neither usage nor spend."""
+        from litellm.llms.bedrock.embed.embedding import BedrockEmbedding
+        from litellm.types.utils import CallTypes
+
+        body: Final = relayed_json_object(httpx_response)
+        if body is None or not isinstance(body.get("embedding"), list):
+            return None
+
+        # the passthrough route logs the deployment's model string, which may still carry the provider prefix
+        bedrock_model: Final = model.removeprefix("bedrock/")
+        embedding_provider: Final = self.get_bedrock_embedding_provider(bedrock_model)
+        if embedding_provider is None:
+            return None
+
+        try:
+            embedding_response = BedrockEmbedding()._transform_response(  # pyright: ignore[reportPrivateUsage]  # the parser the /embeddings endpoint uses; a copy here would drift from it
+                response_list=[dict(body)],
+                model=bedrock_model,
+                provider=embedding_provider,
+            )
+        except Exception:  # noqa: BLE001 - a model the parser does not know keeps the chat path it takes today
+            return None
+        if embedding_response is None:
+            return None
+        logging_obj.call_type = CallTypes.aembedding.value
+        return embedding_response
 
     def create_stream_collector(
         self,

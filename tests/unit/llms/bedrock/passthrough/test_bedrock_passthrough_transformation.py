@@ -25,7 +25,7 @@ from litellm.llms.bedrock.passthrough.transformation import (
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.passthrough.main import AsyncPassthroughStreamingResponse, PassthroughStreamingResponse
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import EmbeddingResponse, ModelResponse
 
 CONVERSE_MODEL = "anthropic.claude-sonnet-4-5-20250929-v1:0"
 CONVERSE_STREAM_ENDPOINT = f"/model/{CONVERSE_MODEL}/converse-stream"
@@ -1036,6 +1036,78 @@ def test_sync_invoke_stream_relay_is_priced_at_the_service_tier_bedrock_served(
 
     assert relayed == stream
     assert logging_obj.model_call_details["response_cost"] == pytest.approx(_tier_priced_cost(price_suffix))
+
+
+TITAN_EMBED_MODEL: Final = "amazon.titan-embed-text-v2:0"
+TITAN_EMBED_ENDPOINT: Final = f"/model/{TITAN_EMBED_MODEL}/invoke"
+TITAN_EMBED_REPLY: Final = {"embedding": [0.1, 0.2, 0.3], "inputTextTokenCount": 20}
+
+
+def _invoke_reply(endpoint: str, body: dict) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json=body,
+        request=httpx.Request("POST", f"https://bedrock-runtime.us-east-1.amazonaws.com{endpoint}"),
+    )
+
+
+@pytest.mark.parametrize("model", [TITAN_EMBED_MODEL, f"bedrock/{TITAN_EMBED_MODEL}"])
+def test_invoke_titan_embedding_reply_is_logged_as_an_embedding_response(model: str) -> None:
+    reply: Final = _invoke_reply(TITAN_EMBED_ENDPOINT, TITAN_EMBED_REPLY)
+    logging_obj: Final = _stream_logging_obj(TITAN_EMBED_ENDPOINT, model=TITAN_EMBED_MODEL)
+
+    logged: Final = BedrockPassthroughConfig().logging_non_streaming_response(
+        model=model,
+        custom_llm_provider="bedrock",
+        httpx_response=reply,
+        request_data={"inputText": "Synthetic example"},
+        logging_obj=logging_obj,
+        endpoint=TITAN_EMBED_ENDPOINT,
+    )
+
+    assert isinstance(logged, EmbeddingResponse)
+    assert [embedding["embedding"] for embedding in logged.data] == [TITAN_EMBED_REPLY["embedding"]]
+    assert logged.usage.prompt_tokens == TITAN_EMBED_REPLY["inputTextTokenCount"]
+    assert logged.usage.completion_tokens == 0
+    assert logged.usage.total_tokens == TITAN_EMBED_REPLY["inputTextTokenCount"]
+    assert logging_obj.call_type == "aembedding"
+    assert reply.json() == TITAN_EMBED_REPLY  # the vector is still readable for the proxy to relay
+
+
+def test_invoke_titan_embedding_reply_is_priced_from_the_provider_token_count() -> None:
+    logged: Final = BedrockPassthroughConfig().logging_non_streaming_response(
+        model=TITAN_EMBED_MODEL,
+        custom_llm_provider="bedrock",
+        httpx_response=_invoke_reply(TITAN_EMBED_ENDPOINT, TITAN_EMBED_REPLY),
+        request_data={"inputText": "Synthetic example"},
+        logging_obj=_stream_logging_obj(TITAN_EMBED_ENDPOINT, model=TITAN_EMBED_MODEL),
+        endpoint=TITAN_EMBED_ENDPOINT,
+    )
+
+    assert litellm.completion_cost(model=f"bedrock/{TITAN_EMBED_MODEL}", completion_response=logged) == pytest.approx(
+        TITAN_EMBED_REPLY["inputTextTokenCount"] * litellm.model_cost[TITAN_EMBED_MODEL]["input_cost_per_token"]
+    )
+
+
+def test_invoke_generation_reply_is_still_logged_through_the_chat_transformer() -> None:
+    body: Final = {
+        "output": {"message": {"role": "assistant", "content": [{"text": "Invoke response"}]}},
+        "stopReason": "end_turn",
+        "usage": {"inputTokens": 11, "outputTokens": 4, "totalTokens": 15},
+    }
+
+    logged: Final = BedrockPassthroughConfig().logging_non_streaming_response(
+        model=TIERED_MODEL,
+        custom_llm_provider="bedrock",
+        httpx_response=_invoke_reply(TIERED_INVOKE_ENDPOINT, body),
+        request_data={},
+        logging_obj=_stream_logging_obj(TIERED_INVOKE_ENDPOINT, model=TIERED_MODEL),
+        endpoint=TIERED_INVOKE_ENDPOINT,
+    )
+
+    assert isinstance(logged, ModelResponse)
+    assert logged.choices[0].message.content == "Invoke response"
+    assert logged.usage.prompt_tokens == 11
 
 
 REQUEST_METADATA_HEADER = "x-amzn-bedrock-request-metadata"
