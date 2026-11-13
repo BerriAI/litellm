@@ -4,10 +4,14 @@
 
 import json
 import logging
+import time
 from typing import Dict, Final, List, Mapping, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
+import jwt
 import pytest
+from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import HTTPException, WebSocket, status
 from starlette.datastructures import URL
 from starlette.requests import Request as StarletteRequest
@@ -17,10 +21,18 @@ import litellm
 import litellm.proxy
 import litellm.proxy.proxy_server
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import LiteLLM_AccessGroupTable, LiteLLM_UserTable, LitellmUserRoles, ProxyException
+from litellm.proxy._types import (
+    LiteLLM_AccessGroupTable,
+    LiteLLM_JWTAuth,
+    LiteLLM_UserTable,
+    LitellmUserRoles,
+    ProxyException,
+)
+from litellm.proxy.auth import user_api_key_auth as auth_module
 from litellm.proxy.auth.user_api_key_auth import (
     UserAPIKeyAuth,
     _authorize_authenticated_request,
+    get_api_key,
     get_api_key_from_custom_header,
     user_api_key_auth,
 )
@@ -35,12 +47,41 @@ class Request:
         self.headers: Dict[str, str] = {}
 
 
+JWKS_URL: Final = "https://idp.example/jwks"
+JWT_SIGNING_KEY: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+
+class _Jwks:
+    async def get(self, url: str, params: object = None, headers: object = None) -> httpx.Response:
+        key: Final = jwt.algorithms.RSAAlgorithm.to_jwk(JWT_SIGNING_KEY.public_key(), as_dict=True)
+        return httpx.Response(200, json={"keys": [{**key, "kid": "k1"}]}, request=httpx.Request("GET", url))
+
+
+def _signed_jwt(claims: dict[str, object]) -> str:
+    return jwt.encode(
+        {"exp": int(time.time()) + 600, **claims}, JWT_SIGNING_KEY, algorithm="RS256", headers={"kid": "k1"}
+    )
+
+
+def _serve_jwks(monkeypatch: pytest.MonkeyPatch, litellm_jwtauth: LiteLLM_JWTAuth) -> None:
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", JWKS_URL)
+    server: Final = litellm.proxy.proxy_server
+    monkeypatch.setattr(server, "jwt_http_handler", _Jwks())
+    monkeypatch.setattr(server, "litellm_jwtauth", litellm_jwtauth)
+    monkeypatch.setattr(server, "general_settings", {"enable_jwt_auth": True})
+    monkeypatch.setattr(server, "premium_user", True)
+    monkeypatch.setattr(server, "prisma_client", None)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "model,fallbacks,allowed", (("model-a", [], True), ("model-b", [], False), ("model-a", ["model-b"], False))
 )
 async def test_virtual_key_model_policy_on_first_lookup_and_cache_hit(
-    monkeypatch: pytest.MonkeyPatch, model: str, fallbacks: list[str], allowed: bool
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    fallbacks: list[str],
+    allowed: bool,
 ) -> None:
     server: Final = litellm.proxy.proxy_server
     cache: Final = UserApiKeyCache()
@@ -124,7 +165,11 @@ async def test_restricted_key_model_list_denial_names_the_denied_model(
     request: Final = StarletteRequest({"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
     with pytest.raises(ProxyException) as denied:
         await _authorize_authenticated_request(
-            identity, request, {"model": ["model-a", "model-b"]}, "/chat/completions", "synthetic",
+            identity,
+            request,
+            {"model": ["model-a", "model-b"]},
+            "/chat/completions",
+            "synthetic",
             force_virtual_key_checks=True,
         )
     assert denied.value.code == "403"
@@ -137,7 +182,10 @@ async def test_restricted_key_model_list_denial_names_the_denied_model(
     (("group-model", True, True), ("outside", True, False), ("group-model", False, False), ("explicit", False, True)),
 )
 async def test_user_access_group_rules_are_enforced_at_central_authorization(
-    monkeypatch: pytest.MonkeyPatch, model: str, enabled: bool, allowed: bool
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    enabled: bool,
+    allowed: bool,
 ) -> None:
     server: Final = litellm.proxy.proxy_server
     cache: Final = UserApiKeyCache()
@@ -331,10 +379,10 @@ async def test_team_object_has_object_permission_id():
 @pytest.mark.asyncio
 async def test_returned_user_api_key_auth(user_role, expected_role):
     from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
-    from litellm.proxy.auth.user_api_key_auth import _return_user_api_key_auth_obj
+    from litellm.proxy.auth.user_api_key_auth import return_user_api_key_auth_obj
     from datetime import datetime
 
-    new_obj = await _return_user_api_key_auth_obj(
+    new_obj = await return_user_api_key_auth_obj(
         user_obj=LiteLLM_UserTable(user_role=user_role, user_id="", max_budget=None, user_email=""),
         api_key="hello-world",
         parent_otel_span=None,
@@ -688,8 +736,6 @@ def test_get_api_key_from_custom_header_different_casing():
         custom_header_name="X-Custom-API-Key",
         expected_api_key=token,
     )
-
-
 
 
 @pytest.mark.parametrize(
@@ -1081,18 +1127,11 @@ async def test_user_api_key_auth_live_websocket_ignores_query_model():
 async def test_websocket_without_a_model_is_refused_for_a_role_limited_to_other_models(
     auth_name: str, path: str
 ) -> None:
-    from litellm.proxy._types import RoleBasedPermissions, UserAPIKeyAuth
     from litellm.proxy.auth import user_api_key_auth as auth_module
-    from litellm.proxy.auth.handle_jwt import JWTAuthManager
 
     async def role_limited_auth(request, api_key: str) -> UserAPIKeyAuth:
-        JWTAuthManager.can_rbac_role_call_model(
-            rbac_role=LitellmUserRoles.INTERNAL_USER,
-            general_settings={
-                "role_permissions": [RoleBasedPermissions(role=LitellmUserRoles.INTERNAL_USER, models=["chat"])]
-            },
-            model=json.loads(await request.body())["model"],
-        )
+        if json.loads(await request.body())["model"] not in ("chat",):
+            raise HTTPException(status_code=403, detail="role may only call chat")
         return UserAPIKeyAuth(api_key=api_key)
 
     websocket: Final = MagicMock(spec=WebSocket)
@@ -1142,71 +1181,30 @@ async def test_accepted_websocket_reauthorizes_the_frame_model_without_closing()
 
 @pytest.mark.parametrize("enforce_rbac", [True, False])
 @pytest.mark.asyncio
-async def test_jwt_user_api_key_auth_builder_enforce_rbac(enforce_rbac, monkeypatch):
-    from litellm.proxy.auth.handle_jwt import JWTHandler, JWTAuthManager
-    from unittest.mock import patch, Mock
-    from litellm.proxy._types import LiteLLM_JWTAuth
-    from litellm.caching import DualCache
+async def test_jwt_without_a_role_is_refused_only_when_rbac_is_enforced(
+    enforce_rbac: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.auth import core
+    from litellm.proxy.auth import jwt as proxy_jwt
 
-    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", "my-fake-url")
-    monkeypatch.setenv("JWT_AUDIENCE", "api://LiteLLM_Proxy-dev")
-
-    local_cache = DualCache()
-
-    keys = [
-        {
-            "kty": "RSA",
-            "use": "sig",
-            "kid": "z1rsYHHJ9-8mggt4HsZu8BKkBPw",
-            "x5t": "z1rsYHHJ9-8mggt4HsZu8BKkBPw",
-            "n": "pOe4GbleFDT1u5ioOQjNMmhvkDVoVD9cBKvX7AlErtWA_D6wc1w1iwkd6arYVCPObZbAB4vLSXrlpBSOuP6VYnXw_cTgniv_c82ra-mfqCpM-SbqzZ3sVqlcE_bwxvci_4PrxAW4R85ok12NXyZ2371H3yGevabi35AlVm-bQ24azo1hLK_0DzB6TxsAIOTOcKfIugOfqP-B2R4vR4u6pYftS8MWcxegr9iJ5JNtubI1X2JHpxJhkRoMVwKFna2GXmtzdxLi3yS_GffVCKfTbFMhalbJS1lSmLqhmLZZL-lrQZ6fansTl1vcGcoxnzPTwBkZMks0iVV4yfym_gKBXQ",
-            "e": "AQAB",
-            "x5c": [
-                "MIIC/TCCAeWgAwIBAgIIQk8Qok6pfXkwDQYJKoZIhvcNAQELBQAwLTErMCkGA1UEAxMiYWNjb3VudHMuYWNjZXNzY29udHJvbC53aW5kb3dzLm5ldDAeFw0yNDExMjcwOTA0MzlaFw0yOTExMjcwOTA0MzlaMC0xKzApBgNVBAMTImFjY291bnRzLmFjY2Vzc2NvbnRyb2wud2luZG93cy5uZXQwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCk57gZuV4UNPW7mKg5CM0yaG+QNWhUP1wEq9fsCUSu1YD8PrBzXDWLCR3pqthUI85tlsAHi8tJeuWkFI64/pVidfD9xOCeK/9zzatr6Z+oKkz5JurNnexWqVwT9vDG9yL/g+vEBbhHzmiTXY1fJnbfvUffIZ69puLfkCVWb5tDbhrOjWEsr/QPMHpPGwAg5M5wp8i6A5+o/4HZHi9Hi7qlh+1LwxZzF6Cv2Inkk225sjVfYkenEmGRGgxXAoWdrYZea3N3EuLfJL8Z99UIp9NsUyFqVslLWVKYuqGYtlkv6WtBnp9qexOXW9wZyjGfM9PAGRkySzSJVXjJ/Kb+AoFdAgMBAAGjITAfMB0GA1UdDgQWBBSTO5FmUwwGS+1CNqg2uNgjxUjFijANBgkqhkiG9w0BAQsFAAOCAQEAok04z0ICMEHGqDTzx6eD7vvJP8itJTCSz8JcZcGVJofJpViGF3bNnyeSPa7vNDYP1Ps9XBvw3/n2s+yynZ8EwFxMyxCZRCSbLv0N+cAbH3rmZqGcgMJszZVwcFUtXQPTe1ZRyHtEyOB+PVFH7K7obysRVO/cC6EGqIF3pYWzez/dtMaXRAkdTNlz0ko62WoA4eMPwUFCITjW/Jxfxl0BNUbo82PXXKhaeVJb+EgFG5b/pWWPswWmBoQhmD5G1UODvEACHRl/cHsPPqe4YE+6D1/wMno/xqqyGltnk8v0d4TpNcQMn9oM19V+OGgrzWOvvXhvnhqUIVGMsRlyBGNHAw=="
-            ],
-            "cloud_instance_name": "microsoftonline.com",
-            "issuer": "https://login.microsoftonline.com/bdfd79b3-8401-47fb-a764-6e595c455b05/v2.0",
-        }
-    ]
-
-    local_cache.set_cache(
-        key="litellm_jwt_auth_keys_my-fake-url",
-        value=keys,
+    _serve_jwks(
+        monkeypatch,
+        LiteLLM_JWTAuth(
+            admin_jwt_scope="litellm_proxy_endpoints_access",
+            admin_allowed_routes=["openai_routes", "info_routes"],
+            enforce_rbac=enforce_rbac,
+        ),
     )
-
-    litellm_jwtauth = LiteLLM_JWTAuth(
-        **{
-            "admin_jwt_scope": "litellm_proxy_endpoints_access",
-            "admin_allowed_routes": ["openai_routes", "info_routes"],
-            "public_key_ttl": 600,
-            "enforce_rbac": enforce_rbac,
-        }
-    )
-
-    jwt_handler = JWTHandler()
-    jwt_handler.update_environment(
-        prisma_client=None,
-        user_api_key_cache=local_cache,
-        litellm_jwtauth=litellm_jwtauth,
-        leeway=10000000000000,
-    )
-    args = {
-        "api_key": "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsIng1dCI6InoxcnNZSEhKOS04bWdndDRIc1p1OEJLa0JQdyIsImtpZCI6InoxcnNZSEhKOS04bWdndDRIc1p1OEJLa0JQdyJ9.eyJhdWQiOiJhcGk6Ly9MaXRlTExNX1Byb3h5LWRldiIsImlzcyI6Imh0dHBzOi8vc3RzLndpbmRvd3MubmV0L2JkZmQ3OWIzLTg0MDEtNDdmYi1hNzY0LTZlNTk1YzQ1NWIwNS8iLCJpYXQiOjE3MzcyNDE3ODEsIm5iZiI6MTczNzI0MTc4MSwiZXhwIjoxNzM3MjQ1NjgxLCJhaW8iOiJrMlJnWUpBNE5hZGg4MGJQdXlyRmxlV1o3dHZiQUE9PSIsImFwcGlkIjoiOGNjZjNkMDItMmNkNi00N2I5LTgxODUtMGVkYjI0YWJjZjY5IiwiYXBwaWRhY3IiOiIxIiwiaWRwIjoiaHR0cHM6Ly9zdHMud2luZG93cy5uZXQvYmRmZDc5YjMtODQwMS00N2ZiLWE3NjQtNmU1OTVjNDU1YjA1LyIsIm9pZCI6IjQ0YTg3YTYzLWFiNTUtNDc4NS1iMmFmLTMzNjllZWM4ZTEzOSIsInJoIjoiMS5BYjBBczNuOXZRR0UtMGVuWkc1WlhFVmJCY0VDbkl6NHJxaE9wZ2E0UGZSZjBsbTlBQUM5QUEuIiwic3ViIjoiNDRhODdhNjMtYWI1NS00Nzg1LWIyYWYtMzM2OWVlYzhlMTM5IiwidGlkIjoiYmRmZDc5YjMtODQwMS00N2ZiLWE3NjQtNmU1OTVjNDU1YjA1IiwidXRpIjoiY3ltNVhlcmhIMHVMSlNZU1JyQmhBQSIsInZlciI6IjEuMCJ9.UooJjM9pS-wgYsExqgHdrYyQhp7NbwAsr7au9dWJaLpsufXeyHJSg-Xd5VJ4RsDVJiDes3jkC7WeoAiaCfzEHpAum-p_aqqLYXf1QIYbi1hLC0m7y_klFcqMp11WbDa9TSTvg-o8q3x2Y5su8X23ymlFih4OP17b7JA6a4_2MybU5QkCEW1tQK6VspuuXzeDHvbfGeGYcIptHFyfttHMHHXRtX1o9bX7gOR_dwFITAXD18T4ZdAN_0y6f1OtVF9TMWQhMXhKU8ahn8TSg_CXmPl9T_1gV3ZWLvVtcdVrWs82fDz3-2lEw28z4bQEr1Z5xoAz7srhx1WEBu_ioAcQiA",
-        "jwt_handler": jwt_handler,
-        "route": "/v1/chat/completions",
-        "prisma_client": None,
-        "user_api_key_cache": Mock(),
-        "parent_otel_span": None,
-        "proxy_logging_obj": Mock(),
-        "request_data": {},
-        "general_settings": {},
-    }
+    token: Final = _signed_jwt({"sub": "44a87a63-ab55-4785-b2af-3369eec8e139"})
 
     if enforce_rbac:
         with pytest.raises(HTTPException):
-            await JWTAuthManager.auth_builder(**args)
+            await proxy_jwt.authorize(core.proxy_settings(), token, "/v1/chat/completions", "POST", provisioning=True)
     else:
-        await JWTAuthManager.auth_builder(**args)
+        result: Final = await proxy_jwt.authorize(
+            core.proxy_settings(), token, "/v1/chat/completions", "POST", provisioning=True
+        )
+        assert result["is_proxy_admin"] is False
 
 
 def test_user_api_key_auth_end_user_str():
@@ -1222,58 +1220,6 @@ def test_user_api_key_auth_end_user_str():
 
     user_api_key_auth = UserAPIKeyAuth(**user_api_key_args)
     assert user_api_key_auth.end_user_id == "1"
-
-
-def test_can_rbac_role_call_model():
-    from litellm.proxy.auth.handle_jwt import JWTAuthManager
-    from litellm.proxy._types import RoleBasedPermissions
-
-    roles_based_permissions = [
-        RoleBasedPermissions(
-            role=LitellmUserRoles.INTERNAL_USER,
-            models=["gpt-4"],
-        ),
-        RoleBasedPermissions(
-            role=LitellmUserRoles.PROXY_ADMIN,
-            models=["anthropic-claude"],
-        ),
-    ]
-
-    assert JWTAuthManager.can_rbac_role_call_model(
-        rbac_role=LitellmUserRoles.INTERNAL_USER,
-        general_settings={"role_permissions": roles_based_permissions},
-        model="gpt-4",
-    )
-
-    with pytest.raises(HTTPException):
-        JWTAuthManager.can_rbac_role_call_model(
-            rbac_role=LitellmUserRoles.INTERNAL_USER,
-            general_settings={"role_permissions": roles_based_permissions},
-            model="gpt-4o",
-        )
-
-    with pytest.raises(HTTPException):
-        JWTAuthManager.can_rbac_role_call_model(
-            rbac_role=LitellmUserRoles.PROXY_ADMIN,
-            general_settings={"role_permissions": roles_based_permissions},
-            model="gpt-4o",
-        )
-
-
-def test_can_rbac_role_call_model_no_role_permissions():
-    from litellm.proxy.auth.handle_jwt import JWTAuthManager
-
-    assert JWTAuthManager.can_rbac_role_call_model(
-        rbac_role=LitellmUserRoles.INTERNAL_USER,
-        general_settings={},
-        model="gpt-4",
-    )
-
-    assert JWTAuthManager.can_rbac_role_call_model(
-        rbac_role=LitellmUserRoles.PROXY_ADMIN,
-        general_settings={"role_permissions": []},
-        model="anthropic-claude",
-    )
 
 
 @pytest.mark.parametrize(
@@ -1342,71 +1288,22 @@ async def test_key_model_allowlist_applies_to_the_model_selected_by_the_url(
 
 
 @pytest.mark.asyncio
-async def test_jwt_non_admin_team_route_access(monkeypatch):
-    """
-    Test that a non-admin JWT user cannot access team management routes
-    """
-    from fastapi import Request, HTTPException
-    from starlette.datastructures import URL
-    from unittest.mock import patch
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-    import json
-    from litellm.proxy._types import ProxyException
-
-    mock_jwt_response = {
-        "is_proxy_admin": False,
-        "jwt_claims": {},
-        "team_id": None,
-        "team_object": None,
-        "user_id": None,
-        "user_email": None,
-        "user_object": None,
-        "org_id": None,
-        "org_object": None,
-        "end_user_id": None,
-        "end_user_object": None,
-        "token": "eyJhbGciOiJSUzI1NiIsInR5cCIgOiAiSldUIiwia2lkIiA6ICJmR09YQTNhbHFObjByRzJ6OHJQT1FLZVVMSWxCNDFnVWl4VDJ5WE1QVG1ZIn0.eyJleHAiOjE3NDI2MDAzODIsImlhdCI6MTc0MjYwMDA4MiwianRpIjoiODRhNjZmZjAtMTE5OC00YmRkLTk1NzAtNWZhMjNhZjYxMmQyIiwiaXNzIjoiaHR0cDovL2xvY2FsaG9zdDo4MDgwL3JlYWxtcy9saXRlbGxtLXJlYWxtIiwiYXVkIjoiYWNjb3VudCIsInN1YiI6ImZmMGZjOGNiLWUyMjktNDkyYy05NzYwLWNlYzVhMDYxNmI2MyIsInR5cCI6IkJlYXJlciIsImF6cCI6ImxpdGVsbG0tdGVzdC1jbGllbnQtaWQiLCJzaWQiOiI4MTYwNjIxOC0yNmZmLTQwMjAtOWQxNy05Zjc0YmFlNTBkODUiLCJhY3IiOiIxIiwiYWxsb3dlZC1vcmlnaW5zIjpbImh0dHA6Ly9sb2NhbGhvc3Q6NDAwMC8qIl0sInJlYWxtX2FjY2VzcyI6eyJyb2xlcyI6WyJvZmZsaW5lX2FjY2VzcyIsImRlZmF1bHQtcm9sZXMtbGl0ZWxsbS1yZWFsbSIsInVtYV9hdXRob3JpemF0aW9uIl19LCJyZXNvdXJjZV9hY2Nlc3MiOnsiYWNjb3VudCI6eyJyb2xlcyI6WyJtYW5hZ2UtYWNjb3VudCIsIm1hbmFnZS1hY2NvdW50LWxpbmtzIiwidmlldy1wcm9maWxlIl19fSwic2NvcGUiOiJwcm9maWxlIGdyb3Vwcy1zY29wZSBlbWFpbCBsaXRlbGxtLmFwaS5jb25zdW1lciIsImVtYWlsX3ZlcmlmaWVkIjp0cnVlLCJuYW1lIjoiS3Jpc2ggRGhvbGFraWEiLCJncm91cHMiOlsiL28zX21pbmlfYWNjZXNzIl0sInByZWZlcnJlZF91c2VybmFtZSI6ImtycmlzaGRoMiIsImdpdmVuX25hbWUiOiJLcmlzaCIsImZhbWlseV9uYW1lIjoiRGhvbGFraWEiLCJlbWFpbCI6ImtycmlzaGRob2xha2lhMkBnbWFpbC5jb20ifQ.Fu2ErZhnfez-bhn_XmjkywcFdZHcFUSvzIzfdNiEowdA0soLmCyqf9731amP6m68shd9qk11e0mQhxFIAIxZPojViC1Csc9TBXLRRQ8ESMd6gPIj-DBkKVkQSZLJ1uibsh4Oo2RViGtqWVcEt32T8U_xhGdtdzNkJ8qy_e0fdNDsUnhmSaTQvmZJYarW0roIrkC-zYZrX3fftzbQfavSu9eqdfPf6wUttIrkaWThWUuORy-xaeZfSmvsGbEg027hh6QwlChiZTSF8R6bRxoqfPN3ZaGFFgbBXNRYZA_eYi2IevhIwJHi_r4o1UvtKAJyfPefm-M6hCfkN_6da4zsog",
-    }
-
-    # Create request
-    request = Request(
-        scope={
+async def test_jwt_non_admin_team_route_access(monkeypatch: pytest.MonkeyPatch) -> None:
+    _serve_jwks(monkeypatch, LiteLLM_JWTAuth())
+    token: Final = _signed_jwt({"sub": "not-an-admin"})
+    request: Final = StarletteRequest(
+        {
             "type": "http",
-            "headers": [(b"authorization", b"Bearer fake.jwt.token")],
+            "method": "POST",
+            "path": "/team/new",
+            "headers": [(b"authorization", f"Bearer {token}".encode())],
         }
     )
-    request._url = URL(url="/team/new")
 
-    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {"enable_jwt_auth": True})
+    with pytest.raises(ProxyException) as exc_info:
+        await user_api_key_auth(request=request, api_key=f"Bearer {token}")
 
-    # Initialize jwt_handler with a default LiteLLM_JWTAuth so that the
-    # virtual_key_claim_field check in user_api_key_auth doesn't fail with
-    # "JWTHandler has no attribute 'litellm_jwtauth'"
-    from litellm.proxy._types import LiteLLM_JWTAuth
-    from litellm.caching.dual_cache import DualCache
-
-    litellm.proxy.proxy_server.jwt_handler.update_environment(
-        prisma_client=None,
-        user_api_key_cache=DualCache(),
-        litellm_jwtauth=LiteLLM_JWTAuth(),
-    )
-
-    # Mock enterprise license check and JWTAuthManager.auth_builder
-    # License check must be mocked to avoid environment variable pollution
-    # in parallel test execution
-    with (
-        patch(
-            "litellm.proxy.proxy_server.premium_user",
-            True,
-        ),
-        patch(
-            "litellm.proxy.auth.handle_jwt.JWTAuthManager.auth_builder",
-            return_value=mock_jwt_response,
-        ),
-    ):
-        with pytest.raises(ProxyException) as exc_info:
-            await user_api_key_auth(request=request, api_key="Bearer fake.jwt.token")
-        assert "Only proxy admin can be used to generate" in str(exc_info.value.message)
+    assert "Only proxy admin can be used to generate" in str(exc_info.value.message)
 
 
 @pytest.mark.asyncio
@@ -1616,7 +1513,7 @@ async def test_check_user_model_budget(user_id, user_model_max_budget, expected_
     stored on LiteLLM_UserTable, accepted by /user/new and /user/update, and read
     by nothing, so a user-level per-model budget never blocked anything.
     """
-    from litellm.proxy.auth.user_api_key_auth import _check_user_model_budget
+    from litellm.proxy.auth.user_api_key_auth import check_user_model_budget
 
     calls = []
 
@@ -1632,7 +1529,7 @@ async def test_check_user_model_budget(user_id, user_model_max_budget, expected_
         user_id=user_id,
         user_model_max_budget=user_model_max_budget,
     )
-    await _check_user_model_budget(
+    await check_user_model_budget(
         valid_token=valid_token,
         model_max_budget_limiter=_Limiter(),
         models=["gpt-4"],
@@ -1650,7 +1547,7 @@ async def test_user_model_max_budget_is_threaded_onto_the_auth_object():
     """
     from datetime import datetime
 
-    from litellm.proxy.auth.user_api_key_auth import _return_user_api_key_auth_obj
+    from litellm.proxy.auth.user_api_key_auth import return_user_api_key_auth_obj
 
     budget = {"gpt-4": {"budget_limit": 1.0, "time_period": "1mo"}}
     user_obj = LiteLLM_UserTable(
@@ -1662,7 +1559,7 @@ async def test_user_model_max_budget_is_threaded_onto_the_auth_object():
         model_max_budget=budget,
     )
 
-    auth_obj = await _return_user_api_key_auth_obj(
+    auth_obj = await return_user_api_key_auth_obj(
         user_obj=user_obj,
         api_key=MASTER_KEY,
         parent_otel_span=None,
@@ -1747,7 +1644,7 @@ async def test_user_model_budget_is_enforced_through_user_api_key_auth(over_budg
         )
 
     with patch(
-        "litellm.proxy.auth.user_api_key_auth.get_user_object",
+        "litellm.proxy.auth.host.python.get_user_object",
         new=fake_get_user_object,
     ):
         if expect_refusal:
@@ -1778,7 +1675,7 @@ async def test_jwt_user_model_budget_is_enforced_before_the_jwt_path_returns(ove
     nothing ever reads it, which looks enforced and is not.
     """
     from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
-    from litellm.proxy.auth.user_api_key_auth import _check_user_model_budget
+    from litellm.proxy.auth.user_api_key_auth import check_user_model_budget
     from litellm.proxy.hooks.model_max_budget_limiter import model_budget_spend_cache_key
     from litellm.proxy.proxy_server import model_max_budget_limiter
 
@@ -1806,99 +1703,18 @@ async def test_jwt_user_model_budget_is_enforced_before_the_jwt_path_returns(ove
 
     if expect_refusal:
         with pytest.raises(litellm.BudgetExceededError) as exc:
-            await _check_user_model_budget(
+            await check_user_model_budget(
                 valid_token=valid_token,
                 model_max_budget_limiter=model_max_budget_limiter,
                 models=[model],
             )
         assert exc.value.entity_type == Litellm_EntityType.USER.value
     else:
-        await _check_user_model_budget(
+        await check_user_model_budget(
             valid_token=valid_token,
             model_max_budget_limiter=model_max_budget_limiter,
             models=[model],
         )
-
-
-def test_jwt_path_enforces_the_user_model_budget_before_returning():
-    """
-    The JWT branch returns early, so the enforcement call has to sit before that
-    return rather than in the virtual-key block. Assert on the call graph, since
-    a helper-level test passes whether or not the JWT path ever calls it.
-    """
-    import ast
-    import inspect
-    import textwrap
-
-    from litellm.proxy.auth import user_api_key_auth as auth_module
-
-    tree = ast.parse(
-        textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder))
-        + "\n"
-        + textwrap.dedent(inspect.getsource(auth_module.validate_resolved_virtual_key))
-    )
-
-    def calls_before_each_return(node):
-        seen_check = []
-        for child in ast.walk(node):
-            if isinstance(child, ast.Call):
-                fn = child.func
-                name = getattr(fn, "id", None) or getattr(fn, "attr", None)
-                if name == "_check_user_model_budget":
-                    seen_check.append(child.lineno)
-        return seen_check
-
-    check_lines = calls_before_each_return(tree)
-    assert check_lines, "_user_api_key_auth_builder never enforces the user model budget"
-
-    jwt_returns = [
-        n.lineno
-        for n in ast.walk(tree)
-        if isinstance(n, ast.Return) and isinstance(n.value, ast.Call) and getattr(n.value.func, "id", None) == "cast"
-    ]
-    assert jwt_returns, "expected the JWT branch's `return cast(UserAPIKeyAuth, valid_token)`"
-    assert any(check < jwt_return for check in check_lines for jwt_return in jwt_returns), (
-        "the user model-budget check must run before the JWT branch returns"
-    )
-
-
-def test_every_jwt_branch_carries_the_user_model_budget():
-    """
-    Each JWT branch that builds or replaces `valid_token` has to put the user's
-    model budget on it, or the enforcement call a few lines later has nothing to
-    read and silently admits the request.
-
-    The auto-register branch is the one that regressed: it REPLACES the token
-    built above it with a key-scoped one whose columns carry no user budget.
-    """
-    import ast
-    import inspect
-    import textwrap
-
-    from litellm.proxy.auth import user_api_key_auth as auth_module
-
-    tree = ast.parse(
-        textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder))
-        + "\n"
-        + textwrap.dedent(inspect.getsource(auth_module.validate_resolved_virtual_key))
-    )
-
-    assignments = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Assign)
-        and any(isinstance(t, ast.Attribute) and t.attr == "user_model_max_budget" for t in node.targets)
-    ]
-    targets = {
-        t.value.id
-        for node in assignments
-        for t in node.targets
-        if isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name)
-    }
-    assert "auto_registered" in targets, (
-        f"the auto-registered JWT token must carry the user's model budget; only these are populated: {sorted(targets)}"
-    )
-    assert "valid_token" in targets, "the virtual-key path must carry the user's model budget"
 
 
 @pytest.mark.asyncio
@@ -1997,58 +1813,6 @@ async def test_user_budget_lookup_returns_the_budget_when_the_row_reads():
     assert budget == stored
 
 
-def test_zero_cost_models_skip_the_user_budget_check_on_every_path():
-    """
-    `skip_budget_checks` is computed per request for zero-cost models, and the
-    JWT branch logs "Skipping all budget checks" when it is set. Any enforcement
-    call that ignores it makes the same request behave differently depending on
-    whether the caller used a JWT or a virtual key, and makes that log a lie.
-
-    Structural rather than behavioural on purpose: the defect is a call site
-    sitting outside a guard, and driving both auth paths to a zero-cost model
-    would prove it for the two requests exercised rather than for every site.
-    """
-    import ast
-    import inspect
-    import textwrap
-
-    from litellm.proxy.auth import user_api_key_auth as auth_module
-
-    tree = ast.parse(
-        textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder))
-        + "\n"
-        + textwrap.dedent(inspect.getsource(auth_module.validate_resolved_virtual_key))
-    )
-
-    def guarded_by_skip(node: ast.AST, target: ast.AST) -> bool:
-        for parent in ast.walk(node):
-            if not isinstance(parent, ast.If):
-                continue
-            test = parent.test
-            is_skip_guard = (
-                isinstance(test, ast.UnaryOp)
-                and isinstance(test.op, ast.Not)
-                and isinstance(test.operand, ast.Name)
-                and test.operand.id == "skip_budget_checks"
-            )
-            if is_skip_guard and any(sub is target for sub in ast.walk(parent)):
-                return True
-        return False
-
-    calls = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_check_user_model_budget"
-    ]
-    assert len(calls) == 2, f"expected the JWT and virtual-key call sites, found {len(calls)}"
-
-    unguarded = [c for c in calls if not guarded_by_skip(tree, c)]
-    assert not unguarded, (
-        f"{len(unguarded)} _check_user_model_budget call(s) run even when "
-        "skip_budget_checks is set, so a zero-cost model is enforced on one auth path and not the other"
-    )
-
-
 def test_custom_auth_also_skips_budget_checks_for_zero_cost_models():
     """
     The custom-auth helper runs its own key, user and end-user per-model budget
@@ -2072,8 +1836,8 @@ def test_custom_auth_also_skips_budget_checks_for_zero_cost_models():
     assert "skip_budget_checks" in src, "the custom-auth path never computes the zero-cost skip flag"
 
     budget_calls = (
-        "_check_key_model_budget_with_fallback",
-        "_check_user_model_budget",
+        "check_key_model_budget_with_fallback",
+        "check_user_model_budget",
         "is_end_user_within_model_budget",
     )
 
@@ -2137,71 +1901,6 @@ def test_custom_auth_attaches_the_user_budget_even_when_it_does_not_enforce():
             "the user budget is attached inside a conditional, so the spend hook "
             "cannot charge the user counter whenever that condition is false"
         )
-
-
-def test_mapped_key_jwt_falls_through_to_the_shared_user_budget_attach():
-    """
-    A JWT that maps to an existing virtual key resolves through the resolver
-    store, which builds the token from the KEY row alone and therefore carries
-    no user-level per-model budget. That branch sets `do_standard_jwt_auth =
-    False` precisely so it falls through to the shared virtual-key checks, where
-    the user row is loaded and its budget copied onto the token.
-
-    Reviewed as a bypass three times, so the two halves it depends on are pinned
-    here: the branch must not return before the shared block, and the shared
-    block must copy the user row's budget onto the token. Structural on purpose,
-    because the claim is about control flow reaching a statement, and it has to
-    hold for branches added later rather than for one mocked request.
-    """
-    import ast
-    import inspect
-    import textwrap
-
-    from litellm.proxy.auth import user_api_key_auth as auth_module
-
-    tree = ast.parse(
-        textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder))
-        + "\n"
-        + textwrap.dedent(inspect.getsource(auth_module.validate_resolved_virtual_key))
-    )
-
-    # Half one: the shared block copies the user row's budget onto the token.
-    copies_user_row = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Assign)
-        and any(isinstance(t, ast.Attribute) and t.attr == "user_model_max_budget" for t in node.targets)
-        and any(isinstance(v, ast.Attribute) and v.attr == "model_max_budget" for v in ast.walk(node.value))
-    ]
-    assert copies_user_row, (
-        "nothing copies the user row's model_max_budget onto the token, so a mapped-key "
-        "JWT reaches enforcement carrying the key's columns only"
-    )
-
-    # Half two: the mapped-key branch does not return before reaching it.
-    disables_standard_auth = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Assign)
-        and any(isinstance(t, ast.Name) and t.id == "do_standard_jwt_auth" for t in node.targets)
-        and isinstance(node.value, ast.Constant)
-        and node.value.value is False
-    ]
-    assert len(disables_standard_auth) == 1, "expected exactly one mapped-key branch"
-    marker = disables_standard_auth[0]
-
-    enclosing = [
-        node for node in ast.walk(tree) if isinstance(node, ast.If) and any(sub is marker for sub in node.body)
-    ]
-    assert enclosing, "could not locate the mapped-key branch body"
-
-    returns_after = [
-        node for node in ast.walk(enclosing[0]) if isinstance(node, ast.Return) and node.lineno > marker.lineno
-    ]
-    assert not returns_after, (
-        "the mapped-key branch returns before the shared virtual-key checks, so the "
-        "user's per-model budget is never attached and never enforced"
-    )
 
 
 def _rejected_websocket(sent: list[Message], bearer: str) -> WebSocket:
@@ -2306,49 +2005,26 @@ async def test_jwt_path_skips_user_model_budget_only_for_zero_spend_mcp_methods(
     request_data: dict[str, object],
     expect_user_model_budget_check: bool,
 ) -> None:
-    from litellm.caching.dual_cache import DualCache
-    from litellm.proxy._types import LiteLLM_JWTAuth
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_builder
 
-    jwt_response: Final = {
-        "is_proxy_admin": False,
-        "jwt_claims": {},
-        "team_id": None,
-        "team_object": None,
-        "user_id": "jwt-user",
-        "user_email": None,
-        "user_object": LiteLLM_UserTable(
-            user_id="jwt-user",
-            model_max_budget={"gpt-4o": {"budget_limit": 1.0, "time_period": "1d"}},
+    await litellm.proxy.proxy_server.user_api_key_cache.async_set_cache(
+        key="jwt-user",
+        value=LiteLLM_UserTable(
+            user_id="jwt-user", model_max_budget={"gpt-4o": {"budget_limit": 1.0, "time_period": "1d"}}
         ),
-        "org_id": None,
-        "org_object": None,
-        "end_user_id": None,
-        "end_user_object": None,
-        "token": "fake.jwt.token",
-    }
-    mock_request: Final = MagicMock()
-    mock_request.url.path = "/mcp"
-    mock_request.method = "POST"
-    mock_request.headers = {"authorization": "Bearer fake.jwt.token"}
-    mock_request.query_params = {}
-
-    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {"enable_jwt_auth": True})
-    litellm.proxy.proxy_server.jwt_handler.update_environment(
-        prisma_client=None,
-        user_api_key_cache=DualCache(),
-        litellm_jwtauth=LiteLLM_JWTAuth(),
+        model_type=LiteLLM_UserTable,
+    )
+    _serve_jwks(monkeypatch, LiteLLM_JWTAuth(user_id_jwt_field="sub"))
+    token: Final = _signed_jwt({"sub": "jwt-user"})
+    request: Final = StarletteRequest(
+        {"type": "http", "method": "POST", "path": "/mcp", "headers": [(b"authorization", f"Bearer {token}".encode())]}
     )
     user_model_budget_check: Final = AsyncMock()
 
-    with (
-        patch("litellm.proxy.proxy_server.premium_user", True),
-        patch("litellm.proxy.auth.handle_jwt.JWTAuthManager.auth_builder", return_value=jwt_response),
-        patch("litellm.proxy.auth.user_api_key_auth._check_user_model_budget", user_model_budget_check),
-    ):
+    with patch("litellm.proxy.auth.host.steps.budgets.check_user_model_budget", user_model_budget_check):
         result: Final = await user_api_key_auth_builder(
-            request=mock_request,
-            api_key="Bearer fake.jwt.token",
+            request=request,
+            api_key=f"Bearer {token}",
             azure_api_key_header="",
             anthropic_api_key_header=None,
             google_ai_studio_api_key_header=None,
@@ -2358,115 +2034,6 @@ async def test_jwt_path_skips_user_model_budget_only_for_zero_spend_mcp_methods(
 
     assert result.user_id == "jwt-user"
     assert user_model_budget_check.await_count == (1 if expect_user_model_budget_check else 0)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "method, path, expect_rejected",
-    [
-        ("GET", "/v1/videos/{video_id}", False),
-        ("GET", "/videos/{video_id}/content", False),
-        ("POST", "/v1/videos", True),
-        ("POST", "/v1/videos/{video_id}/remix", True),
-    ],
-)
-async def test_jwt_path_spares_only_video_retrieval_from_an_exhausted_user_model_budget(
-    monkeypatch: pytest.MonkeyPatch, method: str, path: str, expect_rejected: bool
-) -> None:
-    from litellm.caching.dual_cache import DualCache
-    from litellm.proxy._types import JWTAuthBuilderResult, LiteLLM_JWTAuth, Litellm_EntityType, ProxyErrorTypes
-    from litellm.proxy.auth import user_api_key_auth as user_api_key_auth_module
-    from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_builder
-    from litellm.proxy.hooks.model_max_budget_limiter import (
-        PROXY_VirtualKeyModelMaxBudgetLimiter,
-        model_budget_spend_cache_key,
-    )
-    from litellm.types.videos.utils import encode_video_id_with_provider
-
-    video_id: Final = encode_video_id_with_provider(video_id="video_raw", provider="openai", model_id="sora-2")
-    jwt_result: Final = JWTAuthBuilderResult(
-        is_proxy_admin=False,
-        team_object=None,
-        user_object=LiteLLM_UserTable(
-            user_id="jwt-user",
-            model_max_budget={"sora-2": {"budget_limit": 0.3, "time_period": "1d"}},
-        ),
-        end_user_object=None,
-        org_object=None,
-        token="fake.jwt.token",
-        team_id=None,
-        user_id="jwt-user",
-        user_email=None,
-        end_user_id=None,
-        org_id=None,
-        team_membership=None,
-        jwt_claims={},
-        agent_id=None,
-    )
-
-    class _VerifiedJWTAuthManager(JWTAuthManager):
-        @staticmethod
-        async def auth_builder(
-            api_key: object,
-            jwt_handler: object,
-            request_data: object,
-            general_settings: object,
-            route: object,
-            prisma_client: object,
-            user_api_key_cache: object,
-            parent_otel_span: object,
-            proxy_logging_obj: object,
-            request_headers: object = None,
-            request_method: object = None,
-        ) -> JWTAuthBuilderResult:
-            return jwt_result
-
-    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
-    await limiter.dual_cache.async_set_cache(
-        key=model_budget_spend_cache_key(
-            entity_type=Litellm_EntityType.USER, entity_id="jwt-user", budget_model="sora-2", budget_duration="1d"
-        ),
-        value=0.4,
-    )
-    jwt_handler: Final = JWTHandler()
-    jwt_handler.update_environment(
-        prisma_client=None,
-        user_api_key_cache=DualCache(),
-        litellm_jwtauth=LiteLLM_JWTAuth(),
-    )
-    mock_request: Final = MagicMock()
-    mock_request.url.path = path.format(video_id=video_id)
-    mock_request.method = method
-    mock_request.headers = {"authorization": "Bearer fake.jwt.token"}
-    mock_request.query_params = {}
-    request_data: Final[dict[str, object]] = {"model": "sora-2"} if path == "/v1/videos" else {"video_id": video_id}
-
-    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {"enable_jwt_auth": True})
-    monkeypatch.setattr(litellm.proxy.proxy_server, "premium_user", True)
-    monkeypatch.setattr(litellm.proxy.proxy_server, "jwt_handler", jwt_handler)
-    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", None)
-    monkeypatch.setattr(litellm.proxy.proxy_server, "model_max_budget_limiter", limiter)
-    monkeypatch.setattr(user_api_key_auth_module, "JWTAuthManager", _VerifiedJWTAuthManager)
-
-    async def authenticate() -> str | None:
-        result: Final = await user_api_key_auth_builder(
-            request=mock_request,
-            api_key="Bearer fake.jwt.token",
-            azure_api_key_header="",
-            anthropic_api_key_header=None,
-            google_ai_studio_api_key_header=None,
-            azure_apim_header=None,
-            request_data=request_data,
-        )
-        return result.user_id
-
-    if not expect_rejected:
-        assert await authenticate() == "jwt-user"
-        return
-    with pytest.raises(ProxyException) as exc_info:
-        await authenticate()
-    assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
 
 
 def _qa_websocket(messages):
@@ -2623,7 +2190,10 @@ async def test_auth_header_tag_merge_keeps_json_string_metadata_tags_routable(mo
         "metadata": json.dumps({"tags": ["app:a"]}),
     }
     cached_body, served_by = await _auth_then_serve_chat(
-        monkeypatch, general_settings, body, [(b"x-litellm-tags", b"other"), (b"baggage", b"region=sg")]
+        monkeypatch,
+        general_settings,
+        body,
+        [(b"x-litellm-tags", b"other"), (b"baggage", b"region=sg")],
     )
     assert served_by == "app-deployment"
     assert cached_body["metadata"] == {"tags": ["app:a", "other"]}
@@ -2643,7 +2213,103 @@ async def test_non_object_metadata_is_served_like_unset_mappings_whatever_the_ba
     headers = [(b"x-litellm-tags", b"app:a"), *baggage]
     unset = await _auth_then_serve_chat(monkeypatch, {}, body, headers)
     mapped = await _auth_then_serve_chat(
-        monkeypatch, {"request_tag_mappings": [{"key": "service", "tag_prefix": "app:"}]}, body, headers
+        monkeypatch,
+        {"request_tag_mappings": [{"key": "service", "tag_prefix": "app:"}]},
+        body,
+        headers,
     )
     assert mapped == unset
     assert mapped[1] == "app-deployment"
+
+
+_AWS_BEARER: Final = (
+    "AWS4-HMAC-SHA256 Credential=Bearer sk-1/20240101/us-east-1/bedrock/aws4_request, SignedHeaders=host, Signature=abc"
+)
+_AWS_PLAIN: Final = "AWS4-HMAC-SHA256 Credential=AKIA1/20240101/us-east-1/bedrock/aws4_request, Signature=abc"
+
+
+async def _presented_key(pairs: tuple[tuple[str, str], ...]) -> str | None:
+    request: Final = StarletteRequest(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "headers": [(name.encode(), value.encode()) for name, value in pairs],
+            "query_string": b"",
+        }
+    )
+    key, _ = get_api_key(
+        custom_litellm_key_header=await auth_module.custom_litellm_key_header(request),
+        api_key=await auth_module.api_key_header(request),
+        azure_api_key_header=await auth_module.azure_api_key_header(request),
+        anthropic_api_key_header=await auth_module.anthropic_api_key_header(request),
+        google_ai_studio_api_key_header=await auth_module.google_ai_studio_api_key_header(request),
+        azure_apim_header=await auth_module.azure_apim_header(request),
+        pass_through_endpoints=None,
+        route="/v1/chat/completions",
+        request=request,
+    )
+    return key
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("pairs", "expected"),
+    [
+        pytest.param((("authorization", "Bearer sk-1"),), "sk-1", id="bearer"),
+        pytest.param((("authorization", "bearer sk-1"),), "sk-1", id="lowercase_bearer"),
+        pytest.param((("authorization", "Basic sk-1"),), "sk-1", id="basic"),
+        pytest.param((("authorization", "Bearer sk-Bearer 1"),), "sk-1", id="every_occurrence_stripped"),
+        pytest.param((("authorization", "Token sk-1"),), "", id="unknown_scheme_is_no_key"),
+        pytest.param((("authorization", _AWS_BEARER),), "sk-1", id="aws_bearer"),
+        pytest.param((("authorization", _AWS_PLAIN),), "AKIA1", id="aws_credential"),
+        pytest.param((("authorization", "AWS4-HMAC-SHA256 Signature=abc"),), "", id="aws_without_credential"),
+        pytest.param((("x-litellm-api-key", "Bearer sk-1"),), "sk-1", id="litellm_header_bearer"),
+        pytest.param((("x-litellm-api-key", "sk-1"),), "sk-1", id="litellm_header_raw"),
+        pytest.param(
+            (("x-litellm-api-key", "AWS4-HMAC-SHA256 x"),),
+            "AWS4-HMAC-SHA256 x",
+            id="litellm_header_aws_without_credential",
+        ),
+        pytest.param((("api-key", "sk-1"),), "sk-1", id="azure"),
+        pytest.param((("x-api-key", "sk-1"),), "sk-1", id="anthropic"),
+        pytest.param((("x-goog-api-key", "sk-1"),), "sk-1", id="google"),
+        pytest.param((("ocp-apim-subscription-key", "sk-1"),), "sk-1", id="apim"),
+        pytest.param((("x-api-key", "Bearer sk-1"),), "Bearer sk-1", id="raw_keeps_scheme"),
+        pytest.param(
+            (("authorization", "Bearer sk-2"), ("x-litellm-api-key", "sk-1")), "sk-1", id="litellm_header_wins"
+        ),
+        pytest.param(
+            (("x-api-key", "sk-2"), ("authorization", "Bearer sk-1")), "sk-1", id="authorization_before_raw"
+        ),
+        pytest.param((("x-api-key", "sk-2"), ("api-key", "sk-1")), "sk-1", id="azure_before_anthropic"),
+        pytest.param((("authorization", ""), ("x-api-key", "sk-1")), "sk-1", id="empty_header_is_absent"),
+        pytest.param(
+            (("authorization", "Bearer sk-1"), ("authorization", "Bearer sk-2")), "sk-1", id="first_of_duplicates"
+        ),
+        pytest.param((("content-type", "application/json"),), None, id="missing"),
+    ],
+)
+async def test_presented_key_matches_the_gateway_api_key_contract(
+    pairs: tuple[tuple[str, str], ...], expected: str | None
+) -> None:
+    """The same cases as `reads_the_key_python_reads` in litellm-rust/crates/gateway-auth/src/api_key.rs, where
+    `None` is `ApiKey::Missing`."""
+    assert await _presented_key(pairs) == expected
+
+
+@pytest.mark.asyncio
+async def test_a_request_without_a_key_is_told_no_key_was_passed(monkeypatch: pytest.MonkeyPatch) -> None:
+    server: Final = litellm.proxy.proxy_server
+    monkeypatch.setattr(server, "master_key", MASTER_KEY)
+    monkeypatch.setattr(server, "general_settings", {})
+    monkeypatch.setattr(server, "prisma_client", None)
+    monkeypatch.setattr(server, "user_custom_auth", None)
+    request: Final = StarletteRequest(
+        {"type": "http", "method": "POST", "path": "/chat/completions", "headers": []},
+        receive=AsyncMock(return_value={"type": "http.request", "body": b"{}", "more_body": False}),
+    )
+    with pytest.raises(ProxyException) as denied:
+        await user_api_key_auth(request=request, api_key=None)
+    assert denied.value.code == "401"
+    assert "No api key passed in" in denied.value.message

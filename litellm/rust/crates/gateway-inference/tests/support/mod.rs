@@ -10,6 +10,7 @@ use axum::{
     response::Response,
 };
 use futures_util::future::BoxFuture;
+use litellm_gateway_auth_core::credential::key::Token;
 use litellm_gateway_inference::{Deployment, Gateway, router};
 use litellm_http::{HttpClientPool, HttpSettings, Resolution, media::PublicDnsResolver};
 use litellm_inference::resources::CoreResources;
@@ -129,7 +130,7 @@ async fn test_identity(
         Arc::new(litellm_gateway_auth::SystemClock),
     );
     let identity = auth
-        .authenticate(&SecretValue::new("test-inbound-key"))
+        .authenticate(&Token::new("test-inbound-key"))
         .await
         .unwrap();
     request.extensions_mut().insert(identity);

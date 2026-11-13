@@ -1818,21 +1818,11 @@ async def test_get_user_info_for_proxy_admin(mock_team_data, mock_key_data):
 
 
 def test_custom_openid_response():
-    from litellm.caching import DualCache
     from litellm.proxy._types import LiteLLM_JWTAuth
-    from litellm.proxy.management_endpoints.ui_sso import (
-        JWTHandler,
-        generic_response_convertor,
-    )
+    from litellm.proxy.auth.jwt import ClaimReading
+    from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
 
-    jwt_handler = JWTHandler()
-    jwt_handler.update_environment(
-        prisma_client={},
-        user_api_key_cache=DualCache(),
-        litellm_jwtauth=LiteLLM_JWTAuth(
-            team_ids_jwt_field="department",
-        ),
-    )
+    jwt_handler = ClaimReading(LiteLLM_JWTAuth(team_ids_jwt_field="department"))
     response = {
         "sub": "3f196e06-7484-451e-be5a-ea6c6bb86c5b",
         "email_verified": True,
@@ -1930,7 +1920,7 @@ def test_update_key_budget_with_temp_budget_increase():
 
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.auth.user_api_key_auth import (
-        _update_key_budget_with_temp_budget_increase,
+        update_key_budget_with_temp_budget_increase,
     )
 
     expiry = datetime.now() + timedelta(days=1)
@@ -1944,7 +1934,7 @@ def test_update_key_budget_with_temp_budget_increase():
             "temp_budget_expiry": expiry_in_isoformat,
         },
     )
-    result = _update_key_budget_with_temp_budget_increase(valid_token)
+    result = update_key_budget_with_temp_budget_increase(valid_token)
     assert result.max_budget == 200
     assert result is not valid_token
     assert valid_token.max_budget == 100

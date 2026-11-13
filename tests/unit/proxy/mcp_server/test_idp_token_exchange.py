@@ -9,7 +9,6 @@ from fastapi import HTTPException, Request
 from prisma.engine.errors import BinaryNotFoundError
 from prisma.errors import DataError
 
-from litellm.caching.caching import DualCache
 from litellm.proxy import proxy_server
 from litellm.proxy._types import (
     JWTIssuerConfig,
@@ -20,7 +19,7 @@ from litellm.proxy._types import (
     Member,
     ProxyException,
 )
-from litellm.proxy.auth.handle_jwt import JWKSUnreachableError, JWTHandler, jwks_unavailable_exception
+from litellm.proxy.auth import jwt as proxy_jwt
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.mcp_server.gateway_dcr_flow import SubjectIdentity, SubjectTokenRefusal
 from litellm.proxy.mcp_server.idp_token_exchange import (
@@ -42,7 +41,7 @@ EVERY_GATE_HOLDS = {
     "maps_jwts_to_virtual_keys": False,
 }
 JWKS_URL = "https://idp.example.com/.well-known/jwks.json"
-JWKS_DOWN = jwks_unavailable_exception(JWKSUnreachableError(f"ConnectError fetching {JWKS_URL} after 3 attempts"))
+JWKS_DOWN = HTTPException(status_code=503, detail=f"JWT Auth: ConnectError fetching {JWKS_URL} after 3 attempts")
 
 
 def _authorized(user_id="u1", team_id="team-b"):
@@ -82,7 +81,7 @@ async def _identity(authorizer, subject_token=IDP_JWT, **unmet):
         subject_token,
         request_headers=REQUEST_HEADERS,
         prerequisites=TokenExchangePrerequisites(**{**EVERY_GATE_HOLDS, **unmet}),
-        is_jwt=JWTHandler.is_jwt,
+        is_jwt=proxy_jwt.is_jwt,
         authorize=authorizer,
     )
 
@@ -144,18 +143,10 @@ MAPPED_ISSUER = JWTIssuerConfig(
 )
 
 
-def _running_jwt_handler(litellm_jwtauth):
-    handler = JWTHandler()
-    if litellm_jwtauth is not None:
-        handler.update_environment(prisma_client=None, user_api_key_cache=DualCache(), litellm_jwtauth=litellm_jwtauth)
-    return handler
-
-
 @pytest.mark.parametrize(
     "general_settings, prisma_client, premium_user, litellm_jwtauth, expected",
     [
         ({"enable_jwt_auth": True}, object(), True, LiteLLM_JWTAuth(), True),
-        ({"enable_jwt_auth": True}, object(), True, None, True),
         ({}, object(), True, LiteLLM_JWTAuth(), False),
         ({"enable_jwt_auth": True}, None, True, LiteLLM_JWTAuth(), False),
         ({"enable_jwt_auth": True}, object(), False, LiteLLM_JWTAuth(), False),
@@ -169,7 +160,7 @@ def test_availability_is_read_from_the_running_proxy(
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", premium_user)
-    monkeypatch.setattr("litellm.proxy.proxy_server.jwt_handler", _running_jwt_handler(litellm_jwtauth))
+    monkeypatch.setattr("litellm.proxy.proxy_server.litellm_jwtauth", litellm_jwtauth)
     assert token_exchange_available() is expected
 
 
@@ -280,16 +271,11 @@ async def test_subject_exchange_applies_team_admission_before_returning_an_ident
 ) -> None:
     cache: Final = UserApiKeyCache()
     database: Final = object()
-    handler: Final = JWTHandler()
-    handler.update_environment(
-        prisma_client=database,
-        user_api_key_cache=cache,
-        litellm_jwtauth=LiteLLM_JWTAuth(
-            user_id_jwt_field="sub",
-            team_ids_jwt_field="groups",
-            enforce_team_based_model_access=enforce_team,
-            team_allowed_routes=["/token"],
-        ),
+    jwt_auth: Final = LiteLLM_JWTAuth(
+        user_id_jwt_field="sub",
+        team_ids_jwt_field="groups",
+        enforce_team_based_model_access=enforce_team,
+        team_allowed_routes=["/token"],
     )
     signing_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     jwks_url: Final = "https://identity.invalid/exchange/jwks"
@@ -316,7 +302,7 @@ async def test_subject_exchange_applies_team_admission_before_returning_an_ident
     monkeypatch.setenv("JWT_PUBLIC_KEY_URL", jwks_url)
     monkeypatch.delenv("JWT_ISSUER", raising=False)
     monkeypatch.delenv("JWT_AUDIENCE", raising=False)
-    monkeypatch.setattr(proxy_server, "jwt_handler", handler)
+    monkeypatch.setattr(proxy_server, "litellm_jwtauth", jwt_auth)
     monkeypatch.setattr(proxy_server, "prisma_client", database)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
     monkeypatch.setattr(proxy_server, "general_settings", {"enable_jwt_auth": True})

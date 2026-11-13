@@ -5052,7 +5052,6 @@ def _cursor_budget_auth_env(base_model: str, spend: float):
         "open_telemetry_logger": None,
         "model_max_budget_limiter": limiter,
         "user_custom_auth": None,
-        "jwt_handler": None,
         "litellm_proxy_admin_name": "admin",
     }
     return valid_token, proxy_server_attrs

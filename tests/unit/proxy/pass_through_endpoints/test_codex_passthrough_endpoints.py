@@ -22,7 +22,6 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.chatgpt.common_utils import OPENAI_AUTH_CLAIM_KEY
 from litellm.proxy import proxy_server
 from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_TeamTableCachedObj, LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.codex_model_catalog import bundled_codex_models
 from litellm.proxy.pass_through_endpoints.codex_passthrough_endpoints import (
@@ -157,7 +156,10 @@ class UsageRecorder(CustomLogger):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True])
 async def test_usage_logged_without_credentials(
-    monkeypatch: pytest.MonkeyPatch, httpx_transport: None, respx_mock: respx.MockRouter, stream: bool
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+    stream: bool,
 ) -> None:
     monkeypatch.setattr(proxy_server, "master_key", MASTER_KEY)
     recorder: Final = UsageRecorder()
@@ -734,7 +736,10 @@ def _key_with_alias_to_budgeted_target(monkeypatch: pytest.MonkeyPatch, target_b
 
 @pytest.mark.parametrize("custom_auth", (False, True), ids=("virtual-key", "custom-auth"))
 def test_native_route_refuses_a_saved_alias_when_its_target_is_over_budget(
-    client: TestClient, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, custom_auth: bool
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    custom_auth: bool,
 ) -> None:
     key: Final = _key_with_alias_to_budgeted_target(monkeypatch, target_budget=0.0)
     if custom_auth:
@@ -762,7 +767,9 @@ def test_native_route_refuses_a_saved_alias_when_its_target_is_over_budget(
 
 
 def test_native_route_serves_a_saved_alias_target_within_budget_under_the_requested_name(
-    client: TestClient, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     key: Final = _key_with_alias_to_budgeted_target(monkeypatch, target_budget=5.0)
     _account_catalog(respx_mock)
@@ -806,7 +813,9 @@ def test_native_route_keeps_a_chatgpt_turn_on_the_subscription_despite_a_saved_a
 
 
 def test_native_route_keeps_a_name_the_account_lists_on_the_subscription_despite_a_saved_alias(
-    client: TestClient, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(proxy_server, "prisma_client", "test-database")
     monkeypatch.setattr(
@@ -845,7 +854,10 @@ _BEARER_KEY: Final = "sk-test-alias-key-sent-as-the-bearer"
     ids=["key only in the bearer", "same key in both headers"],
 )
 def test_native_route_never_sends_a_litellm_key_sent_as_the_bearer_to_chatgpt(
-    client: TestClient, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, gateway_header: dict[str, str]
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    gateway_header: dict[str, str],
 ) -> None:
     monkeypatch.setattr(proxy_server, "prisma_client", "test-database")
     monkeypatch.setattr(
@@ -1047,19 +1059,16 @@ def _team_jwt(monkeypatch: pytest.MonkeyPatch, team_allowed_routes: list[str]) -
         "alg": "RS256",
         "use": "sig",
     }
-    keys_cache: Final = DualCache()
-    keys_cache.set_cache(key=f"litellm_jwt_auth_keys_{_JWT_JWKS_URL}", value=[public_jwk])
-    handler: Final = JWTHandler()
-    handler.update_environment(
-        prisma_client=None,
-        user_api_key_cache=keys_cache,
-        litellm_jwtauth=LiteLLM_JWTAuth(
+    proxy_server.user_api_key_cache.set_cache(key=f"litellm_jwt_auth_keys_{_JWT_JWKS_URL}", value=[public_jwk])
+    monkeypatch.setattr(
+        proxy_server,
+        "litellm_jwtauth",
+        LiteLLM_JWTAuth(
             issuers=[{"issuer": _JWT_ISSUER, "jwks_url": _JWT_JWKS_URL, "audience": _JWT_AUDIENCE}],
             team_ids_jwt_field="groups",
             team_allowed_routes=team_allowed_routes,
         ),
     )
-    monkeypatch.setattr(proxy_server, "jwt_handler", handler)
     monkeypatch.setattr(proxy_server, "general_settings", {"enable_jwt_auth": True})
     monkeypatch.setattr(proxy_server, "premium_user", True)
     monkeypatch.setattr(proxy_server, "prisma_client", "test-database")

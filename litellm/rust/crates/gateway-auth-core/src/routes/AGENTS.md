@@ -1,6 +1,6 @@
 # Routes
 
-Whether a route may be called
+Whether a route may be called. Its failures follow the same `error.rs` convention as `credential/`
 
 ## `error.rs`
 

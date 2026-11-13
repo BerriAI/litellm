@@ -2,9 +2,9 @@ use std::time::{Duration, SystemTime};
 
 use litellm_gateway_auth::{
     Error,
-    keys::{KeyHash, KeyLookup, KeyStatus, LookupFuture, verify_key},
+    keys::{KeyLookup, KeyStatus, LookupFuture, verify_key},
 };
-use litellm_secret_value::SecretValue;
+use litellm_gateway_auth_core::credential::key::{KeyHash, Token};
 use rstest::{fixture, rstest};
 
 struct Lookup {
@@ -25,8 +25,8 @@ impl KeyLookup for Lookup {
 }
 
 #[fixture]
-fn token() -> SecretValue {
-    SecretValue::new("sk-test-credential")
+fn token() -> Token {
+    Token::new("sk-test-credential")
 }
 
 #[fixture]
@@ -41,12 +41,12 @@ fn now() -> SystemTime {
 #[case::past(Some(99), false)]
 #[tokio::test]
 async fn checks_expiration(
-    token: SecretValue,
+    token: Token,
     now: SystemTime,
     #[case] expiration: Option<u64>,
     #[case] valid: bool,
 ) {
-    let hash = KeyHash::from_token(&token);
+    let hash = token.hash();
     let lookup = Lookup {
         hash: hash.clone(),
         status: Some(KeyStatus::Active {
@@ -67,13 +67,9 @@ async fn checks_expiration(
 #[case::missing(None)]
 #[case::revoked(Some(KeyStatus::Revoked))]
 #[tokio::test]
-async fn rejects_unusable_keys(
-    token: SecretValue,
-    now: SystemTime,
-    #[case] status: Option<KeyStatus>,
-) {
+async fn rejects_unusable_keys(token: Token, now: SystemTime, #[case] status: Option<KeyStatus>) {
     let lookup = Lookup {
-        hash: KeyHash::from_token(&token),
+        hash: token.hash(),
         status,
     };
 
@@ -85,14 +81,14 @@ async fn rejects_unusable_keys(
 
 #[rstest]
 #[tokio::test]
-async fn rejects_a_different_token(token: SecretValue, now: SystemTime) {
+async fn rejects_a_different_token(token: Token, now: SystemTime) {
     let lookup = Lookup {
-        hash: KeyHash::from_token(&token),
+        hash: token.hash(),
         status: Some(KeyStatus::Active { expires_at: None }),
     };
 
     assert!(matches!(
-        verify_key(&lookup, &SecretValue::new("sk-other-credential"), || now).await,
+        verify_key(&lookup, &Token::new("sk-other-credential"), || now).await,
         Err(Error::InvalidToken)
     ));
 }
@@ -111,7 +107,7 @@ impl KeyLookup for Unavailable {
 
 #[rstest]
 #[tokio::test]
-async fn lookup_failure_preserves_source_without_exposing_it(token: SecretValue, now: SystemTime) {
+async fn lookup_failure_preserves_source_without_exposing_it(token: Token, now: SystemTime) {
     let error = verify_key(&Unavailable, &token, || now).await.unwrap_err();
 
     assert_eq!(error.status(), axum::http::StatusCode::SERVICE_UNAVAILABLE);

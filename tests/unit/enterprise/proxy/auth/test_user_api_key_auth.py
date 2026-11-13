@@ -56,7 +56,7 @@ async def test_enterprise_custom_auth_returns_string():
         patch("litellm.proxy.proxy_server.master_key", MASTER_KEY),
         patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
     ):
-        # Verify the key is correctly handled in _user_api_key_auth_builder
+        # Verify the key is correctly handled in user_api_key_auth_builder
         with patch("litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key") as mock_get_key_object:
             mock_get_key_object.return_value = UserAPIKeyAuth(
                 token="sk-test-key",
@@ -65,7 +65,7 @@ async def test_enterprise_custom_auth_returns_string():
                 user_id="test-user",
             )
 
-            # Call _user_api_key_auth_builder with the returned key
+            # Call user_api_key_auth_builder with the returned key
             from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_builder
 
             try:

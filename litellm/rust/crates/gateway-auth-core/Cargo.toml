@@ -6,9 +6,20 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+base64.workspace = true
 http.workspace = true
+jiff.workspace = true
+jsonwebtoken = { workspace = true, features = ["rust_crypto"] }
+litellm-config.workspace = true
+litellm-fnmatch.workspace = true
+litellm-secret-value.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
 strum.workspace = true
+subtle.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+jsonwebtoken = { workspace = true, features = ["rust_crypto", "use_pem"] }
 rstest.workspace = true
+tokio = { workspace = true, features = ["rt", "macros"] }

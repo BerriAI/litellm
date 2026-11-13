@@ -840,9 +840,9 @@ class RouteChecks:
         if valid_token.jwt_claims is None or valid_token.token is not None or valid_token.team_id is None:
             return ()
 
-        from litellm.proxy.proxy_server import jwt_handler
+        from litellm.proxy.proxy_server import litellm_jwtauth
 
-        return jwt_handler.litellm_jwtauth.team_allowed_routes
+        return litellm_jwtauth.team_allowed_routes
 
     @staticmethod
     def _require_auth_pass_through_access(

@@ -97,6 +97,7 @@ backon = { version = "1.6.0", default-features = false, features = ["std", "toki
 aws-sdk-s3 = { version = "1.146.1", default-features = false, features = ["rt-tokio"] }
 http = "1"
 google-cloud-auth = { version = "1.16.0", default-features = false }
+jiff = { version = "0.2.37", default-features = false, features = ["std"] }
 jsonwebtoken = { version = "11.1.0", default-features = false }
 hyper-util = { version = "0.1.20", default-features = false, features = ["client-proxy"] }
 parking_lot = "0.12.5"

@@ -3380,12 +3380,14 @@ dependencies = [
  "js-sys",
  "p256",
  "p384",
+ "pem 3.0.6",
  "rand 0.8.7",
  "rsa",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "signature",
+ "simple_asn1",
  "zeroize",
 ]
 
@@ -3710,6 +3712,7 @@ name = "litellm-config"
 version = "0.1.0"
 dependencies = [
  "litellm-error",
+ "litellm-python-compat",
  "litellm-router-types",
  "litellm-secret-value",
  "rstest",
@@ -3871,6 +3874,7 @@ dependencies = [
  "futures-util",
  "litellm-config",
  "litellm-error",
+ "litellm-gateway-auth-core",
  "litellm-secret-value",
  "litellm-secrets",
  "rstest",
@@ -3888,10 +3892,20 @@ dependencies = [
 name = "litellm-gateway-auth-core"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "http 1.4.2",
+ "jiff",
+ "jsonwebtoken",
+ "litellm-config",
+ "litellm-fnmatch",
+ "litellm-secret-value",
  "rstest",
+ "serde_json",
+ "sha2 0.10.9",
  "strum",
+ "subtle",
  "thiserror 2.0.19",
+ "tokio",
 ]
 
 [[package]]
@@ -3930,6 +3944,7 @@ dependencies = [
  "litellm-cache-response",
  "litellm-error",
  "litellm-gateway-auth",
+ "litellm-gateway-auth-core",
  "litellm-host",
  "litellm-host-http",
  "litellm-http",
@@ -3961,7 +3976,7 @@ dependencies = [
  "base64 0.22.1",
  "litellm-error",
  "litellm-gateway-auth",
- "litellm-secret-value",
+ "litellm-gateway-auth-core",
  "rand 0.8.7",
  "rstest",
  "thiserror 2.0.19",
@@ -4417,13 +4432,16 @@ dependencies = [
  "futures-util",
  "http 1.4.2",
  "indexmap 2.14.0",
+ "jiff",
  "litellm-auth",
  "litellm-auth-aws",
  "litellm-cache",
  "litellm-cache-response",
  "litellm-callbacks-legacy-python",
  "litellm-circuit-breaker",
+ "litellm-config",
  "litellm-core-utils",
+ "litellm-coroutine",
  "litellm-error",
  "litellm-gateway-auth-core",
  "litellm-host",
@@ -4500,7 +4518,7 @@ dependencies = [
  "litellm-redis-testing",
  "litellm-redis-types",
  "litellm-secret-value",
- "pem",
+ "pem 4.0.0",
  "pkcs8",
  "redis",
  "rstest",
@@ -5514,6 +5532,16 @@ dependencies = [
 
 [[package]]
 name = "pem"
+version = "3.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d30c53c26bc5b31a98cd02d20f25a7c8567146caf63ed593a9d87b2775291be"
+dependencies = [
+ "base64 0.22.1",
+ "serde_core",
+]
+
+[[package]]
+name = "pem"
 version = "4.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d354a98a3d1251555de99e8fdd8afda05573c31b82f59063a7b0a29b5527f120"
@@ -6156,7 +6184,7 @@ version = "0.14.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8774e05a7d0de114588e6a28fe7e71694b82614ed569d86d8b389dfbc98b8ad8"
 dependencies = [
- "pem",
+ "pem 4.0.0",
  "ring",
  "rustls-pki-types",
  "time",
@@ -7054,6 +7082,18 @@ name = "simdutf8"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
+
+[[package]]
+name = "simple_asn1"
+version = "0.6.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d585997b0ac10be3c5ee635f1bab02d512760d14b7c468801ac8a01d9ae5f1d"
+dependencies = [
+ "num-bigint 0.4.8",
+ "num-traits",
+ "thiserror 2.0.19",
+ "time",
+]
 
 [[package]]
 name = "slab"

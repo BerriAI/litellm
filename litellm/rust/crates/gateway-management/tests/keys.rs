@@ -7,15 +7,12 @@ use std::{
 };
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use litellm_gateway_auth::{
-    hash_token,
-    keys::{KeyHash, KeyLookup, KeyStatus, verify_key},
-};
+use litellm_gateway_auth::keys::{KeyLookup, KeyStatus, verify_key};
+use litellm_gateway_auth_core::credential::key::Token;
 use litellm_gateway_management::{
     Error,
     keys::{Keys, Revocation},
 };
-use litellm_secret_value::SecretValue;
 use rstest::{fixture, rstest};
 use support::{MemoryStore, Unavailable};
 
@@ -45,7 +42,7 @@ async fn generated_key_can_be_retrieved_verified_and_revoked(
     let generated = keys.generate(expires_at, now).await.unwrap();
     let hash = &generated.record.hash;
 
-    assert_eq!(hash.as_str(), hash_token(generated.token.expose()));
+    assert_eq!(*hash, generated.token.hash());
     assert_eq!(generated.record.status, KeyStatus::Active { expires_at });
     assert_eq!(
         keys.get(hash).await.unwrap(),
@@ -117,7 +114,7 @@ async fn invalid_expiration_is_rejected_before_storage(now: SystemTime, #[case] 
 #[tokio::test]
 async fn missing_key_is_not_created_by_get_or_revoke(store: Arc<MemoryStore>) {
     let keys = Keys::new(store);
-    let hash = KeyHash::from_token(&SecretValue::new("sk-missing"));
+    let hash = Token::new("sk-missing").hash();
 
     assert_eq!(keys.get(&hash).await.unwrap(), None);
     assert_eq!(keys.revoke(&hash).await.unwrap(), Revocation::NotFound);
@@ -128,7 +125,7 @@ async fn missing_key_is_not_created_by_get_or_revoke(store: Arc<MemoryStore>) {
 #[tokio::test]
 async fn storage_failures_are_returned_for_all_operations(now: SystemTime) {
     let keys = Keys::new(Arc::new(Unavailable));
-    let hash = KeyHash::from_token(&SecretValue::new("sk-unavailable"));
+    let hash = Token::new("sk-unavailable").hash();
 
     assert!(matches!(
         keys.generate(None, now).await,

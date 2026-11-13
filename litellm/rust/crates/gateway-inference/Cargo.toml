@@ -33,6 +33,7 @@ thiserror.workspace = true
 
 [dev-dependencies]
 litellm-cache-memory.workspace = true
+litellm-gateway-auth-core.workspace = true
 futures-util.workspace = true
 tokio = { workspace = true, features = ["io-util"] }
 rstest.workspace = true
