@@ -118,9 +118,7 @@ function SourceWorkspace({
         lastEvent={lastEvent}
         onSetup={() => setSetup(!setup)}
       />
-      {(setup || !connected) && (
-        <SetupCard token={token} sourceId={source.source_id} status={status} />
-      )}
+      {(setup || !connected) && <SetupCard token={token} sourceId={source.source_id} status={status} />}
       <SummaryStats counts={summary.data} />
       <Tabs
         value={tab}
