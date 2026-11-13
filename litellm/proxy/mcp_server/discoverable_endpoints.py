@@ -1459,11 +1459,21 @@ async def exchange_token_with_server(
             )
         proxy_base_url: Final = get_request_base_url(request)
         resolved_redirect_uri: Final = redirect_uri if bridge_token_relay else f"{proxy_base_url}/callback"
+        granted_scope: Final = (
+            managed_code.requested_scope
+            if managed_code is not None
+            else (bridge_identity.requested_scope if bridge_identity is not None else None)
+        )
+        requested_scope: Final = scope if scope is not None else granted_scope
+        authorization_scope: Final = (
+            requested_scope if requested_scope is not None else " ".join(resolved_server.scopes or ())
+        )
         token_data = {
             "grant_type": "authorization_code",
             "code": bridge_identity.upstream_code if bridge_identity else authorization_code,
             "redirect_uri": resolved_redirect_uri,
             **token_request.body,
+            **({"scope": authorization_scope} if authorization_scope else {}),
         }
         if code_verifier:
             token_data["code_verifier"] = code_verifier
