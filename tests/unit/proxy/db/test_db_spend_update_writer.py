@@ -2607,7 +2607,7 @@ async def test_commit_spend_updates_uses_pipeline():
     mock_redis_update_buffer.store_in_memory_spend_updates_in_redis = AsyncMock()
     # Return all-None tuple (no data to commit); the pipeline yields 6 slots
     mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
-        return_value=(None, None, None, None, None, None, None)
+        return_value=(None, None, None, None, None, None, None, None)
     )
     db_writer.redis_update_buffer = mock_redis_update_buffer
 
@@ -2688,7 +2688,7 @@ async def test_commit_with_redis_requeues_all_on_db_failure():
 
     mock_redis_update_buffer = AsyncMock()
     mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
-        return_value=(db_spend, daily_user, None, None, None, None, None)
+        return_value=(db_spend, daily_user, None, None, None, None, None, None)
     )
     mock_redis_update_buffer.restore_transactions_to_redis = AsyncMock()
     db_writer.redis_update_buffer = mock_redis_update_buffer
@@ -2743,7 +2743,7 @@ async def test_commit_with_redis_only_requeues_failed_category():
 
     mock_redis_update_buffer = AsyncMock()
     mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
-        return_value=(db_spend, daily_user, None, None, None, None, None)
+        return_value=(db_spend, daily_user, None, None, None, None, None, None)
     )
     mock_redis_update_buffer.restore_transactions_to_redis = AsyncMock()
     db_writer.redis_update_buffer = mock_redis_update_buffer
@@ -2791,7 +2791,7 @@ async def test_commit_with_redis_no_requeue_on_success():
 
     mock_redis_update_buffer = AsyncMock()
     mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
-        return_value=(db_spend, None, None, None, None, None, None)
+        return_value=(db_spend, None, None, None, None, None, None, None)
     )
     mock_redis_update_buffer.restore_transactions_to_redis = AsyncMock()
     db_writer.redis_update_buffer = mock_redis_update_buffer
@@ -3424,7 +3424,7 @@ async def test_window_spend_queue_is_handed_to_the_redis_buffer():
     db_writer = DBSpendUpdateWriter()
     mock_redis_update_buffer = AsyncMock()
     mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
-        return_value=(None, None, None, None, None, None, None)
+        return_value=(None, None, None, None, None, None, None, None)
     )
     db_writer.redis_update_buffer = mock_redis_update_buffer
     db_writer.pod_lock_manager = AsyncMock()
@@ -3454,7 +3454,7 @@ async def test_window_spend_transactions_from_redis_are_committed_by_the_lock_wi
     )
     mock_redis_update_buffer = AsyncMock()
     mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
-        return_value=(None, None, None, None, None, None, window_transactions)
+        return_value=(None, None, None, None, None, None, window_transactions, None)
     )
     db_writer.redis_update_buffer = mock_redis_update_buffer
     db_writer.pod_lock_manager = AsyncMock()
@@ -3712,7 +3712,7 @@ async def test_failed_window_spend_commit_from_redis_is_restored_to_redis():
     )
     mock_redis_update_buffer = AsyncMock()
     mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
-        return_value=(None, None, None, None, None, None, window_transactions)
+        return_value=(None, None, None, None, None, None, window_transactions, None)
     )
     mock_redis_update_buffer.restore_transactions_to_redis = AsyncMock()
     db_writer.redis_update_buffer = mock_redis_update_buffer
@@ -3747,7 +3747,7 @@ async def test_failed_per_entity_increment_from_redis_restores_only_what_may_sti
     )
     mock_redis_update_buffer = AsyncMock()
     mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
-        return_value=(db_spend_transactions, None, None, None, None, None, None)
+        return_value=(db_spend_transactions, None, None, None, None, None, None, None)
     )
     mock_redis_update_buffer.restore_transactions_to_redis = AsyncMock()
     db_writer.redis_update_buffer = mock_redis_update_buffer
@@ -3830,7 +3830,7 @@ async def test_failed_window_spend_commit_from_redis_is_restored_only_when_safe_
     )
     mock_redis_update_buffer = AsyncMock()
     mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
-        return_value=(None, None, None, None, None, None, window_transactions)
+        return_value=(None, None, None, None, None, None, window_transactions, None)
     )
     mock_redis_update_buffer.restore_transactions_to_redis = AsyncMock()
     db_writer.redis_update_buffer = mock_redis_update_buffer
