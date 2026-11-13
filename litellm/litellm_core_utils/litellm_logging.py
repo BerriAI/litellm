@@ -5594,8 +5594,23 @@ def get_masked_values(
             return v[: unmasked_length // 2] + "*" * number_of_asterisks + v[-unmasked_length // 2 :]
         return v[: unmasked_length // 2] + "*" * (len(v) - unmasked_length) + v[-unmasked_length // 2 :]
 
+    def _mask_nested(v: object) -> object:
+        if not isinstance(v, dict):
+            return v
+        typed_value: Final = cast(dict[object, object], v)  # cast-ok: nested config values are untyped mappings
+        if _depth >= _max_depth or not all(isinstance(nested_key, str) for nested_key in typed_value):
+            return typed_value
+        return get_masked_values(
+            cast(dict[str, object], typed_value),  # cast-ok: every key was checked to be a str above
+            mask_all_values=mask_all_values,
+            unmasked_length=unmasked_length,
+            number_of_asterisks=number_of_asterisks,
+            _depth=_depth + 1,
+            _max_depth=_max_depth,
+        )
+
     return {
-        k: (v if ignore_sensitive_values or not has_sensitive_keyword(k) else _mask_value(v))
+        k: (v if ignore_sensitive_values else _mask_value(v) if has_sensitive_keyword(k) else _mask_nested(v))
         for k, v in sensitive_object.items()
     }
 
