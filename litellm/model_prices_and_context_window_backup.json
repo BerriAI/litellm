@@ -31077,6 +31077,11 @@
         "supported_output_modalities": [
             "text"
         ],
+        "supported_regions": [
+            "global",
+            "us",
+            "eu"
+        ],
         "supports_audio_input": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -31146,6 +31151,11 @@
         ],
         "supported_output_modalities": [
             "text"
+        ],
+        "supported_regions": [
+            "global",
+            "us",
+            "eu"
         ],
         "supports_audio_input": true,
         "supports_computer_use": true,
@@ -79330,6 +79340,11 @@
         ],
         "supported_output_modalities": [
             "text"
+        ],
+        "supported_regions": [
+            "global",
+            "us",
+            "eu"
         ],
         "supports_audio_input": true,
         "supports_computer_use": true,
