@@ -12,7 +12,7 @@ from typing import Final, TypeVar
 from litellm.redis.stores.router_usage import CounterIncrement, RouterUsageStore, UsageCounter
 from litellm.router_python_host import PythonHost
 from litellm.rust_bridge._native import NativeRedisClient
-from tests.unit.caching.test_redis_batch import fake_pending
+from tests.unit.caching.redis_batch_double import fake_pending
 
 T = TypeVar("T")
 

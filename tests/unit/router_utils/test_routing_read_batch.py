@@ -19,7 +19,7 @@ from litellm.router_config import build_router_config
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
 from litellm.router_utils import routing_prefetch
 from litellm.utils import get_utc_datetime
-from tests.unit.caching.test_redis_batch import FakeNativePending, FakeNatives, ReadyPending, fake_pending, fake_send
+from tests.unit.caching.redis_batch_double import FakeNativePending, FakeNatives, ReadyPending, fake_pending, fake_send
 from tests.unit.conftest import redis_cache_double
 from tests.unit.redis.stores.router_usage_double import FakeUsageHandle, UsageHost
 from tests.unit.redis.stores.test_router_cooldowns import FakeCooldowns

@@ -36,11 +36,6 @@ _billing_time: Final[ContextVar[datetime | None]] = ContextVar("billing_time", d
 _post_response: Final[ContextVar[bool]] = ContextVar("post_response", default=False)
 
 _service_target: Final[ContextVar[str | None]] = ContextVar("service_target", default=None)
-# Event-metadata key under which a Redis pipeline reports the sorted, comma-joined families its ops were
-# declared under when they span more than one.
-REDIS_FAMILIES_METADATA_KEY: Final = "families"
-
-_service_caller: Final[ContextVar[str | None]] = ContextVar("service_caller", default=None)
 
 _mirrored_call: Final[ContextVar[bool]] = ContextVar("mirrored_call", default=False)
 
@@ -138,22 +133,6 @@ def with_service_target(
         return run
 
     return decorate
-
-
-@contextmanager
-def service_caller(caller: str | None) -> Generator[None]:
-    """Name the litellm code a datastore call was issued for when its own frames cannot: an operation
-    declared in one task and run in another (a batch op retried on the flush) carries the chain captured
-    where it was declared."""
-    token: Final = _service_caller.set(caller)
-    try:
-        yield
-    finally:
-        _restore(_service_caller, token)
-
-
-def current_service_caller() -> str | None:
-    return _service_caller.get()
 
 
 @contextmanager
