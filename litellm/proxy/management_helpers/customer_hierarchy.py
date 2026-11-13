@@ -102,6 +102,23 @@ def budget_values(budget: Budget) -> Mapping[str, object]:
     return _VALUES.validate_python(budget.model_dump())
 
 
+_JSON_BUDGET_COLUMNS: Final = frozenset({"model_tpm_limit", "model_rpm_limit"})
+
+
+_MODEL_LIMIT_MAP: Final = TypeAdapter(dict[str, int])
+
+
+def budget_row_values(values: Mapping[str, object]) -> Mapping[str, object]:
+    """Prisma writes Json columns only through ``Json``; the per-model limit maps are the budget's Json columns."""
+    from prisma import Json
+
+    return {
+        key: Json(_MODEL_LIMIT_MAP.validate_python(value)) if key in _JSON_BUDGET_COLUMNS else value
+        for key, value in values.items()
+        if not (key in _JSON_BUDGET_COLUMNS and value is None)
+    }
+
+
 def related_budget(value: object, now: datetime | None = None, inherited_maximum: float | None = None) -> Budget | None:
     record: Final = _BUDGET.validate_python(value)
     if record is None:
@@ -224,6 +241,11 @@ def alias_patch(payload: OrganizationPatch | TeamPatch | MemberPatch) -> Mapping
 
 _BUDGET_INCLUDE: Final = {"budget": True}
 _MEMBER_INCLUDE: Final = {"budget": True, "budget_override": True}
+_ID: Final = TypeAdapter(str)
+
+
+def _member_ids(rows: Sequence[PrismaRecord]) -> tuple[str, ...]:
+    return tuple(_ID.validate_python(row.model_dump()["customer_member_id"]) for row in rows)
 
 
 class CustomerHierarchyStore:
@@ -288,11 +310,13 @@ class CustomerHierarchyStore:
         budget_id: Final = str(uuid4())
         await create_budget_row(
             self.budgets,
-            {
-                **budget_values(budget),
-                "allowed_models": budget.allowed_models or (),
-                "budget_id": budget_id,
-            },
+            budget_row_values(
+                {
+                    **budget_values(budget),
+                    "allowed_models": budget.allowed_models or (),
+                    "budget_id": budget_id,
+                }
+            ),
             actor,
         )
         return budget_id
@@ -304,10 +328,12 @@ class CustomerHierarchyStore:
         await update_budget_row(
             self.budgets,
             budget_id,
-            {
-                **patch,
-                **({"allowed_models": budget.allowed_models or ()} if "allowed_models" in patch else {}),
-            },
+            budget_row_values(
+                {
+                    **patch,
+                    **({"allowed_models": budget.allowed_models or ()} if "allowed_models" in patch else {}),
+                }
+            ),
             actor,
         )
         return budget_id
@@ -604,6 +630,17 @@ class CustomerHierarchyStore:
         )
         return Page(tuple(member_response(row, self.now) for row in rows), count)
 
+    async def member_ids_in_team(self, team_id: str) -> tuple[str, ...]:
+        return _member_ids(await self.members.find_many(where={"parent_team_id": team_id}))
+
+    async def member_ids_in_organization(self, organization_id: str) -> tuple[str, ...]:
+        teams: Final = await self.teams.find_many(where={"parent_org_id": organization_id})
+        team_ids: Final = tuple(_ID.validate_python(team.model_dump()["customer_team_id"]) for team in teams)
+        return _member_ids(await find_many_in(self.members, "parent_team_id", team_ids))
+
+    async def member_ids_using_template(self, budget_id: str) -> tuple[str, ...]:
+        return _member_ids(await self.members.find_many(where={"budget_id": budget_id}))
+
     async def delete_member(self, member_id: str) -> None | Failure:
         member: Final = await self.get_member(member_id)
         if isinstance(member, Failure):
@@ -706,6 +743,15 @@ class CustomerHierarchy:
         return await self.transaction(
             lambda store: store.delete_member(entity_id), operation_type=TransactionOperation.DELETE
         )
+
+    async def member_ids_in_team(self, entity_id: str) -> tuple[str, ...] | Failure:
+        return await self.transaction(lambda store: store.member_ids_in_team(entity_id))
+
+    async def member_ids_in_organization(self, entity_id: str) -> tuple[str, ...] | Failure:
+        return await self.transaction(lambda store: store.member_ids_in_organization(entity_id))
+
+    async def member_ids_using_template(self, budget_id: str) -> tuple[str, ...] | Failure:
+        return await self.transaction(lambda store: store.member_ids_using_template(budget_id))
 
     async def list_organizations(
         self, page: int = 1, page_size: int = 50, search: str = ""

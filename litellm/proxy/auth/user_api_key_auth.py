@@ -130,6 +130,10 @@ from litellm.proxy.auth.auth_utils import (
     request_dispatched_to_provider_pass_through,
     route_in_additonal_public_routes,
 )
+from litellm.proxy.auth.customer_hierarchy_auth import (
+    customer_member_id_from_headers,
+    resolve_customer_hierarchy,
+)
 from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
 from litellm.proxy.auth.network import TrustedProxyConfig, resolve_network_context
 from litellm.proxy.auth.oauth2_check import Oauth2Handler
@@ -301,6 +305,7 @@ _CLAUDE_MODEL_ROUTES: Final = frozenset(
 )
 _CLAUDE_MODEL_NORMALIZED: Final = "litellm.claude_model_normalized"
 _GENERAL_SETTINGS_ADAPTER: Final = TypeAdapter(dict[str, object])
+_KEY_METADATA_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
 async def _normalize_claude_model(
@@ -4535,8 +4540,29 @@ async def _authorize_authenticated_request(
             llm_model_list,  # pyright: ignore[reportUnknownVariableType]  # proxy global has untyped deployment entries
             llm_router,
             prisma_client,
+            user_api_key_cache,
             user_model,
         )
+
+        customer_member_id: Final = customer_member_id_from_headers(
+            safe_get_request_headers(request)  # pyright: ignore[reportUnknownArgumentType]  # request headers are untyped
+        )
+        user_api_key_auth_obj.customer_hierarchy = None  # rebind-ok: request state, never inherited from a cached key
+        if customer_member_id is not None:
+            with tracer.trace("litellm.proxy.auth.resolve_customer_hierarchy"):  # pyright: ignore[reportUnknownMemberType]  # tracer is the untyped proxy tracer
+                user_api_key_auth_obj.customer_hierarchy = await resolve_customer_hierarchy(  # rebind-ok: the gate updates the request-owned auth object in place
+                    customer_member_id=customer_member_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    llm_router=llm_router,
+                    request_model=_get_model_from_request_context(
+                        request_data, route, request, llm_router, team_id=user_api_key_auth_obj.team_id
+                    ),
+                    route=route,
+                    key_metadata=_KEY_METADATA_ADAPTER.validate_python(
+                        user_api_key_auth_obj.metadata or {}  # pyright: ignore[reportUnknownMemberType]  # untyped key metadata, validated here
+                    ),
+                )
 
         grants: Final = await access_group_ids_for_identity(user_api_key_auth_obj)
         user_api_key_auth_obj.apply_access_group_rule_grants(grants)

@@ -12,15 +12,14 @@ import httpx
 import prisma
 import pytest
 
-
-from litellm.proxy._types import LiteLLM_BudgetTableFull, LiteLLM_VerificationToken
-from litellm.proxy.common_utils import reset_budget_job as reset_budget_job_module
 from litellm.constants import (
     PROXY_BUDGET_RESCHEDULER_MIN_TIME,
     RESET_BUDGET_JOB_BATCH_SIZE,
     RESET_BUDGET_JOB_LOCK_TTL_SECONDS,
     RESET_BUDGET_JOB_NAME,
 )
+from litellm.proxy._types import LiteLLM_BudgetTableFull, LiteLLM_VerificationToken
+from litellm.proxy.common_utils import reset_budget_job as reset_budget_job_module
 from litellm.proxy.common_utils.reset_budget_job import (
     ResetBudgetJob,
     _RowReset,
@@ -116,6 +115,7 @@ class MockTable:
         where: Dict[str, Any],
         order: Optional[Dict[str, str]] = None,
         take: Optional[int] = None,
+        include: Optional[Dict[str, bool]] = None,
     ) -> List[Any]:
         """Replays canned rows, honouring the keyset cursor + ``take`` a paged
         caller relies on: without that a paged walk never advances and the
@@ -220,6 +220,9 @@ class MockDB:
         self.litellm_tagtable = MockTable()
         self.litellm_modelaccessgroupbudgettable = MockTable()
         self.litellm_projecttable = MockTable()
+        self.litellm_customermembertable = MockTable()
+        self.litellm_customerteamtable = MockTable()
+        self.litellm_customerorganizationtable = MockTable()
         self.batch_calls: List[Dict[str, Any]] = []
         self.batchers: List[MockBatcher] = []
 
@@ -257,6 +260,7 @@ class MockPrismaClient:
         }
         self.get_data_calls: List[Dict[str, Any]] = []
         self.db = MockDB()
+        self.writer_db = self.db
 
     async def get_data(self, table_name, query_type, **kwargs):
         self.get_data_calls.append({"table_name": table_name, "query_type": query_type, **kwargs})
@@ -4337,6 +4341,9 @@ async def test_reset_budget_continues_other_categories_on_failure(frozen_reset_c
         **{t["team_id"]: t["spend"] for t in [team1, team2]},
     }
     _wire_cascade_reads_for_test(prisma_client, endusers=[enduser1])
+    prisma_client.writer_db.litellm_customermembertable.find_many = AsyncMock(return_value=[])
+    prisma_client.writer_db.litellm_customerteamtable.find_many = AsyncMock(return_value=[])
+    prisma_client.writer_db.litellm_customerorganizationtable.find_many = AsyncMock(return_value=[])
 
     proxy_logging_obj: Final = MagicMock()
     proxy_logging_obj.service_logging_obj = MagicMock()

@@ -56,6 +56,9 @@ PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS: Final = frozenset(
         "model_per_project",
         "model_per_project_itpm",
         "model_per_project_otpm",
+        "model_per_customer_org",
+        "model_per_customer_team",
+        "model_per_customer_member",
     }
 )
 DISABLE_FALLBACKS_ON_PER_MODEL_RATE_LIMITS_SETTING: Final = "disable_fallbacks_on_per_model_rate_limits"
