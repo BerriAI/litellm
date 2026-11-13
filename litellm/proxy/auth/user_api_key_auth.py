@@ -4541,7 +4541,7 @@ async def _resolve_request_customer_hierarchy(
     user_api_key_auth_obj: UserAPIKeyAuth,
     customer_identity: CustomerRequestIdentity,
     request: Request,
-    request_data: dict[str, object],
+    request_data: Mapping[str, object],
     route: str,
 ) -> None:
     """Records on the request's auth object the customer hierarchy the headers name, or only the named identity
@@ -4555,7 +4555,7 @@ async def _resolve_request_customer_hierarchy(
             user_api_key_cache=user_api_key_cache,
             llm_router=llm_router,
             request_model=_get_model_from_request_context(
-                request_data, route, request, llm_router, team_id=user_api_key_auth_obj.team_id
+                dict(request_data), route, request, llm_router, team_id=user_api_key_auth_obj.team_id
             ),
             route=route,
             key_metadata=_KEY_METADATA_ADAPTER.validate_python(
