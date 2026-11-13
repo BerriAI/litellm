@@ -33,7 +33,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     claim_request_stash_for_data,
 )
 from litellm.proxy.hooks.priority_class_share import pool_member
-from litellm.redis.stores.rate_limits import RateLimitScope
+from litellm.redis.stores.rate_limits import LocalValue, RateLimitEntry, RateLimitScope
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from tests.unit.redis.stores.fake_rate_limits import FakeRateLimits
 
@@ -3797,3 +3797,53 @@ async def test_a_failing_metrics_sink_never_changes_admission(monkeypatch: pytes
     refusal: Final = await _refused_at_the_hook(handler, _team_key())
     assert refusal.headers is not None
     assert refusal.headers["rate_limited_by"] == "model_per_team_saturated"
+
+
+class _SharedRedisRateLimits(FakeRateLimits):
+    """One Redis behind several workers, each with its own memory."""
+
+    def __init__(self, redis: dict[RateLimitEntry, LocalValue]) -> None:
+        super().__init__()
+        self.redis = redis
+
+    async def get(self, entry: RateLimitEntry, *, backfill_ttl_seconds: float | None = None) -> LocalValue | None:
+        value: Final = self.redis.get(entry)
+        if value is not None:
+            self.memory.set_local(entry, value, backfill_ttl_seconds)
+        return value
+
+
+@pytest.mark.asyncio
+async def test_every_worker_reads_the_models_saturation_from_redis_not_from_what_it_served_itself(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    redis: Final[dict[RateLimitEntry, LocalValue]] = {}
+    busy, idle = (_borrowing_handler(monkeypatch, borrows=True) for _ in range(2))
+    for worker in (busy, idle):
+        worker.v3_limiter = PROXY_MaxParallelRequestsHandler_v3(
+            worker.internal_usage_cache, rate_limit_store=_SharedRedisRateLimits(redis).store()
+        )
+    counter: Final = RateLimitScope("model_saturation_check", "shared-model").counter("tokens")
+    redis[counter] = 700
+    busy.v3_limiter.rate_limits.set_local(counter, 700, 60)
+    idle.v3_limiter.rate_limits.set_local(counter, 30, 60)
+    group: Final = busy.llm_router.registry().group("shared-model")
+    assert group is not None
+    assert await busy._check_model_saturation("shared-model", group) == pytest.approx(0.7)
+    assert await idle._check_model_saturation("shared-model", group) == pytest.approx(0.7)
+
+
+@pytest.mark.asyncio
+async def test_a_worker_without_redis_reads_the_models_saturation_from_its_own_memory(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _borrowing_handler(monkeypatch, borrows=True)
+    fakes: Final = FakeRateLimits(connected=False)
+    handler.v3_limiter = PROXY_MaxParallelRequestsHandler_v3(
+        handler.internal_usage_cache, rate_limit_store=fakes.store()
+    )
+    counter: Final = RateLimitScope("model_saturation_check", "shared-model").counter("tokens")
+    fakes.set_local(counter, 700, 60)
+    group: Final = handler.llm_router.registry().group("shared-model")
+    assert group is not None
+    assert await handler._check_model_saturation("shared-model", group) == pytest.approx(0.7)

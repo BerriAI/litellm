@@ -100,6 +100,14 @@ class RateLimitStore:
         return await self._handle.get(entry, backfill_ttl_seconds=backfill_ttl)
 
     @with_service_target(RATE_LIMITS_TARGET)
+    async def get_from_redis(self, entry: RateLimitEntry, backfill_ttl: float | None = None) -> LocalValue | None:
+        """Redis first, written back to memory, for a read every worker must agree on. Memory alone answers only
+        without Redis, since a worker's own copy carries just the usage it served itself."""
+        if not self.has_redis:
+            return self._handle.get_local(entry)
+        return await self._handle.get(entry, backfill_ttl_seconds=backfill_ttl)
+
+    @with_service_target(RATE_LIMITS_TARGET)
     def sliding_window(
         self, counters: Sequence[RateLimitCounter], now: int, window_size: int, *, batch: Batch
     ) -> Awaitable[tuple[WindowCount, ...]]:

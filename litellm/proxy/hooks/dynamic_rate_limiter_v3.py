@@ -587,19 +587,10 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         self,
         counter: RateLimitCounter,
     ) -> int | float | str | None:
-        """
-        Get saturation value with configurable local cache TTL.
-
-        Uses DualCache with configurable TTL for local cache storage.
-        TTL is configurable via litellm.priority_reservation_settings.saturation_check_cache_ttl
-
-        Args:
-            counter: The saturation counter
-
-        Returns:
-            Counter value, or None if not found
-        """
-        value: Final = await self.v3_limiter.rate_limits.get(
+        """The model's counter as Redis holds it, so every worker agrees on saturation. A worker's own in-memory copy
+        carries only the usage it served itself, and steady traffic keeps that copy alive past any TTL. The read is
+        written back to memory for ``saturation_check_cache_ttl`` seconds; without Redis memory is all there is."""
+        value: Final = await self.v3_limiter.rate_limits.get_from_redis(
             counter, backfill_ttl=self._get_saturation_check_cache_ttl()
         )
         return None if isinstance(value, dict) else value
