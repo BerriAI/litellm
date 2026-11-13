@@ -447,6 +447,10 @@ def request_tags(args: HookArgs) -> tuple[str | int | float | bool | Stringified
     return coerce_value("request_tags", _TAGS, raw if iterated is None else iterated)
 
 
+def _guardrail_modes(mode: object) -> object:
+    return mode if isinstance(mode, list) else (mode,)  # pyright: ignore[reportUnknownVariableType]  # untyped legacy modes
+
+
 def _guardrail_entry(entry: object) -> GuardrailEntry:
     entry_mapping: Final = mapping(entry)
     if entry_mapping is None:
@@ -456,7 +460,7 @@ def _guardrail_entry(entry: object) -> GuardrailEntry:
         GuardrailEntry,
         {
             "mapping": True,
-            "modes": mode if isinstance(mode, list) else (mode,),
+            "modes": _guardrail_modes(mode),
             "duration": entry_mapping.get("duration"),
         },
     )
