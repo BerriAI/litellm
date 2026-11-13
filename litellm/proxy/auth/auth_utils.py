@@ -2423,12 +2423,14 @@ _MODEL_ROUTING_ROUTE_MARKERS: Final = (
     "/evals",
     "/fine_tuning",
     "/videos",
+    "/interactions/",
 )
 _MODEL_ROUTING_HEADER_OR_QUERY_ROUTE_MARKERS: Final = (
     "/files",
     "/batches",
     "/skills",
     "/evals",
+    "/interactions/",
 )
 _MODEL_ROUTING_QUERY_TARGET_MODEL_ROUTE_MARKERS: Final = (
     "/files",
@@ -2602,6 +2604,19 @@ def video_access_group(
     return creating_group
 
 
+_INTERACTION_BY_ID_ROUTE_MARKERS: Final = ("/interactions/",)
+
+
+def _group_of_deployment_selector(selector: object, llm_router: Router | None) -> object:
+    if not isinstance(selector, str) or llm_router is None:
+        return selector
+    registry: Final = llm_router.registry()
+    if selector in registry.index("model_name"):
+        return selector
+    deployment: Final = registry.deployment(selector)
+    return selector if deployment is None else deployment.model_name
+
+
 def _resolve_model_id_with_router(model_id: str | None, llm_router: Router | None) -> str | None:
     if model_id is None or llm_router is None:
         return model_id
@@ -2680,9 +2695,15 @@ def _extract_model_candidates_from_request(
     uses_completion_model_sources: Final = _route_matches_any_marker(
         route=route, markers=_MODEL_ROUTING_COMPLETION_MODEL_ROUTE_MARKERS
     )
+    selects_by_interaction_id: Final = _route_matches_any_marker(route=route, markers=_INTERACTION_BY_ID_ROUTE_MARKERS)
 
     body_model: Final = request_data.get("model")
-    _append_model_candidates(candidates, body_model)
+    _append_model_candidates(
+        candidates,
+        _group_of_deployment_selector(body_model, llm_router)
+        if selects_by_interaction_id and isinstance(body_model, str)
+        else body_model,
+    )
     if uses_body_target_model_sources or not body_model:
         _append_model_candidates(candidates, request_data.get("target_model_names"))
     if _route_matches_any_marker(route=route, markers=_MODEL_ROUTING_SESSION_MODEL_ROUTE_MARKERS):
@@ -2694,14 +2715,14 @@ def _extract_model_candidates_from_request(
 
     if uses_model_routing_sources:
         if uses_header_or_query_model_sources:
-            _append_model_candidates(
-                candidates,
+            for selector in (
                 _get_case_insensitive_mapping_value(request_query_params, "model"),
-            )
-            _append_model_candidates(
-                candidates,
                 _get_case_insensitive_mapping_value(request_headers, MODEL_ROUTING_HEADER_NAME),
-            )
+            ):
+                _append_model_candidates(
+                    candidates,
+                    _group_of_deployment_selector(selector, llm_router) if selects_by_interaction_id else selector,
+                )
         if uses_query_target_model_sources:
             _append_model_candidates(
                 candidates,

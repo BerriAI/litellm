@@ -862,6 +862,7 @@ def validate_model_cost_values(model_data, exceptions=None):
         "output_cost_per_image_1K",
         "output_cost_per_image_2K",
         "output_cost_per_image_4K",
+        "output_cost_per_billable_unit",
         "input_cost_per_pixel",
         "output_cost_per_pixel",
         "cost_per_second",
@@ -1156,6 +1157,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "output_cost_per_image_1K": {"type": "number"},
             "output_cost_per_image_2K": {"type": "number"},
             "output_cost_per_image_4K": {"type": "number"},
+            "output_cost_per_billable_unit": {"type": "number"},
             "output_cost_per_image_token": {"type": "number"},
             "output_cost_per_image_token_batches": {"type": "number"},
             "output_cost_per_image_token_priority": {"type": "number"},
@@ -1167,6 +1169,16 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "output_cost_per_second_768p": {"type": "number"},
             "output_cost_per_second_2k": {"type": "number"},
             "output_cost_per_second_1080p": {"type": "number"},
+            "output_cost_per_video_clip": {
+                "type": "object",
+                "patternProperties": {
+                    "^[1-9][0-9]*s$": {
+                        "type": "object",
+                        "additionalProperties": {"type": "number", "exclusiveMinimum": 0},
+                    }
+                },
+                "additionalProperties": False,
+            },
             "output_cost_per_second_4k": {"type": "number"},
             "output_cost_per_token": {"type": "number"},
             "output_cost_per_token_above_32k_tokens": {"type": "number"},
@@ -1181,6 +1193,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "output_cost_per_token_above_512k_tokens": {"type": "number"},
             "output_cost_per_token_batches": {"type": "number"},
             "output_cost_per_reasoning_token": {"type": "number"},
+            "output_cost_per_video": {"type": "number"},
             "output_cost_per_video_per_second": {"type": "number"},
             "output_db_cost_per_token": {"type": "number"},
             "output_dbu_cost_per_token": {"type": "number"},

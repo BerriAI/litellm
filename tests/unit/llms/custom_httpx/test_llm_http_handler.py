@@ -5579,6 +5579,66 @@ async def test_responses_agentic_followup_sends_the_plans_request_param_over_a_s
     assert followup_calls[0]["prompt_cache_key"] == "from-plan-params"
 
 
+def _messages_reply(message_id: str, input_tokens: int, output_tokens: int) -> dict[str, object]:
+    return {
+        "id": message_id,
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-5-5",
+        "content": [{"type": "text", "text": "answer"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens},
+    }
+
+
+@pytest.mark.asyncio
+async def test_anthropic_agentic_follow_up_keeps_the_first_rounds_spend_row_on_its_own_id() -> None:
+    from datetime import datetime, timezone
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_spend_logs_id
+
+    request_messages: Final = [{"role": "user", "content": "search"}]
+    first_round: Final = Logging(
+        model="claude-sonnet-5-5",
+        messages=request_messages,
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        litellm_call_id="first-round",
+        function_id="first-round",
+    )
+    first_round.optional_params = {}
+    first_round.model_call_details["httpx_response"] = httpx.Response(
+        200,
+        json=_messages_reply("msg_first_round", 100, 10),
+        request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+    )
+    follow_up_upstream: Final = httpx.MockTransport(
+        lambda request: httpx.Response(200, json=_messages_reply("msg_follow_up", 300, 30))
+    )
+
+    served: Final = await BaseLLMHTTPHandler()._execute_anthropic_agentic_plan(
+        plan=AgenticLoopPlan(run_agentic_loop=True, request_patch=AgenticLoopRequestPatch(messages=request_messages)),
+        model="anthropic/claude-sonnet-5-5",
+        messages=request_messages,
+        anthropic_messages_optional_request_params={},
+        logging_obj=first_round,
+        kwargs={"api_key": "test-key", "client": AsyncHTTPHandler(transport=follow_up_upstream)},
+        depth=0,
+        max_loops=3,
+        fingerprints=[],
+        fingerprint="fp",
+    )
+
+    assert isinstance(served, dict)
+    assert served["id"] == "msg_follow_up"
+    first_round_row: Final = first_round._anthropic_messages_logged_response(result=served).model_dump()
+    first_round_id: Final = get_spend_logs_id("anthropic_messages", first_round_row, {"litellm_call_id": "first-round"})
+    assert first_round_id == "msg_first_round"
+
+
 class _PlannedChatLoop(CustomLogger):
     def __init__(self, plan: AgenticLoopPlan, claimed_call_name: str = "litellm_web_search") -> None:
         super().__init__()
