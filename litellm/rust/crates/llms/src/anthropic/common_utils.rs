@@ -498,6 +498,13 @@ pub fn filter_billing_headers_from_system(system: SystemPrompt) -> Option<System
     }
 }
 
+/// The billing strip of Python's `AnthropicMessagesConfig.transform_anthropic_messages_request`,
+/// which pops a system prompt the filter leaves empty, an empty string included.
+pub fn strip_billing_metadata_from_system(system: SystemPrompt) -> Option<SystemPrompt> {
+    filter_billing_headers_from_system(system)
+        .filter(|kept| !matches!(kept, SystemPrompt::Text(text) if text.is_empty()))
+}
+
 pub fn strip_encrypted_reasoning_blocks(messages: Vec<Message>) -> Vec<Message> {
     retain_blocks(messages, |block| !is_encrypted_reasoning_block(block))
 }

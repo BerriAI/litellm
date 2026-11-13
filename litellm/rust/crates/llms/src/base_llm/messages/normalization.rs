@@ -10,7 +10,7 @@ use litellm_llms_types::{
 use crate::{
     anthropic::{
         beta_gated_fields::strip_beta_gated_system_messages,
-        common_utils::filter_billing_headers_from_system,
+        common_utils::strip_billing_metadata_from_system,
     },
     base_llm::messages::mid_conversation_system::{
         as_system_content_blocks, convert_mid_conversation_system_turns, is_system_role_message,
@@ -18,10 +18,11 @@ use crate::{
     },
 };
 
-/// Python's `_normalize_system_role_messages`: a leading run of `role: "system"` entries is
-/// hoisted into the top-level `system`, a later one stays in place when the model accepts it
-/// and otherwise loses its beta-gated fields under drop_params and becomes a user turn where it
-/// was, and billing blocks are stripped from the top-level `system` either way.
+/// Python's `_normalize_system_role_messages`, run on a request whose billing blocks Python's
+/// transform already stripped: a leading run of `role: "system"` entries is hoisted into the
+/// top-level `system`, which is always sent as blocks, a later one stays in place when the model
+/// accepts it and otherwise loses its beta-gated fields under drop_params and becomes a user
+/// turn where it was, and billing blocks are stripped from the top-level `system` either way.
 pub fn normalize_system_role_messages(
     request: MessagesRequest,
     supports_mid_conversation_system: bool,
@@ -57,24 +58,23 @@ pub fn normalize_system_role_messages(
             convert_mid_conversation_system_turns,
         )
     };
-    let system = if hoisted.is_empty() {
-        request.params.system
-    } else {
-        Some(SystemPrompt::Blocks(
-            as_system_content_blocks(request.params.system)
-                .into_iter()
-                .chain(
-                    hoisted
-                        .into_iter()
-                        .flat_map(|message| message_content_blocks(message.content)),
-                )
-                .collect(),
-        ))
-    };
+    let system_blocks: Vec<ContentBlock> = as_system_content_blocks(
+        request
+            .params
+            .system
+            .and_then(strip_billing_metadata_from_system),
+    )
+    .into_iter()
+    .chain(
+        hoisted
+            .into_iter()
+            .flat_map(|message| message_content_blocks(message.content)),
+    )
+    .collect();
     MessagesRequest {
         messages: remaining,
         params: MessagesOptionalParams {
-            system: system.and_then(filter_billing_headers_from_system),
+            system: strip_billing_metadata_from_system(SystemPrompt::Blocks(system_blocks)),
             ..request.params
         },
         ..request
@@ -199,6 +199,32 @@ mod tests {
         let mut body = json!({"model": "test-model", "max_tokens": 64, "messages": [{"role": "user", "content": "hi"}]});
         body.as_object_mut().unwrap().extend(fields);
         serde_json::from_value(body).unwrap()
+    }
+
+    fn sent_system(fields: Value) -> Option<Value> {
+        serde_json::to_value(normalize_system_role_messages(
+            request(fields),
+            false,
+            false,
+            BetaProvider::AzureAi,
+        ))
+        .unwrap()
+        .get("system")
+        .cloned()
+    }
+
+    #[rstest]
+    #[case::string(json!("be terse"), Some(json!([{"type": "text", "text": "be terse"}])))]
+    #[case::blank_string(json!(" "), Some(json!([{"type": "text", "text": " "}])))]
+    #[case::empty_string(json!(""), None)]
+    #[case::billing_string(json!("x-anthropic-billing-header: cc_version=1"), None)]
+    #[case::empty_blocks(json!([]), None)]
+    #[case::blocks(json!([{"type": "text", "text": "be terse"}]), Some(json!([{"type": "text", "text": "be terse"}])))]
+    fn the_top_level_system_is_sent_as_blocks(
+        #[case] system: Value,
+        #[case] expected: Option<Value>,
+    ) {
+        assert_eq!(sent_system(json!({"system": system})), expected);
     }
 
     fn reminder_with(content: Value) -> Value {

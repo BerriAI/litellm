@@ -723,7 +723,10 @@ mod tests {
                 drops_unsupported_params: false,
             },
         );
-        assert_eq!(body["system"], json!("be terse"));
+        assert_eq!(
+            body["system"],
+            json!([{"type": "text", "text": "be terse"}])
+        );
         assert_eq!(body["messages"][2]["role"], json!(role));
         assert_eq!(body["messages"].as_array().unwrap().len(), 4);
     }
@@ -733,6 +736,20 @@ mod tests {
             drops_unsupported_params,
             ..MessagesTransformContext::default()
         }
+    }
+
+    #[rstest]
+    #[case::string("be terse", Some(json!([{"type": "text", "text": "be terse"}])))]
+    #[case::empty_string("", None)]
+    fn the_system_string_is_sent_as_blocks_as_python_does(
+        #[case] system: &str,
+        #[case] expected: Option<Value>,
+    ) {
+        let body = transformed(
+            json!({"model": "claude-sonnet-4-5", "max_tokens": 16, "system": system, "messages": [{"role": "user", "content": "a"}]}),
+            &MessagesTransformContext::default(),
+        );
+        assert_eq!(body.get("system").cloned(), expected);
     }
 
     #[rstest]

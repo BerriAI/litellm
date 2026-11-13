@@ -3813,6 +3813,32 @@ AZURE_SHAPING_CASES: Final = tuple(
             model=AZURE_CLAUDE,
             warned=True,
         ),
+        Case("azure_ai_system_string", _kw(system="Answer in one word."), model=AZURE_CLAUDE),
+        Case("azure_ai_system_empty_string", _kw(system=""), model=AZURE_CLAUDE),
+        Case(
+            "azure_ai_system_string_stream",
+            _kw(stream=True, system="Answer in one word."),
+            model=AZURE_CLAUDE,
+            upstream=(_stream(TEXT_STREAM),),
+        ),
+        Case(
+            "azure_ai_system_string_with_a_leading_system_turn",
+            _kw(system="Answer in one word.", messages=[{"role": "system", "content": "Be terse."}, dict(USER)]),
+            model=AZURE_CLAUDE,
+        ),
+        Case(
+            "azure_ai_system_blocks_with_cache_control",
+            _kw(
+                system=[
+                    {
+                        "type": "text",
+                        "text": "Answer in one word.",
+                        "cache_control": {"type": "ephemeral", "scope": "global"},
+                    }
+                ]
+            ),
+            model=AZURE_CLAUDE,
+        ),
         Case("azure_ai_extra_body", _kw(extra_body={"parity_extra": 1}), model=AZURE_CLAUDE),
         Case("azure_ai_unknown_top_level_param", _kw(parity_unknown_param="x"), model=AZURE_CLAUDE),
         Case("azure_ai_latest_alias", model="azure_ai/claude-sonnet-latest"),

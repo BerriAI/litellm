@@ -899,15 +899,22 @@ mod tests {
         );
     }
 
-    #[test]
-    fn finalize_request_is_idempotent_and_preserves_string_system() {
+    #[rstest]
+    #[case::string(json!("plain string system"), Some(json!([{"type": "text", "text": "plain string system"}])))]
+    #[case::empty_string(json!(""), None)]
+    #[case::billing_string(json!("x-anthropic-billing-header: cc_version=1"), None)]
+    fn finalize_request_sends_the_system_as_blocks_like_python(
+        #[case] system: serde_json::Value,
+        #[case] expected: Option<serde_json::Value>,
+    ) {
         let request = request_from(json!({
             "model": "claude-sonnet-4-5",
             "max_tokens": 16,
-            "system": "plain string system",
+            "system": system,
             "messages": [{"role": "user", "content": "hi"}]
         }));
         let once = finalized(request, &[], &MessagesTransformContext::default());
+        assert_eq!(once.get("system").cloned(), expected);
         assert_eq!(
             finalized(
                 request_from(once.clone()),
@@ -916,7 +923,6 @@ mod tests {
             ),
             once
         );
-        assert_eq!(once["system"], json!("plain string system"));
     }
 
     #[test]
@@ -1022,7 +1028,7 @@ mod tests {
             ]
         }),
         false,
-        json!("be terse"),
+        json!([{"type": "text", "text": "be terse"}]),
         json!([
             {"role": "user", "content": "fix the bug"},
             {"role": "user", "content": [
@@ -1040,7 +1046,7 @@ mod tests {
             ]
         }),
         true,
-        json!("be terse"),
+        json!([{"type": "text", "text": "be terse"}]),
         json!([
             {"role": "user", "content": "fix the bug"},
             {"role": "system", "content": "reminder"}
