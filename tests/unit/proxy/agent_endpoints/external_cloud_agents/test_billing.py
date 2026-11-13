@@ -189,3 +189,13 @@ async def test_empty_sync_replaces_window_with_empty_totals(db: DatabaseDouble) 
         result: Final = await SpendSync(db, client, lambda: NOW).save_key(db.source.source_id, vendor.key)
     assert result == SyncResult(rows=0)
     assert db.persisted == ()
+
+
+@pytest.mark.asyncio
+async def test_operator_environment_can_redirect_billing_to_a_scripted_server(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_EXTERNAL_CLOUD_AGENTS_BILLING_BASE_URL", "http://127.0.0.1:19199/")
+    vendor: Final = Vendor((page(),))
+    async with httpx.AsyncClient(transport=httpx.MockTransport(vendor.respond)) as client:
+        result: Final = await fetch_page(client, vendor.key, window_start(NOW), NOW)
+    assert not isinstance(result, Failure)
+    assert str(vendor.requests[0].url).startswith("http://127.0.0.1:19199/v2/teams/billing-items?")

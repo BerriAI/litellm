@@ -1,4 +1,5 @@
 import json
+import os
 from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
@@ -131,9 +132,9 @@ async def fetch_page(
         }
     )
     try:
-        response: Final = await client.get(
-            BILLING_URL, params=params, auth=httpx.BasicAuth(key, ""), timeout=BILLING_TIMEOUT
-        )
+        base_url: Final = os.getenv("LITELLM_EXTERNAL_CLOUD_AGENTS_BILLING_BASE_URL")
+        url: Final = base_url.rstrip("/") + "/v2/teams/billing-items" if base_url else BILLING_URL
+        response: Final = await client.get(url, params=params, auth=httpx.BasicAuth(key, ""), timeout=BILLING_TIMEOUT)
         if response.status_code == 429:
             retry_header: Final = TypeAdapter(str).validate_python(response.headers.get("Retry-After", "unspecified"))
             retry_after: Final = retry_header.replace(key, "[redacted]")[:100]
