@@ -37,6 +37,7 @@ This module provides a single proxy-side error class that:
 
 import json
 from collections.abc import Mapping, MutableMapping
+from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
@@ -78,7 +79,6 @@ def per_model_rate_limits_disable_fallbacks(general_settings: Mapping[str, objec
 FALLBACK_ON_SATURATION_SETTING: Final = "fallback_on_saturation"
 SATURATION_FALLBACK_DESCRIPTOR_KEY: Final = "model_saturation_fallback"
 SATURATION_FALLBACKS_EXHAUSTED_METADATA_KEY: Final = "saturation_fallbacks_exhausted"
-SATURATION_FALLBACK_WALK_METADATA_KEY: Final = "saturation_fallback_walk"
 _FALLBACK_ON_SATURATION_FLAG: Final[TypeAdapter[bool | None]] = TypeAdapter(bool | None)
 
 
@@ -117,25 +117,23 @@ def saturation_fallbacks_exhausted(request_data: Mapping[str, object]) -> bool:
     )
 
 
-def saturation_fallback_walk_armed(request_data: Mapping[str, object]) -> bool:
+_SATURATION_FALLBACK_WALK: Final[ContextVar[bool]] = ContextVar("litellm_saturation_fallback_walk", default=False)
+
+
+def saturation_fallback_walk_armed() -> bool:
     """Whether a caller that catches the handoff (``_pre_call_with_fallbacks``) is running this request's hooks."""
-    return any(
-        _metadata_bucket(request_data.get(bucket_name)).get(SATURATION_FALLBACK_WALK_METADATA_KEY) is True
-        for bucket_name in ("metadata", "litellm_metadata")
-    )
+    return _SATURATION_FALLBACK_WALK.get()
 
 
-def arm_saturation_fallback_walk(
-    request_data: MutableMapping[str, object],  # mutable-ok: in-place edit keeps the caller's request object
-) -> None:
-    """Mark the request as running under the fallback walk, so the limiter may hand a saturated model off to it.
-    Routes that call the hooks directly never set this and keep admitting or refusing as before. A request that
-    carries no metadata bucket yet is left as it is, so no bucket is invented that would reach the provider."""
-    bucket_name: Final = next((name for name in ("litellm_metadata", "metadata") if name in request_data), None)
-    if bucket_name is None:
-        return
-    bucket: Final = _metadata_bucket(request_data.get(bucket_name))
-    request_data[bucket_name] = {**bucket, SATURATION_FALLBACK_WALK_METADATA_KEY: True}  # rebind-ok: same object
+def arm_saturation_fallback_walk() -> Token[bool]:
+    """Mark the current request as running under the fallback walk, so the limiter may hand a saturated model off to
+    it. The marker lives in the request's context, never in its body, so nothing reaches the provider. Routes that
+    call the hooks directly never arm it and keep admitting or refusing as before."""
+    return _SATURATION_FALLBACK_WALK.set(True)
+
+
+def disarm_saturation_fallback_walk(token: Token[bool]) -> None:
+    _SATURATION_FALLBACK_WALK.reset(token)
 
 
 def fallback_on_saturation_requested(request_data: Mapping[str, object]) -> bool:
@@ -144,7 +142,7 @@ def fallback_on_saturation_requested(request_data: Mapping[str, object]) -> bool
     the caller, and it has not already run for this request."""
     return (
         fallback_on_saturation_enabled(request_data.get("router_settings_override"))
-        and saturation_fallback_walk_armed(request_data)
+        and saturation_fallback_walk_armed()
         and not saturation_fallbacks_exhausted(request_data)
     )
 

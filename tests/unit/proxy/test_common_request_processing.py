@@ -2,16 +2,14 @@ import asyncio
 import contextvars
 import copy
 import datetime
-import time
 import gzip
 import json
+import time
 from collections.abc import AsyncIterable, Awaitable, Coroutine, Mapping
 from types import MappingProxyType, SimpleNamespace
 from typing import AsyncGenerator, Callable, Final, Iterator, Literal, Optional, Sequence, TypeVar
-from urllib.parse import unquote_plus
 from unittest.mock import AsyncMock, MagicMock, patch
-
-from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
+from urllib.parse import unquote_plus
 
 import anthropic
 import httpx
@@ -23,29 +21,39 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 import litellm
 from litellm._uuid import uuid
-from litellm.exceptions import APIError, InternalServerError, MidStreamFallbackError
-from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.anthropic_interface.exceptions import AnthropicErrorSseFrame, anthropic_error_sse_frame
 from litellm.caching.caching import DualCache
-from litellm.litellm_core_utils.bug_report import (
-    DISABLE_ENV_VAR,
-    ISSUE_URL_BASE,
-    bug_report_notice,
-    build_bug_report,
-)
-from litellm.types.router import RouterRateLimitError, RouterRateLimitErrorBasic
-from litellm.types.utils import CachingDetails, Delta, ModelResponseStream, StreamingChoices
 from litellm.constants import (
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
     MAX_LITELLM_CALL_ID_LENGTH,
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
     STREAM_SSE_KEEPALIVE_PING_BYTES,
 )
-from litellm.integrations.custom_logger import CustomLogger
+from litellm.exceptions import APIError, InternalServerError, MidStreamFallbackError
 from litellm.integrations.custom_guardrail import ModifyResponseException
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.opentelemetry import UserAPIKeyAuth
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.litellm_core_utils.add_retry_fallback_headers import prepare_response_for_header_attachment
+from litellm.litellm_core_utils.bug_report import (
+    DISABLE_ENV_VAR,
+    ISSUE_URL_BASE,
+    bug_report_notice,
+    build_bug_report,
+)
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.litellm_core_utils.total_deadline import current_total_deadline
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.proxy._types import Litellm_EntityType, ProxyErrorTypes, ProxyException
+from litellm.proxy._types import UserAPIKeyAuth as ProxyUserAPIKeyAuth
+from litellm.proxy.auth.fallback_budget import RouterFallbackBudgetCheck
 from litellm.proxy.common_request_processing import (
+    OPENAI_FIRST_CHUNK_FRAMING,
+    RESPONSES_FIRST_CHUNK_FRAMING,
+    RESPONSES_LATE_SSE_FRAMING,
+    CostBreakdownHeaderValues,
+    FirstChunkSseFraming,
     ProxyBaseLLMRequestProcessing,
     ProxyConfig,
     _await_llm_call_cancelling_on_disconnect,
@@ -53,39 +61,29 @@ from litellm.proxy.common_request_processing import (
     _buffer_first_chunk_honoring_disconnect,
     _cancel_llm_call_on_client_disconnect,
     _ClientDisconnectedBeforeFirstChunk,
-    attach_guardrail_information,
     _extract_error_from_sse_chunk,
-    FirstChunkSseFraming,
     _get_cost_breakdown_from_logging_obj,
-    CostBreakdownHeaderValues,
     _has_attribute_error_in_chain,
-    OPENAI_FIRST_CHUNK_FRAMING,
-    RESPONSES_FIRST_CHUNK_FRAMING,
-    include_guardrail_response_requested,
-    is_azure_model_router_request,
-    RESPONSES_LATE_SSE_FRAMING,
-    open_sse_before_first_byte,
-    resolve_litellm_call_id,
-    ttft_keepalive_interval,
     _override_openai_response_model,
     _parse_event_data_for_error,
     _resolve_per_request_model_group_alias,
-    should_return_raw_model_name,
     _sse_error_frames,
     _UpstreamClosingStreamingResponse,
+    attach_guardrail_information,
     create_response,
+    include_guardrail_response_requested,
+    is_azure_model_router_request,
+    open_sse_before_first_byte,
+    resolve_litellm_call_id,
+    should_return_raw_model_name,
     sse_error_payload,
+    ttft_keepalive_interval,
 )
 from litellm.proxy.common_utils.callback_utils import add_guardrail_to_applied_guardrails_header
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.common_utils.sse_keepalive import ANTHROPIC_PING_SSE_CHUNK
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.dd_span_tagger import DDSpanTagger
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-from litellm.proxy._types import Litellm_EntityType, ProxyErrorTypes, ProxyException
-from litellm.litellm_core_utils.total_deadline import current_total_deadline
-from litellm.proxy._types import UserAPIKeyAuth as ProxyUserAPIKeyAuth
-from litellm.proxy.auth.fallback_budget import RouterFallbackBudgetCheck
 from litellm.proxy.hooks.model_max_budget_limiter import (
     PROXY_VirtualKeyModelMaxBudgetLimiter,
     model_budget_spend_cache_key,
@@ -94,10 +92,11 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
 from litellm.proxy.utils import ProxyLogging
 from litellm.responses.mcp.parked_stream_dispatch import IN_FLIGHT_ROUND
 from litellm.router import Router
-from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.types.router import RouterRateLimitError, RouterRateLimitErrorBasic
+from litellm.types.utils import CachingDetails, Delta, ModelResponseStream, StreamingChoices
 from litellm.utils import ModelResponseListIterator
-from litellm.litellm_core_utils.add_retry_fallback_headers import prepare_response_for_header_attachment
 from tests._support.clock_loops import AutojumpClockLoop
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 
 def test_attach_guardrail_information_copies_recorded_entries_onto_model_response():
@@ -2632,10 +2631,11 @@ class TestCommonRequestProcessingHelpers:
 
     async def test_serialize_http_exception_detail_helper(self):
         """Direct unit coverage for the L1 helper across all branches."""
+        import json as _json
+
         from litellm.proxy.common_request_processing import (
             serialize_http_exception_detail,
         )
-        import json as _json
 
         assert serialize_http_exception_detail("plain") == ("plain", None)
 
@@ -6569,6 +6569,7 @@ class TestAllmPassthroughRoutePostCallGuardrails:
 def _build_event_stream_frame(event_type: str, payload: dict) -> bytes:
     import json
     import struct
+
     from botocore.eventstream import crc32 as esm_crc32
 
     payload_bytes = json.dumps(payload, separators=(",", ":")).encode()
@@ -8078,8 +8079,8 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
 
     @pytest.mark.asyncio
     async def test_fallback_triggered_on_local_rate_limit(self):
-        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
         from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 
         primary_model = "gpt-4"
         fallback_model = "gpt-3.5-turbo"
@@ -8112,7 +8113,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                 request=MagicMock(),
                 general_settings={},
                 proxy_logging_obj=MagicMock(),
-                user_api_key_dict=MagicMock(router_settings=None),
+                user_api_key_dict=MagicMock(router_settings=None, agent_id=None),
                 version=None,
                 proxy_config=_proxy_config(),
                 user_model=None,
@@ -8183,8 +8184,8 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
 
     @pytest.mark.asyncio
     async def test_raises_when_no_fallbacks_configured(self):
-        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
         from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 
         processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4"})
 
@@ -8207,7 +8208,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                     request=MagicMock(),
                     general_settings={},
                     proxy_logging_obj=MagicMock(),
-                    user_api_key_dict=MagicMock(router_settings=None),
+                    user_api_key_dict=MagicMock(router_settings=None, agent_id=None),
                     version=None,
                     proxy_config=_proxy_config(),
                     user_model=None,
@@ -8222,8 +8223,8 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
 
     @pytest.mark.asyncio
     async def test_raises_when_all_fallbacks_also_rate_limited(self):
-        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
         from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 
         processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4"})
 
@@ -8246,7 +8247,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                     request=MagicMock(),
                     general_settings={},
                     proxy_logging_obj=MagicMock(),
-                    user_api_key_dict=MagicMock(router_settings=None),
+                    user_api_key_dict=MagicMock(router_settings=None, agent_id=None),
                     version=None,
                     proxy_config=_proxy_config(),
                     user_model=None,
@@ -8263,8 +8264,8 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
 
     @pytest.mark.asyncio
     async def test_fallback_uses_key_level_router_settings(self):
-        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
         from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 
         processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4"})
 
@@ -8279,7 +8280,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         mock_router = route_entry_points_to_stubs(MagicMock())
         mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo"]}]
 
-        user_api_key_dict = MagicMock()
+        user_api_key_dict = MagicMock(agent_id=None)
         user_api_key_dict.router_settings = {"fallbacks": [{"gpt-4": ["claude-3-haiku"]}]}
 
         with patch.object(
@@ -8308,8 +8309,8 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
 
     @pytest.mark.asyncio
     async def test_fallback_uses_team_level_router_settings_when_the_key_has_none(self):
-        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
         from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 
         processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4"})
 
@@ -8327,7 +8328,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                 request=MagicMock(),
                 general_settings={},
                 proxy_logging_obj=MagicMock(),
-                user_api_key_dict=MagicMock(router_settings=None),
+                user_api_key_dict=MagicMock(router_settings=None, agent_id=None),
                 version=None,
                 proxy_config=_proxy_config(team_settings),
                 user_model=None,
@@ -8344,8 +8345,8 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
 
     @pytest.mark.asyncio
     async def test_a_fallback_the_key_may_not_call_is_skipped(self, monkeypatch):
-        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
         from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 
         processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4"})
 
@@ -8369,7 +8370,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                 request=MagicMock(),
                 general_settings={},
                 proxy_logging_obj=MagicMock(),
-                user_api_key_dict=MagicMock(router_settings=None),
+                user_api_key_dict=MagicMock(router_settings=None, agent_id=None),
                 version=None,
                 proxy_config=_proxy_config(),
                 user_model=None,
@@ -8385,10 +8386,46 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         assert processor.data["model"] == "claude-3-haiku"
 
     @pytest.mark.asyncio
-    async def test_a_fallback_over_its_model_budget_is_skipped(self, monkeypatch):
+    async def test_an_agent_owned_key_never_leaves_the_model_it_asked_for(self):
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
         from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+
+        processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4"})
+
+        async def mock_pre_call_logic(**kwargs):
+            if processor.data.get("model") == "gpt-4":
+                raise ProxyRateLimitError(detail="TPM limit exceeded", headers={"retry-after": "30"})
+            return processor.data, MagicMock()
+
+        mock_router = route_entry_points_to_stubs(MagicMock())
+        mock_router.fallbacks = [{"gpt-4": ["claude-3-haiku"]}]
+
+        with (
+            patch.object(processor, "common_processing_pre_call_logic", side_effect=mock_pre_call_logic),
+            pytest.raises(ProxyRateLimitError),
+        ):
+            await processor._pre_call_with_fallbacks(
+                request=MagicMock(),
+                general_settings={},
+                proxy_logging_obj=MagicMock(),
+                user_api_key_dict=MagicMock(router_settings=None, agent_id="agent-1"),
+                version=None,
+                proxy_config=_proxy_config(),
+                user_model=None,
+                user_temperature=None,
+                user_request_timeout=None,
+                user_max_tokens=None,
+                user_api_base=None,
+                model="gpt-4",
+                route_type="acompletion",
+                llm_router=mock_router,
+            )
+
+    @pytest.mark.asyncio
+    async def test_a_fallback_over_its_model_budget_is_skipped(self, monkeypatch):
         from litellm.proxy._types import UserAPIKeyAuth as ProxyKey
         from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 
         processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4"})
 
@@ -8433,9 +8470,9 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
     async def test_an_unpriced_fallback_is_skipped_only_while_unpriced_models_are_blocked(
         self, monkeypatch, unpriced_models_blocked, served_by
     ):
-        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
         from litellm.proxy._types import UserAPIKeyAuth as ProxyKey
         from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 
         processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4"})
 
@@ -8474,9 +8511,9 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
 
     @pytest.mark.asyncio
     async def test_a_fallback_priced_above_the_reserved_estimate_is_skipped(self, monkeypatch):
-        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
         from litellm.proxy._types import UserAPIKeyAuth as ProxyKey
         from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
         from litellm.types.router import ModelGroupInfo
 
         processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4"})
@@ -8522,9 +8559,9 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
 
     @pytest.mark.asyncio
     async def test_a_fallback_outside_the_reserved_access_groups_is_skipped(self, monkeypatch):
-        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
         from litellm.proxy._types import UserAPIKeyAuth as ProxyKey
         from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
         from litellm.types.router import ModelGroupInfo
 
         processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4"})
@@ -8572,9 +8609,9 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
 
     @pytest.mark.asyncio
     async def test_a_fallback_in_a_group_the_request_already_holds_is_not_refused_by_its_own_hold(self, monkeypatch):
-        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
         from litellm.proxy._types import UserAPIKeyAuth as ProxyKey
         from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
         from litellm.types.router import ModelGroupInfo
 
         processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4"})
@@ -8629,9 +8666,9 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
 
     @pytest.mark.asyncio
     async def test_a_served_fallback_charges_the_access_groups_that_grant_it(self, monkeypatch):
-        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
         from litellm.proxy._types import UserAPIKeyAuth as ProxyKey
         from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 
         processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4"})
         key: Final = ProxyKey(matched_model_access_groups=["primary-group"])
@@ -8679,9 +8716,9 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
     @pytest.mark.asyncio
     async def test_a_fallback_over_its_access_group_budget_is_skipped(self, monkeypatch):
         from litellm.exceptions import BudgetExceededError
-        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
         from litellm.proxy._types import UserAPIKeyAuth as ProxyKey
         from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 
         processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4"})
         key: Final = ProxyKey(matched_model_access_groups=["primary-group"])
@@ -8731,8 +8768,8 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
 
     @pytest.mark.asyncio
     async def test_a_client_body_cannot_opt_into_saturation_fallbacks(self):
-        from litellm.proxy.common_utils.proxy_rate_limit_error import fallback_on_saturation_requested
         from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+        from litellm.proxy.common_utils.proxy_rate_limit_error import fallback_on_saturation_requested
 
         processor = ProxyBaseLLMRequestProcessing(
             data={"model": "gpt-4", "router_settings_override": {"fallback_on_saturation": True, "num_retries": 1}}
@@ -8751,7 +8788,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                 request=MagicMock(),
                 general_settings={},
                 proxy_logging_obj=MagicMock(),
-                user_api_key_dict=MagicMock(router_settings=None),
+                user_api_key_dict=MagicMock(router_settings=None, agent_id=None),
                 version=None,
                 proxy_config=_proxy_config(),
                 user_model=None,
@@ -8771,12 +8808,12 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
     async def test_fallback_on_saturation_moves_past_a_fallback_that_refuses_the_request(self):
         from fastapi import HTTPException
 
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
         from litellm.proxy.common_utils.proxy_rate_limit_error import (
             SATURATION_FALLBACK_DESCRIPTOR_KEY,
             ProxyRateLimitError,
             saturation_fallbacks_exhausted,
         )
-        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
         processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4"})
         attempted = []
@@ -8800,7 +8837,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                 request=MagicMock(),
                 general_settings={},
                 proxy_logging_obj=MagicMock(),
-                user_api_key_dict=MagicMock(router_settings=None),
+                user_api_key_dict=MagicMock(router_settings=None, agent_id=None),
                 version=None,
                 proxy_config=_proxy_config(settings),
                 user_model=None,
@@ -8818,12 +8855,12 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
 
     @pytest.mark.asyncio
     async def test_fallback_on_saturation_serves_the_first_fallback_with_room(self):
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
         from litellm.proxy.common_utils.proxy_rate_limit_error import (
             SATURATION_FALLBACK_DESCRIPTOR_KEY,
             ProxyRateLimitError,
             rate_limit_fallback_from_request_data,
         )
-        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
         processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4"})
         attempted = []
@@ -8845,7 +8882,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                 request=MagicMock(),
                 general_settings={},
                 proxy_logging_obj=MagicMock(),
-                user_api_key_dict=MagicMock(router_settings=None),
+                user_api_key_dict=MagicMock(router_settings=None, agent_id=None),
                 version=None,
                 proxy_config=_proxy_config(settings),
                 user_model=None,
@@ -8868,13 +8905,13 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
 
     @pytest.mark.asyncio
     async def test_fallback_on_saturation_serves_the_requested_model_when_no_fallback_has_room(self):
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
         from litellm.proxy.common_utils.proxy_rate_limit_error import (
             SATURATION_FALLBACK_DESCRIPTOR_KEY,
             ProxyRateLimitError,
             rate_limit_fallback_from_request_data,
             saturation_fallbacks_exhausted,
         )
-        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
         processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4", "metadata": {"tags": ["t"]}})
         attempted = []
@@ -8895,7 +8932,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                 request=MagicMock(),
                 general_settings={},
                 proxy_logging_obj=MagicMock(),
-                user_api_key_dict=MagicMock(router_settings=None),
+                user_api_key_dict=MagicMock(router_settings=None, agent_id=None),
                 version=None,
                 proxy_config=_proxy_config({"fallback_on_saturation": True}),
                 user_model=None,
@@ -8915,12 +8952,12 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
 
     @pytest.mark.asyncio
     async def test_fallback_on_saturation_without_a_fallback_list_serves_the_requested_model(self):
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
         from litellm.proxy.common_utils.proxy_rate_limit_error import (
             SATURATION_FALLBACK_DESCRIPTOR_KEY,
             ProxyRateLimitError,
             saturation_fallbacks_exhausted,
         )
-        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
         processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4"})
         attempted = []
@@ -8941,7 +8978,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                 request=MagicMock(),
                 general_settings={},
                 proxy_logging_obj=MagicMock(),
-                user_api_key_dict=MagicMock(router_settings=None),
+                user_api_key_dict=MagicMock(router_settings=None, agent_id=None),
                 version=None,
                 proxy_config=_proxy_config({"fallback_on_saturation": True}),
                 user_model=None,
@@ -8959,12 +8996,12 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
 
     @pytest.mark.asyncio
     async def test_a_real_429_on_the_requested_model_after_saturation_fallbacks_is_returned(self):
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
         from litellm.proxy.common_utils.proxy_rate_limit_error import (
             SATURATION_FALLBACK_DESCRIPTOR_KEY,
             ProxyRateLimitError,
             saturation_fallbacks_exhausted,
         )
-        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
         processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4"})
 
@@ -8984,7 +9021,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                     request=MagicMock(),
                     general_settings={},
                     proxy_logging_obj=MagicMock(),
-                    user_api_key_dict=MagicMock(router_settings=None),
+                    user_api_key_dict=MagicMock(router_settings=None, agent_id=None),
                     version=None,
                     proxy_config=_proxy_config({"fallback_on_saturation": True}),
                     user_model=None,
@@ -8999,8 +9036,8 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
 
     @pytest.mark.asyncio
     async def test_disable_fallbacks_flag_respected(self):
-        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
         from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 
         processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4", "disable_fallbacks": True})
 
@@ -9023,7 +9060,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                     request=MagicMock(),
                     general_settings={},
                     proxy_logging_obj=MagicMock(),
-                    user_api_key_dict=MagicMock(router_settings=None),
+                    user_api_key_dict=MagicMock(router_settings=None, agent_id=None),
                     version=None,
                     proxy_config=_proxy_config(),
                     user_model=None,
@@ -9038,8 +9075,8 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
 
     @pytest.mark.asyncio
     async def test_model_restored_on_non_rate_limit_exception(self):
-        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
         from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 
         primary_model = "gpt-4"
 
@@ -9067,7 +9104,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                     request=MagicMock(),
                     general_settings={},
                     proxy_logging_obj=MagicMock(),
-                    user_api_key_dict=MagicMock(router_settings=None),
+                    user_api_key_dict=MagicMock(router_settings=None, agent_id=None),
                     version=None,
                     proxy_config=_proxy_config(),
                     user_model=None,
@@ -13790,8 +13827,8 @@ class TestResponseCostFromLoggingObjForBridgedMessages:
         return logging_obj
 
     def test_recomputed_cost_prices_the_reasoning_tokens_of_the_bridged_chat_completion(self):
-        from litellm.types.utils import CompletionTokensDetailsWrapper, ModelResponse, Usage
         from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+        from litellm.types.utils import CompletionTokensDetailsWrapper, ModelResponse, Usage
 
         model = "dashscope/qwen-turbo"
         pricing = litellm.get_model_info(model)

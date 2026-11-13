@@ -2437,7 +2437,7 @@ async def _fallback_grant(
     requested_model: str,
 ) -> list[str] | None:
     """The model access groups a pre-call fallback to ``fallback_model`` charges, or None when the caller may not use
-    it: the key, team and project allowlists while ``enforce_fallback_model_access`` is on, the pricing rules, every
+    it: an agent-owned key never leaves the model it asked for, as at auth, then the key, team and project allowlists while ``enforce_fallback_model_access`` is on, the pricing rules, every
     per-model budget layer, the budgets of the access groups that grant the model, and the budget auth reserved for
     ``requested_model``, the same checks a direct request passes at auth."""
     from litellm.proxy.auth.auth_checks import (
@@ -2451,6 +2451,8 @@ async def _fallback_grant(
 
     if llm_router is None:
         return []
+    if user_api_key_dict.agent_id is not None:
+        return None
     if router_fallback_access_check.is_enforced() and not await is_model_authorized_for_token(
         model=fallback_model, valid_token=user_api_key_dict, llm_router=llm_router
     ):
@@ -3138,6 +3140,7 @@ class ProxyBaseLLMRequestProcessing:
             ProxyRateLimitError,
             RateLimitFallback,
             arm_saturation_fallback_walk,
+            disarm_saturation_fallback_walk,
             drop_client_saturation_opt_in,
             fallback_on_saturation_enabled,
             is_saturation_fallback,
@@ -3169,7 +3172,7 @@ class ProxyBaseLLMRequestProcessing:
         scrubbed: Final[dict] = self.data  # mutable-ok: caller-defined request-payload shape
         payload: Final = cast(MutableMapping[str, object], scrubbed)  # cast-ok: untyped caller payload
         drop_client_saturation_opt_in(payload)
-        arm_saturation_fallback_walk(payload)
+        walk: Final = arm_saturation_fallback_walk()
         self.data = scrubbed
         pristine: Final = (
             independent_snapshot(scrubbed)
@@ -3325,6 +3328,8 @@ class ProxyBaseLLMRequestProcessing:
                 user_api_key_dict.matched_model_access_groups = requested_groups  # rebind-ok: undo the fallback
                 self.data = rate_limited_data
                 raise
+        finally:
+            disarm_saturation_fallback_walk(walk)
 
     @staticmethod
     async def _hierarchical_router_settings(

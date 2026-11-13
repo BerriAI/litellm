@@ -6,7 +6,7 @@ Core tests to validate that priority weights are respected (0.9/0.1) instead of 
 
 import asyncio
 import time
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from datetime import datetime, timedelta
 from typing import Final
 from unittest.mock import AsyncMock, patch
@@ -1841,9 +1841,20 @@ def _opted_in(model: str = "shared-model", **extra: object) -> dict[str, object]
     return {
         "model": model,
         "router_settings_override": {"fallback_on_saturation": True},
-        "metadata": {"saturation_fallback_walk": True},
         **extra,
     }
+
+
+@pytest.fixture
+def armed_walk() -> Iterator[None]:
+    from litellm.proxy.common_utils.proxy_rate_limit_error import (
+        arm_saturation_fallback_walk,
+        disarm_saturation_fallback_walk,
+    )
+
+    walk: Final = arm_saturation_fallback_walk()
+    yield
+    disarm_saturation_fallback_walk(walk)
 
 
 @pytest.mark.asyncio
@@ -1868,7 +1879,7 @@ async def _saturate_to_threshold(handler: _PROXY_DynamicRateLimitHandlerV3, key:
 
 @pytest.mark.asyncio
 async def test_a_key_with_fallback_on_saturation_is_sent_to_its_fallbacks_once_the_model_saturates(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, armed_walk: None
 ):
     from litellm.proxy.common_utils.proxy_rate_limit_error import SATURATION_FALLBACK_DESCRIPTOR_KEY
 
@@ -1894,7 +1905,7 @@ async def test_a_key_without_fallback_on_saturation_is_admitted_on_the_saturated
 
 @pytest.mark.asyncio
 async def test_a_request_back_from_an_exhausted_fallback_walk_is_admitted_on_the_saturated_model(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, armed_walk: None
 ):
     from litellm.proxy.common_utils.proxy_rate_limit_error import with_saturation_fallbacks_exhausted
 
@@ -3466,7 +3477,9 @@ async def test_a_class_share_refusal_is_counted_under_the_teams_priority(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_a_saturation_fallback_handoff_is_not_counted_as_a_throttle(monkeypatch: pytest.MonkeyPatch):
+async def test_a_saturation_fallback_handoff_is_not_counted_as_a_throttle(
+    monkeypatch: pytest.MonkeyPatch, armed_walk: None
+):
     from litellm.proxy.common_utils.proxy_rate_limit_error import SATURATION_FALLBACK_DESCRIPTOR_KEY
 
     handler = _saturation_fallback_handler(monkeypatch)
