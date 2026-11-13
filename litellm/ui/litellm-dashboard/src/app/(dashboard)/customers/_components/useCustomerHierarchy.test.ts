@@ -12,21 +12,21 @@ it("should encode hierarchy IDs in paths and preserve their identity", async () 
     vi.fn<typeof fetch>(async (input) => {
       const url = new URL(input instanceof Request ? input.url : String(input), "http://localhost");
       requested.push(url.pathname);
-      let record: object = { customer_team_id: "team/one", parent_org_id: "org/one" };
-      if (url.pathname.includes("customer_organizations")) record = { customer_org_id: "org/one", default_budgets: [] };
+      let record: object = { customer_team_id: "team:one", parent_org_id: "org:one" };
+      if (url.pathname.includes("customer_organizations")) record = { customer_org_id: "org:one", default_budgets: [] };
       if (url.pathname.includes("customer_members"))
-        record = { customer_member_id: "member/one", parent_team_ids: ["team/one"] };
+        record = { customer_member_id: "member:one", parent_team_ids: ["team:one"] };
       return new Response(JSON.stringify(record), { headers: { "Content-Type": "application/json" } });
     }),
   );
-  const result = await customerHierarchyContext({ org: "org/one", team: null, member: "member/one" }, "test-session");
+  const result = await customerHierarchyContext({ org: "org:one", team: null, member: "member:one" }, "test-session");
   expect(requested).toEqual([
-    "/management/v1/customer_organizations/org%2Fone",
-    "/management/v1/customer_members/member%2Fone",
-    "/management/v1/customer_teams/team%2Fone",
+    "/management/v1/customer_organizations/org%3Aone",
+    "/management/v1/customer_members/member%3Aone",
+    "/management/v1/customer_teams/team%3Aone",
   ]);
   expect(result.entity).toEqual({
     kind: "member",
-    record: { customer_member_id: "member/one", parent_team_ids: ["team/one"] },
+    record: { customer_member_id: "member:one", parent_team_ids: ["team:one"] },
   });
 });

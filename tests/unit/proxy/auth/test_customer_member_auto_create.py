@@ -1,13 +1,17 @@
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final, cast
 
 import pytest
 
+from litellm.proxy.auth.customer_hierarchy_auth import load_customer_hierarchy
 from litellm.proxy.auth.customer_member_auto_create import (
     default_team_id,
     ensure_customer_member,
     ensure_customer_organization,
 )
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_helpers.customer_hierarchy import CustomerHierarchy, ErrorCode, Failure
+from litellm.types.proxy.auth.customer_hierarchy import CustomerRequestIdentity
 from litellm.types.proxy.management_endpoints.customer_hierarchy import (
     Budget,
     BudgetTemplate,
@@ -25,6 +29,45 @@ if TYPE_CHECKING:
 
 def _prisma(database: Database) -> "PrismaClient":
     return cast("PrismaClient", database)  # cast-ok: in-memory Prisma edge
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("org_id", "member_id"), (("org-1", "foo/bar"), ("foo/bar", "member")))
+async def test_slash_ids_cannot_leave_a_default_team(org_id: str, member_id: str) -> None:
+    database: Final = Database()
+    await _organization(database, "org-1")
+    result: Final = await ensure_customer_member(org_id, member_id, _prisma(database))
+    assert result == Failure(ErrorCode.NOT_FOUND)
+    assert not database.litellm_customerteamtable.rows
+    assert not database.litellm_customermembertable.rows
+
+
+@pytest.mark.asyncio
+async def test_slash_alias_cannot_register_an_unreachable_organization() -> None:
+    database: Final = Database()
+    result: Final = await ensure_customer_organization("foo/bar", _prisma(database))
+    assert result == Failure(ErrorCode.NOT_FOUND)
+    assert not database.litellm_customerorganizationtable.rows
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("known_org", (False, True))
+async def test_unregistrable_member_traffic_keeps_the_known_organization_or_runs_untracked(known_org: bool) -> None:
+    database: Final = Database()
+    created: Final = await CustomerHierarchy(_prisma(database), clock=lambda: NOW).create_organization(
+        OrganizationCreate(customer_org_id="org-1", alias="org-1"), "admin"
+    )
+    assert not isinstance(created, Failure)
+    prisma: Final = cast("PrismaClient", SimpleNamespace(db=database))  # cast-ok: in-memory Prisma edge
+    result: Final = await load_customer_hierarchy(
+        CustomerRequestIdentity(customer_org_alias="org-1" if known_org else "foo/bar", customer_member_id="foo/bar"),
+        prisma,
+        UserApiKeyCache(),
+    )
+    assert (result.customer_org_id if result is not None else None) == ("org-1" if known_org else None)
+    assert tuple(database.litellm_customerorganizationtable.rows) == ("org-1",)
+    assert not database.litellm_customerteamtable.rows
+    assert not database.litellm_customermembertable.rows
 
 
 async def _organization(database: Database, org_id: str, default_budget: bool = True) -> None:

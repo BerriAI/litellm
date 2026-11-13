@@ -9,9 +9,12 @@ assigns one.
 
 from typing import TYPE_CHECKING, Final
 
+from pydantic import TypeAdapter, ValidationError
+
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.management_helpers.customer_hierarchy import CustomerHierarchy, ErrorCode, Failure
 from litellm.types.proxy.management_endpoints.customer_hierarchy import (
+    CustomerHierarchyId,
     CustomerMember,
     MemberCreate,
     Organization,
@@ -26,6 +29,16 @@ if TYPE_CHECKING:
 AUTO_CREATE_ACTOR: Final = "x-litellm-customer-member-id"
 AUTO_CREATE_ORG_ACTOR: Final = "x-litellm-customer-org-alias"
 DEFAULT_TEAM_ALIAS: Final = "default"
+_CUSTOMER_ID: Final[TypeAdapter[str]] = TypeAdapter(CustomerHierarchyId)
+
+
+def _registrable(*identifiers: str) -> bool:
+    try:
+        for identifier in identifiers:
+            _CUSTOMER_ID.validate_python(identifier)
+    except ValidationError:
+        return False
+    return True
 
 
 def default_team_id(customer_org_id: str) -> str:
@@ -51,6 +64,8 @@ async def ensure_customer_member(
 ) -> CustomerMember | Failure:
     """The member row for ``customer_member_id`` in ``customer_org_id``'s default team, created when absent.
     Two workers registering the same member at once both end up with the one row."""
+    if not _registrable(customer_org_id, customer_member_id):
+        return Failure(ErrorCode.NOT_FOUND)
     hierarchy: Final = CustomerHierarchy(prisma_client)
     team: Final = await _default_team(hierarchy, customer_org_id)
     if isinstance(team, Failure):
@@ -78,6 +93,8 @@ async def ensure_customer_organization(
     """The organization row carrying ``customer_org_alias``, created with the alias as its id when absent, so a
     customer's first request is charged to it. Two workers registering the same alias at once both end up with
     the one row."""
+    if not _registrable(customer_org_alias):
+        return Failure(ErrorCode.NOT_FOUND)
     hierarchy: Final = CustomerHierarchy(prisma_client)
     created: Final = await hierarchy.create_organization(
         OrganizationCreate(customer_org_id=customer_org_alias, alias=customer_org_alias), AUTO_CREATE_ORG_ACTOR

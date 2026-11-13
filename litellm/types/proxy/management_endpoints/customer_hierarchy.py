@@ -1,8 +1,17 @@
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Final, Literal, TypeAlias
+from typing import Annotated, Final, Literal, TypeAlias
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, NonNegativeInt, field_validator, model_validator
+from pydantic import (
+    AfterValidator,
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    NonNegativeInt,
+    field_validator,
+    model_validator,
+)
 
 from litellm.models.budget import BudgetLimits
 from litellm.proxy.common_utils.timezone_utils import budget_duration_error
@@ -10,6 +19,15 @@ from litellm.proxy.common_utils.timezone_utils import budget_duration_error
 CapPolicy: TypeAlias = Literal["pause_until_reset", "pause_allow_increase"]
 INCREASE_REQUEST_ROUTE: Final = "/management/v1/customer_budget_increase_requests"
 IncreaseRequestStatus: TypeAlias = Literal["pending_review", "approved", "rejected"]
+
+
+def validate_customer_id(value: str) -> str:
+    if "/" in value:
+        raise ValueError("Customer IDs must not contain '/'")
+    return value
+
+
+CustomerHierarchyId: TypeAlias = Annotated[str, AfterValidator(validate_customer_id)]
 
 
 class Budget(BaseModel):
@@ -62,13 +80,13 @@ class OrganizationPatch(OrganizationFields):
 
 
 class OrganizationCreate(OrganizationFields):
-    customer_org_id: str | None = None
+    customer_org_id: CustomerHierarchyId | None = None
     default_budgets: tuple[BudgetTemplate, ...] = ()
     default_budget_template: str | None = Field(default=None, min_length=1)
 
 
 class OrganizationUpsert(OrganizationCreate):
-    customer_org_id: str | None = Field(default=None, min_length=1)
+    customer_org_id: CustomerHierarchyId | None = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
     def require_identity(self) -> "OrganizationUpsert":
@@ -87,7 +105,7 @@ class TeamPatch(BaseModel):
 
 
 class TeamCreate(TeamPatch):
-    customer_team_id: str | None = None
+    customer_team_id: CustomerHierarchyId | None = None
     parent_org_id: str
 
 
@@ -101,14 +119,14 @@ class MemberPatch(BaseModel):
 
 
 class MemberCreate(MemberPatch):
-    customer_member_id: str | None = None
+    customer_member_id: CustomerHierarchyId | None = None
     parent_org_id: str | None = Field(default=None, description="Must match the parent teams' organization when set")
     parent_team_ids: tuple[str, ...] = Field(min_length=1, description="Teams the member belongs to, first is default")
 
 
 class MemberUpsert(MemberPatch):
-    customer_member_id: str = Field(min_length=1)
-    customer_org_id: str | None = None
+    customer_member_id: CustomerHierarchyId = Field(min_length=1)
+    customer_org_id: CustomerHierarchyId | None = None
     customer_org_alias: str | None = None
     parent_team_id: str | None = None
 

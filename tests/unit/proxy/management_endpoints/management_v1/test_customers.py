@@ -1,6 +1,7 @@
 import asyncio
 from datetime import timedelta
 from typing import TYPE_CHECKING, Final, cast
+from urllib.parse import quote
 
 import pytest
 from fastapi import FastAPI, Request
@@ -79,6 +80,44 @@ def family(http: TestClient) -> dict[str, object]:
     )
     assert team.status_code == 201, team.text
     return org.json()
+
+
+@pytest.mark.parametrize(
+    ("resource", "payload"),
+    (
+        ("customer_organizations", {"customer_org_id": "foo/bar"}),
+        ("customer_organizations/upsert", {"customer_org_id": "foo/bar"}),
+        ("customer_teams", {"customer_team_id": "foo/bar", "parent_org_id": "org"}),
+        ("customer_members", {"customer_member_id": "foo/bar", "parent_team_ids": ["team"]}),
+        ("customer_members/upsert", {"customer_member_id": "foo/bar", "customer_org_id": "org"}),
+        ("customer_members/upsert", {"customer_member_id": "member", "customer_org_id": "foo/bar"}),
+    ),
+)
+def test_slash_customer_ids_are_rejected_before_writing(resource: str, payload: dict[str, object]) -> None:
+    database: Final = Database()
+    http: Final = client(database=database)
+    family(http)
+    response: Final = http.post(f"/management/v1/{resource}", json=payload)
+    assert response.status_code == 422, response.text
+    assert tuple(database.litellm_customerorganizationtable.rows) == ("org",)
+    assert tuple(database.litellm_customerteamtable.rows) == ("team",)
+    assert not database.litellm_customermembertable.rows
+
+
+@pytest.mark.parametrize("identifier", ("normal", "org:default", "punctuation !@#$%&+?"))
+def test_customer_ids_with_other_punctuation_remain_addressable(identifier: str) -> None:
+    http: Final = client()
+    family(http)
+    for resource, field, extra in (
+        ("customer_organizations", "customer_org_id", {}),
+        ("customer_teams", "customer_team_id", {"parent_org_id": "org"}),
+        ("customer_members", "customer_member_id", {"parent_team_ids": ["team"]}),
+    ):
+        created: Final = http.post(f"/management/v1/{resource}", json={field: identifier, **extra})
+        assert created.status_code == 201, created.text
+        fetched: Final = http.get(f"/management/v1/{resource}/{quote(identifier, safe='')}")
+        assert fetched.status_code == 200, fetched.text
+        assert fetched.json()[field] == identifier
 
 
 def test_member_budget_id_must_name_one_of_its_organizations_templates() -> None:
