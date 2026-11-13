@@ -96,9 +96,8 @@ from litellm.repositories.table_repositories import (
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.unit_of_work import (
     CustomerSpendTable,
-    EndUserSpendResetWrites,
-    LinkedSpendResetWrites,
     SpendResetWrites,
+    WindowedSpendResetWrites,
     budget_cascade_unit_of_work,
     customer_spend_reset_unit_of_work,
     enduser_spend_reset_unit_of_work,
@@ -121,12 +120,18 @@ class _BudgetCapRow(Protocol):
     @property
     def max_budget(self) -> float | None: ...
 
+    @property
+    def budget_duration(self) -> str | None: ...
+
 
 class _CustomerScopedRow(Protocol):
     """A customer team or member: spend governed by its template, or by an unexpired override."""
 
     @property
     def spend(self) -> float | None: ...
+
+    @property
+    def budget_id(self) -> str | None: ...
 
     @property
     def budget_override_id(self) -> str | None: ...
@@ -343,26 +348,51 @@ def _customer_effective_cap(row: _CustomerScopedRow, now: datetime) -> float | N
     return _rollover_cap(row.budget.max_budget) if row.budget is not None else None
 
 
-def _customer_ids_by_cap(
-    rows: Sequence[_CustomerScopedRow], ids: Sequence[str], now: datetime
-) -> Mapping[float | None, tuple[str, ...]]:
-    caps: Final = tuple(_customer_effective_cap(row, now) if _rollover_enabled() else None for row in rows)
+def _customer_clock_tier(row: _CustomerScopedRow, now: datetime) -> str | None:
+    """The budget row whose window resets the row, the one ``_customer_due_where`` matched it through: an unexpired
+    override that carries its own duration, else the template."""
+    expires_at: Final = row.budget_override_expires_at
+    override: Final = row.budget_override
+    override_owns_clock: Final = (
+        row.budget_override_id is not None
+        and (expires_at is None or expires_at > now)
+        and override is not None
+        and override.budget_duration is not None
+    )
+    return row.budget_override_id if override_owns_clock else row.budget_id
+
+
+def _customer_reset_key(
+    row: _CustomerScopedRow, now: datetime, windows: Mapping[str, str]
+) -> tuple[float | None, str | None]:
+    tier: Final = _customer_clock_tier(row, now)
+    cap: Final = _customer_effective_cap(row, now) if _rollover_enabled() else None
+    return cap, windows.get(tier) if tier is not None else None
+
+
+def _customer_ids_by_reset(
+    rows: Sequence[_CustomerScopedRow], ids: Sequence[str], now: datetime, windows: Mapping[str, str]
+) -> Mapping[tuple[float | None, str | None], tuple[str, ...]]:
+    keys: Final = tuple(_customer_reset_key(row, now, windows) for row in rows)
     return MappingProxyType(
-        {cap: tuple(row_id for row_id, row_cap in zip(ids, caps) if row_cap == cap) for cap in dict.fromkeys(caps)}
+        {key: tuple(row_id for row_id, row_key in zip(ids, keys) if row_key == key) for key in dict.fromkeys(keys)}
     )
 
 
 def _queue_customer_page_resets(
-    writes: LinkedSpendResetWrites, id_field: str, ids_by_cap: Mapping[float | None, tuple[str, ...]]
+    writes: WindowedSpendResetWrites,
+    id_field: str,
+    ids_by_reset: Mapping[tuple[float | None, str | None], tuple[str, ...]],
 ) -> None:
-    """``_queue_enduser_tier_resets`` for one page of customer rows, grouped by the cap each row carries over."""
-    for cap, ids in ids_by_cap.items():
+    """``_queue_enduser_tier_resets`` for one page of customer rows, grouped by the cap each row carries over and the
+    window its clock tier closes."""
+    for (cap, window), ids in ids_by_reset.items():
         page = {id_field: {"in": list(ids)}}  # bounded-ok: one page of RESET_BUDGET_JOB_BATCH_SIZE ids
         if cap is None:
-            writes.queue_spend_zero(where={**page, **_SPENT_ROWS_WHERE})
+            writes.queue_spend_zero(where={**page, **_SPENT_ROWS_WHERE}, window=window)
             continue
-        writes.queue_spend_zero(where={**page, "spend": {"gt": 0, "lte": cap}})
-        writes.queue_spend_decrement(where={**page, "spend": {"gt": cap}}, amount=cap)
+        writes.queue_spend_zero(where={**page, "spend": {"gt": 0, "lte": cap}}, window=window)
+        writes.queue_spend_decrement(where={**page, "spend": {"gt": cap}}, amount=cap, window=window)
 
 
 def _template_governed_where(now: datetime) -> Mapping[str, object]:
@@ -426,7 +456,7 @@ def _enduser_ids_by_tier(rows: Sequence[_EndUserRow]) -> Mapping[str | None, tup
 
 
 def _queue_enduser_page_resets(
-    writes: EndUserSpendResetWrites, rows: Sequence[_EndUserRow], cascade: "_BudgetCascade"
+    writes: WindowedSpendResetWrites, rows: Sequence[_EndUserRow], cascade: "_BudgetCascade"
 ) -> None:
     """The statements of ``_queue_budget_linked_resets`` for one page of end
     users, keyed by their user ids so each statement touches at most one page.
@@ -447,7 +477,7 @@ def _queue_enduser_page_resets(
 
 
 def _queue_enduser_tier_resets(
-    writes: EndUserSpendResetWrites, user_ids: Sequence[str], cap: float | None, window: str | None
+    writes: WindowedSpendResetWrites, user_ids: Sequence[str], cap: float | None, window: str | None
 ) -> None:
     page: Final = {"user_id": {"in": list(user_ids)}}  # bounded-ok: one page of RESET_BUDGET_JOB_BATCH_SIZE ids
     if cap is None:
@@ -1158,9 +1188,9 @@ class ResetBudgetJob:
             if not rows:
                 return
             ids = tuple(row_id(row) for row in rows)
-            ids_by_cap = _customer_ids_by_cap(rows, ids, now)
+            ids_by_reset = _customer_ids_by_reset(rows, ids, now, cascade.windows)
             await self._with_db_write_retry(
-                lambda: self._commit_customer_page(batch_table, id_field, ids_by_cap),
+                lambda: self._commit_customer_page(batch_table, id_field, ids_by_reset),
                 reason=f"reset_budget_write_customer_{entity}s_failure",
             )
             await self._evict_customer_page(entity, ids)
@@ -1173,13 +1203,16 @@ class ResetBudgetJob:
             verbose_proxy_logger.warning("Failed to invalidate customer %s hierarchy caches: %s", entity, e)
 
     async def _commit_customer_page(
-        self, batch_table: CustomerSpendTable, id_field: str, ids_by_cap: Mapping[float | None, tuple[str, ...]]
+        self,
+        batch_table: CustomerSpendTable,
+        id_field: str,
+        ids_by_reset: Mapping[tuple[float | None, str | None], tuple[str, ...]],
     ) -> None:
         async with (
             db_span("reset_budget_customers", batch_table),
             customer_spend_reset_unit_of_work(self._new_batch, batch_table) as writes,
         ):
-            _queue_customer_page_resets(writes, id_field, ids_by_cap)
+            _queue_customer_page_resets(writes, id_field, ids_by_reset)
 
     async def _commit_enduser_page(self, rows: Sequence[_EndUserRow], cascade: _BudgetCascade) -> None:
         async with (

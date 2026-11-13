@@ -33,6 +33,11 @@ class _BudgetTable(PrismaTableRepository["prisma_models.LiteLLM_BudgetTable"]):
     table_name = "litellm_budgettable"
 
 
+def _window_name(row: "prisma_models.LiteLLM_BudgetTable") -> str:
+    closes_at: Final = row.budget_reset_at.isoformat() if row.budget_reset_at is not None else "unset"
+    return f"{row.budget_id}:{row.created_at.isoformat()}:{row.budget_reset_count}:{closes_at}"
+
+
 class BudgetRepository(BaseRepository[LiteLLM_BudgetTable]):
     """Repository for budget database operations."""
 
@@ -123,9 +128,11 @@ class BudgetRepository(BaseRepository[LiteLLM_BudgetTable]):
 
     async def due_tier_windows(self, budget_ids: Sequence[str], due_before: datetime) -> Mapping[str, str]:
         """The name of the window each listed tier still due before ``due_before``
-        closes: the tier and how many windows it has closed before. Read on the
-        writer, so a lagging replica cannot show a tier another sweep already
-        advanced as still due."""
+        closes: the tier, when it was created, how many windows it has closed
+        before, and when this one closes. An admin moving the reset time or
+        recreating the tier opens a new window even when no advance ran. Read
+        on the writer, so a lagging replica cannot show a tier another sweep
+        already advanced as still due."""
         rows: Final = await _BudgetTable(self._prisma_client, use_writer=True).table.find_many(
             where={
                 # bounded-ok: callers pass one get_data page of at most RESET_BUDGET_JOB_BATCH_SIZE tiers
@@ -133,7 +140,7 @@ class BudgetRepository(BaseRepository[LiteLLM_BudgetTable]):
                 "OR": [{"budget_reset_at": None}, {"budget_reset_at": {"lt": due_before}}],
             }
         )
-        return MappingProxyType({row.budget_id: f"{row.budget_id}:{row.budget_reset_count}" for row in rows})
+        return MappingProxyType({row.budget_id: _window_name(row) for row in rows})
 
     async def delete_budget(self, budget_id: str) -> LiteLLM_BudgetTable | None:
         """Delete a budget record."""

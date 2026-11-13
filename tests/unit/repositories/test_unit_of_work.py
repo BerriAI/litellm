@@ -245,24 +245,31 @@ async def test_membership_total_spend_repair_is_queued_on_the_cascade_batch_ahea
 @pytest.mark.asyncio
 async def test_customer_page_resets_commit_on_their_own_batch_against_the_named_table():
     """A page of customer members or teams lands in its own commit, apart from the
-    budget cascade, so a statement never grows with the rows a template governs."""
+    budget cascade, so a statement never grows with the rows a template governs.
+    Like an end-user page, it stamps the window it closes and skips rows already stamped."""
     batch = FakeBatch()
+    window = "tier-1:4"
+    not_reset_in_window = {"OR": [{"spend_reset_window": None}, {"spend_reset_window": {"not": window}}]}
     async with customer_spend_reset_unit_of_work(lambda: batch, "litellm_customermembertable") as writes:
-        writes.queue_spend_zero(where={"customer_member_id": {"in": ["m-1"]}, "spend": {"gt": 0, "lte": 10.0}})
-        writes.queue_spend_decrement(where={"customer_member_id": {"in": ["m-1"]}, "spend": {"gt": 10.0}}, amount=10.0)
+        writes.queue_spend_zero(
+            where={"customer_member_id": {"in": ["m-1"]}, "spend": {"gt": 0, "lte": 10.0}}, window=window
+        )
+        writes.queue_spend_decrement(
+            where={"customer_member_id": {"in": ["m-1"]}, "spend": {"gt": 10.0}}, amount=10.0, window=window
+        )
         assert batch.commit_count == 0
 
     assert batch.commit_count == 1
     assert batch.calls == [
         (
             "litellm_customermembertable.update_many",
-            {"customer_member_id": {"in": ["m-1"]}, "spend": {"gt": 0, "lte": 10.0}},
-            {"spend": 0},
+            {"AND": [{"customer_member_id": {"in": ["m-1"]}, "spend": {"gt": 0, "lte": 10.0}}, not_reset_in_window]},
+            {"spend": 0, "spend_reset_window": window},
         ),
         (
             "litellm_customermembertable.update_many",
-            {"customer_member_id": {"in": ["m-1"]}, "spend": {"gt": 10.0}},
-            {"spend": {"decrement": 10.0}},
+            {"AND": [{"customer_member_id": {"in": ["m-1"]}, "spend": {"gt": 10.0}}, not_reset_in_window]},
+            {"spend": {"decrement": 10.0}, "spend_reset_window": window},
         ),
     ]
 

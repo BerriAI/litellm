@@ -189,12 +189,12 @@ class LinkedSpendResetWrites:
 
 
 @dataclass(frozen=True, slots=True)
-class EndUserSpendResetWrites:
-    """End-user pages commit ahead of the window advance, so a failed advance
-    replays them. Each reset stamps the tier window it closes and skips rows
-    already stamped with it: replaying the cap predicate would zero a carried
-    overage, and replaying the zero would erase spend accrued since. Without
-    a window the resets are unguarded."""
+class WindowedSpendResetWrites:
+    """End-user and customer team and member pages commit ahead of the window
+    advance, so a failed advance replays them. Each reset stamps the tier window
+    it closes and skips rows already stamped with it: replaying the cap
+    predicate would zero a carried overage, and replaying the zero would erase
+    spend accrued since. Without a window the resets are unguarded."""
 
     table: BatchTable
 
@@ -375,20 +375,20 @@ CustomerSpendTable: TypeAlias = Literal["litellm_customerteamtable", "litellm_cu
 @asynccontextmanager
 async def customer_spend_reset_unit_of_work(
     new_batch: Callable[[], PrismaBatch], table: CustomerSpendTable
-) -> AsyncGenerator[LinkedSpendResetWrites, None]:
+) -> AsyncGenerator[WindowedSpendResetWrites, None]:
     """One page of customer team or member spend resets, committed on its own like end users: an aliased request
     can register a member, so the rows a template governs are unbounded."""
     batch: Final = new_batch()
-    yield LinkedSpendResetWrites(table=getattr(batch, table))
+    yield WindowedSpendResetWrites(table=getattr(batch, table))
     await batch.commit()
 
 
 @asynccontextmanager
 async def enduser_spend_reset_unit_of_work(
     new_batch: Callable[[], PrismaBatch],
-) -> AsyncGenerator[EndUserSpendResetWrites, None]:
+) -> AsyncGenerator[WindowedSpendResetWrites, None]:
     """One page of end-user spend resets, committed on its own so a statement
     never grows with the end-user population."""
     batch: Final = new_batch()
-    yield EndUserSpendResetWrites(table=batch.litellm_endusertable)
+    yield WindowedSpendResetWrites(table=batch.litellm_endusertable)
     await batch.commit()
