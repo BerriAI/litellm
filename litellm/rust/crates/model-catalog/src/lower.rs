@@ -13,29 +13,86 @@ use litellm_cost::schedule::{Schedule, Window};
 use crate::error::{Error, Repr, pointer_child, pointer_for_key};
 use crate::model::Model;
 use crate::vocabulary::Mode;
-use crate::wire::{EntryWire, FlatPrice, OffPeakBlock, TierRow, WebSearchBillingUnit};
+use crate::wire::{
+    EntryWire, FlatKey, FlatPrice, OffPeakBlock, TierRow, TierSuffix, WebSearchBillingUnit,
+};
 
 impl TryFrom<&EntryWire> for Prices {
     type Error = Vec<Error>;
 
     fn try_from(wire: &EntryWire) -> Result<Self, Self::Error> {
-        let mut problems = Vec::new();
-        let sourced = flat_prices(&wire.prices)
-            .chain(tier_prices(wire, &mut problems))
-            .chain(search_context_prices(wire))
-            .chain(guardrail_prices(wire));
-        let rates = dedupe(sourced, &mut problems);
-        let off_peak = wire
-            .off_peak
-            .as_ref()
-            .and_then(|block| off_peak(block, &mut problems));
+        let (prices, problems) = lowered(wire, &wire.prices);
         if problems.is_empty() {
-            let billing = billing(wire, &rates);
-            Ok(Prices::new(rates, off_peak, billing))
+            Ok(prices)
         } else {
             Err(problems)
         }
     }
+}
+
+/// The prices main bills `wire` at, for a row the catalog checks may reject. A deployment that
+/// overrides a flat-priced row with `tiered_pricing` holds both spellings, and main then bills the
+/// text tokens from the tier alone. Every other contradiction keeps the price read first
+pub fn billed_prices(wire: &EntryWire) -> Prices {
+    let flat: Vec<FlatPrice> = wire
+        .prices
+        .iter()
+        .filter(|flat| !replaced_by_tiers(wire, &flat.flat))
+        .cloned()
+        .collect();
+    lowered(wire, &flat).0
+}
+
+/// Whether main ignores a flat price because the row has token tiers. A tier supplies input and
+/// the cache rates, which fall back to the tier's input. It supplies output and reasoning only
+/// when a tier prices output, otherwise the standard flat output price stands in
+fn replaced_by_tiers(wire: &EntryWire, flat: &FlatKey) -> bool {
+    let tiers_price = |meter: &Meter| {
+        wire.tier_rows.iter().flatten().any(|row| {
+            row.range.is_some() && row.prices.iter().any(|price| price.flat.meter == *meter)
+        })
+    };
+    let text_output = Meter::Output(OutputUnit::Token(TokenKind::Text));
+    if !tiers_price(&TEXT_INPUT)
+        || matches!(flat.tier, Some(TierSuffix::Batches | TierSuffix::Decisions))
+    {
+        return false;
+    }
+    match &flat.meter {
+        Meter::Input(InputUnit::Token(TokenKind::Text))
+        | Meter::CacheRead {
+            kind: TokenKind::Text,
+            ..
+        }
+        | Meter::CacheWrite {
+            kind: TokenKind::Text,
+            ..
+        } => true,
+        Meter::Output(OutputUnit::Token(TokenKind::Text)) => {
+            tiers_price(&text_output) || flat.has_suffix()
+        }
+        Meter::Output(OutputUnit::ReasoningToken) => {
+            tiers_price(&text_output) || tiers_price(&flat.meter)
+        }
+        _ => false,
+    }
+}
+
+const TEXT_INPUT: Meter = Meter::Input(InputUnit::Token(TokenKind::Text));
+
+fn lowered(wire: &EntryWire, flat: &[FlatPrice]) -> (Prices, Vec<Error>) {
+    let mut problems = Vec::new();
+    let sourced = flat_prices(flat)
+        .chain(tier_prices(wire, &mut problems))
+        .chain(search_context_prices(wire))
+        .chain(guardrail_prices(wire));
+    let rates = dedupe(sourced, &mut problems);
+    let off_peak = wire
+        .off_peak
+        .as_ref()
+        .and_then(|block| off_peak(block, &mut problems));
+    let billing = billing(wire, &rates);
+    (Prices::new(rates, off_peak, billing), problems)
 }
 
 fn billing(wire: &EntryWire, rates: &BTreeMap<Price, UnitPrice>) -> Billing {
@@ -53,15 +110,13 @@ fn billing(wire: &EntryWire, rates: &BTreeMap<Price, UnitPrice>) -> Billing {
             Meter::Input(InputUnit::Character) | Meter::Output(OutputUnit::Character)
         )
     });
-    let prices_cache_read = prices_meter(|meter| {
-        matches!(
-            meter,
-            Meter::CacheRead {
-                kind: TokenKind::Text,
-                ..
-            }
-        )
-    });
+    let prices_cache_read = rates.contains_key(&Price::online(
+        Meter::CacheRead {
+            kind: TokenKind::Text,
+            mode: CacheReadMode::Implicit,
+        },
+        When::default(),
+    ));
     Billing {
         text_unit: if prices_characters && !prices_tokens {
             TextUnit::Character
@@ -480,8 +535,6 @@ mod tests {
 
     use super::*;
 
-    const TEXT_INPUT: Meter = Meter::Input(InputUnit::Token(TokenKind::Text));
-
     fn wire(entry: Value) -> EntryWire {
         let Value::Object(fields) = entry else {
             panic!("entry must be an object")
@@ -564,18 +617,14 @@ mod tests {
         ]}))
         .unwrap();
         assert_eq!(
-            prices.band(ServiceTier::Standard, 256_001),
-            Band::over_prompt_tokens(256_000)
-        );
-        assert_eq!(
             prices
-                .rate(
-                    &TEXT_INPUT,
-                    ServiceTier::Standard,
-                    Band::over_prompt_tokens(256_000)
-                )
-                .map(UnitPrice::get),
-            Some(2e-6)
+                .iter()
+                .map(|(price, rate)| (price.when.band, rate.get()))
+                .collect::<Vec<_>>(),
+            [
+                (Band::Base, 1e-6),
+                (Band::over_prompt_tokens(256_000), 2e-6)
+            ]
         );
     }
 
@@ -700,6 +749,123 @@ mod tests {
                 .any(|problem| problem.path() == expected_path
                     && <&str>::from(problem.kind()) == expected_variant),
             "{problems:?}"
+        );
+    }
+
+    fn billed(entry: Value) -> Vec<(Meter, ServiceTier, Band, f64)> {
+        let Value::Object(fields) = entry else {
+            panic!("entry must be an object")
+        };
+        billed_prices(&EntryWire::read(&fields))
+            .iter()
+            .map(|(price, rate)| {
+                (
+                    price.meter.clone(),
+                    price.when.tier,
+                    price.when.band,
+                    rate.get(),
+                )
+            })
+            .collect()
+    }
+
+    const TEXT_OUTPUT: Meter = Meter::Output(OutputUnit::Token(TokenKind::Text));
+    const REASONING: Meter = Meter::Output(OutputUnit::ReasoningToken);
+
+    #[rstest]
+    fn tiers_over_a_flat_priced_row_bill_text_tokens_from_the_tiers_alone() {
+        use ServiceTier::Standard;
+        let second = Band::over_prompt_tokens(256_000);
+        let audio = Meter::Input(InputUnit::Token(TokenKind::Audio));
+
+        assert_eq!(
+            billed(json!({
+                "input_cost_per_token": 9e-6,
+                "input_cost_per_token_priority": 9e-6,
+                "input_cost_per_token_above_200k_tokens": 9e-6,
+                "output_cost_per_token": 9e-6,
+                "output_cost_per_reasoning_token": 9e-6,
+                "cache_read_input_token_cost": 9e-6,
+                "cache_creation_input_token_cost_above_1hr": 9e-6,
+                "input_cost_per_audio_token": 7e-6,
+                "tiered_pricing": [
+                    {"range": [0, 256000], "input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6},
+                    {"range": [256000, 1000000], "input_cost_per_token": 3e-6, "output_cost_per_token": 4e-6}
+                ]
+            })),
+            [
+                (TEXT_INPUT, Standard, Band::Base, 1e-6),
+                (TEXT_INPUT, Standard, second, 3e-6),
+                (audio, Standard, Band::Base, 7e-6),
+                (TEXT_OUTPUT, Standard, Band::Base, 2e-6),
+                (TEXT_OUTPUT, Standard, second, 4e-6),
+            ]
+        );
+    }
+
+    #[rstest]
+    fn tiers_that_price_no_output_keep_the_standard_flat_output_and_reasoning() {
+        use ServiceTier::Standard;
+
+        assert_eq!(
+            billed(json!({
+                "input_cost_per_token": 9e-6,
+                "output_cost_per_token": 5e-6,
+                "output_cost_per_token_priority": 9e-6,
+                "output_cost_per_token_above_200k_tokens": 9e-6,
+                "output_cost_per_reasoning_token": 6e-6,
+                "tiered_pricing": [{"range": [0, 256000], "input_cost_per_token": 1e-6}]
+            })),
+            [
+                (TEXT_INPUT, Standard, Band::Base, 1e-6),
+                (TEXT_OUTPUT, Standard, Band::Base, 5e-6),
+                (REASONING, Standard, Band::Base, 6e-6),
+            ]
+        );
+    }
+
+    #[rstest]
+    #[case::batch_prices(json!({
+        "input_cost_per_token_batches": 5e-6,
+        "tiered_pricing": [{"range": [0, 10], "input_cost_per_token": 1e-6}]
+    }), 2)]
+    #[case::result_tiers_do_not_price_tokens(json!({
+        "input_cost_per_token": 5e-6,
+        "cache_read_input_token_cost": 1e-6,
+        "tiered_pricing": [{"max_results_range": [0, 25], "input_cost_per_query": 1e-3}]
+    }), 3)]
+    #[case::a_ladder_the_catalog_rejects_still_prices(json!({
+        "tiered_pricing": [
+            {"range": [0, 128000], "input_cost_per_token": 1e-6},
+            {"range": [128001, 1000000], "input_cost_per_token": 2e-6}
+        ]
+    }), 2)]
+    #[case::two_spellings_keep_the_first(json!({
+        "input_cost_per_token": 1e-6,
+        "input_cost_per_token_above_0k_tokens": 2e-6,
+        "cache_read_input_token_cost": 1e-7
+    }), 2)]
+    fn billing_keeps_what_the_catalog_checks_would_reject(
+        #[case] entry: Value,
+        #[case] expected_prices: usize,
+    ) {
+        assert_eq!(billed(entry).len(), expected_prices);
+    }
+
+    #[rstest]
+    fn billing_drops_an_off_peak_block_with_no_hours() {
+        let Value::Object(fields) = json!({
+            "input_cost_per_token": 1e-6,
+            "off_peak_pricing": {"input_cost_per_token": 5e-7}
+        }) else {
+            unreachable!()
+        };
+        let prices = billed_prices(&EntryWire::read(&fields));
+
+        assert_eq!(prices.off_peak(), None);
+        assert_eq!(
+            prices.get(&Price::online(TEXT_INPUT, When::default())),
+            UnitPrice::new(1e-6)
         );
     }
 
@@ -828,6 +994,10 @@ mod tests {
     )]
     #[case::fireworks_without_cache_read_borrows_half(
         json!({"litellm_provider": "fireworks_ai", "input_cost_per_token": 1e-6}),
+        Billing { cache_read_fallback: CacheReadFallback::HalfInputRate, ..Billing::default() }
+    )]
+    #[case::fireworks_with_only_a_tier_cache_read_still_borrows_half(
+        json!({"litellm_provider": "fireworks_ai", "input_cost_per_token": 1e-6, "cache_read_input_token_cost_priority": 1e-7}),
         Billing { cache_read_fallback: CacheReadFallback::HalfInputRate, ..Billing::default() }
     )]
     #[case::fireworks_with_cache_read_keeps_it(

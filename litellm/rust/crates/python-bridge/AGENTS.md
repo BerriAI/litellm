@@ -130,6 +130,13 @@ GIL handling to `litellm-host-python`.
   mapping. The 256-character cap applies only to HTTP error diagnostics, not
   response bodies. Do not log those args.
 
+## Pricing
+
+- `src/cost.rs` is the whole pricing bridge. `NativePrices` lowers one row with `billed_prices` when it is built and holds no Python object after that
+- Python hands it quantities, never a `Usage`. Reading the provider's usage into counts stays in `litellm_core_utils/llm_cost_calc/utils.py`, and every rate rule stays in `litellm-cost`
+- A row crosses as the mapping Python holds. A value JSON cannot hold, such as a `datetime` in router `model_info`, is skipped with its key
+- The call's provider replaces the row's `litellm_provider` before lowering, because the band edge and the Fireworks cache-read default follow the call
+
 ## Tests
 
 - `cargo test --workspace` must compile this crate.
