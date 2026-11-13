@@ -27,7 +27,10 @@ export interface CustomerUsageEntity {
   label: string;
   spend: number;
   budgetLimit: number | null;
+  budgetDuration: string | null;
+  budgetLimits: components["schemas"]["BudgetLimit"][];
   budgetResetAt: string | null;
+  budgetUsage?: components["schemas"]["CustomerBudgetUsage"][] | null;
 }
 
 export interface CustomerHierarchyUsage extends ReturnType<typeof mergeCustomerActivityPages> {
@@ -40,6 +43,9 @@ export interface CustomerHierarchyUsage extends ReturnType<typeof mergeCustomerA
   teamResults: ReturnType<typeof mergeCustomerActivityPages>["results"];
   memberResults: ReturnType<typeof mergeCustomerActivityPages>["results"];
   memberBudgets: CustomerUsageEntity[];
+  monthlyOrganizationSpend: number;
+  monthlyMembers: UsageRow[];
+  yearlyMembers: UsageRow[];
 }
 
 interface CustomerUsageRequest {
@@ -47,6 +53,10 @@ interface CustomerUsageRequest {
   accessToken: string;
   startDate: string;
   endDate: string;
+  monthStartDate: string;
+  monthEndDate: string;
+  yearStartDate: string;
+  yearEndDate: string;
   signal?: AbortSignal;
 }
 
@@ -136,7 +146,7 @@ const activityPages = async (resource: Collection, ids: readonly string[], reque
 };
 
 interface ActivityJob {
-  dimension: "scope" | "teams" | "members";
+  dimension: "scope" | "teams" | "members" | "monthlyOrganization" | "monthlyMembers" | "yearlyMembers";
   resource: Collection;
   ids: readonly string[];
 }
@@ -148,19 +158,40 @@ const chunkJobs = (resource: Collection, dimension: ActivityJob["dimension"], id
     ids: ids.slice(index * PAGE_SIZE, (index + 1) * PAGE_SIZE),
   }));
 
-const entity = (id: string, record: Organization | Team | Member): CustomerUsageEntity => ({
-  id,
-  label: record.alias || id,
-  spend: record.spend,
-  budgetLimit: ("effective_budget" in record ? record.effective_budget : record.budget)?.max_budget ?? null,
-  budgetResetAt: record.budget_reset_at ?? null,
-});
+const entity = (id: string, record: Organization | Team | Member): CustomerUsageEntity => {
+  const budget = "effective_budget" in record ? record.effective_budget : record.budget;
+  return {
+    id,
+    label: record.alias || id,
+    spend: record.spend,
+    budgetLimit: budget?.max_budget ?? null,
+    budgetDuration: budget?.budget_duration ?? null,
+    budgetLimits: budget?.budget_limits ?? [],
+    budgetResetAt: record.budget_reset_at ?? null,
+    budgetUsage: record.budget_usage,
+  };
+};
 
 const selectedResource = (scope: ResolvedScope): Collection => {
   if (scope.member) return "customer_members";
   if (scope.team) return "customer_teams";
   return "customer_organizations";
 };
+
+const monthlyJobs = (
+  isCurrentMonth: boolean,
+  resource: Collection,
+  organizationId: string,
+  memberIds: readonly string[],
+): ActivityJob[] => [
+  ...(!isCurrentMonth || resource !== "customer_organizations"
+    ? chunkJobs("customer_organizations", "monthlyOrganization", [organizationId])
+    : []),
+  ...(!isCurrentMonth ? chunkJobs("customer_members", "monthlyMembers", memberIds) : []),
+];
+
+const isSelectedRange = (request: CustomerUsageRequest, startDate: string, endDate: string): boolean =>
+  request.startDate === startDate && request.endDate === endDate;
 
 export const customerHierarchyUsageCall = async (request: CustomerUsageRequest): Promise<CustomerHierarchyUsage> => {
   assertIdentifiers([
@@ -171,6 +202,8 @@ export const customerHierarchyUsageCall = async (request: CustomerUsageRequest):
   const children = await descendants(selected, request);
   const resource = selectedResource(selected);
   const selectedId = selected.member?.customer_member_id ?? selected.team?.customer_team_id ?? request.scope.org;
+  const isCurrentMonth = isSelectedRange(request, request.monthStartDate, request.monthEndDate);
+  const isCurrentYear = isSelectedRange(request, request.yearStartDate, request.yearEndDate);
   const jobs: ActivityJob[] = [
     { dimension: "scope", resource, ids: [selectedId] },
     ...(!selected.team
@@ -187,10 +220,33 @@ export const customerHierarchyUsageCall = async (request: CustomerUsageRequest):
           children.members.map((member) => member.customer_member_id),
         )
       : []),
+    ...monthlyJobs(
+      isCurrentMonth,
+      resource,
+      request.scope.org,
+      children.members.map((member) => member.customer_member_id),
+    ),
+    ...(!isCurrentYear
+      ? chunkJobs(
+          "customer_members",
+          "yearlyMembers",
+          children.members.map((member) => member.customer_member_id),
+        )
+      : []),
   ];
+  const monthRequest = { ...request, startDate: request.monthStartDate, endDate: request.monthEndDate };
+  const yearRequest = { ...request, startDate: request.yearStartDate, endDate: request.yearEndDate };
+  const requests: Record<ActivityJob["dimension"], CustomerUsageRequest> = {
+    scope: request,
+    teams: request,
+    members: request,
+    monthlyOrganization: monthRequest,
+    monthlyMembers: monthRequest,
+    yearlyMembers: yearRequest,
+  };
   const activity = await batches(jobs, async (job) => ({
     dimension: job.dimension,
-    pages: await activityPages(job.resource, job.ids, request),
+    pages: await activityPages(job.resource, job.ids, requests[job.dimension]),
   }));
   const primary = mergeCustomerActivityPages(
     activity.filter((result) => result.dimension === "scope").flatMap((result) => result.pages),
@@ -205,6 +261,22 @@ export const customerHierarchyUsageCall = async (request: CustomerUsageRequest):
     : mergeCustomerActivityPages(
         activity.filter((result) => result.dimension === "members").flatMap((result) => result.pages),
       ).results;
+  const monthlyOrganization =
+    isCurrentMonth && resource === "customer_organizations"
+      ? primary
+      : mergeCustomerActivityPages(
+          activity.filter((result) => result.dimension === "monthlyOrganization").flatMap((result) => result.pages),
+        );
+  const monthlyMemberDays = isCurrentMonth
+    ? memberDays
+    : mergeCustomerActivityPages(
+        activity.filter((result) => result.dimension === "monthlyMembers").flatMap((result) => result.pages),
+      ).results;
+  const yearlyMemberActivity = isCurrentYear
+    ? { results: memberDays, metadata: primary.metadata }
+    : mergeCustomerActivityPages(
+        activity.filter((result) => result.dimension === "yearlyMembers").flatMap((result) => result.pages),
+      );
   const teamLabels = new Map(
     children.teams.map((team) => [team.customer_team_id, team.alias || team.customer_team_id]),
   );
@@ -232,5 +304,12 @@ export const customerHierarchyUsageCall = async (request: CustomerUsageRequest):
     ),
     memberResults: customerEntityDailyData(primary.results, memberDays, memberLabels),
     memberBudgets: children.members.map((member) => entity(member.customer_member_id, member)),
+    monthlyOrganizationSpend: monthlyOrganization.metadata.total_spend,
+    monthlyMembers: customerEntityRankings(monthlyMemberDays, memberLabels, monthlyOrganization.metadata, {
+      unassignedLabel: i18n.t("customerPortal.analytics.unassignedMember"),
+    }),
+    yearlyMembers: customerEntityRankings(yearlyMemberActivity.results, memberLabels, yearlyMemberActivity.metadata, {
+      unassignedLabel: i18n.t("customerPortal.analytics.unassignedMember"),
+    }),
   };
 };
