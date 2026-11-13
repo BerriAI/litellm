@@ -2282,6 +2282,11 @@ def _timing_values(
     return getattr(logging_obj, "response_timing_metrics", None) or {}
 
 
+def _redact_snapshot_when_guardrail_blocked(exc: BaseException, data: Mapping[str, object]) -> None:
+    if isinstance(exc, Exception) and is_guardrail_intervention(exc):
+        redact_blocked_request_body_snapshot(data)
+
+
 def _fallback_refusal_ends_the_walk(
     exc: Exception, at_saturation: bool, general_settings: Mapping[str, object]
 ) -> bool:
@@ -3138,8 +3143,7 @@ class ProxyBaseLLMRequestProcessing:
                 skip_guardrails=skip_guardrails,
             )
         except Exception as e:
-            if is_guardrail_intervention(e):
-                redact_blocked_request_body_snapshot(self.data)
+            _redact_snapshot_when_guardrail_blocked(e, self.data)
             raise
         await _enforce_guardrail_added_tag_budgets(
             data=self.data,
@@ -3397,8 +3401,7 @@ class ProxyBaseLLMRequestProcessing:
                 )
             except BaseException as e:
                 user_api_key_dict.matched_model_access_groups = requested_groups  # rebind-ok: undo the fallback
-                if is_guardrail_intervention(e):
-                    redact_blocked_request_body_snapshot(rate_limited_data)
+                _redact_snapshot_when_guardrail_blocked(e, rate_limited_data)
                 self.data = rate_limited_data
                 raise
         finally:

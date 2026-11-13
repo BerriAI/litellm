@@ -2704,7 +2704,7 @@ def refresh_proxy_server_request_body_snapshot(
         )
 
 
-def redact_blocked_request_body_snapshot(data: MutableMapping[str, object]) -> None:
+def redact_blocked_request_body_snapshot(data: Mapping[str, object]) -> None:
     """
     Replace the stored ``proxy_server_request`` body with a redacted placeholder.
 
