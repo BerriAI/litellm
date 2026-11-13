@@ -110,6 +110,8 @@ class ExceptionCheckers:
             "exceeds the maximum number of tokens allowed",  # Gemini
             '"code": "context_length_exceeded"',
             "prompt is too long",
+            "exceeds the context window of this model",  # OpenAI
+            "exceeded model token limit",  # Moonshot
         ]
         for substring in known_exception_substrings:
             if substring in _error_str_lowercase:

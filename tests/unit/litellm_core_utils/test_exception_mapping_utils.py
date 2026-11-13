@@ -503,6 +503,13 @@ context_window_test_cases = [
         "Input should be 'error' or 'truncate', field: 'context_length_exceeded_behavior', value: 'foo'",
         False,
     ),
+    # OpenAI's current wording (code context_length_exceeded)
+    (
+        "Your input exceeds the context window of this model. Please adjust your input and try again.",
+        True,
+    ),
+    # Moonshot
+    ("Invalid request: Your request exceeded model token limit: 262144", True),
     # Negative cases (should return False)
     ("A generic API error occurred.", False),
     ("Invalid API Key provided.", False),
@@ -759,6 +766,37 @@ async def test_sglang_context_window_error_mapping(
     assert caught.value.status_code == 400
     assert error_message in str(caught.value)
     assert caught.value.llm_provider == "openai"
+
+
+@pytest.mark.parametrize(
+    "custom_llm_provider, model, error_message",
+    [
+        (
+            "openai",
+            "gpt-5",
+            "Error code: 400 - {'error': {'message': 'Your input exceeds the context window of this model. "
+            "Please adjust your input and try again.', 'type': 'invalid_request_error', 'param': 'input', "
+            "'code': 'context_length_exceeded'}}",
+        ),
+        (
+            "moonshot",
+            "kimi-k2",
+            "Error code: 400 - {'error': {'message': 'Invalid request: Your request exceeded model token limit: "
+            "262144', 'type': 'invalid_request_error', 'param': None, 'code': None}}",
+        ),
+    ],
+)
+def test_openai_compatible_context_window_error_mapping(custom_llm_provider, model, error_message):
+    """These 400s must map to ContextWindowExceededError so context_window_fallbacks fire."""
+    with pytest.raises(litellm.ContextWindowExceededError) as excinfo:
+        exception_type(
+            model=model,
+            original_exception=OpenAIError(status_code=400, message=error_message),
+            custom_llm_provider=custom_llm_provider,
+        )
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.llm_provider == custom_llm_provider
 
 
 def test_lemonade_context_window_error_mapping():
