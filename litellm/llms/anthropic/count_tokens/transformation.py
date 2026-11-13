@@ -161,8 +161,13 @@ def _is_plain_message(message: Mapping[str, object]) -> bool:
     return message.get("role") != "tool" and _PLAIN_MESSAGE_KEYS.issuperset(message.keys())
 
 
+def _string_role(message: Mapping[str, object]) -> str | None:
+    role: Final = message.get("role")
+    return role if isinstance(role, str) else None
+
+
 def _is_contentless_chat_turn(message: Mapping[str, object]) -> bool:
-    return message.get("content") is None and message.get("role") in _NULL_CONTENT_CHAT_ROLES
+    return message.get("content") is None and _string_role(message) in _NULL_CONTENT_CHAT_ROLES
 
 
 def _needs_chat_translation(translate_contentless_turns: bool, message: Mapping[str, object]) -> bool:
@@ -320,7 +325,7 @@ def _message_problem(index: int, message: Mapping[str, object]) -> str | None:
 
 
 def _chat_message_problem(index: int, message: Mapping[str, object]) -> str | None:
-    return None if message.get("role") in _CHAT_ROLES_WITHOUT_CONTENT else _message_problem(index, message)
+    return None if _string_role(message) in _CHAT_ROLES_WITHOUT_CONTENT else _message_problem(index, message)
 
 
 def _first_message_problem(
