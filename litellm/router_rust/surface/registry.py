@@ -645,6 +645,9 @@ class HostRegistry(HostModelInfo):
         # ``mock_response``, a callable ``azure_ad_token_provider``), by deployment id: an attempt is called with them, as Python's list held them.
         self._live_params: Final[dict[str, Mapping[str, object]]] = {}  # mutable-ok: written as deployments register
         self._live_info: Final[dict[str, Mapping[str, object]]] = {}  # mutable-ok: written as deployments register
+        self._vertex_pass_through_key_by_model_id: Final[
+            dict[str, tuple[str, str]]
+        ] = {}  # mutable-ok: written as deployments register
         # The indexes the registry hands out: router-core's, read back, every write a changeset.
         self._indexes: Final = HostedIndexes(self._live_handle, self._hand_changes)
         self._core_deployment_latency_map: dict[str, float] = {}  # mutable-ok: the live latency map
@@ -1288,30 +1291,77 @@ class HostRegistry(HostModelInfo):
             return None
         return str(project), str(location)
 
-    def _vertex_pass_through_key_in_use(self, project: str, location: str) -> bool:
-        """Whether any live deployment still registers vertex pass-through credentials for the key."""
+    def _vertex_pass_through_claim(self, entry: UntypedEntry) -> tuple[str, str] | None:
+        """The (project, location) a live deployment claims, by its recorded key when present."""
+        model_info: Final = as_str_mapping(entry.get("model_info"))
+        model_id: Final = model_info.get("id") if model_info is not None else None
+        if isinstance(model_id, str):
+            recorded: Final = self._vertex_pass_through_key_by_model_id.get(model_id)
+            if recorded is not None:
+                return recorded
+        return self._vertex_pass_through_key(as_str_mapping(entry.get("litellm_params")))
+
+    def _vertex_pass_through_survivor(self, project: str, location: str) -> Mapping[str, object] | None:
+        """The litellm_params of a live deployment still claiming (project, location), if any."""
         for entry in self._core_model_list:
             litellm_params: Final = as_str_mapping(entry.get("litellm_params"))
-            if litellm_params is not None and self._vertex_pass_through_key(litellm_params) == (
-                project,
-                location,
-            ):
-                return True
-        return False
+            if litellm_params is None:
+                continue
+            if self._vertex_pass_through_claim(entry) == (project, location):
+                return litellm_params
+        return None
 
-    def _unregister_vertex_pass_through_credentials(self, litellm_params: Mapping[str, object] | None) -> None:
-        """Forget a removed deployment's vertex pass-through credentials, unless a live deployment still claims them."""
-        if litellm_params is None:
-            return
-        key: Final = self._vertex_pass_through_key(litellm_params)
+    def _unregister_vertex_pass_through_credentials(
+        self,
+        litellm_params: Mapping[str, object] | None,
+        *,
+        model_id: str | None = None,
+        recorded_key: tuple[str, str] | None = None,
+    ) -> None:
+        """Forget a removed deployment's vertex pass-through credentials.
+
+        Uses the (project, location) recorded when the deployment registered, so a
+        named credential deleted or edited after registration cannot strand the
+        cached credential under its original key. When a live deployment still
+        claims the key and still resolves to it, its credentials are re-registered,
+        so the cache holds the surviving deployment's service account instead of the
+        removed one. Otherwise the key is removed.
+        """
+        if model_id is not None:
+            popped: Final = self._vertex_pass_through_key_by_model_id.pop(model_id, None)
+            if recorded_key is None:
+                recorded_key = popped
+        key: Final = recorded_key
+        if key is None:
+            if litellm_params is None:
+                return
+            key = self._vertex_pass_through_key(litellm_params)
         if key is None:
             return
         project, location = key
-        if self._vertex_pass_through_key_in_use(project, location):
-            return
         from litellm.router_host import router_host
 
         try:
+            survivor_params: Final = self._vertex_pass_through_survivor(project, location)
+            if survivor_params is not None and self._vertex_pass_through_key(survivor_params) == (
+                project,
+                location,
+            ):
+                credential_name: Final = survivor_params.get("litellm_credential_name")
+                credential_values: Final = (
+                    CredentialAccessor.get_credential_values(credential_name)
+                    if isinstance(credential_name, str)
+                    else {}
+                )
+                credentials: Final = credential_values.get("vertex_credentials") or survivor_params.get(
+                    "vertex_credentials"
+                )
+                router_host().add_vertex_pass_through_credentials(
+                    project_id=project,
+                    location=location,
+                    vertex_credentials=credentials,  # pyright: ignore[reportArgumentType]  # the survivor's credentials
+                )
+                return
             router_host().remove_vertex_pass_through_credentials(project_id=project, location=location)
         except Exception:  # noqa: BLE001  # credential cleanup must not fail a deployment write
             verbose_router_logger.warning(
@@ -1322,7 +1372,10 @@ class HostRegistry(HostModelInfo):
 
     def _initialize_deployment_for_pass_through(self, deployment: Deployment, custom_llm_provider: str) -> None:
         """Register vertex credentials for a pass-through deployment (``_initialize_deployment_for_pass_through``)."""
+        model_id: Final = deployment.model_info.id
         if deployment.litellm_params.use_in_pass_through is not True or custom_llm_provider != "vertex_ai":
+            if model_id is not None:
+                self._vertex_pass_through_key_by_model_id.pop(model_id, None)
             return
         credential_name: Final = deployment.litellm_params.litellm_credential_name
         credential_values: Final = (
@@ -1342,6 +1395,8 @@ class HostRegistry(HostModelInfo):
             location=str(location),
             vertex_credentials=credentials,  # pyright: ignore[reportArgumentType]  # the configured credentials
         )
+        if model_id is not None:
+            self._vertex_pass_through_key_by_model_id[model_id] = (str(project), str(location))
 
     # -- writes -----------------------------------------------------------------------------------
 
@@ -1360,6 +1415,7 @@ class HostRegistry(HostModelInfo):
         """Add or replace one deployment (``_upsert_deployment``)."""
         model_id: Final = deployment.model_info.id or ""
         on_router: Final = self._core_get_deployment(model_id=model_id)
+        old_vertex_key: Final = self._vertex_pass_through_key_by_model_id.get(model_id)
         served: Final = without_model_capability_flags(deployment)
         try:
             if on_router is not None:
@@ -1394,7 +1450,8 @@ class HostRegistry(HostModelInfo):
         else:
             if on_router is not None:
                 self._unregister_vertex_pass_through_credentials(
-                    as_str_mapping(on_router.to_json(exclude_none=True).get("litellm_params"))
+                    as_str_mapping(on_router.to_json(exclude_none=True).get("litellm_params")),
+                    recorded_key=old_vertex_key,
                 )
             return deployment
 
@@ -1433,9 +1490,9 @@ class HostRegistry(HostModelInfo):
         """Forget the live values of ids no deployment carries any more, so a router that rotates
         ids does not keep the removed deployments' errors and callables."""
         handle: Final = self._live_handle()
-        if handle is None or not (self._live_params or self._live_info):
+        if handle is None or not (self._live_params or self._live_info or self._vertex_pass_through_key_by_model_id):
             return
-        for held in (self._live_params, self._live_info):
+        for held in (self._live_params, self._live_info, self._vertex_pass_through_key_by_model_id):
             for model_id in [id for id in held if handle.deployment(id) is None]:
                 del held[model_id]
 
@@ -1550,6 +1607,7 @@ class HostRegistry(HostModelInfo):
     def replace_model_list(self, model_list: "list[UntypedEntry]") -> None:  # mutable-ok: the list as assigned
         """``router.model_list = [...]``: the list is swapped as given, without reindexing, and
         router-core takes it whole."""
+        self._vertex_pass_through_key_by_model_id.clear()
         self._core_model_list.replace(model_list)
         self._registry_version += 1
         self._on_change()
@@ -1562,8 +1620,11 @@ class HostRegistry(HostModelInfo):
                 if deployment_idx is None:
                     return None
                 item: Final = self._core_model_list[deployment_idx]  # pyright: ignore[reportArgumentType]  # raises IndexError for a position past the list, as the pop does
+                recorded_key: Final = self._vertex_pass_through_key_by_model_id.get(id)
                 self._remove(id)
-                self._unregister_vertex_pass_through_credentials(as_str_mapping(item.get("litellm_params")))
+                self._unregister_vertex_pass_through_credentials(
+                    as_str_mapping(item.get("litellm_params")), model_id=id, recorded_key=recorded_key
+                )
             if self.checks is not None:
                 self.checks.unregister_deployment_budget(id)
             if self.strategies is not None:
