@@ -10,12 +10,20 @@ from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.management_helpers.customer_hierarchy import CustomerHierarchy, ErrorCode, Failure
-from litellm.types.proxy.management_endpoints.customer_hierarchy import CustomerMember, MemberCreate, Team, TeamCreate
+from litellm.types.proxy.management_endpoints.customer_hierarchy import (
+    CustomerMember,
+    MemberCreate,
+    Organization,
+    OrganizationCreate,
+    Team,
+    TeamCreate,
+)
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
 AUTO_CREATE_ACTOR: Final = "x-litellm-customer-member-id"
+AUTO_CREATE_ORG_ACTOR: Final = "x-litellm-customer-org-alias"
 DEFAULT_TEAM_ALIAS: Final = "default"
 
 
@@ -58,4 +66,21 @@ async def ensure_customer_member(
             team.customer_team_id,
             customer_org_id,
         )
+    return created
+
+
+async def ensure_customer_organization(
+    customer_org_alias: str, prisma_client: "PrismaClient"
+) -> Organization | Failure:
+    """The organization row carrying ``customer_org_alias``, created with the alias as its id when absent, so a
+    customer's first request is charged to it. Two workers registering the same alias at once both end up with
+    the one row."""
+    hierarchy: Final = CustomerHierarchy(prisma_client)
+    created: Final = await hierarchy.create_organization(
+        OrganizationCreate(customer_org_id=customer_org_alias, alias=customer_org_alias), AUTO_CREATE_ORG_ACTOR
+    )
+    if isinstance(created, Failure) and created.code is ErrorCode.ALREADY_EXISTS:
+        return await hierarchy.get_organization(customer_org_alias)
+    if not isinstance(created, Failure):
+        verbose_proxy_logger.info("Registered customer organization %s", customer_org_alias)
     return created
