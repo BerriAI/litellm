@@ -14,9 +14,10 @@ from pydantic import TypeAdapter
 
 from litellm.proxy.db.native_database import (
     TokenRotation,
-    keep_writer_token_fresh,
+    keep_token_fresh,
     native_endpoint,
     needs_tls_probe,
+    reader_token_rotation,
     server_offers_tls,
     writer_token_rotation,
 )
@@ -284,6 +285,24 @@ def test_writer_token_rotation_follows_token_auth(monkeypatch: pytest.MonkeyPatc
     )
 
 
+def test_reader_token_rotation_uses_the_reader_region_even_when_the_writer_is_pooled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    url: Final = "postgresql://reader:tok@replica.internal:5433/proxy"
+    monkeypatch.delenv("AZURE_POSTGRESQL_AUTH", raising=False)
+    monkeypatch.setenv(PGBOUNCER_POOLED_ENV_VAR, "true")
+    monkeypatch.setenv("IAM_TOKEN_DB_AUTH", "false")
+    assert reader_token_rotation(url) is None
+
+    monkeypatch.setenv("IAM_TOKEN_DB_AUTH", "true")
+    monkeypatch.setenv("AWS_RDS_REGION", "us-west-2")
+    monkeypatch.setenv("AWS_RDS_READ_REPLICA_REGION", "eu-west-1")
+    assert reader_token_rotation(url) == TokenRotation(
+        auth=RdsIamTokenAuth(region="eu-west-1"),
+        endpoint=IAMEndpoint(host="replica.internal", port="5433", user="reader", name="proxy"),
+    )
+
+
 def test_pooled_writer_needs_no_token_rotation(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("IAM_TOKEN_DB_AUTH", "true")
     monkeypatch.setenv(PGBOUNCER_POOLED_ENV_VAR, "true")
@@ -313,7 +332,7 @@ class _Sink:
         self._wanted: Final = wanted
         self.done: Final = asyncio.Event()
 
-    def set_writer_password(self, password: str) -> None:
+    def install(self, password: str) -> None:
         self.passwords = (*self.passwords, password)
         if len(self.passwords) >= self._wanted:
             self.done.set()
@@ -344,7 +363,7 @@ def _minting(*outcomes: str | Exception) -> TokenRotation:
 
 async def _run_until(sink: _Sink, rotation: TokenRotation, schedule: _Schedule) -> None:
     task: Final = asyncio.create_task(
-        keep_writer_token_fresh(sink, rotation, "opaque", now=lambda: NOW, sleep=schedule.sleep)
+        keep_token_fresh(sink.install, rotation, "opaque", now=lambda: NOW, sleep=schedule.sleep)
     )
     await asyncio.wait_for(sink.done.wait(), timeout=5)
     task.cancel()
@@ -352,7 +371,7 @@ async def _run_until(sink: _Sink, rotation: TokenRotation, schedule: _Schedule) 
 
 
 @pytest.mark.asyncio
-async def test_keep_writer_token_fresh_installs_each_minted_token() -> None:
+async def test_keep_token_fresh_installs_each_minted_token() -> None:
     sink: Final = _Sink(wanted=2)
     schedule: Final = _Schedule()
 
@@ -363,7 +382,7 @@ async def test_keep_writer_token_fresh_installs_each_minted_token() -> None:
 
 
 @pytest.mark.asyncio
-async def test_keep_writer_token_fresh_retries_a_failed_mint() -> None:
+async def test_keep_token_fresh_retries_a_failed_mint() -> None:
     sink: Final = _Sink(wanted=1)
     schedule: Final = _Schedule()
 

@@ -1718,6 +1718,14 @@ def run_server(
             # on the writer. Anything pinned on the replica URL wins, unlike the
             # writer where the config is applied on top.
             read_replica_url: Final[str | None] = os.getenv("DATABASE_URL_READ_REPLICA")
+            reader_budget: Final = (
+                ConnectionBudget.of(
+                    _url_query_value(read_replica_url, "connection_limit") or connection_url_params["connection_limit"]
+                )
+                if read_replica_url
+                else None
+            )
+            reader_prisma_limit: Final = None if reader_budget is None else reader_budget.prisma_limit
             if read_replica_url:
                 reader_options: Final[str] = _pg_options_with_timeouts(
                     _url_query_value(read_replica_url, "options"),
@@ -1725,12 +1733,17 @@ def run_server(
                     db_lock_timeout,
                     db_idle_in_transaction_timeout,
                 )
+                reader_url: Final = (
+                    _with_query_value(read_replica_url, "options", reader_options)
+                    if reader_options
+                    else read_replica_url
+                )
                 os.environ["DATABASE_URL_READ_REPLICA"] = translate_libpq_ssl_params(
                     add_missing_query_params(
                         add_missing_query_params(
-                            _with_query_value(read_replica_url, "options", reader_options)
-                            if reader_options
-                            else read_replica_url,
+                            reader_url
+                            if reader_prisma_limit is None
+                            else _with_query_value(reader_url, "connection_limit", str(reader_prisma_limit)),
                             reader_shareable_params(prisma_url_params),
                         ),
                         prisma_defaults,
@@ -1747,6 +1760,7 @@ def run_server(
                     )
                     if read_replica_url
                     else None,
+                    rust_reader_limit=0 if reader_budget is None else reader_budget.rust,
                     num_workers=f"{1 if run_hypercorn else num_workers}",
                 )
             )
