@@ -586,7 +586,7 @@ _MISSING_KEY: Final = (
 )
 
 
-def _rejection(error: Exception, request: Mapping[str, object], request_provider: str) -> Exception:
+def _rejection(error: Exception, request: Mapping[str, object], request_provider: str, asynchronous: bool) -> Exception:
     """The error Python's handler raises for a request it refuses before sending it."""
     metadata: Final = request.get("metadata")
     if isinstance(metadata, dict):
@@ -597,10 +597,12 @@ def _rejection(error: Exception, request: Mapping[str, object], request_provider
     provider_rejection: Final = getattr(error, "messages_provider_rejection", None)
     if isinstance(provider_rejection, str):
         _log_resolved_call(request, request_provider)
+        _flag_azure_ai_call(request, request_provider, asynchronous)
         return _public_provider_error(
             _config_error(400, provider_rejection, (), request, request_provider), error, request, request_provider
         )
     if getattr(error, "messages_unsupported_param", False):
+        _flag_azure_ai_call(request, request_provider, asynchronous)
         return litellm.UnsupportedParamsError(message=str(error))
     return litellm.BadRequestError(
         message=str(error),
@@ -899,7 +901,7 @@ def map_failure(
         _flag_messages_call(request.get("litellm_logging_obj"), asynchronous)
         return _raised_like_python(error, request_provider)
     if getattr(error, "messages_request_error", False):
-        return _rejection(error, request, request_provider)
+        return _rejection(error, request, request_provider, asynchronous)
     if getattr(error, "messages_missing_credential", False):
         return _raised_like_python(
             litellm.AuthenticationError(
@@ -1013,6 +1015,13 @@ def _flag_messages_call(logger: object, asynchronous: bool) -> None:
     if not isinstance(logger, LiteLLMLoggingObj):
         return
     logger.model_call_details.setdefault("litellm_params", {})[CallTypes.aanthropic_messages.value] = asynchronous
+
+
+def _flag_azure_ai_call(request: Mapping[str, object], request_provider: str, asynchronous: bool) -> None:
+    """Python's handler flags the call before it gets the credential or refuses a param. By the owner's ruling
+    anthropic keeps main's unflagged failure."""
+    if request_provider == "azure_ai":
+        _flag_messages_call(request.get("litellm_logging_obj"), asynchronous)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1278,9 +1287,12 @@ def azure_ad_token(arguments: Mapping[str, object]) -> str:
     return get_azure_ad_token(_handler_params(arguments)) or ""
 
 
-def map_token_failure(error: Exception, request: Mapping[str, object], request_provider: str) -> Exception:
+def map_token_failure(
+    error: Exception, request: Mapping[str, object], request_provider: str, asynchronous: bool = False
+) -> Exception:
     """Python's handler maps a litellm exception raised while it gets the call's credential, and lets any other
     exception through as raised."""
+    _flag_azure_ai_call(request, request_provider, asynchronous)
     if not isinstance(error, BaseLLMException):
         return error
     return _public_provider_error(error, error, request, request_provider)

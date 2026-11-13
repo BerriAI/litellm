@@ -909,7 +909,12 @@ impl PythonBinding for MessagesPythonHost {
             let mapped = py
                 .import(ROUTE_HOST_MODULE)?
                 .getattr("map_token_failure")?
-                .call1((raised.value(py), self.view.request(py)?, self.provider(py)))?;
+                .call1((
+                    raised.value(py),
+                    self.view.request(py)?,
+                    self.provider(py),
+                    self.asynchronous,
+                ))?;
             return Ok(PyErr::from_value(mapped));
         }
         if let Some(unencodable) = litellm_error::find::<UnencodableHeader>(&error) {

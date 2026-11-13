@@ -8,7 +8,7 @@ from typing import Final
 
 import httpx
 import pytest
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
@@ -2282,6 +2282,42 @@ def test_any_other_token_failure_reaches_the_caller_as_raised() -> None:
     error: Final = RuntimeError("Failed to get Azure AD token: Authentication failed: HTTP Error: 500")
 
     assert messages_host.map_token_failure(error, _AZURE_CLAUDE_REQUEST, "azure_ai") is error
+
+
+_PARAMS: Final = TypeAdapter(dict[str, object])
+
+
+@pytest.mark.parametrize(
+    ("provider", "asynchronous", "flagged"),
+    [
+        pytest.param("azure_ai", True, True, id="azure_ai_async"),
+        pytest.param("azure_ai", False, False, id="azure_ai_sync"),
+        pytest.param("anthropic", True, None, id="anthropic_keeps_main"),
+    ],
+)
+def test_a_token_failure_logs_the_call_flag_python_s_handler_set_first(
+    provider: str, asynchronous: bool, flagged: bool | None
+) -> None:
+    logger: Final = Logging(
+        model=f"{provider}/claude-sonnet-4-5",
+        messages=[],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="token",
+        function_id="token",
+    )
+
+    messages_host.map_token_failure(
+        RuntimeError("Failed to get Azure AD token"),
+        {"model": f"{provider}/claude-sonnet-4-5", "litellm_logging_obj": logger},
+        provider,
+        asynchronous,
+    )
+
+    details: Final[Mapping[str, object]] = logger.model_call_details
+    params: Final = _PARAMS.validate_python(details.get("litellm_params", {}))
+    assert params.get("aanthropic_messages") is flagged
 
 
 def test_a_failure_without_an_endpoint_answer_raises_what_get_azure_ad_token_raises() -> None:

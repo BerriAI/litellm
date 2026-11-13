@@ -551,14 +551,6 @@ KNOWN_GAPS: Final[Mapping[str, Mapping[str, str | None]]] = MappingProxyType(
                 "int_temperature_on_adaptive_model",
                 "int_top_p_on_adaptive_model",
                 "int_speed_on_model_without_speed",
-                "azure_ai_entra_token_provider_raises",
-                "azure_ai_entra_provider_rejection_is_an_authentication_error",
-                "azure_ai_entra_provider_rejection_redacts_guids",
-                "azure_ai_entra_provider_unlisted_code_is_a_runtime_error",
-                "azure_ai_oidc_reference_is_minted_by_python",
-                "azure_ai_token_refresh_outranks_a_static_token",
-                "azure_ai_username_and_password_are_minted_by_python",
-                "azure_ai_speed_refused",
             )
         },
     }
