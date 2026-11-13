@@ -785,7 +785,14 @@ if MCP_AVAILABLE:
         We treat a requestor as a "restricted" virtual key if `allowed_routes`
         is a non-empty list. This matches the auth gate that blocks routes with
         the error: "Virtual key is not allowed to call this route...".
+
+        Admin roles (PROXY_ADMIN, PROXY_ADMIN_VIEW_ONLY) with route restrictions
+        are admin keys scoped to specific paths, not untrusted client virtual keys,
+        so they receive the appropriate admin or non-admin view rather than the
+        minimal virtual-key discovery view.
         """
+        if user_api_key_has_admin_view(user_api_key_dict):
+            return False
 
         allowed_routes: Final = getattr(user_api_key_dict, "allowed_routes", None)
         return isinstance(allowed_routes, list) and len(allowed_routes) > 0
