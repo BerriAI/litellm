@@ -13074,9 +13074,13 @@ class PythonCore(DeprecatedRouterMembers):
         else:
             model_info_name = model
 
-        model_info: Final = self._host.invoke("get_model_info")(model=model_info_name)
-        if model_info is None:
-            return model_info
+        try:
+            model_info = self._host.invoke("get_model_info")(model=model_info_name)
+        except Exception as e:
+            verbose_router_logger.debug(
+                f"get_model_info failed for model {model_info_name} in _core_get_router_model_info: {e}"
+            )
+            model_info = None
 
         ## CHECK USER SET MODEL INFO
         raw_user_model_info: Final = deployment.get("model_info")
@@ -13085,6 +13089,36 @@ class PythonCore(DeprecatedRouterMembers):
             if isinstance(raw_user_model_info, BaseModel)
             else raw_user_model_info or {}
         )
+
+        if model_info is None:
+            # Fall back to ModelMapInfo constructed from user_model_info and deployment litellm_params
+            mode = user_model_info.get("mode") or "chat"
+            input_cost_per_token = _cost_value_as_float(user_model_info.get("input_cost_per_token")) or 0.0
+            output_cost_per_token = _cost_value_as_float(user_model_info.get("output_cost_per_token")) or 0.0
+            try:
+                supported_openai_params = (
+                    self._host.invoke("get_supported_openai_params")(
+                        model=model, custom_llm_provider=custom_llm_provider
+                    )
+                    or []
+                )
+            except Exception:
+                supported_openai_params = []
+
+            model_info = ModelMapInfo(
+                key=model,
+                max_tokens=user_model_info.get("max_tokens"),
+                max_input_tokens=user_model_info.get("max_input_tokens"),
+                max_output_tokens=user_model_info.get("max_output_tokens"),
+                input_cost_per_token=input_cost_per_token,
+                output_cost_per_token=output_cost_per_token,
+                litellm_provider=custom_llm_provider,
+                mode=mode,
+                supported_openai_params=supported_openai_params,
+                supports_system_messages=None,
+            )
+        elif model_info.get("mode") is None:
+            model_info["mode"] = user_model_info.get("mode") or "chat"
 
         # get_model_info() hands back an lru_cache'd dict, so merge into a copy; unset
         # values are skipped or Deployment's None pricing defaults would erase the map's
