@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -1225,11 +1226,14 @@ def test_batch_dump_applies_exclude_none_to_provider_usage_detail_fields() -> No
     assert (python_usage["prompt_tokens"], python_usage["input_tokens"]) == (21, 21)
 
 
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="isolates each model's first use in a forked child")
 def test_parallel_first_response_model_construction_does_not_race_schema_build() -> None:
     probe: Final = r"""
 import inspect
+import os
 import sys
 import threading
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, sys.argv[1])
@@ -1289,7 +1293,7 @@ cases = (
     (ChatCompletionDeltaToolCall, {"id": "call_race", "type": "function", "index": 2, "function": {"arguments": "{}", "name": "race_tool"}}),
     (ChatCompletionMessageCustomToolCall, {"id": "call_race", "type": "custom", "custom": {"input": "race", "name": "race_tool"}}),
 )
-for model, fields in cases:
+def race(model, fields):
     barrier = threading.Barrier(8, timeout=5)
     start_barrier = threading.Barrier(8, timeout=5)
     def trace(frame, event, arg):
@@ -1313,6 +1317,24 @@ for model, fields in cases:
     for result in results:
         assert {key: result[key] for key in fields} == fields, result
     print(model.__name__ + ": 8 parallel constructions passed")
+
+failed = []
+for model, fields in cases:
+    child = os.fork()
+    if child == 0:
+        status = 1
+        try:
+            race(model, fields)
+            status = 0
+        except BaseException:
+            traceback.print_exc()
+        finally:
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os._exit(status)
+    if os.waitstatus_to_exitcode(os.waitpid(child, 0)[1]) != 0:
+        failed.append(model.__name__)
+assert not failed, failed
 """
     root: Final = str(Path(__file__).resolve().parents[3])
     result: Final = subprocess.run(
