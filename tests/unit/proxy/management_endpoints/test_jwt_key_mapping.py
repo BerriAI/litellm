@@ -2,6 +2,7 @@ import pytest
 import sys
 import os
 from datetime import datetime, timezone
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 # Add project root to sys.path
@@ -1724,3 +1725,128 @@ async def test_update_evicts_old_and_new_cache_keys_after_write():
     assert result.jwt_claim_value == "renamed@example.com"
     assert await user_api_key_cache.async_get_cache(old_cache_key) is None
     assert await user_api_key_cache.async_get_cache(new_cache_key) is None
+
+
+# ──────────────────────────────────────────────
+# Tests: a global mapping must evict every issuer's cached miss
+# ──────────────────────────────────────────────
+
+_ISSUER: Final = "https://issuer-a.example.com"
+_NEW_TOKEN_HASH: Final = "a" * 64
+
+
+def _jwt_handler_with_issuer() -> JWTHandler:
+    handler = JWTHandler()
+    handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        issuers=[
+            {
+                "issuer": _ISSUER,
+                "jwks_url": f"{_ISSUER}/jwks",
+                "virtual_key_claim_field": "sub",
+                "disable_audience_validation": True,
+            }
+        ]
+    )
+    return handler
+
+
+@pytest.mark.asyncio
+async def test_creating_a_global_mapping_evicts_an_issuers_cached_miss():
+    """An issuer's unmapped token caches ``__NO_MAPPING__`` under its issuer-scoped
+    key. Creating the mapping without ``jwt_issuer`` (which the lookup falls back to
+    for every issuer) must evict that miss, or the issuer keeps being told there is
+    no mapping until ``virtual_key_mapping_cache_ttl`` expires."""
+    from litellm.proxy._types import CreateJWTKeyMappingRequest
+
+    jwt_handler = _jwt_handler_with_issuer()
+    rows: list[dict] = []
+
+    async def fake_find_first(where):
+        for row in rows:
+            if all(row.get(k) == v for k, v in where.items()):
+                return MagicMock(**row)
+        return None
+
+    async def fake_create(data):
+        rows.append({**data, "is_active": True})
+        return _mock_mapping(claim_name=data["jwt_claim_name"], claim_value=data["jwt_claim_value"])
+
+    prisma_client = _mock_prisma()
+    prisma_client.db.litellm_jwtkeymapping.find_first = AsyncMock(side_effect=fake_find_first)
+    prisma_client.db.litellm_jwtkeymapping.create = AsyncMock(side_effect=fake_create)
+
+    user_api_key_cache = DualCache()
+    await user_api_key_cache.async_set_cache(
+        key=_NEW_TOKEN_HASH,
+        value=UserAPIKeyAuth(token=_NEW_TOKEN_HASH, team_id="team-1"),
+    )
+    jwt_claims = {JWTHandler.LITELLM_JWT_ISSUER_CLAIM: _ISSUER, "sub": "dev-alice"}
+
+    async def resolve():
+        return await _resolve_jwt_to_virtual_key(
+            jwt_claims=jwt_claims,
+            jwt_handler=jwt_handler,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=None,
+        )
+
+    assert await resolve() is None
+
+    with (
+        patch(  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+            "litellm.proxy.proxy_server.prisma_client", prisma_client
+        ),
+        patch(  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+            "litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache
+        ),
+        patch(  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+            "litellm.proxy.proxy_server.jwt_handler", jwt_handler
+        ),
+    ):
+        await create_jwt_key_mapping(
+            data=CreateJWTKeyMappingRequest(jwt_claim_name="sub", jwt_claim_value="dev-alice", token=_NEW_TOKEN_HASH),
+            user_api_key_dict=_make_admin_auth(),
+        )
+
+    resolved = await resolve()
+    assert isinstance(resolved, UserAPIKeyAuth)
+    assert resolved.token == _NEW_TOKEN_HASH
+
+
+@pytest.mark.asyncio
+async def test_moving_a_mapping_to_global_scope_evicts_every_issuers_cached_miss():
+    """Updating a mapping to the global scope makes it answer every configured
+    issuer, so each issuer's cached miss for the new claim must go too."""
+    from litellm.proxy._types import UpdateJWTKeyMappingRequest
+    from litellm.proxy.auth.auth_checks import jwt_key_mapping_cache_key
+
+    jwt_handler = _jwt_handler_with_issuer()
+    issuer_miss_key = jwt_key_mapping_cache_key("email", "renamed@example.com", _ISSUER)
+    user_api_key_cache = DualCache()
+    await user_api_key_cache.async_set_cache(key=issuer_miss_key, value="__NO_MAPPING__")
+
+    mock_prisma = _mock_prisma()
+    mock_prisma.db.litellm_jwtkeymapping.find_unique.return_value = _mock_mapping(issuer=_ISSUER)
+    mock_prisma.db.litellm_jwtkeymapping.update.return_value = _mock_mapping(
+        claim_value="renamed@example.com", issuer=""
+    )
+
+    with (
+        patch(  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma
+        ),
+        patch(  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+            "litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache
+        ),
+        patch(  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+            "litellm.proxy.proxy_server.jwt_handler", jwt_handler
+        ),
+    ):
+        await update_jwt_key_mapping(
+            data=UpdateJWTKeyMappingRequest(id="mapping-1", jwt_claim_value="renamed@example.com", jwt_issuer=None),
+            user_api_key_dict=_make_admin_auth(),
+        )
+
+    assert await user_api_key_cache.async_get_cache(issuer_miss_key) is None
