@@ -189,6 +189,9 @@ def fal_ai_passthrough_cost(model: str, request_body: Mapping[str, object]) -> f
     entry: Final = _entry(f"{litellm.LlmProviders.FAL_AI.value}/{model}")
     if entry is None or "output_cost_per_billable_unit" in entry:
         return None
+    cost_per_video: Final = entry.get("output_cost_per_video")
+    if isinstance(cost_per_video, (int, float)):
+        return float(cost_per_video)
     cost_per_image: Final = _passthrough_cost_per_image(entry, request_body)
     if cost_per_image is None:
         return None

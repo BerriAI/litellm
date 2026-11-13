@@ -572,9 +572,13 @@ class CallTypeRateLimiter(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class BorrowingTeamModelHold:
-    """A router fallback target's team share with the tokens held on it, settled to actual usage or given back."""
+    """A router fallback target's team share with the tokens held on it, settled to actual usage or given back.
 
-    descriptor: RateLimitDescriptor
+    An idle target holds no descriptor: its usage is not charged to the share, and settlement still finds the hold so
+    the admitting model's reservation is given back instead of taking the target's tokens.
+    """
+
+    descriptor: RateLimitDescriptor | None
     reserved_tokens: int = 0
     window: ReservationWindowIdentity | None = None
 
@@ -631,6 +635,7 @@ class RequestRateLimiterStash:
         default_factory=lambda: MappingProxyType({})
     )
     priority_class_share: RateLimitDescriptor | None = None
+    dynamic_limiter_priority: str | None = None
     reservation_released: bool = False
     io_reservation_released: bool = False
     tpm_limited_tags: frozenset[str] = field(default_factory=frozenset)

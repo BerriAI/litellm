@@ -116,6 +116,10 @@ describe("customer organization usage", () => {
       within(updatedRow).getByRole("cell", { name: "$7.00 Current budget $51.00 / $500.00 10.2% used" }),
     ).toBeInTheDocument();
     expect(within(updatedRow).getByText("3")).toBeInTheDocument();
+    expect(within(updatedRow).getByRole("link", { name: "Customer A" })).toHaveAttribute(
+      "href",
+      "/ui/customers/usage?org=customer-a&from=2024-02-01&to=2024-02-29",
+    );
     expect(requests.at(-1)?.searchParams.get("start_date")).toBe("2024-02-01");
     expect(requests.at(-1)?.searchParams.get("end_date")).toBe("2024-02-29");
     expect(listRequests.at(-1)?.searchParams.get("page")).toBe("1");

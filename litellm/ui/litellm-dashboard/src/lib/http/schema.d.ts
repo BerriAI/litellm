@@ -9616,10 +9616,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get Customer Member Daily Activity
-         * @description Get daily customer member activity for inclusive UTC dates. Includes standard metrics and breakdowns with member aliases. Dates, model, API key, entity and exclusion filters apply before pagination. Member identity is supplied by x-litellm-customer-member-id when the writer records usage. Proxy admins only.
+         * Customer Member Daily Activity
+         * @description Get paginated daily customer member activity with model, provider, key and member breakdowns. Filters accept comma-separated member IDs. Proxy admins only.
          */
-        get: operations["get_customer_member_daily_activity_management_v1_customer_members_daily_activity_get"];
+        get: operations["customer_member_daily_activity_management_v1_customer_members_daily_activity_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -9688,10 +9688,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get Customer Organization Daily Activity
-         * @description Get daily customer organization activity for inclusive UTC dates, using the recorded organization IDs on customer member daily spend rows. Includes standard metrics and breakdowns with organization aliases. Dates, model, API key, entity and exclusion filters apply before pagination. Proxy admins only.
+         * Customer Organization Daily Activity
+         * @description Get paginated daily customer organization activity with model, provider, key and organization breakdowns. Filters accept comma-separated organization IDs. Proxy admins only.
          */
-        get: operations["get_customer_organization_daily_activity_management_v1_customer_organizations_daily_activity_get"];
+        get: operations["customer_organization_daily_activity_management_v1_customer_organizations_daily_activity_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -9708,10 +9708,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get Customer Organization Daily Activity Aggregated
-         * @description Get complete daily usage totals for up to 100 customer organizations in one response. Uses the shared SQL daily-spend aggregation, including per-organization breakdowns. Dates are inclusive UTC days, limited to 400 days, and model/API-key filters apply before aggregation. Key breakdowns show the top key; totals include every key. No raw-row pagination is required. Budget counters are returned separately by organization reads. Proxy admins only.
+         * Customer Organization Daily Activity Aggregated
+         * @description Get complete daily usage totals for up to 100 customer organizations in one response. Uses shared SQL daily-spend aggregation with per-organization breakdowns. Dates are inclusive UTC days, limited to 400 days. Model/API-key filters apply before aggregation. Key breakdowns show the top key; totals include every key. No raw-row pagination is required. Budget counters are returned separately by organization reads. Proxy admins only.
          */
-        get: operations["get_customer_organization_daily_activity_aggregated_management_v1_customer_organizations_daily_activity_aggregated_get"];
+        get: operations["customer_organization_daily_activity_aggregated_management_v1_customer_organizations_daily_activity_aggregated_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -9824,10 +9824,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get Customer Team Daily Activity
-         * @description Get daily customer team activity for inclusive UTC dates, using the recorded team IDs on customer member daily spend rows. Includes standard metrics and breakdowns with team aliases. Dates, model, API key, entity and exclusion filters apply before pagination. Proxy admins only.
+         * Customer Team Daily Activity
+         * @description Get paginated daily customer team activity with model, provider, key and team breakdowns. Filters accept comma-separated team IDs. Proxy admins only.
          */
-        get: operations["get_customer_team_daily_activity_management_v1_customer_teams_daily_activity_get"];
+        get: operations["customer_team_daily_activity_management_v1_customer_teams_daily_activity_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -37701,6 +37701,8 @@ export interface components {
             output_cost_per_token_priority?: number | null;
             /** Output Cost Per Token Ultrafast */
             output_cost_per_token_ultrafast?: number | null;
+            /** Output Cost Per Video */
+            output_cost_per_video?: number | null;
             /** Output Cost Per Video Per Second */
             output_cost_per_video_per_second?: number | null;
             /** Output Cost Per Video Token */
@@ -54193,6 +54195,8 @@ export interface components {
             output_cost_per_token_priority?: number | null;
             /** Output Cost Per Token Ultrafast */
             output_cost_per_token_ultrafast?: number | null;
+            /** Output Cost Per Video */
+            output_cost_per_video?: number | null;
             /** Output Cost Per Video Per Second */
             output_cost_per_video_per_second?: number | null;
             /** Output Cost Per Video Token */
@@ -68154,19 +68158,16 @@ export interface operations {
             };
         };
     };
-    get_customer_member_daily_activity_management_v1_customer_members_daily_activity_get: {
+    customer_member_daily_activity_management_v1_customer_members_daily_activity_get: {
         parameters: {
             query?: {
-                /** @description First UTC calendar day, YYYY-MM-DD, inclusive */
+                customer_member_ids?: string | null;
                 start_date?: string | null;
-                /** @description Last UTC calendar day, YYYY-MM-DD, inclusive */
                 end_date?: string | null;
                 model?: string | null;
                 api_key?: string | null;
                 page?: number;
                 page_size?: number;
-                /** @description Comma-separated customer member IDs */
-                customer_member_ids?: string | null;
                 exclude_customer_member_ids?: string | null;
             };
             header?: never;
@@ -68357,19 +68358,16 @@ export interface operations {
             };
         };
     };
-    get_customer_organization_daily_activity_management_v1_customer_organizations_daily_activity_get: {
+    customer_organization_daily_activity_management_v1_customer_organizations_daily_activity_get: {
         parameters: {
             query?: {
-                /** @description First UTC calendar day, YYYY-MM-DD, inclusive */
+                customer_org_ids?: string | null;
                 start_date?: string | null;
-                /** @description Last UTC calendar day, YYYY-MM-DD, inclusive */
                 end_date?: string | null;
                 model?: string | null;
                 api_key?: string | null;
                 page?: number;
                 page_size?: number;
-                /** @description Comma-separated customer organization IDs */
-                customer_org_ids?: string | null;
                 exclude_customer_org_ids?: string | null;
             };
             header?: never;
@@ -68398,7 +68396,7 @@ export interface operations {
             };
         };
     };
-    get_customer_organization_daily_activity_aggregated_management_v1_customer_organizations_daily_activity_aggregated_get: {
+    customer_organization_daily_activity_aggregated_management_v1_customer_organizations_daily_activity_aggregated_get: {
         parameters: {
             query: {
                 /** @description First UTC calendar day, YYYY-MM-DD, inclusive */
@@ -68698,19 +68696,16 @@ export interface operations {
             };
         };
     };
-    get_customer_team_daily_activity_management_v1_customer_teams_daily_activity_get: {
+    customer_team_daily_activity_management_v1_customer_teams_daily_activity_get: {
         parameters: {
             query?: {
-                /** @description First UTC calendar day, YYYY-MM-DD, inclusive */
+                customer_team_ids?: string | null;
                 start_date?: string | null;
-                /** @description Last UTC calendar day, YYYY-MM-DD, inclusive */
                 end_date?: string | null;
                 model?: string | null;
                 api_key?: string | null;
                 page?: number;
                 page_size?: number;
-                /** @description Comma-separated customer team IDs */
-                customer_team_ids?: string | null;
                 exclude_customer_team_ids?: string | null;
             };
             header?: never;

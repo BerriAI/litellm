@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Plus } from "lucide-react";
-import { parseAsString, useQueryState } from "nuqs";
+import { createSerializer, parseAsString, useQueryState } from "nuqs";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { $api } from "@/lib/http/api";
 import { customerUsageTotals } from "./_components/customerUsageTotals";
@@ -13,6 +13,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { DataTablePagination, useUrlTableState } from "@/components/shared/DataTable";
 import { ErrorState } from "@/components/shared/ErrorState";
+import { uiHref } from "@/utils/uiHref";
 import CreateCustomerDialog from "./_components/CreateCustomerDialog";
 import CustomerDetail from "./_components/CustomerDetail";
 import { calendarDate, customerUsagePresets, useCustomerUsageRange } from "./_components/customerUsageRange";
@@ -23,6 +24,8 @@ const TABLE_OPTIONS = {
   defaultPageSize: 25,
   filterColumns: [],
 };
+
+const usageHref = createSerializer({ org: parseAsString, from: parseAsString, to: parseAsString });
 
 export default function CustomersPage() {
   const [selectedId, setSelectedId] = useQueryState("id", parseAsString);
@@ -181,7 +184,16 @@ function CustomerOrganizations() {
                 rows.map((customer) => (
                   <TableRow key={customer.customer_org_id}>
                     <TableCell className="pl-4">
-                      <p className="font-medium">{customer.alias || customer.customer_org_id}</p>
+                      <a
+                        className="font-medium text-primary hover:underline"
+                        href={usageHref(uiHref("customers/usage"), {
+                          org: customer.customer_org_id,
+                          from: calendarDate(dateValue.from),
+                          to: calendarDate(dateValue.to),
+                        })}
+                      >
+                        {customer.alias || customer.customer_org_id}
+                      </a>
                       <p className="font-mono text-[11px] text-muted-foreground">{customer.customer_org_id}</p>
                     </TableCell>
                     <TableCell className="text-right tabular-nums">

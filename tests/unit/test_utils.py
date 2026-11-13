@@ -1183,6 +1183,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "output_cost_per_token_above_512k_tokens": {"type": "number"},
             "output_cost_per_token_batches": {"type": "number"},
             "output_cost_per_reasoning_token": {"type": "number"},
+            "output_cost_per_video": {"type": "number"},
             "output_cost_per_video_per_second": {"type": "number"},
             "output_db_cost_per_token": {"type": "number"},
             "output_dbu_cost_per_token": {"type": "number"},

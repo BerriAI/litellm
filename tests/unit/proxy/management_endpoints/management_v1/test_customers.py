@@ -549,6 +549,14 @@ def test_organization_list_counts_all_members_and_searches_before_paginating() -
             "/management/v1/customer_members", json={"customer_member_id": identifier, "parent_team_id": "team"}
         )
         assert created.status_code == 201, created.text
+    second_team: Final = http.post(
+        "/management/v1/customer_teams", json={"customer_team_id": "second-team", "parent_org_id": "org"}
+    )
+    assert second_team.status_code == 201, second_team.text
+    third_member: Final = http.post(
+        "/management/v1/customer_members", json={"customer_member_id": "member-c", "parent_team_id": "second-team"}
+    )
+    assert third_member.status_code == 201, third_member.text
     other: Final = http.post(
         "/management/v1/customer_organizations", json={"customer_org_id": "other", "alias": "Literal%_"}
     )
@@ -556,7 +564,7 @@ def test_organization_list_counts_all_members_and_searches_before_paginating() -
     page: Final = http.get("/management/v1/customer_organizations", params={"q": "ORG", "page_size": 1})
     assert page.status_code == 200, page.text
     assert page.json()["meta"]["total_count"] == 1
-    assert page.json()["data"][0]["member_count"] == 2
+    assert page.json()["data"][0]["member_count"] == 3
     assert page.json()["data"][0]["spend"] == 0
     assert page.json()["data"][0]["budget"]["max_budget"] == 1000
     literal: Final = http.get("/management/v1/customer_organizations", params={"q": "%_"})
