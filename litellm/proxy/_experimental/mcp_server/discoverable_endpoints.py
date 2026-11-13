@@ -89,6 +89,7 @@ from litellm.proxy._experimental.mcp_server.oauth_identity_binding import (
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     CIMD_METADATA_PATH,
     TOKEN_NO_CACHE_HEADERS,
+    asks_for_wildcard,
     build_upstream_authorize_url,
     build_upstream_oauth2_token_request,
     configured_proxy_base_url,
@@ -1040,7 +1041,10 @@ async def _managed_authorization_scope(
         if scope_user_id and prisma_client is not None
         else None
     )
-    merged_scope: Final = union_scopes(" ".join(prior_grant.get("scopes") or ()) if prior_grant else None, scope)
+    kept_scope: Final = (
+        None if prior_grant is None or asks_for_wildcard(scope) else " ".join(prior_grant.get("scopes") or ())
+    )
+    merged_scope: Final = union_scopes(kept_scope, scope)
     selected_scope: Final = (
         get_client_metadata_scopes(
             merged_scope,

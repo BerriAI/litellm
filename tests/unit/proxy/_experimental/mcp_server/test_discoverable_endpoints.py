@@ -14834,11 +14834,23 @@ async def test_saved_refresh_metadata_is_bound_to_the_callers_stored_grant(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "prior_scopes, expected", [(["tools.read"], "tools.read tools.write"), (None, "tools.write"), ([], "tools.write")]
+    "prior_scopes, scope, expected",
+    [
+        (["tools.read"], "tools.write", "tools.read tools.write"),
+        (None, "tools.write", "tools.write"),
+        ([], "tools.write", "tools.write"),
+        (["logs_read_data", "dashboards_read"], "mcp_all", "mcp_all"),
+        (["logs_read_data", "dashboards_read"], "openid mcp_all", "openid mcp_all"),
+        (["tools.read"], "mcp_allowed", "tools.read mcp_allowed"),
+    ],
 )
-async def test_managed_authorize_retains_the_callers_previous_grant(
-    jwt_oauth_identity, monkeypatch, prior_scopes, expected
-):
+async def test_managed_authorize_retains_the_previous_grant_except_for_a_wildcard_request(
+    jwt_oauth_identity: tuple["JWTHandler", "RSAPrivateKey"],
+    monkeypatch: pytest.MonkeyPatch,
+    prior_scopes: list[str] | None,
+    scope: str,
+    expected: str,
+) -> None:
     from types import SimpleNamespace
     from urllib.parse import parse_qs, urlsplit
 
@@ -14864,7 +14876,7 @@ async def test_managed_authorize_retains_the_callers_previous_grant(
         server,
         "scope-client",
         "http://127.0.0.1:9/cb",
-        scope="tools.write",
+        scope=scope,
         code_challenge="challenge",
         code_challenge_method="S256",
     )
@@ -15133,6 +15145,7 @@ async def test_connect_requires_the_requested_vendor_grant(monkeypatch, granted,
 
 
 _SLACK_SCOPES: Final = frozenset(("channels:read", "chat:write", "files:write"))
+_DATADOG_EXPANSION: Final = ("logs_read_index_data", "dashboards_read", "mcp_read", "mcp_write")
 _COMMA_NAMED_SCOPES: Final = frozenset(("files:read", "files:read,write"))
 
 
@@ -15151,6 +15164,10 @@ _COMMA_NAMED_SCOPES: Final = frozenset(("files:read", "files:read,write"))
         (("read", "write"), ("read", "write"), frozenset[str](), True),
         ((), ("read",), frozenset(("read",)), False),
         ((), (), frozenset[str](), True),
+        (_DATADOG_EXPANSION, ("mcp_all",), frozenset[str](), True),
+        (("channels:read,chat:write",), ("mcp_all", "channels:read"), _SLACK_SCOPES, True),
+        ((), ("mcp_all",), frozenset[str](), False),
+        (_DATADOG_EXPANSION, ("mcp_all", "admin"), frozenset[str](), False),
     ],
 )
 def test_grant_covers_scopes_splits_a_lone_token_only_into_known_scopes(
