@@ -474,18 +474,16 @@ def test_budget_window_start_reads_json_encoded_windows(window: str, expected: d
     [
         ("12mo", "2029-01-01T00:00:00Z", datetime(2028, 1, 1, tzinfo=timezone.utc)),
         ("12mo", "2028-01-01T00:00:00", datetime(2027, 1, 1, tzinfo=timezone.utc)),
-        ("1mo", "2028-03-01T00:00:00Z", datetime(2028, 2, 1, tzinfo=timezone.utc)),
-        ("30d", "2028-03-01T00:00:00Z", datetime(2028, 2, 1, tzinfo=timezone.utc)),
     ],
 )
-def test_calendar_window_keeps_all_spend_from_its_reset_boundary(
+def test_annual_window_keeps_all_spend_from_its_reset_boundary(
     today: str, duration: str, reset_at: str, expected: datetime
 ) -> None:
     with patch("time.time", return_value=datetime.fromisoformat(today).replace(tzinfo=timezone.utc).timestamp()):
         assert get_budget_window_start({"budget_duration": duration, "reset_at": reset_at}) == expected
 
 
-class _CalendarWindowDatabase:
+class _AnnualWindowDatabase:
     def __init__(self) -> None:
         self.db = self
         self.litellm_budgetwindowspend = self
@@ -514,20 +512,18 @@ class _CalendarWindowDatabase:
     "duration,zone,reset_at",
     (
         ("12mo", "UTC", "2029-01-01T00:00:00Z"),
-        ("1mo", "America/New_York", "2026-12-01T00:00:00-05:00"),
-        ("30d", "America/New_York", "2026-12-01T00:00:00-05:00"),
-        ("1mo", "America/New_York", "2026-04-01T00:00:00-04:00"),
-        ("1mo", "Australia/Lord_Howe", "2026-05-01T00:00:00+10:30"),
+        ("12mo", "America/New_York", "2029-01-01T00:00:00-05:00"),
+        ("12mo", "Pacific/Apia", "2012-01-01T00:00:00+14:00"),
     ),
 )
-async def test_cold_calendar_counter_preserves_reset_writer_spend(
+async def test_cold_annual_counter_preserves_reset_writer_spend(
     monkeypatch: pytest.MonkeyPatch, duration: str, zone: str, reset_at: str
 ) -> None:
     from litellm.proxy.auth.auth_checks import _virtual_key_multi_budget_check
     from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
     from litellm.types.integrations.slack_alerting import Litellm_EntityType
 
-    database: Final = _CalendarWindowDatabase()
+    database: Final = _AnnualWindowDatabase()
     store: Final = SpendCounterStore(connect(None).spend_counters())
     monkeypatch.setattr(litellm, "timezone", zone, raising=False)
     monkeypatch.setattr(proxy_server, "prisma_client", database)

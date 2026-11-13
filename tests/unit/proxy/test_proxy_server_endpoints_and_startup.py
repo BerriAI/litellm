@@ -13933,12 +13933,13 @@ async def _drain(queue):
 
 
 @pytest.mark.asyncio
-async def test_key_window_spend_row_is_enqueued_with_the_actual_cost():
+@pytest.mark.parametrize("duration", ("30d", "12mo"))
+async def test_key_window_spend_row_is_enqueued_with_the_actual_cost(duration: str):
     from litellm.proxy.proxy_server import increment_spend_counters
 
-    reset_at: Final = datetime(2028, 3, 1, tzinfo=timezone.utc)
+    reset_at: Final = datetime(2029, 1, 1, tzinfo=timezone.utc)
     key_obj = MagicMock()
-    key_obj.budget_limits = [{"budget_duration": "30d", "max_budget": 100.0, "reset_at": reset_at.isoformat()}]
+    key_obj.budget_limits = [{"budget_duration": duration, "max_budget": 100.0, "reset_at": reset_at.isoformat()}]
 
     with _window_spend_enqueue_env({"hashed-token": key_obj}) as queue:
         await increment_spend_counters(token="hashed-token", team_id=None, user_id=None, response_cost=0.25)
@@ -13947,9 +13948,12 @@ async def test_key_window_spend_row_is_enqueued_with_the_actual_cost():
     assert len(enqueued) == 1
     assert enqueued[0]["entity_type"] == "key"
     assert enqueued[0]["entity_id"] == "hashed-token"
-    assert enqueued[0]["window_duration"] == "30d"
+    assert enqueued[0]["window_duration"] == duration
     assert enqueued[0]["spend"] == pytest.approx(0.25)
-    assert enqueued[0]["window_start"] == "2028-02-01T00:00:00.000000"
+    expected_start: Final = datetime(2028, 1, 1, tzinfo=timezone.utc) if duration == "12mo" else reset_at - timedelta(days=30)
+    assert enqueued[0]["window_start"] == expected_start.astimezone(timezone.utc).replace(
+        tzinfo=None
+    ).isoformat(timespec="microseconds")
 
 
 @pytest.mark.asyncio
@@ -16354,7 +16358,7 @@ def _accounting_window_env(cached: Mapping[str, object], client: MagicMock) -> I
 
 @pytest.mark.asyncio
 async def test_accounting_window_keys_cover_the_stored_key_and_the_cached_team():
-    key_reset: Final = datetime(2026, 11, 1, tzinfo=timezone.utc)
+    key_reset: Final = datetime(2026, 11, 13, tzinfo=timezone.utc)
     team_reset: Final = datetime(2026, 11, 6, tzinfo=timezone.utc)
     key_row: Final = _StoredRow(
         budget_limits=[{"budget_duration": "30d", "max_budget": 100.0, "reset_at": key_reset.isoformat()}]
@@ -16370,7 +16374,7 @@ async def test_accounting_window_keys_cover_the_stored_key_and_the_cached_team()
             "entity_type": "key",
             "entity_id": "hashed-key",
             "window_duration": "30d",
-            "window_start": "2026-10-01T00:00:00+00:00",
+            "window_start": (key_reset - timedelta(days=30)).isoformat(),
         },
         {
             "entity_type": "team",

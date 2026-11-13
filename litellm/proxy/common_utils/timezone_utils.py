@@ -4,7 +4,7 @@ from typing import Final
 from pydantic import ConfigDict
 
 import litellm
-from litellm.litellm_core_utils.duration_parser import get_budget_window_start, get_next_standardized_reset_time
+from litellm.litellm_core_utils.duration_parser import get_next_standardized_reset_time
 from litellm.types.llms.base import LiteLLMBaseModel
 
 
@@ -64,10 +64,7 @@ def get_budget_reset_settings() -> BudgetResetSettings:
 
 
 def compute_budget_reset_at(
-    budget_duration: str,
-    settings: BudgetResetSettings,
-    now: datetime | None = None,
-    previous_reset_at: datetime | None = None,
+    budget_duration: str, settings: BudgetResetSettings, now: datetime | None = None
 ) -> datetime:
     """Compute the next reset time for a budget duration using injected settings."""
     return get_next_standardized_reset_time(
@@ -75,12 +72,7 @@ def compute_budget_reset_at(
         current_time=now if now is not None else datetime.now(timezone.utc),
         timezone_str=settings.timezone,
         reset_time_of_day=settings.reset_time_of_day,
-        previous_reset_at=previous_reset_at,
     )
-
-
-def compute_budget_window_start(budget_duration: str, reset_at: datetime, settings: BudgetResetSettings) -> datetime:
-    return get_budget_window_start(budget_duration, reset_at, timezone_str=settings.timezone).astimezone(timezone.utc)
 
 
 def get_budget_reset_time(budget_duration: str) -> datetime:

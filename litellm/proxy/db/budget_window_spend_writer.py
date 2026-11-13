@@ -18,7 +18,7 @@ from collections.abc import Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from types import MappingProxyType, TracebackType
+from types import TracebackType
 from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import TypeAdapter
@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 
 
 _SELECT_EXISTING_ROWS_SQL: Final = (
-    'SELECT entity_type, entity_id, window_duration, window_start FROM "LiteLLM_BudgetWindowSpend" '
+    'SELECT entity_type, entity_id, window_duration FROM "LiteLLM_BudgetWindowSpend" '
     "WHERE (entity_type, entity_id, window_duration) "
     "IN (SELECT * FROM unnest($1::text[], $2::text[], $3::text[]))"
 )
@@ -129,7 +129,6 @@ class _ExistingKeyRow(TypedDict):
     entity_type: ReadOnly[str]
     entity_id: ReadOnly[str]
     window_duration: ReadOnly[str]
-    window_start: ReadOnly[datetime]
 
 
 _SEED_TOTALS_ROWS: Final = TypeAdapter(tuple[_SeedTotalsRow, ...])
@@ -282,41 +281,38 @@ def _primary_key(transaction: WindowSpendTransaction) -> tuple[str, str, str]:
     )
 
 
-async def _existing_window_starts(
+async def _existing_primary_keys(
     prisma_client: "PrismaClient",
     transactions: tuple[WindowSpendTransaction, ...],
     query: _ExistingKeysQuery | None = None,
-) -> Mapping[tuple[str, str, str], datetime]:
+) -> frozenset[tuple[str, str, str]]:
     async with db_span("select_window_spend_rows", "LiteLLM_BudgetWindowSpend"):
-        rows: Final = _EXISTING_KEY_ROWS.validate_python(
-            await (query or _existing_keys_query(prisma_client))(
-                _SELECT_EXISTING_ROWS_SQL,
-                tuple(transaction["entity_type"] for transaction in transactions),
-                tuple(transaction["entity_id"] for transaction in transactions),
-                tuple(transaction["window_duration"] for transaction in transactions),
-            )
+        rows: Final = await (query or _existing_keys_query(prisma_client))(
+            _SELECT_EXISTING_ROWS_SQL,
+            tuple(transaction["entity_type"] for transaction in transactions),
+            tuple(transaction["entity_id"] for transaction in transactions),
+            tuple(transaction["window_duration"] for transaction in transactions),
         )
-    return MappingProxyType(
-        {
-            (row["entity_type"], row["entity_id"], row["window_duration"]): to_naive_utc(row["window_start"])
-            for row in rows
-        }
-    )
+    return frozenset((row["entity_type"], row["entity_id"], row["window_duration"]) for row in rows or ())
 
 
-async def _seed_base_for_unmaintained_window(
+async def _seed_base_for_missing_row(
     prisma_client: "PrismaClient",
     transaction: WindowSpendTransaction,
-    existing_window_starts: Mapping[tuple[str, str, str], datetime],
+    existing_primary_keys: frozenset[tuple[str, str, str]],
     spend_logs_aggregate: WindowSpendLogsAggregate,
     query: _SeedTotalsQuery | None = None,
 ) -> float:
-    """Recover billed spend when inserting or advancing a window, excluding
-    this batch's increments. A maintained current or newer row needs no scan."""
-    window_start: Final = datetime.fromisoformat(transaction["window_start"]).replace(tzinfo=timezone.utc)
-    existing_start: Final = existing_window_starts.get(_primary_key(transaction))
-    if existing_start is not None and existing_start >= to_naive_utc(window_start):
+    """Spend already recorded for a window that has no row yet.
+
+    This is the LiteLLM_SpendLogs aggregate the window counter reseed runs on
+    every cold counter today, but here it runs once per window lifetime and off
+    the request path, and it discounts the queued increments so they are
+    counted once.
+    """
+    if _primary_key(transaction) in existing_primary_keys:
         return 0.0
+    window_start: Final = datetime.fromisoformat(transaction["window_start"]).replace(tzinfo=timezone.utc)
     totals: Final = (
         await spend_logs_aggregate(
             prisma_client=prisma_client,
@@ -366,7 +362,8 @@ def _upsert_params(
 ) -> tuple[str, str, str, datetime, float, float, datetime]:
     """$5 is what a brand new row starts at (pre-existing spend plus this
     increment); $6 is the increment alone, which is all an already-current row
-    may add, so two pods cannot apply the seed twice."""
+    may add. They are equal for every row that already existed, so a row is
+    never seeded twice when two pods flush the same new window."""
     increment: Final = float(transaction["spend"])
     return (
         transaction["entity_type"],
@@ -408,7 +405,7 @@ async def commit_window_spend_updates(
 
     An increment at or behind the row's window_start adds into the row (this is
     how in-flight requests that raced a reset carry into the new window); an
-    increment ahead of it recovers billed spend before rolling the window.
+    increment ahead of it rolls the window and starts from that increment.
 
     Statements are ordered by primary key so concurrent pods take row locks in
     the same order, with window_start breaking ties so an older window is
@@ -419,17 +416,17 @@ async def commit_window_spend_updates(
 
     ordered: Final = tuple(sorted(transactions, key=window_spend_group_key))
     reads: Final = _transaction_reads(outer_transaction) if outer_transaction is not None else (None, None)
-    existing_window_starts: Final = await _existing_window_starts(
+    existing_primary_keys: Final = await _existing_primary_keys(
         prisma_client=prisma_client,
         transactions=ordered,
         query=reads[0],
     )
     seed_bases: Final = tuple(
         [
-            await _seed_base_for_unmaintained_window(
+            await _seed_base_for_missing_row(
                 prisma_client=prisma_client,
                 transaction=transaction,
-                existing_window_starts=existing_window_starts,
+                existing_primary_keys=existing_primary_keys,
                 spend_logs_aggregate=spend_logs_aggregate,
                 query=reads[1],
             )
@@ -441,7 +438,7 @@ async def commit_window_spend_updates(
     verbose_proxy_logger.debug(
         "Spend tracking - committing %d budget window spend upserts over %d existing rows",
         len(ordered),
-        len(existing_window_starts),
+        len(existing_primary_keys),
     )
     async with (
         db_span("commit_window_spend_updates", "LiteLLM_BudgetWindowSpend"),
