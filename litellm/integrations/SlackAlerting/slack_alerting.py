@@ -39,6 +39,11 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.proxy.spend_tracking.customer_budget_alerts import (
+    claim_customer_budget_alert,
+    customer_budget_alert_id,
+    customer_budget_event_info,
+)
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.table_repositories import InvitationLinkRepository
 from litellm.repositories.team_repository import TeamRepository
@@ -571,10 +576,13 @@ class SlackAlerting(CustomBatchLogger):
 
         # Get the appropriate budget alert type handler
         budget_alert_class: Final = get_budget_alert_type(type)
-        _id: Final = budget_alert_class.get_id(user_info)
+        customer_id: Final = customer_budget_alert_id(user_info)
+        _id: Final = customer_id or budget_alert_class.get_id(user_info)
         user_info_str: Final = self._get_user_info_str(user_info)
-        event_message = (
-            "Team Member Budget: "
+        initial_message: Final = (
+            f"{user_info.event_group.value.replace('_', ' ')} budget: "
+            if customer_id is not None
+            else "Team Member Budget: "
             if user_info.event_group == Litellm_EntityType.TEAM_MEMBER
             else budget_alert_class.get_event_message()
         )
@@ -593,8 +601,8 @@ class SlackAlerting(CustomBatchLogger):
         # check if crossed budget
         event, event_message = self._get_event_and_event_message(
             event=event,
-            user_info=user_info,
-            event_message=event_message,
+            user_info=customer_budget_event_info(user_info, soft=type == "soft_budget"),
+            event_message=initial_message,
         )
 
         # send alert
@@ -602,12 +610,22 @@ class SlackAlerting(CustomBatchLogger):
             _cache_key: Final = f"budget_alerts:{event}:{_id}"
             result: Final = await _cache.async_get_cache(key=_cache_key)
             if result is None:
+                if customer_id is not None and not await claim_customer_budget_alert(
+                    _cache, f"{_cache_key}:claim", self.alerting_args.budget_alert_ttl
+                ):
+                    return
                 webhook_event = WebhookEvent(
                     event=event,
                     event_message=event_message,
                     spend=user_info.spend,
                     max_budget=user_info.max_budget,
                     soft_budget=user_info.soft_budget,
+                    entity_id=user_info.entity_id,
+                    customer_org_id=user_info.customer_org_id,
+                    customer_org_alias=user_info.customer_org_alias,
+                    customer_team_id=user_info.customer_team_id,
+                    customer_member_id=user_info.customer_member_id,
+                    customer_budget_reset_at=user_info.customer_budget_reset_at,
                     token=user_info.token,
                     customer_id=user_info.customer_id,
                     user_id=user_info.user_id,
@@ -622,13 +640,18 @@ class SlackAlerting(CustomBatchLogger):
                     alert_emails=user_info.alert_emails,
                     max_budget_alert_emails=user_info.max_budget_alert_emails,
                 )
-                await self.send_alert(
-                    message=event_message + "\n\n" + user_info_str,
-                    level="High",
-                    alert_type=AlertType.budget_alerts,
-                    user_info=webhook_event,
-                    alerting_metadata={},
-                )
+                try:
+                    await self.send_alert(
+                        message=event_message + "\n\n" + user_info_str,
+                        level="High",
+                        alert_type=AlertType.budget_alerts,
+                        user_info=webhook_event,
+                        alerting_metadata={},
+                    )
+                except Exception:  # noqa: BLE001  # Release the shared claim on any transport failure before retrying.
+                    if customer_id is not None:
+                        await _cache.async_delete_cache(key=f"{_cache_key}:claim")
+                    raise
                 await _cache.async_set_cache(
                     key=_cache_key,
                     value="SENT",
@@ -1240,7 +1263,7 @@ Model Info:
         if webhook_url is None:
             raise Exception("Missing webhook_url from environment")
 
-        payload: Final = webhook_event.model_dump_json()
+        payload: Final = webhook_event.model_dump_json(exclude_none=customer_budget_alert_id(webhook_event) is not None)
         headers: Final = {"Content-type": "application/json"}
 
         response: Final = await self.async_http_handler.post(

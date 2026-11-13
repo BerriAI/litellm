@@ -328,6 +328,12 @@ class CallInfo(LiteLLMPydanticObjectBase):
     spend: float
     max_budget: float | None = None
     soft_budget: float | None = None
+    entity_id: str | None = None
+    customer_org_id: str | None = None
+    customer_org_alias: str | None = None
+    customer_team_id: str | None = None
+    customer_member_id: str | None = None
+    customer_budget_reset_at: dt | None = None
     token: str | None = Field(default=None, description="Hashed value of that key")
     customer_id: str | None = None
     user_id: str | None = None
