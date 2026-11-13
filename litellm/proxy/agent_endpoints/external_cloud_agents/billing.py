@@ -1,7 +1,7 @@
 import json
 from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from itertools import groupby
 from operator import attrgetter
 from types import MappingProxyType
@@ -88,7 +88,7 @@ def combine_group(rows: tuple[DailySpend, ...]) -> DailySpend:
         update={
             "email": next((row.email for row in reversed(rows) if row.email), None),
             "display_name": next((row.display_name for row in reversed(rows) if row.display_name), None),
-            "cost_usd": sum((row.cost_usd for row in rows), Decimal(0)),
+            "cost_micros": sum(row.cost_micros for row in rows),
             "prompt_tokens": sum(row.prompt_tokens for row in rows),
             "completion_tokens": sum(row.completion_tokens for row in rows),
             "requests": sum(row.requests for row in rows),
@@ -104,7 +104,7 @@ def aggregate(items: tuple[BillingItem, ...], start: datetime, end: datetime) ->
                 email=item.displayExtras.userEmail,
                 display_name=item.displayExtras.displayLabel,
                 day=item.eventTime.astimezone(timezone.utc).date(),
-                cost_usd=item.pricing.contracted,
+                cost_micros=int((item.pricing.contracted * 1_000_000).to_integral_value(rounding=ROUND_HALF_UP)),
                 prompt_tokens=item.usage.prompt_tokens,
                 completion_tokens=item.usage.completion_tokens,
                 requests=item.usage.requests,
@@ -248,17 +248,17 @@ class SpendSync:
             "SET last_spend_sync_at=$5::timestamp,last_spend_sync_error=NULL WHERE id=$1 AND admin_api_key=$6 "
             "AND (last_spend_sync_at IS NULL OR last_spend_sync_at<=$5::timestamp) RETURNING id), "
             "incoming AS (SELECT x.* FROM jsonb_to_recordset($2::jsonb) AS x("
-            "vendor_user_id text,email text,display_name text,day date,cost_usd decimal,"
+            "vendor_user_id text,email text,display_name text,day date,cost_micros bigint,"
             "prompt_tokens bigint,completion_tokens bigint,requests bigint) CROSS JOIN eligible), "
             'removed AS (DELETE FROM "LiteLLM_ExternalCloudAgentSpend" s WHERE source_id=$1 '
             "AND day BETWEEN $3::date AND $4::date AND NOT EXISTS "
             "(SELECT 1 FROM incoming i WHERE i.vendor_user_id=s.vendor_user_id AND i.day=s.day) "
             "AND EXISTS (SELECT 1 FROM eligible)) "
             'INSERT INTO "LiteLLM_ExternalCloudAgentSpend" '
-            "(source_id,vendor_user_id,email,display_name,day,cost_usd,prompt_tokens,completion_tokens,requests) "
-            "SELECT $1,vendor_user_id,email,display_name,day,cost_usd,prompt_tokens,completion_tokens,requests FROM incoming "
+            "(source_id,vendor_user_id,email,display_name,day,cost_micros,prompt_tokens,completion_tokens,requests) "
+            "SELECT $1,vendor_user_id,email,display_name,day,cost_micros,prompt_tokens,completion_tokens,requests FROM incoming "
             "ON CONFLICT (source_id,vendor_user_id,day) DO UPDATE SET email=EXCLUDED.email,"
-            "display_name=EXCLUDED.display_name,cost_usd=EXCLUDED.cost_usd,prompt_tokens=EXCLUDED.prompt_tokens,"
+            "display_name=EXCLUDED.display_name,cost_micros=EXCLUDED.cost_micros,prompt_tokens=EXCLUDED.prompt_tokens,"
             "completion_tokens=EXCLUDED.completion_tokens,requests=EXCLUDED.requests",
             source_id,
             json.dumps(tuple(row.model_dump(mode="json") for row in scan.rows)),

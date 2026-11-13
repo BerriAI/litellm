@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS "LiteLLM_ExternalCloudAgentSpend" (
     "email" TEXT,
     "display_name" TEXT,
     "day" DATE NOT NULL,
-    "cost_usd" DECIMAL(38,10) NOT NULL,
+    "cost_micros" BIGINT NOT NULL,
     "prompt_tokens" BIGINT NOT NULL,
     "completion_tokens" BIGINT NOT NULL,
     "requests" BIGINT NOT NULL,

@@ -76,7 +76,7 @@ class SpendReader:
                 "WITH vendor AS (SELECT vendor_user_id,"
                 "(array_agg(email ORDER BY day DESC) FILTER (WHERE email IS NOT NULL))[1] AS email,"
                 "(array_agg(display_name ORDER BY day DESC) FILTER (WHERE display_name IS NOT NULL))[1] AS display_name,"
-                "SUM(cost_usd) AS grok_cost_usd,SUM(prompt_tokens+completion_tokens)::bigint AS tokens,"
+                "SUM(cost_micros)/1000000::numeric AS grok_cost_usd,SUM(prompt_tokens+completion_tokens)::bigint AS tokens,"
                 'SUM(requests)::bigint AS requests FROM "LiteLLM_ExternalCloudAgentSpend" '
                 "WHERE source_id=$1 AND day BETWEEN $2::text::date AND $3::text::date GROUP BY vendor_user_id), "
                 'emails AS (SELECT LOWER(user_email) AS email,MIN(user_id) AS user_id FROM "LiteLLM_UserTable" '

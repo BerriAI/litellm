@@ -82,7 +82,7 @@ class DailySpend(FrozenModel):
     email: str | None = None
     display_name: str | None = None
     day: date
-    cost_usd: Decimal
+    cost_micros: int
     prompt_tokens: int
     completion_tokens: int
     requests: int

@@ -1,6 +1,5 @@
 import base64
 from datetime import timedelta
-from decimal import Decimal
 from typing import Final
 
 import httpx
@@ -52,7 +51,7 @@ def test_aggregate_filters_and_sums_decimal_cost_strings_and_request_fallback() 
             email="Member@example.test",
             display_name="Member",
             day=NOW.date(),
-            cost_usd=Decimal("0.2469135782"),
+            cost_micros=246914,
             prompt_tokens=43,
             completion_tokens=10,
             requests=6,
@@ -65,6 +64,14 @@ def test_aggregate_uses_utc_day_and_accepts_empty_usage() -> None:
     assert rows[0].day == (NOW - timedelta(days=1)).date()
     assert (rows[0].prompt_tokens, rows[0].completion_tokens, rows[0].requests) == (0, 0, 1)
     assert aggregate((), window_start(NOW), NOW) == ()
+
+
+@pytest.mark.parametrize(
+    "cost,micros", [("0.00000049", 0), ("0.0000005", 1), ("1.2345675", 1234568), ("-0.0000005", -1)]
+)
+def test_cost_is_rounded_exactly_to_nearest_micro_usd(cost: str, micros: int) -> None:
+    rows: Final = aggregate((item(pricing={"contracted": cost}),), window_start(NOW), NOW)
+    assert rows[0].cost_micros == micros
 
 
 class Vendor:
@@ -101,7 +108,7 @@ async def test_key_save_validates_once_encrypts_and_syncs_all_pages(db: Database
     assert result == SyncResult(rows=1)
     assert db.source.admin_api_key != vendor.key
     assert decrypt_value_helper(db.source.admin_api_key, "admin_api_key") == vendor.key
-    assert db.persisted[0].cost_usd == Decimal("0.2469135782")
+    assert db.persisted[0].cost_micros == 246914
     assert db.persisted[0].requests == 4
     assert len(vendor.requests) == 2
     assert "cursor" not in vendor.requests[0].url.params

@@ -4,7 +4,6 @@ datasource client {
 }
 
 generator client {
-  enable_experimental_decimal = true
   provider = "prisma-client-py"
   recursive_type_depth = -1
   binaryTargets = ["native", "debian-openssl-1.1.x", "debian-openssl-3.0.x", "linux-musl", "linux-musl-openssl-3.0.x"]
@@ -47,7 +46,7 @@ model LiteLLM_ExternalCloudAgentSpend {
   email              String?
   display_name       String?
   day                DateTime @client.Date
-  cost_usd           Decimal @client.Decimal(38, 10)
+  cost_micros        BigInt
   prompt_tokens      BigInt
   completion_tokens  BigInt
   requests           BigInt

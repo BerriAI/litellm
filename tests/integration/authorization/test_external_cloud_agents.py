@@ -70,17 +70,17 @@ async def test_vendor_sync_replaces_real_database_rows_idempotently_and_clears_d
         again: Final = await sync.run(source_id)
         assert again == initial
         persisted: Final = connected.gateway.rows(
-            'SELECT cost_usd::text AS cost,requests FROM "LiteLLM_ExternalCloudAgentSpend" WHERE source_id=%s',
+            'SELECT cost_micros AS cost,requests FROM "LiteLLM_ExternalCloudAgentSpend" WHERE source_id=%s',
             (source_id,),
         )
-        assert persisted == [{"cost": "1.1234567891", "requests": 4}]
+        assert persisted == [{"cost": 1123457, "requests": 4}]
         vendor.replace_cost()
         updated: Final = await sync.run(source_id)
         assert updated == initial
         changed: Final = connected.gateway.rows(
-            'SELECT cost_usd::text AS cost FROM "LiteLLM_ExternalCloudAgentSpend" WHERE source_id=%s', (source_id,)
+            'SELECT cost_micros AS cost FROM "LiteLLM_ExternalCloudAgentSpend" WHERE source_id=%s', (source_id,)
         )
-        assert changed == [{"cost": "3.2500000000"}]
+        assert changed == [{"cost": 3250000}]
         vendor.clear()
         cleared: Final = await sync.run(source_id)
         assert cleared == SyncResult(rows=0)
@@ -227,9 +227,9 @@ def test_concurrent_first_frames_bind_one_tenant(connected: Connected) -> None:
 def seed_spend(gateway: Gateway, source_id: str, vendor_id: str, email: str, cost: str, day: str) -> None:
     write_rows(
         'INSERT INTO "LiteLLM_ExternalCloudAgentSpend" '
-        "(source_id,vendor_user_id,email,display_name,day,cost_usd,prompt_tokens,completion_tokens,requests) "
-        "VALUES (%s,%s,%s,%s,%s::date,%s::numeric,40,10,2)",
-        (source_id, vendor_id, email, vendor_id, day, cost),
+        "(source_id,vendor_user_id,email,display_name,day,cost_micros,prompt_tokens,completion_tokens,requests) "
+        "VALUES (%s,%s,%s,%s,%s::date,%s,40,10,2)",
+        (source_id, vendor_id, email, vendor_id, day, int(Decimal(cost) * 1_000_000)),
         database_url=gateway.database_url,
     )
 
