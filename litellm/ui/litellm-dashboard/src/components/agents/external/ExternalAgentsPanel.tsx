@@ -119,7 +119,7 @@ function SourceWorkspace({
         onSetup={() => setSetup(!setup)}
       />
       {(setup || !connected) && (
-        <SetupCard key={source.source_id} token={token} sourceId={source.source_id} status={status} />
+        <SetupCard token={token} sourceId={source.source_id} status={status} />
       )}
       <SummaryStats counts={summary.data} />
       <Tabs
@@ -134,16 +134,16 @@ function SourceWorkspace({
           <TabsTrigger value="decisions">{t("agents.external.decisions")}</TabsTrigger>
         </TabsList>
       </Tabs>
-      {tab === "bots" && <BotsPanel key={source.source_id} token={token} sourceId={source.source_id} teams={teams} />}
+      {tab === "bots" && <BotsPanel token={token} sourceId={source.source_id} teams={teams} />}
       {tab === "policies" && (
         <div className="space-y-4">
           <Button variant="outline" onClick={() => setMapping(true)}>
             {t("agents.external.mapMembers")}
           </Button>
-          <PoliciesPanel key={source.source_id} token={token} sourceId={source.source_id} teams={teams} />
+          <PoliciesPanel token={token} sourceId={source.source_id} teams={teams} />
         </div>
       )}
-      {tab === "decisions" && <DecisionsPanel key={source.source_id} token={token} sourceId={source.source_id} />}
+      {tab === "decisions" && <DecisionsPanel token={token} sourceId={source.source_id} />}
       {mapping && <MemberMappingDialog token={token} sourceId={source.source_id} onClose={() => setMapping(false)} />}
     </>
   );

@@ -153,6 +153,9 @@ describe("external agent administration", () => {
     );
     expect(screen.getByLabelText("Custom Header name")).toHaveValue("Authorization");
     expect(screen.getByLabelText("Custom Header value")).toHaveValue("Bearer litellm_ingest_test");
+    fireEvent.click(screen.getByRole("button", { name: "Show setup" }));
+    fireEvent.click(screen.getByRole("button", { name: "Show setup" }));
+    expect(screen.getAllByLabelText("Endpoint URL")).toHaveLength(1);
     expect(apiClient.request).toHaveBeenCalledWith(
       "POST",
       "/v1/external_agents/sources",
