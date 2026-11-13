@@ -220,7 +220,7 @@ async fn azure_credentials_resolve_in_pythons_order(
         panic!("case params are an object")
     };
 
-    run_with(
+    run_hosted_with(
         Arc::new(RecordingSecrets::new(secrets.iter().copied())),
         MessagesCall {
             custom_llm_provider: Some("azure_ai".into()),
@@ -264,8 +264,62 @@ async fn azure_credentials_resolve_in_pythons_order(
     assert_eq!(sent, expected);
 }
 
+/// Without a Python host, as in the Rust gateway, a deployment without a key fails before sending
+/// as on main, whatever Entra ID settings it holds.
+#[rstest]
+#[case::nothing(json!({}), &[])]
+#[case::a_static_token(json!({"azure_ad_token": "entra-token"}), &[])]
+#[case::a_token_in_the_secret_source(json!({}), &[("AZURE_AD_TOKEN", "secret-token")])]
+#[case::a_provider_named_callable(json!({"azure_ad_token_provider": "callable"}), &[])]
+#[case::client_secret(json!({"tenant_id": "t", "client_id": "c", "client_secret": "s"}), &[])]
+#[case::username_and_password(
+    json!({"azure_username": "u", "azure_password": "p", "client_id": "c"}),
+    &[]
+)]
+#[case::token_refresh(json!({"enable_azure_ad_token_refresh": true}), &[])]
+#[tokio::test]
+async fn an_azure_deployment_without_a_key_or_a_python_host_is_a_missing_key(
+    call: MessagesCall,
+    #[case] params: Value,
+    #[case] secrets: &[(&str, &str)],
+) {
+    let upstream = upstream([message_response()]).await;
+    let Value::Object(params) = params else {
+        panic!("case params are an object")
+    };
+
+    let error = run_with(
+        Arc::new(RecordingSecrets::new(secrets.iter().copied())),
+        MessagesCall {
+            custom_llm_provider: Some("azure_ai".into()),
+            litellm_params: litellm_inference_messages::litellm_params(
+                [("model".to_string(), json!(MODEL))]
+                    .into_iter()
+                    .chain(params)
+                    .collect(),
+            )
+            .expect("valid params"),
+            api_base: Some(upstream.uri()),
+            ..call
+        },
+    )
+    .await
+    .expect_err("no key and no Python host");
+
+    assert_eq!(
+        error,
+        Error::from(litellm_llms::Error::from(
+            litellm_auth::Error::MissingApiKey {
+                provider: "Azure",
+                environment_variable: "AZURE_API_KEY",
+            }
+        ))
+    );
+    assert!(received(&upstream).await.is_empty());
+}
+
 /// Python reads `AZURE_USERNAME` and `AZURE_PASSWORD` with `os.getenv`, so only the process
-/// environment sends the call to the host's `get_azure_ad_token`, which this route has none of.
+/// environment sends the call to the host's `get_azure_ad_token`, which fails in these tests.
 static PROCESS_ENVIRONMENT: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[rstest]
@@ -283,20 +337,23 @@ async fn azure_username_and_password_come_from_the_process_environment(
     }
     let upstream = upstream([message_response()]).await;
 
-    let outcome = run(MessagesCall {
-        custom_llm_provider: Some("azure_ai".into()),
-        litellm_params: litellm_inference_messages::litellm_params(
-            [
-                ("model".to_string(), json!(MODEL)),
-                ("client_id".to_string(), json!("c")),
-            ]
-            .into_iter()
-            .collect(),
-        )
-        .expect("valid params"),
-        api_base: Some(upstream.uri()),
-        ..call
-    })
+    let outcome = run_hosted_with(
+        Arc::new(RecordingSecrets::empty()),
+        MessagesCall {
+            custom_llm_provider: Some("azure_ai".into()),
+            litellm_params: litellm_inference_messages::litellm_params(
+                [
+                    ("model".to_string(), json!(MODEL)),
+                    ("client_id".to_string(), json!("c")),
+                ]
+                .into_iter()
+                .collect(),
+            )
+            .expect("valid params"),
+            api_base: Some(upstream.uri()),
+            ..call
+        },
+    )
     .await;
     for (name, _) in process_env {
         unsafe { std::env::remove_var(name) };

@@ -239,7 +239,7 @@ async fn azure_ad_token_is_looked_up_only_where_python_looks_it_up(
     let upstream = upstream([message_response()]).await;
     let secrets = Arc::new(RecordingSecrets::empty());
 
-    run_with(
+    run_hosted_with(
         secrets.clone(),
         MessagesCall {
             custom_llm_provider: Some("azure_ai".into()),

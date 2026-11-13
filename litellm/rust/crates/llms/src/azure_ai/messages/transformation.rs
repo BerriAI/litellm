@@ -137,8 +137,8 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
     /// credential sent: no deployment key and no Entra ID token. A caller `api-key` goes out as
     /// `x-api-key` in any casing when it replaces a deployment key, and as Python sends it when
     /// there is none.
-    /// Otherwise the Azure key goes in `x-api-key`, and without one an Entra ID token is minted as
-    /// Python's `get_azure_ad_token` does.
+    /// Otherwise the Azure key goes in `x-api-key`. Without one, a call with a Python host mints an
+    /// Entra ID token as Python's `get_azure_ad_token` does, and any other call is a missing key.
     fn validate_environment(
         &self,
         headers: Headers,
@@ -168,7 +168,15 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
                 placement: API_KEY_PLACEMENT,
                 secret: SecretValue::new(key),
             },
-            None => entra_id_auth(litellm_params, env_lookup, &|name| std::env::var(name).ok()),
+            None => AuthScheme::PythonHostedAzureAdToken {
+                entra: Box::new(entra_id_auth(litellm_params, env_lookup, &|name| {
+                    std::env::var(name).ok()
+                })),
+                missing: litellm_auth::Error::MissingApiKey {
+                    provider: "Azure",
+                    environment_variable: AZURE_API_KEY_ENV,
+                },
+            },
         };
         Ok(ValidatedEnvironment { headers, auth })
     }

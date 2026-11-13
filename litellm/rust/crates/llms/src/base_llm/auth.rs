@@ -36,6 +36,13 @@ pub enum AuthScheme {
     /// OIDC references, token refresh), asked of the host when the request is sent. A host
     /// answer without a token leaves the call unauthenticated.
     HostAzureAdToken,
+    /// Entra ID auth for a call without a key, which only a call with a Python host runs
+    /// ([`AzureAdTokenHosts::host`]). Without one the call fails with `missing`, as it does when
+    /// the config takes only a key.
+    PythonHostedAzureAdToken {
+        entra: Box<AuthScheme>,
+        missing: litellm_auth::Error,
+    },
     /// A Google access token for the Vertex AI project the config names, acquired when the
     /// request is sent through the shared GCP token cache.
     GcpAccessToken { config: Box<VertexConfig> },
@@ -66,14 +73,20 @@ pub struct AzureAdTokenHosts {
 
 impl ValidatedEnvironment {
     /// Hands an Entra ID scheme the token source it names. Other schemes never read them.
-    #[must_use]
-    pub fn with_azure_ad_token_hosts(self, hosts: AzureAdTokenHosts) -> Self {
-        let provider = match &self.auth {
+    pub fn with_azure_ad_token_hosts(self, hosts: AzureAdTokenHosts) -> Result<Self, crate::Error> {
+        let auth = match (self.auth, &hosts.host) {
+            (AuthScheme::PythonHostedAzureAdToken { missing, .. }, None) => {
+                return Err(missing.into());
+            }
+            (AuthScheme::PythonHostedAzureAdToken { entra, .. }, Some(_)) => *entra,
+            (auth, _) => auth,
+        };
+        let provider = match &auth {
             AuthScheme::AzureAdToken { .. } => hosts.caller,
             AuthScheme::HostAzureAdToken => hosts.host,
             _ => None,
         };
-        match (self.auth, provider) {
+        Ok(match (auth, provider) {
             (AuthScheme::AzureAdToken { inputs }, Some(provider)) => Self {
                 auth: AuthScheme::AzureAdToken {
                     inputs: Box::new(AzureAuthInputs {
@@ -96,7 +109,7 @@ impl ValidatedEnvironment {
                 auth,
                 headers: self.headers,
             },
-        }
+        })
     }
 }
 
@@ -153,6 +166,7 @@ pub async fn resolve_auth(
                 signer: None,
             })
         }
+        AuthScheme::PythonHostedAzureAdToken { missing, .. } => Err(missing),
         AuthScheme::HostAzureAdToken => Err(litellm_auth::Error::CredentialAcquisition(
             litellm_auth::ErrorDetail::Unresolved {
                 subject: "Azure AD token without a Python host",
@@ -326,7 +340,8 @@ mod tests {
         .with_azure_ad_token_hosts(AzureAdTokenHosts {
             caller: provider.map(|token| TokenProviderHandle::new(Arc::new(StaticToken(token)))),
             host: None,
-        });
+        })
+        .unwrap();
         let authenticated = resolve(validated.headers, validated.auth).await;
         assert_eq!(authenticated.headers, headers(expected));
     }
@@ -346,7 +361,8 @@ mod tests {
         .with_azure_ad_token_hosts(AzureAdTokenHosts {
             caller: Some(TokenProviderHandle::new(Arc::new(StaticToken("caller")))),
             host: host.map(|token| TokenProviderHandle::new(Arc::new(StaticToken(token)))),
-        });
+        })
+        .unwrap();
         let authenticated = resolve(validated.headers, validated.auth).await;
         assert_eq!(authenticated.headers, headers(expected));
     }

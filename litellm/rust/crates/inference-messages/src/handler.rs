@@ -352,7 +352,7 @@ async fn provider_call(
             None => return Err(missing.into()),
         },
     }
-    .with_azure_ad_token_hosts(credentials.azure_ad_token_hosts);
+    .with_azure_ad_token_hosts(credentials.azure_ad_token_hosts)?;
 
     let tool_custom_field = config.tool_custom_field(&trimmed.model);
     let requested_output_format = trimmed.params.output_format.clone();

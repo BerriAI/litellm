@@ -116,6 +116,43 @@ async fn run_with(
         .await
 }
 
+/// The Python host's `get_azure_ad_token`, which these tests never reach without failing on it.
+#[derive(Debug)]
+struct UnreachablePythonHost;
+
+impl litellm_auth::TokenProvider for UnreachablePythonHost {
+    fn acquire(&self) -> litellm_auth::TokenFuture<'_> {
+        Box::pin(async {
+            Err(litellm_auth::Error::CredentialAcquisition(
+                litellm_auth::ErrorDetail::Unresolved {
+                    subject: "the test's Python host",
+                },
+            ))
+        })
+    }
+}
+
+/// Runs the route as python-bridge wires it, with a Python host for Entra ID flows.
+async fn run_hosted_with(
+    secrets: Arc<RecordingSecrets>,
+    call: MessagesCall,
+) -> Result<MessagesOutput, Error> {
+    let host = LocalMessagesHost::new(call);
+    let route = messages_route(secrets).with_azure_ad_token_hosts(
+        litellm_llms::base_llm::auth::AzureAdTokenHosts {
+            caller: None,
+            host: Some(litellm_auth::TokenProviderHandle::new(Arc::new(
+                UnreachablePythonHost,
+            ))),
+        },
+    );
+    litellm_host_native::in_process::run_hosted(
+        route.machine(host.request()?, None),
+        host.runtime(),
+    )
+    .await
+}
+
 /// Runs the route with a secret source that knows nothing, so no environment leaks in.
 async fn run(call: MessagesCall) -> Result<MessagesOutput, Error> {
     run_with(Arc::new(RecordingSecrets::empty()), call).await
