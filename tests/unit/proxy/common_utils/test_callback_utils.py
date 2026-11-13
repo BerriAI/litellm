@@ -7,12 +7,14 @@ from typing import Final
 from unittest.mock import patch
 
 import pytest
+from fastapi import HTTPException
 
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.constants import MAX_GUARDRAIL_SCAN_METADATA_HEADER_LENGTH
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.callback_config_validation import logging_metadata_config_error
 from litellm.proxy.common_utils.callback_utils import (
     _serialize_scan_metadata_header,
     add_guardrail_scan_id,
@@ -431,8 +433,7 @@ def test_callback_vars_helpers_handle_edge_shapes(monkeypatch):
     assert decrypt_callback_vars(None) is None
     assert decrypt_callback_vars({}) == {}
 
-    # logging not a list / callback_vars not a dict — leave alone
-    weird = {"logging": "not-a-list", "callback_settings": {"callback_vars": None}}
+    weird: Final = {"callback_settings": {"callback_vars": None}}
     assert encrypt_callback_vars(weird) == weird
 
     # empty/None callback_vars values stay as-is
@@ -860,11 +861,55 @@ def test_key_logging_entries_drops_an_entry_whose_credential_is_not_defined(monk
         pytest.param([{"callback_name": "langfuse", "callback_vars": {}}, None], id="list-with-null"),
     ],
 )
-def test_key_logging_entries_fails_on_non_object_logging_like_the_request_path_always_has(
+def test_key_logging_entries_skips_non_object_logging_with_a_warning(
     logging_value: object,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    with pytest.raises(TypeError):
-        key_logging_entries({"logging": logging_value})
+    with caplog.at_level(logging.WARNING):
+        entries: Final = key_logging_entries({"logging": logging_value})
+    expected: Final = (
+        (logging_value[0],) if isinstance(logging_value, list) and isinstance(logging_value[0], dict) else ()
+    )
+    assert entries == expected
+    assert "Ignoring invalid metadata.logging" in caplog.text
+
+
+def test_json_string_logging_is_encrypted_as_a_list_and_reads_like_list_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_salt_key(monkeypatch)
+    original: Final = _sample_metadata()
+    serialized: Final = {**original, "logging": json.dumps(original["logging"])}
+    encrypted: Final = encrypt_callback_vars(serialized)
+    assert isinstance(encrypted["logging"], list)
+    assert encrypted["logging"][0]["callback_vars"]["langfuse_secret_key"].startswith("litellm_enc::")
+    assert decrypt_callback_vars(encrypted) == original
+    assert key_logging_entries(serialized) == tuple(original["logging"])
+    assert serialized["logging"] == json.dumps(original["logging"])
+
+
+@pytest.mark.parametrize("value", ["not json", '{"a":1}', '"text"', "null", "[null]", {"bad": 1}, [1]])
+def test_invalid_logging_is_rejected_on_write_with_400(value: object) -> None:
+    with pytest.raises(HTTPException) as error:
+        encrypt_callback_vars({"logging": value})
+    assert error.value.status_code == 400
+    assert "metadata.logging must be a list of objects" in str(error.value.detail)
+
+
+@pytest.mark.parametrize("value", [[], "[]"])
+def test_empty_logging_is_stored_as_an_empty_list(value: object) -> None:
+    assert encrypt_callback_vars({"logging": value, "other": 1}) == {"logging": [], "other": 1}
+
+
+@pytest.mark.parametrize("metadata", [{}, {"logging": ""}, {"logging": {}}, {"logging": None}])
+def test_empty_logging_sentinels_are_preserved_without_validation_errors_or_warnings(
+    metadata: dict[str, object], caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING):
+        assert logging_metadata_config_error(metadata) is None
+        assert encrypt_callback_vars(metadata) == metadata
+        assert key_logging_entries(metadata) == (() if metadata.get("logging") is not None else None)
+    assert "Ignoring invalid metadata.logging" not in caplog.text
 
 
 @pytest.mark.parametrize(

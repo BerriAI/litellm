@@ -1335,7 +1335,8 @@ class _CallbackModelFields(TypedDict, total=False, extra_items=object):
 
 def get_validated_callback_metadata(item: object, *, source: str) -> AddTeamCallback | None:
     if not isinstance(item, Mapping):
-        raise TypeError(f"{source} metadata.logging must be a list of objects, got an item of {type(item).__name__}")
+        verbose_proxy_logger.warning("Ignoring invalid %s callback metadata, expected an object", source)
+        return None
     try:
         return AddTeamCallback.model_validate(item)
     except (PydanticValidationError, ValueError) as e:

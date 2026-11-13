@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from itertools import accumulate
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Optional, TypeAlias
 
+from fastapi import HTTPException
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
@@ -29,7 +30,12 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import CALLBACK_VAR_NAMES, CommonProxyErrors, LiteLLMPromptInjectionParams
-from litellm.proxy.common_utils.callback_config_validation import object_sequence, string_keyed
+from litellm.proxy.common_utils.callback_config_validation import (
+    InvalidLoggingMetadata,
+    is_empty_logging,
+    normalize_logging_entries,
+    string_keyed,
+)
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
@@ -743,7 +749,15 @@ def encrypt_callback_vars(metadata: object) -> object:
     Idempotent: a value that already decrypts cleanly is left unchanged so
     round-trips through edit forms don't double-encrypt.
     """
-    return _transform_callback_vars(metadata, _encrypt_if_plaintext)
+    fields: Final = string_keyed(metadata)
+    if not isinstance(metadata, dict):
+        return metadata
+    if "logging" not in fields or is_empty_logging(fields["logging"]):
+        return _transform_callback_vars(fields, _encrypt_if_plaintext)
+    entries: Final = normalize_logging_entries(fields["logging"])
+    if isinstance(entries, InvalidLoggingMetadata):
+        raise HTTPException(status_code=400, detail={"error": entries.message})
+    return _transform_callback_vars({**fields, "logging": list(entries)}, _encrypt_if_plaintext)
 
 
 def decrypt_callback_vars(metadata: object) -> Any:
@@ -770,10 +784,11 @@ def key_logging_entries(metadata: object) -> tuple[Mapping[str, object], ...] | 
 
 
 def _logging_objects(entries: object) -> tuple[Mapping[str, object], ...]:
-    items: Final = () if entries in ("", {}) else object_sequence(entries)
-    if items is None or not all(isinstance(item, Mapping) for item in items):
-        raise TypeError(f"key metadata.logging must be a list of objects, got {type(entries).__name__}")
-    return tuple(string_keyed(item) for item in items)
+    items: Final = normalize_logging_entries(entries, skip_invalid=True)
+    if isinstance(items, InvalidLoggingMetadata):
+        verbose_proxy_logger.warning("Ignoring invalid metadata.logging, expected a list of objects")
+        return ()
+    return items
 
 
 def _with_credential(entry: Mapping[str, object]) -> Mapping[str, object] | None:
@@ -796,18 +811,35 @@ def _with_credential(entry: Mapping[str, object]) -> Mapping[str, object] | None
 
 
 def _transform_callback_vars(metadata: object, transform: Callable[[str, object], object]) -> object:
+    fields: Final = string_keyed(metadata)
     if not isinstance(metadata, dict):
         return metadata
-    out: Final = copy.deepcopy(metadata)
-    logging_entries: Final = out.get("logging")
-    if isinstance(logging_entries, list):
-        for entry in logging_entries:
-            if isinstance(entry, dict) and isinstance(entry.get("callback_vars"), dict):
-                entry["callback_vars"] = {k: transform(k, v) for k, v in entry["callback_vars"].items()}
+    out: Final = copy.deepcopy(fields)
     callback_settings: Final = out.get("callback_settings")
-    if isinstance(callback_settings, dict) and isinstance(callback_settings.get("callback_vars"), dict):
-        callback_settings["callback_vars"] = {k: transform(k, v) for k, v in callback_settings["callback_vars"].items()}
-    return out
+    settings_fields: Final = string_keyed(callback_settings)
+    return {
+        **out,
+        **(
+            {"logging": [_transform_callback_entry(entry, transform) for entry in _logging_objects(out["logging"])]}
+            if "logging" in out and not is_empty_logging(out["logging"])
+            else {}
+        ),
+        **(
+            {"callback_settings": _transform_callback_entry(settings_fields, transform)}
+            if isinstance(callback_settings, Mapping)
+            else {}
+        ),
+    }
+
+
+def _transform_callback_entry(
+    entry: Mapping[str, object], transform: Callable[[str, object], object]
+) -> Mapping[str, object]:
+    variables: Final = entry.get("callback_vars")
+    variable_fields: Final = string_keyed(variables)
+    if not isinstance(variables, Mapping):
+        return entry
+    return {**entry, "callback_vars": {key: transform(key, value) for key, value in variable_fields.items()}}
 
 
 def is_sensitive_callback_key(

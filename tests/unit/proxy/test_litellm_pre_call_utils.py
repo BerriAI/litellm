@@ -2958,11 +2958,42 @@ def test_get_dynamic_logging_metadata_with_arize_team_logging():
         pytest.param([None], id="list-with-null"),
     ],
 )
-def test_non_object_team_logging_metadata_fails_as_a_server_error_not_a_bad_request(logging_value: object) -> None:
+def test_non_object_team_logging_metadata_is_skipped(logging_value: object) -> None:
     user_api_key_dict: Final = UserAPIKeyAuth(api_key="test-key", metadata={}, team_metadata={"logging": logging_value})
 
-    with pytest.raises(TypeError):
-        get_dynamic_logging_metadata(user_api_key_dict=user_api_key_dict, proxy_config=MagicMock())
+    assert get_dynamic_logging_metadata(user_api_key_dict=user_api_key_dict, proxy_config=MagicMock()) is None
+
+
+@pytest.mark.parametrize("source", ["metadata", "team_metadata"])
+@pytest.mark.parametrize("serialized", [True, False])
+def test_stored_json_string_logging_activates_the_same_callback(source: str, serialized: bool) -> None:
+    entries: Final = [
+        {
+            "callback_name": "langfuse",
+            "callback_type": "success",
+            "callback_vars": {"langfuse_secret_key": "legacy-secret"},
+        }
+    ]
+    metadata: Final = {"logging": json.dumps(entries) if serialized else entries}
+    auth: Final = UserAPIKeyAuth.model_validate({"api_key": "test-key", source: metadata})
+    result: Final = get_dynamic_logging_metadata(auth, MagicMock())
+    assert result is not None
+    assert result.success_callback == ["langfuse"]
+    assert result.callback_vars == {"langfuse_secret_key": "legacy-secret"}
+
+
+@pytest.mark.parametrize("source", ["metadata", "team_metadata"])
+def test_malformed_stored_logging_items_do_not_drop_valid_siblings(source: str) -> None:
+    entry: Final = {
+        "callback_name": "langfuse",
+        "callback_type": "success",
+        "callback_vars": {"langfuse_secret_key": "legacy-secret"},
+    }
+    auth: Final = UserAPIKeyAuth.model_validate({"api_key": "test-key", source: {"logging": [None, entry, "bad"]}})
+    result: Final = get_dynamic_logging_metadata(auth, MagicMock())
+    assert result is not None
+    assert result.success_callback == ["langfuse"]
+    assert result.callback_vars == {"langfuse_secret_key": "legacy-secret"}
 
 
 def test_add_team_callback_rejects_env_reference():
