@@ -101,7 +101,7 @@ def _grant(member: CustomerMember, request: BudgetIncreaseRequest, now: datetime
 
 def _check_key_scope(caller: UserAPIKeyAuth, member: CustomerMember) -> None:
     """A key whose metadata pins ``customer_org_id`` may only file for members of that organization."""
-    key_customer_org_id: Final = (caller.metadata or {}).get("customer_org_id")
+    key_customer_org_id: Final = (caller.metadata or {}).get("customer_org_id")  # pyright: ignore[reportUnknownMemberType]  # UserAPIKeyAuth.metadata is an untyped dict
     if key_customer_org_id is not None and key_customer_org_id != member.parent_org_id:
         resolve(Failure(ErrorCode.KEY_NOT_IN_ORG))
 

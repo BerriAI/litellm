@@ -1599,7 +1599,7 @@ async def _connect_to_count_stored_values(resources: AsyncExitStack) -> Supports
     if prisma_client is None:
         resources.push_async_callback(client.aclose)
     await client.connect()
-    return client.writer_db
+    return client.writer_db  # pyright: ignore[reportReturnType]  # PrismaWrapper forwards query_raw via __getattr__
 
 
 async def _own_database(resources: AsyncExitStack, client: PrismaClient | None) -> database_runtime.Database | None:

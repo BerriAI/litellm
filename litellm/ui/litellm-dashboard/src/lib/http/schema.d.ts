@@ -9641,6 +9641,9 @@ export interface paths {
         /**
          * Approve Budget Increase Request
          * @description Grant the increase: the member's override takes the requested cap until the request's expiry. Proxy admins only.
+         *
+         *     The claim and the override land in one transaction, so a racing reject sees ``request_not_pending`` instead of
+         *     leaving a rejected request with the cap still granted.
          */
         put: operations["approve_budget_increase_request_management_v1_customer_budget_increase_requests__request_id__approve_put"];
         post?: never;
