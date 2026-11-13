@@ -10197,6 +10197,8 @@ async def test_call_tool_with_legacy_db_m2m_server_resolves_oauth2_flow():
         ("https://host:8443/a/b?q=1", "https://host:8443"),
         ("https://mcp.zapier.com/api/mcp/s/NDgzcret-token/mcp", "https://mcp.zapier.com"),
         ("https://mcp.notion.com/mcp", "https://mcp.notion.com"),
+        ("http://[::1]:8080/x", "http://[::1]:8080"),
+        ("https://[2001:db8::1]/mcp?token=abcd", "https://[2001:db8::1]"),
         (None, None),
         ("", None),
         ("not a url", None),

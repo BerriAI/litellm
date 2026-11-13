@@ -3864,6 +3864,23 @@ async def test_test_custom_code_endpoint_returns_a_sync_guardrails_result():
 
 
 @pytest.mark.asyncio
+async def test_test_custom_code_endpoint_passes_the_mcp_server_identity_to_the_policy():
+    request = TestCustomCodeGuardrailRequest(
+        custom_code=(
+            "def apply_guardrail(inputs, request_data, input_type):\n"
+            '    return block(str(request_data.get("mcp_server_name")) + "|" + str(request_data.get("mcp_server_url")))\n'
+        ),
+        test_input={"texts": ["x"]},
+        request_data={"mcp_server_name": "crypto-prices", "mcp_server_url": "https://mcp.example.com:8443"},
+    )
+
+    response = await run_custom_code_test_endpoint(request=request, user_api_key_dict=MOCK_ADMIN_USER)
+
+    assert response.success is True and response.result is not None, response
+    assert response.result["reason"] == "crypto-prices|https://mcp.example.com:8443"
+
+
+@pytest.mark.asyncio
 async def test_add_guardrail_rolls_back_a_custom_code_guardrail_that_fails_to_compile(mocker, mock_guardrail_registry):
     stored = {
         "guardrail_id": "custom-code-broken",

@@ -1,10 +1,3 @@
-"""A ``pre_mcp_call`` or ``during_mcp_call`` custom code guardrail sees which MCP server a tool call routes to.
-
-Two servers registered against the same upstream expose the same tool names, so a policy written as custom
-code can only tell them apart through ``request_data["mcp_server_name"]``. The server URL it sees is the
-origin only, never the userinfo, path or query an admin configured.
-"""
-
 import re
 import textwrap
 import uuid
@@ -24,6 +17,8 @@ _PRE_PROBE: Final = "pre-probe"
 _HIDDEN_TOOL: Final = "list_markets"
 _HIDDEN_ECHO: Final = "catalog-hidden"
 _DURING_ECHO: Final = "during-saw"
+_LLM_ECHO: Final = "llm-saw"
+_LLM_PROBE: Final = "llm-probe"
 _DURING_PROBE: Final = "during-probe"
 _BLOCKED_ALIAS: Final = "srvb" + uuid.uuid4().hex[:8]
 _PRE_GUARDRAIL_CODE: Final = (
@@ -46,6 +41,13 @@ _DURING_GUARDRAIL_CODE: Final = (
     f'    return block("{_DURING_ECHO}[" + str(request_data.get("mcp_server_name")) + "|"'
     ' + str(request_data.get("mcp_server_url")) + "]")\n'
 )
+_LLM_GUARDRAIL_CODE: Final = (
+    "def apply_guardrail(inputs, request_data, input_type):\n"
+    f'    if "{_LLM_PROBE}" not in list(inputs.get("texts") or []):\n'
+    "        return allow()\n"
+    f'    return block("{_LLM_ECHO}[" + str(request_data.get("mcp_server_name")) + "|"'
+    ' + str(request_data.get("mcp_server_url")) + "]")\n'
+)
 _GUARDRAILS_YAML: Final = (
     "guardrails:\n"
     "  - guardrail_name: server-identity-pre\n"
@@ -60,7 +62,14 @@ _GUARDRAILS_YAML: Final = (
     "      guardrail: custom_code\n"
     "      mode: during_mcp_call\n"
     "      default_on: true\n"
-    "      custom_code: |\n" + textwrap.indent(_DURING_GUARDRAIL_CODE, 8 * " ")
+    "      custom_code: |\n"
+    + textwrap.indent(_DURING_GUARDRAIL_CODE, 8 * " ")
+    + "  - guardrail_name: server-identity-llm\n"
+    "    litellm_params:\n"
+    "      guardrail: custom_code\n"
+    "      mode: pre_call\n"
+    "      default_on: true\n"
+    "      custom_code: |\n" + textwrap.indent(_LLM_GUARDRAIL_CODE, 8 * " ")
 )
 
 
@@ -143,3 +152,18 @@ def test_during_mcp_call_custom_code_sees_the_same_server_name_and_origin(twins:
     probed: Final = caller.call(f"{twins.allowed_alias}-get_ticker", {"symbol": _DURING_PROBE})
     assert probed.error is not None, f"the during probe was not blocked: {probed.raw}"
     assert _echoed(probed, _DURING_ECHO) == f"{twins.allowed_alias}|{twins.origin}", probed.raw
+
+
+def test_llm_request_body_cannot_spoof_the_mcp_server_identity(identity_rig: Gateway) -> None:
+    response: Final = identity_rig.request(
+        "POST",
+        "/v1/chat/completions",
+        {
+            "model": "openai/gpt-5-mini",
+            "messages": [{"role": "user", "content": _LLM_PROBE}],
+            "mcp_server_name": "spoofed",
+            "mcp_server_url": "https://attacker.example",
+            "mcp_server_identity": {"name": "spoofed", "url": "https://attacker.example"},
+        },
+    )
+    assert _echoed(Outcome(response.status_code, None, raw=response.text), _LLM_ECHO) == "None|None", response.text

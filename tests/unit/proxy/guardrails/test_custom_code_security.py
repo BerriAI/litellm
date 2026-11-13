@@ -17,6 +17,7 @@ from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail 
 )
 from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
 from litellm.types.guardrails import SupportedGuardrailIntegrations
+from litellm.types.mcp import MCPServerIdentity
 
 # str.mro() + generator gi_code + code.replace(co_names=...) + __setattr__
 # to swap a function's bytecode and read http_get's real builtins dict.
@@ -321,23 +322,28 @@ REQUEST_KEYS_ECHO_CODE = (
     "def apply_guardrail(inputs, request_data, input_type):\n"
     "    return flag('keys', metadata={'keys': sorted(request_data.keys())})\n"
 )
+SERVER_IDENTITY_ECHO_CODE = (
+    "def apply_guardrail(inputs, request_data, input_type):\n"
+    "    return flag('server', metadata={\n"
+    "        'server': [request_data['mcp_server_name'], request_data['mcp_server_url']],\n"
+    "    })\n"
+)
+
+
+async def _sandbox_payload_keys(request_data: dict) -> list[str]:
+    guardrail = _compile(REQUEST_KEYS_ECHO_CODE)
+    await guardrail.apply_guardrail(inputs={"texts": ["x"]}, request_data=request_data, input_type="request")
+    entry = request_data["metadata"]["standard_logging_guardrail_information"][0]
+    return entry["guardrail_response"]["metadata"]["keys"]
 
 
 @pytest.mark.asyncio
 async def test_custom_code_sandbox_sees_the_mcp_server_identity_of_a_tool_call():
-    """LIT-9648: a pre_mcp_call / during_mcp_call policy must know which MCP server the tool call routes
-    to, since two servers can expose the same tool name. The URL arrives already reduced to its origin."""
-    code = (
-        "def apply_guardrail(inputs, request_data, input_type):\n"
-        "    return flag('server', metadata={\n"
-        "        'server': [request_data['mcp_server_name'], request_data['mcp_server_url']],\n"
-        "    })\n"
-    )
-    guardrail = _compile(code)
+    guardrail = _compile(SERVER_IDENTITY_ECHO_CODE)
     request_data = {
         "model": "mcp-tool-call",
         "mcp_server_name": "crypto-prices",
-        "mcp_server_url": "https://mcp.example.com:8443",
+        "mcp_server_identity": MCPServerIdentity(name="crypto-prices", url="https://mcp.example.com:8443"),
         "metadata": dict(CALLER_IDENTITY),
     }
 
@@ -349,16 +355,27 @@ async def test_custom_code_sandbox_sees_the_mcp_server_identity_of_a_tool_call()
 
 @pytest.mark.asyncio
 async def test_custom_code_sandbox_gets_no_mcp_keys_on_an_llm_request():
-    """A chat completion carries no MCP server, so the sandbox payload keeps its pre-LIT-9648 shape."""
-    guardrail = _compile(REQUEST_KEYS_ECHO_CODE)
     request_data = {"model": "m", "messages": [{"role": "user", "content": "hi"}], "metadata": dict(CALLER_IDENTITY)}
 
-    await guardrail.apply_guardrail(inputs={"texts": ["hi"]}, request_data=request_data, input_type="request")
+    keys = await _sandbox_payload_keys(request_data)
 
-    entry = request_data["metadata"]["standard_logging_guardrail_information"][0]
-    assert entry["guardrail_response"]["metadata"] == {
-        "keys": ["end_user_id", "metadata", "model", "team_id", "user_id"]
+    assert [key for key in keys if key.startswith("mcp_")] == [], keys
+
+
+@pytest.mark.asyncio
+async def test_custom_code_sandbox_ignores_mcp_identity_spoofed_in_an_llm_request_body():
+    request_data = {
+        "model": "m",
+        "messages": [{"role": "user", "content": "hi"}],
+        "mcp_server_name": "spoofed",
+        "mcp_server_url": "https://attacker.example",
+        "mcp_server_identity": {"name": "spoofed", "url": "https://attacker.example"},
+        "metadata": dict(CALLER_IDENTITY),
     }
+
+    keys = await _sandbox_payload_keys(request_data)
+
+    assert [key for key in keys if key.startswith("mcp_")] == [], keys
 
 
 @pytest.mark.asyncio

@@ -3,6 +3,7 @@ from __future__ import annotations
 import enum
 import re
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, TypeAlias
 from urllib.parse import urlsplit
@@ -440,6 +441,14 @@ class MCPStdioConfig(TypedDict, total=False):
     """
     Environment variables to set when running the command
     """
+
+
+@dataclass(frozen=True, slots=True)
+class MCPServerIdentity:
+    """Which MCP server a guardrail payload routes to. Never a JSON type, so a request body cannot forge it."""
+
+    name: str | None
+    url: str | None
 
 
 class MCPPreCallRequestObject(LiteLLMBaseModel):
