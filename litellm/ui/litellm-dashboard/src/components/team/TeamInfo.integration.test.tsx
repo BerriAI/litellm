@@ -897,6 +897,55 @@ describe("TeamInfoView - model settings", () => {
     seedDefaultMocks();
   });
 
+  const openWindowedTeamEditor = async (user: ReturnType<typeof userEvent.setup>) => {
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({
+        models: [],
+        budget_limits: [
+          { budget_duration: "24h", max_budget: 10, reset_at: "2026-11-14T00:00:00+00:00" },
+          { budget_duration: "30d", max_budget: 200, reset_at: "2026-12-01T00:00:00+00:00" },
+        ],
+      }),
+    );
+    renderWithProviders(<TeamInfoView {...props} userModels={["gpt-4"]} />);
+    await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    expect(await screen.findByText(/Budget Window \(24h\): \$10\.00, resets/)).toBeInTheDocument();
+    expect(screen.getByText(/Budget Window \(30d\): \$200\.00, resets/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /edit settings/i }));
+    return screen.getAllByPlaceholderText("Max spend ($)");
+  };
+
+  const savedBudgetLimits = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalled());
+    return vi.mocked(networking.teamUpdateCall).mock.calls[0][1].budget_limits;
+  };
+
+  it("leaves unchanged team budget windows off the update", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openWindowedTeamEditor(user);
+    expect(await savedBudgetLimits(user)).toBeUndefined();
+  });
+
+  it("sends edited team budget windows on update", async () => {
+    const user = userEvent.setup({ delay: null });
+    const [dailyInput] = await openWindowedTeamEditor(user);
+    fireEvent.change(dailyInput, { target: { value: "25" } });
+    expect(await savedBudgetLimits(user)).toStrictEqual([
+      { budget_duration: "24h", max_budget: 25 },
+      { budget_duration: "30d", max_budget: 200 },
+    ]);
+  });
+
+  it("clears team budget windows when every window is removed", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openWindowedTeamEditor(user);
+    await user.click(screen.getAllByRole("button", { name: "✕" })[0]);
+    await user.click(screen.getByRole("button", { name: "✕" }));
+    expect(await savedBudgetLimits(user)).toStrictEqual([]);
+  });
+
   it("submits the prompt storage restriction in team metadata", async () => {
     const user = userEvent.setup({ delay: null });
     vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData({ models: [] }));

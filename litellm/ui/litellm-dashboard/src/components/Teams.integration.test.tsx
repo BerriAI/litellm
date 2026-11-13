@@ -61,6 +61,25 @@ describe("Teams creation integration", () => {
     expect(payload.metadata.store_prompts_in_spend_logs).toBe(false);
   });
 
+  it("sends only completed team budget windows on create", async () => {
+    const user = userEvent.setup({ delay: null });
+    renderWithProviders(<Teams accessToken="sk-session-test" userID="test-admin" userRole="Admin" premiumUser />);
+    await user.click(screen.getAllByRole("button", { name: /create team/i })[0]);
+    fireEvent.change(await screen.findByLabelText(/team name/i), { target: { value: "Windowed Team" } });
+
+    await user.click(screen.getByRole("button", { name: "+ Add Budget Window" }));
+    await user.click(screen.getByRole("button", { name: "+ Add Budget Window" }));
+    fireEvent.change(screen.getAllByPlaceholderText("Max spend ($)")[0], { target: { value: "15" } });
+
+    await user.click(screen.getAllByRole("button", { name: /create team/i }).at(-1)!);
+    await waitFor(() =>
+      expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes("/team/new"))).toBe(true),
+    );
+    const request = vi.mocked(fetch).mock.calls.find(([url]) => String(url).includes("/team/new"));
+    const payload = JSON.parse(String(request?.[1]?.body)) as Record<string, unknown>;
+    expect(payload.budget_limits).toStrictEqual([{ budget_duration: "24h", max_budget: 15 }]);
+  });
+
   it("sends a configured default member per-model budget", async () => {
     const user = userEvent.setup({ delay: null });
     renderWithProviders(<Teams accessToken="sk-session-test" userID="test-admin" userRole="Admin" premiumUser />);

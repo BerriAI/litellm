@@ -74,6 +74,8 @@ import {
   modelMaxBudgetToEntries,
 } from "../key_team_helpers/ModelMaxBudgetEditor";
 import { modelMaxBudgetUpdate, StoredModelMaxBudget } from "../key_team_helpers/modelMaxBudgetPayload";
+import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/BudgetWindowsEditor";
+import { budgetWindowsUpdate } from "../key_team_helpers/budgetWindows";
 import {
   ALL_PROXY_MODELS,
   computeTeamModelBadges,
@@ -306,6 +308,10 @@ export interface TeamMembership {
   };
 }
 
+interface StoredBudgetWindow extends BudgetWindowEntry {
+  reset_at?: string | null;
+}
+
 export interface TeamData {
   team_id: string;
   team_info: {
@@ -322,6 +328,7 @@ export interface TeamData {
     max_budget: number | null;
     soft_budget?: number | null;
     budget_duration: string | null;
+    budget_limits?: StoredBudgetWindow[] | null;
     model_max_budget?: StoredModelMaxBudget | null;
     model_max_budget_usage?: Record<string, ModelBudgetUsage> | null;
     models: string[];
@@ -633,6 +640,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [isEditMemberModalVisible, setIsEditMemberModalVisible] = useState(false);
   const [selectedEditMember, setSelectedEditMember] = useState<Member | null>(null);
   const [isEditing, setIsEditing] = useState(false);
+  const [teamBudgetLimits, setTeamBudgetLimits] = useState<BudgetWindowEntry[]>([]);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const { data: guardrailsData, isLoading: isGuardrailsLoading } = useGuardrails();
   const globalGuardrailNames = guardrailsData?.globalGuardrailNames ?? new Set<string>();
@@ -705,6 +713,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const startEditing = () => {
     form.reset(teamFormValues());
     setTeamModelMaxBudget((teamData?.team_info?.model_max_budget ?? {}) as ModelMaxBudget);
+    setTeamBudgetLimits(teamData?.team_info?.budget_limits ?? []);
     setTeamMemberModelMaxBudget(
       (teamData?.team_info?.team_member_budget_table?.model_max_budget ?? {}) as ModelMaxBudget,
     );
@@ -1248,6 +1257,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       const modelBudgets = modelMaxBudgetUpdate(teamModelMaxBudget, info.model_max_budget);
       if (modelBudgets !== undefined) {
         updateData.model_max_budget = modelBudgets;
+      }
+
+      const budgetWindows = budgetWindowsUpdate(teamBudgetLimits, info.budget_limits ?? []);
+      if (budgetWindows !== undefined) {
+        updateData.budget_limits = budgetWindows;
       }
 
       const teamMemberModelBudgets = modelMaxBudgetUpdate(
@@ -1902,6 +1916,16 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     )}
                   </FormField>
 
+                  <Field>
+                    <FieldLabel>
+                      {labelWithHint(
+                        t("teams.teamInfo.editForm.budgetWindows"),
+                        t("teams.teamInfo.editForm.budgetWindowsHint"),
+                      )}
+                    </FieldLabel>
+                    <BudgetWindowsEditor value={teamBudgetLimits} onChange={setTeamBudgetLimits} />
+                  </Field>
+
                   <ModelMaxBudgetField
                     premiumUser={premiumUser}
                     value={teamModelMaxBudget}
@@ -2503,6 +2527,22 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   {t("teams.teamInfo.settingsView.budgetReset")}
                   {info.budget_duration || t("teams.teamInfo.settingsView.never")}
                 </div>
+                {(info.budget_limits ?? []).map(({ budget_duration, max_budget, reset_at }) => {
+                  const windowLine = {
+                    duration: budget_duration,
+                    limit: max_budget === null ? "?" : formatNumberWithCommas(max_budget, 2),
+                  };
+                  return (
+                    <div key={budget_duration}>
+                      {reset_at
+                        ? t("teams.teamInfo.settingsView.budgetWindow.lineWithReset", {
+                            ...windowLine,
+                            resetAt: new Date(reset_at).toLocaleString(),
+                          })
+                        : t("teams.teamInfo.settingsView.budgetWindow.line", windowLine)}
+                    </div>
+                  );
+                })}
                 {modelMaxBudgetToEntries(info.model_max_budget as ModelMaxBudget | null | undefined).map(
                   ({ model, budgetLimit, timePeriod }) => {
                     const spent = model === null ? undefined : info.model_max_budget_usage?.[model]?.current_spend;
