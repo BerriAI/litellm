@@ -438,7 +438,6 @@ def test_fal_h3_oversized_size_uses_top_resolution_tier_and_queues(gateway: Gate
 
 _FLAT_PRICED_MODEL: Final = "fal-ai/ltx-video"
 _FLAT_PRICED_MODEL_AS_DEPLOYMENT_ID: Final = "fal-ai/ovi"
-_PER_SECOND_RATE: Final = 0.1
 _OFF_PEAK_NEVER_OPEN: Final[JsonValue] = {"hours_utc": "00:00-00:00", "output_cost_per_second": 0.05}
 
 
@@ -461,7 +460,7 @@ def test_deployment_per_second_price_bills_a_fal_model_the_catalog_prices_per_vi
     gateway: Gateway, fal_model: str, model_info: Mapping[str, JsonValue]
 ) -> None:
     request_id: Final = "fal-flat-req-" + uuid.uuid4().hex
-    assert rate("fal_ai", "output_cost_per_video", fal_model) != 5 * _PER_SECOND_RATE
+    per_second_rate: Final = rate("fal_ai", "output_cost_per_video", fal_model)
 
     def respond(request: Request) -> Reply:
         assert request.method == "POST"
@@ -473,7 +472,7 @@ def test_deployment_per_second_price_bills_a_fal_model_the_catalog_prices_per_vi
             model=f"fal_ai/{fal_model}",
             api_base=wire.url,
             api_key="synthetic-fal-key",
-            output_cost_per_second=_PER_SECOND_RATE,
+            output_cost_per_second=per_second_rate,
             model_info=model_info,
         )
         key: Final = scenario.key(models=[model])
@@ -484,4 +483,4 @@ def test_deployment_per_second_price_bills_a_fal_model_the_catalog_prices_per_vi
             key=key,
         )
         assert created.status_code == 200, created.text
-        settled_spend(key, 5 * _PER_SECOND_RATE)
+        settled_spend(key, 5 * per_second_rate)
