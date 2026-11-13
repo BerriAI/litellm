@@ -13,8 +13,10 @@ from fastapi import status
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 import litellm
+from litellm._internal_context import with_service_target
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy.auth.auth_checks import can_object_call_model
+from litellm.proxy.auth.auth_object_prefetch import AUTH_OBJECTS_TARGET
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, get_management_object_ttl
 from litellm.proxy.management_helpers.customer_hierarchy import (
@@ -133,6 +135,7 @@ def _member_table(prisma_client: "PrismaClient") -> TableActions[PrismaRecord]:
     return prisma_client.db.litellm_customermembertable  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportAny]  # prisma tables are generated at build time
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def get_customer_hierarchy(
     customer_member_id: str,
     prisma_client: "PrismaClient",
@@ -189,11 +192,9 @@ async def resolve_customer_hierarchy(
     llm_router: "Router | None",
     request_model: object,
     route: str,
-    key_metadata: Mapping[str, object] | None = None,
 ) -> CustomerHierarchyAuth:
     """Load the hierarchy the header names and admit the request against it. An unknown member is refused
-    rather than treated as unrestricted: the caller asked for a budgeted identity that does not exist. A key
-    whose metadata pins ``customer_org_id`` may only act for members of that organization."""
+    rather than treated as unrestricted: the caller asked for a budgeted identity that does not exist."""
     hierarchy: Final = (
         await get_customer_hierarchy(customer_member_id, prisma_client, user_api_key_cache)
         if prisma_client is not None
@@ -206,16 +207,21 @@ async def resolve_customer_hierarchy(
             param=CUSTOMER_MEMBER_ID_HEADER,
             code=status.HTTP_401_UNAUTHORIZED,
         )
-    key_customer_org_id: Final = key_metadata.get("customer_org_id") if key_metadata is not None else None
-    if key_customer_org_id is not None and key_customer_org_id != hierarchy.customer_org_id:
-        raise ProxyException(
-            message="API key is not allowed to act for this customer member's organization",
-            type=ProxyErrorTypes.auth_error,
-            param=CUSTOMER_MEMBER_ID_HEADER,
-            code=status.HTTP_403_FORBIDDEN,
-        )
     if not RouteChecks.is_info_route(route):
         check_customer_hierarchy_budget(hierarchy)
     if isinstance(request_model, str) and request_model:
         check_customer_hierarchy_model_access(hierarchy, request_model, llm_router)
     return hierarchy
+
+
+def check_customer_hierarchy_key_scope(hierarchy: CustomerHierarchyAuth, key_metadata: Mapping[str, object]) -> None:
+    """A key whose metadata pins ``customer_org_id`` may only act for members of that organization."""
+    key_customer_org_id: Final = key_metadata.get("customer_org_id")
+    if key_customer_org_id is None or key_customer_org_id == hierarchy.customer_org_id:
+        return
+    raise ProxyException(
+        message="API key is not allowed to act for this customer member's organization",
+        type=ProxyErrorTypes.auth_error,
+        param=CUSTOMER_MEMBER_ID_HEADER,
+        code=status.HTTP_403_FORBIDDEN,
+    )

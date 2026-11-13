@@ -10,6 +10,7 @@ from litellm.proxy._types import ProxyException
 from litellm.proxy.auth.customer_hierarchy_auth import (
     CUSTOMER_MEMBER_ID_HEADER,
     check_customer_hierarchy_budget,
+    check_customer_hierarchy_key_scope,
     check_customer_hierarchy_model_access,
     customer_hierarchy_from_member_row,
     customer_member_id_from_headers,
@@ -249,28 +250,10 @@ async def test_resolution_enforces_budget_on_model_routes_but_not_on_info_routes
     assert hierarchy.customer_member_id == "member-1"
 
 
-@pytest.mark.asyncio
-async def test_a_key_pinned_to_another_organization_cannot_act_for_the_member() -> None:
-    cache: Final = UserApiKeyCache(DualCache())
-    prisma: Final = _Prisma(_MemberTable({"member-1": _row(template={"max_budget": 10.0})}))
+def test_a_key_pinned_to_another_organization_cannot_act_for_the_member() -> None:
+    hierarchy: Final = customer_hierarchy_from_member_row(_row(template={"max_budget": 10.0}), now=NOW)
     with pytest.raises(ProxyException) as denied:
-        await resolve_customer_hierarchy(
-            customer_member_id="member-1",
-            prisma_client=prisma,  # pyright: ignore[reportArgumentType]  # test double
-            user_api_key_cache=cache,
-            llm_router=None,
-            request_model="gpt-4o",
-            route="/chat/completions",
-            key_metadata={"customer_org_id": "some-other-org"},
-        )
+        check_customer_hierarchy_key_scope(hierarchy, {"customer_org_id": "some-other-org"})
     assert denied.value.code == "403"
-    hierarchy: Final = await resolve_customer_hierarchy(
-        customer_member_id="member-1",
-        prisma_client=prisma,  # pyright: ignore[reportArgumentType]  # test double
-        user_api_key_cache=cache,
-        llm_router=None,
-        request_model="gpt-4o",
-        route="/chat/completions",
-        key_metadata={"customer_org_id": "org-1"},
-    )
-    assert hierarchy.customer_org_id == "org-1"
+    check_customer_hierarchy_key_scope(hierarchy, {"customer_org_id": "org-1"})
+    check_customer_hierarchy_key_scope(hierarchy, {})

@@ -21,7 +21,6 @@ from redis.exceptions import DataError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-
 from litellm._service_logger import ServiceTypes
 from litellm.constants import SPEND_ROLLUP_LOCK_TIMEOUT_MS
 from litellm.proxy._types import DailyTagSpendTransaction, Litellm_EntityType, SpendUpdateQueueItem
@@ -44,7 +43,6 @@ from litellm.proxy.spend_tracking.session_spend_total import SessionSpendTotals
 from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.types.caching import RedisPipelineLpopOperation, RedisPipelineRpushOperation
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
-
 
 
 @pytest.fixture(autouse=True)
@@ -3996,6 +3994,9 @@ async def test_commit_spend_updates_to_db_reports_each_completed_table():
         call("tag_list_transactions"),
         call("model_access_group_list_transactions"),
         call("agent_list_transactions"),
+        call("customer_org_list_transactions"),
+        call("customer_team_list_transactions"),
+        call("customer_member_list_transactions"),
     ]
 
 
