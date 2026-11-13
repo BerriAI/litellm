@@ -84,6 +84,7 @@ _NO_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
 _FIELDS: Final = TypeAdapter(dict[str, object])
 _NOVA_PARAMS_KEYS: Final = ("segmentedEmbeddingParams", "singleEmbeddingParams")
 _NOVA_INPUT_KEYS: Final = frozenset({"text", "image", "video", "audio"})
+_NOVA_CONTENT_KEYS: Final = frozenset({"value", "source"})
 _DEFAULTED_FIELDS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
     {
         "cohere": ("input_type",),
@@ -97,10 +98,25 @@ def _fields(value: object) -> Mapping[str, object]:
     return _FIELDS.validate_python(value) if isinstance(value, Mapping) else _NO_FIELDS
 
 
+def _nova_params(model_input: Mapping[str, object]) -> Mapping[str, object]:
+    return next((_fields(model_input[key]) for key in _NOVA_PARAMS_KEYS if key in model_input), _NO_FIELDS)
+
+
 def _nova_options(model_input: Mapping[str, object]) -> Mapping[str, object]:
-    """The caller's Nova embedding params without the fields that carry the content to embed."""
-    params: Final = next((_fields(model_input[key]) for key in _NOVA_PARAMS_KEYS if key in model_input), _NO_FIELDS)
-    return {k: v for k, v in params.items() if k not in _NOVA_INPUT_KEYS}
+    """The caller's Nova embedding params without the fields that describe the content to embed."""
+    return {k: v for k, v in _nova_params(model_input).items() if k not in _NOVA_INPUT_KEYS}
+
+
+def _nova_input_options(model_input: Mapping[str, object], input_key: str) -> Mapping[str, object]:
+    """The caller's settings for one Nova input field, such as ``text.segmentationConfig``, without its content."""
+    return {k: v for k, v in _fields(_nova_params(model_input).get(input_key)).items() if k not in _NOVA_CONTENT_KEYS}
+
+
+def _nova_params_with_options(caller: Mapping[str, object], params: Mapping[str, object]) -> Mapping[str, object]:
+    merged_inputs: Final = {
+        k: {**_nova_input_options(caller, k), **_fields(v)} for k, v in params.items() if k in _NOVA_INPUT_KEYS
+    }
+    return {**_nova_options(caller), **params, **merged_inputs}
 
 
 def _nova_model_input(extra_body: Mapping[str, object]) -> Mapping[str, object]:
@@ -121,9 +137,12 @@ def _caller_values_for_defaults(
 
 
 def _nova_model_input_with_options(
-    caller_options: Mapping[str, object], model_input: Mapping[str, object]
+    caller: Mapping[str, object], model_input: Mapping[str, object]
 ) -> Mapping[str, object]:
-    return {k: {**caller_options, **_fields(v)} if k in _NOVA_PARAMS_KEYS else v for k, v in model_input.items()}
+    return {
+        k: _nova_params_with_options(caller, _fields(v)) if k in _NOVA_PARAMS_KEYS else v
+        for k, v in model_input.items()
+    }
 
 
 def _with_extra_body(
@@ -134,13 +153,13 @@ def _with_extra_body(
     merged: Final = {**extra_body, **body}
     if provider != "nova":
         return merged
-    caller_options: Final = _nova_options(_nova_model_input(extra_body))
+    caller: Final = _nova_model_input(extra_body)
     if "modelInput" in body:
         return {
             **merged,
-            "modelInput": dict(_nova_model_input_with_options(caller_options, _fields(body["modelInput"]))),
+            "modelInput": dict(_nova_model_input_with_options(caller, _fields(body["modelInput"]))),
         }
-    return {**extra_body, **_nova_model_input_with_options(caller_options, body)}
+    return {**extra_body, **_nova_model_input_with_options(caller, body)}
 
 
 class BedrockEmbedding(BaseAWSLLM):

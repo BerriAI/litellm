@@ -2342,7 +2342,12 @@ def test_bedrock_async_nova_embedding_uses_extra_body_params_under_model_input(
             "modelInput": {
                 "segmentedEmbeddingParams": {
                     "embeddingDimension": 256,
-                    "text": {"value": "text the guardrails never saw"},
+                    "text": {
+                        "value": "text the guardrails never saw",
+                        "source": {"s3Location": {"uri": "s3://bucket/unscanned.txt"}},
+                        "segmentationConfig": {"maxLengthChars": 500},
+                    },
+                    "image": {"detailLevel": "STANDARD_IMAGE"},
                     "extraOption": {"enabled": True},
                 }
             }
@@ -2354,6 +2359,9 @@ def test_bedrock_async_nova_embedding_uses_extra_body_params_under_model_input(
     assert params["embeddingDimension"] == 256
     assert params["extraOption"] == {"enabled": True}
     assert params["text"]["value"] == test_input
+    assert params["text"]["segmentationConfig"] == {"maxLengthChars": 500}
+    assert "source" not in params["text"]
+    assert "image" not in params
     assert body["outputDataConfig"] == {"s3OutputDataConfig": {"s3Uri": "s3://test-bucket/out/"}}
 
 
