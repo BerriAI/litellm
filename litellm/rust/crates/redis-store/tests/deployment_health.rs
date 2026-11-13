@@ -5,28 +5,33 @@ use std::{
     time::Duration,
 };
 
-use litellm_python_compat::Value;
 use litellm_redis_client::{Ttl, commands};
-use litellm_redis_store::{Clock, deployment_health::DeploymentHealth};
+use litellm_redis_store::{
+    Clock, Number,
+    deployment_health::{DeploymentHealth, HealthState, HealthStates},
+};
 use litellm_redis_testing::{RedisDeployment, Topology};
 use rstest::rstest;
 use support::{connect, remote, within};
 
 const STATES_KEY: &str = "litellm:health_check:deployment_health_state";
 
-fn states() -> Value {
+fn states() -> HealthStates {
     states_because("timeout")
 }
 
-fn states_because(reason: &str) -> Value {
-    let text = |text: &str| Value::Str(text.to_owned());
-    Value::Dict(vec![(
-        text("dep-a"),
-        Value::Dict(vec![
-            (text("is_healthy"), Value::Bool(false)),
-            (text("timestamp"), Value::Float(1.5)),
-            (text("reason"), text(reason)),
-        ]),
+fn states_because(reason: &str) -> HealthStates {
+    one("dep-a", false, Number::Float(1.5), reason)
+}
+
+fn one(id: &str, is_healthy: bool, timestamp: Number, reason: &str) -> HealthStates {
+    HealthStates(vec![(
+        id.to_owned(),
+        HealthState {
+            is_healthy,
+            timestamp,
+            reason: reason.to_owned(),
+        },
     )])
 }
 
@@ -103,5 +108,71 @@ async fn a_snapshot_read_from_redis_is_read_again_once_the_configured_memory_ttl
             Some(states()),
             Some(states_because("rate limited"))
         )
+    );
+}
+
+#[rstest]
+#[case::extra_fields_are_ignored(
+    "{'dep-a': {'is_healthy': False, 'timestamp': 1.5, 'reason': 'timeout', 'region': 'eu'}}",
+    one("dep-a", false, Number::Float(1.5), "timeout")
+)]
+#[case::a_falsy_flag_is_unhealthy(
+    "{'dep-a': {'is_healthy': 0, 'timestamp': 95, 'reason': 'timeout'}}",
+    one("dep-a", false, Number::Int(95), "timeout")
+)]
+#[case::a_missing_flag_is_healthy(
+    "{'dep-a': {'timestamp': 1.5}}",
+    one("dep-a", true, Number::Float(1.5), "")
+)]
+#[case::a_timestamp_that_is_no_number_is_stale(
+    "{'dep-a': {'is_healthy': False, 'timestamp': 'soon', 'reason': 'timeout'}}",
+    one("dep-a", false, Number::Float(0.0), "timeout")
+)]
+#[case::a_bool_timestamp_is_no_number(
+    "{'dep-a': {'is_healthy': False, 'timestamp': True, 'reason': 'timeout'}}",
+    one("dep-a", false, Number::Float(0.0), "timeout")
+)]
+#[case::what_is_no_record_is_dropped_alone(
+    "{'dep-a': 'not a record', 'dep-b': None, 'dep-c': {'is_healthy': False, 'timestamp': 1.5, 'reason': 'timeout'}}",
+    one("dep-c", false, Number::Float(1.5), "timeout")
+)]
+#[tokio::test]
+async fn a_record_another_writer_left_is_read_the_way_mains_readers_read_it(
+    #[case] written: &str,
+    #[case] read: HealthStates,
+    #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
+) {
+    let deployment = RedisDeployment::start(topology).await.unwrap();
+    let raw = connect(&deployment);
+    let reader = DeploymentHealth::new(Some(remote(connect(&deployment))), None);
+    raw.send(commands::set(STATES_KEY, written, Duration::from_secs(90)))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (reader.get_shared().await, reader.get().await.unwrap()),
+        (Some(read.clone()), Some(read))
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn an_entry_that_is_no_dict_reads_as_nothing_shared(
+    #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
+) {
+    let deployment = RedisDeployment::start(topology).await.unwrap();
+    let raw = connect(&deployment);
+    let reader = DeploymentHealth::new(Some(remote(connect(&deployment))), None);
+    raw.send(commands::set(
+        STATES_KEY,
+        "['dep-a']",
+        Duration::from_secs(90),
+    ))
+    .await
+    .unwrap();
+
+    assert_eq!(
+        (reader.get_shared().await, reader.get().await.unwrap()),
+        (None, None)
     );
 }

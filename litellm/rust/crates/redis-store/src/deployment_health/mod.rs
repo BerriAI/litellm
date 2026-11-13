@@ -1,10 +1,11 @@
 mod keys;
+mod types;
 
 use std::{sync::Arc, time::Duration};
 
-use litellm_python_compat::Value;
 use litellm_redis_client::commands;
 
+pub use self::types::{HealthState, HealthStates};
 use crate::{
     Error, codec,
     dual_cache::{DualCache, MemorySettings},
@@ -16,7 +17,7 @@ use crate::{
 /// router's `DualCache`: memory per worker, Redis shared by every pod. The writer's merge and the
 /// readers' staleness rules stay with the host.
 pub struct DeploymentHealth {
-    states: DualCache<Value>,
+    states: DualCache<HealthStates>,
 }
 
 impl DeploymentHealth {
@@ -51,13 +52,13 @@ impl DeploymentHealth {
     }
 
     /// `DualCache.get_cache`: memory, else Redis written back to memory.
-    pub async fn get(&self) -> Result<Option<Value>, Error> {
+    pub async fn get(&self) -> Result<Option<HealthStates>, Error> {
         self.states.get(None, keys::STATES, None).await
     }
 
     /// `redis_cache.get_cache`, what every pod merged so far. No Redis, a failed read and an open
     /// breaker all read as `None`.
-    pub async fn get_shared(&self) -> Option<Value> {
+    pub async fn get_shared(&self) -> Option<HealthStates> {
         let client = self.states.redis().client()?;
         client
             .send(commands::get::<Vec<u8>>(keys::STATES))
@@ -71,7 +72,7 @@ impl DeploymentHealth {
     }
 
     /// `DualCache.set_cache`, whose sync `RedisCache.set_cache` writes `str(value)`.
-    pub async fn set(&self, states: Value, ttl: Duration) -> Result<(), Error> {
+    pub async fn set(&self, states: HealthStates, ttl: Duration) -> Result<(), Error> {
         self.states.set_str(keys::STATES, states, Some(ttl)).await
     }
 }
