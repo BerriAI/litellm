@@ -546,6 +546,13 @@ class LiteLLMRoutes(enum.Enum):
     # The handlers in agent_endpoints/endpoints.py enforce proxy-admin on writes and
     # scope reads by role, so these also appear in self_managed_routes.
     agent_management_routes = (
+        "/v1/external_cloud_agents/sources",
+        "/v1/external_cloud_agents/sources/{source_id}/connection",
+        "/v1/external_cloud_agents/sources/{source_id}",
+        "/v1/external_cloud_agents/sources/{source_id}/admin_api_key",
+        "/v1/external_cloud_agents/sources/{source_id}/sync_spend",
+        "/v1/external_cloud_agents/agents",
+        "/v1/external_cloud_agents/spend",
         "/v1/agents",
         "/v1/agents/{agent_id}",
         "/v1/agents/make_public",
