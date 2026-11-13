@@ -10772,6 +10772,61 @@ class TestFalAIPassthroughRoute:
             assert "no pricing entry" in response.text
             assert not route.calls
 
+    @pytest.mark.parametrize(
+        "path",
+        (
+            "/fal_ai/acme/x/requests/%2e%2e/%2e%2e/unit-billed-model",
+            "/fal_ai/acme/unit-billed-model/requests/%2e%2e",
+            "/fal_ai/acme/unit-billed-model%3Fa=/requests/x",
+            "/fal_ai/acme/unit-billed-model%23/requests/x",
+        ),
+    )
+    def test_submit_gate_prices_the_upstream_path_not_the_spelling_of_the_request_path(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, path: str
+    ) -> None:
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "fal_ai/acme/unit-billed-model",
+            {"litellm_provider": "fal_ai", "mode": "image_generation", "output_cost_per_billable_unit": 1.0},
+        )
+        with respx.mock(assert_all_called=False) as upstream:
+            route: Final = upstream.post("https://queue.fal.run/acme/unit-billed-model").mock(
+                return_value=httpx.Response(200, json={"request_id": "req-1"})
+            )
+            response: Final = client.post(path, json={"prompt": "a red boat"})
+
+            assert response.status_code == 400, response.text
+            assert "no pricing entry" in response.text
+            assert not route.calls
+
+    def test_submit_gate_strips_the_queue_base_path_before_pricing(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("FAL_AI_QUEUE_API_BASE", "https://queue.example/base")
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "fal_ai/acme/unit-billed-model",
+            {"litellm_provider": "fal_ai", "mode": "image_generation", "output_cost_per_billable_unit": 1.0},
+        )
+        with respx.mock(assert_all_called=False) as upstream:
+            priced_route: Final = upstream.post("https://queue.example/base/fal-ai/trellis-2").mock(
+                return_value=httpx.Response(200, json={"request_id": "req-1"})
+            )
+            unit_billed_route: Final = upstream.post("https://queue.example/base/acme/unit-billed-model").mock(
+                return_value=httpx.Response(200, json={"request_id": "req-2"})
+            )
+            priced: Final = client.post(
+                "/fal_ai/fal-ai/trellis-2", json={"image_url": "https://example.com/in.png", "resolution": 1536}
+            )
+            unit_billed: Final = client.post(
+                "/fal_ai/acme/x/requests/%2e%2e/%2e%2e/unit-billed-model", json={"prompt": "a red boat"}
+            )
+
+            assert priced.status_code == 200, priced.text
+            assert unit_billed.status_code == 400, unit_billed.text
+            assert len(priced_route.calls) == 1
+            assert not unit_billed_route.calls
+
     def test_submit_gate_prices_the_request_body_not_an_empty_one(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:

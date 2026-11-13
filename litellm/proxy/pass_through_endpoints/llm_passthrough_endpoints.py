@@ -589,6 +589,12 @@ def _fal_target(endpoint: str) -> httpx.URL:
     )
 
 
+def _fal_upstream_endpoint(target: httpx.URL) -> str:
+    base_path: Final = httpx.URL(fal_ai_queue_base()).path.strip("/")
+    upstream_path: Final = target.path.lstrip("/")
+    return upstream_path.removeprefix(f"{base_path}/") if base_path else upstream_path
+
+
 @router.api_route(
     "/fal_ai/{endpoint:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
@@ -610,10 +616,14 @@ async def fal_ai_proxy_route(
             status_code=401,
             detail="FAL_AI_API_KEY is not set and no fal_ai pass-through deployment credentials are configured",
         )
-    if "/requests/" not in endpoint and fal_ai_passthrough_cost(endpoint, await read_request_body(request)) is None:
+    upstream_endpoint: Final = _fal_upstream_endpoint(updated_url)
+    if (
+        "/requests/" not in upstream_endpoint
+        and fal_ai_passthrough_cost(upstream_endpoint, await read_request_body(request)) is None
+    ):
         raise HTTPException(
             status_code=400,
-            detail=f"fal_ai/{endpoint} has no pricing entry for this request; only priced Fal requests can be submitted through /fal_ai",
+            detail=f"fal_ai/{upstream_endpoint} has no pricing entry for this request; only priced Fal requests can be submitted through /fal_ai",
         )
     endpoint_func: Final = create_pass_through_route(
         endpoint=endpoint,
