@@ -959,3 +959,73 @@ async def test_responses_websocket_turn_failure_reports_the_deployment_it_was_se
 
     assert failure is not None
     _assert_names_the_azure_deployment(failure, reported_api_base)
+
+
+_BEDROCK_SERVICE_UNAVAILABLE_CHUNK: Final = {
+    "error": {
+        "message": "The server had an error while processing your request. Sorry about that!",
+        "type": "server_error",
+        "code": "service_unavailable",
+    }
+}
+
+
+def _real_config_iterator(provider: str, model: str, events: tuple[Mapping[str, object], ...]):
+    payload: Final = b"".join(b"data: " + json.dumps(event).encode() + b"\n\n" for event in events)
+
+    async def aiter_bytes():
+        yield payload
+
+    response: Final = Mock()
+    response.headers = {}
+    response.aiter_bytes = aiter_bytes
+    logging_obj: Final = Mock(spec=LiteLLMLoggingObj)
+    logging_obj.model_call_details = {"litellm_params": {}}
+    logging_obj.completion_start_time = None
+    config: Final = ProviderConfigManager.get_provider_responses_api_config(
+        provider=litellm.LlmProviders(provider), model=model
+    )
+    assert config is not None
+    return ResponsesAPIStreamingIterator(
+        response=response,
+        model=model,
+        responses_api_provider_config=config,
+        logging_obj=logging_obj,
+        custom_llm_provider=provider,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider", "model"),
+    [
+        ("bedrock", "us.openai.gpt-5.6-sol"),
+        ("openai", "gpt-5.5"),
+        ("volcengine", "doubao-seed-1-6"),
+        ("bigmodel", "glm-5"),
+    ],
+)
+async def test_untyped_mid_stream_error_chunk_raises_the_upstream_error(provider: str, model: str):
+    iterator: Final = _real_config_iterator(
+        provider,
+        model,
+        (
+            {
+                "type": "response.output_text.delta",
+                "item_id": "msg_1",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "partial ",
+                "sequence_number": 1,
+            },
+            _BEDROCK_SERVICE_UNAVAILABLE_CHUNK,
+        ),
+    )
+    stream: Final = aiter(iterator)
+    assert (await anext(stream)).type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA
+
+    with pytest.raises(MidStreamFallbackError) as exc_info:
+        await anext(stream)
+    assert "The server had an error while processing your request" in str(exc_info.value.original_exception)
+    assert exc_info.value.status_code >= 500
+    assert exc_info.value.generated_content == "partial "

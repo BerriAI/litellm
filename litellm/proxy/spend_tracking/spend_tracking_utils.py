@@ -1,12 +1,13 @@
+import asyncio
 import ipaddress
 import json
 import os
 import re
 import secrets
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from datetime import datetime as dt
-from functools import reduce
+from functools import partial, reduce
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, cast, runtime_checkable
 
@@ -37,7 +38,7 @@ from litellm.constants import (
     MAX_STRING_LENGTH_PROMPT_IN_DB as DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB,
 )
 from litellm.integrations.otel.model.metadata import caller_session_id
-from litellm.integrations.otel.model.trace_controls import TraceControls
+from litellm.integrations.otel.model.trace_controls import TraceControls, caller_trace_controls
 from litellm.litellm_core_utils.batch_utils import (
     BATCH_COST_REQUEST_ID_SUFFIX,
     charged_poll_cost,
@@ -50,6 +51,7 @@ from litellm.litellm_core_utils.classifier_logging import (
     without_classifier_audit,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
     get_litellm_metadata_from_kwargs,
     proxy_stamped_kubernetes_pod_routing,
     proxy_stamped_used_client_oauth_token,
@@ -71,6 +73,7 @@ from litellm.litellm_core_utils.litellm_logging import (
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
 from litellm.litellm_core_utils.ptu_pricing import azure_spillover
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, strip_null_bytes
+from litellm.litellm_core_utils.secret_redaction import redact_tokens
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.llms.anthropic.common_utils import resolve_used_client_oauth_token
 from litellm.proxy._types import (
@@ -87,6 +90,7 @@ from litellm.responses.litellm_completion_transformation.compaction_items import
     summary_only_compaction_content,
     with_compaction_summary,
 )
+from litellm.secret_managers.main import str_to_bool
 from litellm.types.router import DeploymentTypedDict, LiteLLM_Params, SilentExperimentFlag
 from litellm.types.utils import (
     PROMPT_CARRYING_GUARDRAIL_FIELDS,
@@ -111,6 +115,12 @@ from litellm.utils import get_end_user_id_for_cost_tracking
 
 if TYPE_CHECKING:
     from litellm.router import Router
+
+
+_TENANT_PROMPT_STORAGE_FIELDS: Final = ("user_api_key_metadata", "user_api_key_team_metadata")
+_SPEND_LOGS_PRIVACY_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(
+    Mapping[str, object] | None
+)
 
 
 def _get_max_string_length_prompt_in_db() -> int:
@@ -336,9 +346,11 @@ def _get_spend_logs_metadata(
     clean_metadata["batch_failed_requests"] = batch_failed_requests
     clean_metadata["mcp_tool_call_metadata"] = mcp_tool_call_metadata
     clean_metadata["vector_store_request_metadata"] = _get_vector_store_request_for_spend_logs_payload(
-        vector_store_request_metadata
+        vector_store_request_metadata, metadata=_SPEND_LOGS_PRIVACY_METADATA_ADAPTER.validate_python(metadata)
     )
-    clean_metadata["guardrail_information"] = _sanitize_guardrail_information_for_spend_logs(guardrail_information)
+    clean_metadata["guardrail_information"] = _sanitize_guardrail_information_for_spend_logs(
+        guardrail_information, metadata=_SPEND_LOGS_PRIVACY_METADATA_ADAPTER.validate_python(metadata)
+    )
     clean_metadata["usage_object"] = usage_object
     clean_metadata["model_map_information"] = model_map_information
     clean_metadata["cold_storage_object_key"] = cold_storage_object_key
@@ -597,6 +609,45 @@ def _scrub_raw_model_from_error_information(
             for key, value in error_information.items()
         },
     )
+
+
+def _spend_log_worker_kwargs(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    params: Final = as_str_mapping(kwargs.get("litellm_params"))
+    if params is None:
+        return kwargs
+    metadata: Final = as_str_mapping(params.get("litellm_metadata"))
+    return {
+        **kwargs,
+        "litellm_params": {
+            **params,
+            **({"litellm_metadata": dict(metadata)} if metadata is not None else {}),
+        },
+    }
+
+
+async def get_logging_payload_async(
+    kwargs: Mapping[str, object] | None,
+    response_obj: object,
+    start_time: datetime,
+    end_time: datetime,
+    llm_router: "Router | None" = None,
+    run_in_thread: Callable[[Callable[[], SpendLogsPayload]], Awaitable[SpendLogsPayload]] = asyncio.to_thread,
+) -> SpendLogsPayload:
+    from litellm.proxy.proxy_server import general_settings_view
+
+    call_kwargs: Final[Mapping[str, object]] = kwargs if kwargs is not None else MappingProxyType({})
+    offload: Final = general_settings_view().get("redact_tokens_in_spend_logs") is not False
+    build: Final = partial(
+        get_logging_payload,
+        kwargs=dict(_spend_log_worker_kwargs(call_kwargs)) if offload else dict(call_kwargs),
+        response_obj=response_obj,
+        start_time=start_time,
+        end_time=end_time,
+        llm_router=llm_router,
+    )
+    if offload:
+        return await run_in_thread(build)
+    return build()
 
 
 def get_logging_payload(
@@ -906,7 +957,9 @@ def get_logging_payload(
     if drop_requester_ip_address:
         clean_metadata["requester_ip_address"] = None
     clean_metadata["error_information"] = sanitize_error_information_for_spend_logs(
-        clean_metadata["error_information"], original_exception=failure_exception
+        clean_metadata["error_information"],
+        original_exception=failure_exception,
+        metadata=_SPEND_LOGS_PRIVACY_METADATA_ADAPTER.validate_python(metadata),
     )
 
     if litellm.cache is None:
@@ -1038,12 +1091,31 @@ def _get_batch_trace_session_id(call_type: str | None, request_id: str | None) -
     return request_id.removesuffix(BATCH_COST_REQUEST_ID_SUFFIX)
 
 
-def _caller_session_for_spend_log(kwargs: Mapping[str, object], metadata: Mapping[str, object] | None) -> str | None:
+def caller_session_for_accounting(kwargs: Mapping[str, object]) -> str | None:
+    params: Final = as_str_mapping(kwargs.get("litellm_params")) or MappingProxyType({})
+    preserved: Final = next(
+        (
+            session
+            for key in ("litellm_metadata", "metadata")
+            if isinstance(session := (as_str_mapping(params.get(key)) or {}).get(CALLER_SESSION_ID_METADATA_KEY), str)
+        ),
+        None,
+    )
+    return _caller_session_for_spend_log(
+        kwargs,
+        MappingProxyType({CALLER_SESSION_ID_METADATA_KEY: preserved}) if preserved else None,
+        trace=caller_trace_controls(kwargs),
+    )
+
+
+def _caller_session_for_spend_log(
+    kwargs: Mapping[str, object], metadata: Mapping[str, object] | None, trace: TraceControls | None = None
+) -> str | None:
     beside_trace_header: Final = metadata.get(CALLER_SESSION_ID_METADATA_KEY) if metadata else None
     caller_session: Final = (
         beside_trace_header
         if isinstance(beside_trace_header, str) and beside_trace_header
-        else caller_session_id(kwargs, TraceControls())
+        else caller_session_id(kwargs, trace or TraceControls())
     )
     return caller_session if caller_session and "\x00" not in caller_session else None
 
@@ -1248,14 +1320,14 @@ def _get_messages_for_spend_logs_payload(
     standard_logging_payload: StandardLoggingPayload | None,
     metadata: dict | None = None,
 ) -> str:
-    if should_store_prompts_and_responses_in_spend_logs():
+    if should_store_prompts_and_responses_in_spend_logs(_SPEND_LOGS_PRIVACY_METADATA_ADAPTER.validate_python(metadata)):
         if standard_logging_payload is not None:
             call_type: Final = standard_logging_payload.get("call_type", "")
             if call_type == "_arealtime":
                 messages: Final = standard_logging_payload.get("messages")
                 if messages is not None:
                     try:
-                        return safe_dumps(messages, non_finite_as_null=True)
+                        return _without_tokens(safe_dumps(messages, non_finite_as_null=True))
                     except Exception:
                         return "{}"
     return "{}"
@@ -1291,8 +1363,8 @@ def stores_latest_turn_only() -> bool:
     return general_settings_view().get("spend_logs_prompt_storage") == _LATEST_TURN_STORAGE
 
 
-def stores_full_prompts_in_spend_logs() -> bool:
-    return should_store_prompts_and_responses_in_spend_logs() and not stores_latest_turn_only()
+def stores_full_prompts_in_spend_logs(metadata: Mapping[str, object] | None = None) -> bool:
+    return should_store_prompts_and_responses_in_spend_logs(metadata) and not stores_latest_turn_only()
 
 
 def _block_type(block: object) -> str | None:
@@ -1428,6 +1500,14 @@ def _is_spend_log_content(parent: Mapping[str, object], key: str) -> bool:
     )
 
 
+def _without_tokens(value: str) -> str:
+    from litellm.proxy.proxy_server import general_settings_view
+
+    if general_settings_view().get("redact_tokens_in_spend_logs") is False:
+        return value
+    return redact_tokens(strip_null_bytes(value), REDACTED_BY_LITELM_STRING)
+
+
 def _truncated_for_db(value: str, max_length: int) -> str:
     if len(value) <= max_length:
         return value
@@ -1443,7 +1523,7 @@ def _truncated_for_db(value: str, max_length: int) -> str:
 
 def _compaction_summary_for_db(summary: str) -> str:
     return _truncated_for_db(
-        summary, max(_get_max_string_length_prompt_in_db(), MAX_STRING_LENGTH_COMPACTION_SUMMARY_IN_DB)
+        _without_tokens(summary), max(_get_max_string_length_prompt_in_db(), MAX_STRING_LENGTH_COMPACTION_SUMMARY_IN_DB)
     )
 
 
@@ -1472,7 +1552,7 @@ def _sanitize_request_body_for_spend_logs_payload(
     At every nesting level, also strips keys listed in _SENSITIVE_REQUEST_BODY_KEYS (e.g. secret_fields,
     which holds raw HTTP headers including Authorization tokens), and replaces string values under keys
     SensitiveDataMasker classifies as credentials with REDACTED_BY_LITELM_STRING, except inside tool payloads
-    and logprobs.
+    and logprobs. Token-shaped substrings (e.g. a GitHub token in a tool result) are masked everywhere.
     """
     if visited is None:
         visited = set()
@@ -1493,7 +1573,7 @@ def _sanitize_request_body_for_spend_logs_payload(
         elif isinstance(value, list):
             return [_sanitize_value(item, mask_credentials) for item in value]
         elif isinstance(value, str):
-            return _truncated_for_db(value, max_string_length_prompt_in_db)
+            return _truncated_for_db(_without_tokens(value), max_string_length_prompt_in_db)
         return value
 
     def _stored_value(key: str, value: object) -> object:
@@ -1651,6 +1731,7 @@ def _redact_prompt_leaks_in_error_string(text: str) -> str:
 
 def _sanitize_guardrail_information_for_spend_logs(
     guardrail_information: list[StandardLoggingGuardrailInformation] | None,
+    metadata: Mapping[str, object] | None = None,
 ) -> list[StandardLoggingGuardrailInformation] | None:
     """
     When ``store_prompts_in_spend_logs`` is False, redact prompt-carrying fields
@@ -1671,7 +1752,7 @@ def _sanitize_guardrail_information_for_spend_logs(
     here to match OTEL's defensive read pattern; otherwise iteration would
     yield the dict's keys and crash the whole spend-log write.
     """
-    if guardrail_information is None or stores_full_prompts_in_spend_logs():
+    if guardrail_information is None or stores_full_prompts_in_spend_logs(metadata):
         return guardrail_information
     entries: Final = [guardrail_information] if isinstance(guardrail_information, dict) else guardrail_information
     return [_redact_prompt_fields_in_guardrail_entry(entry) for entry in entries if isinstance(entry, dict)]
@@ -1721,6 +1802,7 @@ def _redact_prompt_fields_in_guardrail_entry(
 def sanitize_error_information_for_spend_logs(
     error_information: StandardLoggingPayloadErrorInformation | None,
     original_exception: BaseException | None = None,
+    metadata: Mapping[str, object] | None = None,
 ) -> StandardLoggingPayloadErrorInformation | None:
     """
     Sanitize ``error_information`` before it lands in ``LiteLLM_SpendLogs.metadata``.
@@ -1749,7 +1831,7 @@ def sanitize_error_information_for_spend_logs(
     )
     sanitized = cast(dict, {**persisted})
 
-    if not stores_full_prompts_in_spend_logs():
+    if not stores_full_prompts_in_spend_logs(metadata):
         for field in ("error_message", "traceback"):
             value = sanitized.get(field)
             if isinstance(value, str):
@@ -2057,7 +2139,7 @@ def _get_proxy_server_request_for_spend_logs_payload(
 
     If turn_off_message_logging is enabled, redact messages in the request body.
     """
-    if should_store_prompts_and_responses_in_spend_logs():
+    if should_store_prompts_and_responses_in_spend_logs(_SPEND_LOGS_PRIVACY_METADATA_ADAPTER.validate_python(metadata)):
         _proxy_server_request: Final = cast(dict | None, litellm_params.get("proxy_server_request", EMPTY_MAPPING))
         if _proxy_server_request is not None:
             _request_body = _proxy_server_request.get("body", EMPTY_MAPPING) or EMPTY_MAPPING
@@ -2098,11 +2180,12 @@ def _get_proxy_server_request_for_spend_logs_payload(
 
 def _get_vector_store_request_for_spend_logs_payload(
     vector_store_request_metadata: list[StandardLoggingVectorStoreRequest] | None,
+    metadata: Mapping[str, object] | None = None,
 ) -> list[StandardLoggingVectorStoreRequest] | None:
     """
     If user does not want to store prompts and responses, then remove the content from the vector store request metadata
     """
-    if stores_full_prompts_in_spend_logs():
+    if stores_full_prompts_in_spend_logs(metadata):
         return vector_store_request_metadata
 
     if vector_store_request_metadata is None:
@@ -2136,7 +2219,9 @@ def _get_response_for_spend_logs_payload(
 ) -> str:
     if payload is None:
         return "{}"
-    if should_store_prompts_and_responses_in_spend_logs():
+    if should_store_prompts_and_responses_in_spend_logs(
+        _SPEND_LOGS_PRIVACY_METADATA_ADAPTER.validate_python(get_litellm_metadata_from_kwargs(kwargs or {}))
+    ):
         response_obj: object = payload.get("response")
         if response_obj is None:
             return "{}"
@@ -2186,9 +2271,26 @@ def _get_response_for_spend_logs_payload(
     return "{}"
 
 
-def should_store_prompts_and_responses_in_spend_logs() -> bool:
+def _disables_prompt_storage(tenant_metadata: object) -> bool:
+    settings: Final = as_str_mapping(tenant_metadata)
+    value: Final = settings.get("store_prompts_in_spend_logs") if settings is not None else None
+    return value is False or (isinstance(value, str) and str_to_bool(value) is False)
+
+
+def should_store_prompts_for_call(kwargs: Mapping[str, object]) -> bool:
+    return should_store_prompts_and_responses_in_spend_logs(
+        _SPEND_LOGS_PRIVACY_METADATA_ADAPTER.validate_python(get_litellm_metadata_from_kwargs(dict(kwargs)))
+    )
+
+
+def should_store_prompts_and_responses_in_spend_logs(metadata: Mapping[str, object] | None = None) -> bool:
     from litellm.proxy.proxy_server import general_settings
     from litellm.secret_managers.main import get_secret_bool
+
+    if metadata is not None and any(
+        _disables_prompt_storage(metadata.get(field)) for field in _TENANT_PROMPT_STORAGE_FIELDS
+    ):
+        return False
 
     # Check general_settings (from DB or proxy_config.yaml)
     store_prompts_value: Final = general_settings.get("store_prompts_in_spend_logs")

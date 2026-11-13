@@ -15,7 +15,6 @@ litellm/proxy/auth/auth_checks.py _fetch_uncached_model_access_group_budgets pri
 litellm/proxy/auth/auth_checks.py _fetch_uncached_tags prisma tag_name.in `list(tags_to_fetch)` 0
 litellm/proxy/auth/auth_checks.py get_jwt_key_mapping_cache_keys_for_tokens prisma token.in `tuple(hashed_tokens)` 0
 litellm/proxy/auth/auth_checks.py get_managed_vector_store_rows_by_uuids prisma vector_store_id.in `cache_misses` 0
-litellm/proxy/common_utils/reset_budget_job.py _budget_link_where prisma budget_id.in `list(budget_ids)` 0
 litellm/proxy/container_endpoints/ownership.py _get_allowed_container_ids prisma created_by.in `owner_scopes` 0
 litellm/proxy/db/tool_registry_writer.py get_tools_by_names prisma tool_name.in `tool_names` 0
 litellm/proxy/guardrails/guardrail_endpoints.py list_guardrail_submissions prisma team_id.in `visible_team_ids` 0

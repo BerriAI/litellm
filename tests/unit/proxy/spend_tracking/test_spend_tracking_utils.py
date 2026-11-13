@@ -1,13 +1,16 @@
 import asyncio
 import datetime
 import json
+import threading
 from collections.abc import Callable, Mapping
+from copy import deepcopy
 from datetime import timezone
 from types import MappingProxyType
 from typing import Any, Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import Request
 from pydantic import TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
@@ -32,10 +35,14 @@ from litellm.constants import (
     MANAGED_BACKGROUND_RESPONSE_METADATA_KEY,
 )
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.ocr.transformation import OCRResponse, OCRUsageInfo
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsMetadataFields, SpendLogsPayload, UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import get_passthrough_router_request_metadata
+from litellm.proxy.pass_through_endpoints.pass_through_endpoints import HttpPassThroughEndpointHelpers
+from litellm.types.passthrough_endpoints.pass_through_endpoints import PassthroughStandardLoggingPayload
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _extract_usage_for_ocr_call,
@@ -55,6 +62,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _scrub_raw_model_from_error_information,
     configured_spend_logs_metadata_fields,
     get_logging_payload,
+    get_logging_payload_async,
     get_spend_logs_id,
     _stored_request_without_requester_ip_address,
     requester_ip_address_logging_disabled,
@@ -209,6 +217,178 @@ def test_classifier_audit_spend_storage_obeys_privacy_and_truncation(monkeypatch
         assert stored["originating_request_masked"]["input"] == "source-only"
         assert stored["model"] == "classifier"
         assert audit["classifier_input"]["system"] == "rubric" * 1000
+
+
+_TENANT_PROMPT: Final = "tenant-private-prompt"
+_TENANT_RESPONSE: Final = "tenant-private-response"
+
+
+def _tenant_settings(setting: bool | str | None) -> dict[str, object]:
+    return {} if setting is None else {"store_prompts_in_spend_logs": setting}
+
+
+def _spend_log_for(litellm_params: Mapping[str, object]) -> tuple[SpendLogsPayload, dict[str, object]]:
+    now: Final = datetime.datetime(2026, 1, 1, tzinfo=timezone.utc)
+    messages: Final = [{"role": "user", "content": _TENANT_PROMPT}]
+    kwargs: Final[dict[str, object]] = {
+        "model": "gpt-4o-mini",
+        "litellm_params": {**litellm_params, "proxy_server_request": {"body": {"messages": messages}}},
+        "standard_logging_object": {
+            "call_type": "_arealtime",
+            "model_map_information": None,
+            "messages": messages,
+            "response": {"choices": [{"message": {"content": _TENANT_RESPONSE}}]},
+            "metadata": {},
+        },
+    }
+    response: Final = litellm.ModelResponse(
+        id="tenant-storage",
+        choices=[{"message": {"role": "assistant", "content": _TENANT_RESPONSE}}],
+        usage=litellm.Usage(prompt_tokens=3, completion_tokens=2, total_tokens=5),
+    )
+    return get_logging_payload(kwargs=kwargs, response_obj=response, start_time=now, end_time=now), kwargs
+
+
+def _stores_tenant_content(payload: SpendLogsPayload) -> tuple[bool, bool, bool]:
+    return (
+        _TENANT_PROMPT in payload["messages"],
+        _TENANT_PROMPT in payload["proxy_server_request"],
+        _TENANT_RESPONSE in payload["response"],
+    )
+
+
+@pytest.mark.parametrize("storage_mode", [None, "latest_turn"])
+@pytest.mark.parametrize(
+    ("key_setting", "team_setting", "global_store", "stored"),
+    [
+        (False, None, True, False),
+        (None, False, True, False),
+        (True, False, True, False),
+        (False, True, True, False),
+        (None, "false", True, False),
+        (None, None, True, True),
+        (True, True, True, True),
+        (True, True, False, False),
+    ],
+)
+def test_tenant_prompt_storage_policy_decides_what_spend_logs_keep(
+    monkeypatch: pytest.MonkeyPatch,
+    key_setting: bool | str | None,
+    team_setting: bool | str | None,
+    global_store: bool,
+    stored: bool,
+    storage_mode: str | None,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(
+        proxy_server,
+        "general_settings",
+        {"store_prompts_in_spend_logs": global_store, "spend_logs_prompt_storage": storage_mode},
+    )
+    monkeypatch.delenv("STORE_PROMPTS_IN_SPEND_LOGS", raising=False)
+    payload, kwargs = _spend_log_for(
+        {
+            "metadata": {
+                "user_api_key_metadata": _tenant_settings(key_setting),
+                "user_api_key_team_metadata": _tenant_settings(team_setting),
+                "store_prompts_in_spend_logs": True,
+                "headers": {"litellm-disable-message-redaction": "true"},
+            }
+        }
+    )
+    assert _stores_tenant_content(payload) == (stored, stored, stored)
+    assert kwargs["standard_logging_object"]["messages"] == [{"role": "user", "content": _TENANT_PROMPT}]
+    assert kwargs["standard_logging_object"]["response"] == {"choices": [{"message": {"content": _TENANT_RESPONSE}}]}
+
+
+def _passthrough_logging_params(auth: UserAPIKeyAuth, request: Request) -> Mapping[str, object]:
+    context: Final = HttpPassThroughEndpointHelpers.init_kwargs_for_pass_through_endpoint(
+        request=request,
+        user_api_key_dict=auth,
+        passthrough_logging_payload=PassthroughStandardLoggingPayload(url="https://api.openai.com/v1/chat/completions"),
+        logging_obj=LiteLLMLoggingObj(
+            model="test-model",
+            messages=[],
+            stream=False,
+            call_type="pass_through_endpoint",
+            start_time=datetime.datetime(2026, 1, 1, tzinfo=timezone.utc),
+            litellm_call_id="tenant-storage",
+            function_id="tenant-storage",
+        ),
+        _parsed_body={
+            "messages": [{"role": "user", "content": _TENANT_PROMPT}],
+            "metadata": {
+                "user_api_key_metadata": {"store_prompts_in_spend_logs": True},
+                "user_api_key_team_metadata": {"store_prompts_in_spend_logs": True},
+            },
+        },
+    )
+    return TypeAdapter[Mapping[str, object]](Mapping[str, object]).validate_python(context["litellm_params"])
+
+
+def _router_passthrough_logging_params(auth: UserAPIKeyAuth, request: Request) -> Mapping[str, object]:
+    return {"litellm_metadata": dict(get_passthrough_router_request_metadata(auth, request))}
+
+
+@pytest.mark.parametrize("logging_params_for", [_passthrough_logging_params, _router_passthrough_logging_params])
+@pytest.mark.parametrize(
+    ("key_setting", "team_setting", "stored"),
+    [(False, None, False), (None, False, False), (True, False, False), (None, None, True)],
+)
+def test_passthrough_spend_logs_follow_the_authenticated_tenant_storage_policy(
+    monkeypatch: pytest.MonkeyPatch,
+    logging_params_for: Callable[[UserAPIKeyAuth, Request], Mapping[str, object]],
+    key_setting: bool | None,
+    team_setting: bool | None,
+    stored: bool,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    monkeypatch.delenv("STORE_PROMPTS_IN_SPEND_LOGS", raising=False)
+    auth: Final = UserAPIKeyAuth(
+        api_key="test-storage-key", metadata=_tenant_settings(key_setting), team_metadata=_tenant_settings(team_setting)
+    )
+    request: Final = Request(
+        {"type": "http", "method": "POST", "path": "/openai/v1/chat/completions", "headers": [], "query_string": b""}
+    )
+    payload, _ = _spend_log_for(logging_params_for(auth, request))
+    assert _stores_tenant_content(payload) == (stored, stored, stored)
+
+
+@pytest.mark.parametrize("tenant_field", ["user_api_key_metadata", "user_api_key_team_metadata"])
+def test_tenant_prompt_restriction_redacts_ancillary_fields_without_mutating_callbacks(
+    monkeypatch: pytest.MonkeyPatch, tenant_field: str
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    metadata: Final = {tenant_field: {"store_prompts_in_spend_logs": False}}
+    guardrails: Final = [{"guardrail_name": "test", "guardrail_request": "private-guardrail"}]
+    vectors: Final = [
+        {"vector_store_search_response": {"data": [{"content": [{"text": "private-vector", "type": "text"}]}]}}
+    ]
+    error: Final = {
+        "error_message": 'bad request {"messages": [{"role": "user", "content": "private-error"}]}',
+        "error_class": "BadRequestError",
+    }
+    cleaned: Final = _get_spend_logs_metadata(
+        metadata=metadata, guardrail_information=guardrails, vector_store_request_metadata=vectors
+    )
+    assert "private-guardrail" not in json.dumps(cleaned["guardrail_information"])
+    assert "private-vector" not in json.dumps(cleaned["vector_store_request_metadata"])
+    assert guardrails == [{"guardrail_name": "test", "guardrail_request": "private-guardrail"}]
+    assert vectors[0]["vector_store_search_response"]["data"][0]["content"][0]["text"] == "private-vector"
+    assert "private-error" not in json.dumps(sanitize_error_information_for_spend_logs(error, metadata=metadata))
+    assert "private-error" in error["error_message"]
+
+
+def test_request_body_metadata_cannot_disable_spend_prompt_storage(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    assert should_store_prompts_and_responses_in_spend_logs({"store_prompts_in_spend_logs": False}) is True
 
 
 def test_get_logging_payload_maps_openai_cached_tokens_to_cache_read_input_tokens():
@@ -1433,6 +1613,228 @@ def test_get_response_for_spend_logs_payload_strips_null_bytes(mock_should_store
     response_json = _get_response_for_spend_logs_payload(payload)
     assert "\\u0000" not in response_json
     assert json.loads(response_json)["content"] == "answerhere"
+
+
+_GITHUB_TOKEN: Final = "ghp_" + "a1B2c3D4e5" * 3 + "F6g7H8"
+
+
+@pytest.mark.parametrize("prefix,serialized", (("\u2022", True), ("\u00e9", True), ("\U0001f600", True), ("\u2022", False)))
+def test_payload_masks_tokens_after_json_unicode_escapes(
+    monkeypatch: pytest.MonkeyPatch, prefix: str, serialized: bool
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    raw: Final = prefix + "ghp_" + "A" * 36
+    content: Final = json.dumps({"stdout": raw}) if serialized else raw
+    messages: Final = [{"role": "tool", "content": content}]
+    kwargs: Final[dict[str, object]] = {
+        "model": "gpt-4o-mini",
+        "litellm_params": {"proxy_server_request": {"body": {"messages": messages}}, "metadata": {}},
+        "standard_logging_object": {
+            "call_type": "_arealtime",
+            "model_map_information": None,
+            "metadata": {},
+            "messages": messages,
+            "response": {"content": content},
+        },
+    }
+    now: Final = datetime.datetime(2026, 1, 1, tzinfo=timezone.utc)
+    payload: Final = get_logging_payload(kwargs, litellm.ModelResponse(choices=[]), now, now)
+    masked_text: Final = prefix + "REDACTED_BY_LITELM"
+    masked: Final = json.dumps({"stdout": masked_text}) if serialized else masked_text
+
+    assert json.loads(payload["proxy_server_request"])["messages"] == [{"role": "tool", "content": masked}]
+    assert json.loads(payload["messages"]) == [{"role": "tool", "content": masked}]
+    assert json.loads(payload["response"]) == {"content": masked}
+    assert messages == [{"role": "tool", "content": content}]
+
+
+def test_payload_masks_tokens_joined_by_null_byte_removal(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    secret: Final = "ghp_\x00" + "A" * 36
+    messages: Final = [{"role": "tool", "content": secret}]
+    compaction: Final = {"type": "compaction", "content": secret}
+    kwargs: Final[dict[str, object]] = {
+        "model": "gpt-4o-mini",
+        "litellm_params": {
+            "proxy_server_request": {"body": {"messages": messages, "input": [compaction]}},
+            "metadata": {},
+        },
+        "standard_logging_object": {
+            "call_type": "_arealtime",
+            "model_map_information": None,
+            "metadata": {},
+            "messages": messages,
+            "response": {"content": secret, "output": [compaction]},
+        },
+    }
+    now: Final = datetime.datetime(2026, 1, 1, tzinfo=timezone.utc)
+    payload: Final = get_logging_payload(kwargs, litellm.ModelResponse(choices=[]), now, now)
+    masked_messages: Final = [{"role": "tool", "content": "REDACTED_BY_LITELM"}]
+    masked_compaction: Final = {"type": "compaction", "content": "REDACTED_BY_LITELM"}
+
+    assert json.loads(payload["proxy_server_request"]) == {"messages": masked_messages, "input": [masked_compaction]}
+    assert json.loads(payload["messages"]) == masked_messages
+    assert json.loads(payload["response"]) == {"content": "REDACTED_BY_LITELM", "output": [masked_compaction]}
+    assert messages == [{"role": "tool", "content": secret}]
+    assert compaction == {"type": "compaction", "content": secret}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("redact", (None, False, True))
+async def test_token_redaction_thread_and_inline_payloads_match(
+    monkeypatch: pytest.MonkeyPatch, redact: bool | None
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(
+        proxy_server,
+        "general_settings",
+        {"store_prompts_in_spend_logs": True, **({"redact_tokens_in_spend_logs": redact} if redact is not None else {})},
+    )
+    loop_thread: Final = threading.get_ident()
+    monkeypatch.setattr(litellm, "cache", litellm.Cache(type="local"))
+    worker_threads: Final[list[int]] = []
+    text: Final = f"TOKEN={_GITHUB_TOKEN} ordinary tool output"
+    body: Final = {"messages": [{"role": "tool", "content": text}]}
+    kwargs: Final[dict[str, object]] = {
+        "model": "gpt-4o-mini",
+        "litellm_trace_id": "trace-1",
+        "litellm_params": {
+            "proxy_server_request": {"body": body},
+            "metadata": {"user_api_key_alias": "key-alias"},
+            "litellm_metadata": {"session_id": "session-1"},
+        },
+    }
+    original: Final = deepcopy(kwargs)
+    response: Final = litellm.ModelResponse(id="chatcmpl-thread-test", choices=[])
+    now: Final = datetime.datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    async def run_in_thread(build: Callable[[], SpendLogsPayload]) -> SpendLogsPayload:
+        thread_id, payload = await asyncio.to_thread(lambda: (threading.get_ident(), build()))
+        worker_threads.append(thread_id)
+        return payload
+
+    payload: Final = await get_logging_payload_async(kwargs, response, now, now, run_in_thread=run_in_thread)
+    expected: Final = get_logging_payload(deepcopy(original), response, now, now)
+
+    assert payload == expected
+    assert redact is False or kwargs == original
+    assert (len(worker_threads) == 1) is (redact is not False)
+    assert all(thread_id != loop_thread for thread_id in worker_threads)
+    stored: Final = json.loads(payload["proxy_server_request"])["messages"][0]["content"]
+    assert stored == ("TOKEN=REDACTED_BY_LITELM ordinary tool output" if redact is not False else text)
+    assert body["messages"][0]["content"] == text
+
+
+_TOKEN_SHAPED_SECRETS: Final = (
+    _GITHUB_TOKEN,
+    "github_pat_" + "A1b2C3d4E5" * 8 + "Z9",
+    "sk-ant-api03-" + "Qw3rTy" * 7,
+    "AKIAIOSFODNN7EXAMPLE",
+    "xoxb-1234567890-0987654321-AbCdEfGhIjKl",
+    "glpat-AbCdEfGhIj1234567890",
+    "lin_api_" + "AbCdEfGhIj" * 4,
+    "hf_" + "AbCdEfGhIj" * 3 + "KlMn",
+    "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
+    "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA\n-----END RSA PRIVATE KEY-----",
+)
+
+
+@pytest.mark.parametrize("secret", _TOKEN_SHAPED_SECRETS)
+def test_stored_request_masks_a_token_returned_in_an_anthropic_tool_result(
+    monkeypatch: pytest.MonkeyPatch, secret: str
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    tool_output: Final = json.dumps({"stdout": f"export TOKEN={secret}\ndone"})
+    request_body: Final = {
+        "model": "claude-sonnet-5-5",
+        "messages": [
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": tool_output}]}
+        ],
+    }
+
+    stored: Final = json.dumps(_sanitize_request_body_for_spend_logs_payload(request_body))
+
+    assert secret not in stored
+    assert secret[:12] not in stored
+    assert "export TOKEN=REDACTED_BY_LITELM" in json.loads(json.loads(stored)["messages"][0]["content"][0]["content"])[
+        "stdout"
+    ]
+
+
+def test_stored_response_masks_a_token_in_a_tool_call_argument(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(
+        proxy_server, "general_settings", {"store_prompts_in_spend_logs": True, "redact_tokens_in_spend_logs": True}
+    )
+    payload: Final = cast(
+        StandardLoggingPayload,
+        {
+            "response": {
+                "content": [
+                    {"type": "text", "text": "Cloning now"},
+                    {"type": "tool_use", "id": "toolu_1", "name": "bash", "input": {"cmd": f"git clone https://{_GITHUB_TOKEN}@github.com/o/r"}},
+                ]
+            }
+        },
+    )
+
+    stored: Final = json.loads(_get_response_for_spend_logs_payload(payload))
+
+    assert stored["content"][0]["text"] == "Cloning now"
+    assert stored["content"][1]["input"]["cmd"] == "git clone https://REDACTED_BY_LITELM@github.com/o/r"
+
+
+def test_stored_request_masks_a_token_kept_in_the_head_of_a_truncated_string(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    long_text: Final = f"{_GITHUB_TOKEN} " + "x" * 10_000
+
+    stored: Final = _sanitize_request_body_for_spend_logs_payload({"text": long_text}, max_string_length_prompt_in_db=200)
+
+    assert stored["text"].startswith("REDACTED_BY_LITELM x")
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in stored["text"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
+        "Use basic auth with password: hunter2 and a Bearer header",
+        "The task-management-system and risk-assessment-framework docs",
+        "See https://github.com/BerriAI/litellm and ghp_short",
+        "A" * 5000,
+    ),
+)
+def test_stored_request_keeps_text_that_only_resembles_credentials(monkeypatch: pytest.MonkeyPatch, text: str) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    stored: Final = _sanitize_request_body_for_spend_logs_payload({"text": text}, max_string_length_prompt_in_db=10_000)
+
+    assert stored["text"] == text
+
+
+def test_stored_request_preserves_a_token_in_a_tool_result_without_redaction(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(
+        proxy_server, "general_settings", {"store_prompts_in_spend_logs": True, "redact_tokens_in_spend_logs": False}
+    )
+    request_body: Final = {
+        "messages": [{"role": "tool", "tool_call_id": "call_1", "content": f"TOKEN={_GITHUB_TOKEN}\ndone"}]
+    }
+
+    stored: Final = _sanitize_request_body_for_spend_logs_payload(request_body)
+
+    assert stored == request_body
 
 
 @patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")

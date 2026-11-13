@@ -81,6 +81,8 @@ async def test_update_customer_with_budget_id(
         return_value=mock_updated_user
     )
 
+    mock_prisma_client.writer_db.litellm_budgettable.find_unique = AsyncMock(return_value=None)
+
     # Create update request with only budget_id (no other budget fields)
     update_request = UpdateCustomerRequest(
         user_id="test-user", budget_id="existing-budget-123"
@@ -144,7 +146,6 @@ async def test_update_customer_creates_budget_with_proper_relations(
     update_request = UpdateCustomerRequest(
         user_id="test-user",
         max_budget=100.0,  # This triggers budget creation
-        rpm_limit=200,  # Use valid budget field
     )
 
     # Act
@@ -267,7 +268,6 @@ async def test_update_customer_budget_creation_with_fallback_admin(
     update_request = UpdateCustomerRequest(
         user_id="test-user",
         max_budget=150.0,
-        tpm_limit=1000,  # Add another budget field
     )
 
     # Act
@@ -325,8 +325,9 @@ async def test_update_customer_with_budget_id_and_creation_fields(
         user_id="test-user",
         budget_id="existing-budget-link",  # For linking to existing budget
         max_budget=300.0,  # This should trigger new budget creation
-        rpm_limit=500,  # Use valid budget field
     )
+
+    mock_prisma_client.writer_db.litellm_budgettable.find_unique = AsyncMock(return_value=None)
 
     # Act
     await update_end_user(update_request, mock_user_api_key_dict)
