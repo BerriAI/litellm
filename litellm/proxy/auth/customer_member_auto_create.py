@@ -51,7 +51,9 @@ async def ensure_customer_member(
 ) -> CustomerMember | Failure:
     """The member row for ``customer_member_id`` in ``customer_org_id``'s default team, created when absent.
     Two workers registering the same member at once both end up with the one row."""
-    hierarchy: Final = CustomerHierarchy(prisma_client)
+    from litellm.proxy.proxy_server import premium_user
+
+    hierarchy: Final = CustomerHierarchy(prisma_client, premium_user=premium_user)
     team: Final = await _default_team(hierarchy, customer_org_id)
     if isinstance(team, Failure):
         return team
@@ -78,7 +80,9 @@ async def ensure_customer_organization(
     """The organization row carrying ``customer_org_alias``, created with the alias as its id when absent, so a
     customer's first request is charged to it. Two workers registering the same alias at once both end up with
     the one row."""
-    hierarchy: Final = CustomerHierarchy(prisma_client)
+    from litellm.proxy.proxy_server import premium_user
+
+    hierarchy: Final = CustomerHierarchy(prisma_client, premium_user=premium_user)
     created: Final = await hierarchy.create_organization(
         OrganizationCreate(customer_org_id=customer_org_alias, alias=customer_org_alias), AUTO_CREATE_ORG_ACTOR
     )

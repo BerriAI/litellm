@@ -877,6 +877,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     output_cost_per_second_768p: ReadOnly[float | None]
     output_cost_per_second_2k: ReadOnly[float | None]
     output_cost_per_second_1080p: float | None
+    output_cost_per_video_clip: ReadOnly[Mapping[str, Mapping[str, float]] | None]
     output_cost_per_second_4k: ReadOnly[float | None]
     num_retries: int | None
     ## MOCK RESPONSES ##

@@ -6,8 +6,9 @@ Core tests to validate that priority weights are respected (0.9/0.1) instead of 
 
 import asyncio
 import time
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timedelta
+from types import ModuleType
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
@@ -2731,7 +2732,9 @@ async def test_two_interactive_teams_each_keep_half_of_the_interactive_share(mon
     with pytest.raises(ProxyRateLimitError) as exc:
         await _check(handler, _class_team("team-b"), saturation=0.52, priority="interactive")
     _held_to_class_share(exc.value)
-    assert "Team: team-b, Priority: interactive, Active callers in class: 2, Active classes: 1, " in str(exc.value.detail)
+    assert "Team: team-b, Priority: interactive, Active callers in class: 2, Active classes: 1, " in str(
+        exc.value.detail
+    )
     assert "Share: 500, Remaining: 0, Model saturation: 52.0%" in str(exc.value.detail)
     await _check(handler, _class_team("team-a"), saturation=0.52, priority="interactive")
 
@@ -4076,3 +4079,45 @@ async def test_a_customer_member_slice_takes_precedence_over_its_organizations(m
     await _check(
         handler, _class_customer("sk-service-a", "org-a", "member-light"), saturation=0.52, priority="interactive"
     )
+
+
+@pytest.mark.asyncio
+async def test_the_limiter_loads_and_admits_requests_without_redis_installed(
+    monkeypatch: pytest.MonkeyPatch, import_without_redis_installed: Callable[[str], ModuleType]
+):
+    module: Final = import_without_redis_installed("litellm.proxy.hooks.dynamic_rate_limiter_v3")
+    handler: Final[PROXY_DynamicRateLimitHandlerV3] = module.PROXY_DynamicRateLimitHandlerV3(
+        internal_usage_cache=DualCache()
+    )
+    handler.update_variables(llm_router=_borrowing_handler(monkeypatch, borrows=False).llm_router)
+
+    await _check(handler, _class_team("team-a"), saturation=0.0, priority="interactive")
+
+
+@pytest.mark.asyncio
+async def test_a_request_is_sized_with_the_tightest_shares_output_cap_on_every_share_it_holds(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _key_and_org_handler(monkeypatch, "key", "customer_organization")
+    key_share: Final = {"model_tpm_limit": {"shared-model": 400}}
+    await _use(handler, _org_caller(org_id="org-busy", share=1000, metadata=key_share), 300, saturation=0.5)
+    uncapped_prompt: Final[dict[str, object]] = {
+        "model": "shared-model",
+        "messages": [{"role": "user", "content": "word " * 10}],
+    }
+
+    await _check(handler, _org_caller(org_id="org-small", share=100, metadata=key_share), 0.5, data=uncapped_prompt)
+
+
+@pytest.mark.asyncio
+async def test_a_team_id_shaped_like_a_customer_org_holder_does_not_draw_on_that_organizations_slice(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.proxy.hooks.priority_class_share import customer_member
+
+    handler: Final = _split_handler(monkeypatch, "team", "customer_organization")
+    victim: Final = _class_customer("sk-service-a", "org-victim")
+    await _use(handler, victim, 20, saturation=1.0, priority="interactive")
+    await _burn(handler, _class_team(customer_member("customer_org", "org-victim")), "interactive", 500)
+
+    await _check(handler, victim, saturation=0.52, priority="interactive")

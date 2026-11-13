@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING, Final, Literal
 
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, ValidationError
-from redis.exceptions import RedisError
 
 import litellm
 from litellm import Router
@@ -634,6 +633,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             if _is_team_class_share_holder(holder)
             else holder
         )
+        from redis.exceptions import RedisError
+
         try:
             members: Final = await self.active_teams.touch(model, member, priority_class, self.v3_limiter.window_size)
         except (RedisError, RedisCircuitBreakerOpenError, ValidationError) as e:
