@@ -150,6 +150,19 @@ pub(crate) fn route_failure(
             value.setattr(MESSAGES_PYTHON_RAISED, true)?;
             native
         }
+        (RequestMarker::Messages, Some(rejection))
+            if matches!(
+                rejection.downcast_ref::<litellm_llms::ErrorDetail>(),
+                Some(litellm_llms::ErrorDetail::MissingAzureApiBase)
+            ) =>
+        {
+            // Python raises it from `get_complete_url`, after the provider resolved.
+            let native = PyValueError::new_err(rejection.to_string());
+            let value = native.value(py);
+            value.setattr(MESSAGES_LATE_REJECTION, true)?;
+            value.setattr(MESSAGES_PYTHON_RAISED, true)?;
+            native
+        }
         (RequestMarker::Messages, Some(rejection)) => {
             let native = PyValueError::new_err(Report::new(rejection).to_string());
             let value = native.value(py);

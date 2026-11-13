@@ -1,5 +1,4 @@
-use crate::Error;
-use litellm_core_utils::settings::resolve_non_empty;
+use crate::{Error, ErrorDetail};
 
 pub const AZURE_OPENAI_API_KEY_ENV: &str = "AZURE_OPENAI_API_KEY";
 pub const AZURE_API_KEY_ENV: &str = "AZURE_API_KEY";
@@ -47,10 +46,15 @@ pub fn resolve_azure_api_key(
         })
 }
 
+/// Python's `api_base or get_secret_str("AZURE_API_BASE")`: the call's base unless empty, else the
+/// environment's as it is.
 pub fn resolve_azure_api_base(
     api_base: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Result<String, Error> {
-    resolve_non_empty(api_base, env_lookup, &[AZURE_API_BASE_ENV])
-        .ok_or_else(|| Error::from(litellm_auth::Error::MissingApiBase { provider: "Azure", guidance: "Set `api_base` or the AZURE_API_BASE environment variable. Expected format: https://<resource-name>.services.ai.azure.com/anthropic" }))
+    api_base
+        .filter(|base| !base.is_empty())
+        .map(str::to_string)
+        .or_else(|| env_lookup(AZURE_API_BASE_ENV))
+        .ok_or(Error::InvalidRequest(ErrorDetail::MissingAzureApiBase))
 }

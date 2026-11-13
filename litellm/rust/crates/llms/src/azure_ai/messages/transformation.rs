@@ -14,7 +14,7 @@ use serde_json::Value;
 use crate::{
     Error,
     anthropic::{
-        common_utils::API_KEY_PLACEMENT,
+        common_utils::{API_KEY_PLACEMENT, strip_trailing_slashes},
         messages::{
             handler::shape_anthropic_messages_request,
             transformation::{transform_messages_request, update_headers_with_safeguards_beta},
@@ -38,6 +38,7 @@ use crate::{
 };
 
 const ANTHROPIC_PATH_SEGMENT: &str = "/anthropic";
+const SCHEME_SEPARATOR: &str = "://";
 const AZURE_API_KEY_HEADER: &str = "api-key";
 const OIDC_PREFIX: &str = "oidc/";
 const AUTHORIZATION_HEADER: &str = "authorization";
@@ -305,23 +306,35 @@ fn entra_id_auth(
     }
 }
 
+/// Python's `azure_anthropic_messages_url`: the base is cut at the first `/anthropic` of its path,
+/// never of its host, and kept untrimmed.
 pub fn complete_azure_anthropic_url(
     api_base: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Result<String, Error> {
     let api_base = resolve_azure_api_base(api_base, env_lookup)?;
-
-    let api_base = api_base.trim_end_matches('/');
-
-    if api_base.ends_with(MESSAGES_PATH) {
-        return Ok(api_base.to_string());
+    let base = api_base.trim_end_matches('/');
+    if base.ends_with(MESSAGES_PATH) {
+        return Ok(base.to_string());
     }
-
-    let with_anthropic = match api_base.split_once(ANTHROPIC_PATH_SEGMENT) {
-        Some((prefix, _)) => format!("{prefix}{ANTHROPIC_PATH_SEGMENT}"),
-        None => format!("{api_base}{ANTHROPIC_PATH_SEGMENT}"),
+    let path_start = match base.find(SCHEME_SEPARATOR) {
+        Some(scheme) => {
+            let authority = scheme + SCHEME_SEPARATOR.len();
+            base[authority..].find('/').map(|slash| authority + slash)
+        }
+        None => Some(0),
     };
-    Ok(format!("{with_anthropic}{MESSAGES_PATH}"))
+    let root = path_start
+        .and_then(|start| {
+            base[start..]
+                .find(ANTHROPIC_PATH_SEGMENT)
+                .map(|anthropic| &base[..start + anthropic])
+        })
+        .unwrap_or(base);
+    Ok(format!(
+        "{}{ANTHROPIC_PATH_SEGMENT}{MESSAGES_PATH}",
+        strip_trailing_slashes(root)
+    ))
 }
 
 #[cfg(test)]
@@ -333,6 +346,7 @@ mod tests {
     use litellm_auth::CredentialPlacement;
 
     use super::*;
+    use crate::ErrorDetail;
     use crate::base_llm::messages::{
         context::MessagesModelCapabilities, mid_conversation_system::CONVERTED_SYSTEM_NOTE,
     };
@@ -345,67 +359,116 @@ mod tests {
         serde_json::to_value(request).expect("serializable request")
     }
 
-    #[test]
-    fn url_appends_anthropic_and_messages_suffix() {
-        let url =
-            complete_azure_anthropic_url(Some("https://resource.services.ai.azure.com"), &|_| None)
-                .expect("url builds");
+    #[rstest]
+    #[case::bare_host(
+        "https://resource.services.ai.azure.com",
+        "https://resource.services.ai.azure.com/anthropic/v1/messages"
+    )]
+    #[case::anthropic_segment(
+        "https://resource.services.ai.azure.com/anthropic",
+        "https://resource.services.ai.azure.com/anthropic/v1/messages"
+    )]
+    #[case::complete_endpoint(
+        "https://resource.services.ai.azure.com/anthropic/v1/messages",
+        "https://resource.services.ai.azure.com/anthropic/v1/messages"
+    )]
+    #[case::messages_path_without_anthropic(
+        "https://resource.services.ai.azure.com/v1/messages",
+        "https://resource.services.ai.azure.com/v1/messages"
+    )]
+    #[case::path_after_anthropic_is_dropped(
+        "https://resource.services.ai.azure.com/anthropic/extra/",
+        "https://resource.services.ai.azure.com/anthropic/v1/messages"
+    )]
+    #[case::host_starting_with_anthropic(
+        "http://anthropic-x.services.ai.azure.com/d/dep/anthropic",
+        "http://anthropic-x.services.ai.azure.com/d/dep/anthropic/v1/messages"
+    )]
+    #[case::bare_host_starting_with_anthropic(
+        "http://anthropic-x.services.ai.azure.com",
+        "http://anthropic-x.services.ai.azure.com/anthropic/v1/messages"
+    )]
+    #[case::userinfo_starting_with_anthropic(
+        "http://anthropic@resource.services.ai.azure.com/d/dep",
+        "http://anthropic@resource.services.ai.azure.com/d/dep/anthropic/v1/messages"
+    )]
+    #[case::empty_host_is_kept_for_the_client_to_refuse(
+        "http:///d/dep/anthropic",
+        "http:///d/dep/anthropic/v1/messages"
+    )]
+    #[case::without_scheme_cuts_anywhere(
+        "resource.services.ai.azure.com/d/dep/anthropic",
+        "resource.services.ai.azure.com/d/dep/anthropic/v1/messages"
+    )]
+    #[case::slash_before_query_moves_behind_the_path(
+        "https://h/d/dep/?q=1",
+        "https://h/d/dep?q=1/anthropic/v1/messages"
+    )]
+    #[case::trailing_spaces_without_anthropic_are_kept(
+        "https://h/d/dep  ",
+        "https://h/d/dep  /anthropic/v1/messages"
+    )]
+    #[case::trailing_spaces_after_anthropic_are_cut(
+        "https://h/d/dep/anthropic  ",
+        "https://h/d/dep/anthropic/v1/messages"
+    )]
+    #[case::trailing_crlf_after_anthropic_is_cut(
+        "https://h/d/dep/anthropic\r\n",
+        "https://h/d/dep/anthropic/v1/messages"
+    )]
+    #[case::leading_space_is_kept(
+        " https://h/d/dep/anthropic",
+        " https://h/d/dep/anthropic/v1/messages"
+    )]
+    #[case::blank_base_is_kept("   ", "   /anthropic/v1/messages")]
+    fn url_is_built_as_python_builds_it(#[case] base: &str, #[case] expected: &str) {
         assert_eq!(
-            url,
-            "https://resource.services.ai.azure.com/anthropic/v1/messages"
+            complete_azure_anthropic_url(Some(base), &|_| None).expect("url builds"),
+            expected
         );
     }
 
-    #[test]
-    fn url_keeps_existing_anthropic_segment() {
-        let url = complete_azure_anthropic_url(
-            Some("https://resource.services.ai.azure.com/anthropic"),
-            &|_| None,
-        )
-        .expect("url builds");
-        assert_eq!(
-            url,
-            "https://resource.services.ai.azure.com/anthropic/v1/messages"
-        );
-    }
-
-    #[test]
-    fn url_leaves_complete_messages_endpoint_untouched() {
-        for base in [
-            "https://resource.services.ai.azure.com/anthropic/v1/messages",
-            "https://resource.services.ai.azure.com/v1/messages",
-        ] {
-            assert_eq!(
-                complete_azure_anthropic_url(Some(base), &|_| None).expect("url builds"),
-                base
-            );
-        }
-    }
-
-    #[test]
-    fn url_trims_trailing_slash_and_truncates_after_anthropic() {
-        let url = complete_azure_anthropic_url(
-            Some("https://resource.services.ai.azure.com/anthropic/extra/"),
-            &|_| None,
-        )
-        .expect("url builds");
-        assert_eq!(
-            url,
-            "https://resource.services.ai.azure.com/anthropic/v1/messages"
-        );
-    }
-
-    #[test]
-    fn url_falls_back_to_env_then_errors_when_absent() {
-        let with_env = |key: &str| {
-            (key == AZURE_API_BASE_ENV).then(|| "https://env.services.ai.azure.com".to_string())
+    #[rstest]
+    #[case::call_base_wins(
+        Some("http://call/d"),
+        Some("http://env/d"),
+        "http://call/d/anthropic/v1/messages"
+    )]
+    #[case::empty_call_base_falls_to_environment(
+        Some(""),
+        Some("http://env/d"),
+        "http://env/d/anthropic/v1/messages"
+    )]
+    #[case::blank_call_base_is_kept(Some("   "), Some("http://env/d"), "   /anthropic/v1/messages")]
+    #[case::environment_base_is_kept_untrimmed(
+        None,
+        Some(" http://env/d "),
+        " http://env/d /anthropic/v1/messages"
+    )]
+    fn url_resolves_the_base_as_python_does(
+        #[case] base: Option<&str>,
+        #[case] environment: Option<&str>,
+        #[case] expected: &str,
+    ) {
+        let lookup = |name: &str| {
+            (name == AZURE_API_BASE_ENV)
+                .then(|| environment.map(str::to_string))
+                .flatten()
         };
         assert_eq!(
-            complete_azure_anthropic_url(None, &with_env).expect("url builds"),
-            "https://env.services.ai.azure.com/anthropic/v1/messages"
+            complete_azure_anthropic_url(base, &lookup).expect("url builds"),
+            expected
         );
-        let err = complete_azure_anthropic_url(Some("  "), &|_| None).expect_err("missing base");
-        assert!(matches!(err, Error::Auth(_)));
+    }
+
+    #[rstest]
+    #[case::no_base(None)]
+    #[case::empty_base(Some(""))]
+    fn a_missing_base_is_python_s_value_error(#[case] base: Option<&str>) {
+        assert_eq!(
+            complete_azure_anthropic_url(base, &|_| None),
+            Err(Error::InvalidRequest(ErrorDetail::MissingAzureApiBase))
+        );
     }
 
     #[rstest]

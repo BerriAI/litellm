@@ -194,7 +194,7 @@ fn url_path(url: &str) -> &str {
 }
 
 /// Python's `_strip_trailing_slashes_keeping_the_scheme`.
-fn strip_trailing_slashes(api_base: &str) -> String {
+pub(crate) fn strip_trailing_slashes(api_base: &str) -> String {
     let stripped = api_base.trim_end_matches('/');
     if stripped.ends_with(':') && !stripped.contains('/') && !stripped.contains('?') {
         return api_base.to_string();
