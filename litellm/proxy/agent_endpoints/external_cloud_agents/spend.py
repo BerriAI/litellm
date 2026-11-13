@@ -30,11 +30,36 @@ def totals(rows: tuple[MemberSpend, ...]) -> SpendTotals:
     )
 
 
+def split_units(value: int, index: int, count: int) -> int:
+    quotient, remainder = divmod(value, count)
+    return quotient + int(index < remainder)
+
+
+def split_money(value: Decimal, index: int, count: int) -> Decimal:
+    exponent: Final = value.as_tuple().exponent
+    precision: Final = max(6, -exponent) if isinstance(exponent, int) else 6
+    return Decimal(split_units(int(value.scaleb(precision)), index, count)).scaleb(-precision)
+
+
+def allocated(row: MatchedSpend, index: int, count: int) -> MatchedSpend:
+    return row.model_copy(
+        update={
+            "grok_cost_usd": split_money(row.grok_cost_usd, index, count),
+            "litellm_gateway_spend_usd": split_money(row.litellm_gateway_spend_usd, index, count),
+            "tokens": split_units(row.tokens, index, count),
+            "requests": split_units(row.requests, index, count),
+        }
+    )
+
+
 def team_members(row: MatchedSpend) -> tuple[tuple[str, str, MatchedSpend], ...]:
     if not row.team_ids:
         return (("", "Unassigned", row),)
     teams: Final = MappingProxyType(dict(zip(row.team_ids, row.team_names)))
-    return tuple((team_id, name, row) for team_id, name in teams.items())
+    return tuple(
+        (team_id, name, allocated(row, index, len(teams)))
+        for index, (team_id, name) in enumerate(sorted(teams.items()))
+    )
 
 
 def rollup(key: str, rows: tuple[tuple[str, str, MatchedSpend], ...]) -> TeamSpend:

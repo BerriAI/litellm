@@ -35,10 +35,25 @@ def test_rollup_counts_gateway_once_for_duplicate_email_matches_and_supports_mul
         grok_cost_usd=Decimal("4.60"), litellm_gateway_spend_usd=Decimal("4.20"), tokens=70, requests=6
     )
     assert tuple(team.team_id for team in result.teams) == ("team-a", "team-b")
-    assert tuple(team.grok_cost_usd for team in result.teams) == (result.totals.grok_cost_usd,) * 2
-    assert (
-        tuple(team.litellm_gateway_spend_usd for team in result.teams) == (result.totals.litellm_gateway_spend_usd,) * 2
+    assert tuple(team.grok_cost_usd for team in result.teams) == (Decimal("2.30"),) * 2
+    assert tuple(team.litellm_gateway_spend_usd for team in result.teams) == (Decimal("2.10"),) * 2
+    assert sum(team.tokens for team in result.teams) == result.totals.tokens
+    assert sum(team.requests for team in result.teams) == result.totals.requests
+
+
+def test_team_allocations_preserve_micro_usd_and_usage_remainders() -> None:
+    result: Final = report(
+        "source",
+        30,
+        NOW,
+        (member(grok_cost_usd="0.000003", litellm_gateway_spend_usd="0.000005", tokens=3, requests=1),),
     )
+    assert tuple(team.grok_cost_usd for team in result.teams) == (Decimal("0.000002"), Decimal("0.000001"))
+    assert tuple(team.litellm_gateway_spend_usd for team in result.teams) == (Decimal("0.000003"), Decimal("0.000002"))
+    assert tuple(team.tokens for team in result.teams) == (2, 1)
+    assert tuple(team.requests for team in result.teams) == (1, 0)
+    assert sum(team.grok_cost_usd for team in result.teams) == result.totals.grok_cost_usd
+    assert sum(team.litellm_gateway_spend_usd for team in result.teams) == result.totals.litellm_gateway_spend_usd
 
 
 def test_unmatched_and_teamless_members_are_unassigned() -> None:
