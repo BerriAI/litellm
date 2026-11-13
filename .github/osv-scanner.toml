@@ -31,7 +31,7 @@ reason = "dnspython 2.9.0 (published 2026-10-09) is the only fix and requires Py
 [[IgnoredVulns]]
 id = "GHSA-mmhr-3c5m-f64f"
 ignoreUntil = 2027-02-01
-reason = "soupsieve 4.0 is the first fix and requires Python >= 3.11.5, so Python 3.10 and 3.11.0-3.11.4 resolve 2.10 while newer Python versions resolve 4.1. litellm declares beautifulsoup4 in its dev dependencies and uses BeautifulSoup in tests/code_coverage_tests/bedrock_pricing.py to parse AWS pricing HTML with html.parser and find table rows and cells, not CSS selectors; no runtime litellm code imports soupsieve or beautifulsoup4. Remove once 3.10 is dropped and the minimum Python version is at least 3.11.5"
+reason = "soupsieve 4.0 is the first fix and requires Python >= 3.11.5, so Python 3.10 and 3.11.0-3.11.4 resolve 2.10 while newer Python versions resolve 4.1. litellm declares beautifulsoup4 in its ci dependency group and uses BeautifulSoup in tests/code_coverage_tests/bedrock_pricing.py to parse AWS pricing HTML with html.parser and find table rows and cells, not CSS selectors; no runtime litellm code imports soupsieve or beautifulsoup4. Remove once 3.10 is dropped and the minimum Python version is at least 3.11.5"
 
 [[PackageOverrides]]
 name = "pillow"
