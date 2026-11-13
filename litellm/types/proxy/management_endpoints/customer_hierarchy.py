@@ -2,7 +2,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Final
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, NonNegativeInt, field_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, NonNegativeInt, field_validator, model_validator
 
 from litellm.proxy.common_utils.timezone_utils import budget_duration_error
 
@@ -54,6 +54,14 @@ class OrganizationCreate(OrganizationPatch):
     default_budgets: tuple[BudgetTemplate, ...] = ()
 
 
+class OrganizationUpsert(OrganizationCreate):
+    @model_validator(mode="after")
+    def require_identity(self) -> "OrganizationUpsert":
+        if not self.customer_org_id and not self.alias:
+            raise ValueError("A customer org ID or alias is required for upsert")
+        return self
+
+
 class TeamPatch(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -78,6 +86,19 @@ class MemberPatch(BaseModel):
 class MemberCreate(MemberPatch):
     customer_member_id: str | None = None
     parent_team_id: str
+
+
+class MemberUpsert(MemberPatch):
+    customer_member_id: str = Field(min_length=1)
+    customer_org_id: str | None = None
+    customer_org_alias: str | None = None
+    parent_team_id: str | None = None
+
+    @model_validator(mode="after")
+    def require_customer_org(self) -> "MemberUpsert":
+        if not self.customer_org_id and not self.customer_org_alias:
+            raise ValueError("A customer org ID or alias is required for customer member upsert")
+        return self
 
 
 class AuditFields(BaseModel):
@@ -116,3 +137,11 @@ class CustomerMember(AuditFields):
     budget_override: Budget | None = None
     budget_override_expires_at: datetime | None = None
     effective_budget: Budget
+
+
+class OrganizationUpsertResponse(Organization):
+    created: bool
+
+
+class MemberUpsertResponse(CustomerMember):
+    created: bool

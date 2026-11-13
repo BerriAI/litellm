@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.auth.customer_hierarchy_auth import customer_member_cache_key
+from litellm.proxy.auth.customer_hierarchy_auth import customer_member_cache_key, customer_org_alias_cache_key
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.list_api.common import ManagementProblem, problem_response
@@ -19,7 +19,12 @@ if TYPE_CHECKING:
     from prisma import Prisma
 
 
-def client(role: LitellmUserRoles = LitellmUserRoles.PROXY_ADMIN, cache: UserApiKeyCache | None = None) -> TestClient:
+def client(
+    role: LitellmUserRoles = LitellmUserRoles.PROXY_ADMIN,
+    cache: UserApiKeyCache | None = None,
+    database: Database | None = None,
+    actor: str = "admin",
+) -> TestClient:
     app: Final = FastAPI()
     app.include_router(router)
 
@@ -27,9 +32,9 @@ def client(role: LitellmUserRoles = LitellmUserRoles.PROXY_ADMIN, cache: UserApi
     async def problem(request: Request, exc: ManagementProblem):
         return problem_response(exc.problem)
 
-    auth: Final = UserAPIKeyAuth(user_id="admin", user_role=role)
+    auth: Final = UserAPIKeyAuth(user_id=actor, user_role=role)
     hierarchy: Final = CustomerHierarchy(
-        cast("Prisma", Database()), clock=lambda: NOW
+        cast("Prisma", database if database is not None else Database()), clock=lambda: NOW
     )  # cast-ok: in-memory Prisma edge
     app.dependency_overrides[user_api_key_auth] = lambda: auth
     app.dependency_overrides[get_customer_hierarchy] = lambda: hierarchy
@@ -73,6 +78,7 @@ def family(http: TestClient) -> dict[str, object]:
     "method,path,body",
     (
         ("POST", "/customer_organizations", {}),
+        ("POST", "/customer_organizations/upsert", {"alias": "customer"}),
         ("GET", "/customer_organizations", None),
         ("GET", "/customer_organizations/id", None),
         ("PATCH", "/customer_organizations/id", {}),
@@ -83,6 +89,7 @@ def family(http: TestClient) -> dict[str, object]:
         ("PATCH", "/customer_teams/id", {}),
         ("DELETE", "/customer_teams/id", None),
         ("POST", "/customer_members", {"parent_team_id": "id"}),
+        ("POST", "/customer_members/upsert", {"customer_member_id": "m", "customer_org_id": "id"}),
         ("GET", "/customer_members", None),
         ("GET", "/customer_members/id", None),
         ("PATCH", "/customer_members/id", {}),
@@ -648,3 +655,266 @@ def test_organization_list_counts_all_members_and_searches_before_paginating() -
 def family_default_budget_id(http: TestClient) -> str:
     organization: Final = http.get("/management/v1/customer_organizations/org").json()
     return str(organization["default_budget_id"])
+
+
+@pytest.mark.parametrize("use_id", (True, False))
+def test_customer_org_upsert_repeats_without_new_budgets_and_updates_by_identity(use_id: bool) -> None:
+    http: Final = client()
+    identity: Final = {"customer_org_id": "org"} if use_id else {}
+    payload: Final = {
+        **identity,
+        "alias": "customer",
+        "budget": {"max_budget": 10},
+        "default_budgets": [{"name": "standard", "max_budget": 2}],
+    }
+    first: Final = http.post("/management/v1/customer_organizations/upsert", json=payload)
+    assert first.status_code == 200, first.text
+    assert first.json()["created"] is True
+    second: Final = http.post("/management/v1/customer_organizations/upsert", json=payload)
+    assert second.status_code == 200, second.text
+    assert second.json() == {**first.json(), "created": False}
+    changed: Final = http.post(
+        "/management/v1/customer_organizations/upsert",
+        json={**payload, "budget": {"max_budget": 20}, "default_budgets": [{"name": "standard", "max_budget": 4}]},
+    )
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["created"] is False
+    assert changed.json()["customer_org_id"] == first.json()["customer_org_id"]
+    assert changed.json()["budget_id"] == first.json()["budget_id"]
+    assert changed.json()["default_budget_id"] == first.json()["default_budget_id"]
+    assert changed.json()["budget"]["max_budget"] == 20
+    assert changed.json()["default_budgets"][0]["max_budget"] == 4
+    assert http.get("/management/v1/customer_organizations").json()["meta"]["total_count"] == 1
+
+
+@pytest.mark.parametrize("method", ("POST", "PATCH", "UPSERT"))
+def test_duplicate_alias_is_rejected_without_changing_the_customer_org(method: str) -> None:
+    http: Final = client()
+    first: Final = http.post(
+        "/management/v1/customer_organizations", json={"customer_org_id": "first", "alias": "taken"}
+    )
+    assert first.status_code == 201, first.text
+    other: Final = http.post(
+        "/management/v1/customer_organizations", json={"customer_org_id": "other", "alias": "other"}
+    )
+    assert other.status_code == 201, other.text
+    requests: Final = {
+        "POST": ("POST", "/customer_organizations", {"customer_org_id": "new", "alias": "taken"}),
+        "PATCH": ("PATCH", "/customer_organizations/other", {"alias": "taken"}),
+        "UPSERT": ("POST", "/customer_organizations/upsert", {"customer_org_id": "other", "alias": "taken"}),
+    }
+    request_method, path, body = requests[method]
+    response: Final = http.request(request_method, "/management/v1" + path, json=body)
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"] == "Customer org alias is already used by another customer org."
+    assert http.get("/management/v1/customer_organizations/other").json() == other.json()
+    assert http.get("/management/v1/customer_organizations").json()["meta"]["total_count"] == 2
+
+
+def test_customer_member_upsert_inherits_default_and_preserves_budget_ids_on_update() -> None:
+    http: Final = client()
+    family(http)
+    payload: Final = {"customer_member_id": "m", "customer_org_id": "org", "alias": "customer member"}
+    first: Final = http.post("/management/v1/customer_members/upsert", json=payload)
+    assert first.status_code == 200, first.text
+    assert first.json()["created"] is True
+    assert first.json()["parent_team_id"] == "org:default"
+    assert first.json()["budget_id"] == family_default_budget_id(http)
+    repeated: Final = http.post("/management/v1/customer_members/upsert", json=payload)
+    assert repeated.status_code == 200, repeated.text
+    assert repeated.json() == {**first.json(), "created": False}
+    overridden: Final = http.post(
+        "/management/v1/customer_members/upsert", json={**payload, "budget_override": {"max_budget": 3}}
+    )
+    assert overridden.status_code == 200, overridden.text
+    assert overridden.json()["effective_budget"]["max_budget"] == 3
+    updated: Final = http.post(
+        "/management/v1/customer_members/upsert", json={**payload, "budget_override": {"max_budget": 5}}
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["budget_override_id"] == overridden.json()["budget_override_id"]
+    assert updated.json()["effective_budget"]["max_budget"] == 5
+    cleared: Final = http.post("/management/v1/customer_members/upsert", json={**payload, "budget_override": None})
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["budget_override_id"] is None
+    assert cleared.json()["effective_budget"]["max_budget"] == 100
+    assert http.get("/management/v1/customer_members").json()["meta"]["total_count"] == 1
+
+
+def test_customer_member_upsert_accepts_customer_org_alias_and_explicit_customer_team() -> None:
+    http: Final = client()
+    family(http)
+    assert http.patch("/management/v1/customer_organizations/org", json={"alias": "customer"}).status_code == 200
+    response: Final = http.post(
+        "/management/v1/customer_members/upsert",
+        json={"customer_member_id": "m", "customer_org_alias": "customer", "parent_team_id": "team"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["created"] is True
+    assert response.json()["parent_team_id"] == "team"
+    moved: Final = http.post(
+        "/management/v1/customer_members/upsert", json={"customer_member_id": "m", "customer_org_id": "org"}
+    )
+    assert moved.status_code == 200, moved.text
+    assert moved.json()["parent_team_id"] == "org:default"
+    assert moved.json()["created"] is False
+
+
+@pytest.mark.parametrize("mismatch", ("customer_org", "customer_team", "customer_org_alias"))
+def test_customer_member_upsert_rejects_cross_customer_org_identity(mismatch: str) -> None:
+    http: Final = client()
+    family(http)
+    assert http.post("/management/v1/customer_organizations", json={"customer_org_id": "other"}).status_code == 201
+    assert (
+        http.post(
+            "/management/v1/customer_teams", json={"customer_team_id": "foreign", "parent_org_id": "other"}
+        ).status_code
+        == 201
+    )
+    original: Final = http.post(
+        "/management/v1/customer_members", json={"customer_member_id": "m", "parent_team_id": "team"}
+    )
+    assert original.status_code == 201, original.text
+    edits: Final = {
+        "customer_org": {"customer_org_id": "other"},
+        "customer_team": {"parent_team_id": "foreign"},
+        "customer_org_alias": {"customer_org_alias": "wrong"},
+    }
+    response: Final = http.post(
+        "/management/v1/customer_members/upsert",
+        json={"customer_member_id": "m", "customer_org_id": "org", **edits[mismatch]},
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["title"] == "Customer org mismatch"
+    assert http.get("/management/v1/customer_members/m").json() == original.json()
+
+
+@pytest.mark.parametrize(
+    "resource,payload,status",
+    (
+        ("customer_organizations", {}, 422),
+        ("customer_members", {"customer_member_id": "m"}, 422),
+        ("customer_members", {"customer_org_id": "org"}, 422),
+        ("customer_members", {"customer_member_id": "m", "customer_org_id": "missing"}, 404),
+        ("customer_members", {"customer_member_id": "m", "customer_org_id": "org", "parent_team_id": "missing"}, 404),
+        ("customer_members", {"customer_member_id": "m", "customer_org_id": "org", "budget_id": "missing"}, 422),
+    ),
+)
+def test_customer_upsert_missing_identity_or_parent_is_rejected(
+    resource: str, payload: dict[str, object], status: int
+) -> None:
+    http: Final = client()
+    family(http)
+    response: Final = http.post(f"/management/v1/{resource}/upsert", json=payload)
+    assert response.status_code == status, response.text
+    assert http.get("/management/v1/customer_members").json()["meta"]["total_count"] == 0
+
+
+def test_customer_upsert_rejects_missing_budget_without_creating_a_default_customer_team() -> None:
+    http: Final = client()
+    assert http.post("/management/v1/customer_organizations", json={"customer_org_id": "org"}).status_code == 201
+    response: Final = http.post(
+        "/management/v1/customer_members/upsert", json={"customer_member_id": "m", "customer_org_id": "org"}
+    )
+    assert response.status_code == 422, response.text
+    assert http.get("/management/v1/customer_teams").json()["meta"]["total_count"] == 0
+
+
+def test_customer_upsert_invalid_templates_do_not_partially_update_customer_org() -> None:
+    http: Final = client()
+    original: Final = family(http)
+    invalid: Final = http.post(
+        "/management/v1/customer_organizations/upsert",
+        json={
+            "customer_org_id": "org",
+            "alias": "changed",
+            "budget": {"max_budget": 1},
+            "default_budgets": [{"name": "duplicate", "is_default": True}, {"name": "duplicate"}],
+        },
+    )
+    assert invalid.status_code == 422, invalid.text
+    assert http.get("/management/v1/customer_organizations/org").json() == original
+
+
+def test_customer_upserts_invalidate_customer_member_and_customer_org_alias_caches() -> None:
+    cache: Final = UserApiKeyCache()
+    http: Final = client(cache=cache)
+    family(http)
+    assert http.patch("/management/v1/customer_organizations/org", json={"alias": "old"}).status_code == 200
+    assert (
+        http.post(
+            "/management/v1/customer_members", json={"customer_member_id": "m", "parent_team_id": "team"}
+        ).status_code
+        == 201
+    )
+    member_key: Final = customer_member_cache_key("m")
+    for key in (member_key, customer_org_alias_cache_key("old"), customer_org_alias_cache_key("new")):
+        asyncio.run(cache.async_set_cache(key=key, value="stale customer hierarchy"))
+    updated: Final = http.post(
+        "/management/v1/customer_organizations/upsert", json={"customer_org_id": "org", "alias": "new"}
+    )
+    assert updated.status_code == 200, updated.text
+    for key in (member_key, customer_org_alias_cache_key("old"), customer_org_alias_cache_key("new")):
+        assert cache.get_cache(key) is None
+    asyncio.run(cache.async_set_cache(key=member_key, value="stale customer hierarchy"))
+    member: Final = http.post(
+        "/management/v1/customer_members/upsert",
+        json={"customer_org_alias": "new", "customer_member_id": "m", "budget_override": {"max_budget": 1}},
+    )
+    assert member.status_code == 200, member.text
+    assert cache.get_cache(member_key) is None
+
+
+def test_customer_org_upsert_rejects_ambiguous_legacy_alias() -> None:
+    database: Final = Database()
+    for identifier in ("first", "second"):
+        asyncio.run(
+            database.litellm_customerorganizationtable.create(
+                {"customer_org_id": identifier, "alias": "legacy", "created_by": "admin", "updated_by": "admin"}
+            )
+        )
+    http: Final = client(database=database)
+    response: Final = http.post("/management/v1/customer_organizations/upsert", json={"alias": "legacy"})
+    assert response.status_code == 409, response.text
+    assert http.get("/management/v1/customer_organizations").json()["meta"]["total_count"] == 2
+
+
+def test_customer_org_upsert_retry_does_not_rewrite_audit_fields() -> None:
+    database: Final = Database()
+    payload: Final = {"alias": "customer", "budget": {"max_budget": 10}}
+    original: Final = client(database=database, actor="creator").post(
+        "/management/v1/customer_organizations/upsert", json=payload
+    )
+    assert original.status_code == 200, original.text
+    repeated: Final = client(database=database, actor="retry").post(
+        "/management/v1/customer_organizations/upsert", json=payload
+    )
+    assert repeated.status_code == 200, repeated.text
+    assert repeated.json() == {**original.json(), "created": False}
+
+
+def test_customer_org_upsert_merges_templates_without_replacing_customer_member_budgets() -> None:
+    http: Final = client()
+    original: Final = family(http)
+    member: Final = http.post(
+        "/management/v1/customer_members", json={"customer_member_id": "m", "parent_team_id": "team"}
+    )
+    assert member.status_code == 201, member.text
+    payload: Final = {"customer_org_id": "org", "default_budgets": [{"name": "premium", "max_budget": 200}]}
+    updated: Final = http.post("/management/v1/customer_organizations/upsert", json=payload)
+    assert updated.status_code == 200, updated.text
+    original_ids: Final = {template["name"]: template["budget_id"] for template in original["default_budgets"]}
+    updated_ids: Final = {template["name"]: template["budget_id"] for template in updated.json()["default_budgets"]}
+    assert set(updated_ids) == {"standard", "small", "premium"}
+    assert {name: updated_ids[name] for name in original_ids} == original_ids
+    assert updated.json()["default_budget_id"] == updated_ids["premium"]
+    assert http.get("/management/v1/customer_members/m").json() == member.json()
+    repeated: Final = http.post("/management/v1/customer_organizations/upsert", json=payload)
+    assert repeated.status_code == 200, repeated.text
+    assert repeated.json() == updated.json()
+    inherited: Final = http.post(
+        "/management/v1/customer_members/upsert", json={"customer_member_id": "new", "customer_org_id": "org"}
+    )
+    assert inherited.status_code == 200, inherited.text
+    assert inherited.json()["budget_id"] == updated_ids["premium"]
+    assert inherited.json()["effective_budget"]["max_budget"] == 200

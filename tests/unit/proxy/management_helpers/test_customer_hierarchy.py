@@ -94,6 +94,15 @@ class Table:
         self.rows = {**self.rows, row_id: row}
         return row
 
+    async def upsert(self, where: Mapping[str, object], data: Mapping[str, object]) -> Record:
+        existing: Final = await self.find_unique(where)
+        values: Final = TypeAdapter(Mapping[str, object]).validate_python(data["update" if existing else "create"])
+        if existing is None:
+            return await self.create(values)
+        updated: Final = await self.update(where, values)
+        assert updated is not None
+        return updated
+
     async def find_many(
         self,
         where: Mapping[str, object] | None = None,
@@ -141,6 +150,8 @@ class Database:
         self.locked_organization_ids: tuple[str, ...] = ()
 
     async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
+        if "pg_advisory_xact_lock" in query:
+            return ()
         if "FOR UPDATE" in query:
             self.locked_organization_ids = (*self.locked_organization_ids, *(str(arg) for arg in args))
             return ()

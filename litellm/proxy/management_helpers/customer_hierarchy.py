@@ -47,6 +47,8 @@ class ErrorCode(str, Enum):
     INVALID_TEMPLATE_NAMES = "invalid_template_names"
     TEMPLATE_IN_USE = "template_in_use"
     BUDGET_REQUIRED = "budget_required"
+    ALIAS_ALREADY_EXISTS = "alias_already_exists"
+    CUSTOMER_ORG_MISMATCH = "customer_org_mismatch"
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +58,10 @@ class Failure:
 
 _LOCK_ORGANIZATION_SQL: Final = (
     'SELECT 1 AS locked FROM "LiteLLM_CustomerOrganizationTable" WHERE customer_org_id = $1 FOR UPDATE'
+)
+
+_LOCK_CUSTOMER_IDENTITIES_SQL: Final = (
+    "SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtextextended('litellm:customer-identities', 0))"
 )
 
 
@@ -356,7 +362,25 @@ class CustomerHierarchyStore:
     async def lock_organization(self, organization_id: str) -> None:
         await self.db.query_raw(_LOCK_ORGANIZATION_SQL, organization_id)
 
+    async def lock_customer_identities(self) -> None:
+        await self.db.query_raw(_LOCK_CUSTOMER_IDENTITIES_SQL)
+
+    async def claim_organization_alias(self, alias: str | None, organization_id: str | None) -> Failure | None:
+        await self.lock_customer_identities()
+        if alias is None:
+            return None
+        duplicates: Final = await self.organizations.find_many(
+            where={"alias": alias, "customer_org_id": {"not": organization_id}}
+            if organization_id
+            else {"alias": alias},
+            take=1,
+        )
+        return Failure(ErrorCode.ALIAS_ALREADY_EXISTS) if duplicates else None
+
     async def create_organization(self, payload: OrganizationCreate, actor: str) -> Organization | Failure:
+        alias_failure: Final = await self.claim_organization_alias(payload.alias, None)
+        if alias_failure is not None:
+            return alias_failure
         default_index: Final = default_template_index(payload.default_budgets)
         if isinstance(default_index, Failure):
             return default_index
@@ -406,6 +430,9 @@ class CustomerHierarchyStore:
     async def update_organization(
         self, organization_id: str, payload: OrganizationPatch, actor: str
     ) -> Organization | Failure:
+        alias_failure: Final = await self.claim_organization_alias(payload.alias, organization_id)
+        if alias_failure is not None:
+            return alias_failure
         organization: Final = await self.get_organization(organization_id)
         if isinstance(organization, Failure):
             return organization
