@@ -2129,16 +2129,13 @@ def completion_cost(
                                 _video_model_info,
                                 getattr(completion_response, "usage", None),
                             )
-                        return (
-                            default_video_cost_calculator(
-                                model=model,
-                                duration_seconds=0.0,
-                                custom_llm_provider=custom_llm_provider,
-                                model_info=_video_model_info,
-                                video_resolution=video_resolution,
-                            )
-                            * _video_count(_video_usage_obj)
-                        )
+                        return default_video_cost_calculator(
+                            model=model,
+                            duration_seconds=0.0,
+                            custom_llm_provider=custom_llm_provider,
+                            model_info=_video_model_info,
+                            video_resolution=video_resolution,
+                        ) * _video_count(_video_usage_obj)
                     # Fallback to default video cost calculation if no duration available
                     return default_video_cost_calculator(
                         model=model,
