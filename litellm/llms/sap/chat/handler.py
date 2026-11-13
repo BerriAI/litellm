@@ -9,6 +9,7 @@ import httpx
 
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.openai import OpenAIChatCompletionChunk
+from litellm.types.utils import Usage
 
 from ...custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 
@@ -47,6 +48,20 @@ class _StreamParser:
     """Normalize orchestration streaming events into OpenAI-like chunks."""
 
     @staticmethod
+    def _validate_chunk(
+        payload: dict[str, object],  # mutable-ok: normalized in place (pops empty logprobs) before validation
+    ) -> OpenAIChatCompletionChunk:
+        choices: Final = payload.get("choices")
+        if isinstance(choices, list):
+            for choice in choices:
+                if isinstance(choice, dict) and not choice.get("logprobs"):
+                    choice.pop("logprobs", None)  # mutable-ok: pops the logprobs key in-place before model_validate
+        chunk = OpenAIChatCompletionChunk.model_validate(payload)
+        if chunk.usage is not None:
+            chunk.usage = Usage.model_validate(chunk.usage.model_dump())
+        return chunk
+
+    @staticmethod
     def _from_orchestration_result(evt: dict) -> OpenAIChatCompletionChunk | None:
         """
         Accepts orchestration_result shape and maps it to an OpenAI-like *chunk*.
@@ -55,25 +70,24 @@ class _StreamParser:
         if not orc:
             return None
 
-        return OpenAIChatCompletionChunk.model_validate(
-            {
-                "id": orc.get("id") or evt.get("request_id") or "stream-chunk",
-                "object": orc.get("object") or "chat.completion.chunk",
-                "created": orc.get("created") or evt.get("created") or _now_ts(),
-                "model": orc.get("model") or "unknown",
-                "choices": [
-                    {
-                        "index": c.get("index", 0),
-                        "delta": c.get("delta") or {},
-                        "finish_reason": c.get("finish_reason"),
-                    }
-                    for c in (orc.get("choices") or [])
-                ],
-            }
-        )
+        payload: Final[dict[str, object]] = {
+            "id": orc.get("id") or evt.get("request_id") or "stream-chunk",
+            "object": orc.get("object") or "chat.completion.chunk",
+            "created": orc.get("created") or evt.get("created") or _now_ts(),
+            "model": orc.get("model") or "unknown",
+            "choices": [
+                {
+                    "index": c.get("index", 0),
+                    "delta": c.get("delta") or {},
+                    "finish_reason": c.get("finish_reason"),
+                }
+                for c in (orc.get("choices") or [])
+            ],
+        }
+        return _StreamParser._validate_chunk(payload)
 
     @staticmethod
-    def to_openai_chunk(event_obj: dict) -> OpenAIChatCompletionChunk | None:
+    def to_openai_chunk(event_obj: dict[str, object]) -> OpenAIChatCompletionChunk | None:
         """
         Accepts:
           - {"final_result": <openai-style CHUNK>}   (IMPORTANT: this is just another chunk, NOT terminal)
@@ -89,11 +103,14 @@ class _StreamParser:
 
         # FINAL RESULT IS *NOT* TERMINAL: treat it as the next chunk
         if "final_result" in event_obj:
-            fr: Final = event_obj["final_result"] or {}
+            final_result: Final = event_obj["final_result"]
+            if not isinstance(final_result, dict):
+                return None
+            fr: Final[dict[str, object]] = final_result
             # ensure it looks like an OpenAI chunk
             if "object" not in fr:
                 fr["object"] = "chat.completion.chunk"
-            return OpenAIChatCompletionChunk.model_validate(fr)
+            return _StreamParser._validate_chunk(fr)
 
         # Orchestration incremental delta
         if "orchestration_result" in event_obj:
@@ -101,7 +118,7 @@ class _StreamParser:
 
         # Already an OpenAI-like chunk
         if "choices" in event_obj and "object" in event_obj:
-            return OpenAIChatCompletionChunk.model_validate(event_obj)
+            return _StreamParser._validate_chunk(event_obj)
 
         # Unknown / heartbeat / metrics
         return None
