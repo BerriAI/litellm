@@ -476,6 +476,11 @@
       "name": "metadata_labels",
       "bit": 45,
       "tier": "small_record"
+    },
+    {
+      "name": "input_sequence_length",
+      "bit": 46,
+      "tier": "small_record"
     }
   ],
   "tiers": [
@@ -502,6 +507,7 @@
     "cold_storage_object_key",
     "cost",
     "deployment",
+    "input_sequence_length",
     "key_identity",
     "key_limits",
     "log_id",

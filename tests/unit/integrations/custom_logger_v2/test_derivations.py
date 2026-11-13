@@ -15,6 +15,7 @@ import litellm
 from litellm.integrations.custom_logger_v2 import derivations
 from litellm.integrations.custom_logger_v2.derivations import RECORD_TYPES
 from litellm.integrations.custom_logger_v2.slots import HookArgs
+from litellm.integrations.prometheus import PrometheusLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import get_model_group_from_litellm_kwargs
 from litellm.proxy.hooks.dynamic_rate_limiter_v3 import alternates_for
@@ -27,6 +28,7 @@ from litellm.types.integrations.custom_logger_v2 import (
     Deployment,
     EstimatedOutputTokens,
     GuardrailEntry,
+    InputSequenceLength,
     KeyIdentity,
     KeyLimits,
     LoggedKeyIdentity,
@@ -48,7 +50,7 @@ from litellm.types.integrations.custom_logger_v2 import (
     coerce_record,
     reset_coercion_reports_for_tests,
 )
-from litellm.types.integrations.prometheus import UserAPIKeyLabelValues
+from litellm.types.integrations.prometheus import UserAPIKeyLabelValues, get_input_sequence_length_bucket
 
 RECORDS_JSON: Final = Path(__file__).parents[4] / "litellm/rust/crates/callbacks/records.json"
 
@@ -1507,3 +1509,51 @@ def test_metadata_labels_are_empty_where_prometheus_finds_no_metadata(
     monkeypatch.setattr(litellm, "custom_prometheus_metadata_labels", ["region"])
 
     assert derivations.metadata_labels(HookArgs(request={"standard_logging_object": payload})) == ()
+
+
+class _Upstream:
+    total_tokens: int = 12
+
+
+@pytest.mark.parametrize(
+    ("payload", "extra", "result", "prompt_tokens"),
+    [
+        pytest.param({"prompt_tokens": 4000, "metadata": {}}, {}, None, 4000, id="payload_tokens"),
+        pytest.param(
+            {"prompt_tokens": 0, "metadata": {}},
+            {"combined_usage_object": {"prompt_tokens": 3}, "_litellm_upstream_reported_usage": _Upstream()},
+            None,
+            None,
+            id="upstream_reported",
+        ),
+        pytest.param({"prompt_tokens": 0, "metadata": {}}, {}, None, None, id="no_usage"),
+        pytest.param(
+            {"prompt_tokens": 0, "metadata": {"usage_object": {"prompt_tokens": 1500}}},
+            {},
+            {"usage": {"prompt_tokens": 7}},
+            1500,
+            id="usage_object",
+        ),
+        pytest.param(
+            {"prompt_tokens": 0, "metadata": {}}, {}, {"usage": {"prompt_tokens": 900}}, 900, id="normalized_response"
+        ),
+    ],
+)
+def test_input_sequence_length_is_the_bucket_prometheus_picks_from_payload_kwargs_and_response(
+    payload: dict[str, object], extra: dict[str, object], result: object, prompt_tokens: int | None
+) -> None:
+    request: Final = {"standard_logging_object": payload, **extra}
+
+    served: Final = derivations.input_sequence_length(HookArgs(request=request, result=result))
+
+    assert served == InputSequenceLength(bucket=get_input_sequence_length_bucket(prompt_tokens))
+    assert served is not None
+    assert served.bucket == PrometheusLogger._get_input_sequence_length(payload, request, result)  # pyright: ignore[reportPrivateUsage, reportArgumentType]  # prometheus's own rule
+
+
+def test_input_sequence_length_names_the_error_prometheus_raises() -> None:
+    request: Final = {"standard_logging_object": {"prompt_tokens": 0, "metadata": None}}
+
+    assert derivations.input_sequence_length(
+        HookArgs(request=request, result={"usage": {"prompt_tokens": 9}})
+    ) == InputSequenceLength(error_type="AttributeError", error_text="'NoneType' object has no attribute 'get'")

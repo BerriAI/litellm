@@ -371,6 +371,12 @@ class LoggedModelGroup(Record):
     error_text: str | None = None
 
 
+class InputSequenceLength(Record):
+    bucket: str | None = None
+    error_type: str | None = None
+    error_text: str | None = None
+
+
 class LoggedRequest(Record):
     client_ip: Scalar | None = None
     user_agent: Scalar | None = None
@@ -457,6 +463,7 @@ __all__ = [
     "Deployment",
     "EstimatedOutputTokens",
     "GuardrailEntry",
+    "InputSequenceLength",
     "KeyIdentity",
     "KeyLimits",
     "LoggedKeyIdentity",

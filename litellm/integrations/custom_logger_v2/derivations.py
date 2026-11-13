@@ -15,6 +15,7 @@ from litellm.types.integrations.custom_logger_v2 import (
     Deployment,
     EstimatedOutputTokens,
     GuardrailEntry,
+    InputSequenceLength,
     KeyIdentity,
     KeyLimits,
     LoggedKeyIdentity,
@@ -653,6 +654,19 @@ def metadata_labels(args: HookArgs) -> tuple[MetadataLabel, ...]:
     )
 
 
+def input_sequence_length(args: HookArgs) -> InputSequenceLength | None:
+    payload: Final = payload_of(args)
+    if payload is None:
+        return None
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    try:
+        bucket: Final = PrometheusLogger._get_input_sequence_length(payload, mapping(args.request) or {}, args.result)  # pyright: ignore[reportPrivateUsage, reportArgumentType]  # prometheus's own bucket rule over the payload it reads
+    except Exception as error:  # noqa: BLE001  # the port reproduces what prometheus does when the rule raises
+        return InputSequenceLength(error_type=type(error).__name__, error_text=str(error))
+    return InputSequenceLength(bucket=bucket)
+
+
 def payload_copy(
     args: HookArgs,
 ) -> dict[str, object] | None:  # mutable-ok: the shallow copy handed to Rust by reference
@@ -684,6 +698,7 @@ RECORD_TYPES: Final[Mapping[Field, object]] = MappingProxyType(
         Field.logged_model_group: LoggedModelGroup,
         Field.logged_payload_not_a_mapping: Scalar,
         Field.metadata_labels: tuple[MetadataLabel, ...],
+        Field.input_sequence_length: InputSequenceLength,
     }
 )
 
@@ -711,6 +726,7 @@ ATTEMPT_SLOTS: Final[Mapping[Field, Slot]] = MappingProxyType(
         **LOGGING_SLOTS,
         Field.outcome: derived(outcome),
         Field.standard_logging_payload_ref: derived(payload_copy),
+        Field.input_sequence_length: derived(input_sequence_length),
     }
 )
 AUTH_SLOTS: Final[Mapping[Field, Slot]] = MappingProxyType({Field.key_identity: derived(key_identity)})
@@ -756,6 +772,7 @@ __all__ = [
     "cost",
     "deployment",
     "guardrail_info",
+    "input_sequence_length",
     "key_identity",
     "key_limits",
     "log_id",

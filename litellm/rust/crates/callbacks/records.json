@@ -415,5 +415,13 @@
       "name": "text",
       "value": "text"
     }
-  ]
+  ],
+  "input_sequence_length": {
+    "rejected": [
+      "member"
+    ],
+    "bucket": "text",
+    "error_type": "text",
+    "error_text": "text"
+  }
 }

@@ -107,6 +107,7 @@ fields! {
     LoggedModelGroup = 43, SmallRecord, crate::record::LoggedModelGroup;
     LoggedPayloadNotAMapping = 44, SmallRecord, crate::scalar::Scalar;
     MetadataLabels = 45, SmallRecord, std::vec::Vec<crate::record::MetadataLabel>;
+    InputSequenceLength = 46, SmallRecord, crate::record::InputSequenceLength;
 }
 
 impl Field {
@@ -144,6 +145,7 @@ pub const DERIVED_ONLY: FieldSet = FieldSet::of(&[
     Field::LoggedModelGroup,
     Field::LoggedPayloadNotAMapping,
     Field::MetadataLabels,
+    Field::InputSequenceLength,
 ]);
 
 pub const BY_REFERENCE: FieldSet = FieldSet::of(&[Field::StandardLoggingPayloadRef]);
@@ -235,7 +237,7 @@ mod tests {
     #[case::wire(Field::ProviderRequestBody, 24, "provider_request_body")]
     #[case::compatibility(Field::DeprecatedResponseObj, 29, "deprecated_response_obj")]
     #[case::typed(Field::KeyLimits, 30, "key_limits")]
-    #[case::last(Field::MetadataLabels, 45, "metadata_labels")]
+    #[case::last(Field::InputSequenceLength, 46, "input_sequence_length")]
     fn a_field_keeps_its_bit_and_its_snake_case_name(
         #[case] field: Field,
         #[case] bit: u8,

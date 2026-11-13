@@ -328,6 +328,15 @@ pub struct LoggedModelGroup {
     pub error_text: Option<String>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct InputSequenceLength {
+    pub rejected: Option<Vec<String>>,
+    pub bucket: Option<String>,
+    pub error_type: Option<String>,
+    pub error_text: Option<String>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LoggedRequest {
@@ -398,6 +407,7 @@ mod tests {
                 round_trip::<typed::LoggedPayloadNotAMapping>(sample)
             }
             Field::MetadataLabels => round_trip::<typed::MetadataLabels>(sample),
+            Field::InputSequenceLength => round_trip::<typed::InputSequenceLength>(sample),
             other => panic!("{other:?} has no typed record sample"),
         }
     }
@@ -411,7 +421,7 @@ mod tests {
             assert_eq!(&decoded(field, sample), sample, "{name}");
         }
         let typed: Vec<&str> = samples.keys().map(String::as_str).collect();
-        assert_eq!(typed.len(), 22);
+        assert_eq!(typed.len(), 23);
     }
 
     #[rstest]
