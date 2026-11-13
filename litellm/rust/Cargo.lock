@@ -3477,6 +3477,7 @@ dependencies = [
 name = "litellm-auth-azure"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "azure_core",
  "azure_identity",
  "litellm-auth-types",

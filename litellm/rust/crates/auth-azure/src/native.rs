@@ -3,7 +3,7 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use azure_core::cloud::{CloudConfiguration, CustomConfiguration};
 use azure_core::credentials::{Secret, TokenCredential};
-use azure_core::http::ClientOptions;
+use azure_core::http::{ClientOptions, RetryOptions};
 use azure_identity::{
     ClientAssertion, ClientAssertionCredential, ClientAssertionCredentialOptions,
     ClientSecretCredential, ClientSecretCredentialOptions, DeveloperToolsCredential,
@@ -19,6 +19,7 @@ use litellm_secret_value::SecretValue;
 use super::credential_provider_cache::{
     AzureCredentialProviderCache, AzureCredentialProviderCacheKey,
 };
+use super::token_retry::entra_token_retry;
 
 #[derive(Clone, Debug)]
 pub(crate) enum NativeAzureRequest {
@@ -522,7 +523,11 @@ fn build_credential(
             client_id.into_value(),
             Secret::new(client_secret.value().expose().to_string()),
             Some(ClientSecretCredentialOptions {
-                client_options: client_options(authority.map(Sourced::into_value), transport),
+                client_options: client_options(
+                    authority.map(Sourced::into_value),
+                    transport,
+                    entra_token_retry(),
+                ),
             }),
         )
         .map(|credential| credential as Arc<dyn TokenCredential>),
@@ -537,7 +542,11 @@ fn build_credential(
             client_id.into_value(),
             StaticAssertion(assertion.into_value()),
             Some(ClientAssertionCredentialOptions {
-                client_options: client_options(authority.map(Sourced::into_value), transport),
+                client_options: client_options(
+                    authority.map(Sourced::into_value),
+                    transport,
+                    RetryOptions::default(),
+                ),
             }),
         )
         .map(|credential| credential as Arc<dyn TokenCredential>),
@@ -549,7 +558,11 @@ fn build_credential(
             ..
         } => WorkloadIdentityCredential::new(Some(WorkloadIdentityCredentialOptions {
             credential_options: azure_identity::ClientAssertionCredentialOptions {
-                client_options: client_options(authority.map(Sourced::into_value), transport),
+                client_options: client_options(
+                    authority.map(Sourced::into_value),
+                    transport,
+                    entra_token_retry(),
+                ),
             },
             client_id: Some(client_id.into_value()),
             tenant_id: Some(tenant_id.into_value()),
@@ -561,7 +574,7 @@ fn build_credential(
                 user_assigned_id: client_id
                     .map(Sourced::into_value)
                     .map(UserAssignedId::ClientId),
-                client_options: client_options(None, transport),
+                client_options: client_options(None, transport, RetryOptions::default()),
             }))
             .map(|credential| credential as Arc<dyn TokenCredential>)
         }
@@ -579,6 +592,7 @@ fn build_credential(
 fn client_options(
     authority: Option<String>,
     transport: Option<azure_core::http::Transport>,
+    retry: RetryOptions,
 ) -> ClientOptions {
     let cloud = authority.map(|authority_host| {
         let mut custom = CustomConfiguration::default();
@@ -588,6 +602,7 @@ fn client_options(
     ClientOptions {
         cloud,
         transport,
+        retry,
         ..Default::default()
     }
 }
@@ -693,6 +708,144 @@ mod tests {
                 ))
             })
         }
+    }
+
+    #[derive(Debug)]
+    struct FailingTokenEndpoint {
+        status: StatusCode,
+        retry_after: Option<&'static str>,
+        posts: std::sync::atomic::AtomicUsize,
+    }
+
+    impl HttpClient for FailingTokenEndpoint {
+        fn execute_request<'life0, 'life1, 'async_trait>(
+            &'life0 self,
+            request: &'life1 Request,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<AsyncRawResponse>> + Send + 'async_trait>,
+        >
+        where
+            'life0: 'async_trait,
+            'life1: 'async_trait,
+            Self: 'async_trait,
+        {
+            Box::pin(async move {
+                assert_eq!(request.method(), azure_core::http::Method::Post);
+                self.posts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let mut headers = Headers::new();
+                if let Some(retry_after) = self.retry_after {
+                    headers.insert(azure_core::http::headers::RETRY_AFTER, retry_after);
+                }
+                Ok(AsyncRawResponse::from_bytes(
+                    self.status,
+                    headers,
+                    r#"{"error":"temporarily_unavailable","error_description":"AADSTS90033: A transient error has occurred."}"#,
+                ))
+            })
+        }
+    }
+
+    fn client_secret_token_request() -> ValidatedAzureRequest {
+        client_secret_request(
+            "tenant",
+            "client",
+            "secret",
+            "https://service.test/.default",
+            "https://login.test",
+        )
+    }
+
+    fn workload_identity_token_request() -> ValidatedAzureRequest {
+        let token_file = std::env::temp_dir().join(format!(
+            "litellm-auth-azure-federated-token-{}",
+            std::process::id()
+        ));
+        std::fs::write(&token_file, "federated-assertion").unwrap();
+        ValidatedAzureRequest::new(NativeAzureRequest::WorkloadIdentity {
+            tenant_id: deployment("tenant".to_string()),
+            client_id: deployment("client".to_string()),
+            token_file_path: deployment(token_file.to_string_lossy().into_owned()),
+            scope: deployment("https://service.test/.default".to_string()),
+            authority: Some(deployment("https://login.test".to_string())),
+        })
+        .unwrap()
+    }
+
+    // Python's counts and delays come from azure-core 1.41.0 RetryPolicy defaults (retry_status=3,
+    // retry_backoff_factor=0.8, Retry-After honoured) that azure-identity 1.25.2 uses for token POSTs.
+    #[rstest::rstest]
+    #[case::client_secret_500_retries_three_times_with_backoff(
+        client_secret_token_request,
+        StatusCode::InternalServerError,
+        None,
+        4,
+        Duration::from_millis(4800)
+    )]
+    #[case::workload_identity_500_retries_three_times_with_backoff(
+        workload_identity_token_request,
+        StatusCode::InternalServerError,
+        None,
+        4,
+        Duration::from_millis(4800)
+    )]
+    #[case::client_secret_503_waits_retry_after_instead_of_backoff(
+        client_secret_token_request,
+        StatusCode::ServiceUnavailable,
+        Some("1"),
+        4,
+        Duration::from_secs(3)
+    )]
+    #[case::client_secret_429_zero_retry_after_keeps_backoff(
+        client_secret_token_request,
+        StatusCode::TooManyRequests,
+        Some("0"),
+        4,
+        Duration::from_millis(4800)
+    )]
+    #[case::client_secret_401_invalid_client_posts_once(
+        client_secret_token_request,
+        StatusCode::Unauthorized,
+        None,
+        1,
+        Duration::ZERO
+    )]
+    #[case::client_secret_400_posts_once(
+        client_secret_token_request,
+        StatusCode::BadRequest,
+        None,
+        1,
+        Duration::ZERO
+    )]
+    #[tokio::test(start_paused = true)]
+    async fn entra_token_endpoint_failures_retry_like_python(
+        #[case] request: fn() -> ValidatedAzureRequest,
+        #[case] status: StatusCode,
+        #[case] retry_after: Option<&'static str>,
+        #[case] expected_posts: usize,
+        #[case] expected_wait: Duration,
+    ) {
+        let endpoint = Arc::new(FailingTokenEndpoint {
+            status,
+            retry_after,
+            posts: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let acquirer =
+            NativeAzureTokenAcquirer::with_transport(4, Transport::new(endpoint.clone()));
+        let started = tokio::time::Instant::now();
+
+        let error = acquirer.acquire(request()).await.into_result().unwrap_err();
+
+        assert!(
+            litellm_error::Report::new(&error)
+                .to_string()
+                .contains("AADSTS90033"),
+            "{error:?}"
+        );
+        assert_eq!(
+            endpoint.posts.load(std::sync::atomic::Ordering::SeqCst),
+            expected_posts
+        );
+        assert_eq!(started.elapsed(), expected_wait);
     }
 
     #[derive(Debug)]
