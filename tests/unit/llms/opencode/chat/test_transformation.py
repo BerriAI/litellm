@@ -1,8 +1,8 @@
 import asyncio
 import json
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Iterator, Mapping
 from datetime import datetime
-from typing import Final
+from typing import Final, cast
 
 import httpx
 import pytest
@@ -16,6 +16,74 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.opencode.chat.transformation import OpenCodeGoMessagesChatConfig
 from litellm.llms.opencode.common_utils import go_headers
+from litellm.types.utils import ModelResponseStream
+
+
+def _messages_sse(tool: bool) -> tuple[str, ...]:
+    block: Final = (
+        {"type": "tool_use", "id": "call_test", "name": "weather", "input": {}}
+        if tool
+        else {"type": "text", "text": ""}
+    )
+    delta: Final = (
+        {"type": "input_json_delta", "partial_json": '{"city":"Paris"}'}
+        if tool
+        else {"type": "text_delta", "text": "hello"}
+    )
+    events: Final = (
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_test",
+                "type": "message",
+                "role": "assistant",
+                "model": "fixture-messages",
+                "content": [],
+                "usage": {"input_tokens": 10, "output_tokens": 0},
+            },
+        },
+        {"type": "content_block_start", "index": 0, "content_block": block},
+        {"type": "content_block_delta", "index": 0, "delta": delta},
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use" if tool else "end_turn"},
+            "usage": {"output_tokens": 5},
+        },
+        {"type": "message_stop"},
+    )
+    return tuple(f"data: {json.dumps(event)}" for event in events)
+
+
+async def _async_lines(lines: tuple[str, ...]) -> AsyncIterator[str]:
+    for line in lines:
+        yield line
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", (True, False), ids=("sync", "async"))
+@pytest.mark.parametrize("tool", (False, True), ids=("text", "tool"))
+async def test_messages_stream_translates_deltas_and_finish_reason(sync: bool, tool: bool) -> None:
+    lines: Final = _messages_sse(tool)
+    stream: Final = OpenCodeGoMessagesChatConfig().get_model_response_iterator_for_request(
+        iter(lines) if sync else _async_lines(lines), sync, False, {}
+    )
+    chunks: Final = (
+        tuple(cast(Iterator[ModelResponseStream], stream))
+        if sync
+        else tuple([chunk async for chunk in cast(AsyncIterator[ModelResponseStream], stream)])
+    )
+    choices: Final = tuple(chunk.choices[0] for chunk in chunks if chunk.choices)
+    assert tuple(choice.finish_reason for choice in choices if choice.finish_reason) == (
+        "tool_calls" if tool else "stop",
+    )
+    if not tool:
+        assert "".join(choice.delta.content or "" for choice in choices) == "hello"
+        return
+    calls: Final = tuple(choice.delta.tool_calls for choice in choices if choice.delta.tool_calls)
+    assert calls[0][0].id == "call_test"
+    assert calls[0][0].function.name == "weather"
+    assert "".join(call[0].function.arguments or "" for call in calls) == '{"city":"Paris"}'
 
 
 @pytest.fixture
@@ -595,7 +663,9 @@ def test_stream_chunk_builder_reads_list_cost_from_dict_chunks():
 
 
 @pytest.mark.parametrize(("model", "cache_marks"), [("qwen3.8-flash", 0), ("minimax-m3", 0), ("claude-haiku-5-5", 4)])
-def test_go_messages_route_carries_prompt_cache_breakpoint_to_cache_control_only_for_claude(model: str, cache_marks: int):
+def test_go_messages_route_carries_prompt_cache_breakpoint_to_cache_control_only_for_claude(
+    model: str, cache_marks: int
+):
     marked_notes: Final = [
         {"type": "text", "text": f"Note {n}", "prompt_cache_breakpoint": {"mode": "explicit"}} for n in range(4)
     ]
