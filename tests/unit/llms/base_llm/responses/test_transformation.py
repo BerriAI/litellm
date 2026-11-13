@@ -1,7 +1,7 @@
 """The shared Responses API config contract."""
 
 import asyncio, importlib, json
-from collections.abc import Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 
 import httpx
 import pytest
@@ -1424,7 +1424,14 @@ async def test_responses_in_stream_error_event_falls_back_only_when_retriable(
 
 
 def _openai_response(model: str, status: str) -> Mapping[str, object]:
-    return {"id": f"resp_{model}", "object": "response", "created_at": 0, "status": status, "model": model, "output": []}
+    return {
+        "id": f"resp_{model}",
+        "object": "response",
+        "created_at": 0,
+        "status": status,
+        "model": model,
+        "output": [],
+    }
 
 
 def _openai_created(model: str) -> Mapping[str, object]:
@@ -1437,10 +1444,15 @@ _IN_STREAM_FAILURES: Final = (
     {"type": "response.failed", "response": {**_openai_response("primary-model", "failed"), "error": _INTERRUPTED}},
 )
 _COMPLETED_TOOL_CALL: Final = {
-    "type": "response.output_item.done", "output_index": 0,
+    "type": "response.output_item.done",
+    "output_index": 0,
     "item": {
-        "type": "function_call", "id": "fc_primary", "call_id": "call_primary",
-        "name": "shell", "arguments": '{"command": "echo run"}', "status": "completed",
+        "type": "function_call",
+        "id": "fc_primary",
+        "call_id": "call_primary",
+        "name": "shell",
+        "arguments": '{"command": "echo run"}',
+        "status": "completed",
     },
 }
 _SHELL_TOOL: Final = {"type": "function", "name": "shell", "parameters": {"type": "object"}}
@@ -1481,21 +1493,21 @@ async def test_responses_fallback_surfaces_the_primary_error_once_a_completed_to
         side_effect=_upstream_streaming(_openai_created("primary-model"), _COMPLETED_TOOL_CALL, failure)
     )
     router: Final = _openai_primary_with_fallback()
-    seen: Final[list[object]] = []
     try:
         stream: Final = await router.aresponses(
             model="primary", input="Run echo run.", stream=True, tools=[_SHELL_TOOL], tool_choice="required"
         )
+        assert isinstance(stream, AsyncIterator)
+        events: Final = aiter(stream)
+        created: Final = await anext(events)
+        done: Final = await anext(events)
         with pytest.raises(litellm.InternalServerError, match="interrupted"):
-            async for event in stream:
-                seen.append(event)
+            await anext(events)
     finally:
         router.discard()
-    assert [getattr(event, "type") for event in seen] == [
-        ResponsesAPIStreamEvents.RESPONSE_CREATED,
-        ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
-    ]
-    assert getattr(getattr(seen[1], "item"), "call_id") == "call_primary"
+    assert created.type == ResponsesAPIStreamEvents.RESPONSE_CREATED
+    assert done.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE
+    assert getattr(getattr(done, "item"), "call_id") == "call_primary"
     assert _requested_models(route) == ["primary-model"]
 
 
