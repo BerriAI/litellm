@@ -3583,7 +3583,10 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
         customer_hierarchy: Final = end_user_params.get("customer_hierarchy")
         if isinstance(customer_hierarchy, CustomerHierarchyAuth):
             check_customer_hierarchy_key_scope(
-                customer_hierarchy, _KEY_METADATA_ADAPTER.validate_python(valid_token_dict.get("metadata") or {})
+                customer_hierarchy,
+                _KEY_METADATA_ADAPTER.validate_python(
+                    valid_token_dict.get("metadata") or {}  # pyright: ignore[reportUnknownMemberType]  # untyped key dump, validated here
+                ),
             )
             valid_token_dict["customer_hierarchy"] = customer_hierarchy
         if _end_user_object is not None:

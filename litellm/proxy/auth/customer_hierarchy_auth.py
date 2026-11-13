@@ -13,8 +13,10 @@ from fastapi import status
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 import litellm
+from litellm._internal_context import with_service_target
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy.auth.auth_checks import can_object_call_model
+from litellm.proxy.auth.auth_object_prefetch import AUTH_OBJECTS_TARGET
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, get_management_object_ttl
 from litellm.proxy.management_helpers.customer_hierarchy import (
@@ -133,6 +135,7 @@ def _member_table(prisma_client: "PrismaClient") -> TableActions[PrismaRecord]:
     return prisma_client.db.litellm_customermembertable  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportAny]  # prisma tables are generated at build time
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def get_customer_hierarchy(
     customer_member_id: str,
     prisma_client: "PrismaClient",
