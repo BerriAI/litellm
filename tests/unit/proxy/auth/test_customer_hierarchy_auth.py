@@ -1,11 +1,16 @@
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Final
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from pydantic import TypeAdapter
 
 import litellm
+import litellm.proxy.proxy_server as ps
+from litellm.caching.dual_cache import DualCache
+from litellm.models.budget import BudgetLimit
 from litellm.proxy._types import ProxyException
 from litellm.proxy.auth.customer_hierarchy_auth import (
     CUSTOMER_MEMBER_ID_HEADER,
@@ -15,6 +20,7 @@ from litellm.proxy.auth.customer_hierarchy_auth import (
     check_customer_hierarchy_budget,
     check_customer_hierarchy_key_scope,
     check_customer_hierarchy_model_access,
+    check_customer_hierarchy_windows,
     customer_hierarchy_from_member_row,
     customer_identity_from_headers,
     customer_member_id_from_headers,
@@ -26,12 +32,14 @@ from litellm.proxy.auth.customer_hierarchy_auth import (
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_helpers.customer_hierarchy import ErrorCode, Failure
+from litellm.proxy.spend_tracking.budget_reservation import customer_window_counters
 from litellm.types.proxy.auth.customer_hierarchy import (
     CustomerHierarchyAuth,
     CustomerRequestIdentity,
     CustomerScopeAuth,
 )
 from litellm.types.proxy.management_endpoints.customer_hierarchy import CustomerMember
+from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 NOW: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
@@ -551,3 +559,168 @@ async def test_an_unknown_member_stays_refused_without_an_alias_or_when_registra
         )
     assert (failed.value.code, failing.calls) == ("401", (("org-1", "user-7"),))
     assert "user-7" not in members.rows
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exhausted_duration", ("1mo", "12mo"))
+async def test_either_customer_cap_blocks_while_the_other_has_capacity(exhausted_duration: str, monkeypatch) -> None:
+    hierarchy = customer_hierarchy_from_member_row(
+        _row(
+            template={
+                "budget_limits": [
+                    {"budget_duration": "1mo", "max_budget": 10},
+                    {"budget_duration": "12mo", "max_budget": 100},
+                ]
+            }
+        ),
+        NOW,
+    )
+    backend = FakeSpendCounters()
+    store = backend.store()
+    monkeypatch.setattr(ps, "spend_counter_store", store)
+    monkeypatch.setattr(ps, "prisma_client", None)
+    member = hierarchy.scopes[-1]
+    counters = customer_window_counters(member.key, member.entity_id, member.budget_limits, now=NOW)
+    for counter in counters:
+        await store.set(counter.counter_key, 1.0)
+    await check_customer_hierarchy_windows(hierarchy, NOW)
+    exhausted = next(counter for counter in counters if counter.window_duration == exhausted_duration)
+    await store.set(exhausted.counter_key, exhausted.max_budget)
+    with pytest.raises(litellm.BudgetExceededError) as error:
+        await check_customer_hierarchy_windows(hierarchy, NOW)
+    assert error.value.entity_id == member.entity_id
+    assert error.value.current_cost == exhausted.max_budget
+    assert exhausted_duration in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_missing_customer_window_balance_rejects_request(monkeypatch) -> None:
+    hierarchy = customer_hierarchy_from_member_row(
+        _row(template={"budget_limits": [{"budget_duration": "1mo", "max_budget": 10}]}), NOW
+    )
+    monkeypatch.setattr(ps, "spend_counter_store", FakeSpendCounters().store())
+    monkeypatch.setattr(ps, "prisma_client", None)
+    with pytest.raises(ProxyException) as error:
+        await check_customer_hierarchy_windows(hierarchy, NOW)
+    assert error.value.code == "503"
+    assert error.value.param == "budget_limits"
+
+
+@pytest.mark.asyncio
+async def test_customer_windows_are_independent_for_members_sharing_a_budget(monkeypatch) -> None:
+    first = customer_hierarchy_from_member_row(
+        _row(template={"budget_limits": [{"budget_duration": "1mo", "max_budget": 10}]}), NOW
+    )
+    first_scope = first.scopes[-1]
+    second_scope = first_scope.model_copy(update={"entity_id": "member-2"})
+    second = first.model_copy(update={"customer_member_id": "member-2", "scopes": (second_scope,)})
+    backend = FakeSpendCounters()
+    store = backend.store()
+    monkeypatch.setattr(ps, "spend_counter_store", store)
+    monkeypatch.setattr(ps, "prisma_client", None)
+    first_counter = customer_window_counters(
+        first_scope.key, first_scope.entity_id, first_scope.budget_limits, now=NOW
+    )[0]
+    second_counter = customer_window_counters(
+        second_scope.key, second_scope.entity_id, second_scope.budget_limits, now=NOW
+    )[0]
+    await store.set(first_counter.counter_key, 10)
+    await store.set(second_counter.counter_key, 0)
+    with pytest.raises(litellm.BudgetExceededError):
+        await check_customer_hierarchy_windows(first, NOW)
+    await check_customer_hierarchy_windows(second, NOW)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope_key", ("customer_org", "customer_team", "customer_member"))
+@pytest.mark.parametrize("duration", ("1mo", "12mo"))
+async def test_customer_window_repairs_stale_redis_and_rejects_from_durable_spend(monkeypatch, scope_key, duration):
+    scope: Final = CustomerScopeAuth(
+        key=scope_key,
+        entity_id="subject",
+        budget_limits=(BudgetLimit(budget_duration=duration, max_budget=10),),
+    )
+    hierarchy: Final = CustomerHierarchyAuth(customer_org_id="org", scopes=(scope,))
+    counter: Final = customer_window_counters(scope.key, scope.entity_id, scope.budget_limits, now=NOW)[0]
+    backend: Final = FakeSpendCounters()
+    store: Final = backend.store()
+    await store.set(counter.counter_key, 2.0)
+    prisma: Final = MagicMock()
+    prisma.db.litellm_budgetwindowspend.find_unique = AsyncMock(
+        return_value=SimpleNamespace(window_start=counter.window_start, spend=12.0)
+    )
+    monkeypatch.setattr(ps, "prisma_client", prisma)
+    monkeypatch.setattr(ps, "spend_counter_store", store)
+    monkeypatch.setattr(ps, "spend_counter_cache", DualCache())
+    monkeypatch.setattr(ps, "general_settings", {"fail_closed_budget_enforcement": False})
+
+    with pytest.raises(litellm.BudgetExceededError) as error:
+        await check_customer_hierarchy_windows(hierarchy, NOW)
+
+    assert error.value.current_cost == 12.0
+    assert error.value.entity_id == scope.entity_id
+    assert backend.redis[counter.counter_key] == 12.0
+    prisma.db.litellm_budgetwindowspend.find_unique.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outage", ("redis_read", "redis_seed", "database"))
+async def test_customer_window_unavailable_stays_closed_without_legacy_flag(monkeypatch, outage):
+    scope: Final = CustomerScopeAuth(
+        key="customer_member",
+        entity_id="outage-member",
+        budget_limits=(BudgetLimit(budget_duration="1mo", max_budget=10),),
+    )
+    hierarchy: Final = CustomerHierarchyAuth(customer_org_id="org", scopes=(scope,))
+    counter: Final = customer_window_counters(scope.key, scope.entity_id, scope.budget_limits, now=NOW)[0]
+    backend: Final = FakeSpendCounters(fail=outage == "redis_read", memory={counter.counter_key: 2.0})
+    prisma: Final = MagicMock()
+
+    async def find_window(**_):
+        if outage == "database":
+            raise ConnectionError("database unavailable")
+        if outage == "redis_seed":
+            backend.fail = True
+        return SimpleNamespace(window_start=counter.window_start, spend=0.0)
+
+    prisma.db.litellm_budgetwindowspend.find_unique = AsyncMock(side_effect=find_window)
+    monkeypatch.setattr(ps, "prisma_client", prisma)
+    monkeypatch.setattr(ps, "spend_counter_store", backend.store())
+    monkeypatch.setattr(ps, "spend_counter_cache", DualCache())
+    monkeypatch.setattr(ps, "general_settings", {"fail_closed_budget_enforcement": False})
+
+    with pytest.raises(ProxyException) as error:
+        await check_customer_hierarchy_windows(hierarchy, NOW)
+
+    assert error.value.code == "503"
+    assert error.value.param == "budget_limits"
+
+
+@pytest.mark.asyncio
+async def test_customer_window_floor_checks_reuse_main_cache_and_one_mget_per_request(monkeypatch):
+    scope: Final = CustomerScopeAuth(
+        key="customer_member",
+        entity_id="cached-floor-member",
+        budget_limits=tuple(BudgetLimit(budget_duration=duration, max_budget=10) for duration in ("1mo", "12mo")),
+    )
+    hierarchy: Final = CustomerHierarchyAuth(customer_org_id="org", scopes=(scope,))
+    counters: Final = customer_window_counters(scope.key, scope.entity_id, scope.budget_limits, now=NOW)
+    backend: Final = FakeSpendCounters(redis={counter.counter_key: 4.0 for counter in counters})
+    starts: Final = {counter.window_duration: counter.window_start for counter in counters}
+    prisma: Final = MagicMock()
+    prisma.db.litellm_budgetwindowspend.find_unique = AsyncMock(
+        side_effect=lambda where: SimpleNamespace(
+            window_start=starts[where["entity_type_entity_id_window_duration"]["window_duration"]], spend=2.0
+        )
+    )
+    monkeypatch.setattr(ps, "prisma_client", prisma)
+    monkeypatch.setattr(ps, "spend_counter_store", backend.store())
+    monkeypatch.setattr(ps, "spend_counter_cache", DualCache())
+
+    await check_customer_hierarchy_windows(hierarchy, NOW)
+    await check_customer_hierarchy_windows(hierarchy, NOW)
+
+    assert prisma.db.litellm_budgetwindowspend.find_unique.await_count == 2
+    assert backend.redis == {counter.counter_key: 4.0 for counter in counters}
+    assert len(backend.commands) == 2
+    assert all(command.startswith("MGET ") for command in backend.commands)

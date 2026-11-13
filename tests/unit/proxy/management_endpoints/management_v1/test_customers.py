@@ -20,7 +20,11 @@ if TYPE_CHECKING:
     from prisma import Prisma
 
 
-def client(role: LitellmUserRoles = LitellmUserRoles.PROXY_ADMIN, cache: UserApiKeyCache | None = None) -> TestClient:
+def client(
+    role: LitellmUserRoles = LitellmUserRoles.PROXY_ADMIN,
+    cache: UserApiKeyCache | None = None,
+    database: Database | None = None,
+) -> TestClient:
     app: Final = FastAPI()
     app.include_router(router)
 
@@ -30,7 +34,7 @@ def client(role: LitellmUserRoles = LitellmUserRoles.PROXY_ADMIN, cache: UserApi
 
     auth: Final = UserAPIKeyAuth(user_id="admin", user_role=role)
     hierarchy: Final = CustomerHierarchy(
-        cast("Prisma", Database()), clock=lambda: NOW
+        cast("Prisma", database if database is not None else Database()), clock=lambda: NOW
     )  # cast-ok: in-memory Prisma edge
     app.dependency_overrides[user_api_key_auth] = lambda: auth
     app.dependency_overrides[get_customer_hierarchy] = lambda: hierarchy
@@ -67,6 +71,61 @@ def family(http: TestClient) -> dict[str, object]:
     )
     assert team.status_code == 201, team.text
     return org.json()
+
+
+def test_member_can_reuse_global_budget_but_not_an_owned_override() -> None:
+    database: Final = Database()
+    asyncio.run(database.litellm_budgettable.create(data={
+        "budget_id": "global", "budget_limits": [{"budget_duration": "12mo", "max_budget": 1000}],
+    }))
+    http: Final = client(database=database)
+    family(http)
+    created: Final = http.post("/management/v1/customer_members", json={
+        "customer_member_id": "global-member", "parent_team_id": "team", "budget_id": "global",
+        "budget_override": {"budget_limits": [{"budget_duration": "1mo", "max_budget": 100}]},
+    })
+    assert created.status_code == 201, created.text
+    assert {row["budget_duration"]: row["max_budget"] for row in created.json()["effective_budget"]["budget_limits"]} == {
+        "1mo": 100, "12mo": 1000,
+    }
+    shared_override: Final = http.post("/management/v1/customer_members", json={
+        "customer_member_id": "other-member", "parent_team_id": "team",
+        "budget_id": created.json()["budget_override_id"],
+    })
+    assert shared_override.status_code == 422, shared_override.text
+
+
+@pytest.mark.parametrize("clear_limits", (None, []))
+def test_member_window_override_round_trip_and_clear(clear_limits: object) -> None:
+    http: Final = client()
+    family(http)
+    template: Final = http.post(
+        "/management/v1/customer_organizations/org/default_budgets",
+        json={"name": "combined", "budget_limits": [
+            {"budget_duration": "1mo", "max_budget": 100},
+            {"budget_duration": "12mo", "max_budget": 1000},
+        ]},
+    )
+    assert template.status_code == 201, template.text
+    budget_id: Final = next(row["budget_id"] for row in template.json()["default_budgets"] if row["name"] == "combined")
+    created: Final = http.post("/management/v1/customer_members", json={
+        "customer_member_id": "window-member", "parent_team_id": "team", "budget_id": budget_id,
+        "budget_override": {"budget_limits": [{"budget_duration": "1mo", "max_budget": 0}]},
+    })
+    assert created.status_code == 201, created.text
+    assert {row["budget_duration"]: row["max_budget"] for row in created.json()["effective_budget"]["budget_limits"]} == {
+        "1mo": 0, "12mo": 1000,
+    }
+    renamed: Final = http.patch("/management/v1/customer_members/window-member", json={"alias": "renamed"})
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["effective_budget"]["budget_limits"] == created.json()["effective_budget"]["budget_limits"]
+    cleared: Final = http.patch("/management/v1/customer_members/window-member", json={
+        "budget_override": {"budget_limits": clear_limits},
+    })
+    assert cleared.status_code == 200, cleared.text
+    assert {row["budget_duration"]: row["max_budget"] for row in cleared.json()["effective_budget"]["budget_limits"]} == {
+        "1mo": 100, "12mo": 1000,
+    }
 
 
 @pytest.mark.parametrize("role", (LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY))
@@ -171,6 +230,7 @@ def test_template_edits_propagate_and_only_live_override_fields_win() -> None:
         "tpm_limit": None,
         "allowed_models": ["model-b"],
         "budget_duration": None,
+        "budget_limits": None,
         "model_tpm_limit": None,
         "model_rpm_limit": None,
     }

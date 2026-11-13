@@ -4,6 +4,7 @@ from typing import Final
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, NonNegativeInt, field_validator
 
+from litellm.models.budget import BudgetLimits
 from litellm.proxy.common_utils.timezone_utils import budget_duration_error
 
 
@@ -16,6 +17,7 @@ class Budget(BaseModel):
     rpm_limit: int | None = Field(default=None, ge=0)
     allowed_models: tuple[str, ...] | None = None
     budget_duration: str | None = None
+    budget_limits: BudgetLimits | None = None
     model_tpm_limit: Mapping[str, NonNegativeInt] | None = None
     model_rpm_limit: Mapping[str, NonNegativeInt] | None = None
 

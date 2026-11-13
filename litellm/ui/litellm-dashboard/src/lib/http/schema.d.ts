@@ -2186,11 +2186,12 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * New Budget
+         * New Budget Endpoint
          * @description Create a new budget object. Can apply this to teams, orgs, end-users, keys.
          *
          *     Parameters:
          *     - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
+         *     - budget_limits: Optional[list] - Concurrent budget windows with independent caps and reset times.
          *     - budget_id: Optional[str] - The id of the budget. If not provided, a new id will be generated.
          *     - max_budget: Optional[float] - The max budget for the budget.
          *     - soft_budget: Optional[float] - The soft budget for the budget.
@@ -2203,7 +2204,7 @@ export interface paths {
          *     - model_rpm_limit: Optional[dict] - Max requests per minute per model, shared by everything on this budget. Example: {"gpt-4o": 200}
          *     - budget_reset_at: Optional[datetime] - Datetime when the initial budget is reset. Default is now.
          */
-        post: operations["new_budget_budget_new_post"];
+        post: operations["new_budget_endpoint_budget_new_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2245,11 +2246,12 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Update Budget
+         * Update Budget Endpoint
          * @description Update an existing budget object.
          *
          *     Parameters:
          *     - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
+         *     - budget_limits: Optional[list] - Replace concurrent budget windows. Null or an empty list clears them.
          *     - budget_id: Optional[str] - The id of the budget. If not provided, a new id will be generated.
          *     - max_budget: Optional[float] - The max budget for the budget.
          *     - soft_budget: Optional[float] - The soft budget for the budget.
@@ -2262,7 +2264,7 @@ export interface paths {
          *     - model_rpm_limit: Optional[dict] - Max requests per minute per model, shared by everything on this budget. Example: {"gpt-4o": 200}
          *     - budget_reset_at: Optional[datetime] - Update the Datetime when the budget was last reset.
          */
-        post: operations["update_budget_budget_update_post"];
+        post: operations["update_budget_endpoint_budget_update_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -29444,6 +29446,8 @@ export interface components {
             allowed_models?: string[] | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Model Rpm Limit */
@@ -29477,6 +29481,18 @@ export interface components {
             /** Id */
             id: string;
         };
+        /** BudgetLimit */
+        BudgetLimit: {
+            /**
+             * Budget Duration
+             * @enum {string}
+             */
+            budget_duration: "1mo" | "12mo";
+            /** Max Budget */
+            max_budget: number;
+            /** Reset At */
+            reset_at?: string | null;
+        };
         /**
          * BudgetLimitEntry
          * @description A single budget window with its own limit and independent reset schedule.
@@ -29502,6 +29518,8 @@ export interface components {
             budget_duration?: string | null;
             /** Budget Id */
             budget_id: string;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /**
@@ -29525,8 +29543,45 @@ export interface components {
              */
             updated_at: string;
         };
-        /** BudgetNewRequest */
-        BudgetNewRequest: {
+        /** BudgetRequest */
+        BudgetRequest: {
+            /** Budgets */
+            budgets: string[];
+        };
+        /** BudgetTemplate */
+        BudgetTemplate: {
+            /** Allowed Models */
+            allowed_models?: string[] | null;
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
+            /**
+             * Is Default
+             * @default false
+             */
+            is_default: boolean;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Model Rpm Limit */
+            model_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Model Tpm Limit */
+            model_tpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Name */
+            name: string;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /** Soft Budget */
+            soft_budget?: number | null;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
+        };
+        /** BudgetWriteRequest */
+        BudgetWriteRequest: {
             /**
              * Budget Duration
              * @description Max duration budget should be set for (e.g. '1hr', '1d', '28d')
@@ -29537,6 +29592,11 @@ export interface components {
              * @description The unique budget id.
              */
             budget_id?: string | null;
+            /**
+             * Budget Limits
+             * @description Independent budget windows. Omit to preserve, or pass null or an empty list to clear.
+             */
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /**
              * Budget Reset At
              * @description Datetime when the budget is reset
@@ -29592,41 +29652,6 @@ export interface components {
              * Tpm Limit
              * @description Max tokens per minute, allowed for this budget id.
              */
-            tpm_limit?: number | null;
-        };
-        /** BudgetRequest */
-        BudgetRequest: {
-            /** Budgets */
-            budgets: string[];
-        };
-        /** BudgetTemplate */
-        BudgetTemplate: {
-            /** Allowed Models */
-            allowed_models?: string[] | null;
-            /** Budget Duration */
-            budget_duration?: string | null;
-            /**
-             * Is Default
-             * @default false
-             */
-            is_default: boolean;
-            /** Max Budget */
-            max_budget?: number | null;
-            /** Model Rpm Limit */
-            model_rpm_limit?: {
-                [key: string]: number;
-            } | null;
-            /** Model Tpm Limit */
-            model_tpm_limit?: {
-                [key: string]: number;
-            } | null;
-            /** Name */
-            name: string;
-            /** Rpm Limit */
-            rpm_limit?: number | null;
-            /** Soft Budget */
-            soft_budget?: number | null;
-            /** Tpm Limit */
             tpm_limit?: number | null;
         };
         /**
@@ -33244,6 +33269,11 @@ export interface components {
         CustomerScopeAuth: {
             /** Allowed Models */
             allowed_models?: string[] | null;
+            /**
+             * Budget Limits
+             * @default []
+             */
+            budget_limits: components["schemas"]["BudgetLimit"][];
             /** Entity Id */
             entity_id: string;
             /**
@@ -42428,6 +42458,8 @@ export interface components {
             budget_duration?: string | null;
             /** Budget Id */
             budget_id: string;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /**
              * Is Default
              * @default false
@@ -50099,6 +50131,8 @@ export interface components {
             allowed_models?: string[] | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Is Default */
             is_default?: boolean | null;
             /** Max Budget */
@@ -57951,7 +57985,7 @@ export interface operations {
             };
         };
     };
-    new_budget_budget_new_post: {
+    new_budget_endpoint_budget_new_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -57960,7 +57994,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["BudgetNewRequest"];
+                "application/json": components["schemas"]["BudgetWriteRequest"];
             };
         };
         responses: {
@@ -58015,7 +58049,7 @@ export interface operations {
             };
         };
     };
-    update_budget_budget_update_post: {
+    update_budget_endpoint_budget_update_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -58024,7 +58058,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["BudgetNewRequest"];
+                "application/json": components["schemas"]["BudgetWriteRequest"];
             };
         };
         responses: {

@@ -5,6 +5,7 @@ from typing import Final, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
+from litellm.models.budget import BudgetLimit
 from litellm.types.integrations.slack_alerting import Litellm_EntityType
 
 CustomerScopeKey: TypeAlias = Literal["customer_org", "customer_team", "customer_member"]
@@ -28,6 +29,7 @@ class CustomerScopeAuth(BaseModel):
     entity_id: str
     spend: float = 0.0
     max_budget: float | None = None
+    budget_limits: tuple[BudgetLimit, ...] = ()
     tpm_limit: int | None = None
     rpm_limit: int | None = None
     allowed_models: tuple[str, ...] | None = None
@@ -77,6 +79,16 @@ class CustomerHierarchyIds:
 
 _FIELDS: Final = TypeAdapter(Mapping[str, object])
 _NO_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
+_BUDGET_SCOPES: Final = TypeAdapter(tuple[CustomerScopeAuth, ...])
+
+
+def customer_budget_scopes_metadata(hierarchy: CustomerHierarchyAuth | None) -> str | None:
+    if hierarchy is None:
+        return None
+    return _BUDGET_SCOPES.dump_json(
+        hierarchy.scopes,
+        include={"__all__": {"key": True, "entity_id": True, "budget_limits": True}},
+    ).decode()
 
 
 def _mapping(value: object) -> Mapping[str, object]:
@@ -108,3 +120,14 @@ def customer_hierarchy_ids_from_request(kwargs: Mapping[str, object]) -> Custome
         customer_team_id=_stamped_id(metadata, "team"),
         customer_member_id=_stamped_id(metadata, "member"),
     )
+
+
+def customer_budget_scopes_from_request(
+    kwargs: Mapping[str, object],
+) -> tuple[CustomerScopeAuth, ...] | None:
+    metadata: Final = _stamped_metadata(_mapping(kwargs.get("litellm_params")))
+    snapshot: Final = metadata.get("user_api_key_customer_budget_scopes")
+    if not isinstance(snapshot, str):
+        return None
+    scopes: Final = _BUDGET_SCOPES.validate_json(snapshot)
+    return tuple(scope for scope in scopes if metadata.get(f"user_api_key_{scope.key}_id") == scope.entity_id)

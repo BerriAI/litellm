@@ -30,6 +30,7 @@ from litellm.proxy.spend_tracking.spend_counter_batch import (
     record_spend_counter_value,
 )
 from litellm.redis.stores.spend_counters import END_USER_COUNTER_PREFIX, SPEND_COUNTERS_TARGET, SpendCounterStore
+from litellm.redis.stores.spend_counters.types import parse_customer_window_counter
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.project_repository import ProjectRepository
 from litellm.repositories.table_repositories import (
@@ -54,6 +55,9 @@ _WINDOW_SPEND_ENTITY_TYPES: Final[Mapping[str, str]] = MappingProxyType(
     {
         "Key": Litellm_EntityType.KEY.value,
         "Team": Litellm_EntityType.TEAM.value,
+        "customer_org": Litellm_EntityType.CUSTOMER_ORG.value,
+        "customer_team": Litellm_EntityType.CUSTOMER_TEAM.value,
+        "customer_member": Litellm_EntityType.CUSTOMER_MEMBER.value,
     }
 )
 
@@ -133,6 +137,10 @@ class SpendCounterReseed:
         """
         if prisma_client is None:
             return None
+        customer_window: Final = parse_customer_window_counter(counter_key)
+        if customer_window is not None:
+            scope, entity_id, duration, start = customer_window
+            return await SpendCounterReseed.window_from_db(prisma_client, scope, entity_id, duration, start)
         # Per-window key/team counters share prefixes with primary counters
         # but don't correspond to a DB row. Do not reject arbitrary entity IDs
         # or tag names that merely contain ":window:".
@@ -266,11 +274,13 @@ class SpendCounterReseed:
     async def _read_cached(spend_counter_store: SpendCounterStore, counter_key: str) -> float | None:
         """Re-check after acquiring the lock. A clean Redis miss, in the request's MGET or a GET, skips memory,
         which only holds this pod's writes."""
-        batched: Final = await SpendCounterReseed._read_active_batch(counter_key)
-        if batched is not None:
-            return batched[0]
-        value, _ = await spend_counter_store.read(counter_key)
+        value, _ = await SpendCounterReseed._cached_reading(spend_counter_store, counter_key)
         return None if value is None else float(value)
+
+    @staticmethod
+    async def _cached_reading(spend_counter_store: SpendCounterStore, counter_key: str) -> tuple[float | None, bool]:
+        batched: Final = await SpendCounterReseed._read_active_batch(counter_key)
+        return batched if batched is not None else await spend_counter_store.read(counter_key)
 
     @staticmethod
     async def window_from_table(
@@ -319,10 +329,10 @@ class SpendCounterReseed:
             )
             return None
 
-        if row is None:
-            return None
-        if _as_utc(row.window_start) < _as_utc(expected_window_start):
-            return None
+        if row is None or _as_utc(row.window_start) < _as_utc(expected_window_start):
+            # Customer windows are new maintained balances, with no historical
+            # SpendLogs aggregate. A missing period starts at zero, a failed read above does not.
+            return 0.0 if entity_type.startswith("customer_") else None
         return float(row.spend or 0.0)
 
     @staticmethod
@@ -407,10 +417,16 @@ class SpendCounterReseed:
         entity_id: str,
         window_duration: str | None,
         window_start: datetime,
+        *,
+        require_authoritative: bool = False,
     ) -> float | None:
+        strict: Final = require_authoritative or entity_type.startswith("customer_")
         lock: Final = await SpendCounterReseed._get_lock(counter_key)
         async with lock:
-            cached: Final = await SpendCounterReseed._read_cached(spend_counter_store, counter_key)
+            cached, authoritative = await SpendCounterReseed._cached_reading(spend_counter_store, counter_key)
+            if strict and spend_counter_store.has_redis and not authoritative:
+                # A pod-local value or durable floor omits other workers' holds and unflushed charges.
+                return None
             if cached is not None:
                 return cached
 
@@ -430,6 +446,8 @@ class SpendCounterReseed:
                     "SpendCounterReseed.coalesced_window: failed to warm counter %s",
                     counter_key,
                 )
+                if strict:
+                    return None
                 raise
             if spend_counter_store.has_redis:
                 record_spend_counter_value(counter_key, float(seeded))
