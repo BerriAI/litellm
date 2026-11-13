@@ -509,6 +509,10 @@ def _tls(**settings: object) -> Mapping[str, object]:
     return MappingProxyType({**settings, "in_memory_llm_clients_cache": LLMClientCache()})
 
 
+CALLER_CLIENT_STREAM_TIMEOUT_DEBUG_INFO: Final = (
+    "The caller client's ReadTimeout from a stalled stream reaches the caller without litellm_debug_info, "
+    "which Python's stream mapping attaches from the deployment's litellm_params"
+)
 E04_HTTPX_CHUNK_READS: Final = "E04: httpx yields each HTTP chunk whole from a 64 KiB socket read; hyper hands a large chunk over in pieces of its smaller read buffer"
 A10_NO_MAX_TOKENS: Final = "A10: native admission hands a call without an int max_tokens to Python, whose signature raises the TypeError; only dispatch differs"
 C_UNSENT_CALL_FLAG: Final = (
@@ -2022,6 +2026,7 @@ TRANSPORT_CASES: Final = (
         "caller_client_stream_read_stalls_past_timeout",
         _caller(stream=True, timeout=0.5),
         upstream=(_stream(SLOW_STREAM, chunk_delay=1.0),),
+        gaps=_gaps(outcome=CALLER_CLIENT_STREAM_TIMEOUT_DEBUG_INFO),
     ),
     Case(
         "caller_client_thinking_signature_rejected_then_retried",
@@ -3858,6 +3863,38 @@ AZURE_SHAPING_CASES: Final = tuple(
     )
 )
 
+UNREACHABLE_AZURE_BASE: Final = "http://127.0.0.1:9/d/dep-e03/anthropic"
+
+AZURE_ERROR_CASES: Final = tuple(
+    replace(case, model=AZURE_CLAUDE, rust_providers=AZURE_AI)
+    for case in (
+        Case("azure_ai_upstream_404", upstream=(_failure(404, "not_found_error", "Resource not found"),)),
+        Case(
+            "azure_ai_upstream_429", upstream=(_failure(429, "rate_limit_error", "slow down", **{"retry-after": "7"}),)
+        ),
+        Case("azure_ai_unreachable_base", _kw(api_base=UNREACHABLE_AZURE_BASE), upstream=()),
+        Case(
+            "azure_ai_unreachable_environment_base",
+            _kw(api_base=None),
+            env=MappingProxyType({"AZURE_API_BASE": UNREACHABLE_AZURE_BASE}),
+            upstream=(),
+        ),
+        Case(
+            "azure_ai_unreachable_environment_base_stream",
+            _kw(api_base=None, stream=True),
+            env=MappingProxyType({"AZURE_API_BASE": UNREACHABLE_AZURE_BASE}),
+            upstream=(),
+        ),
+        Case("azure_ai_deployment_key_with_trailing_newline", _kw(api_key="sk-azure-key\n"), upstream=()),
+        Case(
+            "azure_ai_environment_key_with_trailing_newline",
+            _kw(api_key=None),
+            env=MappingProxyType({"AZURE_API_KEY": "sk-azure-key\n"}),
+            upstream=(),
+        ),
+    )
+)
+
 AZURE_NON_CLAUDE: Final = "azure_ai/Phi-4"
 MESSAGES_PASSTHROUGH: Final = MappingProxyType({"supported_endpoints": ["/v1/messages"]})
 
@@ -3905,6 +3942,7 @@ CASES: Final = (
     *AZURE_URL_CASES,
     *ANTHROPIC_URL_CASES,
     *AZURE_SHAPING_CASES,
+    *AZURE_ERROR_CASES,
 )
 
 
@@ -4107,6 +4145,7 @@ def _error(error: BaseException, phase: str, chunks: Iterable[object] = ()) -> M
         "llm_provider": getattr(error, "llm_provider", None),
         "model": getattr(error, "model", None),
         "message": _normalized(str(error)),
+        "debug_info": _normalized(str(getattr(error, "litellm_debug_info", None))),
         "details": AnthropicExceptionMapping.embedded_error_details(str(error)),
         "keeps_the_deployment_warm": is_message_thread_not_found(error),
         "headers": {name: header_items.get(name) for name in ("retry-after", "request-id") if name in header_items},

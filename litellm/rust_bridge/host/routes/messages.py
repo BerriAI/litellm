@@ -243,6 +243,7 @@ _ENTRY_PARAMS: Final = frozenset(inspect.signature(_ENTRY).parameters) - {"kwarg
 _HANDLER_PARAMS: Final = frozenset(inspect.signature(_HANDLER).parameters) - {"kwargs"}
 _JsonBlocks: TypeAlias = list[dict[str, JsonValue]]
 _Prepared: TypeAlias = tuple[_JsonBlocks, str | _JsonBlocks | None, Sequence[object] | None]
+_SecretsRead: TypeAlias = list[tuple[str, str | None]]
 
 
 def _prompt_cached(request: Mapping[str, object], asynchronous: bool, hooked: bool) -> _Prepared:
@@ -544,6 +545,8 @@ _exception_type: Final = cast(  # cast-ok: the legacy public exception mapper is
 )
 _BODY_READ_TIMEOUT: Final = "Timeout on reading data from socket"  # aiohttp's SocketTimeoutError text
 _UNREACHABLE: Final = "could not reach the provider: "
+_UNSENDABLE_HEADER: Final = "invalid request: failed to parse header value"
+_AIOHTTP_UNSENDABLE_HEADER: Final = "Forbidden control character detected in headers. Potential header injection attack."  # aiohttp's `_safe_header` text
 _TOO_MANY_REDIRECTS: Final = "upstream network error: error following redirect: too many redirects"
 _SEND_FAILED: Final = "upstream network error: error sending request: client error (SendRequest): "
 _DNS_FAILURE: Final = "failed to lookup address information: "
@@ -628,9 +631,22 @@ def _body_cut(received: int, expected: int | None, reset: bool) -> httpx.Transpo
     return httpx.ReadError(f"{text}. {ConnectionResetError(errno.ECONNRESET, os.strerror(errno.ECONNRESET))!r}")
 
 
-def _connect_failure(native: str, request: Mapping[str, object], request_provider: str) -> str | None:
+def _sent_base(request: Mapping[str, object], request_provider: str, secrets_read: _SecretsRead) -> str | None:
+    """The base the call was sent to: azure_ai's falls back to the `AZURE_API_BASE` the host read
+    to send it, and anthropic's to its default."""
     api_base: Final = request.get("api_base")
-    if not isinstance(api_base, str) and request_provider != "anthropic":
+    if request_provider == "anthropic":
+        return api_base if isinstance(api_base, str) else anthropic_pass_through_api_base()
+    if request_provider == "azure_ai" and not api_base:
+        return dict(secrets_read).get("AZURE_API_BASE")
+    return api_base if isinstance(api_base, str) else None
+
+
+def _connect_failure(
+    native: str, request: Mapping[str, object], request_provider: str, secrets_read: _SecretsRead
+) -> str | None:
+    base: Final = _sent_base(request, request_provider, secrets_read)
+    if base is None:
         return None
     refused: Final = "tcp connect error: Connection refused" in native
     dns_reason: Final = native.rsplit(_DNS_FAILURE, 1)[1] if _DNS_FAILURE in native else None
@@ -642,7 +658,7 @@ def _connect_failure(native: str, request: Mapping[str, object], request_provide
         if dns_errno is not None:
             return f"[Errno {dns_errno}] {dns_reason}"
         return "" if tls_eof else None
-    url: Final = httpx.URL(api_base if isinstance(api_base, str) else anthropic_pass_through_api_base())
+    url: Final = httpx.URL(base)
     port: Final = url.port or (443 if url.scheme == "https" else 80)
     if refused:
         try:
@@ -664,12 +680,17 @@ def _aiohttp_connect_failure(url: httpx.URL, port: int, request: Mapping[str, ob
     return f"Cannot connect to host {url.host}:{port} ssl:{'default' if ssl_config is True else ssl_config} [{reason}]"
 
 
-def _transport_failure(error: Exception, request: Mapping[str, object], request_provider: str) -> str | None:
+def _transport_failure(
+    error: Exception, request: Mapping[str, object], request_provider: str, secrets_read: _SecretsRead
+) -> str | None:
     """The text Python's HTTP client raises for a call that failed before any response arrived."""
     body_cut: Final = getattr(error, "messages_body_cut", None)
     if body_cut is not None:
         return str(_body_cut(*_BODY_CUT.validate_python(body_cut)))
     native: Final = str(error)
+    if native == _UNSENDABLE_HEADER:
+        # httpx names the header value in its text, which may be a credential.
+        return _AIOHTTP_UNSENDABLE_HEADER if http_transport.uses_aiohttp_transport() else native
     if native == _TOO_MANY_REDIRECTS:
         return "Exceeded maximum allowed redirects."
     if native.startswith(_SEND_FAILED):
@@ -684,7 +705,7 @@ def _transport_failure(error: Exception, request: Mapping[str, object], request_
         return "Server disconnected without sending a response." if closed else native
     if not native.startswith(_UNREACHABLE):
         return None
-    connect: Final = _connect_failure(native, request, request_provider)
+    connect: Final = _connect_failure(native, request, request_provider, secrets_read)
     return native if connect is None else connect
 
 
@@ -714,9 +735,11 @@ def _upstream_failure(
     return status, text, tuple(rebuilt.headers.items())
 
 
-def _provider_error(error: Exception, request: Mapping[str, object], request_provider: str) -> Exception | None:
+def _provider_error(
+    error: Exception, request: Mapping[str, object], request_provider: str, secrets_read: _SecretsRead
+) -> Exception | None:
     """The provider exception Python's `_handle_error` builds for the same failure."""
-    transport: Final = _transport_failure(error, request, request_provider)
+    transport: Final = _transport_failure(error, request, request_provider, secrets_read)
     failure: Final = _upstream_failure(error, request) if transport is None else (500, transport, ())
     if failure is None:
         return None
@@ -749,6 +772,12 @@ def _config_error(
     )
 
 
+def _entry_kwargs(request: Mapping[str, object]) -> dict[str, object]:  # mutable-ok: the legacy mapper takes a dict
+    """The `**kwargs` of Python's entry, which its exception mapping reads, so the named `api_base`
+    adds no API Base line to the debug info."""
+    return {name: value for name, value in request.items() if name not in _ENTRY_PARAMS}
+
+
 def _public_provider_error(
     provider_error: Exception, error: Exception, request: Mapping[str, object], request_provider: str
 ) -> Exception:
@@ -757,7 +786,7 @@ def _public_provider_error(
             model=str(request["model"]),
             custom_llm_provider=request_provider,
             original_exception=provider_error,
-            extra_kwargs=dict(request),
+            extra_kwargs=_entry_kwargs(request),
         )
     except Exception as mapped:  # noqa: BLE001  # exception_type raises the mapped public error
         mapped.__context__ = error
@@ -795,9 +824,14 @@ def _with_deployment_debug_info(error: Exception, request: Mapping[str, object],
 
 
 def map_failure(
-    error: Exception, request: Mapping[str, object], request_provider: str, asynchronous: bool = False
+    error: Exception,
+    request: Mapping[str, object],
+    request_provider: str,
+    asynchronous: bool = False,
+    secrets_read: _SecretsRead | None = None,
 ) -> Exception:
-    """Raises what Python's Messages handler raises for the same failure."""
+    """Raises what Python's Messages handler raises for the same failure. `secrets_read` are the
+    secrets the host read to send the call, such as azure_ai's `AZURE_API_BASE`."""
     if getattr(error, "messages_timeout", None) == "Body":
         # Python reads a stream's body outside its HTTP client's error mapping, so the transport's
         # own timeout reaches the caller unmapped.
@@ -832,10 +866,14 @@ def map_failure(
             llm_provider=request_provider,
             model=str(request["model"]).removeprefix(f"{request_provider}/"),
         )
-    provider_error: Final = _provider_error(error, request, request_provider)
+    provider_error: Final = _provider_error(error, request, request_provider, secrets_read or [])
     if provider_error is None:
         return failures.map_native_failure(
-            error, str(request["model"]), request_provider, request, optional_str(request.get("api_base"))
+            error,
+            str(request["model"]),
+            request_provider,
+            _entry_kwargs(request),
+            optional_str(request.get("api_base")),
         )
     return _public_provider_error(provider_error, error, request, request_provider)
 
@@ -1248,9 +1286,6 @@ def _readable_port(parts: SplitResult) -> bool:
         return False
 
 
-_SecretsRead: TypeAlias = list[tuple[str, str | None]]
-
-
 def _sent_api_base(request: Mapping[str, object]) -> tuple[object, _SecretsRead]:
     """The base Python's URL builder reads, and the secrets read to find it: azure_ai falls back to
     `AZURE_API_BASE`, read once, which the native route then reuses."""
@@ -1278,7 +1313,7 @@ def transport_handler(request: Mapping[str, object]) -> tuple[AsyncHTTPHandler |
 def decoding_failure(message: str, request: Mapping[str, object], request_provider: str) -> Exception:
     error: Final = httpx.DecodingError(message)
     if request.get("stream") is True:
-        return error
+        return _with_deployment_debug_info(error, request, request_provider)
     return map_transport_failure(error, request, request_provider)
 
 
@@ -1359,7 +1394,7 @@ def map_transport_failure(error: Exception, request: Mapping[str, object], reque
                 model=str(request["model"]),
                 custom_llm_provider=request_provider,
                 original_exception=provider_error,
-                extra_kwargs=dict(request),
+                extra_kwargs=_entry_kwargs(request),
             )
         except Exception as mapped:  # noqa: BLE001  # exception_type raises the mapped public error
             mapped.__context__ = provider_error

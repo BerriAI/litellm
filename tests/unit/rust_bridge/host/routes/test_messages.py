@@ -693,6 +693,101 @@ def test_a_failure_before_any_response_maps_like_the_python_transport_error(
     assert "This looks like a bug in LiteLLM" not in str(mapped)
 
 
+_AZURE_CLAUDE: Final = "azure_ai/claude-sonnet-4-5"
+
+
+def _provider_and_model(error: Exception) -> tuple[object, object]:
+    return getattr(error, "llm_provider", None), getattr(error, "model", None)
+
+
+def _ssl_configuration(_ssl_verify: object) -> str:
+    return "<ssl>"
+
+
+_REFUSED: Final = (
+    f"could not reach the provider: {_TRANSPORT} (Connect): tcp connect error: Connection refused (os error 111)"
+)
+
+
+@pytest.mark.parametrize(
+    ("aiohttp", "text"),
+    (
+        pytest.param(
+            True, "Cannot connect to host 127.0.0.1:47 ssl:<ssl> [Connect call failed ('127.0.0.1', 47)]", id="aiohttp"
+        ),
+        pytest.param(False, "All connection attempts failed", id="httpx"),
+    ),
+)
+def test_an_azure_ai_connect_failure_names_the_environment_base_the_host_sent_to(
+    monkeypatch: pytest.MonkeyPatch, aiohttp: bool, text: str
+) -> None:
+    from litellm.rust_bridge.host import http_transport
+
+    monkeypatch.setattr(http_transport, "uses_aiohttp_transport", lambda: aiohttp)
+    monkeypatch.setattr(messages_host, "get_ssl_configuration", _ssl_configuration)
+
+    mapped: Final = messages_host.map_failure(
+        RuntimeError(_REFUSED),
+        {"model": _AZURE_CLAUDE},
+        "azure_ai",
+        secrets_read=[("AZURE_API_BASE", "http://127.0.0.1:47/anthropic")],
+    )
+
+    assert type(mapped) is litellm.InternalServerError
+    assert (mapped.status_code, *_provider_and_model(mapped)) == (500, "azure_ai", _AZURE_CLAUDE)
+    assert mapped.message.endswith(f"Azure_aiException - {text}")
+
+
+@pytest.mark.parametrize(
+    ("aiohttp", "text"),
+    (
+        pytest.param(
+            True, "Forbidden control character detected in headers. Potential header injection attack.", id="aiohttp"
+        ),
+        pytest.param(False, "invalid request: failed to parse header value", id="httpx"),
+    ),
+)
+def test_an_unsendable_header_value_fails_as_the_python_transport_refuses_it(
+    monkeypatch: pytest.MonkeyPatch, aiohttp: bool, text: str
+) -> None:
+    from litellm.rust_bridge.host import http_transport
+
+    monkeypatch.setattr(http_transport, "uses_aiohttp_transport", lambda: aiohttp)
+
+    mapped: Final = messages_host.map_failure(
+        ValueError("invalid request: failed to parse header value"),
+        {"model": _AZURE_CLAUDE, "api_base": "http://127.0.0.1:9/anthropic"},
+        "azure_ai",
+    )
+
+    assert type(mapped) is litellm.InternalServerError
+    assert (mapped.status_code, *_provider_and_model(mapped)) == (500, "azure_ai", _AZURE_CLAUDE)
+    assert mapped.message.endswith(f"Azure_aiException - {text}")
+
+
+def _upstream_status(status: int, body: str) -> Exception:
+    upstream: Final = ValueError(status, body)
+    upstream.headers = []  # pyright: ignore[reportAttributeAccessIssue]  # set by the native host
+    return upstream
+
+
+@pytest.mark.parametrize(
+    "native",
+    (
+        pytest.param(_upstream_status(404, "not found"), id="upstream-status"),
+        pytest.param(RuntimeError(_REFUSED), id="transport"),
+    ),
+)
+def test_a_mapped_failure_names_the_model_but_not_the_call_s_api_base_like_the_python_entry(
+    native: Exception,
+) -> None:
+    mapped: Final = messages_host.map_failure(
+        native, {"model": _AZURE_CLAUDE, "api_base": "http://127.0.0.1:9/anthropic", "api_key": "k"}, "azure_ai"
+    )
+
+    assert getattr(mapped, "litellm_debug_info", None) == f"\nModel: {_AZURE_CLAUDE}"
+
+
 _CALL: Final = MappingProxyType({"messages": [{"role": "user", "content": "hi"}], "max_tokens": 8})
 _OPENCODE: Final = "https://opencode.ai/inference/go/anthropic/v1"
 _COST_HEADER: Final = MappingProxyType({"headers": {"x-litellm-include-cost-in-streaming-usage": "true"}})
