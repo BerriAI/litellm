@@ -863,6 +863,13 @@ class _FailureRun:
 
 class Logging(LiteLLMLoggingBaseClass):
     v2_scope: RequestScope | None = None
+    v2_failure_delivered: bool = False
+
+    def claim_v2_failure(self, eligible: bool) -> bool:
+        if not eligible or self.v2_failure_delivered:
+            return False
+        self.v2_failure_delivered = True
+        return True
 
     def v2_logging_scope(self) -> RequestScope | None:
         if self.v2_scope is not None or litellm.global_disable_no_log_param:
@@ -5160,7 +5167,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 callbacks,
                 self.model_call_details,
                 functools.partial(self._deliver_sync_failure, run),
-                include_v2=not for_async_request,
+                include_v2=self.claim_v2_failure(not for_async_request),
                 owner=self,
             )
         except Exception as e:
@@ -5377,6 +5384,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 start_time,  # pyright: ignore[reportUnknownArgumentType]  # untyped failure helper
                 end_time,  # pyright: ignore[reportUnknownArgumentType]  # untyped failure helper
             ),
+            include_v2=self.claim_v2_failure(True),
             owner=self,
         )
         await flush_post_call_redis_batches()

@@ -15765,3 +15765,23 @@ async def test_a_logged_request_still_reaches_a_v2_observer_that_honors_no_log(
     await logging_obj.async_success_handler(result=ModelResponse(id="served"), start_time=now, end_time=now)
 
     assert journal == ["v2"]
+
+
+async def test_a_v2_attempt_ended_subscriber_gets_one_failure_when_both_failure_handlers_run(
+    logging_obj: LitellmLogging, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    journal: Final[list[object]] = []
+    recorder: Final = _EndedRecorder(journal)
+    _plane_lists(
+        monkeypatch,
+        failure_callback=[_Entry("sync", journal), recorder],
+        _async_failure_callback=[_Entry("async", journal), recorder],
+    )
+    logging_obj.stream = False
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={})
+    error: Final = ValueError("tool failed")
+
+    await asyncio.to_thread(logging_obj.failure_handler, error, "trace")
+    await logging_obj.async_failure_handler(error, "trace")
+
+    assert journal == [("sync", "failure", None), "v2", ("async", "failure", None)]
