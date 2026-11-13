@@ -327,6 +327,21 @@ async fn a_remote_increment_of_nothing_is_none_as_mains_pipeline_returns(
 
 #[rstest]
 #[tokio::test]
+async fn a_memory_count_past_i64_stays_above_the_limit_instead_of_wrapping_negative() {
+    let store = RouterUsage::new(None, POLICY);
+    let [tpm, _] = tpm_and_rpm(None);
+    store.increment(&tpm, Number::Int(1), COUNTER_TTL).await;
+
+    assert_eq!(
+        store
+            .increment(&tpm, Number::Int(i64::MAX), COUNTER_TTL)
+            .await,
+        Some(Number::Float(9_223_372_036_854_775_808.0))
+    );
+}
+
+#[rstest]
+#[tokio::test]
 async fn a_local_merge_replaces_the_memory_count_without_reaching_redis() {
     let deployment = RedisDeployment::start(Topology::Standalone).await.unwrap();
     let (client, trips) = support::connect_observed(&deployment);

@@ -2214,6 +2214,17 @@ async def test_an_output_cap_too_large_for_the_store_to_count_is_refused_instead
         await check.async_pre_call_check(_otpm_limited_deployment())
 
 
+@pytest.mark.asyncio
+async def test_an_output_cap_that_overflows_the_count_is_refused_instead_of_wrapping_negative() -> None:
+    check: Final = ModelRateLimitingCheck(usage=_memory_usage())
+    set_io_token_rate_limit_request_kwargs({"max_tokens": 1, "metadata": {}}, metadata_channel="metadata")
+    await check.async_pre_call_check(_otpm_limited_deployment())
+    set_io_token_rate_limit_request_kwargs({"max_tokens": 2**63 - 1, "metadata": {}}, metadata_channel="metadata")
+
+    with pytest.raises(litellm.RateLimitError, match="OTPM limit=50"):
+        await check.async_pre_call_check(_otpm_limited_deployment())
+
+
 def test_a_sync_output_cap_too_large_for_the_store_to_count_is_refused_instead_of_admitted() -> None:
     check: Final = ModelRateLimitingCheck(usage=_memory_usage())
     set_io_token_rate_limit_request_kwargs({"max_tokens": 2**63, "metadata": {}}, metadata_channel="metadata")
