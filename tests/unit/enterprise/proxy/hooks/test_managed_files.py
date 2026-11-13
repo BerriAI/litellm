@@ -5610,9 +5610,9 @@ async def test_team_b_cannot_access_team_a_provider_format_file(
         )
 
     assert exc_info.value.status_code == 403
-    prisma_client.db.litellm_managedfiletable.find_first.assert_awaited_once_with(
-        where={"OR": [{"unified_file_id": file_id}, {"flat_model_file_ids": {"has": file_id}}]}
-    )
+    lookup: Final = prisma_client.db.litellm_managedfiletable.find_first.await_args.kwargs["where"]
+    assert file_id in lookup["OR"][0]["unified_file_id"]["in"]
+    assert file_id in lookup["OR"][1]["flat_model_file_ids"]["hasSome"]
 
 
 @pytest.mark.asyncio
@@ -6209,15 +6209,20 @@ async def test_enforce_provider_file_access_denies_every_spelling_of_another_key
 async def test_enforce_provider_file_access_lets_the_owner_read_any_spelling(spelling: str):
     managed_files, _ = _managed_files_with_fake_prisma(_gemini_batch_output_row())
 
-    await managed_files.enforce_provider_file_access(spelling, UserAPIKeyAuth(user_id="owner", team_id="team-owner"))
-    await managed_files.enforce_provider_file_access(spelling, UserAPIKeyAuth(user_id="teammate", team_id="team-owner"))
+    owner: Final = UserAPIKeyAuth(user_id="owner", team_id="team-owner")
+    teammate: Final = UserAPIKeyAuth(user_id="teammate", team_id="team-owner")
+
+    assert await managed_files.enforce_provider_file_access(spelling, owner) is None
+    assert await managed_files.enforce_provider_file_access(spelling, teammate) is None
 
 
 @pytest.mark.asyncio
 async def test_enforce_provider_file_access_still_passes_a_file_nobody_registered():
     managed_files, _ = _managed_files_with_fake_prisma(_gemini_batch_output_row())
 
-    await managed_files.enforce_provider_file_access("files/batch-other", UserAPIKeyAuth(user_id="stranger"))
+    stranger: Final = UserAPIKeyAuth(user_id="stranger")
+
+    assert await managed_files.enforce_provider_file_access("files/batch-other", stranger) is None
 
 
 _GEMINI_UPLOAD_URI: Final = "https://generativelanguage.googleapis.com/v1beta/files/upload-1"
