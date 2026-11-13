@@ -14378,7 +14378,6 @@ async def _route_realtime_websocket_session(
             user_request_timeout=user_request_timeout,
             user_max_tokens=user_max_tokens,
             user_api_base=user_api_base,
-            model=route_model,
             route_type="_arealtime",
         )
     except Exception as e:
