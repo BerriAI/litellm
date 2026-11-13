@@ -71,9 +71,32 @@ def _spend(table: str, key: tuple[tuple[str, str], ...], spend: float) -> Contri
     return Contribution(table, key, (("spend", spend),))
 
 
+_CUSTOMER_ID_KEYS: Final = ("customer_org_id", "customer_team_id", "customer_member_id")
+
+
+def _customer_ids(metadata: Mapping[str, object]) -> Mapping[str, str | None]:
+    """The customer hierarchy a request is charged to: the member the request named, else the key's attribution."""
+    entities: Final = _fields(metadata.get("accounting_entities"))
+    if isinstance(entities.get("customer_org_id"), str):
+        return {key: value if isinstance(value := entities.get(key), str) else None for key in _CUSTOMER_ID_KEYS}
+    serialized: Final = metadata.get(CUSTOMER_USAGE_METADATA_KEY)
+    if not isinstance(serialized, str):
+        return dict.fromkeys(_CUSTOMER_ID_KEYS)
+    try:
+        attribution: Final = CustomerUsageAttribution.model_validate_json(serialized)
+    except ValidationError:
+        return dict.fromkeys(_CUSTOMER_ID_KEYS)
+    return {
+        "customer_org_id": attribution.customer_org_id,
+        "customer_team_id": attribution.customer_team_id,
+        "customer_member_id": attribution.customer_member_id,
+    }
+
+
 def _entity_contributions(row: Mapping[str, object], metadata: Mapping[str, object]) -> tuple[Contribution, ...]:
     spend: Final = _number(row.get("spend"))
     entities: Final = _fields(metadata.get("accounting_entities"))
+    customer: Final = _customer_ids(metadata)
     identities: Final = (
         ("LiteLLM_VerificationToken", "token", entities.get("api_key")),
         ("LiteLLM_UserTable", "user_id", entities.get("user")),
@@ -81,9 +104,9 @@ def _entity_contributions(row: Mapping[str, object], metadata: Mapping[str, obje
         ("LiteLLM_TeamTable", "team_id", entities.get("team_id")),
         ("LiteLLM_OrganizationTable", "organization_id", entities.get("organization_id")),
         ("LiteLLM_EndUserTable", "user_id", entities.get("end_user")),
-        ("LiteLLM_CustomerOrganizationTable", "customer_org_id", entities.get("customer_org_id")),
-        ("LiteLLM_CustomerTeamTable", "customer_team_id", entities.get("customer_team_id")),
-        ("LiteLLM_CustomerMemberTable", "customer_member_id", entities.get("customer_member_id")),
+        ("LiteLLM_CustomerOrganizationTable", "customer_org_id", customer["customer_org_id"]),
+        ("LiteLLM_CustomerTeamTable", "customer_team_id", customer["customer_team_id"]),
+        ("LiteLLM_CustomerMemberTable", "customer_member_id", customer["customer_member_id"]),
         ("LiteLLM_AgentsTable", "agent_id", entities.get("agent_id")),
         ("LiteLLM_ProjectTable", "project_id", entities.get("project_id")),
     )
@@ -164,10 +187,12 @@ def _daily_contributions(row: Mapping[str, object], metadata: Mapping[str, objec
     # The legacy daily organization writer uses the charged org argument, not
     # SpendLogs' normalized empty-string identity for a request with no org.
     entities: Final = _fields(metadata.get("accounting_entities"))
+    customer: Final = _customer_ids(metadata)
     daily_row: Final = {
         **row,
         "organization_id": entities.get("organization_id"),
-        **{key: entities.get(key) for key in ("customer_member_id", "customer_team_id", "customer_org_id")},
+        "customer_org_id": customer["customer_org_id"],
+        **{key: customer[key] or "" for key in ("customer_team_id", "customer_member_id")},
     }
     return tuple(_daily_rows(daily_row, shared_key, counters))
 
@@ -222,51 +247,8 @@ def project(row: Mapping[str, object]) -> tuple[Contribution, ...]:
         *_window_contributions(row, metadata),
         *_model_contributions(row, metadata),
         *_guardrail_contributions(row, metadata),
-        *_customer_usage_contributions(row, metadata),
     )
     return tuple(_capped(contribution) for contribution in contributions if _indexable(contribution))
-
-
-def _customer_usage_contributions(
-    row: Mapping[str, object], metadata: Mapping[str, object]
-) -> tuple[Contribution, ...]:
-    serialized: Final = metadata.get(CUSTOMER_USAGE_METADATA_KEY)
-    date: Final = _date(row)
-    if not isinstance(serialized, str) or date is None:
-        return ()
-    try:
-        attribution: Final = CustomerUsageAttribution.model_validate_json(serialized)
-    except ValidationError:
-        return ()
-    counters: Final = _daily_counters(row, metadata)
-    identities: Final = (
-        ("LiteLLM_CustomerOrganizationTable", "customer_org_id", attribution.customer_org_id),
-        ("LiteLLM_CustomerTeamTable", "customer_team_id", attribution.customer_team_id),
-        ("LiteLLM_CustomerMemberTable", "customer_member_id", attribution.customer_member_id),
-    )
-    return (
-        Contribution(
-            "LiteLLM_DailyCustomerMemberSpend",
-            (
-                ("date", date),
-                ("customer_org_id", attribution.customer_org_id),
-                ("customer_team_id", attribution.customer_team_id or ""),
-                ("customer_member_id", attribution.customer_member_id or ""),
-                ("model", _text(row.get("model"))),
-                ("model_group", _text(row.get("model_group"))),
-                ("custom_llm_provider", _text(row.get("custom_llm_provider"))),
-                ("api_key", _text(row.get("api_key"))),
-                ("mcp_namespaced_tool_name", _text(row.get("mcp_namespaced_tool_name"))),
-                ("endpoint", _text(ROUTE_ENDPOINT_MAPPING.get(_text(row.get("call_type"))))),
-            ),
-            counters,
-        ),
-        *(
-            _spend(table, ((column, identity),), float(_number(row.get("spend"))))
-            for table, column, identity in identities
-            if identity is not None
-        ),
-    )
 
 
 def _indexable(contribution: Contribution) -> bool:

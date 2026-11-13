@@ -23,7 +23,7 @@ _NOW: Final = datetime(2026, 11, 2, tzinfo=timezone.utc)
 _FIELDS: Final = TypeAdapter(dict[str, object])
 
 
-def test_customer_model_aliases_and_providers_keep_separate_daily_totals() -> None:
+def test_customer_providers_keep_separate_daily_totals_and_aliases_of_one_model_share_a_row() -> None:
     stamp: Final = CustomerUsageAttribution(customer_org_id="org-1", customer_member_id="member-1").model_dump_json()
     base: Final = {
         "startTime": _NOW,
@@ -40,11 +40,11 @@ def test_customer_model_aliases_and_providers_keep_separate_daily_totals() -> No
         )
     )
     totals: Final = {
-        (dict(item.key)["model_group"], dict(item.key)["custom_llm_provider"]): dict(item.increments)["spend"]
+        (dict(item.key)["model"], dict(item.key)["custom_llm_provider"]): dict(item.increments)["spend"]
         for item in project_deliveries(deliveries)
         if item.table == "LiteLLM_DailyCustomerMemberSpend"
     }
-    assert totals == {("alias-a", "provider-a"): 1, ("alias-b", "provider-a"): 2, ("alias-a", "provider-b"): 3}
+    assert totals == {("shared-model", "provider-a"): 3, ("shared-model", "provider-b"): 3}
 
 
 @pytest.mark.parametrize("retry", [False, True])
@@ -84,12 +84,12 @@ def test_customer_usage_survives_logging_and_accounting_with_correct_request_cou
         "customer_team_id": attribution.customer_team_id,
         "customer_member_id": attribution.customer_member_id,
         "model": payload["model"],
-        "model_group": payload["model_group"],
         "custom_llm_provider": payload["custom_llm_provider"],
         "api_key": payload["api_key"],
         "mcp_namespaced_tool_name": "",
         "endpoint": "/chat/completions",
     }
+    assert dict(usage.values)["model_group"] == payload["model_group"]
     assert dict(usage.increments) == {
         "spend": 0.75,
         "prompt_tokens": 10,
@@ -692,9 +692,7 @@ def test_caller_supplied_savings_beyond_json_range_are_clamped_and_never_drop_th
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status,cost", [("success", 0.25), ("failure", 0.0), ("failure", 0.25)])
-async def test_customer_daily_usage_matches_ledger_and_legacy_with_utc_date(
-    status: str, cost: float
-) -> None:
+async def test_customer_daily_usage_matches_ledger_and_legacy_with_utc_date(status: str, cost: float) -> None:
     identities: Final = {
         "customer_member_id": "member",
         "customer_team_id": "customer-team",
@@ -734,9 +732,9 @@ async def test_customer_daily_usage_matches_ledger_and_legacy_with_utc_date(
     client: Final = PrismaClient(database_url="postgresql://unused", proxy_logging_obj=proxy_logging_obj)
     from litellm.types.proxy.auth.customer_hierarchy import customer_hierarchy_ids_from_request
 
-    hierarchy: Final = customer_hierarchy_ids_from_request({
-        "litellm_params": {"metadata": {f"user_api_key_{key}": value for key, value in identities.items()}}
-    })
+    hierarchy: Final = customer_hierarchy_ids_from_request(
+        {"litellm_params": {"metadata": {f"user_api_key_{key}": value for key, value in identities.items()}}}
+    )
     await writer.add_spend_log_transaction_to_daily_customer_member_transaction(payload, hierarchy, client)
     rows: Final = (
         await writer.daily_customer_member_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()

@@ -66,9 +66,10 @@ _TAGS: Final = TypeAdapter(tuple[object, ...])
 
 
 def daily_spend_entity_ids(payload: Mapping[str, object], entity: DailySpendEntity) -> tuple[str | None, ...]:
-    if entity == "customer_member" and not all(
-        isinstance(payload.get(column), str) and payload.get(column)
-        for column in ("customer_member_id", "customer_team_id", "customer_org_id")
+    if entity == "customer_member" and not (
+        isinstance(payload.get("customer_org_id"), str)
+        and payload.get("customer_org_id")
+        and all(isinstance(payload.get(column), str) for column in ("customer_member_id", "customer_team_id"))
     ):
         return ()
     key: Final = _ENTITY_INPUT_KEYS[entity]

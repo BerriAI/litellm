@@ -1042,7 +1042,7 @@ model LiteLLM_DailyCustomerMemberSpend {
   customer_team_id    String   @default("")
   customer_member_id  String   @default("")
   model               String   @default("")
-  model_group         String   @default("")
+  model_group         String?
   custom_llm_provider String   @default("")
   mcp_namespaced_tool_name String @default("")
   endpoint            String   @default("")
@@ -1066,6 +1066,7 @@ model LiteLLM_DailyCustomerMemberSpend {
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
+  @@unique([customer_member_id, customer_team_id, customer_org_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name, endpoint], map: "LiteLLM_DailyCustomerMemberSpend_identity_key")
   @@index([date])
   @@index([customer_org_id, date])
   @@index([customer_team_id, date])
@@ -1150,49 +1151,6 @@ model LiteLLM_DailyAgentSpend {
 }
 
 // Track daily team spend metrics per model and key
-model LiteLLM_DailyCustomerMemberSpend {
-  id                  String   @id @default(uuid())
-  customer_member_id  String
-  customer_team_id    String
-  customer_org_id     String
-  date                String
-  api_key             String
-  model               String?
-  model_group         String?
-  custom_llm_provider String?
-  mcp_namespaced_tool_name String?
-  endpoint               String?
-  prompt_tokens       BigInt      @default(0)
-  completion_tokens   BigInt      @default(0)
-  cache_read_input_tokens     BigInt      @default(0)
-  cache_creation_input_tokens BigInt      @default(0)
-  compression_saved_tokens    BigInt      @default(0)
-  compression_savings_spend    Float       @default(0.0)
-  prompt_caching_savings_spend Float       @default(0.0)
-  gateway_injected_caching_savings_spend Float @default(0.0)
-  autorouter_savings_spend     Float       @default(0.0)
-  guardrail_spend              Float       @default(0.0)
-  spend               Float    @default(0.0)
-  api_requests        BigInt      @default(0)
-  successful_requests BigInt      @default(0)
-  failed_requests     BigInt      @default(0)
-  total_response_time_ms BigInt   @default(0)
-  timed_requests      BigInt      @default(0)
-  ptu_flat_cost       Float    @default(0.0)
-  created_at          DateTime @default(now())
-  updated_at          DateTime @updatedAt
-
-  @@unique([customer_member_id, customer_team_id, customer_org_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name, endpoint], map: "LiteLLM_DailyCustomerMemberSpend_identity_key")
-  @@index([date])
-  @@index([customer_member_id, date])
-  @@index([customer_team_id, date])
-  @@index([customer_org_id, date])
-  @@index([api_key])
-  @@index([model])
-  @@index([mcp_namespaced_tool_name])
-  @@index([endpoint])
-}
-
 model LiteLLM_DailyTeamSpend {
   id                  String   @id @default(uuid())
   team_id             String?
