@@ -625,6 +625,40 @@ def _billing_database(monkeypatch: pytest.MonkeyPatch, owner: LiteLLM_UserTable)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "own_models, denied",
+    [(["no-default-models"], True), (["gpt-a"], True), (["gpt-a", "shared"], False), ([], False)],
+)
+async def test_dashboard_batches_require_own_model_grants(
+    monkeypatch: pytest.MonkeyPatch, teams: None, own_models: list[str], denied: bool
+) -> None:
+    owner: Final = LiteLLM_UserTable(user_id="u1", models=own_models, teams=["team-a"])
+    _billing_database(monkeypatch, owner)
+    token: Final = UserAPIKeyAuth(
+        api_key="dashboard-key", user_id="u1", team_id=UI_TEAM_ID, models=[],
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+    request: Final = Request({"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
+    try:
+        if denied:
+            with pytest.raises(HTTPException) as error:
+                await _authorize_authenticated_request(
+                    token, request, {"model": "gpt-a,shared"}, "/chat/completions", "dashboard-key",
+                    force_virtual_key_checks=True,
+                )
+            assert error.value.status_code == 403
+        else:
+            billed: Final = await _authorize_authenticated_request(
+                token, request, {"model": "gpt-a,shared"}, "/chat/completions", "dashboard-key",
+                force_virtual_key_checks=True,
+            )
+            assert (billed or token).team_id == UI_TEAM_ID
+    finally:
+        if token.budget_reservation is not None:
+            await release_budget_reservation(token.budget_reservation)
+
+
+@pytest.mark.asyncio
 async def test_dashboard_admitted_team_reservation_does_not_deny_same_team_fallback(
     monkeypatch: pytest.MonkeyPatch, teams: None
 ) -> None:

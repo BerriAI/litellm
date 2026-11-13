@@ -6479,7 +6479,7 @@ async def personal_key_owner_teams(
 
 async def dashboard_model_billing_auth(
     auth: UserAPIKeyAuth,
-    model: str | None,
+    model: str | Sequence[str] | None,
     llm_router: RegistryReader | None,
 ) -> UserAPIKeyAuth:
     from litellm.proxy.auth.team_grants import team_grant_billing_auth_update
@@ -6489,6 +6489,10 @@ async def dashboard_model_billing_auth(
         return auth
     origin: Final = auth.dashboard_session_origin or auth
     owner: Final = await _personal_key_owner(origin, prisma_client, user_api_key_cache, proxy_logging_obj)
+    if not isinstance(model, str):
+        if not all(_dashboard_user_grants_model(entry, origin, owner, llm_router) for entry in model):
+            raise HTTPException(status_code=403, detail="Dashboard batches cannot use team-only models")
+        return auth
     fields: Final = frozenset(
         name for name in UserAPIKeyAuth.model_fields if name.startswith(("team_", "organization_")) or name == "org_id"
     )

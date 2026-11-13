@@ -4536,7 +4536,7 @@ async def _authorize_authenticated_request(
     billing_auth: Final = (
         await dashboard_model_billing_auth(
             user_api_key_auth_obj,
-            billing_model if isinstance(billing_model, str) else None,
+            billing_model,
             llm_router=billing_router,
         )
         if RouteChecks.is_llm_api_route(route=route)
