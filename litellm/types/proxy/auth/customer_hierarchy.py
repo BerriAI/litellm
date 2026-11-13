@@ -67,9 +67,15 @@ def _mapping(value: object) -> Mapping[str, object]:
         return {}
 
 
+def _stamped_metadata(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
+    """The proxy stamps auth ids into ``litellm_metadata`` on routes whose body owns ``metadata``, else into ``metadata``."""
+    buckets: Final = tuple(_mapping(litellm_params.get(name)) for name in ("litellm_metadata", "metadata"))
+    return next((bucket for bucket in buckets if "user_api_key_customer_member_id" in bucket), {})
+
+
 def customer_hierarchy_ids_from_request(kwargs: Mapping[str, object]) -> CustomerHierarchyIds | None:
-    """The ids auth stamped into ``litellm_params.metadata``, or None when the request named no customer member."""
-    metadata: Final = _mapping(_mapping(kwargs.get("litellm_params")).get("metadata"))
+    """The ids auth stamped into the request's proxy metadata, or None when the request named no customer member."""
+    metadata: Final = _stamped_metadata(_mapping(kwargs.get("litellm_params")))
     ids: Final = tuple(metadata.get(f"user_api_key_customer_{level}_id") for level in ("member", "team", "org"))
     if not all(isinstance(value, str) and value for value in ids):
         return None

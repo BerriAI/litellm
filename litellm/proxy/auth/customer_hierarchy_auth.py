@@ -18,6 +18,7 @@ from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy.auth.auth_checks import can_object_call_model
 from litellm.proxy.auth.auth_object_prefetch import AUTH_OBJECTS_TARGET
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, get_management_object_ttl
 from litellm.proxy.management_helpers.customer_hierarchy import (
     PrismaRecord,
@@ -248,4 +249,4 @@ def check_customer_hierarchy_key_scope(hierarchy: CustomerHierarchyAuth, key_met
 @with_service_target(AUTH_OBJECTS_TARGET)
 async def forget_customer_hierarchy(customer_member_id: str, user_api_key_cache: UserApiKeyCache) -> None:
     """Drop the cached hierarchy of a member that was changed or deleted so request auth reloads it."""
-    await user_api_key_cache.async_delete_cache(customer_member_cache_key(customer_member_id))
+    await evict_and_broadcast((customer_member_cache_key(customer_member_id),), user_api_key_cache)

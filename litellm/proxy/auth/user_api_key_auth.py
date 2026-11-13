@@ -4475,7 +4475,9 @@ async def _authorize_authenticated_request(
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
                     llm_router=llm_router,
-                    request_model=_get_model_from_request_context(request_data, route, request, llm_router),
+                    request_model=_get_model_from_request_context(
+                        request_data, route, request, llm_router, team_id=user_api_key_auth_obj.team_id
+                    ),
                     route=route,
                     key_metadata=_KEY_METADATA_ADAPTER.validate_python(
                         user_api_key_auth_obj.metadata or {}  # pyright: ignore[reportUnknownMemberType]  # untyped key metadata, validated here
