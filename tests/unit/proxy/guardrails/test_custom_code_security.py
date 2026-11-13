@@ -2,6 +2,7 @@ import asyncio
 import http.server
 import threading
 import time
+from collections.abc import Mapping
 from http.server import ThreadingHTTPServer
 from types import SimpleNamespace
 
@@ -331,7 +332,7 @@ SERVER_IDENTITY_ECHO_CODE = (
 )
 
 
-async def _sandbox_payload_keys(request_data: dict) -> list[str]:
+async def _sandbox_payload_keys(request_data: dict[str, object]) -> list[str]:
     guardrail = _compile(REQUEST_KEYS_ECHO_CODE)
     await guardrail.apply_guardrail(inputs={"texts": ["x"]}, request_data=request_data, input_type="request")
     entry = request_data["metadata"]["standard_logging_guardrail_information"][0]
@@ -372,7 +373,9 @@ async def test_custom_code_sandbox_gets_no_mcp_keys_on_an_llm_request():
     ],
     ids=["dict", "namespace"],
 )
-async def test_custom_code_sandbox_ignores_mcp_identity_spoofed_in_an_llm_request_body(spoofed_identity):
+async def test_custom_code_sandbox_ignores_mcp_identity_spoofed_in_an_llm_request_body(
+    spoofed_identity: Mapping[str, str] | SimpleNamespace,
+) -> None:
     request_data = {
         "model": "m",
         "messages": [{"role": "user", "content": "hi"}],
