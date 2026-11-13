@@ -43,6 +43,7 @@ if TYPE_CHECKING:
 
 
 class ErrorCode(str, Enum):
+    FREE_TIER_LIMIT = "free_tier_limit"
     NOT_FOUND = "not_found"
     PARENT_NOT_FOUND = "parent_not_found"
     ALREADY_EXISTS = "already_exists"
@@ -67,6 +68,30 @@ class ErrorCode(str, Enum):
 @dataclass(frozen=True, slots=True)
 class Failure:
     code: ErrorCode
+
+
+FREE_ORGANIZATION_LIMIT: Final = 5
+FREE_TEAMS_PER_ORGANIZATION_LIMIT: Final = 5
+FREE_MEMBERS_PER_TEAM_LIMIT: Final = 5
+FREE_CAPACITY_ADVISORY_LOCK: Final = 714023581
+
+
+class CustomerPortalLimits(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    limits_apply: bool
+    organization_limit: int = FREE_ORGANIZATION_LIMIT
+    teams_per_organization_limit: int = FREE_TEAMS_PER_ORGANIZATION_LIMIT
+    members_per_team_limit: int = FREE_MEMBERS_PER_TEAM_LIMIT
+    organization_count: int
+    any_limit_reached: bool
+
+
+class _CapacityCounts(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    full_organizations: int
+    full_teams: int
 
 
 _LOCK_ORGANIZATION_SQL: Final = (
@@ -461,14 +486,52 @@ def _member_ids(rows: Sequence[PrismaRecord]) -> tuple[str, ...]:
 
 
 class CustomerHierarchyStore:
-    def __init__(self, db: "Prisma", now: datetime, settings: BudgetResetSettings | None = None) -> None:
+    def __init__(
+        self, db: "Prisma", now: datetime, settings: BudgetResetSettings | None = None, *, premium_user: bool
+    ) -> None:
         self.db = db
+        self.premium_user = premium_user
         self.now = now
         self.settings = settings if settings is not None else get_budget_reset_settings()
         self.organizations: TableActions[PrismaRecord] = db.litellm_customerorganizationtable  # pyright: ignore[reportAttributeAccessIssue]  # protocol accepts immutable query mappings
         self.teams: TableActions[PrismaRecord] = db.litellm_customerteamtable  # pyright: ignore[reportAttributeAccessIssue]  # protocol accepts immutable query mappings
         self.members: TableActions[PrismaRecord] = db.litellm_customermembertable  # pyright: ignore[reportAttributeAccessIssue]  # protocol accepts immutable query mappings
         self.budgets: TableActions[PrismaRecord] = db.litellm_budgettable  # pyright: ignore[reportAttributeAccessIssue]  # protocol accepts immutable query mappings
+
+    async def lock_free_capacity(self) -> None:
+        await self.db.query_raw("SELECT 1 AS locked FROM pg_advisory_xact_lock($1)", FREE_CAPACITY_ADVISORY_LOCK)
+
+    async def member_capacity_reached(self, team_ids: Sequence[str]) -> bool:
+        if self.premium_user or not team_ids:
+            return False
+        await self.lock_free_capacity()
+        for team_id in team_ids:
+            if await self.members.count(where={"parent_team_ids": {"has": team_id}}) >= FREE_MEMBERS_PER_TEAM_LIMIT:
+                return True
+        return False
+
+    async def portal_limits(self) -> CustomerPortalLimits:
+        organization_count: Final = await self.organizations.count()
+        counts: Final = TypeAdapter(tuple[_CapacityCounts, ...]).validate_python(
+            await self.db.query_raw(
+                'SELECT (SELECT COUNT(*) FROM (SELECT parent_org_id FROM "LiteLLM_CustomerTeamTable" '
+                "GROUP BY parent_org_id HAVING COUNT(*) >= $1) AS full_orgs) AS full_organizations, "
+                '(SELECT COUNT(*) FROM (SELECT team_id FROM "LiteLLM_CustomerMemberTable", '
+                "unnest(parent_team_ids) AS team_id GROUP BY team_id HAVING COUNT(*) >= $2) AS full_members) AS full_teams",
+                FREE_TEAMS_PER_ORGANIZATION_LIMIT,
+                FREE_MEMBERS_PER_TEAM_LIMIT,
+            )
+        )
+        return CustomerPortalLimits(
+            limits_apply=not self.premium_user,
+            organization_count=organization_count,
+            any_limit_reached=not self.premium_user
+            and (
+                organization_count >= FREE_ORGANIZATION_LIMIT
+                or counts[0].full_organizations > 0
+                or counts[0].full_teams > 0
+            ),
+        )
 
     async def organization_responses(self, rows: Sequence[PrismaRecord]) -> tuple[Organization, ...]:
         records: Final = tuple(
@@ -607,6 +670,13 @@ class CustomerHierarchyStore:
         alias_failure: Final = await self.claim_organization_alias(payload.alias, None)
         if alias_failure is not None:
             return alias_failure
+        if not self.premium_user:
+            await self.lock_free_capacity()
+            if await self.organizations.count() >= FREE_ORGANIZATION_LIMIT and (
+                payload.customer_org_id is None
+                or await self.organizations.find_unique(where={"customer_org_id": payload.customer_org_id}) is None
+            ):
+                return Failure(ErrorCode.FREE_TIER_LIMIT)
         default_index: Final = default_template_index(payload.default_budgets, payload.default_budget_template)
         if isinstance(default_index, Failure):
             return default_index
@@ -791,6 +861,15 @@ class CustomerHierarchyStore:
         parent: Final = await self.organizations.find_unique(where={"customer_org_id": payload.parent_org_id})
         if parent is None:
             return Failure(ErrorCode.PARENT_NOT_FOUND)
+        if not self.premium_user:
+            await self.lock_free_capacity()
+            if await self.teams.count(
+                where={"parent_org_id": payload.parent_org_id}
+            ) >= FREE_TEAMS_PER_ORGANIZATION_LIMIT and (
+                payload.customer_team_id is None
+                or await self.teams.find_unique(where={"customer_team_id": payload.customer_team_id}) is None
+            ):
+                return Failure(ErrorCode.FREE_TIER_LIMIT)
         budget_id: Final = await self.create_budget(payload.budget, actor) if payload.budget is not None else None
         override_id: Final = (
             await self.create_budget(payload.budget_override, actor) if payload.budget_override is not None else None
@@ -847,6 +926,11 @@ class CustomerHierarchyStore:
         organization_id: Final = await self.member_organization(payload)
         if isinstance(organization_id, Failure):
             return organization_id
+        if await self.member_capacity_reached(payload.parent_team_ids) and (
+            payload.customer_member_id is None
+            or await self.members.find_unique(where={"customer_member_id": payload.customer_member_id}) is None
+        ):
+            return Failure(ErrorCode.FREE_TIER_LIMIT)
         template_id: Final = await self.resolve_member_template(organization_id, payload.budget_id)
         if isinstance(template_id, Failure):
             return template_id
@@ -1070,9 +1154,13 @@ class CustomerHierarchyStore:
 
 
 class CustomerHierarchy:
-    def __init__(self, db: TransactionSource, clock: Callable[[], datetime] = utc_now) -> None:
+    def __init__(self, db: TransactionSource, *, premium_user: bool, clock: Callable[[], datetime] = utc_now) -> None:
         self.db = db
         self.clock = clock
+        self.premium_user = premium_user
+
+    async def portal_limits(self) -> CustomerPortalLimits | Failure:
+        return await self.transaction(lambda store: store.portal_limits())
 
     async def transaction(
         self,
@@ -1084,7 +1172,7 @@ class CustomerHierarchy:
 
         try:
             async with self.db.tx() as tx:
-                return await operation(CustomerHierarchyStore(tx, self.clock()))
+                return await operation(CustomerHierarchyStore(tx, self.clock(), premium_user=self.premium_user))
         except UniqueViolationError:
             return Failure(ErrorCode.ALREADY_EXISTS)
         except RecordNotFoundError:

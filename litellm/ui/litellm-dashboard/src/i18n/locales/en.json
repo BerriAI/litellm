@@ -20638,6 +20638,12 @@
       "title": "Budget groups",
       "discard": "Discard edits and reload"
     },
+    "limits": {
+      "byline": "Free tier: up to 5 customers, 5 teams per customer, 5 members per team. LiteLLM <enterprise>Enterprise</enterprise> removes these limits.",
+      "reachedTitle": "Free customer portal limit reached",
+      "reachedDescription": "New customers, teams and members can't be created. Requests from new customers or members still go through but are not tracked in the customer portal.",
+      "upgrade": "Upgrade to Enterprise"
+    },
     "hierarchy": {
       "customerNavigation": "Customer navigation",
       "usage": "Usage",

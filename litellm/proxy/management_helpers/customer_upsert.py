@@ -5,6 +5,7 @@ from pydantic import BaseModel
 
 from litellm.proxy.auth.customer_member_auto_create import DEFAULT_TEAM_ALIAS, default_team_id
 from litellm.proxy.management_helpers.customer_hierarchy import (
+    FREE_TEAMS_PER_ORGANIZATION_LIMIT,
     CustomerHierarchy,
     CustomerHierarchyStore,
     ErrorCode,
@@ -157,6 +158,13 @@ async def customer_team(
             if explicit_team.parent_org_id == organization_id
             else Failure(ErrorCode.CUSTOMER_ORG_MISMATCH)
         )
+    if not store.premium_user:
+        await store.lock_free_capacity()
+        if (
+            await store.teams.find_unique(where={"customer_team_id": default_team_id(organization_id)}) is None
+            and await store.teams.count(where={"parent_org_id": organization_id}) >= FREE_TEAMS_PER_ORGANIZATION_LIMIT
+        ):
+            return Failure(ErrorCode.FREE_TIER_LIMIT)
     await store.teams.upsert(
         where={"customer_team_id": default_team_id(organization_id)},
         data={
@@ -257,6 +265,8 @@ async def upsert_member(
         and expiry_matches
     ):
         return MemberUpsertResponse.model_validate({**existing.model_dump(), "created": False})
+    if await store.member_capacity_reached(tuple(tid for tid in team_ids if tid not in existing.parent_team_ids)):
+        return Failure(ErrorCode.FREE_TIER_LIMIT)
     await store.members.update(
         where={"customer_member_id": payload.customer_member_id}, data={"parent_team_ids": team_ids}
     )
