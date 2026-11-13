@@ -5024,9 +5024,7 @@ def get_optional_params_embeddings(
             optional_params["dimensions"] = non_default_params.pop("dimensions")
         if len(non_default_params.keys()) > 0:
             if litellm.drop_params is True or drop_params is True:  # drop the unsupported non-default values
-                keys = list(non_default_params.keys())
-                for k in keys:
-                    non_default_params.pop(k, None)
+                non_default_params.clear()
             else:
                 raise UnsupportedParamsError(
                     status_code=500,
@@ -5039,9 +5037,7 @@ def get_optional_params_embeddings(
     ):
         if len(non_default_params.keys()) > 0:
             if litellm.drop_params is True or drop_params is True:  # drop the unsupported non-default values
-                keys = list(non_default_params.keys())
-                for k in keys:
-                    non_default_params.pop(k, None)
+                non_default_params.clear()
             else:
                 raise UnsupportedParamsError(
                     status_code=500,
@@ -5060,7 +5056,7 @@ def get_optional_params_embeddings(
         additional_drop_params=kwargs.get("additional_drop_params", None),
     )
 
-    if "extra_body" in final_params and len(final_params["extra_body"]) == 0:
+    if "extra_body" in final_params and not final_params["extra_body"]:
         final_params.pop("extra_body", None)
 
     return final_params
@@ -7485,6 +7481,7 @@ def get_model_info_helper(
                 output_cost_per_second_768p=_model_info.get("output_cost_per_second_768p", None),
                 output_cost_per_second_2k=_model_info.get("output_cost_per_second_2k", None),
                 output_cost_per_second_4k=_model_info.get("output_cost_per_second_4k", None),
+                output_cost_per_video=_model_info.get("output_cost_per_video", None),
                 output_cost_per_video_per_second=_model_info.get("output_cost_per_video_per_second", None),
                 output_cost_per_image=_model_info.get("output_cost_per_image", None),
                 output_cost_per_image_1K=_model_info.get("output_cost_per_image_1K", None),
@@ -7667,6 +7664,7 @@ def get_model_info(
             ]  # only for vertex ai models
             output_cost_per_image: Optional[float]
             output_vector_size: Optional[int]
+            output_cost_per_video: Optional[float]
             output_cost_per_video_per_second: Optional[float]  # only for vertex ai models
             output_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
             litellm_provider: Required[str]

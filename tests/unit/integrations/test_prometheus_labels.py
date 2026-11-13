@@ -619,12 +619,12 @@ def test_prometheus_label_value_sanitization():
 
     # U+2028 must be stripped
     assert (
-        "\u2028" not in labels["requested_model"]
+        "\u2028" not in (labels["requested_model"] or "")
     ), f"U+2028 should be removed from label value, got: {repr(labels['requested_model'])}"
     assert labels["requested_model"] == "claude-haiku-4-5-20251001"
 
     # Newlines must be replaced with spaces, quotes must be escaped
-    assert "\n" not in labels["api_key_alias"]
+    assert "\n" not in (labels["api_key_alias"] or "")
     assert labels["api_key_alias"] == 'My Key \\"test\\" with newline'
 
     print("✅ Prometheus label values are properly sanitized")

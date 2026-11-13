@@ -463,6 +463,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_reasoning_token: float | None
     output_cost_per_reasoning_token_flex: float | None
     output_cost_per_reasoning_token_priority: float | None
+    output_cost_per_video: ReadOnly[float | None]
     output_cost_per_video_per_second: float | None  # only for vertex ai models
     output_cost_per_audio_per_second: float | None  # only for vertex ai models
     output_cost_per_second: float | None  # for OpenAI Speech models
@@ -3144,6 +3145,9 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_user_email: str | None
     user_api_key_team_alias: str | None
     user_api_key_end_user_id: str | None
+    user_api_key_customer_member_id: ReadOnly[str | None]
+    user_api_key_customer_team_id: ReadOnly[str | None]
+    user_api_key_customer_org_id: ReadOnly[str | None]
     user_api_key_request_route: str | None
     user_api_key_auth_metadata: dict[str, str] | None
 
@@ -4268,6 +4272,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_reasoning_token: float | None = None
     output_cost_per_reasoning_token_flex: float | None = None
     output_cost_per_reasoning_token_priority: float | None = None
+    output_cost_per_video: float | None = None
     output_cost_per_video_per_second: float | None = None
     output_cost_per_audio_per_second: float | None = None
     search_context_cost_per_query: dict[str, Any] | None = None

@@ -14,6 +14,7 @@ from litellm.models.team import Member
 from litellm.models.verification_token import LiteLLM_VerificationToken
 from litellm.types.agents import AgentCaller, AgentResponse
 from litellm.types.proxy.agent_identity import ManagedAgentContext
+from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth
 from litellm.types.proxy.auth.user_roles import LitellmUserRoles
 from litellm.types.proxy.carried_budget_state import (
     CommittedBudgetSpend,
@@ -89,6 +90,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     end_user_model_max_budget: _UntypedDict | None = None
     end_user_model_tpm_limit: Mapping[str, int] | None = None
     end_user_model_rpm_limit: Mapping[str, int] | None = None
+    customer_hierarchy: CustomerHierarchyAuth | None = None
 
     # Organization Params
     organization_alias: str | None = None
