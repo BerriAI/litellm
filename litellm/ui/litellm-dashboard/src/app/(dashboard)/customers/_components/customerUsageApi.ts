@@ -3,6 +3,12 @@ import { type DailyActivityAggregatedResponse } from "@/components/UsagePage/dai
 import type { components } from "@/lib/http/schema";
 import i18n from "@/i18n/i18n";
 import {
+  resolveCustomerHierarchy,
+  type CustomerHierarchyScope as CustomerUsageScope,
+  type ResolvedCustomerHierarchy as ResolvedScope,
+} from "./customerHierarchyApi";
+export type { CustomerHierarchyScope as CustomerUsageScope } from "./customerHierarchyApi";
+import {
   mergeCustomerActivityPages,
   customerEntityRankings,
   customerKeyRankings,
@@ -36,24 +42,12 @@ export interface CustomerHierarchyUsage extends ReturnType<typeof mergeCustomerA
   memberBudgets: CustomerUsageEntity[];
 }
 
-export interface CustomerUsageScope {
-  org: string;
-  team: string | null;
-  member: string | null;
-}
-
 interface CustomerUsageRequest {
   scope: CustomerUsageScope;
   accessToken: string;
   startDate: string;
   endDate: string;
   signal?: AbortSignal;
-}
-
-interface ResolvedScope {
-  organization: Organization;
-  team: Team | null;
-  member: Member | null;
 }
 
 const PREFIX = "/management/v1";
@@ -70,39 +64,12 @@ const assertIdentifiers = (ids: readonly string[]) => {
   if (ids.some((id) => !id || id.includes(","))) throw new Error(i18n.t("customerPortal.analytics.invalidIdentifier"));
 };
 
-const assertScope = (valid: boolean) => {
-  if (!valid) throw new Error(i18n.t("customerPortal.analytics.scopeMismatch"));
-};
-
 const batches = async <T, R>(items: readonly T[], task: (item: T) => Promise<R>): Promise<R[]> => {
   const results: R[] = [];
   for (let start = 0; start < items.length; start += MAX_CONCURRENT) {
     results.push(...(await Promise.all(items.slice(start, start + MAX_CONCURRENT).map(task))));
   }
   return results;
-};
-
-const info = <T>(resource: Collection, id: string, request: CustomerUsageRequest) =>
-  apiClient.get<T>(`${PREFIX}/${resource}/${encodeURIComponent(id)}`, {
-    accessToken: request.accessToken,
-    signal: request.signal,
-  });
-
-const resolveScope = async (request: CustomerUsageRequest): Promise<ResolvedScope> => {
-  const { scope } = request;
-  assertIdentifiers([scope.org, ...[scope.team, scope.member].filter((id): id is string => id !== null)]);
-  const [organization, requestedTeam, member] = await Promise.all([
-    info<Organization>("customer_organizations", scope.org, request),
-    scope.team ? info<Team>("customer_teams", scope.team, request) : null,
-    scope.member ? info<Member>("customer_members", scope.member, request) : null,
-  ]);
-  const team = requestedTeam ?? (member ? await info<Team>("customer_teams", member.parent_team_id, request) : null);
-  assertScope(organization.customer_org_id === scope.org);
-  assertScope(!team || team.parent_org_id === scope.org);
-  assertScope(!scope.team || team?.customer_team_id === scope.team);
-  assertScope(!member || member.customer_member_id === scope.member);
-  assertScope(!member || member.parent_team_id === team?.customer_team_id);
-  return { organization, team, member };
 };
 
 const listAll = async <T>(
@@ -196,7 +163,11 @@ const selectedResource = (scope: ResolvedScope): Collection => {
 };
 
 export const customerHierarchyUsageCall = async (request: CustomerUsageRequest): Promise<CustomerHierarchyUsage> => {
-  const selected = await resolveScope(request);
+  assertIdentifiers([
+    request.scope.org,
+    ...[request.scope.team, request.scope.member].filter((id): id is string => id !== null),
+  ]);
+  const selected = await resolveCustomerHierarchy(request);
   const children = await descendants(selected, request);
   const resource = selectedResource(selected);
   const selectedId = selected.member?.customer_member_id ?? selected.team?.customer_team_id ?? request.scope.org;
