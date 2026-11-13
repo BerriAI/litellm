@@ -70,7 +70,10 @@ class Marked:
 
 request = {
     "standard_logging_object": {
-        "metadata": {"user_api_key_team_id": ["t1"], "user_api_key_alias": Marked(), "user_api_key_org_id": set()},
+        "metadata": {"user_api_key_team_id": ["t1"], "user_api_key_alias": Marked(), "user_api_key_org_id": set(),
+            "user_api_key_project_id": ("p1",),
+            "user_api_key_user_id": 2**127,
+        },
         "request_tags": {"prod": 1, "dev": []},
     }
 }
@@ -90,10 +93,12 @@ asyncio.run(
 )
 "#;
 
-fn stringified(text: &str, truthy: bool) -> Option<Scalar> {
+fn stringified(text: &str, truthy: bool, hashable: bool, integer: bool) -> Option<Scalar> {
     Some(Scalar::Stringified {
         text: text.to_owned(),
         truthy,
+        hashable,
+        integer,
     })
 }
 
@@ -139,12 +144,20 @@ fn values_python_derives_reach_rust_as_their_str_text_truthiness_and_iteration()
         .expect("the native ran");
     let identity = identity.unwrap();
     assert_eq!(identity.rejected, None);
-    assert_eq!(identity.team_id, stringified("['t1']", true));
+    assert_eq!(identity.team_id, stringified("['t1']", true, false, false));
     assert_eq!(
         identity.key_alias,
-        stringified("\u{f8ff}litellm-raw-json:x", true)
+        stringified("\u{f8ff}litellm-raw-json:x", true, true, false)
     );
-    assert_eq!(identity.org_id, stringified("set()", false));
+    assert_eq!(identity.org_id, stringified("set()", false, false, false));
+    assert_eq!(
+        identity.project_id,
+        stringified("('p1',)", true, true, false)
+    );
+    assert_eq!(
+        identity.user_id,
+        stringified("170141183460469231731687303715884105728", true, true, true)
+    );
     assert_eq!(
         tags,
         Some(vec![

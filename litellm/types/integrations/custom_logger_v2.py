@@ -48,13 +48,25 @@ class Strict(BaseModel):
 class Stringified(Strict):
     text: str
     truthy: bool
+    hashable: bool
+    integer: bool
+
+
+def _hashable(value: object) -> bool:
+    try:
+        _ = hash(value)
+    except TypeError:
+        return False
+    return True
 
 
 def _stringified(value: object) -> Stringified:
     try:
-        return Stringified(text=str(value), truthy=bool(value))
+        return Stringified(
+            text=str(value), truthy=bool(value), hashable=_hashable(value), integer=isinstance(value, int)
+        )
     except Exception as error:
-        raise ValueError(f"str() or bool() of a {type(value).__name__} raises") from error
+        raise ValueError(f"str(), bool() or hash() of a {type(value).__name__} raises") from error
 
 
 def _scalar(value: object) -> bool | int | float | str | Stringified:
