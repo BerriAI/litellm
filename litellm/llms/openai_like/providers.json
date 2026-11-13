@@ -319,6 +319,15 @@
     "base_url": "https://inference-api.nousresearch.com/v1",
     "api_key_env": "NOUSRESEARCH_API_KEY",
     "api_base_env": "NOUSRESEARCH_API_BASE",
+    "provider_info": {
+      "supports_function_calling": true,
+      "supports_tool_choice": true,
+      "supports_response_schema": true,
+      "supports_reasoning": true
+    },
+    "special_handling": {
+      "use_model_supported_endpoints": true
+    },
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
     },

@@ -25,6 +25,44 @@ CHAT: Final = {
 MODELS: Final = tuple(name for name in litellm.model_cost if name.startswith("nousresearch/"))
 
 
+def test_unlisted_model_forwards_tools() -> None:
+    model: Final = "nousresearch/lit-test/unlisted-chat"
+    tools: Final = [{"type": "function", "function": {"name": "status", "parameters": {"type": "object"}}}]
+    with respx.mock() as upstream:
+        route: Final = upstream.post(f"{BASE}/chat/completions").respond(json=CHAT)
+        response: Final = litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "Hello"}],
+            tools=tools,
+            tool_choice="auto",
+            api_key="nous-key",
+        )
+    assert json.loads(route.calls.last.request.content)["tools"] == tools
+    assert json.loads(route.calls.last.request.content)["tool_choice"] == "auto"
+    assert response.choices[0].message.content == "Hello"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", ["responses", "messages"])
+async def test_chat_only_model_translates_native_requests(endpoint: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    model: Final = "nousresearch/lit-test/chat-only"
+    litellm.register_model(
+        {model: {"litellm_provider": "nousresearch", "mode": "chat", "supported_endpoints": ["/v1/chat/completions"]}}
+    )
+    with respx.mock() as upstream:
+        route: Final = upstream.post(f"{BASE}/chat/completions").respond(json=CHAT)
+        if endpoint == "responses":
+            response: Final = await litellm.aresponses(model=model, input="Hello", api_key="nous-key")
+            assert response.output[0].content[0].text == "Hello"
+        else:
+            message: Final = await litellm.anthropic.messages.acreate(
+                model=model, messages=[{"role": "user", "content": "Hello"}], max_tokens=32, api_key="nous-key"
+            )
+            assert message["content"] == [{"type": "text", "text": "Hello"}]
+    assert json.loads(route.calls.last.request.content)["model"] == "lit-test/chat-only"
+
+
 def test_bundled_model_listing_includes_chat_and_embedding_models() -> None:
     assert set(litellm.get_valid_models(custom_llm_provider="nousresearch", check_provider_endpoint=False)) == set(
         MODELS
