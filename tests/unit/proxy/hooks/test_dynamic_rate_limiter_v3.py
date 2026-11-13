@@ -6,7 +6,7 @@ Core tests to validate that priority weights are respected (0.9/0.1) instead of 
 
 import asyncio
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
 from types import MappingProxyType
 from typing import Final
@@ -33,9 +33,9 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     claim_request_stash_for_data,
 )
 from litellm.proxy.hooks.priority_class_share import pool_member
-from litellm.redis.stores.rate_limits import LocalValue, RateLimitEntry, RateLimitScope
+from litellm.redis.stores.rate_limits import LocalValue, RateLimitCounter, RateLimitEntry, RateLimitScope
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
-from tests.unit.redis.stores.fake_rate_limits import FakeRateLimits
+from tests.unit.redis.stores.fake_rate_limits import FakeRateLimits, Resolved
 
 
 class TimeController:
@@ -1436,20 +1436,21 @@ async def test_saturation_check_cache_ttl_configuration(monkeypatch):
             "TTL should be configurable via priority_reservation_settings"
         )
 
-        # Track read-through (memory then Redis) gets to verify TTL is passed
+        # The Redis count is written back to memory for the configured TTL
         get_cache_calls = []
 
         class _RecordingRateLimits(FakeRateLimits):
-            async def get(self, entry, *, backfill_ttl_seconds=None):
-                get_cache_calls.append({"entry": entry, "ttl": backfill_ttl_seconds})
+            def set_local(self, entry, value, ttl_seconds):
+                get_cache_calls.append({"entry": entry, "ttl": ttl_seconds})
+                super().set_local(entry, value, ttl_seconds)
 
+        counter = RateLimitScope("model_saturation_check", model).counter("requests")
+        fakes = _RecordingRateLimits()
+        fakes.memory.set_local(counter, 1, 60)
         handler.v3_limiter = PROXY_MaxParallelRequestsHandler_v3(
             handler.internal_usage_cache,
-            rate_limit_store=_RecordingRateLimits().store(),
+            rate_limit_store=fakes.store(),
         )
-
-        # Call _get_saturation_value_from_cache
-        counter = RateLimitScope("model_saturation_check", model).counter("requests")
 
         await handler._get_saturation_value_from_cache(counter)
 
@@ -3806,11 +3807,15 @@ class _SharedRedisRateLimits(FakeRateLimits):
         super().__init__()
         self.redis = redis
 
-    async def get(self, entry: RateLimitEntry, *, backfill_ttl_seconds: float | None = None) -> LocalValue | None:
-        value: Final = self.redis.get(entry)
-        if value is not None:
-            self.memory.set_local(entry, value, backfill_ttl_seconds)
-        return value
+    def read_counters(self, counters: Sequence[RateLimitCounter], send: object) -> Resolved[list[str | None]]:
+        async def reply() -> list[str | None]:
+            return [text for counter in counters for text in (None, self._redis_text(counter))]
+
+        return Resolved(reply, send, "read_counters")
+
+    def _redis_text(self, counter: RateLimitCounter) -> str | None:
+        value: Final = self.redis.get(counter)
+        return None if value is None or isinstance(value, dict) else str(value)
 
 
 @pytest.mark.asyncio

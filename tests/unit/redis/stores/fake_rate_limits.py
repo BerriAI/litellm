@@ -152,14 +152,19 @@ class FakeRateLimits:
         keys: Final = [key for counter in counters for key in (window_key(counter), counter_key(counter))]
 
         async def reply() -> list[str | None]:
+            if self.batch_counter_read_script is None:
+                return [text for counter in counters for text in (None, self._local_text(counter))]
             raw: Final = await self._run(self.batch_counter_read_script, "batch_counter_read_script", keys, [])
             return [_text(value) for value in raw]
 
         return Resolved(reply, send, "read_counters")
 
-    def check_and_increment(
-        self, counters: Sequence[AtomicCounter], send: object
-    ) -> Resolved[AtomicReply]:
+    def _local_text(self, counter: RateLimitCounter) -> str | None:
+        """Memory standing in for Redis when the test gave no read script, as ``get`` does."""
+        value: Final = self.memory.get_local(counter)
+        return None if value is None or isinstance(value, dict) else str(value)
+
+    def check_and_increment(self, counters: Sequence[AtomicCounter], send: object) -> Resolved[AtomicReply]:
         keys: Final = [key for atomic in counters for key in (window_key(atomic.counter), counter_key(atomic.counter))]
         args: Final = [
             arg for atomic in counters for arg in (atomic.limit, atomic.increment, atomic.ttl, atomic.window_size)
@@ -225,7 +230,9 @@ class FakeRateLimits:
 
         return Resolved(reply, send, "parallel_release")
 
-    def parallel_count(self, gauges: Sequence[RateLimitScope], slot_ttl_seconds: int, send: object) -> Resolved[list[int]]:
+    def parallel_count(
+        self, gauges: Sequence[RateLimitScope], slot_ttl_seconds: int, send: object
+    ) -> Resolved[list[int]]:
         keys: Final = [scope_key(scope, "max_parallel_requests") for scope in gauges]
 
         async def reply() -> list[int]:
