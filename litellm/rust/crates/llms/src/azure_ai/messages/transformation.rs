@@ -40,6 +40,8 @@ use crate::{
 const ANTHROPIC_PATH_SEGMENT: &str = "/anthropic";
 const AZURE_API_KEY_HEADER: &str = "api-key";
 const OIDC_PREFIX: &str = "oidc/";
+const AUTHORIZATION_HEADER: &str = "authorization";
+const BEARER_SCHEME: &str = "bearer";
 const ENVIRONMENT_REFERENCE_PREFIX: &str = "os.environ/";
 
 pub struct AzureAnthropicMessagesConfig;
@@ -106,17 +108,11 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
             AZURE_API_KEY_ENV,
             AZURE_API_BASE_ENV,
             AZURE_AD_TOKEN_ENV,
-            AZURE_TENANT_ID_ENV,
-            AZURE_CLIENT_ID_ENV,
-            AZURE_CLIENT_SECRET_ENV,
-            AZURE_USERNAME_ENV,
-            AZURE_PASSWORD_ENV,
-            AZURE_SCOPE_ENV,
         ]
     }
 
-    /// A forwarded `x-api-key`, `api-key` (sent as `x-api-key`) or non-blank bearer is the
-    /// credential, replacing the deployment's. Otherwise the Azure key goes in `x-api-key`, and
+    /// A forwarded `x-api-key`, `api-key` (sent as `x-api-key`) or `Authorization` other than a
+    /// blank bearer is the only credential sent: no deployment key and no Entra ID token. Otherwise the Azure key goes in `x-api-key`, and
     /// without one an Entra ID token is minted as Python's `get_azure_ad_token` does.
     fn validate_environment(
         &self,
@@ -127,7 +123,9 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
         litellm_params: &LitellmParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
-        if has_header(&headers, API_KEY_PLACEMENT.header_name()) || has_bearer_auth(&headers) {
+        if has_header(&headers, API_KEY_PLACEMENT.header_name())
+            || has_caller_authorization(&headers)
+        {
             return Ok(ValidatedEnvironment {
                 headers,
                 auth: AuthScheme::Forwarded,
@@ -144,7 +142,7 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
                 placement: API_KEY_PLACEMENT,
                 secret: SecretValue::new(key),
             },
-            None => entra_id_auth(litellm_params, env_lookup),
+            None => entra_id_auth(litellm_params, env_lookup, &|name| std::env::var(name).ok()),
         };
         Ok(ValidatedEnvironment { headers, auth })
     }
@@ -156,6 +154,19 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
     fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
         update_headers_with_safeguards_beta(headers, request, BetaProvider::AzureAi)
     }
+}
+
+/// Any `Authorization` the caller sends is their credential, except a bearer with no token.
+fn has_caller_authorization(headers: &Headers) -> bool {
+    has_bearer_auth(headers)
+        || headers.iter().any(|(name, value)| {
+            name.eq_ignore_ascii_case(AUTHORIZATION_HEADER)
+                && !value.trim().is_empty()
+                && !value
+                    .trim()
+                    .get(..BEARER_SCHEME.len())
+                    .is_some_and(|scheme| scheme.eq_ignore_ascii_case(BEARER_SCHEME))
+        })
 }
 
 fn with_azure_key_as_x_api_key(headers: Headers) -> Headers {
@@ -170,13 +181,15 @@ fn with_azure_key_as_x_api_key(headers: Headers) -> Headers {
         .collect()
 }
 
-/// Python's `get_azure_ad_token` order, with each setting read from the call and then the
-/// secret lookup. Flows only Python implements (username and password, OIDC references,
+/// Python's `get_azure_ad_token` order, with each setting read from the call and then where
+/// Python reads it: `AZURE_AD_TOKEN` through the secret lookup (`get_secret_str`), the rest from
+/// the process environment (`os.getenv`). Flows only Python implements (username and password, OIDC references,
 /// `os.environ/` references, token refresh) are left to the host's `get_azure_ad_token`, so
 /// Python both orders and mints them.
 fn entra_id_auth(
     litellm_params: &LitellmParams,
-    env_lookup: &dyn Fn(&str) -> Option<String>,
+    secret_lookup: &dyn Fn(&str) -> Option<String>,
+    process_env: &dyn Fn(&str) -> Option<String>,
 ) -> AuthScheme {
     let param = |name: &str| {
         litellm_params
@@ -186,11 +199,12 @@ fn entra_id_auth(
             .filter(|value| !value.is_empty())
             .map(str::to_string)
     };
-    let setting = |name: &str, environment: &str| {
-        param(name).or_else(|| env_lookup(environment).filter(|value| !value.is_empty()))
+    let from = |lookup: &dyn Fn(&str) -> Option<String>, name: &str, environment: &str| {
+        param(name).or_else(|| lookup(environment).filter(|value| !value.is_empty()))
     };
+    let setting = |name: &str, environment: &str| from(process_env, name, environment);
     let flag = |name: &str| litellm_params.extra.get(name) == Some(&Value::Bool(true));
-    let token = setting("azure_ad_token", AZURE_AD_TOKEN_ENV);
+    let token = from(secret_lookup, "azure_ad_token", AZURE_AD_TOKEN_ENV);
     let tenant_id = setting("tenant_id", AZURE_TENANT_ID_ENV);
     let client_id = setting("client_id", AZURE_CLIENT_ID_ENV);
     let client_secret = setting("client_secret", AZURE_CLIENT_SECRET_ENV);
@@ -239,7 +253,7 @@ fn entra_id_auth(
             ConfigValue::Value(Sourced::new(value.to_string(), InputSource::Deployment))
         };
         let scope = param("azure_scope")
-            .or_else(|| env_lookup(AZURE_SCOPE_ENV))
+            .or_else(|| process_env(AZURE_SCOPE_ENV))
             .unwrap_or_else(|| DEFAULT_AZURE_SCOPE.to_string());
         return AuthScheme::AzureAdToken {
             inputs: Box::new(AzureAuthInputs {
@@ -446,23 +460,29 @@ mod tests {
         );
     }
 
-    fn entra_flow(params: serde_json::Value, env: &[(&str, &str)]) -> String {
-        let lookup = |name: &str| {
-            env.iter()
+    fn lookup_in<'a>(pairs: &'a [(&str, &str)]) -> impl Fn(&str) -> Option<String> + 'a {
+        move |name: &str| {
+            pairs
+                .iter()
                 .find(|(key, _)| *key == name)
                 .map(|(_, value)| value.to_string())
-        };
-        let validated = AZURE_ANTHROPIC_MESSAGES_CONFIG
-            .validate_environment(
-                Vec::new(),
-                None,
-                "claude",
-                &MessagesOptionalParams::default(),
-                &litellm_params(params),
-                &lookup,
-            )
-            .unwrap();
-        match validated.auth {
+        }
+    }
+
+    fn entra_flow(params: serde_json::Value, env: &[(&str, &str)]) -> String {
+        entra_flow_from(params, &[], env)
+    }
+
+    fn entra_flow_from(
+        params: serde_json::Value,
+        secrets: &[(&str, &str)],
+        process_env: &[(&str, &str)],
+    ) -> String {
+        match entra_id_auth(
+            &litellm_params(params),
+            &lookup_in(secrets),
+            &lookup_in(process_env),
+        ) {
             AuthScheme::HostAzureAdToken => "host".to_string(),
             AuthScheme::AzureAdToken { inputs } => match inputs.tenant_id.as_value() {
                 Some(tenant_id) => format!(
@@ -495,15 +515,13 @@ mod tests {
         "host"
     )]
     #[case::a_static_token(json!({"azure_ad_token": "tok"}), &[], "bearer:tok")]
-    #[case::a_static_token_from_the_secret_lookup(json!({}), &[("AZURE_AD_TOKEN", "env-tok")], "bearer:env-tok")]
-    #[case::an_empty_token_param_falls_to_the_lookup(json!({"azure_ad_token": ""}), &[("AZURE_AD_TOKEN", "env-tok")], "bearer:env-tok")]
     #[case::the_caller_provider_outranks_a_token(
         json!({"azure_ad_token": "tok", "azure_ad_token_provider": "callable"}),
         &[],
         "caller"
     )]
     #[case::client_secret(json!({"tenant_id": "t", "client_id": "c", "client_secret": "s"}), &[], SECRET)]
-    #[case::client_secret_from_the_secret_lookup(
+    #[case::client_secret_from_the_process_environment(
         json!({}),
         &[("AZURE_TENANT_ID", "t"), ("AZURE_CLIENT_ID", "c"), ("AZURE_CLIENT_SECRET", "s")],
         SECRET
@@ -587,6 +605,53 @@ mod tests {
         assert_eq!(entra_flow(params, env), expected);
     }
 
+    #[rstest]
+    #[case::a_token_from_the_secret_lookup(json!({}), &[("AZURE_AD_TOKEN", "secret-tok")], &[], "bearer:secret-tok")]
+    #[case::an_empty_token_param_falls_to_the_secret_lookup(
+        json!({"azure_ad_token": ""}),
+        &[("AZURE_AD_TOKEN", "secret-tok")],
+        &[],
+        "bearer:secret-tok"
+    )]
+    #[case::a_token_only_in_the_process_environment_is_not_read_there(
+        json!({}),
+        &[],
+        &[("AZURE_AD_TOKEN", "env-tok")],
+        "unauthenticated"
+    )]
+    #[case::client_secret_only_in_the_secret_lookup_is_not_used(
+        json!({}),
+        &[("AZURE_TENANT_ID", "t"), ("AZURE_CLIENT_ID", "c"), ("AZURE_CLIENT_SECRET", "s")],
+        &[],
+        "unauthenticated"
+    )]
+    #[case::scope_only_in_the_secret_lookup_is_not_used(
+        json!({"tenant_id": "t", "client_id": "c", "client_secret": "s"}),
+        &[("AZURE_SCOPE", "api://secret/.default")],
+        &[],
+        SECRET
+    )]
+    #[case::username_only_in_the_secret_lookup_is_not_used(
+        json!({"client_id": "c"}),
+        &[("AZURE_USERNAME", "u"), ("AZURE_PASSWORD", "p")],
+        &[],
+        "unauthenticated"
+    )]
+    #[case::username_from_the_process_environment(
+        json!({"client_id": "c"}),
+        &[],
+        &[("AZURE_USERNAME", "u"), ("AZURE_PASSWORD", "p")],
+        "host"
+    )]
+    fn entra_settings_are_read_where_python_reads_them(
+        #[case] params: serde_json::Value,
+        #[case] secrets: &[(&str, &str)],
+        #[case] process_env: &[(&str, &str)],
+        #[case] expected: &str,
+    ) {
+        assert_eq!(entra_flow_from(params, secrets, process_env), expected);
+    }
+
     #[test]
     fn the_azure_key_goes_in_x_api_key() {
         assert!(matches!(
@@ -604,6 +669,36 @@ mod tests {
     fn a_forwarded_key_or_bearer_is_the_credential(#[case] forwarded: &[(&str, &str)]) {
         assert!(matches!(
             validated(forwarded, Some("sk-azure")).auth,
+            AuthScheme::Forwarded
+        ));
+    }
+
+    #[rstest]
+    #[case::bearer_on_an_entra_only_deployment(
+        &[("Authorization", "Bearer caller")],
+        json!({"azure_ad_token": "entra"})
+    )]
+    #[case::lowercase_authorization_with_entra_settings(
+        &[("authorization", "Bearer caller")],
+        json!({"tenant_id": "t", "client_id": "c", "client_secret": "s"})
+    )]
+    #[case::bearer_with_python_only_entra_settings(
+        &[("Authorization", "Bearer caller")],
+        json!({"azure_username": "u", "azure_password": "p", "client_id": "c"})
+    )]
+    #[case::x_api_key_with_entra_settings(&[("x-api-key", "caller")], json!({"azure_ad_token": "entra"}))]
+    #[case::mixed_case_api_key_with_entra_settings(&[("API-Key", "caller")], json!({"azure_ad_token": "entra"}))]
+    #[case::non_bearer_authorization(&[("Authorization", "Basic caller")], json!({"azure_ad_token": "entra"}))]
+    fn a_caller_credential_skips_the_deployment_key_and_entra(
+        #[case] forwarded: &[(&str, &str)],
+        #[case] params: serde_json::Value,
+    ) {
+        assert!(matches!(
+            validated_with(forwarded, Some("sk-azure"), params.clone()).auth,
+            AuthScheme::Forwarded
+        ));
+        assert!(matches!(
+            validated_with(forwarded, None, params).auth,
             AuthScheme::Forwarded
         ));
     }

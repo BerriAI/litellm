@@ -3341,6 +3341,14 @@ A09_MIXED_CASE_API_KEY: Final = (
     "A09 (approved security fix): a caller Api-Key in any casing replaces the azure_ai operator key as x-api-key "
     "on Rust, Python only matches a lowercase api-key and sends both"
 )
+CALLER_CREDENTIAL_SKIPS_ENTRA: Final = (
+    "Approved by the owner, same class as A06-A08: a caller credential header is the only credential Rust sends "
+    "and no Entra ID token is minted, Python adds the Entra token (joined into one Authorization or beside x-api-key)"
+)
+A10_CALLER_BEARER_ON_ENTRA: Final = (
+    "A10 (approved by the owner): a caller bearer on an Entra-only azure_ai deployment is sent as is on Rust, "
+    "Python overwrites it with the deployment's Entra token"
+)
 
 AZURE_AI: Final = frozenset({"azure_ai"})
 
@@ -3438,6 +3446,30 @@ AZURE_AUTH_CASES: Final = tuple(
             model=AZURE_CLAUDE,
             env=MappingProxyType({"AZURE_AUTHORITY_HOST": "http://127.0.0.1:9"}),
             upstream=(),
+        ),
+        Case(
+            "azure_ai_caller_bearer_on_entra_deployment",
+            _kw(api_key=None, azure_ad_token="entra-token", extra_headers={"Authorization": "Bearer caller-token"}),
+            model=AZURE_CLAUDE,
+            gaps=_gaps(request=A10_CALLER_BEARER_ON_ENTRA),
+        ),
+        Case(
+            "azure_ai_caller_lowercase_authorization_with_entra",
+            _kw(api_key=None, azure_ad_token="entra-token", extra_headers={"authorization": "Bearer caller-token"}),
+            model=AZURE_CLAUDE,
+            gaps=_gaps(request=CALLER_CREDENTIAL_SKIPS_ENTRA),
+        ),
+        Case(
+            "azure_ai_caller_x_api_key_with_entra",
+            _kw(api_key=None, azure_ad_token="entra-token", extra_headers={"x-api-key": "sk-caller"}),
+            model=AZURE_CLAUDE,
+            gaps=_gaps(request=CALLER_CREDENTIAL_SKIPS_ENTRA),
+        ),
+        Case(
+            "azure_ai_caller_upper_case_api_key",
+            _kw(extra_headers={"API-KEY": "sk-caller"}),
+            model=AZURE_CLAUDE,
+            gaps=_gaps(request=A09_MIXED_CASE_API_KEY),
         ),
         Case(
             "azure_ai_no_credential",

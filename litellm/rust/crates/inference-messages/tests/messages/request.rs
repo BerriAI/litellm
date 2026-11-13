@@ -131,6 +131,70 @@ async fn credentials_become_exactly_one_auth_header(
     &[("AZURE_AD_TOKEN", "secret-token")],
     &[("authorization", "Bearer secret-token")],
 )]
+#[case::client_secret_settings_only_in_the_secret_source_are_not_used(
+    None,
+    &[],
+    json!({"azure_ad_token": "entra-token"}),
+    None,
+    &[("AZURE_TENANT_ID", "t"), ("AZURE_CLIENT_ID", "c"), ("AZURE_CLIENT_SECRET", "s")],
+    &[("authorization", "Bearer entra-token")],
+)]
+#[case::username_and_password_only_in_the_secret_source_are_not_used(
+    None,
+    &[],
+    json!({"client_id": "c"}),
+    None,
+    &[("AZURE_USERNAME", "u"), ("AZURE_PASSWORD", "p")],
+    &[],
+)]
+#[case::a_caller_bearer_replaces_an_entra_only_deployment(
+    None,
+    &[("Authorization", "Bearer caller")],
+    json!({"azure_ad_token": "entra-token"}),
+    None,
+    &[],
+    &[("authorization", "Bearer caller")],
+)]
+#[case::a_caller_bearer_skips_the_python_only_entra_flow(
+    None,
+    &[("Authorization", "Bearer caller")],
+    json!({"azure_username": "u", "azure_password": "p", "client_id": "c"}),
+    None,
+    &[],
+    &[("authorization", "Bearer caller")],
+)]
+#[case::a_lowercase_caller_authorization_is_not_joined_with_entra(
+    None,
+    &[("authorization", "Bearer caller")],
+    json!({"azure_ad_token": "entra-token"}),
+    None,
+    &[],
+    &[("authorization", "Bearer caller")],
+)]
+#[case::a_caller_x_api_key_skips_entra(
+    None,
+    &[("x-api-key", "caller")],
+    json!({"azure_ad_token": "entra-token"}),
+    None,
+    &[],
+    &[("x-api-key", "caller")],
+)]
+#[case::a_mixed_case_caller_api_key_replaces_the_operator_key(
+    Some("sk-operator"),
+    &[("API-Key", "caller")],
+    json!({}),
+    None,
+    &[],
+    &[("x-api-key", "caller")],
+)]
+#[case::a_caller_basic_authorization_replaces_the_operator_key(
+    Some("sk-operator"),
+    &[("Authorization", "Basic caller")],
+    json!({}),
+    None,
+    &[],
+    &[("authorization", "Basic caller")],
+)]
 #[case::a_key_outranks_an_entra_token(
     Some("sk-call"),
     &[],
@@ -150,6 +214,7 @@ async fn azure_credentials_resolve_in_pythons_order(
     #[case] secrets: &[(&str, &str)],
     #[case] expected: &[(&str, &str)],
 ) {
+    let _serialized = PROCESS_ENVIRONMENT.lock().await;
     let upstream = upstream([message_response()]).await;
     let Value::Object(params) = params else {
         panic!("case params are an object")
@@ -197,6 +262,48 @@ async fn azure_credentials_resolve_in_pythons_order(
         .map(|(name, value)| (name.to_string(), value.to_string()))
         .collect();
     assert_eq!(sent, expected);
+}
+
+/// Python reads `AZURE_USERNAME` and `AZURE_PASSWORD` with `os.getenv`, so only the process
+/// environment sends the call to the host's `get_azure_ad_token`, which this route has none of.
+static PROCESS_ENVIRONMENT: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+#[rstest]
+#[case::from_the_process_environment(&[("AZURE_USERNAME", "u"), ("AZURE_PASSWORD", "p")], true)]
+#[case::without_them(&[], false)]
+#[tokio::test]
+async fn azure_username_and_password_come_from_the_process_environment(
+    call: MessagesCall,
+    #[case] process_env: &[(&'static str, &'static str)],
+    #[case] asks_the_host: bool,
+) {
+    let _serialized = PROCESS_ENVIRONMENT.lock().await;
+    for (name, value) in process_env {
+        unsafe { std::env::set_var(name, value) };
+    }
+    let upstream = upstream([message_response()]).await;
+
+    let outcome = run(MessagesCall {
+        custom_llm_provider: Some("azure_ai".into()),
+        litellm_params: litellm_inference_messages::litellm_params(
+            [
+                ("model".to_string(), json!(MODEL)),
+                ("client_id".to_string(), json!("c")),
+            ]
+            .into_iter()
+            .collect(),
+        )
+        .expect("valid params"),
+        api_base: Some(upstream.uri()),
+        ..call
+    })
+    .await;
+    for (name, _) in process_env {
+        unsafe { std::env::remove_var(name) };
+    }
+
+    assert_eq!(outcome.is_err(), asks_the_host, "{outcome:?}");
+    assert_eq!(received(&upstream).await.is_empty(), asks_the_host);
 }
 
 #[rstest]
