@@ -3892,6 +3892,14 @@ AZURE_ERROR_CASES: Final = tuple(
             env=MappingProxyType({"AZURE_API_KEY": "sk-azure-key\n"}),
             upstream=(),
         ),
+        Case(
+            "azure_ai_caller_mixed_case_api_key_without_an_operator_key",
+            _kw(api_key=None, extra_headers={"API-Key": "sk-caller-key"}),
+        ),
+        Case(
+            "azure_ai_caller_api_key_without_an_operator_key",
+            _kw(api_key=None, extra_headers={"api-key": "sk-caller-key"}),
+        ),
     )
 )
 

@@ -128,9 +128,12 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
         }
     }
 
-    /// A forwarded `x-api-key`, `api-key` (sent as `x-api-key`) or `Authorization` other than a
-    /// blank bearer is the only credential sent: no deployment key and no Entra ID token. Otherwise the Azure key goes in `x-api-key`, and
-    /// without one an Entra ID token is minted as Python's `get_azure_ad_token` does.
+    /// A forwarded `x-api-key`, `api-key` or `Authorization` other than a blank bearer is the only
+    /// credential sent: no deployment key and no Entra ID token. A caller `api-key` goes out as
+    /// `x-api-key` in any casing when it replaces a deployment key, and as Python sends it when
+    /// there is none.
+    /// Otherwise the Azure key goes in `x-api-key`, and without one an Entra ID token is minted as
+    /// Python's `get_azure_ad_token` does.
     fn validate_environment(
         &self,
         headers: Headers,
@@ -148,13 +151,14 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
                 auth: AuthScheme::Forwarded,
             });
         }
+        let azure_key = resolve_azure_api_key(api_key, env_lookup);
         if has_header(&headers, AZURE_API_KEY_HEADER) {
             return Ok(ValidatedEnvironment {
-                headers: with_azure_key_as_x_api_key(headers),
+                headers: with_azure_key_as_x_api_key(headers, azure_key.is_some()),
                 auth: AuthScheme::Forwarded,
             });
         }
-        let auth = match resolve_azure_api_key(api_key, env_lookup) {
+        let auth = match azure_key {
             Some(key) => AuthScheme::Credential {
                 placement: API_KEY_PLACEMENT,
                 secret: SecretValue::new(key),
@@ -229,15 +233,21 @@ fn has_caller_authorization(headers: &Headers) -> bool {
         })
 }
 
-fn with_azure_key_as_x_api_key(headers: Headers) -> Headers {
+/// A caller `api-key` that replaces a deployment key is renamed in any casing. Without one it is
+/// renamed only when spelled exactly `api-key`, as Python's `AzureAnthropicMessagesConfig` does.
+fn with_azure_key_as_x_api_key(headers: Headers, replaces_a_deployment_key: bool) -> Headers {
     headers
         .into_iter()
-        .map(
-            |(name, value)| match name.eq_ignore_ascii_case(AZURE_API_KEY_HEADER) {
+        .map(|(name, value)| {
+            let renamed = match replaces_a_deployment_key {
+                true => name.eq_ignore_ascii_case(AZURE_API_KEY_HEADER),
+                false => name == AZURE_API_KEY_HEADER,
+            };
+            match renamed {
                 true => (API_KEY_PLACEMENT.header_name().to_string(), value),
                 false => (name, value),
-            },
-        )
+            }
+        })
         .collect()
 }
 
@@ -589,6 +599,25 @@ mod tests {
             environment.headers,
             vec![
                 ("x-api-key".to_string(), "caller".to_string()),
+                ("x-trace".to_string(), "1".to_string()),
+            ]
+        );
+    }
+
+    #[rstest]
+    #[case::lowercase(&[("api-key", "caller"), ("x-trace", "1")], "x-api-key")]
+    #[case::mixed_case(&[("API-Key", "caller"), ("x-trace", "1")], "API-Key")]
+    #[case::title_case(&[("Api-Key", "caller"), ("x-trace", "1")], "Api-Key")]
+    fn a_caller_api_key_without_an_azure_key_is_sent_as_python_sends_it(
+        #[case] forwarded: &[(&str, &str)],
+        #[case] sent_as: &str,
+    ) {
+        let environment = validated(forwarded, None);
+        assert!(matches!(environment.auth, AuthScheme::Forwarded));
+        assert_eq!(
+            environment.headers,
+            vec![
+                (sent_as.to_string(), "caller".to_string()),
                 ("x-trace".to_string(), "1".to_string()),
             ]
         );
