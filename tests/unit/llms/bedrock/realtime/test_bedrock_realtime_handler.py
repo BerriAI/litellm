@@ -7,6 +7,7 @@ from typing import Final
 from unittest.mock import MagicMock
 
 import pytest
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import (
@@ -18,6 +19,14 @@ from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.realtime.handler import BedrockRealtime
 from litellm.llms.bedrock.realtime.transformation import BedrockRealtimeConfig
 from litellm.realtime_api import main as realtime_main
+
+
+class _EndpointConfig(TypedDict):
+    endpoint_uri: ReadOnly[str]
+
+
+class _EndpointCapture(TypedDict, total=False):
+    config_kwargs: ReadOnly[_EndpointConfig]
 
 
 @pytest.fixture(autouse=True)
@@ -1024,8 +1033,12 @@ class TestBedrockRealtimeAwsAuth:
         ),
     )
     async def test_an_empty_endpoint_setting_counts_as_unset(
-        self, stub_aws_sdk_client, api_base, runtime_endpoint, expected_endpoint
-    ):
+        self,
+        stub_aws_sdk_client: _EndpointCapture,
+        api_base: str | None,
+        runtime_endpoint: str | None,
+        expected_endpoint: str,
+    ) -> None:
         await BedrockRealtime().async_realtime(
             model="amazon.nova-sonic-v1:0",
             websocket=RealtimeClientWS(),
@@ -1037,6 +1050,7 @@ class TestBedrockRealtimeAwsAuth:
             aws_bedrock_runtime_endpoint=runtime_endpoint,
         )
 
+        assert "config_kwargs" in stub_aws_sdk_client
         assert stub_aws_sdk_client["config_kwargs"]["endpoint_uri"] == expected_endpoint
 
     @pytest.mark.asyncio
