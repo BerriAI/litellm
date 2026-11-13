@@ -5705,7 +5705,6 @@ class PrismaClient:
     _tool_usage_transactions_lock = asyncio.Lock()
     model_usage_transactions: ClassVar[list["ModelUsageTransaction"]] = []
     _model_usage_transactions_lock = asyncio.Lock()
-    autorouter_turn_transactions: list["AutoRouterTurnTransaction"] = []
     _autorouter_turn_transactions_lock = asyncio.Lock()
 
     # How long a health probe failure waits for an in-flight planned engine
@@ -5724,6 +5723,7 @@ class PrismaClient:
     ):
         ## init logging object
         self.baseline_accounting_transactions: list[BaselineAccountingRecord] = []
+        self.autorouter_turn_transactions: list[AutoRouterTurnTransaction] = []
         self.baseline_accounting_lock: Final = asyncio.Lock()
         self.proxy_logging_obj = proxy_logging_obj
         self.token_auth: DatabaseTokenAuth | None = resolve_database_token_auth()
