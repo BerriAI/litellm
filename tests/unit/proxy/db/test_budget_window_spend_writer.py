@@ -2,7 +2,7 @@ import math
 from contextlib import asynccontextmanager
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Final
 
 import pytest
 
@@ -37,14 +37,14 @@ class _FakeBatcher:
 class _FakeDB:
     """Stands in for prisma_client.db; records every statement it is handed."""
 
-    def __init__(self, existing_rows: list[dict[str, str]] | None = None) -> None:
+    def __init__(self, existing_rows: list[dict[str, str | datetime]] | None = None) -> None:
         self.existing_rows = existing_rows or []
         self.query_raw_calls: list[tuple[str, tuple[Any, ...]]] = []
         self.execute_raw_calls: list[tuple[str, tuple[Any, ...]]] = []
         self.batcher = _FakeBatcher()
         self.committed = False
 
-    async def query_raw(self, query: str, *args: Any) -> list[dict[str, str]]:
+    async def query_raw(self, query: str, *args: Any) -> list[dict[str, str | datetime]]:
         record_db_io()
         self.query_raw_calls.append((query, args))
         return self.existing_rows
@@ -146,8 +146,15 @@ def _batch(spend: float, started_at: datetime | None = BATCH_STARTED_AT) -> dict
     }
 
 
-def _existing(entity_type: str, entity_id: str, window_duration: str) -> dict[str, str]:
-    return {"entity_type": entity_type, "entity_id": entity_id, "window_duration": window_duration}
+def _existing(
+    entity_type: str, entity_id: str, window_duration: str, window_start: datetime = WINDOW_A
+) -> dict[str, str | datetime]:
+    return {
+        "entity_type": entity_type,
+        "entity_id": entity_id,
+        "window_duration": window_duration,
+        "window_start": window_start,
+    }
 
 
 @pytest.mark.asyncio
@@ -189,7 +196,7 @@ async def test_missing_row_is_seeded_from_spend_logs_once():
 
 
 @pytest.mark.asyncio
-async def test_existing_row_is_never_reseeded():
+async def test_current_window_is_never_reseeded():
     """The seed is a full LiteLLM_SpendLogs scan; running it for a row that is
     already maintained would both cost a scan and double count."""
     db = _FakeDB(existing_rows=[_existing("key", "k1", "30d")])
@@ -205,6 +212,51 @@ async def test_existing_row_is_never_reseeded():
     ((_, params),) = db.batcher.calls
     assert params[INSERT_SPEND] == pytest.approx(1.0)
     assert params[INCREMENT] == pytest.approx(1.0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entity_type", ("key", "team"))
+@pytest.mark.parametrize("logs_include_batch", (False, True))
+@pytest.mark.parametrize("serialized", (False, True))
+async def test_corrected_window_recovers_previous_charges_without_counting_the_batch_twice(
+    entity_type: str, logs_include_batch: bool, serialized: bool
+) -> None:
+    old_start: Final = datetime(2027, 1, 30, tzinfo=timezone.utc)
+    corrected_start: Final = datetime(2027, 2, 1, tzinfo=timezone.utc)
+    row: Final = _existing(entity_type, "budgeted", "30d", old_start)
+    db: Final = _FakeDB(existing_rows=[{**row, "window_start": old_start.isoformat()} if serialized else row])
+    billed: Final = 95.0
+    increment: Final = 5.0
+    aggregate: Final = _RecordingAggregate(
+        total=billed + (increment if logs_include_batch else 0.0), before_batch=billed
+    )
+
+    await commit_window_spend_updates(
+        prisma_client=_FakePrismaClient(db),
+        transactions=(build_window_spend_transaction(entity_type, "budgeted", "30d", corrected_start, increment),),
+        spend_logs_aggregate=aggregate,
+    )
+
+    ((_, params),) = db.batcher.calls
+    assert params[INSERT_SPEND] == billed + increment
+    assert params[INCREMENT] == increment
+    assert aggregate.calls[0]["window_start"] == corrected_start
+
+
+@pytest.mark.asyncio
+async def test_late_increment_uses_the_newer_maintained_window_without_scanning_logs() -> None:
+    db: Final = _FakeDB(existing_rows=[_existing("key", "k1", "30d", WINDOW_B)])
+    aggregate: Final = _RecordingAggregate(total=99.0)
+
+    await commit_window_spend_updates(
+        prisma_client=_FakePrismaClient(db),
+        transactions=(build_window_spend_transaction("key", "k1", "30d", WINDOW_A, 1.0),),
+        spend_logs_aggregate=aggregate,
+    )
+
+    assert aggregate.calls == []
+    ((_, params),) = db.batcher.calls
+    assert params[INCREMENT] == 1.0
 
 
 @pytest.mark.asyncio
@@ -564,8 +616,7 @@ async def test_seed_aggregate_sql_splits_the_window_at_the_batch_start(entity_ty
     assert (
         'FILTER (WHERE EXISTS (SELECT 1 FROM "LiteLLM_SpendLogDelivery" delivery '
         'WHERE delivery.request_id = "LiteLLM_SpendLogs".request_id) '
-        "OR \"startTime\" < ($3::timestamptz AT TIME ZONE 'UTC'))"
-        in normalized
+        "OR \"startTime\" < ($3::timestamptz AT TIME ZONE 'UTC'))" in normalized
     )
     assert 'FROM "LiteLLM_SpendLogs"' in normalized
     # startTime is TIMESTAMP(3): the bound is floored to the second so the
@@ -649,9 +700,7 @@ async def test_window_reads_inside_an_enclosing_transaction_use_its_connection()
 
     await commit_window_spend_updates(
         prisma_client=_FakePrismaClient(client_db),
-        transactions=(
-            build_window_spend_transaction("key", "k1", "30d", WINDOW_A, 1.0, started_at=BATCH_STARTED_AT),
-        ),
+        transactions=(build_window_spend_transaction("key", "k1", "30d", WINDOW_A, 1.0, started_at=BATCH_STARTED_AT),),
         outer_transaction=transaction,
     )
 

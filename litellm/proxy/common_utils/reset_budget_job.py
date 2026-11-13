@@ -1524,7 +1524,7 @@ class ResetBudgetJob:
             verbose_proxy_logger.warning("Failed to reset Redis counter %s: %s", counter_key, redis_err)
         budget_duration: Final = window["budget_duration"]
         next_reset_at: Final = compute_budget_reset_at(
-            budget_duration=budget_duration, settings=reset_settings, now=_as_utc(now)
+            budget_duration=budget_duration, settings=reset_settings, now=_as_utc(now), previous_reset_at=reset_at
         )
         window["reset_at"] = next_reset_at.isoformat()
         await ResetBudgetJob._roll_window_spend_row(
