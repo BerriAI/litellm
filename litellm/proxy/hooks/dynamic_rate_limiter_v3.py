@@ -390,6 +390,10 @@ def _tightest_team_share(descriptors: Iterable[RateLimitDescriptor | None]) -> t
     return min(shares, key=lambda share: share[1], default=None)
 
 
+def _tightest_of(*shares: tuple[RateLimitDescriptor, int] | None) -> tuple[RateLimitDescriptor, int] | None:
+    return min((share for share in shares if share is not None), key=lambda share: share[1], default=None)
+
+
 def _capped_idle_share(
     share: RateLimitDescriptor | None, cap: RateLimitDescriptor | None
 ) -> tuple[RateLimitDescriptor, int] | None:
@@ -947,10 +951,12 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             if not loggers or stash is None or model_group is None or settlement.user_api_key_team_id is None:
                 return
             share: Final = (
-                _tightest_team_share((hold.descriptor,)) or _capped_idle_share(hold.share, hold.cap)
+                _tightest_of(_tightest_team_share((hold.descriptor,)), _capped_idle_share(hold.share, hold.cap))
                 if hold is not None
-                else _tightest_team_share((stash.borrowing_team_model_limit, stash.priority_class_share))
-                or _capped_idle_share(stash.borrowing_team_model_share, stash.borrowing_team_model_cap)
+                else _tightest_of(
+                    _tightest_team_share((stash.borrowing_team_model_limit, stash.priority_class_share)),
+                    _capped_idle_share(stash.borrowing_team_model_share, stash.borrowing_team_model_cap),
+                )
             )
             if share is None:
                 return
@@ -1107,7 +1113,11 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         enforced_team: Final = None if borrowing is None else borrowing.enforced(saturated)
         team_cap: Final = None if borrowing is None else borrowing.ceiling
         if connection_stash is not None and borrowing is not None:
-            connection_stash.borrowing_team_model_limit = enforced_team
+            connection_stash.borrowing_team_model_limit = (
+                connection_stash.borrowing_team_model_limit
+                if enforced_team is None and connection_stash.borrowing_team_model_reserved_tokens
+                else enforced_team
+            )
             connection_stash.borrowing_team_model_share = borrowing.share
             connection_stash.borrowing_team_model_cap = team_cap
         descriptors: Final = (
