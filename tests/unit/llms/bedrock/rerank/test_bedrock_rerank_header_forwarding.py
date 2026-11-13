@@ -451,11 +451,12 @@ def test_bedrock_rerank_forwarded_headers_excluded_from_sigv4_signature():
     assert headers["x-forwarded-for"] == "203.0.113.5", "forwarded header must still reach Bedrock, unsigned"
 
 
-def test_bedrock_rerank_signs_with_sigv4_even_when_bedrock_api_key_is_set(monkeypatch):
+def test_bedrock_rerank_uses_bedrock_api_key_as_bearer(monkeypatch):
     """
-    Bedrock API keys are only valid for Bedrock and Bedrock Runtime actions, not for
-    Agents for Amazon Bedrock Runtime ones. Rerank is served by bedrock-agent-runtime,
-    so it has to keep signing with SigV4 even when AWS_BEARER_TOKEN_BEDROCK is set.
+    The Cohere Rerank 3.5 model card documents calling the Rerank API with a
+    long-term Bedrock API key (docs.aws.amazon.com model-card-cohere-rerank-3-5,
+    checked 2026-10-16), so a key in AWS_BEARER_TOKEN_BEDROCK must be sent as
+    an Authorization: Bearer header and must not trigger SigV4 signing
     """
     monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "test-bedrock-api-key")
 
@@ -476,9 +477,53 @@ def test_bedrock_rerank_signs_with_sigv4_even_when_bedrock_api_key_is_set(monkey
     assert prepared_request["endpoint_url"].startswith("https://bedrock-agent-runtime.")
 
     authorization = prepared_request["prepped"].headers["Authorization"]
-    assert authorization.startswith("AWS4-HMAC-SHA256"), (
-        f"rerank must sign with SigV4, got Authorization={authorization[:30]}"
+    assert authorization == "Bearer test-bedrock-api-key", (
+        f"rerank must authenticate with the Bedrock API key, got Authorization={authorization[:30]}"
     )
+
+
+def test_bedrock_rerank_with_api_key_authenticates_with_bearer_not_sigv4():
+    """
+    A Bedrock API key configured on the deployment must authenticate the rerank
+    call with Authorization: Bearer, matching how Bedrock chat and embeddings
+    already treat it. SigV4 signing with the instance role ignores the key
+    """
+    client = HTTPHandler()
+    model = "bedrock/arn:aws:bedrock:us-east-1::foundation-model/cohere.rerank-v3-5:0"
+
+    with (
+        patch.object(client, "post") as mock_post,
+        patch(  # test-quality-ok: boto credential lookup needs live AWS; the HTTP boundary is already a MockTransport
+            "litellm.llms.bedrock.rerank.handler.BedrockRerankHandler._get_boto_credentials_from_optional_params",
+            return_value=create_mock_credentials(),
+        ),
+        patch("botocore.auth.SigV4Auth") as mock_sigv4,
+    ):
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(bedrock_rerank_response)
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_response.raise_for_status = lambda: None
+        mock_post.return_value = mock_response
+
+        response = litellm.rerank(
+            model=model,
+            query=test_query,
+            documents=test_documents,
+            top_n=3,
+            client=client,
+            api_key="test-bearer-key-12345",
+            aws_region_name="us-east-1",
+        )
+
+        assert isinstance(response, litellm.RerankResponse)
+
+        sent_headers = mock_post.call_args.kwargs["headers"]
+        assert sent_headers.get("Authorization") == "Bearer test-bearer-key-12345", (
+            "rerank with a Bedrock API key must send Authorization: Bearer, "
+            f"got headers={sent_headers}"
+        )
+        assert not mock_sigv4.called, "rerank with a Bedrock API key must not SigV4-sign"
 
 
 @pytest.mark.asyncio
