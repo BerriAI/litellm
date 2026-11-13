@@ -14,6 +14,7 @@ use serde_json::Value;
 use crate::{
     Error,
     anthropic::{
+        beta_headers::BetaPolicy,
         common_utils::{API_KEY_PLACEMENT, strip_trailing_slashes},
         messages::{
             handler::shape_anthropic_messages_request,
@@ -175,8 +176,15 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
         DEFAULT_HEADERS
     }
 
+    /// Python's `_update_headers_with_anthropic_beta`, then the handler's
+    /// `update_headers_with_filtered_beta` over the azure_ai row: unknown and unsupported betas
+    /// are dropped, the caller's with the ones the request needs.
     fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
-        update_headers_with_safeguards_beta(headers, request, BetaProvider::AzureAi)
+        BetaPolicy::Filter(BetaProvider::AzureAi).apply(update_headers_with_safeguards_beta(
+            headers,
+            request,
+            BetaProvider::AzureAi,
+        ))
     }
 }
 
@@ -1086,7 +1094,32 @@ mod tests {
         &[("x-api-key", "k"), ("anthropic-beta", "claude-code-20250219,dangerous-tool-use-2026-09-03")]
     )]
     #[case::null_safeguards_need_no_beta(json!({"safeguards": null}), &[], &[("x-api-key", "k")])]
-    fn request_headers_carry_the_anthropic_feature_betas(
+    #[case::unknown_and_unsupported_caller_betas_are_dropped(
+        json!({}),
+        &[("anthropic-beta", " web-search-2025-03-05 ,bash_20250124,unlisted-2030-01-01,,context-1m-2025-08-07")],
+        &[("x-api-key", "k"), ("anthropic-beta", "context-1m-2025-08-07,web-search-2025-03-05")]
+    )]
+    #[case::a_header_left_empty_is_removed(
+        json!({}),
+        &[("ANTHROPIC-BETA", "mcp-servers-2025-12-04,unlisted-2030-01-01")],
+        &[("x-api-key", "k")]
+    )]
+    #[case::caller_casings_are_joined_into_one_header(
+        json!({}),
+        &[("Anthropic-Beta", "effort-2025-11-24,text_editor_20250124"), ("anthropic-beta", "context-1m-2025-08-07")],
+        &[("x-api-key", "k"), ("anthropic-beta", "context-1m-2025-08-07,effort-2025-11-24")]
+    )]
+    #[case::the_advisor_beta_is_not_sent(
+        json!({"tools": [{"type": "advisor_20260301", "name": "advisor", "model": "claude-opus-4-8"}]}),
+        &[],
+        &[("x-api-key", "k")]
+    )]
+    #[case::feature_betas_survive_beside_an_unknown_caller_beta(
+        json!({"output_format": {"type": "json_schema"}, "thinking": {"type": "enabled", "budget_tokens": 1024, "display": "updates"}}),
+        &[("anthropic-beta", "unlisted-2030-02-02")],
+        &[("x-api-key", "k"), ("anthropic-beta", "structured-outputs-2025-11-13,thinking-display-updates-2026-08-18")]
+    )]
+    fn request_headers_carry_the_feature_betas_filtered_through_the_azure_ai_row(
         #[case] fields: serde_json::Value,
         #[case] forwarded: &[(&str, &str)],
         #[case] expected: &[(&str, &str)],

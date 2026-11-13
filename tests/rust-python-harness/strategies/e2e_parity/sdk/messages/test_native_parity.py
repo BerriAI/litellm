@@ -3559,6 +3559,132 @@ AZURE_URL_CASES: Final = tuple(
 # the native parser read from the path (`d`).
 ANTHROPIC_URL_CASES: Final = (Case("anthropic_base_empty_host", _kw(api_base="http:///d"), upstream=()),)
 
+JSON_SCHEMA_FORMAT: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {
+        "type": "json_schema",
+        "schema": {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]},
+    }
+)
+
+
+def _beta(value: str) -> Mapping[str, object]:
+    return {"anthropic-beta": value}
+
+
+AZURE_SHAPING_CASES: Final = tuple(
+    replace(case, rust_providers=AZURE_AI)
+    for case in (
+        Case(
+            "azure_ai_beta_mixed_padded_list",
+            _kw(
+                extra_headers=_beta(
+                    " web-search-2025-03-05 , bash_20250124,parity-unlisted-2030-01-01,context-1m-2025-08-07,,"
+                    "web-search-2025-03-05"
+                )
+            ),
+            model=AZURE_CLAUDE,
+        ),
+        Case(
+            "azure_ai_beta_all_dropped",
+            _kw(extra_headers=_beta("mcp-servers-2025-12-04,advisor-tool-2026-03-01,parity-unlisted-2030-01-01")),
+            model=AZURE_CLAUDE,
+        ),
+        Case(
+            "azure_ai_beta_title_case_header",
+            _kw(extra_headers={"Anthropic-Beta": "mcp-servers-2025-12-04,effort-2025-11-24"}),
+            model=AZURE_CLAUDE,
+        ),
+        Case(
+            "azure_ai_beta_upper_case_header_null_beta",
+            _kw(extra_headers={"ANTHROPIC-BETA": "bash_20241022"}),
+            model=AZURE_CLAUDE,
+        ),
+        Case(
+            "azure_ai_beta_two_casings",
+            _kw(
+                extra_headers={
+                    "Anthropic-Beta": "interleaved-thinking-2025-05-14,text_editor_20250124",
+                    "anthropic-beta": "fine-grained-tool-streaming-2025-05-14",
+                }
+            ),
+            model=AZURE_CLAUDE,
+        ),
+        Case(
+            "azure_ai_beta_stream",
+            _kw(stream=True, extra_headers=_beta("mcp-servers-2025-12-04,context-1m-2025-08-07")),
+            model=AZURE_CLAUDE,
+            upstream=(_stream(TEXT_STREAM),),
+        ),
+        Case(
+            "azure_ai_beta_context_management",
+            _kw(context_management={"edits": [{"type": "clear_tool_uses_20250919"}]}),
+            model=AZURE_CLAUDE,
+        ),
+        Case("azure_ai_beta_native_compaction", _kw(compaction={}), model=AZURE_CLAUDE),
+        Case(
+            "azure_ai_beta_tool_search",
+            _kw(
+                tools=[
+                    {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+                    {**WEATHER_TOOL, "defer_loading": True},
+                ]
+            ),
+            model=AZURE_CLAUDE,
+        ),
+        Case(
+            "azure_ai_beta_output_config_with_a_null_caller_beta",
+            _kw(output_config={"format": dict(JSON_SCHEMA_FORMAT)}, extra_headers=_beta("mcp-servers-2025-12-04")),
+            model=AZURE_CLAUDE,
+        ),
+        Case(
+            "azure_ai_beta_thinking_display_and_binding",
+            _kw(
+                max_tokens=2048,
+                thinking={"type": "enabled", "budget_tokens": 1024, "display": "updates", "block_binding": "strict"},
+            ),
+            model=AZURE_CLAUDE,
+        ),
+        Case(
+            "azure_ai_beta_per_turn_output_config",
+            _kw(messages=[{**USER, "output_config": {"effort": "low"}}]),
+            model=AZURE_CLAUDE,
+        ),
+        Case(
+            "azure_ai_beta_features_with_an_unknown_caller_beta",
+            _kw(
+                max_tokens=2048,
+                output_format=dict(JSON_SCHEMA_FORMAT),
+                context_management={"edits": [{"type": "clear_tool_uses_20250919"}]},
+                thinking={"type": "enabled", "budget_tokens": 1024, "display": "updates"},
+                tools=[{"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"}],
+                extra_headers=_beta("parity-unlisted-2030-02-02"),
+            ),
+            model=AZURE_CLAUDE,
+        ),
+        Case(
+            "azure_ai_beta_features_stream",
+            _kw(stream=True, output_format=dict(JSON_SCHEMA_FORMAT), extra_headers=_beta("mcp-servers-2025-12-04")),
+            model=AZURE_CLAUDE,
+            upstream=(_stream(TEXT_STREAM),),
+        ),
+        Case("azure_ai_advisor_tool", _kw(tools=[dict(ADVISOR_TOOL)]), model=AZURE_CLAUDE),
+        Case(
+            "azure_ai_advisor_tool_with_a_caller_beta",
+            _kw(tools=[dict(ADVISOR_TOOL)], extra_headers=_beta("context-1m-2025-08-07")),
+            model=AZURE_CLAUDE,
+        ),
+        Case(
+            "azure_ai_advisor_tool_stream",
+            _kw(stream=True, tools=[dict(ADVISOR_TOOL)]),
+            model=AZURE_CLAUDE,
+        ),
+        Case("azure_ai_extra_body", _kw(extra_body={"parity_extra": 1}), model=AZURE_CLAUDE),
+        Case("azure_ai_unknown_top_level_param", _kw(parity_unknown_param="x"), model=AZURE_CLAUDE),
+        Case("azure_ai_latest_alias", model="azure_ai/claude-sonnet-latest"),
+    )
+)
+
+
 CASES: Final = (
     *REQUEST_CASES,
     *INPUT_VALUE_CASES,
@@ -3587,6 +3713,7 @@ CASES: Final = (
     *AZURE_AUTH_CASES,
     *AZURE_URL_CASES,
     *ANTHROPIC_URL_CASES,
+    *AZURE_SHAPING_CASES,
 )
 
 
@@ -4635,6 +4762,68 @@ async def test_both_lanes_stream_a_router_burst_in_the_same_chunks(
 
     assert native_messages.calls == 0
     assert native == python
+
+
+DEPLOYMENT_BETA: Final[Mapping[str, str]] = MappingProxyType(
+    {"anthropic-beta": "mcp-servers-2025-12-04,effort-2025-11-24"}
+)
+NO_CALLER_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
+
+
+async def _deployment_beta_sent(
+    server: RecordingServer, native: bool, caller: Mapping[str, str]
+) -> tuple[str | None, ...]:
+    server.enqueue(ResponseSpec(body=dict(TEXT_RESPONSE)))
+    sent_before: Final = len(server.requests)
+    deployment: Final[Mapping[str, object]] = {
+        "model": AZURE_CLAUDE,
+        "api_base": f"{server.base_url}/d/dep-hdr-beta/anthropic",
+        "api_key": API_KEY,
+        "extra_headers": dict(DEPLOYMENT_BETA),
+    }
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(isolated_callback_registries())
+        stack.enter_context(_environment({}))
+        stack.enter_context(_served_natively(AZURE_AI))
+        if not native:
+            stack.enter_context(rebound(litellm, "anthropic_messages", _PYTHON_AMESSAGES))
+        router: Final = litellm.Router(
+            model_list=[
+                {"model_name": "hdr-beta", "litellm_params": dict(deployment), "model_info": {"id": "dep-hdr-beta"}}
+            ],
+            num_retries=0,
+        )
+        await router.aanthropic_messages(
+            model="hdr-beta",
+            max_tokens=32,
+            messages=[dict(USER)],
+            **({"extra_headers": dict(caller)} if caller else {}),
+        )
+        await drain_logging()
+    server.responses.clear()
+    return tuple(sent.headers.get("anthropic-beta") for sent in server.requests[sent_before:])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("caller", "sent"),
+    [
+        pytest.param(NO_CALLER_HEADERS, "effort-2025-11-24", id="deployment_beta_filtered"),
+        pytest.param(
+            MappingProxyType({"anthropic-beta": "context-1m-2025-08-07,advisor-tool-2026-03-01"}),
+            "context-1m-2025-08-07",
+            id="caller_beta_replaces_the_deployment_beta",
+        ),
+    ],
+)
+async def test_both_lanes_send_the_azure_ai_deployment_or_caller_beta_alike(
+    parity_server: RecordingServer, native_messages: FallbackProbe, caller: Mapping[str, str], sent: str
+) -> None:
+    python: Final = await _deployment_beta_sent(parity_server, native=False, caller=caller)
+    native: Final = await _deployment_beta_sent(parity_server, native=True, caller=caller)
+
+    assert native_messages.calls == 0
+    assert native == python == (sent,)
 
 
 async def _abandoned_stream(

@@ -608,7 +608,7 @@ async fn null_safeguards_are_dropped_instead_of_sent_without_their_beta(
             custom_llm_provider: Some(provider.into()),
             api_key: Some("sk".into()),
             api_base: Some(upstream.uri()),
-            extra_headers: headers([("Anthropic-Beta", "caller-beta-2025-01-01")]),
+            extra_headers: headers([("Anthropic-Beta", "context-1m-2025-08-07")]),
             ..call
         },
         json!({"safeguards": null}),
@@ -618,7 +618,7 @@ async fn null_safeguards_are_dropped_instead_of_sent_without_their_beta(
     let request = only_request(&upstream).await;
     assert_eq!(
         sent_betas(&request),
-        BetaSet::from_iter([AnthropicBeta::Other("caller-beta-2025-01-01".to_string())])
+        BetaSet::from_iter([AnthropicBeta::Context1m20250807])
     );
     assert!(
         !request
@@ -626,6 +626,47 @@ async fn null_safeguards_are_dropped_instead_of_sent_without_their_beta(
             .unwrap()
             .contains_key("safeguards")
     );
+}
+
+#[rstest]
+#[case::unknown_and_unsupported_caller_betas(
+    json!({}),
+    "mcp-servers-2025-12-04, caller-beta-2025-01-01 ,effort-2025-11-24",
+    Some("effort-2025-11-24")
+)]
+#[case::nothing_left(json!({}), "mcp-servers-2025-12-04,caller-beta-2025-01-01", None)]
+#[case::an_unsupported_feature_beta(
+    json!({"tools": [{"type": "advisor_20260301", "name": "advisor", "model": MODEL}]}),
+    "caller-beta-2025-01-01",
+    None
+)]
+#[case::a_supported_feature_beta(
+    json!({"output_format": {"type": "json_schema"}}),
+    "caller-beta-2025-01-01",
+    Some("structured-outputs-2025-11-13")
+)]
+#[tokio::test]
+async fn azure_ai_sends_only_the_betas_its_row_accepts(
+    call: MessagesCall,
+    #[case] fields: Value,
+    #[case] caller: &str,
+    #[case] sent: Option<&str>,
+) {
+    let upstream = upstream([message_response()]).await;
+
+    run_message(with_fields(
+        MessagesCall {
+            custom_llm_provider: Some("azure_ai".into()),
+            api_key: Some("sk".into()),
+            api_base: Some(upstream.uri()),
+            extra_headers: headers([("Anthropic-Beta", caller)]),
+            ..call
+        },
+        fields,
+    ))
+    .await;
+
+    assert_eq!(only_request(&upstream).await.header("anthropic-beta"), sent);
 }
 
 #[rstest]
