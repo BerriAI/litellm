@@ -1280,6 +1280,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.litellm_params = {
             **self.litellm_params,
             **scrub_sensitive_keys_in_metadata(litellm_params),
+            "litellm_logging_obj": None,
         }
         self.litellm_request_debug = litellm_params.get("litellm_request_debug", False)
         self.logger_fn = litellm_params.get("logger_fn", None)
@@ -4336,17 +4337,18 @@ class Logging(LiteLLMLoggingBaseClass):
                     )
 
             elif should_compute_batch_data:
+                batch_logging_params: Final = _LITELLM_PARAMS.validate_python(
+                    self.litellm_params  # pyright: ignore[reportUnknownMemberType]  # Logging.litellm_params is untyped
+                )
                 batch_result: Final = await handle_completed_batch(
                     batch=result,
                     custom_llm_provider=self.custom_llm_provider,
                     model_name=self.get_deployment_model_for_cost(),
-                    litellm_params=self.litellm_params,
+                    litellm_params=batch_logging_params,
                     model_info=self.get_router_deployment_model_info(),
                     vertex_location=resolve_vertex_location_for_cost(
                         custom_llm_provider=self.custom_llm_provider,
-                        litellm_params=_LITELLM_PARAMS.validate_python(
-                            self.litellm_params  # pyright: ignore[reportUnknownMemberType]  # Logging.litellm_params is untyped
-                        ),
+                        litellm_params=batch_logging_params,
                         optional_params=None,
                         model=self.get_deployment_model_for_cost() or self.model,
                     ),

@@ -2,14 +2,17 @@ import asyncio
 import contextlib
 import copy
 import datetime
+import gc
 import importlib.abc
 import json
+import io
 import logging
 import os
 import sys
 import threading
 import time
 import traceback
+import weakref
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from datetime import datetime as datetime_standard_logging, datetime as datetime_unit_test, datetime as dt_object
 from importlib.machinery import ModuleSpec
@@ -138,6 +141,38 @@ def test_per_call_free_prices_override_catalog_unless_pricing_failed(
     response: Final = ModelResponse(model=model, usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15))
 
     assert obj.is_usage_explicitly_free(response) is (rate == 0.0 and not calculation_failed)
+
+
+def _transcription_request_references() -> tuple[weakref.ReferenceType[io.BytesIO], weakref.ReferenceType[Logging]]:
+    upload: Final = io.BytesIO(b"synthetic audio")
+    request_logging: Final = Logging(
+        model="openai/whisper-1",
+        messages=[],
+        stream=False,
+        call_type="transcription",
+        start_time=datetime.datetime(2000, 1, 1),
+        litellm_call_id="synthetic-call",
+        function_id="synthetic-function",
+    )
+    request_logging.update_environment_variables(
+        litellm_params={"litellm_logging_obj": request_logging}, optional_params={}
+    )
+    request_logging.pre_call(
+        input="audio.wav", api_key="synthetic", additional_args={"complete_input_dict": {"file": upload}}
+    )
+    return weakref.ref(upload), weakref.ref(request_logging)
+
+
+def test_transcription_logging_releases_upload_without_cyclic_collection() -> None:
+    collecting: Final = gc.isenabled()
+    gc.disable()
+    try:
+        upload, request_logging = _transcription_request_references()
+        assert request_logging() is None
+        assert upload() is None
+    finally:
+        if collecting:
+            gc.enable()
 
 
 @pytest.fixture
