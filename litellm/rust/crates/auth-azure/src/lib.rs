@@ -1,6 +1,7 @@
 mod credential_provider_cache;
 mod native;
 mod resolve;
+mod retry_after;
 mod token_retry;
 mod types;
 

@@ -2052,7 +2052,8 @@ _JSON: Final = (("content-type", "application/json"),)
 
 # The "Authentication failed: ..." texts are azure-identity 1.25.2 and MSAL 1.37.0 wording: MSAL raises
 # "HTTP Error: <status>" for a 5xx (throttled_http_client.py), azure-core 1.41.0 raises "Invalid HTTP date"
-# for an unparseable Retry-After (pipeline/policies/_utils.py) and json raises its own decode error.
+# for an unparseable Retry-After (pipeline/policies/_utils.py), CPython 3.12's time.sleep refuses a wait past
+# its time_t range and json raises its own decode error.
 @pytest.mark.parametrize(
     ("status", "headers", "body", "raised", "status_code", "message"),
     [
@@ -2092,6 +2093,15 @@ _JSON: Final = (("content-type", "application/json"),)
             None,
             "Failed to get Azure AD token: Authentication failed: Invalid HTTP date",
             id="malformed_retry_after",
+        ),
+        pytest.param(
+            503,
+            (*_JSON, ("retry-after", "inf")),
+            _TRANSIENT.encode(),
+            RuntimeError,
+            None,
+            "Failed to get Azure AD token: Authentication failed: timestamp out of range for platform time_t",
+            id="retry_after_too_long_to_sleep",
         ),
         pytest.param(
             400,

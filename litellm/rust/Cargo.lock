@@ -3485,11 +3485,13 @@ dependencies = [
  "litellm-secret-value",
  "litellm-secrets",
  "moka",
+ "reqwest",
  "rstest",
  "serde_json",
  "sha2 0.10.9",
  "strum",
  "thiserror 2.0.19",
+ "time",
  "tokio",
  "url",
 ]

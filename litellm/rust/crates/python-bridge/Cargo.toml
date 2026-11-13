@@ -44,6 +44,7 @@ serde.workspace = true
 litellm-auth.workspace = true
 litellm-auth-aws.workspace = true
 litellm-auth-azure.workspace = true
+azure_core = "1.0.0"
 litellm-callbacks-legacy-python.workspace = true
 litellm-inference.workspace = true
 litellm-inference-transcription.workspace = true
@@ -75,7 +76,6 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "sync"] }
 
 [dev-dependencies]
-azure_core = "1.0.0"
 tracing.workspace = true
 litellm-http = { workspace = true, features = ["test-support"] }
 litellm-secrets-aws.workspace = true

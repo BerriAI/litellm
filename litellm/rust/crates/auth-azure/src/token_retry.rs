@@ -1,22 +1,17 @@
 use std::sync::Arc;
 
 use azure_core::error::ErrorKind;
-use azure_core::http::headers::{
-    HeaderName, Headers, RETRY_AFTER, RETRY_AFTER_MS, X_MS_RETRY_AFTER_MS,
-};
+use azure_core::http::headers::RETRY_AFTER;
 use azure_core::http::policies::{Policy, PolicyResult};
 use azure_core::http::{AsyncRawResponse, Context, Request, RetryOptions};
-use azure_core::time::{Duration, OffsetDateTime, parse_rfc7231};
+use azure_core::time::{Duration, OffsetDateTime};
+
+use crate::retry_after::{RetryAfter, retry_after};
 
 const RETRIES_PER_KIND: u32 = 3;
 const BACKOFF_FACTOR: Duration = Duration::milliseconds(800);
 const BACKOFF_MAX: Duration = Duration::seconds(120);
 const RETRY_STATUS_CODES: [u16; 6] = [408, 429, 500, 502, 503, 504];
-const RETRY_AFTER_HEADERS: [(HeaderName, f64); 3] = [
-    (RETRY_AFTER, 1.0),
-    (RETRY_AFTER_MS, 0.001),
-    (X_MS_RETRY_AFTER_MS, 0.001),
-];
 
 pub(crate) enum TokenRetry {
     SdkDefault,
@@ -127,22 +122,31 @@ pub enum EntraTokenFailure {
     Response(TokenResponse),
     #[error("Invalid HTTP date")]
     InvalidRetryAfter(TokenResponse),
-    #[error("Entra ID token request failed")]
-    Transport(#[source] azure_core::Error),
+    #[error("timestamp out of range for platform time_t")]
+    RetryAfterTooLong(TokenResponse),
+    #[error("Entra ID token request to {host}:{port} failed")]
+    Transport {
+        host: String,
+        port: u16,
+        #[source]
+        source: azure_core::Error,
+    },
 }
 
 impl EntraTokenFailure {
     pub fn response(&self) -> Option<&TokenResponse> {
         match self {
-            Self::Response(response) | Self::InvalidRetryAfter(response) => Some(response),
-            Self::Transport(_) => None,
+            Self::Response(response)
+            | Self::InvalidRetryAfter(response)
+            | Self::RetryAfterTooLong(response) => Some(response),
+            Self::Transport { .. } => None,
         }
     }
 }
 
 enum Next {
     Wait(Duration),
-    Rejected,
+    Rejected(fn(TokenResponse) -> EntraTokenFailure),
     Settle,
 }
 
@@ -154,14 +158,19 @@ impl Policy for AzureIdentityRetry {
         request: &mut Request,
         next: &[Arc<dyn Policy>],
     ) -> PolicyResult {
+        let target = Target::of(request);
         let mut budget = RetryBudget::new();
         loop {
             let outcome = next[0].send(ctx, request, &next[1..]).await;
             let step = match &outcome {
                 Ok(response) if is_retryable(response) && budget.spend(RetryKind::Status) => {
-                    match retry_after(response.headers()) {
-                        Ok(delay) => Next::Wait(delay.unwrap_or_else(|| budget.backoff())),
-                        Err(MalformedRetryAfter) => Next::Rejected,
+                    match retry_after(response.headers(), OffsetDateTime::now_utc()) {
+                        RetryAfter::Backoff => Next::Wait(budget.backoff()),
+                        RetryAfter::Wait(delay) => Next::Wait(delay),
+                        RetryAfter::Unparseable => {
+                            Next::Rejected(EntraTokenFailure::InvalidRetryAfter)
+                        }
+                        RetryAfter::TooLong => Next::Rejected(EntraTokenFailure::RetryAfterTooLong),
                     }
                 }
                 Err(error)
@@ -173,33 +182,57 @@ impl Policy for AzureIdentityRetry {
             };
             match step {
                 Next::Wait(delay) => azure_core::sleep::sleep(delay).await,
-                Next::Rejected => {
-                    return failed(outcome?, EntraTokenFailure::InvalidRetryAfter).await;
-                }
-                Next::Settle => return settle(outcome).await,
+                Next::Rejected(failure) => return failed(&target, outcome?, failure).await,
+                Next::Settle => return settle(&target, outcome).await,
             }
         }
     }
 }
 
-async fn settle(outcome: PolicyResult) -> PolicyResult {
+struct Target {
+    host: String,
+    port: u16,
+}
+
+impl Target {
+    fn of(request: &Request) -> Self {
+        Self {
+            host: request.url().host_str().unwrap_or_default().to_string(),
+            port: request.url().port_or_known_default().unwrap_or_default(),
+        }
+    }
+
+    fn failed(&self, error: azure_core::Error) -> azure_core::Error {
+        azure_core::Error::new(
+            error.kind().clone(),
+            EntraTokenFailure::Transport {
+                host: self.host.clone(),
+                port: self.port,
+                source: error,
+            },
+        )
+    }
+}
+
+async fn settle(target: &Target, outcome: PolicyResult) -> PolicyResult {
     match outcome {
         Ok(response) if u16::from(response.status()) >= 400 => {
-            failed(response, EntraTokenFailure::Response).await
+            failed(target, response, EntraTokenFailure::Response).await
         }
-        Err(error) if transport_retry(error.kind()).is_some() => Err(transport_failure(error)),
+        Err(error) if transport_retry(error.kind()).is_some() => Err(target.failed(error)),
         outcome => outcome,
     }
 }
 
 async fn failed(
+    target: &Target,
     response: AsyncRawResponse,
     failure: fn(TokenResponse) -> EntraTokenFailure,
 ) -> PolicyResult {
     let status = response.status();
     let response = TokenResponse::read(response)
         .await
-        .map_err(transport_failure)?;
+        .map_err(|error| target.failed(error))?;
     Err(azure_core::Error::new(
         ErrorKind::HttpResponse {
             status,
@@ -208,10 +241,6 @@ async fn failed(
         },
         failure(response),
     ))
-}
-
-fn transport_failure(error: azure_core::Error) -> azure_core::Error {
-    azure_core::Error::new(error.kind().clone(), EntraTokenFailure::Transport(error))
 }
 
 fn is_retryable(response: &AsyncRawResponse) -> bool {
@@ -230,34 +259,4 @@ fn transport_retry(kind: &ErrorKind) -> Option<RetryKind> {
         ErrorKind::Io => Some(RetryKind::Read),
         _ => None,
     }
-}
-
-struct MalformedRetryAfter;
-
-fn retry_after(headers: &Headers) -> Result<Option<Duration>, MalformedRetryAfter> {
-    let Some((value, unit)) = RETRY_AFTER_HEADERS.iter().find_map(|(name, unit)| {
-        headers
-            .get_optional_str(name)
-            .filter(|value| !value.is_empty())
-            .map(|value| (value, *unit))
-    }) else {
-        return Ok(None);
-    };
-    parse_delay(value)
-        .map(|delay| Some(delay * unit).filter(|delay| delay.is_positive()))
-        .ok_or(MalformedRetryAfter)
-}
-
-fn parse_delay(value: &str) -> Option<Duration> {
-    value
-        .trim()
-        .parse::<f64>()
-        .ok()
-        .map(|seconds| Duration::checked_seconds_f64(seconds).unwrap_or(Duration::ZERO))
-        .or_else(|| {
-            parse_rfc7231(value)
-                .ok()
-                .map(|date| date - OffsetDateTime::now_utc())
-        })
-        .map(|delay| delay.max(Duration::ZERO))
 }

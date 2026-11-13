@@ -15,6 +15,7 @@ use pyo3::{
 };
 
 use crate::credentials::CallerTokenProvider;
+use litellm_auth_azure::EntraTokenFailure;
 
 const MODULE: &str = "litellm.rust_bridge.host.routes.messages";
 
@@ -172,26 +173,89 @@ pub(crate) fn entra_token_error(
     py: Python<'_>,
     error: &(dyn std::error::Error + 'static),
 ) -> Option<PyErr> {
-    let failure = litellm_error::find::<litellm_auth_azure::EntraTokenFailure>(error)?;
-    let raised = py
-        .import(MODULE)
-        .and_then(|module| match failure.response() {
-            Some(response) => module.getattr("entra_token_response_failure")?.call1((
+    entra_token_error_with(py, error, &|name| std::env::var(name).ok())
+}
+
+fn entra_token_error_with(
+    py: Python<'_>,
+    error: &(dyn std::error::Error + 'static),
+    environment: &dyn Fn(&str) -> Option<String>,
+) -> Option<PyErr> {
+    let failure = litellm_error::find::<EntraTokenFailure>(error)?;
+    let raised = py.import(MODULE).and_then(|module| match failure {
+        EntraTokenFailure::Response(response)
+        | EntraTokenFailure::InvalidRetryAfter(response)
+        | EntraTokenFailure::RetryAfterTooLong(response) => {
+            module.getattr("entra_token_response_failure")?.call1((
                 response.status,
                 response.headers.clone(),
                 PyBytes::new(py, &response.body),
-            )),
-            None => module
-                .getattr("entra_token_failure")?
-                .call1((std::error::Error::source(failure)
-                    .map(|cause| litellm_error::Report::new(cause).to_string())
-                    .unwrap_or_else(|| litellm_error::Report::new(failure).to_string()),)),
-        });
+            ))
+        }
+        EntraTokenFailure::Transport { host, port, source } => module
+            .getattr("entra_token_failure")?
+            .call1((requests_reason(host, *port, source, environment)
+                .unwrap_or_else(|| litellm_error::Report::new(source).to_string()),)),
+    });
     match raised {
         Ok(raised) if raised.is_none() => None,
         Ok(raised) => Some(PyErr::from_value(raised)),
         Err(mapping) => Some(mapping),
     }
+}
+
+/// `getaddrinfo` failures as glibc words them, with the `EAI_*` code Python's `socket.gaierror` shows.
+const LOOKUP_FAILURES: [(i32, &str); 4] = [
+    (-2, "Name or service not known"),
+    (-3, "Temporary failure in name resolution"),
+    (-4, "Non-recoverable failure in name resolution"),
+    (-5, "No address associated with hostname"),
+];
+const PROXY_VARIABLES: [&str; 4] = ["https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"];
+
+/// What urllib3 2 says, through requests and azure-core, when a direct connection to the token
+/// endpoint cannot be made: a refused or unreachable connect, or a failed name lookup. Any other
+/// transport failure, and every one through a proxy, has no deterministic urllib3 text to match.
+fn requests_reason(
+    host: &str,
+    port: u16,
+    failure: &azure_core::Error,
+    environment: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
+    let proxied = PROXY_VARIABLES
+        .iter()
+        .any(|name| environment(name).is_some_and(|value| !value.is_empty()));
+    if proxied || *failure.kind() != azure_core::error::ErrorKind::Connection {
+        return None;
+    }
+    let causes = || {
+        std::iter::successors(
+            Some(failure as &(dyn std::error::Error + 'static)),
+            |cause| cause.source(),
+        )
+        .filter_map(|cause| cause.downcast_ref::<std::io::Error>())
+    };
+    let connection = format!("HTTPSConnection(host='{host}', port={port})");
+    if let Some(errno) = causes().find_map(std::io::Error::raw_os_error) {
+        let text = std::io::Error::from_raw_os_error(errno).to_string();
+        let strerror = text
+            .strip_suffix(&format!(" (os error {errno})"))
+            .unwrap_or(&text);
+        return Some(format!(
+            "{connection}: Failed to establish a new connection: [Errno {errno}] {strerror}"
+        ));
+    }
+    let (code, lookup) = causes().find_map(|cause| {
+        let text = cause.to_string();
+        let lookup = text.strip_prefix("failed to lookup address information: ")?;
+        LOOKUP_FAILURES
+            .iter()
+            .find(|(_, failure)| *failure == lookup)
+            .copied()
+    })?;
+    Some(format!(
+        "{connection}: Failed to resolve '{host}' ([Errno {code}] {lookup})"
+    ))
 }
 
 pub(crate) fn python_error(
@@ -304,12 +368,28 @@ else:
         "[('response', 200, [], b'{\"error\":\"invalid_client\"}')]"
     )]
     #[case::transport_failure_gives_its_cause(
-        EntraTokenFailure::Transport(azure_core::Error::with_message(
-            azure_core::error::ErrorKind::Connection,
-            "connection refused",
-        )),
+        EntraTokenFailure::Transport {
+            host: "login.microsoftonline.com".into(),
+            port: 443,
+            source: azure_core::Error::with_message(
+                azure_core::error::ErrorKind::Connection,
+                "tls handshake failed",
+            ),
+        },
         Some("mapped reason"),
-        "[('reason', 'connection refused')]"
+        "[('reason', 'tls handshake failed')]"
+    )]
+    #[case::refused_connection_reads_as_urllib3(
+        EntraTokenFailure::Transport {
+            host: "login.microsoftonline.com".into(),
+            port: 443,
+            source: azure_core::Error::new(
+                azure_core::error::ErrorKind::Connection,
+                std::io::Error::from_raw_os_error(111),
+            ),
+        },
+        Some("mapped reason"),
+        "[('reason', \"HTTPSConnection(host='login.microsoftonline.com', port=443): Failed to establish a new connection: [Errno 111] Connection refused\")]"
     )]
     fn a_native_entra_failure_raises_what_the_host_builds(
         #[case] failure: EntraTokenFailure,
@@ -318,7 +398,7 @@ else:
     ) {
         let error = acquisition_failure(failure);
         with_fake_host(|py, locals| {
-            let mapped = entra_token_error(py, &error);
+            let mapped = entra_token_error_with(py, &error, &|_| None);
 
             assert_eq!(
                 mapped.map(|mapped| mapped.value(py).str().unwrap().to_string()),
@@ -335,7 +415,7 @@ else:
             std::io::Error::from(std::io::ErrorKind::PermissionDenied),
         ));
         with_fake_host(|py, locals| {
-            assert!(entra_token_error(py, &error).is_none());
+            assert!(entra_token_error_with(py, &error, &|_| None).is_none());
             assert_eq!(calls(locals), "[]");
         });
     }
@@ -396,5 +476,80 @@ else:
             assert_eq!(error.value(py).str().unwrap().to_string(), message);
             assert_eq!(calls(locals), asked);
         });
+    }
+
+    fn connect_failure(cause: std::io::Error) -> azure_core::Error {
+        azure_core::Error::new(azure_core::error::ErrorKind::Connection, cause)
+    }
+
+    #[rstest::rstest]
+    #[case::refused(
+        connect_failure(std::io::Error::from_raw_os_error(111)),
+        None,
+        Some(
+            "HTTPSConnection(host='login.microsoftonline.com', port=443): Failed to establish a new connection: [Errno 111] Connection refused"
+        )
+    )]
+    #[case::unreachable(
+        connect_failure(std::io::Error::from_raw_os_error(101)),
+        None,
+        Some(
+            "HTTPSConnection(host='login.microsoftonline.com', port=443): Failed to establish a new connection: [Errno 101] Network is unreachable"
+        )
+    )]
+    #[case::unknown_host(
+        connect_failure(std::io::Error::other(
+            "failed to lookup address information: Name or service not known"
+        )),
+        None,
+        Some(
+            "HTTPSConnection(host='login.microsoftonline.com', port=443): Failed to resolve 'login.microsoftonline.com' ([Errno -2] Name or service not known)"
+        )
+    )]
+    #[case::lookup_retry(
+        connect_failure(std::io::Error::other(
+            "failed to lookup address information: Temporary failure in name resolution"
+        )),
+        None,
+        Some(
+            "HTTPSConnection(host='login.microsoftonline.com', port=443): Failed to resolve 'login.microsoftonline.com' ([Errno -3] Temporary failure in name resolution)"
+        )
+    )]
+    #[case::through_a_proxy(
+        connect_failure(std::io::Error::from_raw_os_error(111)),
+        Some("http://proxy.internal:3128"),
+        None
+    )]
+    #[case::reset_while_reading(
+        azure_core::Error::new(
+            azure_core::error::ErrorKind::Io,
+            std::io::Error::from_raw_os_error(104)
+        ),
+        None,
+        None
+    )]
+    #[case::tls_failure(
+        azure_core::Error::with_message(
+            azure_core::error::ErrorKind::Connection,
+            "invalid peer certificate"
+        ),
+        None,
+        None
+    )]
+    fn a_direct_connect_failure_reads_as_urllib3_reports_it(
+        #[case] failure: azure_core::Error,
+        #[case] proxy: Option<&str>,
+        #[case] expected: Option<&str>,
+    ) {
+        let environment = |name: &str| {
+            (name == "https_proxy")
+                .then(|| proxy.map(str::to_string))
+                .flatten()
+        };
+
+        assert_eq!(
+            requests_reason("login.microsoftonline.com", 443, &failure, &environment).as_deref(),
+            expected
+        );
     }
 }

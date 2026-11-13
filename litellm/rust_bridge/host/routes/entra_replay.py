@@ -3,6 +3,7 @@ Python reads a native flow's final token response exactly as it reads one off th
 
 import io
 import json
+import time
 from dataclasses import dataclass
 from typing import Final
 
@@ -21,7 +22,7 @@ class _TokenEndpointAnswer:
 
 class _ReplayedTokenEndpoint(RequestsTransport):
     """Answers every token POST with one recorded response and every discovery GET with the endpoints
-    MSAL needs, without sleeping between retries."""
+    MSAL needs. It does not wait between retries, but a wait `time.sleep` refuses still raises its error."""
 
     def __init__(self, answer: _TokenEndpointAnswer) -> None:
         super().__init__()
@@ -37,7 +38,8 @@ class _ReplayedTokenEndpoint(RequestsTransport):
         return RequestsTransportResponse(request, response)
 
     def sleep(self, duration: float) -> None:
-        return None
+        if duration * 1e9 >= _SLEEP_LIMIT_NANOS:
+            time.sleep(duration)
 
 
 def replayed_credential(status: int, headers: tuple[tuple[str, str], ...], body: bytes) -> ClientSecretCredential:
@@ -51,6 +53,7 @@ def replayed_credential(status: int, headers: tuple[tuple[str, str], ...], body:
 
 
 _TENANT: Final = "00000000-0000-0000-0000-000000000000"
+_SLEEP_LIMIT_NANOS: Final = 2.0**63
 _DISCOVERY: Final = _TokenEndpointAnswer(
     200,
     (("content-type", "application/json"),),

@@ -853,6 +853,14 @@ mod tests {
         Duration::ZERO,
         "Invalid HTTP date"
     )]
+    #[case::client_secret_infinite_retry_after_fails_after_one_post(
+        client_secret_token_request,
+        StatusCode::ServiceUnavailable,
+        Some("inf"),
+        1,
+        Duration::ZERO,
+        "timestamp out of range for platform time_t"
+    )]
     #[case::client_assertion_503_posts_once(
         client_assertion_token_request,
         StatusCode::ServiceUnavailable,
@@ -1376,5 +1384,40 @@ mod tests {
             ),
             "{error:?}"
         );
+    }
+
+    #[rstest::rstest]
+    #[tokio::test(start_paused = true)]
+    #[expect(
+        clippy::disallowed_methods,
+        clippy::disallowed_types,
+        reason = "pins what azure_core's own reqwest transport reports, without the sandbox's proxy"
+    )]
+    async fn a_refused_token_endpoint_keeps_its_host_port_and_os_error() {
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let acquirer =
+            NativeAzureTokenAcquirer::with_transport(4, Transport::new(Arc::new(client)));
+        let request = client_secret_request(
+            "tenant",
+            "client",
+            "secret",
+            "https://service.test/.default",
+            "https://127.0.0.1:1",
+        );
+
+        let error = acquirer.acquire(request).await.into_result().unwrap_err();
+
+        let Some(crate::EntraTokenFailure::Transport { host, port, source }) =
+            litellm_error::find::<crate::EntraTokenFailure>(&error)
+        else {
+            panic!("{error:?}");
+        };
+        assert_eq!((host.as_str(), *port), ("127.0.0.1", 1));
+        let errno = std::iter::successors(
+            Some(source as &(dyn std::error::Error + 'static)),
+            |cause| cause.source(),
+        )
+        .find_map(|cause| cause.downcast_ref::<std::io::Error>()?.raw_os_error());
+        assert_eq!(errno, Some(111));
     }
 }
