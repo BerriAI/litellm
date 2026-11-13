@@ -62,6 +62,19 @@ class TestExtractRequestToolNames:
             "get_current_weather"
         ]
 
+    def test_openai_responses_chat_completions_shaped_tools_yield_every_name(self):
+        data = {
+            "tools": [
+                {"type": "function", "function": {"name": "get_weather"}},
+                {"type": "function", "name": "decoy", "function": {"name": "run_sql"}},
+            ]
+        }
+        assert extract_request_tool_names("/v1/responses", data) == [
+            "get_weather",
+            "decoy",
+            "run_sql",
+        ]
+
     def test_openai_responses_mcp_tools(self):
         data = {
             "tools": [
