@@ -241,7 +241,8 @@ mod tests {
                 request.clone(),
                 MessagesShapeOptions {
                     reasoning_auto_summary,
-                    presanitized
+                    presanitized,
+                    ..MessagesShapeOptions::default()
                 }
             ),
             Ok(request)

@@ -483,7 +483,7 @@ async fn the_facade_sends_through_the_injected_http_pool_configuration(call: Mes
 #[case::mistyped_param(json!({"model": MODEL, "messages": "hello", "max_tokens": 16}))]
 #[case::missing_messages(json!({"model": MODEL, "max_tokens": 16}))]
 fn a_body_that_does_not_parse_is_an_invalid_request(#[case] raw: Value) {
-    let error = messages_body(object(raw)).expect_err("the body is rejected");
+    let error = messages_body(object(raw), None).expect_err("the body is rejected");
 
     assert!(error.is_request(), "{error:?}");
     assert!(
@@ -492,6 +492,56 @@ fn a_body_that_does_not_parse_is_an_invalid_request(#[case] raw: Value) {
             .contains("invalid Anthropic messages request"),
         "{error:?}"
     );
+}
+
+const UNPARSED_SYSTEMS: [&str; 4] = [
+    r#"[{"type": "text", "text": "be terse"}, 5]"#,
+    r#"{"type": "text"}"#,
+    "5",
+    "true",
+];
+
+#[rstest]
+fn a_system_prompt_that_does_not_parse_is_main_s_request_error_except_on_azure_ai(
+    #[values(0, 1, 2, 3)] system: usize,
+    #[values(
+        ("anthropic/claude-sonnet-4-5", None),
+        ("claude-sonnet-4-5", Some("anthropic")),
+        ("vertex_ai/claude-sonnet-4-5", None),
+        ("azure_ai/claude-sonnet-4-5", None),
+        ("claude-sonnet-4-5", Some("azure_ai"))
+    )]
+    call: (&str, Option<&str>),
+) {
+    let (model, custom_llm_provider) = call;
+    let system: Value = serde_json::from_str(UNPARSED_SYSTEMS[system]).unwrap();
+    let body = object(json!({"model": model, "messages": [], "max_tokens": 16, "system": system}));
+    let parsed = messages_body(body, custom_llm_provider);
+    let azure_ai = model.starts_with("azure_ai/") || custom_llm_provider == Some("azure_ai");
+    match parsed {
+        Err(error) => {
+            assert!(
+                !azure_ai || system.is_number() || system.is_boolean(),
+                "{error:?}"
+            );
+            let text = litellm_error::Report::new(&error).to_string();
+            let expected = if azure_ai {
+                "system must be a string or a list of content blocks"
+            } else {
+                "invalid Anthropic messages request: data did not match any variant of untagged enum SystemPrompt"
+            };
+            assert!(text.contains(expected), "{text}");
+        }
+        Ok(request) => {
+            assert!(azure_ai, "{request:?}");
+            assert!(
+                request
+                    .params
+                    .system
+                    .is_some_and(|system| system.known().is_none())
+            );
+        }
+    }
 }
 
 #[rstest]

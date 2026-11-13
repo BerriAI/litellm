@@ -52,15 +52,23 @@ type MergedHeaders = (Option<Map<String, Value>>, Option<Vec<u8>>);
 const ANTHROPIC_BETA_HEADER: &str = "anthropic-beta";
 
 /// Python filters `anthropic-beta` before its client encodes it, so the wire check decides it.
-fn is_filtered_beta_header(name: &Bound<'_, PyAny>, value: &Bound<'_, PyAny>) -> bool {
-    name.extract::<String>()
-        .is_ok_and(|name| name.eq_ignore_ascii_case(ANTHROPIC_BETA_HEADER))
+/// Only for `azure_ai`: by the owner's ruling `anthropic` keeps main's hold-back of the header.
+fn is_filtered_beta_header(
+    name: &Bound<'_, PyAny>,
+    value: &Bound<'_, PyAny>,
+    provider_filters_beta: bool,
+) -> bool {
+    provider_filters_beta
+        && name
+            .extract::<String>()
+            .is_ok_and(|name| name.eq_ignore_ascii_case(ANTHROPIC_BETA_HEADER))
         && value.call_method1("encode", ("utf-8",)).is_ok()
 }
 
 fn ascii_headers<'py>(
     headers: &Bound<'py, PyAny>,
     unencodable: &mut Option<Vec<u8>>,
+    provider_filters_beta: bool,
 ) -> PyResult<Bound<'py, PyAny>> {
     let Ok(headers) = headers.cast::<PyDict>() else {
         return Ok(headers.clone());
@@ -69,7 +77,7 @@ fn ascii_headers<'py>(
     let kept = PyDict::new(py);
     for (name, value) in headers.iter() {
         if value.is_instance_of::<PyString>()
-            && !is_filtered_beta_header(&name, &value)
+            && !is_filtered_beta_header(&name, &value, provider_filters_beta)
             && let Err(error) = value.call_method1("encode", ("ascii",))
         {
             if !error.is_instance_of::<PyUnicodeEncodeError>(py) {
@@ -89,7 +97,10 @@ fn ascii_headers<'py>(
 const PROVIDER_SPECIFIC_HEADERS_MODULE: &str =
     "litellm.litellm_core_utils.get_provider_specific_headers";
 
-fn ascii_scoped_headers<'py>(value: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+fn ascii_scoped_headers<'py>(
+    value: &Bound<'py, PyAny>,
+    provider_filters_beta: bool,
+) -> PyResult<Bound<'py, PyAny>> {
     let ascii_entry = |entry: Bound<'py, PyAny>| -> PyResult<Bound<'py, PyAny>> {
         let Ok(entry) = entry.cast::<PyDict>() else {
             return Ok(entry);
@@ -98,7 +109,10 @@ fn ascii_scoped_headers<'py>(value: &Bound<'py, PyAny>) -> PyResult<Bound<'py, P
             return Ok(entry.clone().into_any());
         };
         let kept = entry.copy()?;
-        kept.set_item("extra_headers", ascii_headers(&headers, &mut None)?)?;
+        kept.set_item(
+            "extra_headers",
+            ascii_headers(&headers, &mut None, provider_filters_beta)?,
+        )?;
         Ok(kept.into_any())
     };
     if let Ok(entries) = value.cast::<PyList>() {
@@ -538,7 +552,11 @@ impl MessagesPythonHost {
         };
         let (extra_headers, mut unencodable_request_header) = match settings.extra_headers {
             Some(headers) => (Some(headers), None),
-            None => self.merged_headers(py, arguments)?,
+            None => self.merged_headers(
+                py,
+                arguments,
+                custom_llm_provider.as_deref() == Some(AZURE_AI_PROVIDER),
+            )?,
         };
         let provider_specific_header = self.provider_specific_header(
             py,
@@ -576,31 +594,40 @@ impl MessagesPythonHost {
         let litellm_params = project_litellm_params(provider_fields, settled, argument, |name| {
             module_global(py, name)
         })?;
-        Ok(messages_body(body).and_then(|body| {
-            Ok(MessagesCall {
-                body,
-                api_key,
-                api_base,
-                extra_headers,
-                provider_specific_header,
-                custom_llm_provider,
-                litellm_params: litellm_params?,
-                timeout: optional_timeout(timeout),
-                shaping,
-            })
-        }))
+        Ok(
+            messages_body(body, custom_llm_provider.as_deref()).and_then(|body| {
+                Ok(MessagesCall {
+                    body,
+                    api_key,
+                    api_base,
+                    extra_headers,
+                    provider_specific_header,
+                    custom_llm_provider,
+                    litellm_params: litellm_params?,
+                    timeout: optional_timeout(timeout),
+                    shaping,
+                })
+            }),
+        )
     }
 
     fn merged_headers(
         &self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
+        provider_filters_beta: bool,
     ) -> PyResult<MergedHeaders> {
         let mut unencodable = None;
         let mut mapping = |name: &str| -> PyResult<Option<Map<String, Value>>> {
             self.view
                 .argument(py, arguments, name)?
-                .map(|value| from_py(&ascii_headers(&value, &mut unencodable)?))
+                .map(|value| {
+                    from_py(&ascii_headers(
+                        &value,
+                        &mut unencodable,
+                        provider_filters_beta,
+                    )?)
+                })
                 .transpose()
         };
         let headers = mapping("headers")?;
@@ -628,9 +655,13 @@ impl MessagesPythonHost {
                 .getattr("ProviderSpecificHeaderUtils")?
                 .call_method1("get_provider_specific_headers", (&value, provider, true))
         {
-            ascii_headers(&scoped, unencodable)?;
+            ascii_headers(&scoped, unencodable, provider == AZURE_AI_PROVIDER)?;
         }
-        from_py(&ascii_scoped_headers(&value)?).map(Some)
+        from_py(&ascii_scoped_headers(
+            &value,
+            provider == Some(AZURE_AI_PROVIDER),
+        )?)
+        .map(Some)
     }
 
     fn capabilities(
@@ -1049,26 +1080,37 @@ mod tests {
     #[rstest]
     #[case::a_beta_is_left_to_the_provider_filter(
         c"{'anthropic-beta': 'ZWJ\\u200djoined'}",
+        true,
         json!({"anthropic-beta": "ZWJ\u{200d}joined"}),
         None
     )]
     #[case::in_any_spelling(
         c"{'Anthropic-Beta': 'ZWJ\\u200djoined'}",
+        true,
         json!({"Anthropic-Beta": "ZWJ\u{200d}joined"}),
         None
     )]
+    #[case::a_beta_held_back_where_the_provider_does_not_filter_it(
+        c"{'anthropic-beta': 'ZWJ\\u200djoined', 'x-note': 'caf\\xe9', 'x-kept': 'b'}",
+        false,
+        json!({"x-kept": "b"}),
+        Some("ZWJ\u{200d}joined".as_bytes().to_vec())
+    )]
     #[case::a_beta_python_cannot_hand_over_as_text(
         c"{'anthropic-beta': 'a\\ud800', 'x-kept': 'b'}",
+        true,
         json!({"x-kept": "b"}),
         Some(b"a\xed\xa0\x80".to_vec())
     )]
     #[case::any_other_header(
         c"{'x-note': 'ZWJ\\u200d', 'x-kept': 'b'}",
+        true,
         json!({"x-kept": "b"}),
         Some("ZWJ\u{200d}".as_bytes().to_vec())
     )]
     fn a_header_python_cannot_encode_is_held_back_unless_the_provider_filters_it(
         #[case] headers: &std::ffi::CStr,
+        #[case] provider_filters_beta: bool,
         #[case] kept: Value,
         #[case] unencodable: Option<Vec<u8>>,
     ) {
@@ -1076,7 +1118,9 @@ mod tests {
         Python::attach(|py| {
             let headers = py.eval(headers, None, None).unwrap();
             let mut held_back = None;
-            let sent: Value = from_py(&ascii_headers(&headers, &mut held_back).unwrap()).unwrap();
+            let sent: Value =
+                from_py(&ascii_headers(&headers, &mut held_back, provider_filters_beta).unwrap())
+                    .unwrap();
             assert_eq!((sent, held_back), (kept, unencodable));
         });
     }

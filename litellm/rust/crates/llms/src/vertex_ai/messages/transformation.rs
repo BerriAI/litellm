@@ -721,6 +721,7 @@ mod tests {
                 },
                 drop_params: false,
                 drops_unsupported_params: false,
+                ..MessagesTransformContext::default()
             },
         );
         assert_eq!(
@@ -793,6 +794,7 @@ mod tests {
             },
             drop_params: false,
             drops_unsupported_params: false,
+            ..MessagesTransformContext::default()
         }
     }
 

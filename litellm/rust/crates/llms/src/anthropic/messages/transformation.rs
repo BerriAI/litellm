@@ -7,7 +7,7 @@ use litellm_llms_types::{
         MessagesOptionalParams, MessagesRequest, Speed, ThinkingConfig, ThinkingDisplay,
     },
     providers::anthropic::{AnthropicBeta, BETA_HEADER, BetaProvider, BetaSet, DEFAULT_HEADERS},
-    recognized::Recognized,
+    recognized::{Recognized, map_known_runs},
 };
 use litellm_router_types::LitellmParams;
 use serde_json::{Map, Value, json};
@@ -19,7 +19,7 @@ use super::{
 };
 use crate::anthropic::beta_headers::accepted_or_unlisted;
 use crate::base_llm::messages::{
-    context::{MessagesShapeOptions, MessagesTransformContext},
+    context::{MessagesShapeOptions, MessagesTransformContext, UnparsedMessages},
     tools::ToolCustomField,
 };
 use crate::{
@@ -33,7 +33,8 @@ use crate::{
         is_claude_strict_tools_rejection, is_tool_search_used, map_messages, merge_beta_headers,
         minted_oauth_environment, optionally_handle_anthropic_oauth,
         requires_native_compaction_beta, strip_advisor_blocks, strip_encrypted_reasoning_blocks,
-        strip_raw_advisor_blocks, strip_raw_encrypted_reasoning_blocks,
+        strip_encrypted_reasoning_blocks_restoring_redacted_data, strip_raw_advisor_blocks,
+        strip_raw_encrypted_reasoning_blocks,
         strip_thinking_blocks_from_anthropic_messages_request, tools_without_strict,
     },
     base_llm::{
@@ -300,16 +301,19 @@ pub(crate) fn transform_messages_request(
         .context_management
         .clone()
         .map(map_openai_context_management_to_anthropic);
+    let reads_unparsed = context.unparsed.read();
     let messages = if has_advisor_tool(request.params.tools.as_deref())
         || continues_message_thread(&request.params)
     {
         request.messages
-    } else {
+    } else if reads_unparsed {
         map_messages(
             request.messages,
             strip_advisor_blocks,
             strip_raw_advisor_blocks,
         )
+    } else {
+        map_known_runs(request.messages, strip_advisor_blocks)
     };
     let messages = if context.drops_unsupported_params {
         drop_non_string_tool_result_texts(messages)
@@ -317,11 +321,15 @@ pub(crate) fn transform_messages_request(
         messages
     };
     Ok(MessagesRequest {
-        messages: map_messages(
-            messages,
-            strip_encrypted_reasoning_blocks,
-            strip_raw_encrypted_reasoning_blocks,
-        ),
+        messages: if reads_unparsed {
+            map_messages(
+                messages,
+                strip_encrypted_reasoning_blocks_restoring_redacted_data,
+                strip_raw_encrypted_reasoning_blocks,
+            )
+        } else {
+            map_known_runs(messages, strip_encrypted_reasoning_blocks)
+        },
         params: MessagesOptionalParams {
             context_management,
             extra: without_null_safeguards(request.params.extra),
@@ -420,17 +428,21 @@ pub(crate) fn update_headers_with_anthropic_beta(
     headers: Headers,
     request: &MessagesRequest,
 ) -> Headers {
-    merge_beta_headers(headers, feature_betas(request))
+    merge_beta_headers(headers, feature_betas(request, UnparsedMessages::Skipped))
 }
 
+/// `unparsed` says whether a beta trigger in a message that did not parse counts, as it does
+/// for Python, which reads any mapping.
 pub(crate) fn update_headers_with_safeguards_beta(
     headers: Headers,
     request: &MessagesRequest,
     provider: BetaProvider,
+    unparsed: UnparsedMessages,
 ) -> Headers {
     merge_beta_headers(
         headers,
-        feature_betas(request).union(on_provider(mapped_host_betas(&request.params), provider)),
+        feature_betas(request, unparsed)
+            .union(on_provider(mapped_host_betas(&request.params), provider)),
     )
 }
 
@@ -438,7 +450,7 @@ pub(crate) fn update_headers_with_safeguards_beta(
 /// through that column.
 pub(crate) fn provider_feature_betas(request: &MessagesRequest, provider: BetaProvider) -> BetaSet {
     on_provider(
-        feature_betas(request).union(mapped_host_betas(&request.params)),
+        feature_betas(request, UnparsedMessages::Skipped).union(mapped_host_betas(&request.params)),
         provider,
     )
 }
@@ -471,7 +483,7 @@ fn is_threaded(params: &MessagesOptionalParams) -> bool {
         .is_some_and(|thread| !thread.is_null())
 }
 
-fn feature_betas(request: &MessagesRequest) -> BetaSet {
+fn feature_betas(request: &MessagesRequest, unparsed: UnparsedMessages) -> BetaSet {
     let params = &request.params;
     let tools = params.tools.as_deref();
     let scanned_messages: &[Recognized<Message>] = if continues_message_thread(params) {
@@ -480,19 +492,19 @@ fn feature_betas(request: &MessagesRequest) -> BetaSet {
         &request.messages
     };
     [
-        requires_native_compaction_beta(params.compaction.as_ref(), scanned_messages)
+        requires_native_compaction_beta(params.compaction.as_ref(), scanned_messages, unparsed)
             .then_some(AnthropicBeta::Compact20260904),
         uses_structured_output(params).then_some(AnthropicBeta::StructuredOutputs20251113),
         (params.speed == Some(Recognized::Known(Speed::Fast)))
             .then_some(AnthropicBeta::FastMode20260201),
-        messages_carry_output_config(scanned_messages)
+        messages_carry_output_config(scanned_messages, unparsed)
             .then_some(AnthropicBeta::PerTurnControl20260701),
         is_threaded(params).then_some(AnthropicBeta::MessageThreads20260812),
         uses_thinking_display_updates(params)
             .then_some(AnthropicBeta::ThinkingDisplayUpdates20260818),
         uses_thinking_block_binding(params)
             .then_some(AnthropicBeta::ThinkingBindingControls20260801),
-        messages_carry_tool_changes(scanned_messages)
+        messages_carry_tool_changes(scanned_messages, unparsed)
             .then_some(AnthropicBeta::MidConversationToolChanges20260701),
         has_advisor_tool(tools).then_some(AnthropicBeta::AdvisorTool20260301),
         is_tool_search_used(tools).then_some(AnthropicBeta::AdvancedToolUse20251120),
@@ -538,12 +550,17 @@ fn carries_safeguards(params: &MessagesOptionalParams) -> bool {
         .is_some_and(|value| !value.is_null())
 }
 
-/// Python's `messages_carry_output_config` reads any mapping, so a message that did not parse,
-/// such as a system turn sent without content, counts too.
-fn messages_carry_output_config(messages: &[Recognized<Message>]) -> bool {
+/// Python's `messages_carry_output_config` reads any mapping, so where unparsed messages are read
+/// a message that did not parse, such as a system turn sent without content, counts too.
+fn messages_carry_output_config(
+    messages: &[Recognized<Message>],
+    unparsed: UnparsedMessages,
+) -> bool {
     messages.iter().any(|message| match message {
         Recognized::Known(message) => message.extra.contains_key(OUTPUT_CONFIG),
-        Recognized::Unrecognized(Value::Object(fields)) => fields.contains_key(OUTPUT_CONFIG),
+        Recognized::Unrecognized(Value::Object(fields)) => {
+            unparsed.read() && fields.contains_key(OUTPUT_CONFIG)
+        }
         Recognized::Unrecognized(_) => false,
     })
 }
@@ -601,15 +618,19 @@ fn is_raw_tool_reference_change(block: &Value) -> bool {
             == Some("tool_reference")
 }
 
-/// `AnthropicModelInfo.is_mid_conversation_tool_change_used` reads any mapping, so a system
-/// message that did not parse is scanned through its raw content too.
-fn messages_carry_tool_changes(messages: &[Recognized<Message>]) -> bool {
+/// `AnthropicModelInfo.is_mid_conversation_tool_change_used` reads any mapping, so where unparsed
+/// messages are read a system message that did not parse is scanned through its raw content too.
+fn messages_carry_tool_changes(
+    messages: &[Recognized<Message>],
+    unparsed: UnparsedMessages,
+) -> bool {
     messages.iter().any(|message| match message {
         Recognized::Known(message) => {
             message.role == "system" && message.blocks().iter().any(is_tool_reference_change)
         }
         Recognized::Unrecognized(Value::Object(fields)) => {
-            fields.get("role").and_then(Value::as_str) == Some("system")
+            unparsed.read()
+                && fields.get("role").and_then(Value::as_str) == Some("system")
                 && matches!(
                     fields.get("content"),
                     Some(Value::Array(blocks)) if blocks.iter().any(is_raw_tool_reference_change)
@@ -1249,6 +1270,7 @@ mod tests {
                     },
                     drop_params: true,
                     drops_unsupported_params: false,
+                    unparsed: UnparsedMessages::Skipped,
                 }
             );
             return;
@@ -1637,7 +1659,44 @@ mod tests {
         &["message-threads-2026-08-12", "per-turn-control-2026-07-01"]
     )]
     fn feature_betas_follow_the_request(#[case] fields: Value, #[case] expected: &[&str]) {
-        assert_eq!(feature_betas(&request(fields)), betas(expected));
+        assert_eq!(
+            feature_betas(&request(fields), UnparsedMessages::Read),
+            betas(expected)
+        );
+    }
+
+    #[rstest]
+    #[case::contentless_system_output_config(json!({"messages": [
+        {"role": "", "content": "Hello"},
+        {"role": "system", "output_config": {"effort": "high"}},
+    ]}))]
+    #[case::unparsed_message_output_config(
+        json!({"messages": [{"role": "user", "content": 5, "output_config": {"effort": "low"}}]})
+    )]
+    #[case::unparsed_signed_compaction_block_in_history(json!({"messages": [
+        {"role": "assistant", "content": [{"type": "text", "text": 5}, {"type": "compaction", "content": "summary", "signature": "sig"}]},
+        {"role": "user", "content": "Continue"},
+    ]}))]
+    #[case::unparsed_system_tool_addition(json!({"messages": [
+        {"role": "user", "content": "Use the ping tool"},
+        {"role": "system", "content": [{"type": "text", "text": 5}, {"type": "tool_addition", "tool": {"type": "tool_reference", "name": "ping"}}]},
+    ]}))]
+    fn a_beta_trigger_in_an_unparsed_message_counts_only_where_unparsed_messages_are_read(
+        #[case] fields: Value,
+    ) {
+        let request = request(fields);
+        assert_eq!(
+            feature_betas(&request, UnparsedMessages::Skipped),
+            BetaSet::default()
+        );
+        assert_eq!(
+            provider_feature_betas(&request, BetaProvider::Anthropic),
+            BetaSet::default()
+        );
+        assert_ne!(
+            feature_betas(&request, UnparsedMessages::Read),
+            BetaSet::default()
+        );
     }
 
     #[rstest]

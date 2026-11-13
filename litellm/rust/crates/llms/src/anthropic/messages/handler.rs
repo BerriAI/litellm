@@ -3,7 +3,7 @@ use litellm_llms_types::{
         AdaptiveThinking, EnabledThinking, Message, MessagesOptionalParams, MessagesRequest,
         ThinkingConfig, ThinkingDisplay,
     },
-    recognized::Recognized,
+    recognized::{Recognized, map_known_runs},
 };
 use serde_json::{Value, json};
 
@@ -15,27 +15,33 @@ use crate::{
         strip_empty_raw_content_blocks, strip_provider_specific_fields,
         strip_raw_provider_specific_fields,
     },
-    base_llm::messages::context::MessagesShapeOptions,
+    base_llm::messages::context::{MessagesShapeOptions, UnparsedMessages},
 };
 
 pub fn shape_anthropic_messages_request(
     request: MessagesRequest,
     options: MessagesShapeOptions,
 ) -> Result<MessagesRequest, Error> {
+    let messages = match (options.presanitized, options.unparsed) {
+        (true, UnparsedMessages::Read) => map_messages(
+            request.messages,
+            strip_provider_specific_fields,
+            strip_raw_provider_specific_fields,
+        ),
+        (false, UnparsedMessages::Read) => map_messages(
+            request.messages,
+            sanitize_anthropic_messages,
+            sanitize_raw_anthropic_message,
+        ),
+        (true, UnparsedMessages::Skipped) => {
+            map_known_runs(request.messages, strip_provider_specific_fields)
+        }
+        (false, UnparsedMessages::Skipped) => {
+            map_known_runs(request.messages, sanitize_anthropic_messages)
+        }
+    };
     Ok(MessagesRequest {
-        messages: if options.presanitized {
-            map_messages(
-                request.messages,
-                strip_provider_specific_fields,
-                strip_raw_provider_specific_fields,
-            )
-        } else {
-            map_messages(
-                request.messages,
-                sanitize_anthropic_messages,
-                sanitize_raw_anthropic_message,
-            )
-        },
+        messages,
         params: MessagesOptionalParams {
             metadata: request
                 .params
@@ -328,6 +334,7 @@ mod tests {
             MessagesShapeOptions {
                 reasoning_auto_summary: true,
                 presanitized: false,
+                unparsed: UnparsedMessages::Skipped,
             },
         )
         .unwrap();
@@ -348,6 +355,7 @@ mod tests {
     #[rstest]
     #[case::sanitized(
         false,
+        UnparsedMessages::Read,
         json!([
             {"role": "user", "content": "hi"},
             {"role": "assistant", "content": [
@@ -357,6 +365,7 @@ mod tests {
     )]
     #[case::presanitized(
         true,
+        UnparsedMessages::Read,
         json!([
             {"role": "user", "content": "hi"},
             {"role": "user", "content": [{"type": "text", "text": 5}]},
@@ -366,8 +375,33 @@ mod tests {
             ]}
         ])
     )]
-    fn shaping_rewrites_a_message_that_did_not_parse_like_python(
+    #[case::skipped(
+        false,
+        UnparsedMessages::Skipped,
+        json!([
+            {"role": "user", "content": "hi"},
+            {"role": "user", "content": [{"type": "text", "text": 5}]},
+            {"role": "assistant", "content": [
+                {"type": "text", "text": 5},
+                {"type": "tool_use", "id": "functions.Bash:0", "name": "Bash", "input": {}, "provider_specific_fields": {"x": 1}}
+            ]}
+        ])
+    )]
+    #[case::skipped_presanitized(
+        true,
+        UnparsedMessages::Skipped,
+        json!([
+            {"role": "user", "content": "hi"},
+            {"role": "user", "content": [{"type": "text", "text": 5}]},
+            {"role": "assistant", "content": [
+                {"type": "text", "text": 5},
+                {"type": "tool_use", "id": "functions.Bash:0", "name": "Bash", "input": {}, "provider_specific_fields": {"x": 1}}
+            ]}
+        ])
+    )]
+    fn shaping_rewrites_a_message_that_did_not_parse_only_where_unparsed_messages_are_read(
         #[case] presanitized: bool,
+        #[case] unparsed: UnparsedMessages,
         #[case] expected: Value,
     ) {
         let shaped = shape_anthropic_messages_request(
@@ -382,6 +416,7 @@ mod tests {
             MessagesShapeOptions {
                 reasoning_auto_summary: false,
                 presanitized,
+                unparsed,
             },
         )
         .unwrap();
@@ -399,6 +434,7 @@ mod tests {
             MessagesShapeOptions {
                 reasoning_auto_summary: false,
                 presanitized: true,
+                unparsed: UnparsedMessages::Skipped,
             },
         )
         .unwrap();

@@ -4215,6 +4215,11 @@ AZURE_ERROR_CASES: Final = tuple(
             env=MappingProxyType({"AZURE_API_BASE": UNREACHABLE_AZURE_BASE}),
             upstream=(),
         ),
+        Case(
+            "azure_ai_stream_deflate_body_that_is_not_deflate",
+            _kw(stream=True),
+            upstream=(_encoded(b"not deflate at all", "deflate"),),
+        ),
         Case("azure_ai_deployment_key_with_trailing_newline", _kw(api_key="sk-azure-key\n"), upstream=()),
         Case(
             "azure_ai_environment_key_with_trailing_newline",
@@ -4896,7 +4901,7 @@ async def test_native_messages_match_python(
         case "request":
             assert _comparable(native.requests) == _comparable(python.requests)
         case "outcome":
-            assert native.outcome == _anthropic_reference(python.outcome, _kwargs(case, parity_server))
+            assert native.outcome == _anthropic_reference(case, python.outcome, _kwargs(case, parity_server))
         case "hidden_params":
             assert native.hidden_params == python.hidden_params
         case "logged":
@@ -4913,13 +4918,34 @@ async def test_native_messages_match_python(
             assert native.tool_runs == python.tool_runs
         case "stream_type":
             assert native.stream_type == _stream_type_reference(case, python.stream_type)
+        case "logged_error":
+            assert _comparable(native.callback_kwargs.get(aspect)) == _comparable(
+                _logged_error_reference(case, python.callback_kwargs.get(aspect))
+            )
         case _:
             assert _comparable(native.callback_kwargs.get(aspect)) == _comparable(python.callback_kwargs.get(aspect))
 
 
-def _anthropic_reference(outcome: Mapping[str, object], kwargs: Mapping[str, object]) -> Mapping[str, object]:
+# Anthropic has no Python path, and by the owner's ruling keeps main's native route where Python differs: a
+# failure Python raises before the send is handed back unraised, so its failure log has no traceback, and a
+# stream's decoding failure is raised bare, without the deployment's debug info Python's stream iterator adds.
+ANTHROPIC_UNTRACED_FAILURES: Final = frozenset({"missing_api_key", "reasoning_effort_with_numeric_string_max_tokens"})
+ANTHROPIC_BARE_STREAM_FAILURES: Final = frozenset({"stream_deflate_body_that_is_not_deflate"})
+
+
+def _logged_error_reference(case: Case, logged: object) -> object:
+    if case.name not in ANTHROPIC_UNTRACED_FAILURES or not isinstance(logged, Mapping):
+        return logged
+    return {**cast(Mapping[str, object], logged), "traced": False}
+
+
+def _anthropic_reference(
+    case: Case, outcome: Mapping[str, object], kwargs: Mapping[str, object]
+) -> Mapping[str, object]:
     """Anthropic has no Python path, and its native route names the caller's api_base in a failure's
     debug info, which the legacy Python entry leaves out."""
+    if case.name in ANTHROPIC_BARE_STREAM_FAILURES:
+        return {**outcome, "debug_info": "None"}
     model: Final = str(kwargs["model"])
     if outcome.get("llm_provider") != "anthropic" or outcome.get("debug_info") != f"\nModel: {model}":
         return outcome
@@ -5520,12 +5546,12 @@ async def test_both_lanes_bill_a_stream_abandoned_after_its_first_chunk_alike(
     assert native == python
 
 
-async def _leave_unread(server: RecordingServer, native: bool, closed: bool) -> None:
+async def _leave_unread(server: RecordingServer, native: bool, closed: bool, model: str) -> None:
     acall: Final = _PUBLIC_AMESSAGES if native else _PYTHON_AMESSAGES
     stream: Final = cast(
         AsyncGenerator[object],
         await acall(
-            model=SONNET,
+            model=model,
             max_tokens=64,
             messages=[dict(USER)],
             api_key=API_KEY,
@@ -5538,16 +5564,17 @@ async def _leave_unread(server: RecordingServer, native: bool, closed: bool) -> 
 
 
 async def _unread_stream(
-    server: RecordingServer, native: bool, closed: bool
+    server: RecordingServer, native: bool, closed: bool, model: str
 ) -> tuple[tuple[str, ...], tuple[Mapping[str, object], ...]]:
     server.enqueue(_burst(TEXT_STREAM))
     recorder: Final = _AttemptRecorder()
     with contextlib.ExitStack() as stack:
         stack.enter_context(isolated_callback_registries())
         stack.enter_context(_environment({}))
+        stack.enter_context(_served_natively(AZURE_AI))
         errors: Final = stack.enter_context(_warnings(verbose_proxy_logger))
         litellm.callbacks.append(recorder)
-        await _leave_unread(server, native, closed)
+        await _leave_unread(server, native, closed, model)
         gc.collect()
         for _ in range(5):
             await drain_logging()
@@ -5558,14 +5585,29 @@ async def _unread_stream(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("closed", (False, True), ids=("dropped", "closed"))
-async def test_both_lanes_log_nothing_for_a_stream_never_read(
+async def test_both_lanes_log_nothing_for_an_azure_ai_stream_never_read(
     parity_server: RecordingServer, native_messages: FallbackProbe, closed: bool
 ) -> None:
-    python: Final = await _unread_stream(parity_server, native=False, closed=closed)
-    native: Final = await _unread_stream(parity_server, native=True, closed=closed)
+    python: Final = await _unread_stream(parity_server, native=False, closed=closed, model=AZURE_CLAUDE)
+    native: Final = await _unread_stream(parity_server, native=True, closed=closed, model=AZURE_CLAUDE)
 
     assert native_messages.calls == 0
-    assert native == python
+    assert native == python == ((), ())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("closed", (False, True), ids=("dropped", "closed"))
+async def test_an_anthropic_stream_never_read_is_billed_as_on_main(
+    parity_server: RecordingServer, native_messages: FallbackProbe, closed: bool
+) -> None:
+    """Anthropic has no Python path, and by the owner's ruling keeps main's native route, which bills a stream
+    the caller never read when it is closed or dropped: billing it logs that it has no complete response to build,
+    and no success reaches the callbacks."""
+    errors, seen = await _unread_stream(parity_server, native=True, closed=closed, model=SONNET)
+
+    assert native_messages.calls == 0
+    assert any("Unable to build complete streaming response" in error for error in errors), errors
+    assert seen == ()
 
 
 async def _entered_stream(server: RecordingServer, native: bool, model: str) -> str:
@@ -5622,3 +5664,152 @@ async def test_an_anthropic_stream_stays_main_s_execution_stream(
 
     assert native_messages.calls == 0
     assert native == "TypeError: 'AsyncStream' object does not support the asynchronous context manager protocol"
+
+
+# By the owner's ruling anthropic, which has no Python path, keeps main's native route where the azure_ai port
+# matched Python. Each case pairs an anthropic call with what main's route does for it; the azure_ai cases of
+# the same behaviour compare with Python in `CASES`.
+_UNPARSED_TEXT: Final[Mapping[str, JsonValue]] = MappingProxyType({"type": "text", "text": 5})
+_SIGNED_COMPACTION: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {"type": "compaction", "content": "Summary.", "signature": "sig"}
+)
+_TOOL_REFERENCE_ADDITION: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {"type": "tool_addition", "tool": {"type": "tool_reference", "tool_name": "get_weather"}}
+)
+
+ANTHROPIC_SENT_AS_IS_CASES: Final = (
+    Case(
+        "anthropic_unparsed_message_non_string_text_block_sent",
+        _kw(messages=[{"role": "user", "content": [dict(_UNPARSED_TEXT), {"type": "text", "text": "Hi."}]}]),
+    ),
+    Case(
+        "anthropic_unparsed_message_tool_use_id_sent",
+        _kw(
+            messages=_unparsed_turn(
+                "assistant",
+                {"type": "tool_use", "id": "functions.get_weather:0", "name": "get_weather", "input": {}},
+                {"type": "text", "text": "Paris.", "provider_specific_fields": {"citations": None}},
+            )
+        ),
+    ),
+    Case(
+        "anthropic_unparsed_assistant_encrypted_reasoning_sent",
+        _kw(
+            messages=_unparsed_turn(
+                "assistant",
+                {"type": "thinking", "thinking": "Hmm.", "signature": "litellm_encrypted_reasoning:abc"},
+                {"type": "redacted_thinking", "data": "UVVKRA=="},
+            )
+        ),
+    ),
+    Case(
+        "anthropic_redacted_thinking_converse_wrapper_sent",
+        _kw(
+            messages=[
+                dict(USER),
+                {
+                    "role": "assistant",
+                    "content": [{"type": "redacted_thinking", "data": "UVVKRA=="}, {"type": "text", "text": "Paris."}],
+                },
+                {"role": "user", "content": "Go on."},
+            ]
+        ),
+    ),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", [pytest.param(case, id=case.name) for case in ANTHROPIC_SENT_AS_IS_CASES])
+async def test_an_anthropic_message_python_would_rewrite_is_sent_as_on_main(
+    case: Case, parity_server: RecordingServer, native_messages: FallbackProbe
+) -> None:
+    native: Final = await _leg(case, parity_server, probe=native_messages)
+
+    assert not native.fell_back
+    assert [_mapping(sent["body"]).get("messages") for sent in native.requests] == [case.kwargs["messages"]]
+
+
+ANTHROPIC_UNREAD_BETA_CASES: Final = (
+    (
+        Case(
+            "anthropic_unparsed_message_output_config",
+            _kw(messages=[{"role": "user", "content": [dict(UNPARSED_BLOCK)], "output_config": {"effort": "low"}}]),
+        ),
+        "per-turn-control-2026-07-01",
+    ),
+    (
+        Case(
+            "anthropic_unparsed_message_signed_compaction",
+            _kw(messages=_unparsed_turn("assistant", dict(_SIGNED_COMPACTION))),
+        ),
+        "compact-2026-09-04",
+    ),
+    (
+        Case(
+            "anthropic_unparsed_system_tool_reference_addition",
+            _kw(
+                tools=[{**WEATHER_TOOL, "defer_loading": True}],
+                messages=_mid_conversation_system(content=[dict(UNPARSED_BLOCK), dict(_TOOL_REFERENCE_ADDITION)]),
+            ),
+        ),
+        "mid-conversation-tool-changes-2026-07-01",
+    ),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("case", "beta"), [pytest.param(case, beta, id=case.name) for case, beta in ANTHROPIC_UNREAD_BETA_CASES]
+)
+async def test_an_anthropic_beta_trigger_in_an_unparsed_message_adds_no_beta_as_on_main(
+    case: Case, beta: str, parity_server: RecordingServer, native_messages: FallbackProbe
+) -> None:
+    native: Final = await _leg(case, parity_server, probe=native_messages)
+
+    assert len(native.requests) == 1
+    assert beta not in str(_mapping(native.requests[0]["headers"]).get("anthropic-beta"))
+
+
+_SYSTEM_PROMPT_REJECTED: Final = (
+    "invalid Anthropic messages request: data did not match any variant of untagged enum SystemPrompt"
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "system",
+    (
+        pytest.param([{"type": "text", "text": "Be terse."}, dict(UNPARSED_BLOCK)], id="list_with_an_unparsed_block"),
+        pytest.param({"type": "text", "text": "Be terse."}, id="object"),
+        pytest.param(5, id="number"),
+    ),
+)
+async def test_an_anthropic_system_prompt_that_does_not_parse_is_main_s_request_error(
+    system: object, parity_server: RecordingServer, native_messages: FallbackProbe
+) -> None:
+    native: Final = await _leg(
+        Case("anthropic_system_prompt_not_parsed", _kw(system=system), upstream=()), parity_server, native_messages
+    )
+
+    assert native.requests == ()
+    assert _SYSTEM_PROMPT_REJECTED in str(native.outcome.get("message")), native.outcome
+
+
+@pytest.mark.asyncio
+async def test_an_anthropic_beta_python_cannot_encode_is_held_back_as_on_main(
+    parity_server: RecordingServer, native_messages: FallbackProbe
+) -> None:
+    """Main holds back an anthropic-beta the ascii codec cannot encode before the beta merge, so it is the header
+    the error names, ahead of any later header that cannot be encoded either."""
+    native: Final = await _leg(
+        Case(
+            "anthropic_beta_not_ascii_held_back",
+            _kw(extra_headers={"anthropic-beta": "ZWJ‍joined", "x-note": "café"}),
+            upstream=(),
+        ),
+        parity_server,
+        native_messages,
+    )
+
+    assert native.requests == ()
+    assert "can't encode character '\\u200d' in position 3" in str(native.outcome.get("message")), native.outcome

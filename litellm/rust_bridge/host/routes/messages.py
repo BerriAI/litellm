@@ -857,6 +857,12 @@ def _raised(error: _RaisedT) -> _RaisedT:
         return error
 
 
+def _raised_like_python(error: _RaisedT, request_provider: str) -> _RaisedT:
+    """`error` raised through a Python frame for a provider with a Python path. Anthropic has none, and by the
+    owner's ruling keeps main's native route, which hands the exception back unraised, without a traceback."""
+    return error if request_provider in _RUST_ONLY_PROVIDERS else _raised(error)
+
+
 def map_failure(
     error: Exception,
     request: Mapping[str, object],
@@ -891,16 +897,17 @@ def map_failure(
         # Python's request transform raises this builtin exception unmapped, e.g. the TypeError
         # of comparing a string max_tokens while capping the thinking budget.
         _flag_messages_call(request.get("litellm_logging_obj"), asynchronous)
-        return _raised(error)
+        return _raised_like_python(error, request_provider)
     if getattr(error, "messages_request_error", False):
         return _rejection(error, request, request_provider)
     if getattr(error, "messages_missing_credential", False):
-        return _raised(
+        return _raised_like_python(
             litellm.AuthenticationError(
                 message=_MISSING_KEY,
                 llm_provider=request_provider,
                 model=str(request["model"]).removeprefix(f"{request_provider}/"),
-            )
+            ),
+            request_provider,
         )
     provider_error: Final = _provider_error(error, request, request_provider, secrets_read or [])
     if provider_error is None:
@@ -1398,6 +1405,10 @@ def transport_handler(request: Mapping[str, object]) -> tuple[AsyncHTTPHandler |
 def decoding_failure(message: str, request: Mapping[str, object], request_provider: str) -> Exception:
     error: Final = httpx.DecodingError(message)
     if request.get("stream") is True:
+        # Python's stream iterator attaches the deployment's debug info. Anthropic has no Python path, and by
+        # the owner's ruling keeps main's native route, which raises the decoding error bare.
+        if request_provider in _RUST_ONLY_PROVIDERS:
+            return error
         return _with_deployment_debug_info(error, request, request_provider)
     return map_transport_failure(error, request, request_provider)
 

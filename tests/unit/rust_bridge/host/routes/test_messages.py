@@ -418,7 +418,7 @@ def _flagged(marker: str) -> ValueError:
         ),
         pytest.param(
             lambda: messages_host.map_failure(
-                _flagged("messages_missing_credential"), {"model": _ADAPTIVE_OPUS}, "anthropic"
+                _flagged("messages_missing_credential"), {"model": _ADAPTIVE_OPUS}, "azure_ai"
             ),
             id="missing-credential",
         ),
@@ -430,6 +430,16 @@ def test_a_failure_python_raises_before_the_send_is_logged_with_its_traceback(ma
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 
     assert StandardLoggingPayloadSetup.get_error_information(mapped()).get("traceback")
+
+
+@pytest.mark.parametrize("marker", ("messages_python_raised", "messages_missing_credential"))
+def test_an_anthropic_failure_before_the_send_stays_unraised_as_on_main(marker: str) -> None:
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    mapped: Final = messages_host.map_failure(_flagged(marker), {"model": _ADAPTIVE_OPUS}, "anthropic")
+
+    assert mapped.__traceback__ is None
+    assert not StandardLoggingPayloadSetup.get_error_information(mapped).get("traceback")
 
 
 def test_a_native_read_timeout_maps_to_the_public_timeout_with_python_text() -> None:
@@ -649,6 +659,24 @@ def test_a_stream_transport_error_names_the_deployment_like_the_python_stream_it
     assert "API Base: `https://upstream.example/v1`" in debug_info
     assert "model_group: `claude-group`" in debug_info
     assert "deployment: `anthropic/claude-opus-4-6`" in debug_info
+
+
+@pytest.mark.parametrize(
+    ("provider", "named"),
+    (
+        pytest.param("azure_ai", True, id="azure_ai-like-the-python-stream-iterator"),
+        pytest.param("anthropic", False, id="anthropic-bare-as-on-main"),
+    ),
+)
+def test_a_stream_decoding_failure_names_the_deployment_only_for_a_provider_with_a_python_path(
+    provider: str, named: bool
+) -> None:
+    request: Final = {"model": _ADAPTIVE_OPUS, "stream": True, "litellm_logging_obj": _deployment_logger()}
+
+    failure: Final = messages_host.decoding_failure("Error -3 while decompressing data", request, provider)
+
+    assert type(failure) is httpx.DecodingError
+    assert ("deployment: `anthropic/claude-opus-4-6`" in str(getattr(failure, "litellm_debug_info", ""))) is named
 
 
 _TRANSPORT: Final = "error sending request: client error"

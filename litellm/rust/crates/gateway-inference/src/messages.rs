@@ -80,7 +80,7 @@ fn project(
         })
         .collect();
     Ok(MessagesCall {
-        body: messages_body(body)?,
+        body: messages_body(body, deployment.custom_llm_provider.as_deref())?,
         api_key: deployment.api_key.clone(),
         api_base: deployment.api_base.clone(),
         custom_llm_provider: deployment.custom_llm_provider.clone(),

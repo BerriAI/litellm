@@ -7,6 +7,7 @@
 - Deliberate differences from Python, approved by the owner: a caller `x-api-key`, `api-key` in any casing or `Authorization` other than a blank bearer is the only credential sent. A caller `api-key` goes out as `x-api-key` in any casing when it replaces a deployment key. Without one it is sent as Python sends it, renamed to `x-api-key` only when spelled exactly `api-key` No deployment key and no Entra ID token goes beside or over it, and the Entra ID path is never run
 - `anthropic-beta` goes through the `azure_ai` row of `anthropic_beta_headers_config.json` as Python's handler filters it: unknown and unsupported betas are dropped, the caller's and the ones the request needs alike
 - The beta-gated system field strip, system-role normalization and the `cache_control.scope` strip run in `finalize_request`, after the betas are picked from the request as sent, in the order Python's transform runs them
+- This config alone reads messages and system prompts Rust could not type as Python does (`UnparsedMessages::Read`): the sanitizer, advisor and encrypted-reasoning strips rewrite them and their beta triggers count. Every other provider, `anthropic` included by the owner's ruling, keeps main's behaviour: such messages go as sent, and a system prompt that does not parse is main's request error (`messages_body`)
 
 # references
 

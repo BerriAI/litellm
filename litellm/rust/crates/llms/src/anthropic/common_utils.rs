@@ -1,6 +1,6 @@
 use std::sync::LazyLock;
 
-use crate::base_llm::messages::context::MessagesModelCapabilities;
+use crate::base_llm::messages::context::{MessagesModelCapabilities, UnparsedMessages};
 use fancy_regex::Regex;
 use litellm_auth::CredentialPlacement;
 use litellm_secret_value::SecretValue;
@@ -321,19 +321,26 @@ pub fn has_advisor_tool(tools: Option<&[Recognized<MessagesTool>]>) -> bool {
 pub fn requires_native_compaction_beta(
     compaction: Option<&Value>,
     messages: &[Recognized<Message>],
+    unparsed: UnparsedMessages,
 ) -> bool {
-    compaction.is_some() || messages.iter().any(carries_signed_compaction_block)
+    compaction.is_some()
+        || messages
+            .iter()
+            .any(|message| carries_signed_compaction_block(message, unparsed))
 }
 
-/// Python's `carries_signed_compaction_block` reads any mapping, so a message that did not parse
-/// is scanned through its raw content too.
-fn carries_signed_compaction_block(message: &Recognized<Message>) -> bool {
+/// Python's `carries_signed_compaction_block` reads any mapping, so where unparsed messages are
+/// read a message that did not parse is scanned through its raw content too.
+fn carries_signed_compaction_block(
+    message: &Recognized<Message>,
+    unparsed: UnparsedMessages,
+) -> bool {
     match message {
         Recognized::Known(message) => message.blocks().iter().any(|block| {
             block.is_type(ContentBlockType::Compaction)
                 && block.signature.as_deref().is_some_and(|s| !s.is_empty())
         }),
-        Recognized::Unrecognized(Value::Object(fields)) => matches!(
+        Recognized::Unrecognized(Value::Object(fields)) if unparsed.read() => matches!(
             fields.get("content"),
             Some(Value::Array(blocks)) if blocks.iter().any(|block| {
                 block.get("type").and_then(Value::as_str) == Some("compaction")
@@ -544,10 +551,17 @@ pub fn strip_billing_metadata_from_system(
     })
 }
 
-/// Python's `strip_encrypted_reasoning_blocks_from_anthropic_messages`: blocks carrying another
-/// provider's encrypted reasoning go, a message left with no blocks goes with them, and a kept
-/// `redacted_thinking` block gets Claude's own `data` back from a Bedrock Converse wrapper.
+/// Blocks carrying another provider's encrypted reasoning go, and a message left with no blocks
+/// goes with them, as main's native route strips them.
 pub fn strip_encrypted_reasoning_blocks(messages: Vec<Message>) -> Vec<Message> {
+    retain_blocks(messages, |block| !is_encrypted_reasoning_block(block))
+}
+
+/// Python's `strip_encrypted_reasoning_blocks_from_anthropic_messages`: the same strip, and a
+/// kept `redacted_thinking` block gets Claude's own `data` back from a Bedrock Converse wrapper.
+pub fn strip_encrypted_reasoning_blocks_restoring_redacted_data(
+    messages: Vec<Message>,
+) -> Vec<Message> {
     messages
         .into_iter()
         .filter_map(|message| {
@@ -1648,8 +1662,16 @@ mod tests {
             ]}])
         };
         assert_eq!(
-            apply(strip_encrypted_reasoning_blocks, turn(data)),
+            apply(
+                strip_encrypted_reasoning_blocks_restoring_redacted_data,
+                turn(data)
+            ),
             turn(expected)
+        );
+        assert_eq!(
+            apply(strip_encrypted_reasoning_blocks, turn(data)),
+            turn(data),
+            "main's strip keeps a Bedrock Converse wrapper as sent"
         );
     }
 
@@ -2557,8 +2579,31 @@ mod tests {
         #[case] messages: Value,
         #[case] expected: bool,
     ) {
+        for unparsed in [UnparsedMessages::Read, UnparsedMessages::Skipped] {
+            assert_eq!(
+                requires_native_compaction_beta(
+                    compaction.as_ref(),
+                    &history(messages.clone()),
+                    unparsed
+                ),
+                expected
+            );
+        }
+    }
+
+    #[rstest]
+    #[case::read(UnparsedMessages::Read, true)]
+    #[case::skipped(UnparsedMessages::Skipped, false)]
+    fn a_signed_compaction_block_in_an_unparsed_message_counts_only_where_unparsed_messages_are_read(
+        #[case] unparsed: UnparsedMessages,
+        #[case] expected: bool,
+    ) {
+        let messages = history(json!([{"role": "assistant", "content": [
+            {"type": "text", "text": 5},
+            {"type": "compaction", "content": "c", "signature": "s"}
+        ]}]));
         assert_eq!(
-            requires_native_compaction_beta(compaction.as_ref(), &history(messages)),
+            requires_native_compaction_beta(None, &messages, unparsed),
             expected
         );
     }

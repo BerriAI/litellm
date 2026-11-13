@@ -32,7 +32,7 @@ use crate::{
     base_llm::{
         auth::{AuthScheme, Headers, ValidatedEnvironment},
         messages::{
-            context::{MessagesShapeOptions, MessagesTransformContext},
+            context::{MessagesShapeOptions, MessagesTransformContext, UnparsedMessages},
             normalization::{normalize_system_role_messages, strip_cache_control_scope},
             transformation::BaseMessagesConfig,
         },
@@ -74,7 +74,7 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
         request: MessagesRequest,
         options: MessagesShapeOptions,
     ) -> Result<MessagesRequest, Error> {
-        shape_anthropic_messages_request(request, options)
+        shape_anthropic_messages_request(request, options.reading_unparsed_messages())
     }
 
     fn get_complete_url(
@@ -93,7 +93,12 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
         request: MessagesRequest,
         context: &MessagesTransformContext,
     ) -> Result<MessagesRequest, Error> {
-        transform_messages_request(request, &context.keeping_display_updates())
+        transform_messages_request(
+            request,
+            &context
+                .keeping_display_updates()
+                .reading_unparsed_messages(),
+        )
     }
 
     fn secret_names(&self) -> &'static [&'static str] {
@@ -180,6 +185,7 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
             headers,
             request,
             BetaProvider::AzureAi,
+            UnparsedMessages::Read,
         ))
     }
 
