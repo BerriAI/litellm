@@ -89,6 +89,14 @@ async fn credentials_become_exactly_one_auth_header(
 }
 
 #[rstest]
+#[case::caller_api_key_replaces_the_operator_key(
+    Some("sk-operator"),
+    &[("Api-Key", "caller")],
+    json!({}),
+    None,
+    &[],
+    &[("x-api-key", "caller")],
+)]
 #[case::module_key_after_an_empty_call_key(Some(""), &[], json!({}), Some("sk-module"), &[], &[("x-api-key", "sk-module")])]
 #[case::call_key_over_the_module_key(Some("sk-call"), &[], json!({}), Some("sk-module"), &[], &[("x-api-key", "sk-call")])]
 #[case::azure_openai_key_before_azure_key(

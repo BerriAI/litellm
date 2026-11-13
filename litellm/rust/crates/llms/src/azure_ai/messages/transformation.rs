@@ -36,6 +36,7 @@ use crate::{
 };
 
 const ANTHROPIC_PATH_SEGMENT: &str = "/anthropic";
+const AZURE_API_KEY_HEADER: &str = "api-key";
 const ENABLE_TOKEN_REFRESH_PARAM: &str = "enable_azure_ad_token_refresh";
 
 pub struct AzureAnthropicMessagesConfig;
@@ -104,7 +105,8 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
         ]
     }
 
-    /// A forwarded `x-api-key` or non-blank bearer is the credential, replacing the deployment's. Otherwise the Azure key goes in `x-api-key`, and
+    /// A forwarded `x-api-key`, `api-key` (sent as `x-api-key`) or non-blank bearer is the
+    /// credential, replacing the deployment's. Otherwise the Azure key goes in `x-api-key`, and
     /// without one an Entra ID token is minted as Python's `get_azure_ad_token` does.
     fn validate_environment(
         &self,
@@ -118,6 +120,12 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
         if has_header(&headers, API_KEY_PLACEMENT.header_name()) || has_bearer_auth(&headers) {
             return Ok(ValidatedEnvironment {
                 headers,
+                auth: AuthScheme::Forwarded,
+            });
+        }
+        if has_header(&headers, AZURE_API_KEY_HEADER) {
+            return Ok(ValidatedEnvironment {
+                headers: with_azure_key_as_x_api_key(headers),
                 auth: AuthScheme::Forwarded,
             });
         }
@@ -140,6 +148,18 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
     fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
         update_headers_with_safeguards_beta(headers, request, BetaProvider::AzureAi)
     }
+}
+
+fn with_azure_key_as_x_api_key(headers: Headers) -> Headers {
+    headers
+        .into_iter()
+        .map(
+            |(name, value)| match name.eq_ignore_ascii_case(AZURE_API_KEY_HEADER) {
+                true => (API_KEY_PLACEMENT.header_name().to_string(), value),
+                false => (name, value),
+            },
+        )
+        .collect()
 }
 
 fn entra_id_inputs(litellm_params: &LitellmParams) -> Result<AzureAuthInputs, Error> {
@@ -325,6 +345,21 @@ mod tests {
                 .collect(),
         ))
         .expect("valid params")
+    }
+
+    #[rstest]
+    #[case::lowercase(&[("api-key", "caller"), ("x-trace", "1")])]
+    #[case::any_casing(&[("Api-Key", "caller"), ("x-trace", "1")])]
+    fn a_caller_api_key_replaces_the_azure_key_as_x_api_key(#[case] forwarded: &[(&str, &str)]) {
+        let environment = validated(forwarded, Some("sk-azure"));
+        assert!(matches!(environment.auth, AuthScheme::Forwarded));
+        assert_eq!(
+            environment.headers,
+            vec![
+                ("x-api-key".to_string(), "caller".to_string()),
+                ("x-trace".to_string(), "1".to_string()),
+            ]
+        );
     }
 
     #[rstest]

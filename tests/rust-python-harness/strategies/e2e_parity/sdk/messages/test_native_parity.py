@@ -3334,6 +3334,11 @@ A06_A08_CALLER_CREDENTIAL: Final = (
     "A06-A08 (approved by design): a caller x-api-key or bearer replaces the azure_ai operator key on Rust, "
     "Python sends both"
 )
+A09_MIXED_CASE_API_KEY: Final = (
+    "A09 (approved security fix): a caller Api-Key in any casing replaces the azure_ai operator key as x-api-key "
+    "on Rust, Python only matches a lowercase api-key and sends both"
+)
+
 AZURE_AI: Final = frozenset({"azure_ai"})
 
 AZURE_AUTH_CASES: Final = tuple(
@@ -3410,6 +3415,13 @@ AZURE_AUTH_CASES: Final = tuple(
             _kw(api_key=None),
             model=AZURE_CLAUDE,
             upstream=(_failure(401, "authentication_error", "missing credentials"),),
+        ),
+        Case("azure_ai_caller_api_key", _kw(extra_headers={"api-key": "sk-caller"}), model=AZURE_CLAUDE),
+        Case(
+            "azure_ai_caller_mixed_case_api_key",
+            _kw(extra_headers={"Api-Key": "sk-caller"}),
+            model=AZURE_CLAUDE,
+            gaps=_gaps(request=A09_MIXED_CASE_API_KEY),
         ),
         Case(
             "azure_ai_caller_x_api_key",
