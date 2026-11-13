@@ -1,3 +1,5 @@
+import json
+import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Final
@@ -45,6 +47,45 @@ class AzureSpeechPassthroughLoggingHandler:
         if AzureSpeechPassthroughLoggingHandler._is_fast_transcription_route(url_route):
             return f"{AZURE_SPEECH_CUSTOM_LLM_PROVIDER}/{AZURE_SPEECH_FAST_TRANSCRIPTION_MODEL}"
         return f"{AZURE_SPEECH_CUSTOM_LLM_PROVIDER}/{AZURE_SPEECH_BATCH_MODEL}"
+
+    @staticmethod
+    def _definition_from_multipart_body(httpx_response: httpx.Response) -> str | None:
+        content_type: Final = httpx_response.request.headers.get("content-type", "")
+        boundary_match: Final = re.search(r"boundary=(?P<boundary>[^;]+)", content_type)
+        if boundary_match is None:
+            return None
+        boundary: Final = boundary_match.group("boundary").strip().strip('"')
+        try:
+            request_content: Final = httpx_response.request.content
+        except RuntimeError:
+            return None
+        definition_pattern: Final = re.compile(
+            rb'Content-Disposition: form-data; name="definition"\r\n\r\n(?P<definition>.*?)\r\n--'
+            + re.escape(boundary.encode()),
+            re.DOTALL,
+        )
+        definition_match: Final = definition_pattern.search(request_content)
+        if definition_match is None:
+            return None
+        return definition_match.group("definition").decode("utf-8", errors="ignore")
+
+    @staticmethod
+    def _enhanced_mode_model(request_body: Mapping[str, object], httpx_response: httpx.Response) -> str | None:
+        definition: object = request_body.get("definition")
+        if definition is None:
+            definition = AzureSpeechPassthroughLoggingHandler._definition_from_multipart_body(httpx_response)
+        if isinstance(definition, str):
+            try:
+                definition = json.loads(definition)
+            except json.JSONDecodeError:
+                return None
+        if not isinstance(definition, Mapping):
+            return None
+        enhanced_mode: Final = definition.get("enhancedMode")
+        if not isinstance(enhanced_mode, Mapping) or enhanced_mode.get("enabled") is not True:
+            return None
+        model: Final = enhanced_mode.get("model")
+        return model if isinstance(model, str) and model else None
 
     @staticmethod
     def _recognized_audio_seconds(response_body: Mapping[str, object] | Sequence[object] | None) -> float:
@@ -95,28 +136,47 @@ class AzureSpeechPassthroughLoggingHandler:
         return 0.0
 
     @staticmethod
+    def _price_with_model(pricing_model: str, audio_seconds: float) -> float:
+        prompt_cost, completion_cost = transcription_cost(
+            model=pricing_model,
+            custom_llm_provider="azure",
+            duration=audio_seconds,
+        )
+        return prompt_cost + completion_cost
+
+    @staticmethod
     def _response_cost(
         url_route: str,
         httpx_response: httpx.Response,
         response_body: Mapping[str, object] | Sequence[object] | None,
+        enhanced_mode_model: str | None = None,
     ) -> float:
         audio_seconds: Final = AzureSpeechPassthroughLoggingHandler._billed_audio_seconds(
             url_route, httpx_response, response_body
         )
         if audio_seconds <= 0.0:
             return 0.0
+        pricing_model: Final = (
+            f"azure/speech/{enhanced_mode_model}" if enhanced_mode_model else AZURE_SPEECH_PRICING_MODEL
+        )
         try:
-            prompt_cost, completion_cost = transcription_cost(
-                model=AZURE_SPEECH_PRICING_MODEL,
-                custom_llm_provider="azure",
-                duration=audio_seconds,
+            return AzureSpeechPassthroughLoggingHandler._price_with_model(pricing_model, audio_seconds)
+        except Exception as e:  # noqa: BLE001  # a missing price entry must not drop the spend log row
+            if pricing_model == AZURE_SPEECH_PRICING_MODEL:
+                verbose_proxy_logger.warning(
+                    "No price for %s, logging Azure Speech call at zero cost: %s", AZURE_SPEECH_PRICING_MODEL, e
+                )
+                return 0.0
+            verbose_proxy_logger.warning(
+                "No price for %s, falling back to %s: %s", pricing_model, AZURE_SPEECH_PRICING_MODEL, e
             )
+        try:
+            return AzureSpeechPassthroughLoggingHandler._price_with_model(AZURE_SPEECH_PRICING_MODEL, audio_seconds)
         except Exception as e:  # noqa: BLE001  # a missing price entry must not drop the spend log row
             verbose_proxy_logger.warning(
                 "No price for %s, logging Azure Speech call at zero cost: %s", AZURE_SPEECH_PRICING_MODEL, e
             )
             return 0.0
-        return prompt_cost + completion_cost
 
     @staticmethod
     def azure_speech_passthrough_handler(
@@ -132,9 +192,18 @@ class AzureSpeechPassthroughLoggingHandler:
         **kwargs: object,  # kwargs-ok: the passthrough logging dispatch forwards shared logging kwargs to every handler
     ) -> PassThroughEndpointLoggingTypedDict:
         try:
-            model_name: Final = AzureSpeechPassthroughLoggingHandler._model_from_url_route(url_route)
+            enhanced_mode_model: Final = (
+                AzureSpeechPassthroughLoggingHandler._enhanced_mode_model(request_body, httpx_response)
+                if AzureSpeechPassthroughLoggingHandler._is_fast_transcription_route(url_route)
+                else None
+            )
+            model_name: Final = (
+                f"{AZURE_SPEECH_CUSTOM_LLM_PROVIDER}/{enhanced_mode_model}"
+                if enhanced_mode_model
+                else AzureSpeechPassthroughLoggingHandler._model_from_url_route(url_route)
+            )
             response_cost: Final = AzureSpeechPassthroughLoggingHandler._response_cost(
-                url_route, httpx_response, response_body
+                url_route, httpx_response, response_body, enhanced_mode_model
             )
 
             updated_kwargs: Final = {
