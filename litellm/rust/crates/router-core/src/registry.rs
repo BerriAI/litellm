@@ -14,10 +14,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     error::ConfigError,
-    host_index::{
-        HostIndexes, IndexWrite, cache_flags_left_to_the_catalog, deployment_model_name,
-        pattern_to_regex, regex_match,
-    },
+    host_index::{HostIndexes, IndexWrite, cache_flags_left_to_the_catalog, deployment_model_name},
 };
 
 /// A registry's version; every change produces a higher one.
@@ -1159,8 +1156,25 @@ fn pattern_specificity(pattern: &str) -> (usize, usize) {
 
 /// `*` matches any run of characters before `\n`, as the pattern router's `(.*)` does under
 /// `re.match`: anchored at the start only, so the name may run on past the pattern's last literal.
+/// Each `*` can be matched greedily at its earliest valid occurrence because any later start that
+/// also reaches a suffix would allow the earlier occurrence to bridge into the same suffix without
+/// crossing `\n`, so existence requires no backtracking.
 fn wildcard_matches(pattern: &str, name: &str) -> bool {
-    regex_match(&pattern_to_regex(pattern), name).is_some()
+    let mut parts = pattern.split('*');
+    let first = parts.next().unwrap_or_default();
+    let Some(mut rest) = name.strip_prefix(first) else {
+        return false;
+    };
+    for part in parts {
+        let Some(at) = rest.find(part) else {
+            return false;
+        };
+        if rest[..at].contains('\n') {
+            return false;
+        }
+        rest = &rest[at + part.len()..];
+    }
+    true
 }
 
 /// `deployment_id` in `litellm/router_api.py`: sha256 over the model group and every
@@ -1651,6 +1665,33 @@ mod tests {
         assert_eq!(
             registry.resolve(request, ResolveScope::default()).is_some(),
             expected_match
+        );
+    }
+
+    #[rstest]
+    fn wildcard_resolve_rejects_backtracking_inputs_without_stalling() {
+        let pattern = "p/*/*/*/*/*/*/*/*/*/*/mini";
+        let registry = Registry::build(
+            vec![spec(
+                pattern,
+                json!({"model": "openai/*"}),
+                json!({"id": "w"}),
+            )],
+            BTreeMap::new(),
+            Vec::new(),
+        )
+        .unwrap();
+        let nonmatching = format!("p/{}x", "/".repeat(80));
+        assert!(
+            registry
+                .resolve(&nonmatching, ResolveScope::default())
+                .is_none()
+        );
+        let matching = format!("p/{}mini", "/".repeat(80));
+        assert!(
+            registry
+                .resolve(&matching, ResolveScope::default())
+                .is_some()
         );
     }
 }

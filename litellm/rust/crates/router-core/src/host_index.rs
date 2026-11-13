@@ -11,6 +11,8 @@
 //!
 //! Values are JSON so whatever a caller wrote reads back as written, junk included.
 
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -493,14 +495,23 @@ pub fn regex_match(regex: &str, request: &str) -> Option<Vec<String>> {
     let runs = literal_runs(regex)?;
     let rest = request.strip_prefix(runs[0].as_str())?;
     let mut groups = Vec::new();
-    greedy(&runs[1..], rest, &mut groups).then_some(groups)
+    let mut rejected = HashSet::new();
+    greedy(&runs[1..], rest, &mut rejected, &mut groups).then_some(groups)
 }
 
 /// Match `runs` (each a literal that follows a group) against `rest`, longest group first.
-fn greedy(runs: &[String], rest: &str, groups: &mut Vec<String>) -> bool {
+fn greedy(
+    runs: &[String],
+    rest: &str,
+    rejected: &mut HashSet<(usize, usize)>,
+    groups: &mut Vec<String>,
+) -> bool {
     let Some((literal, later)) = runs.split_first() else {
         return true;
     };
+    if !later.is_empty() && rejected.contains(&(runs.len(), rest.len())) {
+        return false;
+    }
     // Python `re.match` without `re.DOTALL` never lets `(.*)` cross `\n`.
     let prefix = &rest[..rest.find('\n').unwrap_or(rest.len())];
     let mut ends: Vec<usize> = prefix.char_indices().map(|(at, _)| at).collect();
@@ -511,10 +522,13 @@ fn greedy(runs: &[String], rest: &str, groups: &mut Vec<String>) -> bool {
             continue;
         };
         groups.push(group.to_owned());
-        if greedy(later, after, groups) {
+        if greedy(later, after, rejected, groups) {
             return true;
         }
         groups.pop();
+    }
+    if !later.is_empty() {
+        rejected.insert((runs.len(), rest.len()));
     }
     false
 }
@@ -773,5 +787,17 @@ mod tests {
         #[case] expected: Option<Vec<String>>,
     ) {
         assert_eq!(regex_match(&pattern_to_regex(pattern), request), expected);
+    }
+
+    #[rstest]
+    fn regex_match_rejects_backtracking_inputs_via_memoization() {
+        let nonmatching = format!("p/{}x", "/".repeat(80));
+        assert_eq!(
+            regex_match(
+                &pattern_to_regex("p/*/*/*/*/*/*/*/*/*/*/mini"),
+                &nonmatching
+            ),
+            None
+        );
     }
 }
