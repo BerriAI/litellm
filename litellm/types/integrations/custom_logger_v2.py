@@ -149,11 +149,6 @@ class Moment(Strict):
 MomentInput: TypeAlias = Annotated[Moment, BeforeValidator(_moment_members)]
 
 
-class ModelPreference(Strict):
-    model: str | None = None
-    alternates: tuple[str, ...] | None = None
-
-
 class KeyIdentity(Record):
     key_hash: Scalar | None = None
     api_key: Scalar | None = None
@@ -172,8 +167,6 @@ class KeyIdentity(Record):
     invoked_agent_id: Scalar | None = None
     team_priority: Scalar | None = None
     key_priority: Scalar | None = None
-    model_preferences: tuple[ModelPreference, ...] | None = None
-    model_preferences_error: str | None = None
 
 
 class LoggedKeyIdentity(Record):
@@ -301,6 +294,9 @@ class LimiterRequest(Record):
     resolved_agent_id: Scalar | None = None
     resolved_agent_id_error_type: str | None = None
     resolved_agent_id_error_text: str | None = None
+    fallback_on_saturation: Flag | None = None
+    fallback_on_saturation_invalid: str | None = None
+    fallback_walk_armed: Flag | None = None
 
 
 class OutputCap(Record):
@@ -496,7 +492,6 @@ __all__ = [
     "MetadataKind",
     "MetadataLabel",
     "ModelInfo",
-    "ModelPreference",
     "Moment",
     "Outcome",
     "OutputCap",

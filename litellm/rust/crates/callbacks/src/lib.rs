@@ -28,7 +28,7 @@ pub use record::{
     AgentPolicy, AttemptTiming, BudgetPlan, BudgetPlanCounter, BudgetReservation, Cost, Deployment,
     EstimatedOutputTokens, GuardrailEntry, InputSequenceLength, KeyIdentity, KeyLimits,
     LimiterRequest, LoggedKeyIdentity, LoggedModelGroup, LoggedRequest, McpToolCall, MetadataKind,
-    MetadataLabel, ModelInfo, ModelPreference, Moment, Outcome, OutputCap, RateLimitState,
+    MetadataLabel, ModelInfo, Moment, Outcome, OutputCap, RateLimitState,
     RateLimitStatus, RateLimitStatuses, ReservationEntry, Usage, UsageRecord, ZeroCost,
 };
 pub use scalar::Scalar;

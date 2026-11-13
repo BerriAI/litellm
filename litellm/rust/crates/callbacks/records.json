@@ -19,16 +19,7 @@
     "agent_id": 42,
     "invoked_agent_id": 42,
     "team_priority": 42,
-    "key_priority": 42,
-    "model_preferences": [
-      {
-        "model": "text",
-        "alternates": [
-          "member"
-        ]
-      }
-    ],
-    "model_preferences_error": "text"
+    "key_priority": 42
   },
   "deployment": {
     "rejected": [
@@ -474,6 +465,9 @@
     ],
     "resolved_agent_id": 42,
     "resolved_agent_id_error_type": "text",
-    "resolved_agent_id_error_text": "text"
+    "resolved_agent_id_error_text": "text",
+    "fallback_on_saturation": true,
+    "fallback_on_saturation_invalid": "text",
+    "fallback_walk_armed": true
   }
 }

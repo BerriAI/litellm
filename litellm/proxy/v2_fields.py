@@ -4,6 +4,8 @@ from dataclasses import replace
 from types import MappingProxyType
 from typing import Final
 
+from pydantic import ValidationError
+
 from litellm.integrations.custom_logger_v2.call import CallFacts, CallIds, CallKind, CallTarget, CallTiming
 from litellm.integrations.custom_logger_v2.derivations import (
     AUTH_SLOTS,
@@ -69,6 +71,27 @@ def _attempt(read: Callable[[], object]) -> tuple[object, Exception | None]:
         return None, error
 
 
+def _fallback_on_saturation(request: Mapping[str, object]) -> tuple[Mapping[str, object], tuple[str, ...]]:
+    from litellm.proxy.common_utils.proxy_rate_limit_error import (
+        _FALLBACK_ON_SATURATION_FLAG,  # pyright: ignore[reportPrivateUsage]  # the capacity callback's own flag parse
+        FALLBACK_ON_SATURATION_SETTING,
+        _metadata_bucket,  # pyright: ignore[reportPrivateUsage]  # the capacity callback's own settings read
+        saturation_fallback_walk_armed,
+    )
+
+    raw: Final = _metadata_bucket(request.get("router_settings_override")).get(FALLBACK_ON_SATURATION_SETTING)
+    try:
+        enabled: Final = _FALLBACK_ON_SATURATION_FLAG.validate_python(raw, strict=True) is True
+    except ValidationError:
+        text, error = _attempt(lambda: repr(raw))
+        return {
+            "fallback_on_saturation": False,
+            "fallback_on_saturation_invalid": text,
+            "fallback_walk_armed": saturation_fallback_walk_armed(),
+        }, () if error is None else ("fallback_on_saturation_invalid",)
+    return {"fallback_on_saturation": enabled, "fallback_walk_armed": saturation_fallback_walk_armed()}, ()
+
+
 def limiter_request(args: HookArgs) -> LimiterRequest | None:
     from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
     from litellm.proxy.hooks.parallel_request_limiter_v3 import (
@@ -81,6 +104,7 @@ def limiter_request(args: HookArgs) -> LimiterRequest | None:
     limiter: Final = _PROXY_MaxParallelRequestsHandler_v3
     session_id, session_error = _attempt(lambda: limiter._get_session_id_from_data(None, request))  # pyright: ignore[reportPrivateUsage, reportArgumentType, reportUnknownMemberType]  # the reader never touches the instance
     agent_id, agent_error = _attempt(lambda: limiter._get_resolved_agent_id(None, args.auth, request))  # pyright: ignore[reportPrivateUsage, reportArgumentType, reportUnknownMemberType]  # the reader never touches the instance
+    saturation, saturation_rejected = _fallback_on_saturation(request)
     return coerce_record(
         LimiterRequest,
         {
@@ -89,7 +113,9 @@ def limiter_request(args: HookArgs) -> LimiterRequest | None:
             "resolved_agent_id": agent_id,
             **_raised(session_error, "session_id"),
             **_raised(agent_error, "resolved_agent_id"),
+            **saturation,
         },
+        rejected=saturation_rejected,
     )
 
 

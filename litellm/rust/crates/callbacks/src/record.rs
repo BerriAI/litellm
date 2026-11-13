@@ -4,13 +4,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::scalar::Scalar;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct ModelPreference {
-    pub model: Option<String>,
-    pub alternates: Option<Vec<String>>,
-}
-
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct KeyIdentity {
@@ -32,8 +25,6 @@ pub struct KeyIdentity {
     pub invoked_agent_id: Option<Scalar>,
     pub team_priority: Option<Scalar>,
     pub key_priority: Option<Scalar>,
-    pub model_preferences: Option<Vec<ModelPreference>>,
-    pub model_preferences_error: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -209,6 +200,9 @@ pub struct LimiterRequest {
     pub resolved_agent_id: Option<Scalar>,
     pub resolved_agent_id_error_type: Option<String>,
     pub resolved_agent_id_error_text: Option<String>,
+    pub fallback_on_saturation: Option<bool>,
+    pub fallback_on_saturation_invalid: Option<String>,
+    pub fallback_walk_armed: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

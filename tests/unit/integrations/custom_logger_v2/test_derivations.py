@@ -20,7 +20,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import (
     get_model_group_from_litellm_kwargs,  # pyright: ignore[reportUnknownVariableType]  # the helper takes an untyped dict
 )
-from litellm.proxy.hooks.dynamic_rate_limiter_v3 import alternates_for
+from litellm.proxy.hooks import dynamic_rate_limiter_v3
 from litellm.types.integrations.custom_logger_v2 import (
     AgentPolicy,
     AttemptTiming,
@@ -39,7 +39,6 @@ from litellm.types.integrations.custom_logger_v2 import (
     MetadataKind,
     MetadataLabel,
     ModelInfo,
-    ModelPreference,
     Moment,
     Outcome,
     RateLimitState,
@@ -855,47 +854,22 @@ def test_key_identity_carries_a_list_priority_and_agent_id_as_the_text_python_fo
 
 
 @pytest.mark.parametrize(
-    ("raw", "expected"),
-    [
-        ([{"model": "gpt", "alternates": ["mini"]}, {"model": "other"}], (("gpt", ("mini",)), ("other", ()))),
-        ([{"model": "gpt", "alternates": [7]}], None),
-        ({"model": "gpt"}, None),
-    ],
-    ids=("parsed", "alternate-not-a-string", "not-a-list"),
-)
-def test_model_preferences_follow_the_capacity_parse_and_name_what_it_ignores_in_rejected(
-    raw: object, expected: tuple[tuple[str, tuple[str, ...]], ...] | None
-) -> None:
-    identity: Final = derivations.key_identity(HookArgs(auth=_auth(team_metadata={"model_preferences": raw})))
-
-    assert identity is not None
-    assert identity.model_preferences == (
-        None if expected is None else tuple(ModelPreference(model=model, alternates=alt) for model, alt in expected)
-    )
-    assert identity.rejected == (None if expected is not None else ("model_preferences",))
-    assert (identity.model_preferences_error is None) is (expected is not None)
-
-
-@pytest.mark.parametrize(
     "raw",
-    [[{"model": "gpt", "alternates": [7]}], {"model": "gpt"}, "gpt", [{"alternates": ["mini"]}]],
-    ids=repr,
+    [[{"model": "gpt", "alternates": ["mini"]}], [{"model": "gpt", "alternates": [7]}], {"model": "gpt"}, "gpt"],
+    ids=("well-formed", "alternate-not-a-string", "not-a-list", "text"),
 )
-def test_malformed_model_preferences_carry_the_text_capacity_logs_when_it_ignores_them(
+def test_a_team_model_preferences_entry_is_ignored_like_the_capacity_callback_ignores_it(
     raw: object, caplog: pytest.LogCaptureFixture
 ) -> None:
-    auth: Final = _auth(team_metadata={"model_preferences": raw})
+    with caplog.at_level("DEBUG"):
+        identity: Final = derivations.key_identity(HookArgs(auth=_auth(team_metadata={"model_preferences": raw})))
 
-    with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
-        alternates: Final = alternates_for(auth, "gpt")
-    identity: Final = derivations.key_identity(HookArgs(auth=auth))
-
-    assert alternates == ()
+    assert identity == derivations.key_identity(HookArgs(auth=_auth(team_metadata={})))
     assert identity is not None
-    assert identity.rejected == ("model_preferences",)
-    assert [entry.getMessage() for entry in caplog.records] == [
-        f"Ignoring malformed team model_preferences for team {identity.team_id}: {identity.model_preferences_error}"
-    ]
+    assert identity.rejected is None
+    assert "model_preferences" not in KeyIdentity.model_fields
+    assert not hasattr(dynamic_rate_limiter_v3, "alternates_for")
+    assert not [entry for entry in caplog.records if "model_preferences" in entry.getMessage()]
 
 
 @pytest.mark.parametrize(
