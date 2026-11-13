@@ -19,14 +19,20 @@ from litellm.llms.opencode.common_utils import go_headers
 from litellm.types.utils import ModelResponseStream
 
 
-def _messages_sse(tool: bool) -> tuple[str, ...]:
+def _messages_sse(
+    tool: bool,
+    usage: Mapping[str, object] | None = None,
+    usage_at_start: bool = False,
+    tool_name: str = "weather",
+    arguments: str = '{"city":"Paris"}',
+) -> tuple[str, ...]:
     block: Final = (
-        {"type": "tool_use", "id": "call_test", "name": "weather", "input": {}}
+        {"type": "tool_use", "id": "call_test", "name": tool_name, "input": {}}
         if tool
         else {"type": "text", "text": ""}
     )
     delta: Final = (
-        {"type": "input_json_delta", "partial_json": '{"city":"Paris"}'}
+        {"type": "input_json_delta", "partial_json": arguments}
         if tool
         else {"type": "text_delta", "text": "hello"}
     )
@@ -39,7 +45,7 @@ def _messages_sse(tool: bool) -> tuple[str, ...]:
                 "role": "assistant",
                 "model": "fixture-messages",
                 "content": [],
-                "usage": {"input_tokens": 10, "output_tokens": 0},
+                "usage": {"input_tokens": 10, "output_tokens": 0, **((usage or {}) if usage_at_start else {})},
             },
         },
         {"type": "content_block_start", "index": 0, "content_block": block},
@@ -48,7 +54,7 @@ def _messages_sse(tool: bool) -> tuple[str, ...]:
         {
             "type": "message_delta",
             "delta": {"stop_reason": "tool_use" if tool else "end_turn"},
-            "usage": {"output_tokens": 5},
+            "usage": {"output_tokens": 5, **((usage or {}) if not usage_at_start else {})},
         },
         {"type": "message_stop"},
     )
@@ -84,6 +90,77 @@ async def test_messages_stream_translates_deltas_and_finish_reason(sync: bool, t
     assert calls[0][0].id == "call_test"
     assert calls[0][0].function.name == "weather"
     assert "".join(call[0].function.arguments or "" for call in calls) == '{"city":"Paris"}'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", (True, False), ids=("sync", "async"))
+@pytest.mark.parametrize("valid_schema", (True, False, None), ids=("schema", "invalid-tools", "no-tools"))
+async def test_messages_json_stream_uses_request_schema(sync: bool, valid_schema: bool | None) -> None:
+    answer: Final = {"city": "Paris"}
+    arguments: Final = json.dumps({"name": "json_tool_call", "parameters": answer}) if valid_schema else json.dumps(answer)
+    lines: Final = _messages_sse(True, tool_name="json_tool_call", arguments=arguments)
+    schema: Final = {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}
+    tools: Final = [{"name": "json_tool_call", "input_schema": schema}] if valid_schema else "invalid"
+    stream: Final = OpenCodeGoMessagesChatConfig().get_model_response_iterator_for_request(
+        iter(lines) if sync else _async_lines(lines), sync, True, {"tools": tools} if valid_schema is not None else {}
+    )
+    chunks: Final = (
+        tuple(cast(Iterator[ModelResponseStream], stream))
+        if sync
+        else tuple([chunk async for chunk in cast(AsyncIterator[ModelResponseStream], stream)])
+    )
+    choices: Final = tuple(chunk.choices[0] for chunk in chunks if chunk.choices)
+    assert json.loads("".join(choice.delta.content or "" for choice in choices)) == answer
+    assert not any(choice.delta.tool_calls for choice in choices)
+    assert tuple(choice.finish_reason for choice in choices if choice.finish_reason) == ("stop",)
+
+
+class _MessagesStream(httpx.SyncByteStream, httpx.AsyncByteStream):
+    def __init__(self, body: bytes) -> None:
+        self.body = body
+        self.closed = False
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield self.body
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield self.body
+
+    def close(self) -> None:
+        self.closed = True
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ("sync", "async", "async-close-sync"))
+async def test_closing_messages_stream_releases_upstream_response(go_catalog: None, mode: str) -> None:
+    upstream: Final = _MessagesStream(("\n\n".join(_messages_sse(False)) + "\n\n").encode())
+    with respx.mock(using="httpx") as transport:
+        transport.post().mock(
+            return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=upstream)
+        )
+        kwargs: Final = {
+            "model": "opencode_go/fixture-messages",
+            "api_key": "fake-go-key",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": True,
+        }
+        if mode != "async":
+            stream: Final = litellm.completion(**kwargs)
+            next(stream)
+            assert not upstream.closed
+            if mode == "sync":
+                stream.close()
+            else:
+                await stream.aclose()
+        else:
+            async_stream: Final = await litellm.acompletion(**kwargs)
+            await async_stream.__anext__()
+            assert not upstream.closed
+            await async_stream.aclose()
+    assert upstream.closed
 
 
 @pytest.fixture
@@ -508,6 +585,11 @@ class CostRecorder(CustomLogger):
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:  # noqa: ANN001
         self.costs.append(kwargs.get("response_cost"))
 
+    def log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.costs.append(TypeAdapter(float | None).validate_python(kwargs.get("response_cost")))
+
 
 async def logged_cost(recorder: CostRecorder) -> float | None:
     for _ in range(50):
@@ -562,6 +644,47 @@ async def test_rows_price_the_request_when_no_list_cost_is_reported(
 
 def sse(*events: Mapping[str, object]) -> str:
     return "".join(f"data: {json.dumps(event)}\n\n" for event in events) + "data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", (True, False), ids=("sync", "async"))
+@pytest.mark.parametrize("usage_at_start", (False, True), ids=("delta-usage", "start-usage"))
+@pytest.mark.parametrize(
+    ("usage", "expected"),
+    (
+        (GO_REPORTED_USAGE, 0.00412),
+        ({"opencode": {"list_cost": 0}}, 0),
+        ({}, ROW_PRICE_FOR_FIXTURE_USAGE),
+        ({"opencode": {"list_cost": "invalid"}}, ROW_PRICE_FOR_FIXTURE_USAGE),
+    ),
+)
+async def test_messages_stream_bills_reported_list_cost(
+    go_catalog: None,
+    cost_recorder: CostRecorder,
+    sync: bool,
+    usage_at_start: bool,
+    usage: Mapping[str, object],
+    expected: float,
+) -> None:
+    lines: Final = _messages_sse(False, usage, usage_at_start)
+    with respx.mock(using="httpx") as transport:
+        transport.post().mock(
+            return_value=httpx.Response(
+                200, headers={"content-type": "text/event-stream"}, text="\n\n".join(lines) + "\n\n"
+            )
+        )
+        kwargs: Final = {
+            "model": "opencode_go/fixture-messages",
+            "api_key": "fake-go-key",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        stream: Final = litellm.completion(**kwargs) if sync else await litellm.acompletion(**kwargs)
+        chunks: Final = tuple(stream) if sync else tuple([chunk async for chunk in stream])
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices) == "hello"
+    assert chunks[-1].usage.total_tokens == 15
+    assert await logged_cost(cost_recorder) == pytest.approx(expected)
 
 
 @pytest.mark.asyncio

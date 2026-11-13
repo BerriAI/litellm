@@ -261,3 +261,5 @@ def test_chat_completion_uses_go_model_stream_protocol(gateway: Gateway, model: 
             response.text
         )
         assert response.text.rstrip().endswith("data: [DONE]"), response.text
+        if model == "opencode_go/minimax-m3":
+            assert _logged_spend(response.headers["x-litellm-call-id"]) == _approx(_LIST_COST)
