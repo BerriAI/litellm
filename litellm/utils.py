@@ -769,6 +769,15 @@ def _is_same_registered_custom_logger(existing: object, callback_class: CustomLo
     )
 
 
+def _same_v2_callback(existing: object, callback: object) -> bool:
+    return (
+        isinstance(existing, CustomLoggerV2)
+        and isinstance(callback, CustomLoggerV2)
+        and litellm.logging_callback_manager.get_custom_logger_key(existing)
+        == litellm.logging_callback_manager.get_custom_logger_key(callback)
+    )
+
+
 class _SupportsGet(Protocol):
     def get(self, key: str, /) -> object: ...
 
@@ -1331,7 +1340,8 @@ def function_setup(
                             llm_router=None,
                         )
                         if callback is None or any(
-                            type(cb) is type(callback) for cb in litellm._async_success_callback
+                            type(cb) is type(callback) or _same_v2_callback(cb, callback)
+                            for cb in litellm._async_success_callback
                         ):  # don't double add a callback
                             continue
                     if callback not in litellm.input_callback:

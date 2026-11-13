@@ -11,6 +11,7 @@ import pytest
 from fastapi import HTTPException
 from pydantic import TypeAdapter
 
+import litellm
 from litellm.exceptions import BudgetExceededError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_logger_v2 import (
@@ -154,6 +155,16 @@ def test_a_native_logger_takes_its_declarations_from_the_rust_manifest() -> None
         True,
     )
     assert manifest.request_state is not None
+
+
+def test_a_native_built_twice_lands_in_an_event_list_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    first: Final = native_logger(Handle())
+
+    for logger in (first, native_logger(Handle())):
+        litellm.logging_callback_manager.add_litellm_async_success_callback(logger)
+
+    assert litellm._async_success_callback == [first]
 
 
 async def test_a_native_logger_runs_at_its_position_between_two_legacy_loggers() -> None:

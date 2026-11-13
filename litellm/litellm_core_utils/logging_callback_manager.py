@@ -22,7 +22,7 @@ _callback_lists_lock: Final = threading.RLock()
 
 
 def _instance_attributes(target: object) -> Mapping[str, object]:
-    return vars(target)
+    return getattr(target, "__dict__", {})
 
 
 class LoggingCallbackManager:
@@ -292,7 +292,11 @@ class LoggingCallbackManager:
                 parent_list=parent_list,
             )
         elif isinstance(callback, CustomLoggerV2):
-            if not any(existing is callback for existing in parent_list):
+            v2_key: Final = self._get_custom_logger_key(callback)
+            if not any(
+                isinstance(existing, CustomLoggerV2) and self._get_custom_logger_key(existing) == v2_key
+                for existing in parent_list
+            ):
                 parent_list.append(callback)  # pyright: ignore[reportArgumentType]  # the event lists also hold V2 callbacks
 
         elif callable(callback):
@@ -339,7 +343,7 @@ class LoggingCallbackManager:
                 return
         parent_list.append(custom_logger)
 
-    def _get_custom_logger_key(self, custom_logger: CustomLogger):
+    def _get_custom_logger_key(self, custom_logger: CustomLogger | CustomLoggerV2):
         """
         Get a unique key for a custom logger that considers only fundamental instance variables
 
