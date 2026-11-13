@@ -18,8 +18,8 @@ const organization: Organization = {
   alias: "Example organization",
   default_budget_template_id: "template-1",
   default_budgets: [
-    { budget_id: "template-1", name: "Standard", is_default: true, max_budget: 10 },
-    { budget_id: "template-2", name: "Pro", is_default: false, max_budget: 50 },
+    { budget_id: "template-1", name: "Standard", max_budget: 10 },
+    { budget_id: "template-2", name: "Pro", max_budget: 50 },
   ],
   budget: {
     max_budget: 100,

@@ -40,7 +40,7 @@ from litellm.types.proxy.auth.customer_hierarchy import (
     CustomerRequestIdentity,
     CustomerScopeAuth,
 )
-from litellm.types.proxy.management_endpoints.customer_hierarchy import CustomerMember
+from litellm.types.proxy.management_endpoints.customer_hierarchy import CustomerMember, Organization
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 NOW: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -482,11 +482,39 @@ class _Registrar:
         )
 
 
+class _OrganizationRegistrar:
+    """Stands in for ensure_customer_organization: records the alias and adds the organization row, or fails."""
+
+    def __init__(self, organizations: _OrganizationTable, failure: Failure | None = None) -> None:
+        self.organizations = organizations
+        self.failure = failure
+        self.calls: tuple[str, ...] = ()
+
+    async def __call__(self, alias: str, prisma_client: object) -> Organization | Failure:
+        self.calls = (*self.calls, alias)
+        if self.failure is not None:
+            return self.failure
+        self.organizations.rows = (*self.organizations.rows, _organization(alias, org_id=alias))
+        return Organization.model_validate(
+            {
+                "customer_org_id": alias,
+                "alias": alias,
+                "member_count": 0,
+                "created_at": NOW,
+                "created_by": "x",
+                "updated_at": NOW,
+                "updated_by": "x",
+            }
+        )
+
+
 def _resolve(
     prisma: _Prisma,
     identity: CustomerRequestIdentity,
     route: str = "/chat/completions",
     register: _Registrar | None = None,
+    key_metadata: Mapping[str, object] | None = None,
+    register_organization: _OrganizationRegistrar | None = None,
 ):
     return resolve_customer_hierarchy(
         identity=identity,
@@ -495,7 +523,11 @@ def _resolve(
         llm_router=None,
         request_model="gpt-4o",
         route=route,
+        key_metadata=key_metadata,
         register=register if register is not None else _Registrar(_MemberTable({}), Failure(ErrorCode.NOT_FOUND)),
+        register_organization=register_organization
+        if register_organization is not None
+        else _OrganizationRegistrar(_OrganizationTable(), Failure(ErrorCode.NOT_FOUND)),
     )
 
 
@@ -514,27 +546,26 @@ async def test_hierarchy_is_loaded_once_and_then_served_from_the_cache() -> None
 
 
 @pytest.mark.asyncio
-async def test_resolution_refuses_an_unknown_member_and_a_proxy_without_a_database() -> None:
+async def test_an_unknown_member_or_a_proxy_without_a_database_runs_the_request_untracked() -> None:
     cache: Final = UserApiKeyCache()
-    with pytest.raises(ProxyException) as missing:
-        await resolve_customer_hierarchy(
-            identity=CustomerRequestIdentity(customer_member_id="ghost"),
-            prisma_client=_Prisma(_MemberTable({})),  # pyright: ignore[reportArgumentType]  # test double
-            user_api_key_cache=cache,
-            llm_router=None,
-            request_model="gpt-4o",
-            route="/chat/completions",
-        )
-    assert missing.value.code == "401"
-    with pytest.raises(ProxyException):
-        await resolve_customer_hierarchy(
-            identity=CustomerRequestIdentity(customer_member_id="member-1"),
-            prisma_client=None,
-            user_api_key_cache=cache,
-            llm_router=None,
-            request_model="gpt-4o",
-            route="/chat/completions",
-        )
+    untracked: Final = await resolve_customer_hierarchy(
+        identity=CustomerRequestIdentity(customer_member_id="ghost"),
+        prisma_client=_Prisma(_MemberTable({})),  # pyright: ignore[reportArgumentType]  # test double
+        user_api_key_cache=cache,
+        llm_router=None,
+        request_model="gpt-4o",
+        route="/chat/completions",
+    )
+    assert untracked is None
+    without_database: Final = await resolve_customer_hierarchy(
+        identity=CustomerRequestIdentity(customer_member_id="member-1"),
+        prisma_client=None,
+        user_api_key_cache=cache,
+        llm_router=None,
+        request_model="gpt-4o",
+        route="/chat/completions",
+    )
+    assert without_database is None
 
 
 @pytest.mark.asyncio
@@ -558,7 +589,7 @@ async def test_resolution_enforces_budget_on_model_routes_but_not_on_info_routes
         request_model=None,
         route="/key/info",
     )
-    assert hierarchy.customer_member_id == "member-1"
+    assert hierarchy is not None and hierarchy.customer_member_id == "member-1"
 
 
 def test_a_key_pinned_to_another_organization_cannot_act_for_the_member() -> None:
@@ -594,6 +625,7 @@ async def test_an_alias_alone_charges_only_the_organization_and_enforces_its_bud
     prisma: Final = _Prisma(_MemberTable({}), _OrganizationTable((_organization("acme", max_budget=5.0, spend=1.0),)))
     hierarchy: Final = await _resolve(prisma, CustomerRequestIdentity(customer_org_alias="acme"))
 
+    assert hierarchy is not None
     assert (hierarchy.customer_org_id, hierarchy.customer_team_id, hierarchy.customer_member_id) == (
         "org-1",
         None,
@@ -620,6 +652,7 @@ async def test_an_alias_next_to_a_member_must_name_that_members_organization() -
     matching: Final = await _resolve(
         prisma, CustomerRequestIdentity(customer_member_id="member-1", customer_org_alias="acme")
     )
+    assert matching is not None
     assert (matching.customer_org_id, matching.customer_member_id) == ("org-1", "member-1")
     assert tuple(scope.key for scope in matching.scopes) == ("customer_org", "customer_team", "customer_member")
 
@@ -629,10 +662,48 @@ async def test_an_alias_next_to_a_member_must_name_that_members_organization() -
 
 
 @pytest.mark.asyncio
-async def test_an_unknown_alias_is_refused_and_a_shared_alias_is_rejected_as_ambiguous() -> None:
-    with pytest.raises(ProxyException) as missing:
-        await _resolve(_Prisma(_MemberTable({})), CustomerRequestIdentity(customer_org_alias="ghost"))
-    assert (missing.value.code, missing.value.param) == ("401", CUSTOMER_ORG_ALIAS_HEADER)
+async def test_an_unknown_alias_becomes_a_new_organization_charged_for_the_request() -> None:
+    organizations: Final = _OrganizationTable(())
+    registrar: Final = _OrganizationRegistrar(organizations)
+    prisma: Final = _Prisma(_MemberTable({}), organizations)
+
+    hierarchy: Final = await _resolve(
+        prisma, CustomerRequestIdentity(customer_org_alias="ghost"), register_organization=registrar
+    )
+
+    assert registrar.calls == ("ghost",)
+    assert hierarchy is not None
+    assert (hierarchy.customer_org_id, hierarchy.customer_team_id, hierarchy.customer_member_id) == (
+        "ghost",
+        None,
+        None,
+    )
+    assert tuple((scope.key, scope.entity_id) for scope in hierarchy.scopes) == (("customer_org", "ghost"),)
+
+    again: Final = await _resolve(
+        prisma, CustomerRequestIdentity(customer_org_alias="ghost"), register_organization=registrar
+    )
+    assert again is not None and registrar.calls == ("ghost",)
+
+
+@pytest.mark.asyncio
+async def test_an_alias_that_cannot_be_registered_runs_untracked_and_a_shared_alias_is_rejected_as_ambiguous() -> None:
+    failing: Final = _OrganizationRegistrar(_OrganizationTable(()), Failure(ErrorCode.ALREADY_EXISTS))
+    untracked: Final = await _resolve(
+        _Prisma(_MemberTable({})), CustomerRequestIdentity(customer_org_alias="ghost"), register_organization=failing
+    )
+    assert (untracked, failing.calls) == (None, ("ghost",))
+
+    oversized: Final = _OrganizationRegistrar(_OrganizationTable(()))
+    assert (
+        await _resolve(
+            _Prisma(_MemberTable({})),
+            CustomerRequestIdentity(customer_org_alias="g" * 257),
+            register_organization=oversized,
+        )
+        is None
+    )
+    assert oversized.calls == ()
 
     shared: Final = _Prisma(
         _MemberTable({}), _OrganizationTable((_organization("acme"), _organization("acme", org_id="org-2")))
@@ -677,26 +748,68 @@ async def test_a_member_the_aliased_organization_has_never_seen_is_registered_th
     )
 
     assert registrar.calls == (("org-1", "user-7"),)
+    assert hierarchy is not None
     assert (hierarchy.customer_org_id, hierarchy.customer_member_id) == ("org-1", "user-7")
     assert _scopes(hierarchy)["customer_member"].max_budget == 10.0
 
 
 @pytest.mark.asyncio
-async def test_an_unknown_member_stays_refused_without_an_alias_or_when_registration_fails() -> None:
+async def test_an_unknown_member_runs_untracked_without_an_alias_and_on_the_organization_when_registration_fails() -> (
+    None
+):
     members: Final = _MemberTable({})
     registrar: Final = _Registrar(members)
-    with pytest.raises(ProxyException) as no_alias:
-        await _resolve(_Prisma(members), CustomerRequestIdentity(customer_member_id="user-7"), register=registrar)
-    assert (no_alias.value.code, registrar.calls) == ("401", ())
+    no_alias: Final = await _resolve(
+        _Prisma(members), CustomerRequestIdentity(customer_member_id="user-7"), register=registrar
+    )
+    assert (no_alias, registrar.calls) == (None, ())
 
     failing: Final = _Registrar(members, Failure(ErrorCode.BUDGET_REQUIRED))
-    prisma: Final = _Prisma(members, _OrganizationTable((_organization("acme"),)))
-    with pytest.raises(ProxyException) as failed:
-        await _resolve(
-            prisma, CustomerRequestIdentity(customer_member_id="user-7", customer_org_alias="acme"), register=failing
-        )
-    assert (failed.value.code, failing.calls) == ("401", (("org-1", "user-7"),))
+    prisma: Final = _Prisma(members, _OrganizationTable((_organization("acme", max_budget=5.0),)))
+    organization_only: Final = await _resolve(
+        prisma, CustomerRequestIdentity(customer_member_id="user-7", customer_org_alias="acme"), register=failing
+    )
+    assert failing.calls == (("org-1", "user-7"),)
+    assert organization_only is not None
+    assert (organization_only.customer_org_id, organization_only.customer_member_id) == ("org-1", None)
+    assert tuple(scope.key for scope in organization_only.scopes) == ("customer_org",)
     assert "user-7" not in members.rows
+
+
+@pytest.mark.asyncio
+async def test_a_key_pinned_to_another_organization_is_refused_before_any_member_is_registered() -> None:
+    members: Final = _MemberTable({})
+    registrar: Final = _Registrar(members)
+    prisma: Final = _Prisma(members, _OrganizationTable((_organization("acme"),)))
+
+    with pytest.raises(ProxyException) as denied:
+        await _resolve(
+            prisma,
+            CustomerRequestIdentity(customer_member_id="user-7", customer_org_alias="acme"),
+            register=registrar,
+            key_metadata={"customer_org_id": "some-other-org"},
+        )
+
+    assert (denied.value.code, registrar.calls, members.rows) == ("403", (), {})
+
+
+@pytest.mark.asyncio
+async def test_a_member_id_past_the_identifier_bound_is_not_registered_and_only_the_organization_is_charged() -> None:
+    members: Final = _MemberTable({})
+    registrar: Final = _Registrar(members)
+    prisma: Final = _Prisma(members, _OrganizationTable((_organization("acme"),)))
+
+    oversized: Final = await _resolve(
+        prisma, CustomerRequestIdentity(customer_member_id="u" * 257, customer_org_alias="acme"), register=registrar
+    )
+    assert oversized is not None
+    assert (oversized.customer_org_id, oversized.customer_member_id, registrar.calls) == ("org-1", None, ())
+
+    longest: Final = await _resolve(
+        prisma, CustomerRequestIdentity(customer_member_id="u" * 256, customer_org_alias="acme"), register=registrar
+    )
+    assert longest is not None
+    assert (longest.customer_member_id, registrar.calls) == ("u" * 256, (("org-1", "u" * 256),))
 
 
 @pytest.mark.asyncio

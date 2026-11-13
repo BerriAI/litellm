@@ -54,10 +54,10 @@ def family(http: TestClient) -> dict[str, object]:
                     "max_budget": 100,
                     "rpm_limit": 10,
                     "allowed_models": ["model-a"],
-                    "is_default": True,
                 },
                 {"name": "small", "max_budget": 20, "rpm_limit": 8},
             ],
+            "default_budget_template": "standard",
         },
     )
     assert org.status_code == 201, org.text
@@ -389,11 +389,13 @@ def test_template_deletion_guards_names_and_references() -> None:
     assert fetched.json() == org
     deleted: Final = http.delete(f"/management/v1/customer_organizations/org/default_budgets/{selected_id}")
     assert deleted.status_code == 204, deleted.text
-    added: Final = http.post(
-        "/management/v1/customer_organizations/org/default_budgets", json={"name": "new", "is_default": True}
-    )
+    added: Final = http.post("/management/v1/customer_organizations/org/default_budgets", json={"name": "new"})
     assert added.status_code == 201, added.text
-    assert added.json()["default_budget_template_id"] != default_id
+    assert added.json()["default_budget_template_id"] == default_id
+    new_id: Final = next(t["budget_id"] for t in added.json()["default_budgets"] if t["name"] == "new")
+    moved: Final = http.patch("/management/v1/customer_organizations/org", json={"default_budget_template_id": new_id})
+    assert moved.status_code == 200, moved.text
+    assert moved.json()["default_budget_template_id"] == new_id
     old_default: Final = http.delete(f"/management/v1/customer_organizations/org/default_budgets/{default_id}")
     assert old_default.status_code == 204, old_default.text
 
@@ -471,18 +473,18 @@ def test_new_entities_report_zero_spend_and_no_reset_and_parent_deletion_conflic
 
 
 @pytest.mark.parametrize(
-    "templates",
+    "body",
     (
-        [{"name": "a"}, {"name": "b"}],
-        [{"name": "a", "is_default": True}, {"name": "b", "is_default": True}],
-        [{"name": "a"}, {"name": "a", "is_default": True}],
+        {"default_budgets": [{"name": "a"}, {"name": "b"}]},
+        {"default_budgets": [{"name": "a"}, {"name": "b"}], "default_budget_template": "c"},
+        {"default_budgets": [{"name": "a"}, {"name": "a"}], "default_budget_template": "a"},
+        {"default_budget_template": "a"},
+        {"default_budgets": [{"name": "a"}], "default_budget_template_id": "a"},
     ),
 )
-def test_invalid_template_configuration_does_not_create_an_organization(templates: list[dict[str, object]]) -> None:
+def test_invalid_template_configuration_does_not_create_an_organization(body: dict[str, object]) -> None:
     http: Final = client()
-    response: Final = http.post(
-        "/management/v1/customer_organizations", json={"customer_org_id": "org", "default_budgets": templates}
-    )
+    response: Final = http.post("/management/v1/customer_organizations", json={"customer_org_id": "org", **body})
     assert response.status_code == 422, response.text
     missing: Final = http.get("/management/v1/customer_organizations/org")
     assert missing.status_code == 404, missing.text
@@ -608,7 +610,7 @@ def test_partial_member_override_updates_preserve_other_fields_and_never_change_
     assert unchanged.json() == {**organization, "member_count": 1}
 
 
-def test_first_added_template_is_default_and_default_cannot_be_unset_without_replacement() -> None:
+def test_first_added_template_is_default_and_org_patch_moves_or_clears_the_default() -> None:
     http: Final = client()
     created: Final = http.post("/management/v1/customer_organizations", json={"customer_org_id": "org"})
     assert created.status_code == 201, created.text
@@ -618,12 +620,27 @@ def test_first_added_template_is_default_and_default_cannot_be_unset_without_rep
     second: Final = http.post("/management/v1/customer_organizations/org/default_budgets", json={"name": "second"})
     assert second.status_code == 201, second.text
     assert second.json()["default_budget_template_id"] == first_id
-    invalid: Final = http.patch(
-        f"/management/v1/customer_organizations/org/default_budgets/{first_id}", json={"is_default": False}
+    second_id: Final = next(t["budget_id"] for t in second.json()["default_budgets"] if t["name"] == "second")
+    foreign: Final = http.patch(
+        "/management/v1/customer_organizations/org", json={"default_budget_template_id": "someone-elses"}
     )
-    assert invalid.status_code == 422, invalid.text
-    still_default: Final = http.get("/management/v1/customer_organizations/org")
-    assert still_default.json() == second.json()
+    assert foreign.status_code == 422, foreign.text
+    moved: Final = http.patch("/management/v1/customer_organizations/org", json={"default_budget_template_id": second_id})
+    assert moved.status_code == 200, moved.text
+    assert moved.json()["default_budget_template_id"] == second_id
+    member: Final = http.post("/management/v1/customer_members", json={"parent_team_ids": [team_in("org", http)]})
+    assert member.status_code == 201, member.text
+    assert member.json()["budget_id"] == second_id
+    cleared: Final = http.patch("/management/v1/customer_organizations/org", json={"default_budget_template_id": None})
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["default_budget_template_id"] is None
+    assert http.get("/management/v1/customer_organizations/org").json() == cleared.json()
+
+
+def team_in(organization_id: str, http: TestClient) -> str:
+    team: Final = http.post("/management/v1/customer_teams", json={"parent_org_id": organization_id})
+    assert team.status_code == 201, team.text
+    return cast("str", team.json()["customer_team_id"])
 
 
 @pytest.mark.parametrize(
@@ -754,7 +771,7 @@ def test_resubmitting_a_templates_duration_keeps_its_reset_clock() -> None:
         "/management/v1/customer_organizations",
         json={
             "customer_org_id": "clocked",
-            "default_budgets": [{"name": "monthly", "max_budget": 100, "budget_duration": "30d", "is_default": True}],
+            "default_budgets": [{"name": "monthly", "max_budget": 100, "budget_duration": "30d"}],
         },
     )
     assert org.status_code == 201, org.text
@@ -799,7 +816,7 @@ def test_budget_reset_at_is_read_from_the_governing_budget_row() -> None:
         json={
             "customer_org_id": "windowed",
             "budget": {"max_budget": 1000, "budget_duration": "30d"},
-            "default_budgets": [{"name": "monthly", "max_budget": 100, "budget_duration": "30d", "is_default": True}],
+            "default_budgets": [{"name": "monthly", "max_budget": 100, "budget_duration": "30d"}],
         },
     )
     assert org.status_code == 201, org.text
@@ -855,10 +872,8 @@ def test_template_rename_shows_on_the_organization_and_leaves_the_other_template
     )
     assert renamed.status_code == 200, renamed.text
     assert "budget_names" not in renamed.json()
-    assert [(template["name"], template["is_default"]) for template in renamed.json()["default_budgets"]] == [
-        ("standard", True),
-        ("starter", False),
-    ]
+    assert [template["name"] for template in renamed.json()["default_budgets"]] == ["standard", "starter"]
+    assert all("is_default" not in template for template in renamed.json()["default_budgets"])
     assert renamed.json()["default_budget_template_id"] == org["default_budget_template_id"]
     fetched: Final = http.get("/management/v1/customer_organizations/org")
     assert fetched.json() == renamed.json()

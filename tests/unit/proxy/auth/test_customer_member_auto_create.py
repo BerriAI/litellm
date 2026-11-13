@@ -2,7 +2,11 @@ from typing import TYPE_CHECKING, Final, cast
 
 import pytest
 
-from litellm.proxy.auth.customer_member_auto_create import default_team_id, ensure_customer_member
+from litellm.proxy.auth.customer_member_auto_create import (
+    default_team_id,
+    ensure_customer_member,
+    ensure_customer_organization,
+)
 from litellm.proxy.management_helpers.customer_hierarchy import CustomerHierarchy, ErrorCode, Failure
 from litellm.types.proxy.management_endpoints.customer_hierarchy import (
     BudgetTemplate,
@@ -21,7 +25,7 @@ def _prisma(database: Database) -> "PrismaClient":
 
 
 async def _organization(database: Database, org_id: str, default_budget: bool = True) -> None:
-    templates: Final = (BudgetTemplate(name="std", max_budget=10.0, is_default=True),) if default_budget else ()
+    templates: Final = (BudgetTemplate(name="std", max_budget=10.0),) if default_budget else ()
     created: Final = await CustomerHierarchy(_prisma(database), clock=lambda: NOW).create_organization(
         OrganizationCreate(customer_org_id=org_id, default_budgets=templates), "admin"
     )
@@ -75,3 +79,18 @@ async def test_an_organization_without_a_default_budget_cannot_register_members(
 @pytest.mark.asyncio
 async def test_an_unknown_organization_cannot_register_members() -> None:
     assert await ensure_customer_member("ghost", "user-7", _prisma(Database())) == Failure(ErrorCode.PARENT_NOT_FOUND)
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_alias_becomes_an_organization_once_and_a_known_one_is_reused() -> None:
+    database: Final = Database()
+
+    created: Final = await ensure_customer_organization("acme", _prisma(database))
+    again: Final = await ensure_customer_organization("acme", _prisma(database))
+
+    assert not isinstance(created, Failure) and not isinstance(again, Failure)
+    assert (created.customer_org_id, created.alias, again.customer_org_id) == ("acme", "acme", "acme")
+    listed: Final = await CustomerHierarchy(_prisma(database), clock=lambda: NOW).list_organizations(
+        page=1, page_size=10
+    )
+    assert not isinstance(listed, Failure) and len(listed.data) == 1

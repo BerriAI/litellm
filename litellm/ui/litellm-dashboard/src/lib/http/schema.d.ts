@@ -29706,11 +29706,6 @@ export interface components {
              * @description What a paused member can do at the cap: wait for the reset (default) or request a temporary increase
              */
             cap_policy?: ("pause_until_reset" | "pause_allow_increase") | null;
-            /**
-             * Is Default
-             * @default false
-             */
-            is_default: boolean;
             /** Max Budget */
             max_budget?: number | null;
             /** Model Rpm Limit */
@@ -42634,11 +42629,6 @@ export interface components {
              * @description What a paused member can do at the cap: wait for the reset (default) or request a temporary increase
              */
             cap_policy?: ("pause_until_reset" | "pause_allow_increase") | null;
-            /**
-             * Is Default
-             * @default false
-             */
-            is_default: boolean;
             /** Max Budget */
             max_budget?: number | null;
             /** Model Rpm Limit */
@@ -42665,6 +42655,8 @@ export interface components {
             budget?: components["schemas"]["Budget"] | null;
             /** Customer Org Id */
             customer_org_id?: string | null;
+            /** Default Budget Template */
+            default_budget_template?: string | null;
             /**
              * Default Budgets
              * @default []
@@ -42706,6 +42698,8 @@ export interface components {
             /** Alias */
             alias?: string | null;
             budget?: components["schemas"]["Budget"] | null;
+            /** Default Budget Template Id */
+            default_budget_template_id?: string | null;
         };
         /** OrganizationRequest */
         OrganizationRequest: {
@@ -50312,8 +50306,6 @@ export interface components {
              * @description What a paused member can do at the cap: wait for the reset (default) or request a temporary increase
              */
             cap_policy?: ("pause_until_reset" | "pause_allow_increase") | null;
-            /** Is Default */
-            is_default?: boolean | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Model Rpm Limit */
