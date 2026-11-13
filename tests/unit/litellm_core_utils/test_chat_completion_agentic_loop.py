@@ -26,6 +26,7 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Any, ClassVar, Dict, Final, List, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from openai._legacy_response import LegacyAPIResponse
 
@@ -1341,3 +1342,180 @@ async def test_a_malformed_choice_dropped_by_drop_params_never_holds_back_the_ch
     )
 
     assert (hook.runs, response.choices[0].message.content) == (1, "ran the hook")
+
+
+class _ExtraBodyGateLogger(CustomLogger):
+    def __init__(self, followup_kwargs: dict[str, Any]) -> None:
+        super().__init__()
+        self._followup_kwargs = followup_kwargs
+
+    async def async_should_run_chat_completion_agentic_loop(
+        self,
+        response: Any,
+        model: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: dict[str, Any],
+    ) -> tuple[bool, dict[str, Any]]:
+        calls = response.choices[0].message.tool_calls or [] if isinstance(response, ModelResponse) else []
+        return bool(calls), {"tool_calls": [{"id": call.id} for call in calls]}
+
+    async def async_build_chat_completion_agentic_loop_plan(
+        self,
+        tools: dict[str, Any],
+        model: str,
+        messages: list[dict[str, Any]],
+        response: Any,
+        optional_params: dict[str, Any],
+        logging_obj: Any,
+        stream: bool,
+        kwargs: dict[str, Any],
+    ) -> AgenticLoopPlan:
+        patched = [
+            {"role": "user", "content": "search please"},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "call_search",
+                        "type": "function",
+                        "function": {"name": "litellm_web_search", "arguments": '{"query": "news"}'},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_search", "content": "search results"},
+        ]
+        return AgenticLoopPlan(
+            run_agentic_loop=True,
+            request_patch=AgenticLoopRequestPatch(messages=patched, kwargs=dict(self._followup_kwargs)),
+        )
+
+    async def async_should_run_agentic_loop(
+        self,
+        response: Any,
+        model: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: dict[str, Any],
+    ) -> tuple[bool, dict[str, Any]]:
+        return await self.async_should_run_chat_completion_agentic_loop(
+            response=response,
+            model=model,
+            messages=messages,
+            tools=tools,
+            stream=stream,
+            custom_llm_provider=custom_llm_provider,
+            kwargs=kwargs,
+        )
+
+    async def async_build_agentic_loop_plan(
+        self,
+        tools: dict[str, Any],
+        model: str,
+        messages: list[dict[str, Any]],
+        response: Any,
+        anthropic_messages_provider_config: Any,
+        anthropic_messages_optional_request_params: dict[str, Any],
+        logging_obj: Any,
+        stream: bool,
+        kwargs: dict[str, Any],
+    ) -> AgenticLoopPlan:
+        return await self.async_build_chat_completion_agentic_loop_plan(
+            tools=tools,
+            model=model,
+            messages=messages,
+            response=response,
+            optional_params=anthropic_messages_optional_request_params,
+            logging_obj=logging_obj,
+            stream=stream,
+            kwargs=kwargs,
+        )
+
+
+class _OpenRouterRecorder:
+    def __init__(self) -> None:
+        self.bodies: list[dict[str, Any]] = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.bodies.append(json.loads(request.content))
+        if len(self.bodies) == 1:
+            payload: dict[str, Any] = {
+                "id": "chatcmpl-1",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "anthropic/claude-3-haiku",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call_search",
+                                    "type": "function",
+                                    "function": {"name": "litellm_web_search", "arguments": '{"query": "news"}'},
+                                }
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+            }
+        else:
+            payload = {
+                "id": "chatcmpl-2",
+                "object": "chat.completion",
+                "created": 2,
+                "model": "anthropic/claude-3-haiku",
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": "final answer"}, "finish_reason": "stop"}
+                ],
+                "usage": {"prompt_tokens": 9, "completion_tokens": 4, "total_tokens": 13},
+            }
+        return httpx.Response(200, json=payload)
+
+
+@pytest.mark.asyncio
+async def test_agentic_followup_keeps_the_requests_extra_body(restore_callbacks):
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    recorder = _OpenRouterRecorder()
+    client = AsyncHTTPHandler(transport=httpx.MockTransport(recorder))
+    litellm.callbacks = [
+        _ExtraBodyGateLogger({"client": client, "api_key": "test-key", "api_base": "https://openrouter.ai/api/v1"})
+    ]
+    try:
+        response = await litellm.acompletion(
+            model="openrouter/anthropic/claude-3-haiku",
+            messages=[{"role": "user", "content": "search please"}],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "litellm_web_search",
+                        "description": "search",
+                        "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+                    },
+                }
+            ],
+            extra_body={"provider": {"zdr": True}},
+            api_key="test-key",
+            api_base="https://openrouter.ai/api/v1",
+            client=client,
+            num_retries=0,
+        )
+    finally:
+        await client.close()
+
+    assert response.choices[0].message.content == "final answer"
+    assert len(recorder.bodies) == 2, f"expected the agentic follow-up call to run, got {len(recorder.bodies)} call(s)"
+    assert recorder.bodies[0].get("provider") == {"zdr": True}
+    assert recorder.bodies[1].get("provider") == {"zdr": True}, (
+        f"follow-up request dropped the original extra_body, body was {recorder.bodies[1]}"
+    )
