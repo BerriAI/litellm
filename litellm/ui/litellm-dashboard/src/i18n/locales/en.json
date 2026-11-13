@@ -3510,7 +3510,8 @@
       "cells": {
         "notApplicable": "n/a",
         "notSet": "Not set",
-        "unlimited": "Unlimited"
+        "unlimited": "Unlimited",
+        "windowLimit": "${{amount}} {{period}}"
       },
       "rowActions": {
         "open": "Open budget actions",
@@ -3530,18 +3531,26 @@
     },
     "form": {
       "errors": {
-        "budgetIdRequired": "Enter a budget ID"
+        "budgetIdRequired": "Enter a budget ID",
+        "invalidBudgetLimit": "Enter a non-negative budget limit"
       },
       "resetOptions": {
         "inTotal": "in total",
         "perDay": "per day",
         "perWeek": "per week",
         "perMonth": "per month",
-        "perYear": "per year"
+        "perYear": "per year",
+        "perMonthAndYear": "per month and year"
       },
       "noLimit": "No limit",
       "optional": "Optional",
       "spendLimit": "Spend limit",
+      "additionalSpendLimit": "Additional spend limit",
+      "additionalResetPeriod": "Additional reset period",
+      "additionalLimitHint": "This limit also applies alongside the calendar limits.",
+      "monthlyLimit": "Monthly limit (USD)",
+      "annualLimit": "Annual limit (USD)",
+      "calendarLimitsHint": "Monthly and annual limits apply independently. Zero stops spending.",
       "resetPeriod": "Reset period",
       "budgetId": "Budget ID",
       "budgetIdLocked": "Budget ID cannot be changed after creation",
@@ -20884,18 +20893,48 @@
     },
     "createDialog": {
       "title": "Create customer",
-      "description": "Create a customer organization. Usage from its registered team members is included in the customer totals.",
+      "description": "Set up a customer organization and its member budgets.",
+      "name": "Customer name",
+      "namePlaceholder": "e.g. Example customer",
       "customerId": "Customer organization id",
       "customerIdPlaceholder": "e.g. customer-001",
       "alias": "Alias",
       "aliasPlaceholder": "Optional display name",
-      "maxBudget": "Monthly budget (USD)",
+      "customerIdHelp": "Optional customer ID for the API. Leave blank to generate one.",
+      "maxBudget": "Customer monthly budget (USD)",
       "maxBudgetPlaceholder": "Leave empty for no budget",
       "tpm": "TPM limit",
       "rpm": "RPM limit",
       "noLimit": "No limit",
       "limitsHelp": "Budget and limits apply to this customer across every key it uses.",
-      "submit": "Create"
+      "budgetHelp": "Total monthly cap across all teams and members.",
+      "groups": "Member budget groups",
+      "groupsHelp": "Reusable budget profiles. Limits are in USD per member. Leave an amount blank for no limit.",
+      "groupName": "Group name",
+      "groupNameLabel": "Group {{index}} name",
+      "monthly": "Monthly budget",
+      "yearly": "Yearly budget",
+      "monthlyLabel": "Group {{index}} monthly budget (USD)",
+      "yearlyLabel": "Group {{index}} yearly budget (USD)",
+      "default": "Default",
+      "defaultGroup": "Default budget group for new members",
+      "useDefault": "Use {{name}} as default",
+      "removeGroup": "Remove {{name}}",
+      "addGroup": "Add budget group",
+      "defaultHelp": "The selected default group is assigned to new members automatically.",
+      "resetHelp": "Reaching either cap pauses usage until that budget resets.",
+      "advanced": "Advanced limits",
+      "creating": "Creating customer...",
+      "errors": {
+        "nameRequired": "Enter a customer name.",
+        "groupNameRequired": "Give each budget group a name.",
+        "duplicateGroups": "Use a unique name for each budget group.",
+        "groupLimitRequired": "Set at least one monthly or yearly limit for each budget group.",
+        "invalidBudget": "Enter budget amounts of zero or more.",
+        "invalidRateLimit": "Rate limits must be whole numbers of zero or more.",
+        "defaultRequired": "Choose a default budget group."
+      },
+      "submit": "Create customer"
     },
     "editDialog": {
       "title": "Edit customer",

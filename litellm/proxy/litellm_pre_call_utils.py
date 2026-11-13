@@ -111,6 +111,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
 )
 from litellm.proxy.spend_tracking.carried_budget_state import carried_budget_metadata
 from litellm.types.integrations.anthropic_cache_control_hook import GATEWAY_INJECTED_CACHE_METADATA_KEY
+from litellm.types.proxy.auth.customer_hierarchy import customer_budget_scopes_metadata
 
 # Cache special headers as a frozenset for O(1) lookup performance
 _SPECIAL_HEADERS_CACHE: Final = frozenset(str(v.value).lower() for v in SpecialHeaders)
@@ -2140,6 +2141,7 @@ class LiteLLMProxyRequestSetup:
             user_api_key_customer_member_id=customer.customer_member_id if customer else None,
             user_api_key_customer_team_id=customer.customer_team_id if customer else None,
             user_api_key_customer_org_id=customer.customer_org_id if customer else None,
+            user_api_key_customer_budget_scopes=customer_budget_scopes_metadata(customer),
             user_api_key_customer_hierarchy=customer.model_dump(mode="json") if customer else None,
             user_api_key_user_email=user_api_key_dict.user_email,
             user_api_key_request_route=user_api_key_dict.request_route,

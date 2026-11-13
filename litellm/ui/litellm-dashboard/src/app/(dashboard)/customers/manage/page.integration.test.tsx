@@ -37,7 +37,7 @@ const operations = { ...audit, customer_team_id: "team-b", parent_org_id: "org-1
 const member = {
   ...audit,
   customer_member_id: "member-a",
-  parent_team_id: "team-a",
+  parent_team_ids: ["team-a"],
   alias: "Member One",
   effective_budget: { max_budget: 10 },
 };
