@@ -617,6 +617,7 @@ async fn delete_drops_memory_and_redis(
     }
 }
 
+#[rstest]
 #[tokio::test]
 async fn delete_drops_memory_before_it_waits_for_redis() {
     let deployment = RedisDeployment::start(Topology::Standalone).await.unwrap();
