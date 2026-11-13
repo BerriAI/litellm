@@ -14,13 +14,13 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
     hash_token,
 )
-from litellm.proxy.auth.auth_checks import jwt_key_mapping_cache_key
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # legacy module exports
     _user_has_admin_view,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     user_api_key_has_admin_view,
 )
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.repositories.table_repositories import JWTKeyMappingRepository
 
 router: Final = APIRouter()
@@ -174,7 +174,7 @@ async def create_jwt_key_mapping(
 
         new_mapping: Final = await _mapping_table(prisma_client).create(data=create_data)
 
-        cache_key: Final = jwt_key_mapping_cache_key(data.jwt_claim_name, data.jwt_claim_value, data.jwt_issuer)
+        cache_key: Final = AuthObject.jwt_key_mapping(data.jwt_claim_name, data.jwt_claim_value, data.jwt_issuer).key
         await evict_and_broadcast(cache_keys=(cache_key,), user_api_key_cache=user_api_key_cache)
 
         return _to_response(new_mapping)
@@ -239,12 +239,12 @@ async def update_jwt_key_mapping(
         # Evict only after the write commits: a concurrent request between an
         # early eviction and the commit would re-cache the old mapping and keep
         # it authorized until TTL.
-        old_cache_key: Final = jwt_key_mapping_cache_key(
+        old_cache_key: Final = AuthObject.jwt_key_mapping(
             old_mapping.jwt_claim_name, old_mapping.jwt_claim_value, old_mapping.jwt_issuer
-        )
-        new_cache_key: Final = jwt_key_mapping_cache_key(
+        ).key
+        new_cache_key: Final = AuthObject.jwt_key_mapping(
             updated_mapping.jwt_claim_name, updated_mapping.jwt_claim_value, updated_mapping.jwt_issuer
-        )
+        ).key
         cache_keys: Final = (old_cache_key,) if old_cache_key == new_cache_key else (old_cache_key, new_cache_key)
         await evict_and_broadcast(cache_keys=cache_keys, user_api_key_cache=user_api_key_cache)
 
@@ -290,9 +290,9 @@ async def delete_jwt_key_mapping(
 
         # Evict only after the row is gone, else a concurrent request can
         # re-cache the deleted mapping and keep it authorized until TTL.
-        cache_key: Final = jwt_key_mapping_cache_key(
+        cache_key: Final = AuthObject.jwt_key_mapping(
             old_mapping.jwt_claim_name, old_mapping.jwt_claim_value, old_mapping.jwt_issuer
-        )
+        ).key
         await evict_and_broadcast(cache_keys=(cache_key,), user_api_key_cache=user_api_key_cache)
         return {"status": "success"}
     except HTTPException:

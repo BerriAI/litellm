@@ -1578,16 +1578,19 @@ async def test_delete_organization_evicts_the_cache_of_the_keys_it_deletes(monke
     a token hash that no longer exists until the TTLs expire. The FK cascade drops the mapping
     rows with the key rows, so the cache keys have to be read before the delete (LIT-5387)."""
     from litellm.proxy._types import DeleteOrganizationRequest, LitellmUserRoles, UserAPIKeyAuth
-    from litellm.proxy.auth.auth_checks import jwt_key_mapping_cache_key
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.management_endpoints.organization_endpoints import delete_organization
+    from litellm.redis.stores.auth_cache import AuthObject
 
     doomed_cache_keys: Final = (
-        "hashed-org-key",
-        jwt_key_mapping_cache_key("sub", "svc-account", None),
-        jwt_key_mapping_cache_key("sub", "svc-account", "https://issuer.example"),
+        AuthObject.virtual_key("hashed-org-key"),
+        AuthObject.jwt_key_mapping("sub", "svc-account", None),
+        AuthObject.jwt_key_mapping("sub", "svc-account", "https://issuer.example"),
     )
-    kept_cache_keys: Final = ("hashed-other-key", jwt_key_mapping_cache_key("sub", "other-account", None))
+    kept_cache_keys: Final = (
+        AuthObject.virtual_key("hashed-other-key"),
+        AuthObject.jwt_key_mapping("sub", "other-account", None),
+    )
     kept_row: Final = JWTMappingRow("hashed-other-key", "sub", "other-account")
     jwt_table: Final = CascadingJWTMappingTable(
         [

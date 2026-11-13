@@ -9,7 +9,6 @@ import jwt
 import pytest
 from fastapi import HTTPException
 
-from litellm.caching.caching import DualCache
 from litellm.proxy._types import IdJagRequestingApp, LiteLLM_JWTAuth, LiteLLMRoutes
 from litellm.proxy.auth.handle_jwt import (
     ID_JAG_TYP,
@@ -18,6 +17,7 @@ from litellm.proxy.auth.handle_jwt import (
     JWTHandler,
     jwks_unavailable_exception,
 )
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.mcp_server.gateway_dcr_flow import (
     AssertionIdentity,
     ConsentTeam,
@@ -406,7 +406,9 @@ async def test_the_deployment_gates_refuse_before_any_verification(unmet, descri
 def _running_jwt_handler(litellm_jwtauth: LiteLLM_JWTAuth | None) -> JWTHandler:
     handler: Final = JWTHandler()
     if litellm_jwtauth is not None:
-        handler.update_environment(prisma_client=None, user_api_key_cache=DualCache(), litellm_jwtauth=litellm_jwtauth)
+        handler.update_environment(
+            prisma_client=None, user_api_key_cache=UserApiKeyCache(), litellm_jwtauth=litellm_jwtauth
+        )
     return handler
 
 

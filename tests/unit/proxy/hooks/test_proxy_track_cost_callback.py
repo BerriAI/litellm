@@ -11,13 +11,14 @@ from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
 import httpx
 import pytest
 
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
 from fastapi import FastAPI, HTTPException
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.caching.dual_cache import DualCache
 from litellm.litellm_core_utils.batch_utils import POLLED_BATCH_COST_IS_FINAL_KWARG, POLLED_BATCH_ID_KWARG
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.litellm_core_utils.redact_messages import perform_redaction
@@ -2912,7 +2913,7 @@ async def test_async_post_call_failure_hook_records_recovered_partial_spend():
 def live_spend_counters(monkeypatch: pytest.MonkeyPatch) -> SpendCounterStore:
     counters: Final = SpendCounterStore(connect(None).spend_counters())
     monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_store", counters)
-    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", DualCache())
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
     return counters
@@ -3195,12 +3196,12 @@ async def test_a_failure_spend_row_lands_in_the_key_budget_window_as_of_the_requ
 
     window_queue: Final = proxy_logging_obj.db_spend_update_writer.window_spend_update_queue
     await window_queue.flush_and_get_aggregated_window_spend_transactions()
-    key_cache: Final = DualCache()
+    key_cache: Final = UserApiKeyCache()
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", key_cache)
     request_start: Final = datetime(2026, 10, 20, 12, 0, tzinfo=timezone.utc)
     reset_at: Final = request_start + timedelta(days=10)
     await key_cache.async_set_cache(
-        "hashed-key",
+        AuthObject.virtual_key("hashed-key"),
         UserAPIKeyAuth(
             token="hashed-key",
             budget_limits=[{"budget_duration": "30d", "max_budget": 100.0, "reset_at": reset_at.isoformat()}],

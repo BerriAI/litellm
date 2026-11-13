@@ -46,6 +46,7 @@ from starlette.testclient import WebSocketTestSession
 
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.proxy.proxy_server import (  # Replace with the actual module where your FastAPI router is defined
     app,
     initialize,
@@ -805,8 +806,8 @@ async def test_team_disable_guardrails(mock_acompletion, client_no_auth, monkeyp
         last_refreshed_at=time.time(),
         metadata={"guardrails": {"modify_guardrails": False}},
     )
-    user_api_key_cache.set_cache(key=hash_token(user_key), value=valid_token)
-    user_api_key_cache.set_cache(key="team_id:{}".format(_team_id), value=team_obj)
+    user_api_key_cache.set_cache(key=AuthObject.virtual_key(hash_token(user_key)), value=valid_token)
+    user_api_key_cache.set_cache(key=AuthObject.team(_team_id), value=team_obj)
 
     monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
     setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
@@ -840,7 +841,7 @@ def test_custom_logger_failure_handler(mock_acompletion, client_no_auth, monkeyp
     mock_api_key = "sk-my-test-key"
     cache_value = UserAPIKeyAuth(token=hash_token(mock_api_key), rpm_limit=rpm_limit)
 
-    user_api_key_cache.set_cache(key=hash_token(mock_api_key), value=cache_value)
+    user_api_key_cache.set_cache(key=AuthObject.virtual_key(hash_token(mock_api_key)), value=cache_value)
 
     mock_logger = CustomLogger()
     mock_logger_unit_tests = CompletionCustomHandler()
@@ -1416,34 +1417,26 @@ async def test_get_team_redis(client_no_auth):
     """
     Tests if get_team_object gets value from redis cache, if set
     """
-    from litellm.caching.caching import DualCache, RedisCache
     from litellm.proxy.auth.auth_checks import get_team_object
+    from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
 
     proxy_logging_obj: ProxyLogging = getattr(
         litellm.proxy.proxy_server, "proxy_logging_obj"
     )
+    cache, redis = shared_cache(FakeAuthCache(redis={"team_id:1234": {"team_id": "1234", "models": ["gpt-4o"]}}))
+    database: Final = AsyncMock()
 
-    redis_cache = RedisCache()
+    team: Final = await get_team_object(
+        team_id="1234",
+        user_api_key_cache=cache,
+        parent_otel_span=None,
+        proxy_logging_obj=proxy_logging_obj,
+        prisma_client=database,
+    )
 
-    from fastapi import HTTPException
-
-    with patch.object(
-        redis_cache,
-        "async_get_cache",
-        new=AsyncMock(),
-    ) as mock_client:
-        try:
-            await get_team_object(
-                team_id="1234",
-                user_api_key_cache=DualCache(redis_cache=redis_cache),
-                parent_otel_span=None,
-                proxy_logging_obj=proxy_logging_obj,
-                prisma_client=AsyncMock(),
-            )
-        except HTTPException:
-            pass
-
-        mock_client.assert_called_once()
+    assert (team.team_id, team.models) == ("1234", ["gpt-4o"])
+    assert ("GET", "team_id:1234") in redis.commands
+    database.db.litellm_teamtable.find_unique.assert_not_called()
 
 
 import random
@@ -1552,8 +1545,8 @@ async def test_create_team_member_add(prisma_client, new_member_method):  # noqa
         last_refreshed_at=time.time(),
         metadata={"guardrails": {"modify_guardrails": False}},
     )
-    # user_api_key_cache.set_cache(key=hash_token(user_key), value=valid_token)
-    user_api_key_cache.set_cache(key="team_id:{}".format(_team_id), value=team_obj)
+    # user_api_key_cache.set_cache(key=AuthObject.virtual_key(hash_token(user_key)), value=valid_token)
+    user_api_key_cache.set_cache(key=AuthObject.team(_team_id), value=team_obj)
 
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
     if new_member_method == "user_id":
@@ -1667,7 +1660,7 @@ async def test_create_team_member_add_team_admin_user_api_key_auth(
         team_member=Member(role=team_member_role, user_id=user),
         last_refreshed_at=time.time(),
     )
-    user_api_key_cache.set_cache(key=hash_token(user_key), value=valid_token)
+    user_api_key_cache.set_cache(key=AuthObject.virtual_key(hash_token(user_key)), value=valid_token)
 
     team_obj = LiteLLM_TeamTableCachedObj(
         team_id=_team_id,
@@ -1676,7 +1669,7 @@ async def test_create_team_member_add_team_admin_user_api_key_auth(
         metadata={"guardrails": {"modify_guardrails": False}},
     )
 
-    user_api_key_cache.set_cache(key="team_id:{}".format(_team_id), value=team_obj)
+    user_api_key_cache.set_cache(key=AuthObject.team(_team_id), value=team_obj)
 
     monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
 
@@ -1743,7 +1736,7 @@ async def test_create_team_member_add_team_admin(
         token=hash_token(user_key),
         last_refreshed_at=time.time(),
     )
-    user_api_key_cache.set_cache(key=hash_token(user_key), value=valid_token)
+    user_api_key_cache.set_cache(key=AuthObject.virtual_key(hash_token(user_key)), value=valid_token)
 
     team_obj = LiteLLM_TeamTableCachedObj(
         team_id=_team_id,
@@ -1753,7 +1746,7 @@ async def test_create_team_member_add_team_admin(
         metadata={"guardrails": {"modify_guardrails": False}},
     )
 
-    user_api_key_cache.set_cache(key="team_id:{}".format(_team_id), value=team_obj)
+    user_api_key_cache.set_cache(key=AuthObject.team(_team_id), value=team_obj)
 
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
     if new_member_method == "user_id":
@@ -2674,9 +2667,7 @@ async def test_proxy_model_group_info_rerank(prisma_client):  # noqa: F811  # py
 async def test_proxy_server_prisma_setup():
     from litellm.proxy.proxy_server import ProxyStartupEvent
     from litellm.proxy.utils import ProxyLogging
-    from litellm.caching import DualCache
-
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
 
     with patch.object(
         litellm.proxy.proxy_server, "PrismaClient", new=MagicMock()
@@ -2717,9 +2708,7 @@ async def test_proxy_server_prisma_setup_invalid_db(monkeypatch):
 
     from litellm.proxy.proxy_server import ProxyStartupEvent
     from litellm.proxy.utils import ProxyLogging
-    from litellm.caching import DualCache
-
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
     invalid_db_url = "postgresql://invalid:invalid@localhost:5432/nonexistent"
 
     monkeypatch.setenv("DATABASE_URL", invalid_db_url)

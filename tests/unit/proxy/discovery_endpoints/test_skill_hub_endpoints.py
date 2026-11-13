@@ -23,6 +23,7 @@ import litellm
 from litellm.caching.caching import DualCache
 from litellm.proxy import proxy_server
 from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.deps.repositories import get_plugin_upload_repository, get_skill_submission_repository
 from litellm.proxy.discovery_endpoints.agent_skills_archive import (
     MAX_ARCHIVE_ENTRIES,
@@ -31,6 +32,7 @@ from litellm.proxy.discovery_endpoints.agent_skills_archive import (
 from litellm.proxy.discovery_endpoints.skill_hub_endpoints import import_http_client
 from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
 from litellm.proxy.utils import InternalUsageCache
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.repositories.plugin_upload_repository import PluginUploadRepository
 from litellm.repositories.skill_submission_repository import SkillSubmissionRepository
 from tests._master_key import MASTER_KEY
@@ -128,14 +130,14 @@ async def hub(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[HubClient]:
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     monkeypatch.setattr(proxy_server, "master_key", MASTER_KEY)
     monkeypatch.setattr(proxy_server, "general_settings", {})
-    monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
     monkeypatch.setattr(litellm, "public_skills_index", True)
     monkeypatch.setenv("PROXY_BASE_URL", "http://test")
     monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
     for key, skills in ((GRANTED_KEY, [NAME]), (PLAIN_KEY, [])):
         proxy_server.user_api_key_cache.set_cache(
-            key=proxy_server.hash_token(key),
-            value=UserAPIKeyAuth(
+            AuthObject.virtual_key(proxy_server.hash_token(key)),
+            UserAPIKeyAuth(
                 token=proxy_server.hash_token(key),
                 user_role=proxy_server.LitellmUserRoles.INTERNAL_USER,
                 object_permission=LiteLLM_ObjectPermissionTable(object_permission_id=key, skills=skills),
@@ -147,8 +149,8 @@ async def hub(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[HubClient]:
         (VIEWER_KEY, proxy_server.LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY),
     ):
         proxy_server.user_api_key_cache.set_cache(
-            key=proxy_server.hash_token(key),
-            value=UserAPIKeyAuth(token=proxy_server.hash_token(key), user_role=role, user_id=key),
+            AuthObject.virtual_key(proxy_server.hash_token(key)),
+            UserAPIKeyAuth(token=proxy_server.hash_token(key), user_role=role, user_id=key),
         )
     async with (
         httpx.AsyncClient(transport=httpx.MockTransport(upstream), trust_env=False) as source_client,
@@ -477,8 +479,8 @@ async def test_publication_limit_is_shared_by_user_and_route_and_resets(
 ) -> None:
     for key in (PLAIN_KEY, GRANTED_KEY):
         proxy_server.user_api_key_cache.set_cache(
-            key=proxy_server.hash_token(key),
-            value=UserAPIKeyAuth(
+            AuthObject.virtual_key(proxy_server.hash_token(key)),
+            UserAPIKeyAuth(
                 token=proxy_server.hash_token(key), user_id=user_id,
                 user_role=role,
             ),

@@ -34,10 +34,9 @@ from litellm.proxy.common_utils.reset_budget_job import _model_access_group_coun
 from litellm.proxy.common_utils.user_api_key_cache import (
     NO_TEAM_MEMBERSHIP_SENTINEL,
     UserApiKeyCache,
-    model_access_group_registry_cache_key,
-    team_membership_reservation_cache_key,
 )
 from litellm.proxy.utils import ProxyLogging
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.spend_counters import model_access_group_counter
 
 TEAM_ID = "team-1"
@@ -73,10 +72,10 @@ async def _cache(
     org_models: tuple[str, ...] = (),
 ) -> UserApiKeyCache:
     cache = UserApiKeyCache()
-    await cache.async_set_cache(key=model_access_group_registry_cache_key(), value=budgeted_groups)
+    await cache.async_set_cache(key=AuthObject.model_access_group_registry(), value=budgeted_groups)
     if member_allowed_models:
         await cache.async_set_cache(
-            key=team_membership_reservation_cache_key(user_id=USER_ID, team_id=TEAM_ID),
+            key=AuthObject.team_membership_reservation(user_id=USER_ID, team_id=TEAM_ID),
             value=LiteLLM_TeamMembership(
                 user_id=USER_ID,
                 team_id=TEAM_ID,
@@ -87,12 +86,12 @@ async def _cache(
         )
     else:
         await cache.async_set_cache(
-            key=team_membership_reservation_cache_key(user_id=USER_ID, team_id=TEAM_ID),
+            key=AuthObject.team_membership_reservation(user_id=USER_ID, team_id=TEAM_ID),
             value=NO_TEAM_MEMBERSHIP_SENTINEL,
         )
     if org_models:
         await cache.async_set_cache(
-            key=f"org_id:{ORG_ID}",
+            key=AuthObject.org(ORG_ID),
             value=LiteLLM_OrganizationTable(
                 organization_id=ORG_ID,
                 budget_id="org-budget",

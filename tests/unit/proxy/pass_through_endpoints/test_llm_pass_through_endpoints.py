@@ -42,6 +42,8 @@ from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException, 
 from litellm.proxy._types import AwsErrorTypeProxyException, ProxyException
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_spend_logs_id
 from litellm.proxy.utils import ProxyLogging, hash_token
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.passthrough.main import raise_for_provider_status
 from litellm.llms.bedrock.common_utils import BedrockError
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
@@ -2114,7 +2116,7 @@ class TestBedrockPassthroughAwsErrors:
             ProxyBaseLLMRequestProcessing(data={}),
             error,
             UserAPIKeyAuth(api_key="test-key"),
-            ProxyLogging(user_api_key_cache=DualCache()),
+            ProxyLogging(user_api_key_cache=UserApiKeyCache()),
         )
 
     @pytest.mark.asyncio
@@ -7125,7 +7127,7 @@ class TestVertexAILiveWebsocketPassthrough:
         recorder: Final = _FailureRecorder()
         monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
         monkeypatch.setattr(
-            "litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache())
+            "litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=UserApiKeyCache())
         )
         monkeypatch.setattr(litellm, "callbacks", [recorder])
         monkeypatch.setattr(passthrough_module.passthrough_endpoint_router, "default_vertex_config", None)
@@ -9547,10 +9549,9 @@ class TestAzureSpeechProxyRoutePathTraversal:
 
 
 def _azure_speech_real_auth_attrs() -> dict[str, object]:
-    from litellm.caching.caching import DualCache
     from litellm.proxy.utils import ProxyLogging
 
-    user_api_key_cache: Final = DualCache()
+    user_api_key_cache: Final = UserApiKeyCache()
     return {
         "prisma_client": None,
         "user_api_key_cache": user_api_key_cache,
@@ -9999,7 +10000,9 @@ class TestTypeSafePassthroughRoute:
         cache: Final = DualCache()
         limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(cache))
         monkeypatch.setattr(litellm, "callbacks", list((limiter, PROXY_CacheControlCheck())))
-        monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=cache))
+        monkeypatch.setattr(
+            proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=UserApiKeyCache(), hook_cache=cache)
+        )
         monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-test-key")
         monkeypatch.setenv("OPENROUTER_API_BASE", "https://typesafe.example/base")
         monkeypatch.setenv("LAYA_API_BASE", "https://typesafe.example/base")
@@ -11811,9 +11814,10 @@ class TestOpenSearchProxyRoute:
 
         key: Final = "sk-opensearch-model-limited-writer"
         grant: Final = {"allowed_vector_store_indexes": [{"index_name": "docs", "index_permissions": ["write"]}]}
-        cache: Final = DualCache()
+        cache: Final = UserApiKeyCache()
         cache.set_cache(
-            key=hash_token(key), value=UserAPIKeyAuth(token=hash_token(key), models=["gpt-x"], metadata=grant)
+            AuthObject.virtual_key(hash_token(key)),
+            UserAPIKeyAuth(token=hash_token(key), models=["gpt-x"], metadata=grant),
         )
         monkeypatch.setattr(proxy_server, "master_key", SHARED_MASTER_KEY)
         monkeypatch.setattr(proxy_server, "prisma_client", "test-database")

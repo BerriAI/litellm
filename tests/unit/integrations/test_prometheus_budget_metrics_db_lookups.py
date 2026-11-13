@@ -15,10 +15,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from prometheus_client import REGISTRY
 
-from litellm.caching.dual_cache import DualCache
-from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.redis.stores.auth_cache import AuthObject
 
 
 @pytest.fixture(autouse=True)
@@ -47,7 +47,7 @@ def prometheus_logger():
 async def test_assemble_key_object_does_not_query_db_on_cache_miss(prometheus_logger):
     mock_prisma = MagicMock()
     mock_prisma.get_data = AsyncMock()
-    cache = DualCache(in_memory_cache=InMemoryCache())
+    cache = UserApiKeyCache()
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
@@ -74,8 +74,8 @@ async def test_assemble_key_object_reads_budget_reset_at_from_cache(prometheus_l
 
     mock_prisma = MagicMock()
     mock_prisma.get_data = AsyncMock()
-    cache = DualCache(in_memory_cache=InMemoryCache())
-    await cache.async_set_cache(key=hashed_token, value=cached_key)
+    cache = UserApiKeyCache()
+    await cache.async_set_cache(AuthObject.virtual_key(hashed_token), cached_key)
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),

@@ -832,13 +832,13 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         """
         from litellm._logging import verbose_proxy_logger
         from litellm.proxy.auth.auth_checks import get_user_object
-        from litellm.proxy.proxy_server import prisma_client
+        from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
         try:
             _user_id_rate_limits: Final = await get_user_object(
                 user_id=user_id,
                 prisma_client=prisma_client,
-                user_api_key_cache=self.internal_usage_cache.dual_cache,
+                user_api_key_cache=user_api_key_cache,
                 user_id_upsert=False,
                 parent_otel_span=user_api_key_dict.parent_otel_span,
                 proxy_logging_obj=None,

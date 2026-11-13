@@ -602,7 +602,8 @@ async def test_vector_store_file_list_authorizes_model_query_param_before_creden
 async def test_vector_store_file_list_model_query_param_enforces_project_model_grant():
     from litellm.proxy._types import LiteLLM_ProjectTableCachedObj, LiteLLM_TeamTableCachedObj
     from litellm.proxy.auth.auth_checks import ProxyException
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, project_cache_key
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.redis.stores.auth_cache import AuthObject
 
     request = MagicMock(spec=Request)
     request.query_params = {"model": "team-openai"}
@@ -612,11 +613,11 @@ async def test_vector_store_file_list_model_query_param_enforces_project_model_g
     llm_router.model_group_alias = {}
     cache = UserApiKeyCache()
     await cache.async_set_cache(
-        key="team_id:team-123",
+        key=AuthObject.team("team-123"),
         value=LiteLLM_TeamTableCachedObj(team_id="team-123", models=["team-openai"]),
     )
     await cache.async_set_cache(
-        key=project_cache_key("proj-1"),
+        key=AuthObject.project("proj-1"),
         value=LiteLLM_ProjectTableCachedObj(project_id="proj-1", models=["other-deployment"]),
     )
     user_api_key_dict = UserAPIKeyAuth(team_id="team-123", team_models=["team-openai"], project_id="proj-1")

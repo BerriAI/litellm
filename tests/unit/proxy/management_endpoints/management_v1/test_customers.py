@@ -6,11 +6,11 @@ from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.auth.customer_hierarchy_auth import customer_member_cache_key
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.list_api.common import ManagementProblem, problem_response
 from litellm.proxy.management_endpoints.management_v1 import router
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.proxy.management_endpoints.management_v1.customers import get_customer_hierarchy, get_user_api_key_cache
 from litellm.proxy.management_helpers.customer_hierarchy import CustomerHierarchy
 from tests.unit.proxy.management_helpers.test_customer_hierarchy import NOW, Database
@@ -594,7 +594,7 @@ def test_budget_edits_at_every_level_drop_the_cached_member_hierarchy() -> None:
         ).status_code
         == 201
     )
-    cache_key: Final = customer_member_cache_key("m")
+    cache_key: Final = AuthObject.customer_member("m")
     edits: Final = (
         ("/management/v1/customer_members/m", {"budget_override": {"max_budget": 1}}),
         ("/management/v1/customer_teams/team", {"budget": {"max_budget": 2}}),

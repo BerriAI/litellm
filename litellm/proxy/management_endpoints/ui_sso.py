@@ -149,6 +149,7 @@ from litellm.proxy.utils import (
     get_custom_url,
     get_server_root_path,
 )
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import SSOConfigRepository
@@ -2189,11 +2190,12 @@ async def _sync_user_role_from_jwt_role_map(
             data={"user_role": mapped_role.value},
         )
         user_info.user_role = mapped_role.value
-        await user_api_key_cache.async_set_cache(
-            key=user_info.user_id,
-            value=user_info,
-            model_type=LiteLLM_UserTable,
-        )
+        if user_info.user_id is not None:
+            await user_api_key_cache.async_set_cache(
+                key=AuthObject.user(user_info.user_id),
+                value=user_info,
+                model_type=LiteLLM_UserTable,
+            )
 
 
 def apply_user_info_values_to_sso_user_defined_values(

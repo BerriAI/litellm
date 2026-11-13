@@ -4864,12 +4864,12 @@ class PrometheusLogger(CustomLogger):
         if not end_user_id:
             return
 
-        from litellm.proxy.common_utils.user_api_key_cache import end_user_cache_key
         from litellm.proxy.proxy_server import user_api_key_cache
+        from litellm.redis.stores.auth_cache import AuthObject
 
         try:
             cached_customer: Final = await user_api_key_cache.async_get_cache(
-                key=end_user_cache_key(end_user_id),
+                key=AuthObject.end_user(end_user_id),
                 model_type=LiteLLM_EndUserTable,
             )
         except Exception as e:

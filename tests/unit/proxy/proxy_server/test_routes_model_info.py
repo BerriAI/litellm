@@ -1616,6 +1616,7 @@ def access_group_team(monkeypatch, mock_prisma):
     from litellm.models.access_group import LiteLLM_AccessGroupTable
     from litellm.models.team import LiteLLM_TeamTableCachedObj
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.redis.stores.auth_cache import AuthObject
 
     router: Final = litellm.Router(
         model_list=[
@@ -1627,7 +1628,7 @@ def access_group_team(monkeypatch, mock_prisma):
 
     def seed_team(models: list[str]) -> None:
         cache.set_cache(
-            key=f"team_id:{_ACCESS_GROUP_TEAM_ID}",
+            key=AuthObject.team(_ACCESS_GROUP_TEAM_ID),
             value=LiteLLM_TeamTableCachedObj(
                 team_id=_ACCESS_GROUP_TEAM_ID, models=models, access_group_ids=[_ACCESS_GROUP_ID]
             ),
@@ -1635,7 +1636,7 @@ def access_group_team(monkeypatch, mock_prisma):
         )
 
     cache.set_cache(
-        key=f"access_group_id:{_ACCESS_GROUP_ID}",
+        key=AuthObject.access_group(_ACCESS_GROUP_ID),
         value=LiteLLM_AccessGroupTable(
             access_group_id=_ACCESS_GROUP_ID,
             access_group_name="group-models",

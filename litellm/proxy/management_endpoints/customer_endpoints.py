@@ -31,10 +31,6 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.user_api_key_cache import (
-    end_user_cache_key,
-    end_user_restricted_registry_cache_key,
-)
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity, unless_database_fails
 from litellm.proxy.management_endpoints.common_utils import validate_budget_duration
 from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
@@ -44,6 +40,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: 
 )
 from litellm.proxy.spend_tracking.committed_spend import drop_committed_spend
 from litellm.proxy.utils import handle_exception_on_proxy
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.spend_counters import end_user_counter
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.chunked_in import find_many_in
@@ -140,7 +137,7 @@ async def _evict_end_user_cache_keys(cache_keys: Sequence[str]) -> None:
 
 def _end_user_cache_keys(user_ids: Sequence[str]) -> tuple[str, ...]:
     """The per-id entries plus the registry, which any restriction change can move ids in or out of."""
-    return (*(end_user_cache_key(user_id) for user_id in user_ids), end_user_restricted_registry_cache_key())
+    return (*(AuthObject.end_user(user_id).key for user_id in user_ids), AuthObject.end_user_restricted_registry().key)
 
 
 def _to_customer_response(record: BaseModel) -> CustomerResponse:

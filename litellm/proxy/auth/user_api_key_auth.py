@@ -32,7 +32,6 @@ from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm.constants import (
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
-    GLOBAL_PROXY_SPEND_CACHE_KEY,
     INVALID_VIRTUAL_KEY_ERROR_MARKER,
     INVALID_VIRTUAL_KEY_ERROR_MESSAGE,
     LITELLM_PROXY_BUDGET_NAME,
@@ -89,7 +88,6 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     is_user_proxy_admin,
     is_valid_fallback_model,
     is_video_retrieval_request,
-    jwt_key_mapping_cache_key,
     key_access_group_grants_model,
     key_model_aliases_for_auth_check,
     model_max_budget_of,
@@ -173,13 +171,7 @@ from litellm.proxy.common_utils.realtime_utils import (  # noqa: F401  # legacy 
     _realtime_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     realtime_request_body,
 )
-from litellm.proxy.common_utils.user_api_key_cache import (
-    UserApiKeyCache,
-    end_user_cache_key,
-    end_user_restricted_registry_cache_key,
-    model_access_group_registry_cache_key,
-    team_membership_auth_cache_key,
-)
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.db_lookup_gate import bounded_db_lookup
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
@@ -207,6 +199,7 @@ from litellm.proxy.utils import (
     ProxyLogging,
     normalize_route_for_root_path,
 )
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.spend_counters import (
     SpendCounterStore,
     team_member_counter,
@@ -576,7 +569,7 @@ class _TokenTeamModels(Protocol):
 
 
 class _RawCacheRead(Protocol):
-    async def async_get_cache(self, *, key: str) -> object: ...
+    async def async_get_cache(self, *, key: AuthObject) -> object: ...
 
 
 def _raw_cache(cache: _RawCacheRead) -> _RawCacheRead:
@@ -1530,7 +1523,7 @@ _global_spend_coordinator: Final = EventDrivenCacheCoordinator(log_prefix="[GLOB
 
 
 async def fetch_global_spend_with_event_coordination(
-    cache_key: str,
+    cache_key: AuthObject,
     user_api_key_cache: UserApiKeyCache,
     prisma_client: PrismaClient,
 ) -> float | None:
@@ -1551,7 +1544,7 @@ async def fetch_global_spend_with_event_coordination(
 
     return await _global_spend_coordinator.get_or_load(
         cache_key=cache_key,
-        cache=user_api_key_cache,  # pyright: ignore[reportArgumentType]
+        cache=user_api_key_cache,
         load_fn=_load_global_spend,
     )
 
@@ -1569,7 +1562,7 @@ async def get_global_proxy_spend(
     global_proxy_spend = None
     if litellm.max_budget > 0 and prisma_client is not None:  # user set proxy max budget
         # Use event-driven coordination to prevent cache stampede
-        cache_key: Final = GLOBAL_PROXY_SPEND_CACHE_KEY
+        cache_key: Final = AuthObject.global_proxy_spend()
         global_proxy_spend = (  # rebind-ok: pre-existing rebinding on a rename-only line
             await fetch_global_spend_with_event_coordination(
                 cache_key=cache_key,
@@ -1743,7 +1736,7 @@ class _PendingAutoRegister(NamedTuple):
 
     claim_field: str
     claim_value: str
-    cache_key: str
+    cache_key: AuthObject
     jwt_issuer: str | None = None
     behavior: UnregisteredJWTClientBehavior = UnregisteredJWTClientBehavior.AUTO_REGISTER
 
@@ -1772,7 +1765,7 @@ async def _auto_register_jwt_mapping(
     user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Span | None,
     proxy_logging_obj: ProxyLogging,
-    cache_key: str,
+    cache_key: AuthObject,
     jwt_issuer: str | None = None,
     team_id: str | None = None,
     user_id: str | None = None,
@@ -1941,7 +1934,7 @@ async def _lookup_jwt_mapping_token_hash(
     virtual_key_claim_field: str,
     claim_value: str,
     normalized_issuer: str | None,
-    cache_key: str,
+    cache_key: AuthObject,
     ttl: float,
 ) -> str | None:
     issuer_scoped: Final = await get_jwt_key_mapping_object(
@@ -1957,7 +1950,7 @@ async def _lookup_jwt_mapping_token_hash(
         return None
     # Another issuer may have already resolved (and cached) this same
     # global mapping -- check its cache entry before re-querying the DB.
-    global_cache_key: Final = jwt_key_mapping_cache_key(virtual_key_claim_field, claim_value)
+    global_cache_key: Final = AuthObject.jwt_key_mapping(virtual_key_claim_field, claim_value)
     cached_global: Final = await _raw_cache(user_api_key_cache).async_get_cache(key=global_cache_key)
     if isinstance(cached_global, str) and cached_global != "__NO_MAPPING__":
         return cached_global
@@ -2031,7 +2024,7 @@ async def _resolve_jwt_to_virtual_key(
             )
         return None
 
-    cache_key: Final = jwt_key_mapping_cache_key(virtual_key_claim_field, str(claim_value), normalized_issuer)
+    cache_key: Final = AuthObject.jwt_key_mapping(virtual_key_claim_field, str(claim_value), normalized_issuer)
     raw_cached_mapping: Final = await user_api_key_cache.async_get_cache(cache_key)
     sentinel_written_by_this_policy: Final = behavior == UnregisteredJWTClientBehavior.AUTO_REGISTER
     cached_mapping: Final = (
@@ -2066,7 +2059,7 @@ async def _resolve_jwt_to_virtual_key(
                         "Configure a database or change unregistered_jwt_client_behavior."
                     ),
                 )
-            await user_api_key_cache.async_delete_cache(cache_key)
+            await user_api_key_cache.async_delete_cache(cache_key.key)
             return _PendingAutoRegister(
                 claim_field=virtual_key_claim_field,
                 claim_value=str(claim_value),
@@ -3375,7 +3368,7 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
             _user_id: Final = valid_token.user_id
             _team_id: Final = valid_token.team_id
             if prisma_client is not None and _user_id is not None and _team_id is not None:
-                _cache_key: Final = team_membership_auth_cache_key(team_id=_team_id, user_id=_user_id)
+                _cache_key: Final = AuthObject.team_membership(team_id=_team_id, user_id=_user_id)
 
                 team_member_info = await user_api_key_cache.async_get_cache(
                     key=_cache_key,
@@ -3602,7 +3595,7 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
 
         global_proxy_spend = None
         if litellm.max_budget > 0 and prisma_client is not None:  # user set proxy max budget
-            cache_key: Final = GLOBAL_PROXY_SPEND_CACHE_KEY
+            cache_key: Final = AuthObject.global_proxy_spend()
             with tracer.trace("litellm.proxy.auth.get_global_proxy_spend"):
                 global_proxy_spend = await fetch_global_spend_with_event_coordination(  # rebind-ok: pre-existing rebinding on a rename-only line
                     cache_key=cache_key,
@@ -4678,16 +4671,16 @@ def _spend_counter_store() -> SpendCounterStore:
     return spend_counter_store
 
 
-def _identity_cache_keys(api_key: str, *, end_user_id: str | None, key_is_resolved: bool) -> tuple[str, ...]:
+def _identity_cache_keys(api_key: str, *, end_user_id: str | None, key_is_resolved: bool) -> tuple[AuthObject, ...]:
     """Cache keys auth reads before it knows the key's owners, all known from the request alone. A key object is
     cached under the hash of the bearer, so the bearer itself never reaches Redis."""
     return tuple(
         key
         for key in (
-            None if key_is_resolved else hash_token(api_key),
-            None if not end_user_id else end_user_cache_key(end_user_id),
-            None if not end_user_id else end_user_restricted_registry_cache_key(),
-            model_access_group_registry_cache_key(),
+            None if key_is_resolved else AuthObject.virtual_key(hash_token(api_key)),
+            None if not end_user_id else AuthObject.end_user(end_user_id),
+            None if not end_user_id else AuthObject.end_user_restricted_registry(),
+            AuthObject.model_access_group_registry(),
         )
         if key is not None
     )

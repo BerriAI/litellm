@@ -33,6 +33,7 @@ from litellm.proxy.proxy_server import (
     hash_token,
     initialize,
 )
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.types.decisions import DecisionsRequestBody, OpenAIDecisionRequestBody
 from litellm.types.extraction import ExtractionRequestBody
 from litellm.types.guardrails import GuardrailEventHooks
@@ -1699,7 +1700,8 @@ def test_a_compressed_body_naming_a_model_outside_the_key_is_refused_by_auth(
     user_key: Final = "sk-decider-only"
     user_api_key_cache: Final = UserApiKeyCache()
     user_api_key_cache.set_cache(
-        key=hash_token(user_key), value=UserAPIKeyAuth(token=hash_token(user_key), models=["decider"])
+        key=AuthObject.virtual_key(hash_token(user_key)),
+        value=UserAPIKeyAuth(token=hash_token(user_key), models=["decider"]),
     )
     monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
     monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)

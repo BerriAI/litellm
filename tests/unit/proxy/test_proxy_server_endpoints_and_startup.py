@@ -55,12 +55,15 @@ from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import Wind
 from litellm.proxy.hooks.parallel_request_limiter_v3 import RequestRateLimiterStash
 from litellm.proxy.proxy_server import app, aws_error_type_exception_handler, initialize, openai_exception_handler
 from litellm.litellm_core_utils.model_cost_table import publish
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.rate_limits import RateLimitScope, RateLimitStore
 from litellm.redis.stores.spend_counters import SpendCounterStore
 from litellm.rust_bridge._native import NativeRedisStoreError
 from tests._master_key import MASTER_KEY
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
+from tests.unit.redis.stores.auth_cache_double import shared_cache
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 PUBLICLY_KNOWN_KEY: Final = "sk-" + "1234"
@@ -6500,11 +6503,10 @@ async def test_tag_cache_update_called():
     """
     Test that update_cache updates tag cache when tags are provided.
     """
-    from litellm.caching.in_memory_cache import InMemoryCache
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
-    cache = UserApiKeyCache(in_memory_cache=InMemoryCache())
-    cache.in_memory_cache.set_cache("tag:test-tag", {"tag_name": "test-tag", "spend": 10.0})
+    cache = UserApiKeyCache()
+    cache.set_local(AuthObject.tag("test-tag"), {"tag_name": "test-tag", "spend": 10.0}, None)
 
     await litellm.proxy.proxy_server.update_cache(
         token=None,
@@ -6517,7 +6519,7 @@ async def test_tag_cache_update_called():
         cache=cache,
     )
 
-    assert cache.in_memory_cache.get_cache("tag:test-tag")["spend"] == 15.0
+    assert cache.get_local(AuthObject.tag("test-tag"))["spend"] == 15.0
 
 
 @pytest.mark.asyncio
@@ -6525,12 +6527,11 @@ async def test_tag_cache_update_multiple_tags():
     """
     Test that multiple tags are updated in cache.
     """
-    from litellm.caching.in_memory_cache import InMemoryCache
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
-    cache = UserApiKeyCache(in_memory_cache=InMemoryCache())
-    cache.in_memory_cache.set_cache("tag:tag1", {"tag_name": "tag1", "spend": 10.0})
-    cache.in_memory_cache.set_cache("tag:tag2", {"tag_name": "tag2", "spend": 20.0})
+    cache = UserApiKeyCache()
+    cache.set_local(AuthObject.tag("tag1"), {"tag_name": "tag1", "spend": 10.0}, None)
+    cache.set_local(AuthObject.tag("tag2"), {"tag_name": "tag2", "spend": 20.0}, None)
 
     await litellm.proxy.proxy_server.update_cache(
         token=None,
@@ -6543,8 +6544,8 @@ async def test_tag_cache_update_multiple_tags():
         cache=cache,
     )
 
-    assert cache.in_memory_cache.get_cache("tag:tag1")["spend"] == 15.0
-    assert cache.in_memory_cache.get_cache("tag:tag2")["spend"] == 25.0
+    assert cache.get_local(AuthObject.tag("tag1"))["spend"] == 15.0
+    assert cache.get_local(AuthObject.tag("tag2"))["spend"] == 25.0
 
 
 @pytest.mark.asyncio
@@ -6555,11 +6556,8 @@ async def test_update_cache_pipeline_honors_user_api_key_cache_ttl():
     a hardcoded 60s, otherwise every priced request resets an active key's cache
     entry back to 60s and the configured TTL is never observed.
     """
-    from litellm.caching.in_memory_cache import InMemoryCache
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-
-    cache = UserApiKeyCache(in_memory_cache=InMemoryCache(clock=lambda: 1000.0), default_in_memory_ttl=300)
-    cache.in_memory_cache.cache_dict["tag:active-tag"] = {"tag_name": "active-tag", "spend": 1.0}
+    cache, fake = shared_cache(default_in_memory_ttl=300)
+    cache.set_local(AuthObject.tag("active-tag"), {"tag_name": "active-tag", "spend": 1.0}, 60)
 
     await litellm.proxy.proxy_server.update_cache(
         token=None,
@@ -6572,8 +6570,10 @@ async def test_update_cache_pipeline_honors_user_api_key_cache_ttl():
         cache=cache,
     )
 
-    assert cache.in_memory_cache.ttl_dict["tag:active-tag"] == 1300.0
-    assert cache.in_memory_cache.get_cache("tag:active-tag")["spend"] == 6.0
+    stored, ttl = fake.memory["tag:active-tag"]
+    assert ttl == 300
+    assert stored["spend"] == 6.0
+    assert fake.commands == []
 
 
 @pytest.mark.asyncio
@@ -6587,43 +6587,30 @@ async def test_spend_tracking_never_writes_the_auth_object_back():
     Spend is tracked through the spend:key:* counters, so the auth object is
     only ever written by the DB-load paths.
     """
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    cache, fake = shared_cache()
+    hashed_token: Final = "spend-tracking-no-writeback-token"
+    await cache.async_set_cache(
+        key=AuthObject.virtual_key(hashed_token),
+        value=UserAPIKeyAuth(token=hashed_token, spend=1.0),
+        model_type=UserAPIKeyAuth,
+    )
+    seeded_commands: Final = len(fake.commands)
 
-    original_cache = litellm.proxy.proxy_server.user_api_key_cache
-    cache = UserApiKeyCache()
-    setattr(litellm.proxy.proxy_server, "user_api_key_cache", cache)
-    try:
-        hashed_token = "spend-tracking-no-writeback-token"
-        await cache.async_set_cache(
-            key=hashed_token,
-            value=UserAPIKeyAuth(token=hashed_token, spend=1.0),
-            model_type=UserAPIKeyAuth,
+    with patch.object(litellm.proxy.proxy_server, "user_api_key_cache", cache):
+        await litellm.proxy.proxy_server.update_cache(
+            token=hashed_token,
+            user_id=None,
+            end_user_id=None,
+            team_id=None,
+            response_cost=5.0,
+            parent_otel_span=None,
         )
-        with (
-            patch.object(cache, "async_set_cache_pipeline", new=AsyncMock()) as mock_pipeline,
-            patch.object(cache, "async_set_cache", new=AsyncMock()) as mock_set,
-        ):
-            await litellm.proxy.proxy_server.update_cache(
-                token=hashed_token,
-                user_id=None,
-                end_user_id=None,
-                team_id=None,
-                response_cost=5.0,
-                parent_otel_span=None,
-            )
-            pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
-            if pending:
-                await asyncio.wait(pending, timeout=5)
+        pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        if pending:
+            await asyncio.wait(pending, timeout=5)
 
-        key_pipeline_writes = [
-            call
-            for call in mock_pipeline.call_args_list
-            if any(k == hashed_token for k, _ in call.kwargs["cache_list"])
-        ]
-        assert key_pipeline_writes == []
-        mock_set.assert_not_called()
-    finally:
-        setattr(litellm.proxy.proxy_server, "user_api_key_cache", original_cache)
+    assert [command for command in fake.commands[seeded_commands:] if command[0] != "GET"] == []
+    assert cache.get_local(AuthObject.virtual_key(hashed_token))["spend"] == 1.0
 
 
 @pytest.mark.asyncio
@@ -8545,9 +8532,9 @@ async def test_update_general_settings_db_pass_through_endpoint_overrides_yaml_e
         assert locked_down.value.code == "401"
 
 
-def _fill_user_api_key_cache(cache: DualCache, count: int) -> None:
+def _fill_user_api_key_cache(cache: UserApiKeyCache, count: int) -> None:
     for index in range(count):
-        cache.set_cache(key=f"key-{index}", value={"token": f"key-{index}"}, local_only=True)
+        cache.set_cache(key=AuthObject.virtual_key(f"key-{index}"), value={"token": f"key-{index}"}, local_only=True)
 
 
 @pytest.mark.asyncio
@@ -8565,7 +8552,7 @@ async def test_update_general_settings_user_api_key_cache_max_size_resizes_the_r
     assert proxy_server_module.general_settings["user_api_key_cache_max_size"] == 300
 
     _fill_user_api_key_cache(cache, 250)
-    assert cache.get_cache(key="key-0", local_only=True) == {"token": "key-0"}
+    assert cache.get_cache(key=AuthObject.virtual_key("key-0"), local_only=True) == {"token": "key-0"}
 
 
 @pytest.mark.asyncio
@@ -8585,7 +8572,7 @@ async def test_update_general_settings_clearing_user_api_key_cache_max_size_rest
     assert "user_api_key_cache_max_size" not in proxy_server_module.general_settings
 
     _fill_user_api_key_cache(cache, 201)
-    assert cache.get_cache(key="key-0", local_only=True) is None
+    assert cache.get_cache(key=AuthObject.virtual_key("key-0"), local_only=True) is None
 
 
 @pytest.mark.asyncio
@@ -8605,7 +8592,7 @@ async def test_update_general_settings_ignores_an_invalid_user_api_key_cache_max
     assert "user_api_key_cache_max_size" not in proxy_server_module.general_settings
 
     _fill_user_api_key_cache(cache, 250)
-    assert cache.get_cache(key="key-0", local_only=True) == {"token": "key-0"}
+    assert cache.get_cache(key=AuthObject.virtual_key("key-0"), local_only=True) == {"token": "key-0"}
 
 
 @pytest.mark.asyncio
@@ -8656,7 +8643,7 @@ async def test_update_general_settings_user_api_key_cache_max_size_yaml_wins(mon
     assert proxy_server_module.general_settings["user_api_key_cache_max_size"] == 300
 
     _fill_user_api_key_cache(cache, 250)
-    assert cache.get_cache(key="key-0", local_only=True) == {"token": "key-0"}
+    assert cache.get_cache(key=AuthObject.virtual_key("key-0"), local_only=True) == {"token": "key-0"}
 
 
 @pytest.mark.asyncio
@@ -8976,10 +8963,10 @@ async def test_increment_spend_counters_initializes_and_increments():
     Uses a pre-hashed token to match production: metadata["user_api_key"]
     is always hashed by the auth flow before reaching the cost callback.
     """
-    from litellm.caching.dual_cache import DualCache
     from litellm.proxy._types import LiteLLM_VerificationTokenView, hash_token
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
-    key_cache = DualCache()
+    key_cache = UserApiKeyCache()
     counter_cache = SpendCounterStore(connect(None).spend_counters())
 
     # In production, the auth flow hashes the raw key before it reaches
@@ -8992,7 +8979,12 @@ async def test_increment_spend_counters_initializes_and_increments():
         spend=5.0,
         max_budget=10.0,
     )
-    key_cache.in_memory_cache.set_cache(key=hashed_token, value=cached_key)
+    key_cache.set_cache(
+        key=AuthObject.virtual_key(hashed_token),
+        value=cached_key,
+        local_only=True,
+        model_type=LiteLLM_VerificationTokenView,
+    )
 
     import litellm.proxy.proxy_server as ps
 
@@ -9034,19 +9026,20 @@ async def test_increment_spend_counters_initializes_and_increments():
 @pytest.mark.asyncio
 async def test_increment_spend_counters_team_and_member():
     """Counter should track team and team member spend separately."""
-    from litellm.caching.dual_cache import DualCache
     from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
-    key_cache = DualCache()
+    key_cache = UserApiKeyCache()
     counter_cache = SpendCounterStore(connect(None).spend_counters())
 
     # Cached team object
     team_obj = LiteLLM_TeamTable(team_id="team-1", spend=2.0)
-    key_cache.in_memory_cache.set_cache(key="team_id:team-1", value=team_obj)
+    key_cache.set_cache(key=AuthObject.team("team-1"), value=team_obj, local_only=True, model_type=LiteLLM_TeamTable)
 
     # Cached team membership
-    key_cache.in_memory_cache.set_cache(
-        key="team_membership:user-1:team-1",
+    key_cache.set_cache(
+        key=AuthObject.team_membership_reservation(user_id="user-1", team_id="team-1"),
+        local_only=True,
         value={"user_id": "user-1", "team_id": "team-1", "spend": 1.0},
     )
 
@@ -9083,24 +9076,28 @@ async def test_prepare_spend_counter_increment_reseeds_from_db_on_counter_miss(m
     authoritative spend from the DB (not a stale cache), so the next
     increment continues from the correct base value."""
     import litellm.proxy.proxy_server as ps
-    from litellm.caching.dual_cache import DualCache
+    from litellm.models.team import LiteLLM_TeamTableCachedObj
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     spend = FakeSpendCounters()
     db_row = MagicMock()
     db_row.spend = 42.0
     fake_prisma = MagicMock()
     fake_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=db_row)
-    stale_cache = DualCache()
-    stale_team = MagicMock()
-    stale_team.spend = 10.0
-    stale_cache.in_memory_cache.set_cache(key="team_id:team-9", value=stale_team)
+    stale_cache = UserApiKeyCache()
+    stale_cache.set_cache(
+        key=AuthObject.team("team-9"),
+        value=LiteLLM_TeamTableCachedObj(team_id="team-9", spend=10.0),
+        local_only=True,
+        model_type=LiteLLM_TeamTableCachedObj,
+    )
     monkeypatch.setattr(ps, "user_api_key_cache", stale_cache)
     monkeypatch.setattr(ps, "spend_counter_store", spend.store())
     monkeypatch.setattr(ps, "prisma_client", fake_prisma)
 
     pending = await ps._prepare_spend_counter_increment(
         counter_key="spend:team:team-9",
-        source_cache_key="team_id:team-9",
+        source_cache_key=AuthObject.team("team-9"),
         increment=1.5,
     )
     await ps._apply_spend_counter_increments(pending=(pending,))
@@ -9274,7 +9271,6 @@ async def test_window_spend_counter_reseeds_from_spend_logs_on_counter_miss():
 @pytest.mark.asyncio
 async def test_init_spend_counter_redis_clean_miss_skips_stale_in_memory(monkeypatch):
     import litellm.proxy.proxy_server as ps
-    from litellm.caching.dual_cache import DualCache
 
     counter_key = "spend:team:team-stale-local"
     spend = FakeSpendCounters(memory={counter_key: 10.0})
@@ -9284,11 +9280,11 @@ async def test_init_spend_counter_redis_clean_miss_skips_stale_in_memory(monkeyp
     fake_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=db_row)
     monkeypatch.setattr(ps, "spend_counter_store", spend.store())
     monkeypatch.setattr(ps, "prisma_client", fake_prisma)
-    monkeypatch.setattr(ps, "user_api_key_cache", DualCache())
+    monkeypatch.setattr(ps, "user_api_key_cache", UserApiKeyCache())
 
     pending = await ps._prepare_spend_counter_increment(
         counter_key=counter_key,
-        source_cache_key="team_id:team-stale-local",
+        source_cache_key=AuthObject.team("team-stale-local"),
         increment=1.5,
     )
     await ps._apply_spend_counter_increments(pending=(pending,))
@@ -9433,7 +9429,6 @@ async def test_window_spend_counter_does_not_seed_zero_when_db_unavailable():
 @pytest.mark.asyncio
 async def test_increment_spend_counters_finalizes_after_unreserved_increments(monkeypatch):
     import litellm.proxy.proxy_server as ps
-    from litellm.caching.dual_cache import DualCache
 
     counter_cache = SpendCounterStore(connect(None).spend_counters())
     counter_cache.set_local("spend:key:key-finalize-after-increments", 0.5)
@@ -9458,7 +9453,7 @@ async def test_increment_spend_counters_finalizes_after_unreserved_increments(mo
         return ps.PendingSpendIncrement(counter_key=kwargs["counter_key"], increment=kwargs["increment"])
 
     monkeypatch.setattr(ps, "spend_counter_store", counter_cache)
-    monkeypatch.setattr(ps, "user_api_key_cache", DualCache())
+    monkeypatch.setattr(ps, "user_api_key_cache", UserApiKeyCache())
     with patch(
         "litellm.proxy.proxy_server._prepare_spend_counter_increment",
         new=AsyncMock(side_effect=assert_reservation_not_finalized_yet),
@@ -9740,7 +9735,6 @@ async def test_concurrent_read_and_write_paths_share_one_db_query():
     """
     import asyncio as _asyncio
 
-    from litellm.caching.dual_cache import DualCache
     from litellm.proxy.proxy_server import (
         _prepare_spend_counter_increment,
         get_current_spend,
@@ -9792,13 +9786,13 @@ async def test_concurrent_read_and_write_paths_share_one_db_query():
     )
     ps.spend_counter_store = counter_cache
     ps.prisma_client = fake_prisma
-    ps.user_api_key_cache = DualCache()
+    ps.user_api_key_cache = UserApiKeyCache()
     try:
         results = await _asyncio.gather(
             get_current_spend(counter_key=counter_key, fallback_spend=0.0),
             _prepare_spend_counter_increment(
                 counter_key=counter_key,
-                source_cache_key="ignored",
+                source_cache_key=AuthObject.virtual_key("ignored"),
                 increment=1.5,
             ),
             get_current_spend(counter_key=counter_key, fallback_spend=0.0),
@@ -13296,7 +13290,7 @@ def _patched_coordination_redis_module_state(
             "spend_counter_store",
             FakeSpendCounters(redis=None).store(),
         ),
-        patch.object(proxy_server_module, "user_api_key_cache", DualCache()),
+        patch.object(proxy_server_module, "user_api_key_cache", UserApiKeyCache()),
         patch.object(proxy_server_module, "cli_sso_session_cache", DualCache()),
         patch.object(proxy_server_module, "llm_router", None),
         patch.object(proxy_server_module, "litellm_config_cache", config_cache),
@@ -13888,7 +13882,7 @@ def test_startup_is_silent_when_mock_testing_params_disabled(caplog):
 
 @contextlib.contextmanager
 def _window_spend_enqueue_env(
-    cached_objects: Mapping[str, object], prisma_client: MagicMock | None = None
+    cached_objects: Mapping[AuthObject, object], prisma_client: MagicMock | None = None
 ) -> Iterator[WindowSpendUpdateQueue]:
     """Point increment_spend_counters at throwaway caches and a real
     WindowSpendUpdateQueue, and hand back the queue to inspect."""
@@ -13938,10 +13932,9 @@ async def test_key_window_spend_row_is_enqueued_with_the_actual_cost(duration: s
     from litellm.proxy.proxy_server import increment_spend_counters
 
     reset_at: Final = datetime(2029, 1, 1, tzinfo=timezone.utc)
-    key_obj = MagicMock()
-    key_obj.budget_limits = [{"budget_duration": duration, "max_budget": 100.0, "reset_at": reset_at.isoformat()}]
+    key_obj = {"budget_limits": [{"budget_duration": duration, "max_budget": 100.0, "reset_at": reset_at.isoformat()}]}
 
-    with _window_spend_enqueue_env({"hashed-token": key_obj}) as queue:
+    with _window_spend_enqueue_env({AuthObject.virtual_key("hashed-token"): key_obj}) as queue:
         await increment_spend_counters(token="hashed-token", team_id=None, user_id=None, response_cost=0.25)
         enqueued = await _drain(queue)
 
@@ -13961,10 +13954,9 @@ async def test_team_window_spend_row_is_enqueued():
     from litellm.proxy.proxy_server import increment_spend_counters
 
     reset_at = datetime.now(timezone.utc) + timedelta(days=3)
-    team_obj = MagicMock()
-    team_obj.budget_limits = [{"budget_duration": "7d", "max_budget": 50.0, "reset_at": reset_at.isoformat()}]
+    team_obj = {"budget_limits": [{"budget_duration": "7d", "max_budget": 50.0, "reset_at": reset_at.isoformat()}]}
 
-    with _window_spend_enqueue_env({"team_id:team-1": team_obj}) as queue:
+    with _window_spend_enqueue_env({AuthObject.team("team-1"): team_obj}) as queue:
         await increment_spend_counters(token=None, team_id="team-1", user_id=None, response_cost=1.5)
         enqueued = await _drain(queue)
 
@@ -13983,8 +13975,7 @@ async def test_window_spend_row_is_enqueued_even_when_the_counter_was_reserved()
     from litellm.proxy.proxy_server import increment_spend_counters
 
     reset_at = datetime.now(timezone.utc) + timedelta(days=10)
-    key_obj = MagicMock()
-    key_obj.budget_limits = [{"budget_duration": "30d", "max_budget": 100.0, "reset_at": reset_at.isoformat()}]
+    key_obj = {"budget_limits": [{"budget_duration": "30d", "max_budget": 100.0, "reset_at": reset_at.isoformat()}]}
     reservation = {
         "entries": [
             {"counter_key": "spend:key:hashed-token", "reserved": 1.0},
@@ -13995,7 +13986,7 @@ async def test_window_spend_row_is_enqueued_even_when_the_counter_was_reserved()
     original_reconcile = br.reconcile_budget_reservation
     br.reconcile_budget_reservation = AsyncMock(return_value=())
     try:
-        with _window_spend_enqueue_env({"hashed-token": key_obj}) as queue:
+        with _window_spend_enqueue_env({AuthObject.virtual_key("hashed-token"): key_obj}) as queue:
             await increment_spend_counters(
                 token="hashed-token",
                 team_id=None,
@@ -14018,10 +14009,9 @@ async def test_sliding_window_without_reset_at_is_not_enqueued():
     using its LiteLLM_SpendLogs fallback instead."""
     from litellm.proxy.proxy_server import increment_spend_counters
 
-    key_obj = MagicMock()
-    key_obj.budget_limits = [{"budget_duration": "30d", "max_budget": 100.0}]
+    key_obj = {"budget_limits": [{"budget_duration": "30d", "max_budget": 100.0}]}
 
-    with _window_spend_enqueue_env({"hashed-token": key_obj}) as queue:
+    with _window_spend_enqueue_env({AuthObject.virtual_key("hashed-token"): key_obj}) as queue:
         await increment_spend_counters(token="hashed-token", team_id=None, user_id=None, response_cost=0.25)
         enqueued = await _drain(queue)
 
@@ -14033,13 +14023,14 @@ async def test_each_configured_window_gets_its_own_row_enqueue():
     from litellm.proxy.proxy_server import increment_spend_counters
 
     now = datetime.now(timezone.utc)
-    key_obj = MagicMock()
-    key_obj.budget_limits = [
-        {"budget_duration": "1d", "max_budget": 5.0, "reset_at": (now + timedelta(hours=5)).isoformat()},
-        {"budget_duration": "30d", "max_budget": 100.0, "reset_at": (now + timedelta(days=10)).isoformat()},
-    ]
+    key_obj = {
+        "budget_limits": [
+            {"budget_duration": "1d", "max_budget": 5.0, "reset_at": (now + timedelta(hours=5)).isoformat()},
+            {"budget_duration": "30d", "max_budget": 100.0, "reset_at": (now + timedelta(days=10)).isoformat()},
+        ]
+    }
 
-    with _window_spend_enqueue_env({"hashed-token": key_obj}) as queue:
+    with _window_spend_enqueue_env({AuthObject.virtual_key("hashed-token"): key_obj}) as queue:
         await increment_spend_counters(token="hashed-token", team_id=None, user_id=None, response_cost=0.25)
         enqueued = await _drain(queue)
 
@@ -14051,10 +14042,9 @@ async def test_each_configured_window_gets_its_own_row_enqueue():
 async def test_no_window_spend_row_enqueued_without_budget_limits():
     from litellm.proxy.proxy_server import increment_spend_counters
 
-    key_obj = MagicMock()
-    key_obj.budget_limits = None
+    key_obj = {"budget_limits": None}
 
-    with _window_spend_enqueue_env({"hashed-token": key_obj}) as queue:
+    with _window_spend_enqueue_env({AuthObject.virtual_key("hashed-token"): key_obj}) as queue:
         await increment_spend_counters(token="hashed-token", team_id=None, user_id=None, response_cost=0.25)
         enqueued = await _drain(queue)
 
@@ -14068,10 +14058,9 @@ async def test_window_spend_row_carries_the_request_start_time():
     from litellm.proxy.proxy_server import increment_spend_counters
 
     reset_at = datetime.now(timezone.utc) + timedelta(days=10)
-    key_obj = MagicMock()
-    key_obj.budget_limits = [{"budget_duration": "30d", "max_budget": 100.0, "reset_at": reset_at.isoformat()}]
+    key_obj = {"budget_limits": [{"budget_duration": "30d", "max_budget": 100.0, "reset_at": reset_at.isoformat()}]}
 
-    with _window_spend_enqueue_env({"hashed-token": key_obj}) as queue:
+    with _window_spend_enqueue_env({AuthObject.virtual_key("hashed-token"): key_obj}) as queue:
         await increment_spend_counters(
             token="hashed-token",
             team_id=None,
@@ -14089,10 +14078,9 @@ async def test_team_window_spend_row_carries_the_request_start_time():
     from litellm.proxy.proxy_server import increment_spend_counters
 
     reset_at = datetime.now(timezone.utc) + timedelta(days=3)
-    team_obj = MagicMock()
-    team_obj.budget_limits = [{"budget_duration": "7d", "max_budget": 50.0, "reset_at": reset_at.isoformat()}]
+    team_obj = {"budget_limits": [{"budget_duration": "7d", "max_budget": 50.0, "reset_at": reset_at.isoformat()}]}
 
-    with _window_spend_enqueue_env({"team_id:team-1": team_obj}) as queue:
+    with _window_spend_enqueue_env({AuthObject.team("team-1"): team_obj}) as queue:
         await increment_spend_counters(
             token=None,
             team_id="team-1",
@@ -14144,7 +14132,7 @@ async def test_key_window_is_charged_when_the_cached_key_expired_before_the_requ
     with _window_spend_enqueue_env({}, prisma_client=prisma_client) as queue:
         await increment_spend_counters(token="hashed-token", team_id=None, user_id=None, response_cost=0.25)
         enqueued: Final = await _drain(queue)
-        assert await ps.user_api_key_cache.async_get_cache(key="hashed-token") is None
+        assert await ps.user_api_key_cache.async_get_cache(key=AuthObject.virtual_key("hashed-token")) is None
 
     assert [item["entity_type"] for item in enqueued] == ["key"]
     assert _charged_windows(enqueued) == [("hashed-token", "30d", pytest.approx(0.25))]
@@ -14160,7 +14148,7 @@ async def test_team_window_is_charged_when_the_cached_team_expired_before_the_re
     with _window_spend_enqueue_env({}, prisma_client=prisma_client) as queue:
         await increment_spend_counters(token=None, team_id="team-1", user_id=None, response_cost=1.5)
         enqueued: Final = await _drain(queue)
-        assert await ps.user_api_key_cache.async_get_cache(key="team_id:team-1") is None
+        assert await ps.user_api_key_cache.async_get_cache(key=AuthObject.team("team-1")) is None
 
     assert [item["entity_type"] for item in enqueued] == ["team"]
     assert _charged_windows(enqueued) == [("team-1", "7d", pytest.approx(1.5))]
@@ -14378,10 +14366,9 @@ async def test_a_late_request_that_misses_the_updated_team_charges_windows_the_t
 async def test_late_costs_for_many_tokens_without_windows_leave_the_cached_team_in_place():
     from litellm.proxy.proxy_server import increment_spend_counters
 
-    team_obj: Final = MagicMock()
-    team_obj.budget_limits = [_window("7d", 50.0)]
+    team_obj: Final = {"budget_limits": [_window("7d", 50.0)]}
 
-    with _window_spend_enqueue_env({"team_id:team-1": team_obj}, prisma_client=_prisma_with_rows()) as queue:
+    with _window_spend_enqueue_env({AuthObject.team("team-1"): team_obj}, prisma_client=_prisma_with_rows()) as queue:
         for token_number in range(250):
             await increment_spend_counters(
                 token=f"token-{token_number}", team_id=None, user_id=None, response_cost=0.01
@@ -15542,7 +15529,7 @@ async def test_load_config_user_api_key_cache_max_size_keeps_more_than_200_entri
     await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
 
     _fill_user_api_key_cache(cache, 999)
-    assert cache.get_cache(key="key-0", local_only=True) == {"token": "key-0"}
+    assert cache.get_cache(key=AuthObject.virtual_key("key-0"), local_only=True) == {"token": "key-0"}
 
 
 @pytest.mark.asyncio
@@ -15565,7 +15552,7 @@ async def test_load_config_rejects_a_non_positive_user_api_key_cache_max_size(tm
         await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
 
     _fill_user_api_key_cache(cache, 150)
-    assert cache.get_cache(key="key-0", local_only=True) == {"token": "key-0"}
+    assert cache.get_cache(key=AuthObject.virtual_key("key-0"), local_only=True) == {"token": "key-0"}
 
 
 def test_docs_redoc_openapi_are_reachable_by_default():
@@ -16341,7 +16328,7 @@ async def test_initialize_prints_the_banner_as_one_json_record_in_json_mode(
 
 
 @contextlib.contextmanager
-def _accounting_window_env(cached: Mapping[str, object], client: MagicMock) -> Iterator[None]:
+def _accounting_window_env(cached: Mapping[AuthObject, object], client: MagicMock) -> Iterator[None]:
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     cache: Final = UserApiKeyCache()
@@ -16363,10 +16350,11 @@ async def test_accounting_window_keys_cover_the_stored_key_and_the_cached_team()
     key_row: Final = _StoredRow(
         budget_limits=[{"budget_duration": "30d", "max_budget": 100.0, "reset_at": key_reset.isoformat()}]
     )
-    team_obj: Final = MagicMock()
-    team_obj.budget_limits = [{"budget_duration": "7d", "max_budget": 50.0, "reset_at": team_reset.isoformat()}]
+    team_obj: Final = {
+        "budget_limits": [{"budget_duration": "7d", "max_budget": 50.0, "reset_at": team_reset.isoformat()}]
+    }
 
-    with _accounting_window_env({"team_id:team-1": team_obj}, _prisma_with_rows(keys={"hashed-key": key_row})):
+    with _accounting_window_env({AuthObject.team("team-1"): team_obj}, _prisma_with_rows(keys={"hashed-key": key_row})):
         windows = await proxy_server_module.accounting_window_keys("hashed-key", "team-1")
 
     assert windows == (

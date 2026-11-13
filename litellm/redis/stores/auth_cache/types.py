@@ -3,9 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final, TypeAlias
 
+from litellm.rust_bridge._native import AuthObject
+
 AUTH_CACHE_TARGET: Final = "auth_cache"
 
-WriteBack: TypeAlias = tuple[str, object, float | None]
+WriteBack: TypeAlias = tuple[AuthObject, object, float | None]
 
 
 @dataclass(frozen=True, slots=True)

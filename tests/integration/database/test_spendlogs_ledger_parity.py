@@ -27,6 +27,7 @@ from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 from litellm.proxy.db.model_usage_rollup import flush_model_usage_transactions
 from litellm.proxy.guardrails.usage_tracking import PendingRollups, process_spend_logs_guardrail_usage
 from litellm.proxy.utils import PrismaClient
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.proxy.hooks.model_budget_shared_windows import DatabaseSharedWindows
 from litellm.proxy.hooks.model_max_budget_limiter import PROXY_VirtualKeyModelMaxBudgetLimiter
 from litellm.repositories.accounting_delivery_repository import AccountingDeliveryRepository
@@ -385,7 +386,10 @@ async def _assert_legacy_database_parity(
             monkeypatch.setattr(proxy_server.proxy_logging_obj, "db_spend_update_writer", writer)
             monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
             monkeypatch.setattr(proxy_server, "spend_counter_cache", DualCache())
-            for cache_key in ("2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683", "team_id:team"):
+            for cache_key in (
+                AuthObject.virtual_key("2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683"),
+                AuthObject.team("team"),
+            ):
                 await proxy_server.user_api_key_cache.async_set_cache(
                     key=cache_key,
                     value={

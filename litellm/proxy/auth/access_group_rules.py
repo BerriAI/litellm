@@ -146,12 +146,13 @@ async def _resolve_name(name: str, prisma_client: DatabaseClient | None, cache: 
     from litellm.constants import DEFAULT_ACCESS_GROUP_CACHE_TTL
     from litellm.proxy._types import LiteLLM_AccessGroupTable
     from litellm.proxy.auth.auth_checks import get_access_group_tables
+    from litellm.redis.stores.auth_cache import AuthObject
     from litellm.repositories.table_repositories import AccessGroupRepository
 
     if prisma_client is None:
         verbose_proxy_logger.debug("Access group rule cannot resolve %s without a database", name)
         return None
-    cache_key: Final = f"access_group_rule_name:{name}"
+    cache_key: Final = AuthObject.access_group_rule_name(name)
     cached: Final = await cache.async_get_cache(key=cache_key, model_type=LiteLLM_AccessGroupTable)
     if cached is not None:
         groups: Final = await get_access_group_tables(

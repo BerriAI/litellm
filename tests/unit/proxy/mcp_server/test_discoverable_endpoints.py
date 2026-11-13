@@ -14,6 +14,7 @@ from fastapi import HTTPException, Request, Response
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.proxy._types import LiteLLM_MCPServerTable
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.types.mcp import MCPAuth
 
 if TYPE_CHECKING:
@@ -7732,12 +7733,11 @@ def _jwt_auth_patches(mapped_key):
     from contextlib import ExitStack
 
     from litellm.proxy._types import LiteLLM_JWTAuth
-    from litellm.proxy.auth.auth_checks import jwt_key_mapping_cache_key
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     cache = UserApiKeyCache()
-    cache.set_cache(key=jwt_key_mapping_cache_key("sub", "mapped-client"), value=mapped_key.token)
-    cache.set_cache(key=mapped_key.token, value=mapped_key)
+    cache.set_cache(AuthObject.jwt_key_mapping("sub", "mapped-client"), mapped_key.token)
+    cache.set_cache(AuthObject.virtual_key(mapped_key.token), mapped_key)
     handler = MagicMock()
     handler.litellm_jwtauth = LiteLLM_JWTAuth(virtual_key_claim_field="sub")
     handler.auth_jwt = AsyncMock(return_value={"sub": "mapped-client"})
@@ -8292,7 +8292,7 @@ async def test_extract_user_id_reads_x_litellm_api_key_header(proxy_globals):
     key = "sk-alice-key"
     cache = UserApiKeyCache()
     await cache.async_set_cache(
-        hash_token(key),
+        AuthObject.virtual_key(hash_token(key)),
         UserAPIKeyAuth(token=hash_token(key), user_id="alice"),
         model_type=UserAPIKeyAuth,
     )
@@ -8316,7 +8316,7 @@ async def test_extract_user_id_rehydrates_cross_replica_dict_cache(proxy_globals
 
     key = "sk-alice-key"
     cache = UserApiKeyCache()
-    cache.set_cache(hash_token(key), {"token": hash_token(key), "user_id": "alice"})
+    cache.set_cache(AuthObject.virtual_key(hash_token(key)), {"token": hash_token(key), "user_id": "alice"})
     proxy_globals.user_api_key_cache = cache
     proxy_globals.prisma_client = object()
 
@@ -8425,7 +8425,7 @@ async def test_resolve_active_litellm_key_returns_resolved_key_for_active_key(pr
     key = "sk-alice-key"
     cache = UserApiKeyCache()
     await cache.async_set_cache(
-        hash_token(key),
+        AuthObject.virtual_key(hash_token(key)),
         UserAPIKeyAuth(token=hash_token(key), user_id="alice"),
         model_type=UserAPIKeyAuth,
     )
@@ -8456,7 +8456,7 @@ async def test_resolve_active_litellm_key_resolves_key_without_user_id(proxy_glo
     key = "sk-team-scoped-key"
     cache = UserApiKeyCache()
     await cache.async_set_cache(
-        hash_token(key),
+        AuthObject.virtual_key(hash_token(key)),
         UserAPIKeyAuth(token=hash_token(key), user_id=None, team_id="team-x"),
         model_type=UserAPIKeyAuth,
     )
@@ -8706,7 +8706,9 @@ async def test_load_active_user_by_id_reads_the_row_from_the_database_not_the_ca
 
     cache = UserApiKeyCache()
     await cache.async_set_cache(
-        key="fresh-jwt-user", value=LiteLLM_UserTable(user_id="fresh-jwt-user", teams=[]), model_type=LiteLLM_UserTable
+        AuthObject.user("fresh-jwt-user"),
+        LiteLLM_UserTable(user_id="fresh-jwt-user", teams=[]),
+        model_type=LiteLLM_UserTable,
     )
     prisma = MagicMock()
     prisma.writer_db.litellm_usertable.find_unique = AsyncMock(
@@ -8719,7 +8721,7 @@ async def test_load_active_user_by_id_reads_the_row_from_the_database_not_the_ca
 
     assert not isinstance(loaded, str)
     assert loaded.teams == ["team-a"]
-    cached = await cache.async_get_cache(key="fresh-jwt-user", model_type=LiteLLM_UserTable)
+    cached = await cache.async_get_cache(AuthObject.user("fresh-jwt-user"), model_type=LiteLLM_UserTable)
     assert cached is not None
     assert cached.teams == ["team-a"]
 
@@ -8738,8 +8740,8 @@ async def test_load_active_user_by_id_serves_a_cached_row_without_a_database_rea
 
     cache = UserApiKeyCache()
     await cache.async_set_cache(
-        key="cached-jwt-user",
-        value=LiteLLM_UserTable(user_id="cached-jwt-user", teams=["team-a"]),
+        AuthObject.user("cached-jwt-user"),
+        LiteLLM_UserTable(user_id="cached-jwt-user", teams=["team-a"]),
         model_type=LiteLLM_UserTable,
     )
     prisma = MagicMock()
@@ -12073,7 +12075,7 @@ def browser_session_database(monkeypatch: pytest.MonkeyPatch) -> _BrowserSession
         PrismaClient("postgresql://local-test@localhost/browser-session", proxy_server.proxy_logging_obj),
     )
     cache: Final = UserApiKeyCache()
-    cache.set_cache(hash_token("sk-browser-session"), database.row)
+    cache.set_cache(AuthObject.virtual_key(hash_token("sk-browser-session")), database.row)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
     return database
 
@@ -12497,15 +12499,15 @@ def test_discovery_advertises_the_exchange_grant_only_where_the_gateway_can_serv
     aggregate authorization-server metadata, and the registration response) lists the RFC 8693
     exchange exactly when the running proxy can serve it: JWT auth on, a database, a license, and
     no JWT-to-virtual-key mapping, since the exchange would mint past the mapped key's policy."""
-    from litellm.caching.caching import DualCache
     from litellm.proxy._types import LiteLLM_JWTAuth
     from litellm.proxy.auth.handle_jwt import JWTHandler
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     client, _session_cookie, _minted = _native_client_app(monkeypatch)
     handler: Final = JWTHandler()
     handler.update_environment(
         prisma_client=None,
-        user_api_key_cache=DualCache(),
+        user_api_key_cache=UserApiKeyCache(),
         litellm_jwtauth=LiteLLM_JWTAuth(virtual_key_claim_field=virtual_key_claim_field),
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.jwt_handler", handler)
@@ -12922,7 +12924,9 @@ def jwt_oauth_identity(monkeypatch: pytest.MonkeyPatch) -> tuple["JWTHandler", "
 
     signing_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     cache: Final = UserApiKeyCache()
-    cache.set_cache("jwt-owner", LiteLLM_UserTable(user_id="jwt-owner", user_email="owner@example.test"))
+    cache.set_cache(
+        AuthObject.user("jwt-owner"), LiteLLM_UserTable(user_id="jwt-owner", user_email="owner@example.test")
+    )
     handler: Final = JWTHandler()
     handler.jwks_cache.set_cache(
         "litellm_jwt_auth_keys_https://idp.example.test/jwks",
@@ -13036,12 +13040,12 @@ async def test_oauth_exchange_stores_token_for_validated_jwt_user(
     users.find_first = AsyncMock(return_value=None)
     users.create = AsyncMock()
     if owner_state in ("missing", "database_error"):
-        handler.user_api_key_cache.delete_cache("jwt-owner")
+        handler.user_api_key_cache.delete_cache(AuthObject.user("jwt-owner").key)
     if owner_state == "database_error":
         users.find_unique.side_effect = RuntimeError("database unavailable")
     if owner_state == "inactive":
         handler.user_api_key_cache.set_cache(
-            "jwt-owner", LiteLLM_UserTable(user_id="jwt-owner", metadata={"scim_active": False})
+            AuthObject.user("jwt-owner"), LiteLLM_UserTable(user_id="jwt-owner", metadata={"scim_active": False})
         )
     table: Final = database.db.litellm_mcpusercredentials
     table.find_unique = AsyncMock(return_value=None)
@@ -13140,7 +13144,7 @@ async def test_oauth_jwt_identity_rejects_untrusted_or_inactive_owner(
         monkeypatch.setattr(proxy_server, "prisma_client", None)
     if rejection == "scim_inactive":
         handler.user_api_key_cache.set_cache(
-            "jwt-owner", LiteLLM_UserTable(user_id="jwt-owner", metadata={"scim_active": False})
+            AuthObject.user("jwt-owner"), LiteLLM_UserTable(user_id="jwt-owner", metadata={"scim_active": False})
         )
     if rejection == "custom_validate":
         handler.litellm_jwtauth.custom_validate = lambda claims: False
@@ -13165,7 +13169,9 @@ async def test_oauth_jwt_cannot_override_explicit_litellm_key(
 
     handler, signing_key = jwt_oauth_identity
     key: Final = "sk-explicit-key"
-    handler.user_api_key_cache.set_cache(hash_token(key), UserAPIKeyAuth(user_id="key-owner", blocked=blocked))
+    handler.user_api_key_cache.set_cache(
+        AuthObject.virtual_key(hash_token(key)), UserAPIKeyAuth(user_id="key-owner", blocked=blocked)
+    )
     request: Final = _token_request(
         {
             "Authorization": f"Bearer {_oauth_identity_jwt(signing_key)}",
@@ -13185,7 +13191,6 @@ async def test_oauth_jwt_uses_configured_virtual_key_owner(
 ) -> None:
     from litellm.models.user import LiteLLM_UserTable
     from litellm.proxy._types import UnregisteredJWTClientBehavior, UserAPIKeyAuth, hash_token
-    from litellm.proxy.auth.auth_checks import jwt_key_mapping_cache_key
     from litellm.proxy.mcp_server.bridge_token_flow import extract_user_id_from_request
 
     handler, signing_key = jwt_oauth_identity
@@ -13201,14 +13206,16 @@ async def test_oauth_jwt_uses_configured_virtual_key_owner(
     )
     key_hash: Final = hash_token("sk-mapped-oauth-owner")
     handler.user_api_key_cache.set_cache(
-        jwt_key_mapping_cache_key("sub", "not-the-configured-user-id"),
+        AuthObject.jwt_key_mapping("sub", "not-the-configured-user-id"),
         "__NO_MAPPING__" if mapping in ("fallback", "pending", "reject") else key_hash,
     )
     handler.user_api_key_cache.set_cache(
-        key_hash, UserAPIKeyAuth(token=key_hash, user_id="mapped-owner", blocked=mapping == "blocked")
+        AuthObject.virtual_key(key_hash),
+        UserAPIKeyAuth(token=key_hash, user_id="mapped-owner", blocked=mapping == "blocked"),
     )
     handler.user_api_key_cache.set_cache(
-        "mapped-owner", LiteLLM_UserTable(user_id="mapped-owner", metadata={"scim_active": mapping != "inactive_owner"})
+        AuthObject.user("mapped-owner"),
+        LiteLLM_UserTable(user_id="mapped-owner", metadata={"scim_active": mapping != "inactive_owner"}),
     )
     request: Final = _token_request({"Authorization": f"Bearer {_oauth_identity_jwt(signing_key)}"})
     expected: Final = "jwt-owner" if mapping == "fallback" else "mapped-owner" if mapping == "active" else None
@@ -13354,7 +13361,7 @@ async def test_oauth_jwt_identity_does_not_provision_or_synchronize_teams(
     handler.litellm_jwtauth.team_id_upsert = True
     handler.litellm_jwtauth.sync_user_role_and_teams = True
     owner: Final = LiteLLM_UserTable(user_id="jwt-owner", teams=["existing-team"])
-    handler.user_api_key_cache.set_cache("jwt-owner", owner)
+    handler.user_api_key_cache.set_cache(AuthObject.user("jwt-owner"), owner)
     request: Final = _token_request(
         {"Authorization": f"Bearer {_oauth_identity_jwt(signing_key)}"}, path="/example/token"
     )
@@ -13385,7 +13392,7 @@ async def test_oauth_refresh_revalidates_the_same_active_user_rule(
     expected: Final = None if state == "active" else "no_active_key" if state == "inactive" else "unresolvable"
     assert await reload_active_user_by_id(user_id) == expected
     if state != "missing_database":
-        cached: Final = handler.user_api_key_cache.get_cache(user_id, model_type=LiteLLM_UserTable)
+        cached: Final = handler.user_api_key_cache.get_cache(AuthObject.user(user_id), model_type=LiteLLM_UserTable)
         assert cached is not None
         assert cached.metadata == row.metadata
 
@@ -13404,7 +13411,7 @@ async def test_oauth_credential_write_keeps_virtual_key_permissions(
     import asyncio
 
     from litellm.proxy._types import UserAPIKeyAuth, hash_token
-    from litellm.proxy.auth.auth_checks import OrganizationNotFoundError, jwt_key_mapping_cache_key
+    from litellm.proxy.auth.auth_checks import OrganizationNotFoundError
     from litellm.proxy.mcp_server import mcp_server_manager
     from litellm.proxy.mcp_server.bridge_token_flow import authorize_oauth_credential_request
 
@@ -13425,10 +13432,12 @@ async def test_oauth_credential_write_keeps_virtual_key_permissions(
         org_id="org-scope",
         end_user_id="end-user-scope",
     )
-    handler.user_api_key_cache.set_cache(hashed, credential)
+    handler.user_api_key_cache.set_cache(AuthObject.virtual_key(hashed), credential)
     if mapped:
         handler.litellm_jwtauth.virtual_key_claim_field = "sub"
-        handler.user_api_key_cache.set_cache(jwt_key_mapping_cache_key("sub", "not-the-configured-user-id"), hashed)
+        handler.user_api_key_cache.set_cache(
+            AuthObject.jwt_key_mapping("sub", "not-the-configured-user-id"), hashed
+        )
     manager: Final = MagicMock()
     manager.get_allowed_mcp_servers = AsyncMock(
         return_value=[] if state == "server_denied" else ["server-a"],
@@ -13481,9 +13490,11 @@ async def test_oauth_writer_preserves_claimed_team_instead_of_expanding_user_ros
     handler.litellm_jwtauth.team_id_upsert = True
     handler.litellm_jwtauth.user_id_upsert = True
     handler.litellm_jwtauth.sync_user_role_and_teams = True
-    handler.user_api_key_cache.set_cache("jwt-owner", LiteLLM_UserTable(user_id="jwt-owner", teams=["a", "b"]))
     handler.user_api_key_cache.set_cache(
-        "team_id:a",
+        AuthObject.user("jwt-owner"), LiteLLM_UserTable(user_id="jwt-owner", teams=["a", "b"])
+    )
+    handler.user_api_key_cache.set_cache(
+        AuthObject.team("a"),
         LiteLLM_TeamTable(team_id="a", models=[], members_with_roles=[Member(user_id="jwt-owner", role="user")]),
     )
     manager: Final = MagicMock()
@@ -13715,11 +13726,11 @@ async def test_identity_bound_authorize_preserves_presented_jwt_permissions(
         return_value=None,
         side_effect=RuntimeError("database unavailable") if credential == "opaque_outage" else None,
     )
-    handler.user_api_key_cache.set_cache("cookie-owner", LiteLLM_UserTable(user_id="cookie-owner"))
+    handler.user_api_key_cache.set_cache(AuthObject.user("cookie-owner"), LiteLLM_UserTable(user_id="cookie-owner"))
     key: Final = "opaque-record" if credential == "opaque_record" else "sk-browser-gateway-key"
     if credential in ("key", "blocked_key", "expired_key", "opaque_record"):
         handler.user_api_key_cache.set_cache(
-            hash_token(key),
+            AuthObject.virtual_key(hash_token(key)),
             UserAPIKeyAuth(
                 token=hash_token(key),
                 user_id="jwt-owner",
@@ -13835,7 +13846,7 @@ async def test_identity_bound_authorize_unrelated_bearer_uses_browser_session(
     monkeypatch.setattr(proxy_server, "master_key", master)
     monkeypatch.setattr(proxy_server, "user_custom_auth", None)
     monkeypatch.setenv("LITELLM_SALT_KEY", "authorize-policy-test-salt")
-    handler.user_api_key_cache.set_cache("cookie-owner", LiteLLM_UserTable(user_id="cookie-owner"))
+    handler.user_api_key_cache.set_cache(AuthObject.user("cookie-owner"), LiteLLM_UserTable(user_id="cookie-owner"))
     proxy_server.prisma_client.get_data = AsyncMock(return_value=None)
     server: Final = MCPServer(
         server_id="bound-server",

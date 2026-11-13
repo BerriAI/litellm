@@ -194,7 +194,7 @@ def _drop_from_memory(cache_key: str, user_api_key_cache: "UserApiKeyCache") -> 
 
 
 @with_service_target(AUTH_OBJECTS_TARGET)
-async def evict_shared(cache_keys: Sequence[str], cache: "DualCache") -> None:
+async def evict_shared(cache_keys: Sequence[str], cache: "UserApiKeyCache | DualCache") -> None:
     """
     Drop cached objects from the cache's memory and, when it has one, its Redis layer, in one
     chunked round trip.

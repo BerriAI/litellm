@@ -24,7 +24,7 @@ from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfi
 from litellm.integrations.otel import OpenTelemetryV2Config
 from litellm.integrations.otel.logger import OpenTelemetryV2
 from litellm.integrations.otel.plumbing import providers
-from litellm.redis.stores.auth_cache import AUTH_CACHE_TARGET, AuthCacheSettings, AuthCacheStore
+from litellm.redis.stores.auth_cache import AUTH_CACHE_TARGET, AuthCacheSettings, AuthCacheStore, AuthObject
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.router_usage import RouterUsageStore, UsageCounter
 from litellm.redis.stores.spend_counters import SpendCounterStore
@@ -175,7 +175,7 @@ async def test_a_native_auth_cache_read_reports_the_redis_span_redis_cache_repor
         with service_target(AUTH_CACHE_TARGET):
             await redis_cache.async_get_cache("python-key", parent_otel_span=python_request)
     with trace.use_span(native_request, end_on_exit=True):
-        await store.get("native-key")
+        await store.get(AuthObject.user("native-key"))
 
     reported_by_redis_cache: Final = await _spans_under(exporter, python_request)
     assert reported_by_redis_cache
@@ -222,7 +222,7 @@ async def test_a_native_read_in_a_legacy_otel_request_reports_its_redis_span_und
 
     async def native_request_read() -> None:
         set_request_parent_otel_span(native_request)
-        await store.get("native-key")
+        await store.get(AuthObject.user("native-key"))
 
     with service_target(AUTH_CACHE_TARGET):
         await redis_cache.async_get_cache("python-key", parent_otel_span=python_request)

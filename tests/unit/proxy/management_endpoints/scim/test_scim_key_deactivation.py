@@ -568,6 +568,7 @@ async def test_scim_status_write_refreshes_user_cache(
 
     from litellm.proxy._types import ProxyException
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.redis.stores.auth_cache import AuthObject
 
     user_id: Final = "scim-cache-user"
     saved: Final = LiteLLM_UserTable(
@@ -582,7 +583,7 @@ async def test_scim_status_write_refreshes_user_cache(
     if failure == "keys":
         db.litellm_verificationtoken.find_many.side_effect = RuntimeError("key update failed")
     cache: Final = UserApiKeyCache()
-    await cache.async_set_cache(key=user_id, value=saved, model_type=LiteLLM_UserTable)
+    await cache.async_set_cache(key=AuthObject.user(user_id), value=saved, model_type=LiteLLM_UserTable)
     with (
         patch("litellm.proxy.proxy_server.prisma_client", client),  # test-quality-ok: substitute the database dependency
         patch("litellm.proxy.proxy_server.user_api_key_cache", cache),  # test-quality-ok: exercise a real isolated cache
@@ -606,7 +607,7 @@ async def test_scim_status_write_refreshes_user_cache(
             response: Final = await request
             assert response.active is active
         assert json.loads(db.litellm_usertable.update.await_args.kwargs["data"]["metadata"])["scim_active"] is active
-        cached: Final = await cache.async_get_cache(key=user_id, model_type=LiteLLM_UserTable)
+        cached: Final = await cache.async_get_cache(key=AuthObject.user(user_id), model_type=LiteLLM_UserTable)
         if failure == "write":
             assert cached == saved
             broadcast.assert_not_awaited()
@@ -622,6 +623,7 @@ async def test_scim_delete_user_evicts_cached_user_row(failure: str | None) -> N
 
     from litellm.proxy._types import ProxyException
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.redis.stores.auth_cache import AuthObject
 
     user_id: Final = "scim-deleted-user"
     saved: Final = LiteLLM_UserTable(user_id=user_id, user_email="x@example.com", teams=[], metadata={})
@@ -629,7 +631,7 @@ async def test_scim_delete_user_evicts_cached_user_row(failure: str | None) -> N
     if failure == "delete":
         db.litellm_usertable.delete_many.side_effect = RuntimeError("user delete failed")
     cache: Final = UserApiKeyCache()
-    await cache.async_set_cache(key=user_id, value=saved, model_type=LiteLLM_UserTable)
+    await cache.async_set_cache(key=AuthObject.user(user_id), value=saved, model_type=LiteLLM_UserTable)
     with (
         patch("litellm.proxy.proxy_server.prisma_client", client),  # test-quality-ok: substitute the database dependency
         patch("litellm.proxy.proxy_server.user_api_key_cache", cache),  # test-quality-ok: exercise a real isolated cache
@@ -645,7 +647,7 @@ async def test_scim_delete_user_evicts_cached_user_row(failure: str | None) -> N
         else:
             response: Final = await delete_user(user_id=user_id)
             assert response.status_code == 204
-    cached: Final = await cache.async_get_cache(key=user_id, model_type=LiteLLM_UserTable)
+    cached: Final = await cache.async_get_cache(key=AuthObject.user(user_id), model_type=LiteLLM_UserTable)
     if failure == "delete":
         assert cached == saved
         broadcast.assert_not_awaited()

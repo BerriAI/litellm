@@ -28,7 +28,9 @@ from tests.unit.redis.stores.auth_cache_double import shared_cache
 
 def _auth_cache(redis: RedisCache) -> UserApiKeyCache:
     """A worker's auth cache with ``enable_redis_auth_cache`` on, whose connection the credential cache shares."""
-    return shared_cache(connection=redis)[0]
+    cache: Final = shared_cache()[0]
+    cache.attach_redis_cache(redis)
+    return cache
 
 
 def _prisma(table=None):
@@ -141,7 +143,7 @@ async def test_aget_credentials_returns_plaintext_and_caches_ciphertext(monkeypa
     cached = await redis.async_get_cache(upc._cache_key("user-a", "copilot-cred"))
     assert cached == ciphertext
     assert "gho_secret" not in cached
-    assert await cache.in_memory_cache.async_get_cache(upc._cache_key("user-a", "copilot-cred")) is None
+    assert cache.store.len_local().objects == 0
 
 
 @pytest.mark.asyncio
@@ -408,6 +410,7 @@ async def test_set_reports_connected_when_delete_clears_a_dropped_write():
     stale entry."""
     store: dict = {}
     silent_redis = SimpleNamespace(
+        store_settings=None,
         async_set_cache=AsyncMock(return_value=None),
         async_get_cache=AsyncMock(side_effect=lambda key: store.get(key)),
         async_delete_cache=AsyncMock(side_effect=lambda key: store.pop(key, None)),
@@ -424,6 +427,7 @@ async def test_set_reports_failure_when_a_stale_entry_survives_both_attempts():
     claiming success."""
     stale = "stale-value"
     silent_redis = SimpleNamespace(
+        store_settings=None,
         async_set_cache=AsyncMock(return_value=None),
         async_get_cache=AsyncMock(return_value=stale),
         async_delete_cache=AsyncMock(return_value=None),

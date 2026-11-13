@@ -27,6 +27,7 @@ from litellm.proxy._types import (
     SpecialMCPServerNames,
     UserAPIKeyAuth,
 )
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
     UnloadableEntitlementError,
@@ -34,6 +35,7 @@ from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import (
     is_mcp_admitted_user_subject,
 )
 from litellm.proxy.utils import InternalUsageCache
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.types.agents import AgentCaller
 
 
@@ -3006,7 +3008,7 @@ class TestMCPDelegateAuthToUpstream:
             patch.object(proxy_server, "user_custom_auth", None),
             patch.object(proxy_server, "master_key", "sk-fixture-master"),
             patch.object(proxy_server, "prisma_client", None),
-            patch.object(proxy_server, "user_api_key_cache", DualCache()),
+            patch.object(proxy_server, "user_api_key_cache", UserApiKeyCache()),
             patch.dict(
                 os.environ,
                 {
@@ -5339,9 +5341,8 @@ class TestAgentMCPPermissions:
         ``object_permission_id`` and then defer to the shared
         ``get_object_permission`` helper so cache entries are shared with the
         org / team / key paths."""
-        from litellm.caching.dual_cache import DualCache
 
-        cache = DualCache()
+        cache = UserApiKeyCache()
         agent_row = MagicMock()
         agent_row.object_permission_id = "perm-xyz"
         prisma_client = MagicMock()
@@ -5377,9 +5378,8 @@ class TestAgentMCPPermissions:
     async def test_get_agent_object_permission_caches_missing_permission(self):
         """When the agent has no ``object_permission_id`` the sentinel must be
         cached so subsequent requests do not hit the DB again."""
-        from litellm.caching.dual_cache import DualCache
 
-        cache = DualCache()
+        cache = UserApiKeyCache()
         agent_row = MagicMock()
         agent_row.object_permission_id = None
         prisma_client = MagicMock()
@@ -10520,7 +10520,6 @@ class TestGetUserObjectPermission:
         return prisma_client
 
     async def test_resolves_through_the_shared_permission_cache(self):
-        from litellm.caching.dual_cache import DualCache
 
         user_row = MagicMock()
         user_row.object_permission_id = "perm-1"
@@ -10530,7 +10529,7 @@ class TestGetUserObjectPermission:
 
         with (
             patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache()),
             patch(
                 "litellm.proxy.proxy_server.proxy_logging_obj",
                 MagicMock(service_logging_obj=MagicMock(async_service_success_hook=AsyncMock())),
@@ -10551,7 +10550,6 @@ class TestGetUserObjectPermission:
 
     async def test_caches_a_sentinel_for_a_human_with_no_entitlement(self):
         """A human without an entitlement is the common case and must cost no DB read per request."""
-        from litellm.caching.dual_cache import DualCache
 
         user_row = MagicMock()
         user_row.object_permission_id = None
@@ -10560,7 +10558,7 @@ class TestGetUserObjectPermission:
 
         with (
             patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache()),
             patch(
                 "litellm.proxy.proxy_server.proxy_logging_obj",
                 MagicMock(service_logging_obj=MagicMock(async_service_success_hook=AsyncMock())),
@@ -10576,7 +10574,6 @@ class TestGetUserObjectPermission:
     async def test_missing_user_row_places_no_ceiling(self, fresh_policy):
         """Whether this human is entitled at all is unknown when their row is absent, which is the
         state before the level existed, so it must not deny."""
-        from litellm.caching.dual_cache import DualCache
 
         prisma_client = self._prisma_with_user(None)
         auth = UserAPIKeyAuth(api_key="sk-test", user_id="ghost")
@@ -10585,7 +10582,7 @@ class TestGetUserObjectPermission:
 
         with (
             patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache()),
             patch(
                 "litellm.proxy.proxy_server.proxy_logging_obj",
                 MagicMock(service_logging_obj=MagicMock(async_service_success_hook=AsyncMock())),
@@ -10594,7 +10591,6 @@ class TestGetUserObjectPermission:
             assert await MCPRequestHandler._get_user_object_permission(auth) is None
 
     async def test_unreadable_user_row_places_no_ceiling(self):
-        from litellm.caching.dual_cache import DualCache
 
         prisma_client = MagicMock()
         prisma_client.db.litellm_usertable.find_unique = AsyncMock(side_effect=Exception("db down"))
@@ -10602,7 +10598,7 @@ class TestGetUserObjectPermission:
 
         with (
             patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache()),
             patch(
                 "litellm.proxy.proxy_server.proxy_logging_obj",
                 MagicMock(service_logging_obj=MagicMock(async_service_success_hook=AsyncMock())),
@@ -10613,7 +10609,6 @@ class TestGetUserObjectPermission:
     async def test_named_but_unreadable_permission_raises(self):
         """A KNOWN entitlement with unknown contents is indeterminate: it must surface so the callers
         can deny rather than serve the wider key scope."""
-        from litellm.caching.dual_cache import DualCache
 
         user_row = MagicMock()
         user_row.object_permission_id = "perm-gone"
@@ -10622,7 +10617,7 @@ class TestGetUserObjectPermission:
 
         with (
             patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache()),
             patch(
                 "litellm.proxy.proxy_server.proxy_logging_obj",
                 MagicMock(service_logging_obj=MagicMock(async_service_success_hook=AsyncMock())),
@@ -10670,11 +10665,10 @@ def _agent_prisma(object_permission_id=None, side_effect=None):
 
 @contextlib.contextmanager
 def _entitlement_fault_globals(prisma_client=None, user_api_key_cache=None):
-    from litellm.caching.dual_cache import DualCache
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", prisma_client or MagicMock()),
-        patch("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache or DualCache()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache or UserApiKeyCache()),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", _proxy_logging_with_awaitable_hooks()),
     ):
         yield
@@ -10823,17 +10817,15 @@ class TestEntitlementFaultSemantics:
 
 
 async def _cache_with_end_user(end_user_id, *, mcp_tool_permissions=None, object_permission_id=None):
-    """A real DualCache already holding the end user row, so ``get_end_user_object`` answers from
+    """A real UserApiKeyCache already holding the end user row, so ``get_end_user_object`` answers from
     cache and no ``litellm.`` internal has to be patched. ``object_permission_id`` without a
     permission body models a row that NAMES an entitlement the DB then fails to serve."""
-    from litellm.caching.dual_cache import DualCache
     from litellm.models.end_user import LiteLLM_EndUserTable
-    from litellm.proxy.common_utils.user_api_key_cache import end_user_cache_key
 
-    cache = DualCache()
+    cache = UserApiKeyCache()
     await cache.async_set_cache(
-        key=end_user_cache_key(end_user_id),
-        value=LiteLLM_EndUserTable(
+        AuthObject.end_user(end_user_id),
+        LiteLLM_EndUserTable(
             user_id=end_user_id,
             blocked=False,
             object_permission_id=object_permission_id or ("op-eu" if mcp_tool_permissions else None),
@@ -10955,14 +10947,13 @@ class TestScopedSessionAdmission:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", [RuntimeError("unavailable"), ValueError("User doesn't exist in db")])
 async def test_fresh_mcp_user_permission_link_ignores_cached_and_replica_grants(monkeypatch, failure):
-    from litellm.caching.dual_cache import DualCache
     from litellm.proxy import proxy_server
     from litellm.proxy._types import LiteLLM_UserTable
 
     cached = LiteLLM_UserTable(user_id="fresh-human", object_permission_id="revoked")
     current = LiteLLM_UserTable(user_id="fresh-human", object_permission_id="current")
-    cache = DualCache()
-    await cache.async_set_cache(key="fresh-human", value=cached)
+    cache = UserApiKeyCache()
+    await cache.async_set_cache(AuthObject.user("fresh-human"), cached)
     database = MagicMock()
     database.writer_db.litellm_usertable.find_unique = AsyncMock(return_value=current)
     database.db.litellm_usertable.find_unique = AsyncMock(return_value=cached)
@@ -11042,7 +11033,6 @@ async def test_catalog_refresh_preserves_non_database_admission_and_resource_sco
 async def test_catalog_refresh_reads_current_user_org_without_losing_resource_scope(monkeypatch):
     from types import SimpleNamespace
 
-    from litellm.caching.dual_cache import DualCache
     from litellm.proxy import proxy_server
     from litellm.proxy._types import LiteLLM_UserTable
 
@@ -11052,7 +11042,7 @@ async def test_catalog_refresh_reads_current_user_org_without_losing_resource_sc
     table = SimpleNamespace(find_unique=AsyncMock(return_value=current))
     database = SimpleNamespace(writer_db=SimpleNamespace(litellm_usertable=table))
     monkeypatch.setattr(proxy_server, "prisma_client", database)
-    monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
     caller = UserAPIKeyAuth(user_id="catalog-user", org_id="previous-org", user_role="proxy_admin")
     caller.mcp_admitted_user_subject = True
     caller.mcp_session_resource_server_ids = ("scoped-server",)
@@ -11080,7 +11070,7 @@ async def test_catalog_refresh_uses_current_virtual_key_policy_and_keeps_session
         litellm_mcptoolsettable=SimpleNamespace(find_many=AsyncMock(return_value=[toolset]))
     )
     monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=tables, writer_db=tables))
-    monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
     current = UserAPIKeyAuth(
         object_permission=permission,
         object_permission_id="current-policy",
@@ -11773,7 +11763,7 @@ async def test_catalog_refresh_reloads_session_credential_through_its_user_and_k
         LiteLLM_UserTable(user_id="session-user", organization_id="live-org", user_role="internal_user", teams=[])
     )
     monkeypatch.setattr(proxy_server, "prisma_client", database)
-    monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
     caller = UserAPIKeyAuth(
         api_key="session-token-hash",
         user_id="session-user",
@@ -11836,7 +11826,7 @@ async def test_token_minted_credential_lists_tools_for_every_scope_shape(monkeyp
     )
     database = _session_credential_storage(user)
     monkeypatch.setattr(proxy_server, "prisma_client", database)
-    monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
     tool = Tool(name="eng_server-list_repos", description="list repos", inputSchema={"type": "object"})
     with (
         patch.object(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[server])),

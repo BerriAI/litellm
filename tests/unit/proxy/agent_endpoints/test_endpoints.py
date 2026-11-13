@@ -1370,13 +1370,13 @@ def test_make_agent_public_rejects_an_agent_published_only_in_the_db(monkeypatch
 def test_jwt_authentication_status_does_not_require_virtual_keys(
     monkeypatch: pytest.MonkeyPatch, enabled: bool, claim_field: str | None, expected: bool
 ) -> None:
-    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy import proxy_server
     from litellm.proxy._types import LiteLLM_JWTAuth
     from litellm.proxy.auth.handle_jwt import JWTHandler
 
     handler: Final = JWTHandler()
-    handler.update_environment(None, DualCache(), LiteLLM_JWTAuth(agent_id_jwt_field=claim_field))
+    handler.update_environment(None, UserApiKeyCache(), LiteLLM_JWTAuth(agent_id_jwt_field=claim_field))
     monkeypatch.setattr(proxy_server, "general_settings", {"enable_jwt_auth": enabled})
     monkeypatch.setattr(proxy_server, "jwt_handler", handler)
     agent: Final = _sample_agent_response()
@@ -1390,13 +1390,13 @@ def test_jwt_authentication_status_does_not_require_virtual_keys(
 
 
 def test_identity_providers_require_configured_issuer_and_audience(monkeypatch: pytest.MonkeyPatch) -> None:
-    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy import proxy_server
     from litellm.proxy._types import LiteLLM_JWTAuth
     from litellm.proxy.auth.handle_jwt import JWTHandler
 
     handler: Final = JWTHandler()
-    handler.update_environment(None, DualCache(), LiteLLM_JWTAuth())
+    handler.update_environment(None, UserApiKeyCache(), LiteLLM_JWTAuth())
     monkeypatch.setattr(proxy_server, "jwt_handler", handler)
     monkeypatch.setattr(proxy_server, "general_settings", {"enable_jwt_auth": True})
     monkeypatch.setenv("JWT_ISSUER", "https://issuer.example")
@@ -1453,7 +1453,7 @@ def test_identity_evidence_is_persisted_and_never_taken_from_runtime_metadata(mo
 def test_identity_providers_honor_issuer_specific_audiences_and_global_fallback(
     monkeypatch: pytest.MonkeyPatch, enabled: bool
 ) -> None:
-    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy import proxy_server
     from litellm.proxy._types import JWTIssuerConfig, LiteLLM_JWTAuth
     from litellm.proxy.auth.handle_jwt import JWTHandler
@@ -1461,7 +1461,7 @@ def test_identity_providers_honor_issuer_specific_audiences_and_global_fallback(
     handler: Final = JWTHandler()
     handler.update_environment(
         None,
-        DualCache(),
+        UserApiKeyCache(),
         LiteLLM_JWTAuth(
             issuers=[
                 JWTIssuerConfig(issuer="https://scoped.example", audience="gateway"),

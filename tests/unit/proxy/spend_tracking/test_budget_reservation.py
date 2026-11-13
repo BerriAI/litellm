@@ -20,25 +20,22 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     UserAPIKeyAuth,
 )
-from litellm.proxy.common_utils.user_api_key_cache import (
-    UserApiKeyCache,
-    project_cache_key,
-    team_membership_reservation_cache_key,
-)
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.common_utils.timezone_utils import BudgetResetSettings
 from litellm.proxy.spend_tracking.budget_reservation import (
     _get_team_member_budget_counter,
+    count_request_input_tokens,
     estimate_request_max_cost,
     get_budget_window_start,
     release_unbound_budget_reservation,
-    count_request_input_tokens,
     reserve_budget_for_request,
 )
 from litellm.proxy.utils import ProxyLogging
-from litellm.router import Router
-from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
+from litellm.router import Router
+from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
 TOKEN_COUNTING_ROUTES: Final = (
     "/responses/input_tokens",
@@ -275,7 +272,7 @@ async def test_team_member_reservation_counter_honours_temp_budget_increase(
     team_id: Final = "team-temp"
     cache: Final = UserApiKeyCache()
     await cache.async_set_cache(
-        key=team_membership_reservation_cache_key(user_id=user_id, team_id=team_id),
+        key=AuthObject.team_membership_reservation(user_id=user_id, team_id=team_id),
         value=LiteLLM_TeamMembership(
             user_id=user_id,
             team_id=team_id,
@@ -317,11 +314,11 @@ async def test_team_member_reservation_counter_adds_temp_increase_to_live_team_d
     team_id: Final = "team-bare"
     cache: Final = UserApiKeyCache()
     await cache.async_set_cache(
-        key="team_member_default_budget:default-bare",
+        key=AuthObject.team_member_default_budget("default-bare"),
         value=LiteLLM_BudgetTable(budget_id="default-bare", max_budget=default_cap),
     )
     await cache.async_set_cache(
-        key=team_membership_reservation_cache_key(user_id=user_id, team_id=team_id),
+        key=AuthObject.team_membership_reservation(user_id=user_id, team_id=team_id),
         value=LiteLLM_TeamMembership(
             user_id=user_id,
             team_id=team_id,
@@ -392,7 +389,7 @@ async def test_release_unbound_budget_reservation_leaves_a_bound_one_to_its_call
 async def test_reservation_holds_cost_against_cached_org_and_project_budgets(spend_counter_store: SpendCounterStore):
     cache: Final = UserApiKeyCache()
     await cache.async_set_cache(
-        key="org_id:org-budgeted:with_budget",
+        key=AuthObject.org_with_budget("org-budgeted"),
         value=LiteLLM_OrganizationTable(
             organization_id="org-budgeted",
             budget_id="org-budget",
@@ -405,7 +402,7 @@ async def test_reservation_holds_cost_against_cached_org_and_project_budgets(spe
         model_type=LiteLLM_OrganizationTable,
     )
     await cache.async_set_cache(
-        key=project_cache_key("project-budgeted"),
+        key=AuthObject.project("project-budgeted"),
         value=LiteLLM_ProjectTableCachedObj(
             project_id="project-budgeted", spend=2.5, litellm_budget_table=LiteLLM_BudgetTable(max_budget=20.0)
         ),

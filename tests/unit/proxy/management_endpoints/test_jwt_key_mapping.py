@@ -26,7 +26,8 @@ from litellm.proxy.management_endpoints.jwt_key_mapping_endpoints import (
     info_jwt_key_mapping,
     update_jwt_key_mapping,
 )
-from litellm.caching.caching import DualCache
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.redis.stores.auth_cache import AuthObject
 from fastapi import HTTPException
 
 # ──────────────────────────────────────────────
@@ -58,7 +59,7 @@ async def test_jwt_to_virtual_key_mapping_resolution():
     # Mock getting the key object
     mock_key_obj = UserAPIKeyAuth(token="sk-9876", team_id="team1")
 
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
 
     # Use patch to mock get_key_object in the module where it's used
     with patch(
@@ -127,9 +128,9 @@ async def test_colliding_claim_value_from_another_issuer_does_not_resolve_to_the
 
     # Dependency-inject the resolved key via the cache (IdentityStore._resolve_key
     # reads it from here) instead of monkeypatching IdentityStore itself.
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
     await user_api_key_cache.async_set_cache(
-        key="hashed-issuer-b-key",
+        key=AuthObject.virtual_key("hashed-issuer-b-key"),
         value=UserAPIKeyAuth(token="hashed-issuer-b-key", team_id="issuer-b-team"),
     )
 
@@ -209,9 +210,9 @@ async def test_global_mapping_resolution_is_cached_under_the_global_key_not_the_
     find_first = AsyncMock(side_effect=fake_find_first)
     prisma_client.db.litellm_jwtkeymapping.find_first = find_first
 
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
     await user_api_key_cache.async_set_cache(
-        key="hashed-legacy-key",
+        key=AuthObject.virtual_key("hashed-legacy-key"),
         value=UserAPIKeyAuth(token="hashed-legacy-key", team_id="legacy-team"),
     )
 
@@ -259,7 +260,7 @@ async def test_jwt_to_virtual_key_mapping_no_mapping():
         "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
         new_callable=AsyncMock,
     ):
-        user_api_key_cache = DualCache()
+        user_api_key_cache = UserApiKeyCache()
 
         result = await _resolve_jwt_to_virtual_key(
             jwt_claims=jwt_claims,
@@ -690,7 +691,7 @@ async def test_reject_behavior_raises_403_on_no_mapping():
     prisma_client = MagicMock()
     prisma_client.db.litellm_jwtkeymapping.find_first = AsyncMock(return_value=None)
 
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
 
     with patch(
         "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
@@ -729,7 +730,7 @@ async def test_reject_behavior_caches_sentinel_after_db_miss():
     prisma_client = MagicMock()
     prisma_client.db.litellm_jwtkeymapping.find_first = AsyncMock(return_value=None)
 
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
 
     with patch(
         "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
@@ -749,7 +750,7 @@ async def test_reject_behavior_caches_sentinel_after_db_miss():
 
         # Sentinel must now be in cache
         cached = await user_api_key_cache.async_get_cache(
-            "jwt_key_mapping:email:unknown@example.com"
+            AuthObject.jwt_key_mapping("email", "unknown@example.com")
         )
         assert cached == "__NO_MAPPING__"
 
@@ -787,8 +788,8 @@ async def test_reject_behavior_raises_403_on_cached_no_mapping():
     prisma_client.db.litellm_jwtkeymapping.find_first = AsyncMock(return_value=None)
 
     # Pre-populate the negative cache so the DB is not hit
-    user_api_key_cache = DualCache()
-    cache_key = "jwt_key_mapping:email:unknown@example.com"
+    user_api_key_cache = UserApiKeyCache()
+    cache_key = AuthObject.jwt_key_mapping("email", "unknown@example.com")
     await user_api_key_cache.async_set_cache(cache_key, "__NO_MAPPING__")
 
     with patch(
@@ -834,7 +835,7 @@ async def test_auto_register_returns_pending_signal_without_creating_key():
     prisma_client.db.litellm_jwtkeymapping.find_first = AsyncMock(return_value=None)
     prisma_client.db.litellm_jwtkeymapping.create = AsyncMock()
 
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
 
     with patch(
         "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
@@ -852,7 +853,7 @@ async def test_auto_register_returns_pending_signal_without_creating_key():
     assert isinstance(result, _PendingAutoRegister)
     assert result.claim_field == "sub"
     assert result.claim_value == "new-user-42"
-    assert result.cache_key == "jwt_key_mapping:sub:new-user-42"
+    assert result.cache_key == AuthObject.jwt_key_mapping("sub", "new-user-42")
     # CRITICAL: no key was created — that must wait until after auth_builder
     mock_gen_key.assert_not_called()
     prisma_client.db.litellm_jwtkeymapping.create.assert_not_called()
@@ -879,7 +880,7 @@ async def test_auto_register_creates_key_and_mapping_when_helper_invoked():
     prisma_client.db.litellm_jwtkeymapping.find_first = AsyncMock(return_value=None)
     prisma_client.db.litellm_jwtkeymapping.create = AsyncMock()
 
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
     plaintext_key = "sk-auto-key"
     expected_hash = hash_token(plaintext_key)
     mock_key_obj = UserAPIKeyAuth(token=expected_hash, team_id="validated-team")
@@ -905,7 +906,7 @@ async def test_auto_register_creates_key_and_mapping_when_helper_invoked():
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=None,
             proxy_logging_obj=None,
-            cache_key="jwt_key_mapping:sub:new-user-42",
+            cache_key=AuthObject.jwt_key_mapping("sub", "new-user-42"),
             team_id="validated-team",
             user_id="validated-user",
         )
@@ -921,7 +922,7 @@ async def test_auto_register_creates_key_and_mapping_when_helper_invoked():
     assert call_data["jwt_claim_name"] == "sub"
     assert call_data["jwt_claim_value"] == "new-user-42"
     assert call_data["token"] == expected_hash
-    cached = await user_api_key_cache.async_get_cache("jwt_key_mapping:sub:new-user-42")
+    cached = await user_api_key_cache.async_get_cache(AuthObject.jwt_key_mapping("sub", "new-user-42"))
     assert cached == expected_hash
 
 
@@ -949,9 +950,9 @@ async def test_auto_register_returns_pending_signal_on_stale_no_mapping_sentinel
     prisma_client.db.litellm_jwtkeymapping.find_first = AsyncMock(return_value=None)
     prisma_client.db.litellm_jwtkeymapping.create = AsyncMock()
 
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
     await user_api_key_cache.async_set_cache(
-        "jwt_key_mapping:email:alice@corp.com", "__NO_MAPPING__"
+        AuthObject.jwt_key_mapping("email", "alice@corp.com"), "__NO_MAPPING__"
     )
 
     with patch(
@@ -971,7 +972,7 @@ async def test_auto_register_returns_pending_signal_on_stale_no_mapping_sentinel
     # Stale sentinel must be evicted so the deferred auto-register actually
     # runs after auth_builder validates the JWT
     cached_after = await user_api_key_cache.async_get_cache(
-        "jwt_key_mapping:email:alice@corp.com"
+        AuthObject.jwt_key_mapping("email", "alice@corp.com")
     )
     assert cached_after is None
     mock_gen_key.assert_not_called()
@@ -1011,7 +1012,7 @@ async def test_auto_register_race_condition_unique_conflict():
         return_value=winner_mapping
     )
 
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
     loser_plaintext = "sk-loser"
     loser_hash = hash_token(loser_plaintext)
     mock_key_obj = UserAPIKeyAuth(token="winner_token_hash", team_id=None)
@@ -1037,7 +1038,7 @@ async def test_auto_register_race_condition_unique_conflict():
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=None,
             proxy_logging_obj=None,
-            cache_key="jwt_key_mapping:sub:user-42",
+            cache_key=AuthObject.jwt_key_mapping("sub", "user-42"),
         )
 
     assert result == mock_key_obj
@@ -1046,7 +1047,7 @@ async def test_auto_register_race_condition_unique_conflict():
         where={"token": loser_hash}
     )
     # Cache should hold the winner's token, not the loser's
-    cached = await user_api_key_cache.async_get_cache("jwt_key_mapping:sub:user-42")
+    cached = await user_api_key_cache.async_get_cache(AuthObject.jwt_key_mapping("sub", "user-42"))
     assert cached == "winner_token_hash"
     mock_get_key.assert_called_once_with("winner_token_hash")
 
@@ -1071,7 +1072,7 @@ async def test_reject_behavior_enforced_when_prisma_client_is_none():
     )
     jwt_claims = {"email": "unknown@example.com"}
 
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
 
     with pytest.raises(HTTPException) as exc_info:
         await _resolve_jwt_to_virtual_key(
@@ -1109,7 +1110,7 @@ async def test_reject_raises_403_when_claim_field_missing_from_jwt():
             jwt_claims=jwt_claims,
             jwt_handler=jwt_handler,
             prisma_client=MagicMock(),
-            user_api_key_cache=DualCache(),
+            user_api_key_cache=UserApiKeyCache(),
             parent_otel_span=None,
             proxy_logging_obj=None,
         )
@@ -1140,7 +1141,7 @@ async def test_auto_register_raises_403_when_claim_field_missing_from_jwt():
             jwt_claims=jwt_claims,
             jwt_handler=jwt_handler,
             prisma_client=MagicMock(),
-            user_api_key_cache=DualCache(),
+            user_api_key_cache=UserApiKeyCache(),
             parent_otel_span=None,
             proxy_logging_obj=None,
         )
@@ -1168,7 +1169,7 @@ async def test_fallback_team_mapping_returns_none_when_claim_field_missing_from_
         jwt_claims=jwt_claims,
         jwt_handler=jwt_handler,
         prisma_client=MagicMock(),
-        user_api_key_cache=DualCache(),
+        user_api_key_cache=UserApiKeyCache(),
         parent_otel_span=None,
         proxy_logging_obj=None,
     )
@@ -1194,7 +1195,7 @@ async def test_fallback_team_mapping_returns_none_when_prisma_client_is_none():
         jwt_claims=jwt_claims,
         jwt_handler=jwt_handler,
         prisma_client=None,
-        user_api_key_cache=DualCache(),
+        user_api_key_cache=UserApiKeyCache(),
         parent_otel_span=None,
         proxy_logging_obj=None,
     )
@@ -1221,7 +1222,7 @@ async def test_auto_register_raises_500_when_prisma_client_is_none():
             jwt_claims=jwt_claims,
             jwt_handler=jwt_handler,
             prisma_client=None,
-            user_api_key_cache=DualCache(),
+            user_api_key_cache=UserApiKeyCache(),
             parent_otel_span=None,
             proxy_logging_obj=None,
         )
@@ -1247,10 +1248,10 @@ async def test_auto_register_raises_500_when_sentinel_cached_and_no_db():
     )
     jwt_claims = {"sub": "user-42"}
 
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
     # Stale sentinel written under a prior fallback_team_mapping config
     await user_api_key_cache.async_set_cache(
-        "jwt_key_mapping:sub:user-42", "__NO_MAPPING__"
+        AuthObject.jwt_key_mapping("sub", "user-42"), "__NO_MAPPING__"
     )
 
     with pytest.raises(HTTPException) as exc_info:
@@ -1297,7 +1298,7 @@ async def test_auto_register_race_conflict_tolerates_delete_failure():
         return_value=winner_mapping
     )
 
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
     mock_key_obj = UserAPIKeyAuth(token="winner_token_hash", team_id=None)
 
     with (
@@ -1321,7 +1322,7 @@ async def test_auto_register_race_conflict_tolerates_delete_failure():
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=None,
             proxy_logging_obj=None,
-            cache_key="jwt_key_mapping:sub:user-42",
+            cache_key=AuthObject.jwt_key_mapping("sub", "user-42"),
         )
 
     # Caller still receives the winner's mapping even when cleanup fails
@@ -1357,7 +1358,7 @@ async def test_auto_register_raises_503_when_winner_mapping_vanishes():
     # Winner row no longer exists by the time we refetch
     prisma_client.db.litellm_jwtkeymapping.find_first = AsyncMock(return_value=None)
 
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
 
     with (
         patch(
@@ -1375,7 +1376,7 @@ async def test_auto_register_raises_503_when_winner_mapping_vanishes():
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=None,
             proxy_logging_obj=None,
-            cache_key="jwt_key_mapping:sub:user-42",
+            cache_key=AuthObject.jwt_key_mapping("sub", "user-42"),
         )
 
     assert exc_info.value.status_code == 503
@@ -1409,9 +1410,9 @@ async def test_proxy_admin_sentinel_skips_db_lookup_on_cache_hit():
         side_effect=AssertionError("DB must not be hit when sentinel is cached")
     )
 
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
     await user_api_key_cache.async_set_cache(
-        "jwt_key_mapping:sub:admin-user", "__JWT_PROXY_ADMIN__"
+        AuthObject.jwt_key_mapping("sub", "admin-user"), "__JWT_PROXY_ADMIN__"
     )
 
     result = await _resolve_jwt_to_virtual_key(
@@ -1474,10 +1475,10 @@ async def test_auto_register_helper_stamps_validated_identity_context():
             claim_value="new-user",
             jwt_handler=jwt_handler,
             prisma_client=prisma_client,
-            user_api_key_cache=DualCache(),
+            user_api_key_cache=UserApiKeyCache(),
             parent_otel_span=None,
             proxy_logging_obj=None,
-            cache_key="jwt_key_mapping:sub:new-user",
+            cache_key=AuthObject.jwt_key_mapping("sub", "new-user"),
             team_id="validated-team",
             user_id="validated-user",
             org_id="validated-org",
@@ -1657,10 +1658,9 @@ async def test_delete_evicts_cache_after_row_is_gone():
     survives until TTL and the deleted mapping stays usable.
     """
     from litellm.proxy._types import DeleteJWTKeyMappingRequest
-    from litellm.proxy.auth.auth_checks import jwt_key_mapping_cache_key
 
-    cache_key = jwt_key_mapping_cache_key("email", "user@example.com")
-    user_api_key_cache = DualCache()
+    cache_key = AuthObject.jwt_key_mapping("email", "user@example.com")
+    user_api_key_cache = UserApiKeyCache()
     await user_api_key_cache.async_set_cache(key=cache_key, value="hashed_token")
 
     mock_prisma = _mock_prisma()
@@ -1695,11 +1695,10 @@ async def test_update_evicts_old_and_new_cache_keys_after_write():
     must be gone once the endpoint returns.
     """
     from litellm.proxy._types import UpdateJWTKeyMappingRequest
-    from litellm.proxy.auth.auth_checks import jwt_key_mapping_cache_key
 
-    old_cache_key = jwt_key_mapping_cache_key("email", "user@example.com")
-    new_cache_key = jwt_key_mapping_cache_key("email", "renamed@example.com")
-    user_api_key_cache = DualCache()
+    old_cache_key = AuthObject.jwt_key_mapping("email", "user@example.com")
+    new_cache_key = AuthObject.jwt_key_mapping("email", "renamed@example.com")
+    user_api_key_cache = UserApiKeyCache()
     await user_api_key_cache.async_set_cache(key=old_cache_key, value="hashed_token")
     await user_api_key_cache.async_set_cache(key=new_cache_key, value="__NO_MAPPING__")
 

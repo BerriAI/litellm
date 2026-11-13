@@ -10,7 +10,6 @@ from uuid import uuid4
 import pytest
 import pytest_asyncio
 
-from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy.auth.auth_checks import (
     get_org_object,
     get_team_membership,
@@ -21,7 +20,9 @@ from litellm.proxy.auth.auth_object_prefetch import AuthObjectRefs, prefetch_aut
 from litellm.proxy.auth.team_grants import team_model_aliases
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.utils import PrismaClient
+from litellm.redis.stores.auth_cache import AuthObject
 from tests.integration._support.prisma_clients import connected_proxy_prisma
+from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -33,8 +34,9 @@ async def prisma() -> AsyncIterator[PrismaClient]:
 
 
 def _frozen_cache() -> UserApiKeyCache:
-    """The org entries carry a 5s TTL; a frozen clock keeps a slow first call from expiring them mid-test."""
-    return UserApiKeyCache(in_memory_cache=InMemoryCache(clock=lambda: 1_000_000.0), redis_cache=None)
+    """The org entries carry a 5s TTL; a store that never expires keeps a slow first call from dropping them."""
+    cache, _ = shared_cache(FakeAuthCache(attached=False))
+    return cache
 
 
 def _dead_db() -> MagicMock:
@@ -76,7 +78,7 @@ async def test_join_binds_the_membership_to_the_requested_team(prisma):
         cache = _frozen_cache()
         refs = AuthObjectRefs(user_id=user_id, team_id=team_a, membership_user_id=user_id, organization_id=org_id)
         await prefetch_auth_objects(refs=refs, user_api_key_cache=cache, prisma_client=prisma)
-        assert cache.in_memory_cache.get_cache(f"org_id:{org_id}") is not None
+        assert cache.get_local(AuthObject.org(org_id)) is not None
 
         dead_db = _dead_db()
         membership = await get_team_membership(

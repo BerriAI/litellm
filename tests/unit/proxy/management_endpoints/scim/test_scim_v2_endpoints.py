@@ -69,6 +69,7 @@ from litellm.proxy.management_helpers.team_roster_sync import (
     RosterTarget,
     TeamGone,
 )
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.types.proxy.management_endpoints.scim_v2 import (
     SCIM_ENTERPRISE_USER_SCHEMA,
     SCIM_MANAGED_TEAM_METADATA_KEY,
@@ -3075,7 +3076,7 @@ async def test_recompute_scim_member_roles_stops_serving_a_demoted_members_cache
     monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
     cache = UserApiKeyCache()
     await cache.async_set_cache(
-        key="member-1", value={"user_id": "member-1", "user_role": LitellmUserRoles.PROXY_ADMIN.value}
+        key=AuthObject.user("member-1"), value={"user_id": "member-1", "user_role": LitellmUserRoles.PROXY_ADMIN.value}
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
     prisma, tx = _scim_admin_prisma(mocker, user_teams=["engineering"])
@@ -3083,7 +3084,7 @@ async def test_recompute_scim_member_roles_stops_serving_a_demoted_members_cache
     await _recompute_scim_member_roles(prisma, ["member-1"])
 
     tx.execute_raw.assert_awaited_once_with(ANY, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY, ["member-1"])
-    assert await cache.async_get_cache(key="member-1") is None
+    assert await cache.async_get_cache(key=AuthObject.user("member-1")) is None
 
 
 @pytest.mark.asyncio
@@ -3827,8 +3828,8 @@ async def test_apply_group_patch_updates_writes_only_the_patched_columns_and_evi
     mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
     updated = mocker.MagicMock()
     mock_prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=updated)
-    proxy_server.user_api_key_cache.set_cache(key="team_id:team-1", value={"team_id": "team-1"})
-    proxy_server.user_api_key_cache.set_cache(key="team_alias:Old", value={"team_id": "team-1"})
+    proxy_server.user_api_key_cache.set_cache(key=AuthObject.team("team-1"), value={"team_id": "team-1"})
+    proxy_server.user_api_key_cache.set_cache(key=AuthObject.team_alias("Old"), value={"team_id": "team-1"})
 
     result = await _apply_group_patch_updates(
         group_id="team-1",
@@ -3840,8 +3841,8 @@ async def test_apply_group_patch_updates_writes_only_the_patched_columns_and_evi
     assert result is updated
     mock_prisma_client.db.litellm_teamtable.update.assert_awaited_once()
     assert mock_prisma_client.db.litellm_teamtable.update.await_args.kwargs["data"] == {"team_alias": "Renamed"}
-    assert proxy_server.user_api_key_cache.get_cache("team_id:team-1") is None
-    assert proxy_server.user_api_key_cache.get_cache("team_alias:Old") is None
+    assert proxy_server.user_api_key_cache.get_cache(AuthObject.team("team-1")) is None
+    assert proxy_server.user_api_key_cache.get_cache(AuthObject.team_alias("Old")) is None
 
 
 @pytest.mark.asyncio
@@ -3854,7 +3855,7 @@ async def test_apply_group_patch_updates_with_nothing_to_write_reads_the_team_an
     existing = mocker.MagicMock()
     mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing)
     mock_prisma_client.db.litellm_teamtable.update = AsyncMock()
-    proxy_server.user_api_key_cache.set_cache(key="team_id:team-2", value={"team_id": "team-2"})
+    proxy_server.user_api_key_cache.set_cache(key=AuthObject.team("team-2"), value={"team_id": "team-2"})
 
     result = await _apply_group_patch_updates(
         group_id="team-2", update_data={}, prisma_client=mock_prisma_client, team_alias="Kept"
@@ -3862,7 +3863,7 @@ async def test_apply_group_patch_updates_with_nothing_to_write_reads_the_team_an
 
     assert result is existing
     mock_prisma_client.db.litellm_teamtable.update.assert_not_awaited()
-    assert proxy_server.user_api_key_cache.get_cache("team_id:team-2") is not None
+    assert proxy_server.user_api_key_cache.get_cache(AuthObject.team("team-2")) is not None
 
 
 def _mock_prisma_for_delete_user(mocker, team):

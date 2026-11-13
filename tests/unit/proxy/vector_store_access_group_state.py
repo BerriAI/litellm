@@ -15,6 +15,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks import cache_access_object
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 
 TOKEN: Final = "hashed-key"
@@ -69,7 +70,7 @@ class ProxyState:
         )
 
     async def add_team(self, team: LiteLLM_TeamTableCachedObj) -> None:
-        await self.cache.async_set_cache(key=f"team_id:{team.team_id}", value=team)
+        await self.cache.async_set_cache(key=AuthObject.team(team.team_id), value=team)
 
 
 def own_permission(stores: Sequence[str] | None) -> LiteLLM_ObjectPermissionTable | None:

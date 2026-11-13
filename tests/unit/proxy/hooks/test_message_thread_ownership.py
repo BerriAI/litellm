@@ -13,6 +13,7 @@ from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import RedisCache
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.message_thread_ownership import MessageThreadOwnership
 from litellm.types.utils import CallTypesLiteral
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging
@@ -106,7 +107,7 @@ async def allows(
 
 @pytest.mark.asyncio
 async def test_the_proxy_starts_with_a_hook_that_keeps_each_thread_with_its_key() -> None:
-    proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
     proxy_logging._add_proxy_hooks()
     await proxy_logging.post_call_success_hook(
         data={"thread": CREATE}, response=anthropic_message("msg_started"), user_api_key_dict=OWNER
@@ -493,7 +494,7 @@ async def test_a_pass_through_continue_is_checked_but_left_unchanged() -> None:
 
 @pytest.mark.asyncio
 async def test_thread_bindings_never_push_the_proxys_rate_limit_counters_out_of_memory() -> None:
-    proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
     ownership: Final = MessageThreadOwnership(message_thread_owner_cache=proxy_logging.message_thread_owner_cache)
     await proxy_logging.internal_usage_cache.async_set_cache(
         key="rpm-counter", value=1, litellm_parent_otel_span=None, ttl=60

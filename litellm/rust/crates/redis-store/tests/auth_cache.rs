@@ -8,7 +8,7 @@ use litellm_redis_client::{Operation, RedisClient, Ttl};
 use litellm_redis_store::Send as RedisSend;
 use litellm_redis_store::{
     Number, Remote, RequestRedis,
-    auth_cache::{self, AuthCache, Settings},
+    auth_cache::{AuthCache, AuthObject, Settings},
     router_cooldowns::RouterCooldowns,
 };
 use litellm_redis_testing::{RedisDeployment, Topology};
@@ -128,6 +128,22 @@ fn store(client: Option<RedisClient>) -> AuthCache {
     AuthCache::new(client.map(remote), settings(Some(60)))
 }
 
+fn team_id(id: &str) -> AuthObject {
+    AuthObject::Team(id.to_owned())
+}
+
+fn user(id: &str) -> AuthObject {
+    AuthObject::User(id.to_owned())
+}
+
+fn key_object() -> AuthObject {
+    AuthObject::Key(KEY_OBJECT.to_owned())
+}
+
+fn owned(ids: &[&str]) -> Vec<String> {
+    ids.iter().map(|id| (*id).to_owned()).collect()
+}
+
 fn team(id: &str) -> Value {
     Value::Dict(vec![(Value::from("team_id"), Value::from(id))])
 }
@@ -139,27 +155,81 @@ async fn redis_ttl(raw: &RedisClient, key: &str) -> Duration {
     remaining
 }
 
+/// The spellings `tests/unit/redis/stores/test_auth_cache.py` checks against `main`'s f-strings.
 #[rstest]
-#[case(KEY_OBJECT, true)]
+#[case(AuthObject::Key(KEY_OBJECT.to_owned()), KEY_OBJECT)]
+#[case(AuthObject::User("user-1".to_owned()), "user-1")]
+#[case(AuthObject::Team("team-1".to_owned()), "team_id:team-1")]
+#[case(AuthObject::TeamAlias("alpha".to_owned()), "team_alias:alpha")]
 #[case(
-    "88DC28D0F030C55ED4AB77ED8FAF098196CB1C05DF778539800C9F1243FE6B4B",
-    false
+    AuthObject::TeamMembership { team_id: "team_1".to_owned(), user_id: "user_1".to_owned() },
+    "team_1_user_1"
 )]
 #[case(
-    "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4",
-    false
+    AuthObject::TeamMembershipReservation { user_id: "user-1".to_owned(), team_id: "team-1".to_owned() },
+    "team_membership:user-1:team-1"
+)]
+#[case(AuthObject::Org("org-1".to_owned()), "org_id:org-1")]
+#[case(AuthObject::OrgWithBudget("org-1".to_owned()), "org_id:org-1:with_budget")]
+#[case(
+    AuthObject::OrgWithBudgetLastKnown("org-1".to_owned()),
+    "org_id:org-1:with_budget:last_known"
+)]
+#[case(AuthObject::OrgAlias("acme".to_owned()), "org_alias:acme")]
+#[case(AuthObject::Project("p-1".to_owned()), "project_id:p-1")]
+#[case(AuthObject::EndUser("eu-1".to_owned()), "end_user_id:eu-1")]
+#[case(AuthObject::EndUserRestrictedRegistry, "end_user_restricted_registry")]
+#[case(AuthObject::EndUserValidation("eu 1".to_owned()), "end_user_validation:eu 1")]
+#[case(AuthObject::CustomerMember("m-1".to_owned()), "customer_member_id:m-1")]
+#[case(AuthObject::CustomerOrgAlias("acme".to_owned()), "customer_org_alias:acme")]
+#[case(AuthObject::DefaultEndUserBudget("b-1".to_owned()), "default_end_user_budget:b-1")]
+#[case(
+    AuthObject::TeamMemberDefaultBudget("b-1".to_owned()),
+    "team_member_default_budget:b-1"
+)]
+#[case(AuthObject::Tag("prod".to_owned()), "tag:prod")]
+#[case(AuthObject::TagRegistry, "tag_registry")]
+#[case(AuthObject::ModelAccessGroup("beta".to_owned()), "model_access_group:beta")]
+#[case(AuthObject::ModelAccessGroupRegistry, "model_access_group_registry")]
+#[case(AuthObject::AccessGroup("ag-1".to_owned()), "access_group_id:ag-1")]
+#[case(AuthObject::AccessGroupRuleName("rule".to_owned()), "access_group_rule_name:rule")]
+#[case(AuthObject::ObjectPermission("op-1".to_owned()), "object_permission_id:op-1")]
+#[case(
+    AuthObject::UserObjectPermission("user-1".to_owned()),
+    "user_object_permission_id:user-1"
 )]
 #[case(
-    "team_id:88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
-    false
+    AuthObject::AgentObjectPermission("agent-1".to_owned()),
+    "agent_object_permission_id:agent-1"
 )]
-#[case("team_membership:user-1:team-1", false)]
-#[case("end_user_restricted_registry", false)]
-fn only_a_bare_lowercase_sha256_digest_is_a_user_key_object(
-    #[case] key: &str,
-    #[case] key_object: bool,
-) {
-    assert_eq!(auth_cache::is_key_object(key), key_object, "{key}");
+#[case(AuthObject::ManagedVectorStore("vs-1".to_owned()), "managed_vector_store_id:vs-1")]
+#[case(
+    AuthObject::JwtKeyMapping { issuer: None, claim_name: "sub".to_owned(), claim_value: "a:b".to_owned() },
+    "jwt_key_mapping:sub:a:b"
+)]
+#[case(
+    AuthObject::JwtKeyMapping {
+        issuer: Some("https://idp".to_owned()),
+        claim_name: "sub".to_owned(),
+        claim_value: "a".to_owned(),
+    },
+    "jwt_key_mapping:https://idp:sub:a"
+)]
+#[case(
+    AuthObject::AgentIdentity { tenant_id: "t\u{e9}".to_owned(), client_id: "c\"1".to_owned() },
+    r#"agent_identity:["t\u00e9", "c\"1"]"#
+)]
+#[case(AuthObject::GlobalProxySpend, "default_user_id:spend")]
+fn each_object_is_cached_under_mains_key(#[case] object: AuthObject, #[case] key: &str) {
+    assert_eq!(object.key(), key);
+}
+
+#[rstest]
+#[case(AuthObject::Key(KEY_OBJECT.to_owned()), true)]
+#[case(AuthObject::User(KEY_OBJECT.to_owned()), false)]
+#[case(AuthObject::Team(KEY_OBJECT.to_owned()), false)]
+fn only_a_virtual_key_is_a_user_key_object(#[case] object: AuthObject, #[case] key_object: bool) {
+    assert_eq!(object.is_key_object(), key_object);
 }
 
 #[rstest]
@@ -172,8 +242,9 @@ async fn writes_mains_json_and_str_bytes(
     let store = store(Some(connect(&deployment)));
 
     for (index, (value, json, printed)) in written().into_iter().enumerate() {
-        let key = format!("team_id:t{index}");
-        store.set(None, &key, value.clone(), None).await.unwrap();
+        let object = team_id(&format!("t{index}"));
+        let key = object.key();
+        store.set(None, &object, value.clone(), None).await.unwrap();
         assert_eq!(
             raw.send(commands::get::<String>(&key))
                 .await
@@ -181,7 +252,7 @@ async fn writes_mains_json_and_str_bytes(
                 .as_deref(),
             Some(json)
         );
-        store.set_str(None, &key, value, None).await.unwrap();
+        store.set_str(None, &object, value, None).await.unwrap();
         assert_eq!(
             raw.send(commands::get::<String>(&key))
                 .await
@@ -202,20 +273,24 @@ async fn reads_every_encoding_main_writes_and_backfills_memory(
     let store = store(Some(connect(&deployment)));
 
     for (index, (bytes, expected)) in read_back().into_iter().enumerate() {
-        let key = format!("user_id:u{index}");
+        let object = user(&format!("u{index}"));
+        let key = object.key();
         raw.send(commands::set(&key, bytes, Duration::from_secs(60)))
             .await
             .unwrap();
 
-        assert_eq!(store.get(None, &key).await.unwrap(), Some(expected.clone()));
+        assert_eq!(
+            store.get(None, &object).await.unwrap(),
+            Some(expected.clone())
+        );
         raw.send(commands::del(&[&key])).await.unwrap();
         assert_eq!(
-            store.get(None, &key).await.unwrap(),
+            store.get(None, &object).await.unwrap(),
             Some(expected),
             "{key}"
         );
     }
-    assert_eq!(store.get(None, "user_id:absent").await.unwrap(), None);
+    assert_eq!(store.get(None, &user("absent")).await.unwrap(), None);
 }
 
 #[rstest]
@@ -239,22 +314,22 @@ async fn ttls_follow_dual_cache_and_the_write_back_rule(
     store
         .set(
             None,
-            "team_id:given",
+            &team_id("given"),
             team("a"),
             Some(Duration::from_secs_f64(30.9)),
         )
         .await
         .unwrap();
     store
-        .set(None, "team_id:default", team("b"), None)
+        .set(None, &team_id("default"), team("b"), None)
         .await
         .unwrap();
     store
         .write_back(
             RedisSend::Now,
             vec![
-                ("user-1".to_owned(), team("c"), None),
-                ("user-2".to_owned(), team("d"), Some(Duration::from_secs(5))),
+                (user("user-1"), team("c"), None),
+                (user("user-2"), team("d"), Some(Duration::from_secs(5))),
             ],
         )
         .unwrap()
@@ -265,7 +340,7 @@ async fn ttls_follow_dual_cache_and_the_write_back_rule(
     assert!(within(redis_ttl(&raw, "team_id:default").await, 20));
     assert!(within(redis_ttl(&raw, "user-1").await, 45));
     assert!(within(redis_ttl(&raw, "user-2").await, 5));
-    assert_eq!(store.get_local("user-1").unwrap(), Some(team("c")));
+    assert_eq!(store.get_local(&user("user-1")).unwrap(), Some(team("c")));
 }
 
 #[tokio::test]
@@ -278,19 +353,19 @@ async fn user_key_objects_survive_churn_in_the_management_object_partition() {
         },
     );
     store
-        .set(None, KEY_OBJECT, team("key"), None)
+        .set(None, &key_object(), team("key"), None)
         .await
         .unwrap();
 
     for index in 0..5 {
         store
-            .set(None, &format!("team_id:t{index}"), team("t"), None)
+            .set(None, &team_id(&format!("t{index}")), team("t"), None)
             .await
             .unwrap();
     }
 
     assert_eq!(
-        store.get(None, KEY_OBJECT).await.unwrap(),
+        store.get(None, &key_object()).await.unwrap(),
         Some(team("key"))
     );
     assert_eq!(store.len_local().unwrap(), (2, 1));
@@ -307,11 +382,11 @@ async fn a_value_json_refuses_stays_in_memory_and_never_reaches_redis(
     let members = Value::Set(vec![Value::from("a")]);
 
     store
-        .set(None, "team_id:set", members.clone(), None)
+        .set(None, &team_id("set"), members.clone(), None)
         .await
         .unwrap();
 
-    assert_eq!(store.get_local("team_id:set").unwrap(), Some(members));
+    assert_eq!(store.get_local(&team_id("set")).unwrap(), Some(members));
     assert_eq!(
         raw.send(commands::get::<String>("team_id:set"))
             .await
@@ -332,17 +407,14 @@ async fn a_value_json_refuses_keeps_its_whole_pipeline_out_of_redis() {
     store
         .set_many(
             None,
-            vec![
-                ("team_id:a".to_owned(), team("a")),
-                ("team_id:set".to_owned(), members.clone()),
-            ],
+            vec![(team_id("a"), team("a")), (team_id("set"), members.clone())],
             None,
         )
         .await
         .unwrap();
 
-    assert_eq!(store.get_local("team_id:a").unwrap(), Some(team("a")));
-    assert_eq!(store.get_local("team_id:set").unwrap(), Some(members));
+    assert_eq!(store.get_local(&team_id("a")).unwrap(), Some(team("a")));
+    assert_eq!(store.get_local(&team_id("set")).unwrap(), Some(members));
     assert_eq!(
         raw.send(commands::get::<String>("team_id:a"))
             .await
@@ -363,14 +435,14 @@ async fn a_write_back_value_json_refuses_fails_after_memory_and_before_redis() {
     let written = store.write_back(
         RedisSend::Now,
         vec![
-            ("team_id:set".to_owned(), members.clone(), None),
-            ("team_id:a".to_owned(), team("a"), None),
+            (team_id("set"), members.clone(), None),
+            (team_id("a"), team("a"), None),
         ],
     );
 
     assert!(written.is_err());
-    assert_eq!(store.get_local("team_id:set").unwrap(), Some(members));
-    assert_eq!(store.get_local("team_id:a").unwrap(), Some(team("a")));
+    assert_eq!(store.get_local(&team_id("set")).unwrap(), Some(members));
+    assert_eq!(store.get_local(&team_id("a")).unwrap(), Some(team("a")));
     assert_eq!(
         raw.send(commands::get::<String>("team_id:a"))
             .await
@@ -411,21 +483,26 @@ async fn pre_call_writes_and_reads_ride_one_pipeline_with_the_cooldown_read(
     let reads = store
         .get_many(
             RedisSend::PreCall(&request),
-            &[KEY_OBJECT.to_owned(), "end_user_id:absent".to_owned()],
+            &[key_object(), AuthObject::EndUser("absent".to_owned())],
         )
         .unwrap();
     let active = cooldowns
         .active(RedisSend::PreCall(&request), &["dep-a".to_owned()])
         .unwrap();
     let written = store
-        .declare_set(RedisSend::PreCall(&request), "team_id:t1", team("t1"), None)
+        .declare_set(
+            RedisSend::PreCall(&request),
+            &team_id("t1"),
+            team("t1"),
+            None,
+        )
         .unwrap();
     let deleted = store
         .declare_delete(RedisSend::PreCall(&request), "team_alias:alpha")
         .unwrap();
 
     assert!(trips.seen().is_empty());
-    assert_eq!(store.get_local("team_id:t1").unwrap(), Some(team("t1")));
+    assert_eq!(store.get_local(&team_id("t1")).unwrap(), Some(team("t1")));
     request.flush_pre().await;
 
     let mut seen = trips.seen();
@@ -480,18 +557,14 @@ async fn a_write_back_on_the_request_waits_for_the_next_flush(
     store
         .write_back(
             RedisSend::PreCall(&request),
-            vec![(
-                "user-1".to_owned(),
-                team("u"),
-                Some(Duration::from_secs(42)),
-            )],
+            vec![(user("user-1"), team("u"), Some(Duration::from_secs(42)))],
         )
         .unwrap()
         .await
         .unwrap();
 
     assert!(trips.seen().is_empty());
-    assert_eq!(store.get_local("user-1").unwrap(), Some(team("u")));
+    assert_eq!(store.get_local(&user("user-1")).unwrap(), Some(team("u")));
     request.flush_pre().await;
     let write = match topology {
         Topology::Standalone => Operation::Pipeline { ops: 1 },
@@ -511,22 +584,22 @@ async fn an_eviction_broadcast_drops_only_this_pods_copy_and_the_next_read_refil
     let this_pod = store(Some(connect(&deployment)));
     let other_pod = store(Some(connect(&deployment)));
     this_pod
-        .set(None, "team_id:t1", team("old"), None)
+        .set(None, &team_id("t1"), team("old"), None)
         .await
         .unwrap();
     other_pod
-        .set(None, "team_id:t1", team("new"), None)
+        .set(None, &team_id("t1"), team("new"), None)
         .await
         .unwrap();
 
     assert_eq!(
-        this_pod.get(None, "team_id:t1").await.unwrap(),
+        this_pod.get(None, &team_id("t1")).await.unwrap(),
         Some(team("old"))
     );
     this_pod.delete_local("team_id:t1").unwrap();
 
     assert_eq!(
-        this_pod.get(None, "team_id:t1").await.unwrap(),
+        this_pod.get(None, &team_id("t1")).await.unwrap(),
         Some(team("new"))
     );
     assert!(
@@ -556,7 +629,7 @@ async fn a_key_the_request_read_as_missing_is_not_read_again(
         ))
     };
     let read = store
-        .get_many(RedisSend::PreCall(&request), &["team_id:read".to_owned()])
+        .get_many(RedisSend::PreCall(&request), &[team_id("read")])
         .unwrap();
     assert_eq!(read.await.unwrap(), vec![None]);
     store
@@ -568,22 +641,25 @@ async fn a_key_the_request_read_as_missing_is_not_read_again(
     other_pod_writes("team_id:deleted").await.unwrap();
 
     assert_eq!(
-        store.get(Some(&request), "team_id:read").await.unwrap(),
+        store.get(Some(&request), &team_id("read")).await.unwrap(),
         None
     );
     assert_eq!(
-        store.get(Some(&request), "team_id:deleted").await.unwrap(),
+        store
+            .get(Some(&request), &team_id("deleted"))
+            .await
+            .unwrap(),
         None
     );
     assert_eq!(
-        store.get(None, "team_id:read").await.unwrap(),
+        store.get(None, &team_id("read")).await.unwrap(),
         Some(team_record())
     );
 
     store
         .declare_set(
             RedisSend::PreCall(&request),
-            "team_id:deleted",
+            &team_id("deleted"),
             team("t"),
             None,
         )
@@ -592,7 +668,10 @@ async fn a_key_the_request_read_as_missing_is_not_read_again(
         .unwrap();
     store.delete_local("team_id:deleted").unwrap();
     assert_eq!(
-        store.get(Some(&request), "team_id:deleted").await.unwrap(),
+        store
+            .get(Some(&request), &team_id("deleted"))
+            .await
+            .unwrap(),
         Some(team("t"))
     );
 }
@@ -618,25 +697,25 @@ async fn a_write_in_the_request_makes_a_key_it_read_as_missing_readable_again(
     let deployment = RedisDeployment::start(topology).await.unwrap();
     let store = store(Some(connect(&deployment)));
     let request = RequestRedis::new(Handle::current(), LONG_DEADLINE);
-    let key = "team_id:t";
+    let object = team_id("t");
     let read = store
-        .get_many(RedisSend::PreCall(&request), &[key.to_owned()])
+        .get_many(RedisSend::PreCall(&request), std::slice::from_ref(&object))
         .unwrap();
     assert_eq!(read.await.unwrap(), vec![None]);
 
     match write {
         RequestWrite::Set => store
-            .set(Some(&request), key, written.clone(), None)
+            .set(Some(&request), &object, written.clone(), None)
             .await
             .unwrap(),
         RequestWrite::SetStr => store
-            .set_str(Some(&request), key, written.clone(), None)
+            .set_str(Some(&request), &object, written.clone(), None)
             .await
             .unwrap(),
         RequestWrite::SetMany => store
             .set_many(
                 Some(&request),
-                vec![(key.to_owned(), written.clone())],
+                vec![(object.clone(), written.clone())],
                 None,
             )
             .await
@@ -644,16 +723,19 @@ async fn a_write_in_the_request_makes_a_key_it_read_as_missing_readable_again(
         RequestWrite::WriteBack => store
             .write_back(
                 RedisSend::PreCall(&request),
-                vec![(key.to_owned(), written.clone(), None)],
+                vec![(object.clone(), written.clone(), None)],
             )
             .unwrap()
             .await
             .unwrap(),
     }
     request.flush_pre().await;
-    store.delete_local(key).unwrap();
+    store.delete_local(&object.key()).unwrap();
 
-    assert_eq!(store.get(Some(&request), key).await.unwrap(), Some(written));
+    assert_eq!(
+        store.get(Some(&request), &object).await.unwrap(),
+        Some(written)
+    );
 }
 
 #[rstest]
@@ -664,11 +746,15 @@ async fn delete_drops_memory_and_redis(
     let deployment = RedisDeployment::start(topology).await.unwrap();
     let raw = connect(&deployment);
     let store = store(Some(connect(&deployment)));
-    let keys = [KEY_OBJECT.to_owned(), "team_id:t1".to_owned()];
+    let objects = [key_object(), team_id("t1")];
+    let keys: Vec<String> = objects.iter().map(AuthObject::key).collect();
     store
         .set_many(
             None,
-            keys.iter().map(|key| (key.clone(), team("t"))).collect(),
+            objects
+                .iter()
+                .map(|object| (object.clone(), team("t")))
+                .collect(),
             None,
         )
         .await
@@ -682,10 +768,28 @@ async fn delete_drops_memory_and_redis(
 
     store.delete(&keys).await.unwrap();
 
-    for key in &keys {
-        assert_eq!(store.get_local(key).unwrap(), None);
+    for (object, key) in objects.iter().zip(&keys) {
+        assert_eq!(store.get_local(object).unwrap(), None);
         assert_eq!(raw.send(commands::get::<String>(key)).await.unwrap(), None);
     }
+}
+
+#[tokio::test]
+async fn an_eviction_by_wire_key_drops_a_hex_user_id_and_a_virtual_key_from_their_partitions() {
+    let store = store(None);
+    store
+        .set(None, &user(KEY_OBJECT), team("u"), None)
+        .await
+        .unwrap();
+    store
+        .set(None, &key_object(), team("k"), None)
+        .await
+        .unwrap();
+    assert_eq!(store.len_local().unwrap(), (1, 1));
+
+    store.delete(&owned(&[KEY_OBJECT])).await.unwrap();
+
+    assert_eq!(store.len_local().unwrap(), (0, 0));
 }
 
 #[rstest]
@@ -699,25 +803,25 @@ async fn increment_if_present_only_raises_an_entry_redis_holds(
 
     assert_eq!(
         store
-            .increment_if_present("litellm-proxy-budget:spend", Number::Float(2.5))
+            .increment_if_present(&AuthObject::GlobalProxySpend, Number::Float(2.5))
             .await
             .unwrap(),
         None
     );
     assert_eq!(
-        raw.send(commands::get::<String>("litellm-proxy-budget:spend"))
+        raw.send(commands::get::<String>("default_user_id:spend"))
             .await
             .unwrap(),
         None
     );
     store
-        .set(None, "litellm-proxy-budget:spend", Value::Float(1.5), None)
+        .set(None, &AuthObject::GlobalProxySpend, Value::Float(1.5), None)
         .await
         .unwrap();
 
     assert_eq!(
         store
-            .increment_if_present("litellm-proxy-budget:spend", Number::Float(2.5))
+            .increment_if_present(&AuthObject::GlobalProxySpend, Number::Float(2.5))
             .await
             .unwrap(),
         Some(4.0)
@@ -730,44 +834,45 @@ async fn without_redis_every_operation_is_memory_only() {
     let request = RequestRedis::new(Handle::current(), LONG_DEADLINE);
 
     store
-        .set(None, "team_id:t1", team("t"), None)
+        .set(None, &team_id("t1"), team("t"), None)
         .await
         .unwrap();
 
     store
-        .declare_set(RedisSend::PreCall(&request), "team_id:t2", team("t"), None)
+        .declare_set(
+            RedisSend::PreCall(&request),
+            &team_id("t2"),
+            team("t"),
+            None,
+        )
         .unwrap()
         .await
         .unwrap();
-    assert_eq!(store.get_local("team_id:t2").unwrap(), Some(team("t")));
+    assert_eq!(store.get_local(&team_id("t2")).unwrap(), Some(team("t")));
     store
         .declare_delete(RedisSend::PreCall(&request), "team_id:t2")
         .unwrap()
         .await
         .unwrap();
-    assert_eq!(store.get_local("team_id:t2").unwrap(), None);
+    assert_eq!(store.get_local(&team_id("t2")).unwrap(), None);
     assert!(
         store
-            .get_many(RedisSend::PreCall(&request), &["team_id:t1".to_owned()])
+            .get_many(RedisSend::PreCall(&request), &[team_id("t1")])
             .is_none()
     );
-    assert!(
-        store
-            .get_many(RedisSend::Now, &["team_id:t1".to_owned()])
-            .is_none()
-    );
+    assert!(store.get_many(RedisSend::Now, &[team_id("t1")]).is_none());
     assert_eq!(
         store
-            .increment_if_present("k", Number::Float(1.0))
+            .increment_if_present(&AuthObject::GlobalProxySpend, Number::Float(1.0))
             .await
             .unwrap(),
         None
     );
     assert_eq!(
-        store.get(None, "team_id:t1").await.unwrap(),
+        store.get(None, &team_id("t1")).await.unwrap(),
         Some(team("t"))
     );
-    assert_eq!(store.get_local("team_id:t2").unwrap(), None);
+    assert_eq!(store.get_local(&team_id("t2")).unwrap(), None);
 }
 
 // UserApiKeyCache writes the key-object partition, then the rest, and deletes both partitions
@@ -788,10 +893,7 @@ async fn the_auth_cache_sends_the_commands_user_api_key_cache_sends(
     store
         .set_many(
             None,
-            vec![
-                (KEY_OBJECT.to_owned(), team("t0")),
-                ("team_id:t1".to_owned(), team("t1")),
-            ],
+            vec![(key_object(), team("t0")), (team_id("t1"), team("t1"))],
             None,
         )
         .await
@@ -802,7 +904,7 @@ async fn the_auth_cache_sends_the_commands_user_api_key_cache_sends(
         .await
         .unwrap();
     store
-        .increment_if_present("litellm-proxy-budget:spend", Number::Int(5))
+        .increment_if_present(&AuthObject::GlobalProxySpend, Number::Int(5))
         .await
         .unwrap();
 

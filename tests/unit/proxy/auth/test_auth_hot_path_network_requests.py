@@ -25,8 +25,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 
-from litellm.caching.dual_cache import DualCache
-from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy._types import (
     LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
@@ -41,11 +39,13 @@ from litellm.proxy.auth.auth_checks import (
     get_team_object,
     get_user_object,
 )
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.redis.stores.auth_cache import AuthObject
 
 
 class CacheCallTracker:
     """
-    Tracks cache read/write operations by wrapping DualCache methods.
+    Tracks cache read/write operations by wrapping UserApiKeyCache methods.
     This is used to count network-level operations on the hot path.
     """
 
@@ -68,20 +68,20 @@ class CacheCallTracker:
         }
 
 
-def _wrap_cache_with_tracker(cache: DualCache, tracker: CacheCallTracker) -> DualCache:
-    """Wrap a DualCache to track all reads and writes."""
+def _wrap_cache_with_tracker(cache: UserApiKeyCache, tracker: CacheCallTracker) -> UserApiKeyCache:
+    """Wrap a UserApiKeyCache to track all reads and writes."""
     original_async_get = cache.async_get_cache
     original_async_set = cache.async_set_cache
 
     async def tracked_async_get(key, *args, **kwargs):
         result = await original_async_get(key, *args, **kwargs)
         tracker.cache_reads.append(
-            {"key": key, "hit": result is not None, "method": "async_get_cache"}
+            {"key": key.key, "hit": result is not None, "method": "async_get_cache"}
         )
         return result
 
     async def tracked_async_set(key, value, *args, **kwargs):
-        tracker.cache_writes.append({"key": key, "method": "async_set_cache"})
+        tracker.cache_writes.append({"key": key.key, "method": "async_set_cache"})
         return await original_async_set(key, value, *args, **kwargs)
 
     cache.async_get_cache = tracked_async_get
@@ -161,8 +161,8 @@ async def test_get_key_object_warm_cache():
     valid_token = _create_valid_token(api_key, team_id, user_id)
 
     # Create cache with pre-populated data
-    cache = DualCache(in_memory_cache=InMemoryCache())
-    await cache.async_set_cache(key=hashed_token, value=valid_token)
+    cache = UserApiKeyCache()
+    await cache.async_set_cache(key=AuthObject.virtual_key(hashed_token), value=valid_token)
 
     # Track cache operations
     tracker = CacheCallTracker()
@@ -206,7 +206,7 @@ async def test_get_key_object_cold_cache():
     valid_token = _create_valid_token(api_key, team_id, user_id)
 
     # Create empty cache
-    cache = DualCache(in_memory_cache=InMemoryCache())
+    cache = UserApiKeyCache()
 
     tracker = CacheCallTracker()
     tracked_cache = _wrap_cache_with_tracker(cache, tracker)
@@ -245,9 +245,9 @@ async def test_get_team_object_warm_cache():
     team_id = "team-warm-123"
     team_obj = _create_team_object(team_id)
 
-    cache = DualCache(in_memory_cache=InMemoryCache())
-    cache_key = f"team_id:{team_id}"
-    await cache.async_set_cache(key=cache_key, value=team_obj)
+    cache = UserApiKeyCache()
+    cache_key = AuthObject.team(team_id).key
+    await cache.async_set_cache(key=AuthObject.team(team_id), value=team_obj)
 
     tracker = CacheCallTracker()
     tracked_cache = _wrap_cache_with_tracker(cache, tracker)
@@ -287,8 +287,8 @@ async def test_get_user_object_warm_cache():
     user_id = "user-warm-456"
     user_obj = _create_user_object(user_id)
 
-    cache = DualCache(in_memory_cache=InMemoryCache())
-    await cache.async_set_cache(key=user_id, value=user_obj)
+    cache = UserApiKeyCache()
+    await cache.async_set_cache(key=AuthObject.user(user_id), value=user_obj)
 
     tracker = CacheCallTracker()
     tracked_cache = _wrap_cache_with_tracker(cache, tracker)
@@ -337,10 +337,12 @@ async def test_get_team_membership_warm_cache():
         "litellm_budget_table": None,
     }
 
-    cache = DualCache(in_memory_cache=InMemoryCache())
+    cache = UserApiKeyCache()
     # Cache key format used by get_team_membership
-    cache_key = f"team_membership:{user_id}:{team_id}"
-    await cache.async_set_cache(key=cache_key, value=membership_dict)
+    cache_key = AuthObject.team_membership_reservation(user_id=user_id, team_id=team_id).key
+    await cache.async_set_cache(
+        key=AuthObject.team_membership_reservation(user_id=user_id, team_id=team_id), value=membership_dict
+    )
 
     tracker = CacheCallTracker()
     tracked_cache = _wrap_cache_with_tracker(cache, tracker)
@@ -389,8 +391,8 @@ async def test_team_membership_cache_key_duplication():
     team_id = "team-dup-123"
 
     # The two different cache keys used for the same data
-    key_format_1 = f"{team_id}_{user_id}"  # user_api_key_auth format
-    key_format_2 = f"team_membership:{user_id}:{team_id}"  # auth_checks format
+    key_format_1 = AuthObject.team_membership(team_id=team_id, user_id=user_id).key  # user_api_key_auth format
+    key_format_2 = AuthObject.team_membership_reservation(user_id=user_id, team_id=team_id).key  # auth_checks format
 
     _ = {
         "user_id": user_id,
@@ -443,15 +445,16 @@ async def test_full_hot_path_network_count():
     )
 
     # Pre-populate cache with all data
-    cache = DualCache(in_memory_cache=InMemoryCache())
-    await cache.async_set_cache(key=hashed_token, value=valid_token)
-    await cache.async_set_cache(key=f"team_id:{team_id}", value=team_obj)
-    await cache.async_set_cache(key=user_id, value=user_obj)
+    cache = UserApiKeyCache()
+    await cache.async_set_cache(key=AuthObject.virtual_key(hashed_token), value=valid_token)
+    await cache.async_set_cache(key=AuthObject.team(team_id), value=team_obj)
+    await cache.async_set_cache(key=AuthObject.user(user_id), value=user_obj)
     await cache.async_set_cache(
-        key=f"team_membership:{user_id}:{team_id}", value=membership_data.model_dump()
+        key=AuthObject.team_membership_reservation(user_id=user_id, team_id=team_id),
+        value=membership_data.model_dump(),
     )
     await cache.async_set_cache(
-        key=f"{team_id}_{user_id}", value=membership_data.model_dump()
+        key=AuthObject.team_membership(team_id=team_id, user_id=user_id), value=membership_data.model_dump()
     )
 
     # Create tracker AFTER populating cache
@@ -529,7 +532,7 @@ async def test_get_user_object_missing_user_negative_cache():
     """
     user_id = "user-missing-negative-cache"
 
-    cache = DualCache(in_memory_cache=InMemoryCache())
+    cache = UserApiKeyCache()
 
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
@@ -560,7 +563,7 @@ async def test_get_user_object_missing_user_rechecks_after_expiry():
 
     user_id = "user-missing-expiry-recheck"
 
-    cache = DualCache(in_memory_cache=InMemoryCache())
+    cache = UserApiKeyCache()
 
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
