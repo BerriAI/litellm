@@ -12251,10 +12251,13 @@ class ProxyStartupEvent:
         if premium_user is not True or prisma_client is None:
             return None
         try:
+            from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
+                BaseEmailLogger,  # pyright: ignore[reportUnknownVariableType]  # litellm_enterprise is absent from the type-check venv
+            )
+
             from litellm.proxy.common_utils.key_expiry_alert_manager import (
                 KeyExpiryAlertManager,
                 KeyExpiryEmailLogger,
-                key_expiry_email_logger_type,
             )
             from litellm.proxy.common_utils.key_expiry_alerts import (
                 KEY_EXPIRY_ALERT_DAYS_ERROR,
@@ -12272,7 +12275,7 @@ class ProxyStartupEvent:
                 return None
 
             expiry_email_loggers: Final = litellm.logging_callback_manager.get_custom_loggers_for_type(
-                callback_type=key_expiry_email_logger_type()
+                callback_type=BaseEmailLogger  # pyright: ignore[reportUnknownArgumentType]  # litellm_enterprise is absent from the type-check venv
             )
             expiry_alerting_config: Final = _GENERAL_SETTINGS_VIEW.validate_python(general_settings).get("alerting")
             if not expiry_email_loggers and "email" not in (as_object_list(expiry_alerting_config) or ()):

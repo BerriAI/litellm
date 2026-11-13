@@ -2,14 +2,12 @@ import logging
 import math
 from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, timezone
-from importlib import import_module
 from typing import Final, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm._internal_context import with_service_target
 from litellm.constants import KEY_EXPIRY_ALERT_MAX_DAYS
-from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy.common_utils.key_expiry_alerts import key_expiry_alert_days
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.chunked_in import find_many_in
@@ -17,7 +15,6 @@ from litellm.repositories.user_repository import UserRepository
 
 _METADATA: Final = TypeAdapter(dict[str, object])
 _ROWS: Final = TypeAdapter(tuple[object, ...])
-_SETTINGS: Final = TypeAdapter(dict[str, bool])
 _EXPIRING_KEYS_SQL: Final = """
 SELECT token, key_alias, key_name, user_id, expires, metadata
 FROM "LiteLLM_VerificationToken"
@@ -45,27 +42,6 @@ def _key_or_none(row: object) -> _ExpiryAlertKey | None:
     except ValidationError:
         logger.exception("Invalid key expiry alert row")
         return None
-
-
-@runtime_checkable
-class _EmailSettingsModule(Protocol):
-    async def get_email_settings(self, prisma_client: PrismaClient) -> object: ...
-
-
-@runtime_checkable
-class _EmailLoggerModule(Protocol):
-    @property
-    def BaseEmailLogger(self) -> type[CustomLogger]: ...
-
-
-_EMAIL_SETTINGS_MODULE: Final = TypeAdapter(_EmailSettingsModule, config=ConfigDict(arbitrary_types_allowed=True))
-_EMAIL_LOGGER_MODULE: Final = TypeAdapter(_EmailLoggerModule, config=ConfigDict(arbitrary_types_allowed=True))
-
-
-def key_expiry_email_logger_type() -> type[CustomLogger]:
-    return _EMAIL_LOGGER_MODULE.validate_python(
-        import_module("litellm_enterprise.enterprise_callbacks.send_emails.base_email")
-    ).BaseEmailLogger
 
 
 class ExpiryAlertCache(Protocol):
@@ -105,11 +81,11 @@ class KeyExpiryAlertManager:
         self.clock = clock
 
     async def process_alerts(self) -> None:
-        email_settings_module: Final = _EMAIL_SETTINGS_MODULE.validate_python(
-            import_module("litellm_enterprise.enterprise_callbacks.send_emails.endpoints")
+        from litellm_enterprise.enterprise_callbacks.send_emails.endpoints import (
+            get_email_settings,  # pyright: ignore[reportUnknownVariableType]  # litellm_enterprise is absent from the type-check venv
         )
-        settings: Final = _SETTINGS.validate_python(await email_settings_module.get_email_settings(self.prisma_client))
-        if not settings.get("Virtual Key Expiring", True):
+
+        if not (await get_email_settings(self.prisma_client)).get("Virtual Key Expiring", True):  # pyright: ignore[reportUnknownMemberType]  # litellm_enterprise is absent from the type-check venv
             return
         now: Final = self.clock().astimezone(timezone.utc)
         rows: Final = _ROWS.validate_python(
