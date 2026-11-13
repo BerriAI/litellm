@@ -20778,8 +20778,13 @@
       "subtitle": "Usage across each customer organization’s customer teams and customer members.",
       "create": "Create customer organization",
       "searchPlaceholder": "Search by customer organization ID or alias",
+      "overallUsage": "Overall customer usage",
+      "overallUsageHelp": "Usage across all external customer organizations for the selected dates.",
+      "newestFirst": "Newest first",
+      "budgetAndShareHelp": "Budget spend follows each configured reset period. Share of overall spend uses the current UTC calendar month across all customer organizations, regardless of search or pagination. Status reflects all configured budget limits. The date picker controls the summary above.",
       "columns": {
         "customer": "$t(customerPortal.entities.organization)",
+        "overallSpendShare": "Share of overall spend",
         "spend": "Spend",
         "requests": "Requests",
         "tokens": "Tokens",
