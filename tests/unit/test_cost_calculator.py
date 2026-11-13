@@ -5250,6 +5250,37 @@ def test_completion_cost_bills_interactions_google_search_per_query():
     assert cost > 3 * per_query_cost
 
 
+def test_completion_cost_bills_an_agent_interaction_at_its_agent_row():
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    agent: Final = "deep-research-preview-04-2026"
+    model_info: Final = litellm.get_model_info(model=agent, custom_llm_provider="vertex_ai")
+    response: Final = InteractionsAPIResponse(
+        id="interactions/agent123",
+        agent=agent,
+        status="completed",
+        usage={
+            "total_input_tokens": 1000,
+            "input_tokens_by_modality": [{"modality": "text", "tokens": 1000}],
+            "total_cached_tokens": 200,
+            "total_output_tokens": 300,
+            "output_tokens_by_modality": [{"modality": "text", "tokens": 300}],
+            "total_thought_tokens": 100,
+            "grounding_tool_count": [{"type": "google_search", "count": 3}],
+        },
+    )
+
+    cost: Final = completion_cost(completion_response=response, custom_llm_provider="vertex_ai")
+
+    assert model_info["key"] == f"vertex_ai/{agent}"
+    assert cost == pytest.approx(
+        800 * model_info["input_cost_per_token"]
+        + 200 * model_info["cache_read_input_token_cost"]
+        + 400 * model_info["output_cost_per_token"]
+        + 3 * model_info["search_context_cost_per_query"]["search_context_size_medium"]
+    )
+
+
 def test_completion_cost_bills_interactions_video_output_at_video_rate():
     from litellm.types.interactions import InteractionsAPIResponse
 
