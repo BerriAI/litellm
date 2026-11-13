@@ -148,6 +148,10 @@ pub enum ManifestError {
     Duplicate { name: String, hook: Hook },
     #[error("{0} writes or may abort, so neither no-log nor a caller opt-out may remove it")]
     Removable(String),
+    #[error(
+        "{name} selects by {selector:?}, which is not lowercase, so no opt-out list can name it"
+    )]
+    NotLowercase { name: String, selector: String },
 }
 
 impl Manifest {
@@ -159,6 +163,15 @@ impl Manifest {
 
     pub fn validate(&self) -> Result<(), ManifestError> {
         let name = &self.selection.name;
+        if let Some(selector) = std::iter::once(name)
+            .chain(&self.selection.aliases)
+            .find(|selector| selector.to_lowercase() != **selector)
+        {
+            return Err(ManifestError::NotLowercase {
+                name: name.clone(),
+                selector: selector.clone(),
+            });
+        }
         for (index, subscription) in self.subscriptions.iter().enumerate() {
             if let Some(problem) = subscription.problem() {
                 return Err(ManifestError::Subscription {
@@ -264,6 +277,23 @@ mod tests {
         assert_eq!(
             manifest(subscription, selection).validate(),
             Err(ManifestError::Removable("example".into()))
+        );
+    }
+
+    #[rstest]
+    #[case::name(Selection::named("S3_v2"), "S3_v2")]
+    #[case::alias(Selection { aliases: vec!["s3".into(), "S3".into()], ..named() }, "S3")]
+    fn a_selector_that_is_not_lowercase_is_rejected(
+        #[case] selection: Selection,
+        #[case] selector: &str,
+    ) {
+        let name = selection.name.clone();
+        assert_eq!(
+            manifest(Subscription::on(Hook::AttemptEnded), selection).validate(),
+            Err(ManifestError::NotLowercase {
+                name,
+                selector: selector.into()
+            })
         );
     }
 
