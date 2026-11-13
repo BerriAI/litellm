@@ -28,8 +28,20 @@ export const initialCustomerOrganizationFields = (): CustomerOrganizationFields 
   tpm: "",
   rpm: "",
   groups: [
-    { id: "power", name: "power_user", monthlyBudget: "200", yearlyBudget: "2000", capPolicy: defaultCustomerCapPolicy },
-    { id: "default", name: "default_user", monthlyBudget: "50", yearlyBudget: "500", capPolicy: defaultCustomerCapPolicy },
+    {
+      id: "power",
+      name: "power_user",
+      monthlyBudget: "200",
+      yearlyBudget: "2000",
+      capPolicy: defaultCustomerCapPolicy,
+    },
+    {
+      id: "default",
+      name: "default_user",
+      monthlyBudget: "50",
+      yearlyBudget: "500",
+      capPolicy: defaultCustomerCapPolicy,
+    },
     { id: "low", name: "low_user", monthlyBudget: "10", yearlyBudget: "100", capPolicy: defaultCustomerCapPolicy },
   ],
   defaultGroupId: "default",

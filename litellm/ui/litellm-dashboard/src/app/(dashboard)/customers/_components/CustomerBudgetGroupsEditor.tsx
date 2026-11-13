@@ -119,9 +119,7 @@ export default function CustomerBudgetGroupsEditor({
               </div>
             ))}
             <div className="col-span-2 min-w-0 space-y-1.5 sm:col-span-3 sm:row-start-2">
-              <Label htmlFor={`cc-cap-${group.id}`}>
-                {t("customerPortal.budgetGroups.atCap")}
-              </Label>
+              <Label htmlFor={`cc-cap-${group.id}`}>{t("customerPortal.budgetGroups.atCap")}</Label>
               <Select
                 value={group.capPolicy}
                 disabled={disabled}
@@ -137,12 +135,18 @@ export default function CustomerBudgetGroupsEditor({
                   className="w-full min-w-0 text-xs"
                 >
                   <SelectValue>
-                    {t(group.capPolicy === "pause_allow_increase" ? "customerPortal.budgetGroups.pauseAllowIncrease" : "customerPortal.budgetGroups.pauseUntilReset")}
+                    {t(
+                      group.capPolicy === "pause_allow_increase"
+                        ? "customerPortal.budgetGroups.pauseAllowIncrease"
+                        : "customerPortal.budgetGroups.pauseUntilReset",
+                    )}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="pause_until_reset">{t("customerPortal.budgetGroups.pauseUntilReset")}</SelectItem>
-                  <SelectItem value="pause_allow_increase">{t("customerPortal.budgetGroups.pauseAllowIncrease")}</SelectItem>
+                  <SelectItem value="pause_allow_increase">
+                    {t("customerPortal.budgetGroups.pauseAllowIncrease")}
+                  </SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -175,7 +179,16 @@ export default function CustomerBudgetGroupsEditor({
         size="sm"
         onClick={() =>
           onChange(
-            [...groups, { id: crypto.randomUUID(), name: "", monthlyBudget: "", yearlyBudget: "", capPolicy: defaultCustomerCapPolicy }],
+            [
+              ...groups,
+              {
+                id: crypto.randomUUID(),
+                name: "",
+                monthlyBudget: "",
+                yearlyBudget: "",
+                capPolicy: defaultCustomerCapPolicy,
+              },
+            ],
             defaultGroupId,
           )
         }

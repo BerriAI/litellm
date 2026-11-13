@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildCustomerOrganizationBody, defaultCustomerCapPolicy, initialCustomerOrganizationFields } from "./customerOrganizationForm";
+import {
+  buildCustomerOrganizationBody,
+  defaultCustomerCapPolicy,
+  initialCustomerOrganizationFields,
+} from "./customerOrganizationForm";
 
 const fields = () => ({
   ...initialCustomerOrganizationFields(),
@@ -14,7 +18,15 @@ describe("buildCustomerOrganizationBody", () => {
       monthlyBudget: "1000.25",
       tpm: "3000",
       rpm: "25",
-      groups: [{ id: "custom", name: " power ", monthlyBudget: "200.50", yearlyBudget: "1500", capPolicy: defaultCustomerCapPolicy }],
+      groups: [
+        {
+          id: "custom",
+          name: " power ",
+          monthlyBudget: "200.50",
+          yearlyBudget: "1500",
+          capPolicy: defaultCustomerCapPolicy,
+        },
+      ],
       defaultGroupId: "custom",
     };
     const result = buildCustomerOrganizationBody(input);

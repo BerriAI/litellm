@@ -1,6 +1,11 @@
 import type { components } from "@/lib/http/schema";
 import type { Organization } from "./customerHierarchyForms";
-import { defaultCustomerCapPolicy, limit, validateCustomerBudgetGroups, type CustomerBudgetGroupFields } from "./customerOrganizationForm";
+import {
+  defaultCustomerCapPolicy,
+  limit,
+  validateCustomerBudgetGroups,
+  type CustomerBudgetGroupFields,
+} from "./customerOrganizationForm";
 
 type Template = components["schemas"]["BudgetTemplate"];
 type Patch = components["schemas"]["TemplatePatch"];
@@ -72,12 +77,13 @@ export function planCustomerBudgetGroups(
           rowId: defaultGroupId,
           name: groups.find((group) => group.id === defaultGroupId)!.name.trim(),
         };
+  const templatesChanged = creates.length || updates.length || removes.length;
   return {
     ok: true,
     creates,
     updates,
     removes,
     defaultChange,
-    changed: Boolean(creates.length || updates.length || removes.length || defaultChange),
+    changed: Boolean(templatesChanged || defaultChange),
   } as const;
 }

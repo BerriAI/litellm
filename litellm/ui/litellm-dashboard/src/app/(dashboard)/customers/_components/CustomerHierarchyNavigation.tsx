@@ -32,23 +32,27 @@ export default function CustomerHierarchyNavigation({
   if (scope.member) pages = ["usage", "settings"];
   return (
     <nav aria-label={t("customerPortal.hierarchy.customerNavigation")} className="flex gap-6 border-b">
-      {pages.map((page) => (
-        <a
-          key={page}
-          href={
-            page === "usage"
-              ? customerHierarchyHref("usage", scope)
-              : `${customerHierarchyHref("manage", scope)}${page === "settings" || page === "budget_groups" || (page === "members" && !scope.team) ? `&tab=${page}` : ""}`
-          }
-          aria-current={active === page ? "page" : undefined}
-          className={cn(
-            "border-b-2 border-transparent px-0.5 pb-3 text-sm font-medium text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring",
-            active === page && "border-primary text-foreground",
-          )}
-        >
-          {t(LABELS[page])}
-        </a>
-      ))}
+      {pages.map((page) => {
+        const organizationMembers = page === "members" && !scope.team;
+        const explicitTab = page === "settings" || page === "budget_groups" || organizationMembers;
+        return (
+          <a
+            key={page}
+            href={
+              page === "usage"
+                ? customerHierarchyHref("usage", scope)
+                : `${customerHierarchyHref("manage", scope)}${explicitTab ? `&tab=${page}` : ""}`
+            }
+            aria-current={active === page ? "page" : undefined}
+            className={cn(
+              "border-b-2 border-transparent px-0.5 pb-3 text-sm font-medium text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring",
+              active === page && "border-primary text-foreground",
+            )}
+          >
+            {t(LABELS[page])}
+          </a>
+        );
+      })}
     </nav>
   );
 }

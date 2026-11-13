@@ -95,6 +95,14 @@ function childView(
   return requested === "members" ? "members" : "teams";
 }
 
+function organizationView(
+  requested: "teams" | "members" | "budget_groups" | "settings" | null,
+  team: string | null,
+  children: ChildList["kind"],
+) {
+  return requested === "budget_groups" && !team ? "budget_groups" : children;
+}
+
 export default function useCustomerHierarchy() {
   const { accessToken, userRole, isLoading } = useAuthorized();
   const canManage = isProxyAdminRole(userRole);
@@ -113,9 +121,10 @@ export default function useCustomerHierarchy() {
   const selected = context.data;
   const childTab = childView(selected, params.tab);
   const showSettings = params.member !== null || params.tab === "settings";
-  const organizationTab = params.tab === "budget_groups" && !params.team ? "budget_groups" : childTab;
+  const organizationTab = organizationView(params.tab, params.team, childTab);
   const tab: "teams" | "members" | "budget_groups" | "settings" = showSettings ? "settings" : organizationTab;
   const childContext = selected && !selected.member ? selected : null;
+  const showChildren = tab === "teams" || tab === "members";
   const page = Math.max(1, params.hierarchyPage);
   const children = useQuery({
     queryKey: [
@@ -127,7 +136,7 @@ export default function useCustomerHierarchy() {
       page,
     ],
     queryFn:
-      enabled && childContext && tab !== "settings" && tab !== "budget_groups"
+      enabled && childContext && showChildren
         ? ({ signal }) => customerHierarchyChildren(childContext, childTab, page, signal)
         : skipToken,
   });

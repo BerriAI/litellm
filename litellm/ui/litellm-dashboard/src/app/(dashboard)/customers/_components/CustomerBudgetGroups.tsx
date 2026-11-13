@@ -88,6 +88,7 @@ export default function CustomerBudgetGroups({
       setPending(false);
     }
   };
+  const noChanges = unchanged || (plan.ok && !plan.changed);
   return (
     <form onSubmit={save} className="max-w-3xl space-y-5">
       <fieldset disabled={pending}>
@@ -105,7 +106,7 @@ export default function CustomerBudgetGroups({
             : t(`customerPortal.createDialog.errors.${error}`)}
         </p>
       )}
-      <Button type="submit" disabled={pending || unchanged || (plan.ok && !plan.changed)}>
+      <Button type="submit" disabled={pending || noChanges}>
         {t("customerPortal.hierarchy.save")}
       </Button>
     </form>

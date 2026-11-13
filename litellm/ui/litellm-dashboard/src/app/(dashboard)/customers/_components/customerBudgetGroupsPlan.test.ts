@@ -31,28 +31,28 @@ const organization: Organization = {
 
 describe("planCustomerBudgetGroups", () => {
   it("should produce a no-op for unchanged groups regardless of limit order", () => {
-    expect(planCustomerBudgetGroups(organization, customerBudgetGroupRows(organization), "standard")).toEqual({
+    const expected = {
       ok: true,
       creates: [],
       updates: [],
       removes: [],
       defaultChange: null,
       changed: false,
-    });
+    };
+    expect(planCustomerBudgetGroups(organization, customerBudgetGroupRows(organization), "standard")).toEqual(expected);
   });
 
   it("should plan additions, renames, cleared yearly limits, removals and a newly created default", () => {
     const rows = customerBudgetGroupRows(organization);
-    expect(
-      planCustomerBudgetGroups(
-        organization,
-        [
-          { ...rows[0], name: "Renamed", monthlyBudget: "0", yearlyBudget: "" },
-          { id: "new", name: "New", monthlyBudget: "30", yearlyBudget: "300", capPolicy: "pause_allow_increase" },
-        ],
-        "new",
-      ),
-    ).toEqual({
+    const result = planCustomerBudgetGroups(
+      organization,
+      [
+        { ...rows[0], name: "Renamed", monthlyBudget: "0", yearlyBudget: "" },
+        { id: "new", name: "New", monthlyBudget: "30", yearlyBudget: "300", capPolicy: "pause_allow_increase" },
+      ],
+      "new",
+    );
+    const expected = {
       ok: true,
       changed: true,
       creates: [
@@ -82,7 +82,8 @@ describe("planCustomerBudgetGroups", () => {
       ],
       removes: ["old"],
       defaultChange: { rowId: "new", name: "New" },
-    });
+    };
+    expect(result).toEqual(expected);
   });
 
   it("should send only a name when only renaming and select an existing default", () => {
@@ -107,7 +108,9 @@ describe("planCustomerBudgetGroups", () => {
       defaultChange: null,
       changed: true,
     };
-    expect(planCustomerBudgetGroups(organization, [{ ...rows[0], capPolicy: "pause_until_reset" }, rows[1]], "standard")).toEqual(expected);
+    expect(
+      planCustomerBudgetGroups(organization, [{ ...rows[0], capPolicy: "pause_until_reset" }, rows[1]], "standard"),
+    ).toEqual(expected);
   });
 
   it("should treat null and absent policies as an unchanged pause-until-reset policy", () => {
@@ -138,9 +141,21 @@ describe("planCustomerBudgetGroups", () => {
 
   it.each([
     [[], "", "defaultRequired"],
-    [[{ id: "a", name: "", monthlyBudget: "1", yearlyBudget: "", capPolicy: defaultCustomerCapPolicy }], "a", "groupNameRequired"],
-    [[{ id: "a", name: "A", monthlyBudget: "", yearlyBudget: "", capPolicy: defaultCustomerCapPolicy }], "a", "groupLimitRequired"],
-    [[{ id: "a", name: "A", monthlyBudget: "-1", yearlyBudget: "", capPolicy: defaultCustomerCapPolicy }], "a", "invalidBudget"],
+    [
+      [{ id: "a", name: "", monthlyBudget: "1", yearlyBudget: "", capPolicy: defaultCustomerCapPolicy }],
+      "a",
+      "groupNameRequired",
+    ],
+    [
+      [{ id: "a", name: "A", monthlyBudget: "", yearlyBudget: "", capPolicy: defaultCustomerCapPolicy }],
+      "a",
+      "groupLimitRequired",
+    ],
+    [
+      [{ id: "a", name: "A", monthlyBudget: "-1", yearlyBudget: "", capPolicy: defaultCustomerCapPolicy }],
+      "a",
+      "invalidBudget",
+    ],
   ] as const)("should validate invalid edits", (groups, defaultId, error) => {
     expect(planCustomerBudgetGroups(organization, [...groups], defaultId)).toEqual({ ok: false, error });
   });
