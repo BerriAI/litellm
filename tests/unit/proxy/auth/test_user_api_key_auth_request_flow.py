@@ -14323,7 +14323,7 @@ async def test_should_skip_budget_checks_spares_only_zero_spend_mcp_discovery(
 
 
 def _request_whose_body_must_not_be_read(
-    api_key: str, method: str = "POST", path: str = "/v1/chat/completions"
+    api_key: str, method: str = "POST", path: str = "/v1/chat/completions", declared_bytes: int = 8388608
 ) -> Request:
     async def receive() -> dict[str, object]:
         raise AssertionError("the body was read before the request was refused")
@@ -14333,7 +14333,10 @@ def _request_whose_body_must_not_be_read(
             "type": "http",
             "method": method,
             "path": path,
-            "headers": [(b"authorization", f"Bearer {api_key}".encode()), (b"content-length", b"8388608")],
+            "headers": [
+                (b"authorization", f"Bearer {api_key}".encode()),
+                (b"content-length", str(declared_bytes).encode()),
+            ],
         },
         receive=receive,
     )
@@ -14390,18 +14393,19 @@ async def test_rate_limited_cached_key_is_refused_before_the_body_is_read() -> N
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "method, path",
+    "method, path, declared_bytes, refused",
     [
-        ("GET", "/v1/models"),
-        ("GET", "/models"),
-        ("GET", "/v1/mcp/tools"),
-        ("GET", "/vector_store/list"),
-        ("POST", "/utils/token_counter"),
-        ("POST", "/v1beta/models/gemini-3-pro:countTokens"),
+        ("GET", "/v1/models", 0, False),
+        ("GET", "/models", 8388608, False),
+        ("GET", "/v1/mcp/tools", 0, False),
+        ("GET", "/vector_store/list", 0, False),
+        ("POST", "/utils/token_counter", 8388608, False),
+        ("POST", "/v1beta/models/gemini-3-pro:countTokens", 8388608, False),
+        ("GET", "/v1/batches", 8388608, True),
     ],
 )
-async def test_exhausted_cached_key_passes_the_preflight_on_routes_the_limiter_never_meters(
-    method: str, path: str
+async def test_exhausted_cached_key_is_only_refused_before_the_body_where_a_metered_route_declares_one(
+    method: str, path: str, declared_bytes: int, refused: bool
 ) -> None:
     from litellm.proxy.auth.user_api_key_auth import _reject_from_headers_before_reading_body
     from litellm.proxy.utils import hash_token
@@ -14430,14 +14434,17 @@ async def test_exhausted_cached_key_passes_the_preflight_on_routes_the_limiter_n
         patch("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj),
     ):
-        admitted: Final = await _reject_from_headers_before_reading_body(
-            request=_request_whose_body_must_not_be_read(api_key, method, path),
-            api_key=f"Bearer {api_key}",
-            custom_litellm_key_header=None,
-            route=path,
+        outcome: Final = await asyncio.gather(
+            _reject_from_headers_before_reading_body(
+                request=_request_whose_body_must_not_be_read(api_key, method, path, declared_bytes),
+                api_key=f"Bearer {api_key}",
+                custom_litellm_key_header=None,
+                route=path,
+            ),
+            return_exceptions=True,
         )
 
-    assert admitted is None
+    assert (getattr(outcome[0], "code", None) == "429") is refused
 
 
 @pytest.mark.asyncio

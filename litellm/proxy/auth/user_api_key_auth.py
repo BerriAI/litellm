@@ -2322,13 +2322,21 @@ async def _small_preflight_failure_json(request: Request) -> Mapping[str, object
     }
 
 
+def _is_bodyless_get(request: Request) -> bool:
+    return (
+        request.scope.get("method") == "GET"
+        and request.headers.get("content-length", "0") == "0"
+        and request.headers.get("transfer-encoding") is None
+    )
+
+
 async def _reject_from_headers_before_reading_body(
     request: Request, api_key: str | None, custom_litellm_key_header: str | None, route: str
 ) -> None:
     """Refuse a request its headers already condemn, a blocked key or an exhausted key limit, before reading its body.
 
     Only a key already in the cache is considered, so a miss changes nothing and the full auth path still runs.
-    The limit is only checked where a body is expected and the route is metered, because model listing, token
+    The limit is only checked where a body is declared and the route is metered, because model listing, token
     counting and other GET discovery routes never reach the limiter and must keep answering an exhausted key.
     A retry flood of large payloads against a limited key used to buffer every payload just to answer 429.
     """
@@ -2379,7 +2387,7 @@ async def _reject_from_headers_before_reading_body(
             dispatched_call_type=str(request_data["call_type"]) if request_data["call_type"] is not None else None,
         )
         return
-    if request.scope.get("method") == "GET" or RouteChecks.is_unbilled_route(route):
+    if RouteChecks.is_unbilled_route(route) or _is_bodyless_get(request):
         return
     limiter: Final = proxy_logging_obj.get_proxy_hook("parallel_request_limiter")
     if not isinstance(limiter, PROXY_MaxParallelRequestsHandler_v3):
