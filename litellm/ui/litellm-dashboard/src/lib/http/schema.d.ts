@@ -9717,6 +9717,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/customer_members/upsert": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upsert Customer Member
+         * @description Create or update a customer member by customer_member_id within a customer org identified by customer_org_id or customer_org_alias. If both are supplied they must match. A new customer member with no parent_team_id joins the customer org's default customer team, created if necessary. An existing customer member keeps its customer teams, and a supplied parent_team_id becomes its first customer team. Alias, budget_id, budget_override and budget_override_expires_at follow the existing customer member models. Omitted update fields retain their values. Moving between customer teams in the same customer org is allowed. Moving between customer orgs or selecting another customer org's customer team returns 409. Returns 200 with created=true for creation and created=false for updates. Repeated identical calls are no-ops. Proxy admins only.
+         */
+        post: operations["upsert_customer_member_management_v1_customer_members_upsert_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/customer_members/{customer_member_id}": {
         parameters: {
             query?: never;
@@ -9803,6 +9823,26 @@ export interface paths {
         get: operations["customer_organization_daily_activity_aggregated_management_v1_customer_organizations_daily_activity_aggregated_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/customer_organizations/upsert": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upsert Customer Organization
+         * @description Create or update a customer org by customer_org_id, or by alias when no ID is supplied. Returns 200 with created=true for creation and created=false for updates. Repeated identical calls are no-ops. Supplied default_budgets are merged by template name, preserving existing template IDs and omitted templates. A single supplied template becomes the default; multiple templates require default_budget_template to name one. Omitted fields retain their values. Conflicting or ambiguous aliases return 409. Proxy admins only.
+         */
+        post: operations["upsert_customer_organization_management_v1_customer_organizations_upsert_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -40699,6 +40739,66 @@ export interface components {
             /** Budget Override Expires At */
             budget_override_expires_at?: string | null;
         };
+        /** MemberUpsert */
+        MemberUpsert: {
+            /** Alias */
+            alias?: string | null;
+            /** Budget Id */
+            budget_id?: string | null;
+            budget_override?: components["schemas"]["Budget"] | null;
+            /** Budget Override Expires At */
+            budget_override_expires_at?: string | null;
+            /** Customer Member Id */
+            customer_member_id: string;
+            /** Customer Org Alias */
+            customer_org_alias?: string | null;
+            /** Customer Org Id */
+            customer_org_id?: string | null;
+            /** Parent Team Id */
+            parent_team_id?: string | null;
+        };
+        /** MemberUpsertResponse */
+        MemberUpsertResponse: {
+            /** Alias */
+            alias?: string | null;
+            /** Budget Id */
+            budget_id?: string | null;
+            budget_override?: components["schemas"]["Budget"] | null;
+            /** Budget Override Expires At */
+            budget_override_expires_at?: string | null;
+            /** Budget Override Id */
+            budget_override_id?: string | null;
+            /** Budget Reset At */
+            budget_reset_at?: string | null;
+            /** Created */
+            created: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /** Customer Member Id */
+            customer_member_id: string;
+            effective_budget: components["schemas"]["Budget"];
+            /** Parent Org Id */
+            parent_org_id: string;
+            /** Parent Team Ids */
+            parent_team_ids: string[];
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Updated By */
+            updated_by: string;
+        };
         /** MemoryCreateRequest */
         MemoryCreateRequest: {
             /**
@@ -42740,6 +42840,67 @@ export interface components {
             soft_budget?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
+        };
+        /** OrganizationUpsert */
+        OrganizationUpsert: {
+            /** Alias */
+            alias?: string | null;
+            budget?: components["schemas"]["Budget"] | null;
+            /** Customer Org Id */
+            customer_org_id?: string | null;
+            /** Default Budget Template */
+            default_budget_template?: string | null;
+            /**
+             * Default Budgets
+             * @default []
+             */
+            default_budgets: components["schemas"]["BudgetTemplate"][];
+        };
+        /** OrganizationUpsertResponse */
+        OrganizationUpsertResponse: {
+            /** Alias */
+            alias?: string | null;
+            budget?: components["schemas"]["Budget"] | null;
+            /** Budget Id */
+            budget_id?: string | null;
+            /** Budget Reset At */
+            budget_reset_at?: string | null;
+            /** Created */
+            created: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /** Customer Org Id */
+            customer_org_id: string;
+            /** Default Budget Template Id */
+            default_budget_template_id?: string | null;
+            /**
+             * Default Budgets
+             * @default []
+             */
+            default_budgets: components["schemas"]["OrganizationBudget"][];
+            /**
+             * Member Count
+             * @description Current registered members across all customer teams
+             * @default 0
+             */
+            member_count: number;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Updated By */
+            updated_by: string;
         };
         /**
          * OutcomeExit
@@ -68677,6 +68838,39 @@ export interface operations {
             };
         };
     };
+    upsert_customer_member_management_v1_customer_members_upsert_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MemberUpsert"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberUpsertResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_customer_member_management_v1_customer_members__customer_member_id__get: {
         parameters: {
             query?: never;
@@ -68902,6 +69096,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upsert_customer_organization_management_v1_customer_organizations_upsert_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrganizationUpsert"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationUpsertResponse"];
                 };
             };
             /** @description Validation Error */
