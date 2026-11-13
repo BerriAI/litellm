@@ -22,7 +22,7 @@ LEDGER_MODEL: Final = "ledger-model"
 LEDGER_ANTHROPIC_MODEL: Final = "ledger-anthropic-model"
 LEDGER_TOOLS: Final = ({"type": "mcp", "server_url": "litellm_proxy/ledger", "require_approval": "never"},)
 _API_BASE: Final = "https://ledger-upstream.example.com/v1"
-_ANTHROPIC_API_BASE: Final = "https://ledger-anthropic.example.com"
+_MESSAGES_API_BASE: Final = "https://ledger-messages.services.ai.azure.com"
 _ARGUMENTS: Final = json.dumps({"entry": "alpha"})
 
 
@@ -134,15 +134,15 @@ def ledger_router(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch,
     litellm.in_memory_llm_clients_cache.flush_cache()
     respx_mock.post(f"{_API_BASE}/chat/completions").mock(side_effect=upstream.chat)
     respx_mock.post(f"{_API_BASE}/responses").mock(side_effect=upstream.responses)
-    respx_mock.post(f"{_ANTHROPIC_API_BASE}/v1/messages").mock(side_effect=upstream.messages)
+    respx_mock.post(f"{_MESSAGES_API_BASE}/anthropic/v1/messages").mock(side_effect=upstream.messages)
     return Router(
         model_list=[
             _deployment(LEDGER_MODEL, "openai/gpt-4.1-mini", _API_BASE, "sk-ledger-a"),
             _deployment(LEDGER_MODEL, "openai/gpt-4.1-mini", _API_BASE, "sk-ledger-b"),
             _deployment("ledger-backup", "openai/gpt-4.1-mini", _API_BASE, "sk-ledger-c"),
-            _deployment(LEDGER_ANTHROPIC_MODEL, "anthropic/claude-sonnet-4-5", _ANTHROPIC_API_BASE, "sk-ledger-d"),
-            _deployment(LEDGER_ANTHROPIC_MODEL, "anthropic/claude-sonnet-4-5", _ANTHROPIC_API_BASE, "sk-ledger-e"),
-            _deployment("ledger-anthropic-backup", "anthropic/claude-sonnet-4-5", _ANTHROPIC_API_BASE, "sk-ledger-f"),
+            _deployment(LEDGER_ANTHROPIC_MODEL, "azure_ai/claude-sonnet-4-5", _MESSAGES_API_BASE, "sk-ledger-d"),
+            _deployment(LEDGER_ANTHROPIC_MODEL, "azure_ai/claude-sonnet-4-5", _MESSAGES_API_BASE, "sk-ledger-e"),
+            _deployment("ledger-anthropic-backup", "azure_ai/claude-sonnet-4-5", _MESSAGES_API_BASE, "sk-ledger-f"),
         ],
         num_retries=2,
         fallbacks=[{LEDGER_MODEL: ["ledger-backup"]}, {LEDGER_ANTHROPIC_MODEL: ["ledger-anthropic-backup"]}],
