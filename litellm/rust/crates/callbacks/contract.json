@@ -466,6 +466,11 @@
       "name": "logged_model_group",
       "bit": 43,
       "tier": "small_record"
+    },
+    {
+      "name": "logged_payload_not_a_mapping",
+      "bit": 44,
+      "tier": "small_record"
     }
   ],
   "tiers": [
@@ -497,6 +502,7 @@
     "log_id",
     "logged_key_identity",
     "logged_model_group",
+    "logged_payload_not_a_mapping",
     "logged_request",
     "mcp_tool_call",
     "outcome",

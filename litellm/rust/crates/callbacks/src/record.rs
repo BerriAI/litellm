@@ -387,6 +387,9 @@ mod tests {
             Field::ColdStorageObjectKey => round_trip::<typed::ColdStorageObjectKey>(sample),
             Field::LoggedKeyIdentity => round_trip::<typed::LoggedKeyIdentity>(sample),
             Field::LoggedModelGroup => round_trip::<typed::LoggedModelGroup>(sample),
+            Field::LoggedPayloadNotAMapping => {
+                round_trip::<typed::LoggedPayloadNotAMapping>(sample)
+            }
             other => panic!("{other:?} has no typed record sample"),
         }
     }
@@ -400,7 +403,7 @@ mod tests {
             assert_eq!(&decoded(field, sample), sample, "{name}");
         }
         let typed: Vec<&str> = samples.keys().map(String::as_str).collect();
-        assert_eq!(typed.len(), 20);
+        assert_eq!(typed.len(), 21);
     }
 
     #[rstest]

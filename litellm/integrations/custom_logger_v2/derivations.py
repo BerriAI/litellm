@@ -29,6 +29,7 @@ from litellm.types.integrations.custom_logger_v2 import (
     RateLimitState,
     RateLimitStatuses,
     ReservationEntry,
+    Scalar,
     ScalarItem,
     Stringified,
     Usage,
@@ -41,6 +42,7 @@ _ABSENT: Final = object()
 _TAGS: Final[TypeAdapter[tuple[str | int | float | bool | Stringified | None, ...]]] = TypeAdapter(
     tuple[ScalarItem, ...]
 )
+_SCALAR: Final[TypeAdapter[str | int | float | bool | Stringified]] = TypeAdapter(Scalar)
 _DERIVED_RESERVATION_MEMBERS: Final = frozenset({"rejected", "entries_is_list", "not_a_mapping"})
 _LIMITER_HEADER_PREFIX: Final = "x-ratelimit-"
 
@@ -628,6 +630,13 @@ def cold_storage_object_key(args: HookArgs) -> str | None:
     return _text(payload_metadata(args).get("cold_storage_object_key"))
 
 
+def logged_payload_not_a_mapping(args: HookArgs) -> str | int | float | bool | Stringified | None:
+    raw: Final = member(args.request, "standard_logging_object")
+    if raw is None or isinstance(raw, Mapping):
+        return None
+    return coerce_value("logged_payload_not_a_mapping", _SCALAR, raw)
+
+
 def payload_copy(
     args: HookArgs,
 ) -> dict[str, object] | None:  # mutable-ok: the shallow copy handed to Rust by reference
@@ -657,6 +666,7 @@ RECORD_TYPES: Final[Mapping[Field, object]] = MappingProxyType(
         Field.cold_storage_object_key: str,
         Field.logged_key_identity: LoggedKeyIdentity,
         Field.logged_model_group: LoggedModelGroup,
+        Field.logged_payload_not_a_mapping: Scalar,
     }
 )
 
@@ -664,6 +674,7 @@ LOGGING_SLOTS: Final[Mapping[Field, Slot]] = MappingProxyType(
     {
         Field.logged_key_identity: derived(logged_key_identity),
         Field.logged_model_group: derived(logged_model_group),
+        Field.logged_payload_not_a_mapping: derived(logged_payload_not_a_mapping),
         Field.deployment: derived(deployment),
         Field.request_tags: derived(request_tags),
         Field.guardrail_info: derived(guardrail_info),
@@ -732,6 +743,7 @@ __all__ = [
     "log_id",
     "logged_key_identity",
     "logged_model_group",
+    "logged_payload_not_a_mapping",
     "logged_request",
     "mapping",
     "mcp_tool_call",

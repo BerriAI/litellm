@@ -89,6 +89,7 @@ class Field(str, Enum):
     standard_logging_payload_ref = ("standard_logging_payload_ref", 41, FieldTier.compatibility)
     logged_key_identity = ("logged_key_identity", 42, FieldTier.small_record)
     logged_model_group = ("logged_model_group", 43, FieldTier.small_record)
+    logged_payload_not_a_mapping = ("logged_payload_not_a_mapping", 44, FieldTier.small_record)
 
 
 class Activation(str, Enum):
@@ -122,6 +123,7 @@ DERIVED_ONLY: Final = frozenset(
         Field.standard_logging_payload_ref,
         Field.logged_key_identity,
         Field.logged_model_group,
+        Field.logged_payload_not_a_mapping,
     }
 )
 BY_REFERENCE: Final = frozenset({Field.standard_logging_payload_ref})

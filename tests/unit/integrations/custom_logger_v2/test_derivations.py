@@ -1444,3 +1444,30 @@ def test_a_reservation_write_never_stores_that_the_read_was_not_a_mapping() -> N
     derivations.write_budget_reservation(args, read.model_copy(update={"finalized": True}))
 
     assert auth.budget_reservation == {"finalized": True}
+
+
+@pytest.mark.parametrize(
+    ("raw", "carried"),
+    [
+        pytest.param({"id": "x"}, None, id="mapping"),
+        pytest.param(None, None, id="none"),
+        pytest.param("payload", "payload", id="text"),
+        pytest.param(0, 0, id="falsy_int"),
+        pytest.param(
+            ("id",),
+            Stringified(text="('id',)", truthy=True, hashable=True, integer=False, type_name="tuple", hash_error=None),
+            id="tuple",
+        ),
+    ],
+)
+def test_a_logging_payload_that_is_not_a_mapping_is_served_apart_from_a_missing_one(
+    raw: object, carried: object
+) -> None:
+    args: Final = HookArgs(request={"standard_logging_object": raw})
+
+    assert derivations.logged_payload_not_a_mapping(args) == carried
+    assert type(derivations.logged_payload_not_a_mapping(args)) is type(carried)
+
+
+def test_a_missing_logging_payload_is_not_served_as_one_that_is_not_a_mapping() -> None:
+    assert derivations.logged_payload_not_a_mapping(HookArgs(request={})) is None

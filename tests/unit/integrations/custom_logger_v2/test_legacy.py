@@ -283,7 +283,9 @@ async def test_legacy_only_and_dispatched_subscribers_give_the_same_result() -> 
         journal: list[object] = []
         subscribers = hook_subscribers(Hook.pre_call, callbacks)
         result = await run_subscribers(
-            subscribers, KwargsFields({"messages": ["original"]}, PROXY_REQUEST_KEYS), _recording(journal, "x", replacement)
+            subscribers,
+            KwargsFields({"messages": ["original"]}, PROXY_REQUEST_KEYS),
+            _recording(journal, "x", replacement),
         )
         return journal, kwargs_after(result)
 
@@ -355,7 +357,9 @@ def test_sync_subscribers_run_a_blocking_v2_callback_inline_in_list_order() -> N
     def start(logger: object, data: object) -> None:
         journal.append((logger, data))
 
-    run_subscribers_sync(subscribers, KwargsFields(details, {F.standard_logging_payload: "standard_logging_object"}), start)
+    run_subscribers_sync(
+        subscribers, KwargsFields(details, {F.standard_logging_payload: "standard_logging_object"}), start
+    )
 
     assert journal == [(masking, details)]
     assert details["standard_logging_object"] == {"stamped": True}
@@ -406,7 +410,9 @@ def test_every_entry_keeps_string_and_callable_callbacks_in_list_order() -> None
     def start(logger: object, data: object) -> None:
         journal.append(logger)
 
-    run_subscribers_sync(hook_subscribers(Hook.attempt_ended, callbacks, admit=Admit.every_entry), KwargsFields({}, {}), start)
+    run_subscribers_sync(
+        hook_subscribers(Hook.attempt_ended, callbacks, admit=Admit.every_entry), KwargsFields({}, {}), start
+    )
 
     assert journal == ["langfuse", plain_callback, exporter]
     assert hook_subscribers(Hook.attempt_ended, callbacks).legacy == (exporter,)

@@ -105,6 +105,7 @@ fields! {
     StandardLoggingPayloadRef = 41, Compatibility, u64;
     LoggedKeyIdentity = 42, SmallRecord, crate::record::LoggedKeyIdentity;
     LoggedModelGroup = 43, SmallRecord, crate::record::LoggedModelGroup;
+    LoggedPayloadNotAMapping = 44, SmallRecord, crate::scalar::Scalar;
 }
 
 impl Field {
@@ -140,6 +141,7 @@ pub const DERIVED_ONLY: FieldSet = FieldSet::of(&[
     Field::StandardLoggingPayloadRef,
     Field::LoggedKeyIdentity,
     Field::LoggedModelGroup,
+    Field::LoggedPayloadNotAMapping,
 ]);
 
 pub const BY_REFERENCE: FieldSet = FieldSet::of(&[Field::StandardLoggingPayloadRef]);
@@ -231,7 +233,7 @@ mod tests {
     #[case::wire(Field::ProviderRequestBody, 24, "provider_request_body")]
     #[case::compatibility(Field::DeprecatedResponseObj, 29, "deprecated_response_obj")]
     #[case::typed(Field::KeyLimits, 30, "key_limits")]
-    #[case::last(Field::LoggedModelGroup, 43, "logged_model_group")]
+    #[case::last(Field::LoggedPayloadNotAMapping, 44, "logged_payload_not_a_mapping")]
     fn a_field_keeps_its_bit_and_its_snake_case_name(
         #[case] field: Field,
         #[case] bit: u8,
