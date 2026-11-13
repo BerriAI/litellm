@@ -5223,6 +5223,13 @@
         "managedByConfig": "Managed by the deployment configuration."
       },
       "settings": {
+        "ariaInternalUserAccess": {
+          "label": "Aria access for internal users",
+          "description": "Choose whether internal users can ask Aria about their own usage or permitted team usage. Admins and proxy-wide viewers are unaffected. Active dashboards check for changes every 30 seconds.",
+          "none": "No access",
+          "own_usage": "Own usage only",
+          "own_and_team_usage": "Own and team usage"
+        },
         "disableAria": {
           "label": "Hide Aria Agent for everyone",
           "description": "Hides Aria from navigation, Usage, and its workspace for all users, including admins. Active dashboards check for changes every 30 seconds.",

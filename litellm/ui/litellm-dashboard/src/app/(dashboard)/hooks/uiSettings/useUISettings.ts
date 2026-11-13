@@ -4,6 +4,11 @@ import { createQueryKeys } from "../common/queryKeysFactory";
 
 const uiSettingsKeys = createQueryKeys("uiSettings");
 
+export type AriaInternalUserAccess = "none" | "own_usage" | "own_and_team_usage";
+type UISettings = Record<string, any> & {
+  values?: Record<string, any> & { aria_internal_user_access?: AriaInternalUserAccess };
+};
+
 /**
  * UI settings, cached for an hour by default because they rarely change.
  *
@@ -15,7 +20,7 @@ const uiSettingsKeys = createQueryKeys("uiSettings");
  */
 export const useUISettings = (options?: { staleTime?: number; refetchInterval?: number; enabled?: boolean }) => {
   const proxyBaseUrl = getProxyBaseUrl();
-  return useQuery<Record<string, any>>({
+  return useQuery<UISettings>({
     queryKey: [...uiSettingsKeys.list({}), proxyBaseUrl],
     queryFn: async () => await getUiSettings(proxyBaseUrl),
     staleTime: options?.staleTime ?? 60 * 60 * 1000, // 1 hour - data rarely changes

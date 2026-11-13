@@ -59,14 +59,22 @@ function useLiteAdminSession() {
   const sessionReady = !auth.isLoading && auth.isAuthorized;
   const { data: uiSettings } = useUISettings({ staleTime: 0, refetchInterval: 30_000, enabled: sessionReady });
   const admin = auth.premiumUser === true && !auth.isViewOnly && isProxyAdminRole(auth.userRole);
+  const internalUser = !isProxyAdminRole(auth.userRole) && !hasProxyWideSpendView(auth.userRole);
+  const internalAccess = uiSettings?.values?.aria_internal_user_access ?? "own_usage";
   if (!uiSettings || uiSettings.values?.disable_aria === true) return null;
+  if (internalUser && internalAccess === "none") return null;
   if (!sessionReady || (admin && disabled)) return null;
   if (!auth.token || !auth.accessToken || !auth.userId) return null;
   const access: LiteAdminSession["access"] = admin
     ? { mode: "admin" }
     : {
         mode: "usage",
-        scope: hasProxyWideSpendView(auth.userRole) ? { type: "global" } : { type: "user", userId: auth.userId },
+        scope: hasProxyWideSpendView(auth.userRole)
+          ? { type: "global" }
+          : {
+              type: internalUser && internalAccess === "own_and_team_usage" ? "user_and_teams" : "user",
+              userId: auth.userId,
+            },
       };
   const session = {
     userId: auth.userId,
