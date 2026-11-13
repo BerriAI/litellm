@@ -327,11 +327,7 @@ class UserApiKeyCache(DualCache):
                 await self._set_shared(shared, key, payload, local_only=local_only, pipelined=pipelined, kwargs=kwargs)
             return None
         if key is not None and is_user_key_cache_key(key):
-            if pipelined and await self.key_object_cache.async_set_cache_pre_call(key, payload, ttl) is not None:
-                return None
             return await self.key_object_cache.async_set_cache(key=key, value=payload, local_only=local_only, **kwargs)
-        if pipelined and await super().async_set_cache_pre_call(key, payload, ttl) is not None:
-            return None
         return await super().async_set_cache(key=key, value=payload, local_only=local_only, **kwargs)
 
     @staticmethod
@@ -371,12 +367,9 @@ class UserApiKeyCache(DualCache):
             return
         await super().async_delete_cache(key)
 
-    async def async_delete_cache_pre_call(self, key: str) -> Awaitable[None] | None:
-        if self._shared is not None:
-            return self._shared.declare_delete(key)
-        if is_user_key_cache_key(key):
-            return await self.key_object_cache.async_delete_cache_pre_call(key)
-        return await super().async_delete_cache_pre_call(key)
+    def declare_delete(self, key: str) -> Awaitable[None] | None:
+        """The DEL on the request's pre-call batch; None without Redis or outside a request, so the caller deletes."""
+        return None if self._shared is None else self._shared.declare_delete(key)
 
     async def async_delete_cache_keys(self, keys: Sequence[str]) -> None:
         """Batch twin of ``async_delete_cache``, partitioned like

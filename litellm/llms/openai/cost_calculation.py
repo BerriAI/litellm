@@ -192,6 +192,10 @@ def video_generation_cost(
     if clip_cost is not None:
         return clip_cost
 
+    video_cost: Final = model_info.get("output_cost_per_video")
+    if video_cost is not None:
+        return video_cost
+
     # Check for video-specific cost per second
     video_cost_per_second: Final = model_info.get("output_cost_per_video_per_second")
     if video_cost_per_second is not None:

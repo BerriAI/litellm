@@ -387,11 +387,7 @@ async def test_encrypted_content_affinity_takes_priority_over_user_key_affinity(
             model_group=model_group,
             user_key=user_api_key_hash,
         )
-        await deployment_callback.cache.async_set_cache(
-            key=cache_key,
-            value={"model_id": "deployment-a"},
-            ttl=60,
-        )
+        await deployment_callback.pins.set(cache_key, {"model_id": "deployment-a"}, 60)
         encoded_id = ResponsesAPIRequestUtils._build_encrypted_item_id("deployment-b", "rs_test")
         request_kwargs = {
             "input": [{"type": "reasoning", "id": encoded_id}],

@@ -1,5 +1,5 @@
 from asyncio import Future
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Generic, Literal, Never, NotRequired, Protocol, TypedDict, TypeVar, final
 
 import httpx
@@ -7,6 +7,7 @@ from pydantic import JsonValue
 from typing_extensions import disjoint_base
 
 from litellm.redis.store_settings import RedisBreakerSettings, RedisStoreSettings
+from litellm.redis.stores.router_session_pins.keys import PinKey
 from litellm.rust_bridge.execution import Execution
 from litellm.rust_bridge.public_call import NativeCall
 
@@ -128,6 +129,11 @@ class NativeClickHouseSpendStorage:
     def ensure_schema(self) -> Future[None]: ...
     def insert_rows(self, rows: Sequence[Mapping[str, object]]) -> Future[None]: ...
 
+class _NativeHealthState(TypedDict):
+    is_healthy: bool
+    timestamp: float
+    reason: str
+
 class _NativeCooldown(TypedDict):
     exception_received: str
     status_code: str
@@ -208,6 +214,17 @@ class NativeRouterCooldowns:
     def snapshot(self) -> dict[str, _NativeCooldown]: ...
 
 @final
+class NativeDeploymentHealth:
+    def __new__(cls, client: NativeRedisClient | None) -> NativeDeploymentHealth: ...
+    @property
+    def has_redis(self) -> bool: ...
+    def attach(self, client: NativeRedisClient) -> bool: ...
+    def get(self) -> Future[dict[str, _NativeHealthState] | None]: ...
+    def get_sync(self) -> dict[str, _NativeHealthState] | None: ...
+    def get_shared_sync(self) -> dict[str, _NativeHealthState] | None: ...
+    def set_sync(self, states: Mapping[str, object], ttl_seconds: float) -> None: ...
+
+@final
 class NativeSensitiveRoutePins:
     def __new__(cls, client: NativeRedisClient | None) -> NativeSensitiveRoutePins: ...
     def get(self, tenant: str, session_id: str, default_ttl_seconds: float) -> Future[str | None]: ...
@@ -215,13 +232,61 @@ class NativeSensitiveRoutePins:
 
 class _UsageCounter(Protocol):
     @property
+    def scope(self) -> Literal["global_router", "deployment"]: ...
+    @property
     def deployment_id(self) -> str: ...
     @property
     def model(self) -> str | None: ...
     @property
-    def minute(self) -> str: ...
+    def window(self) -> str: ...
     @property
-    def kind(self) -> Literal["tpm", "rpm"]: ...
+    def kind(self) -> Literal["tpm", "rpm", "itpm", "otpm", "tpd", "rpd"]: ...
+
+class _CounterIncrement(Protocol):
+    @property
+    def counter(self) -> _UsageCounter: ...
+    @property
+    def amount(self) -> float: ...
+    @property
+    def ttl(self) -> float | None: ...
+
+@final
+class NativeUsageRead:
+    @property
+    def read(self) -> NativePending[list[float | None]]: ...
+    def release(self) -> None: ...
+
+@final
+class NativeRouterSessionPins:
+    def __new__(
+        cls, client: NativeRedisClient | None, clock: Callable[[], float] | None = None
+    ) -> NativeRouterSessionPins: ...
+    def attach(self, client: NativeRedisClient) -> bool: ...
+    @property
+    def has_redis(self) -> bool: ...
+    def get(self, key: PinKey) -> Future[object]: ...
+    def get_local(self, key: PinKey) -> object: ...
+    def set_local(self, key: PinKey, value: object, ttl_seconds: float) -> None: ...
+    def delete_local(self, key: PinKey) -> None: ...
+    def set(self, key: PinKey, value: object, ttl_seconds: float) -> Future[None]: ...
+    def get_shared(self, key: PinKey) -> Future[object]: ...
+    def read(self, key: PinKey, ttl_seconds: float, send: NativeSend) -> NativePending[object]: ...
+    def claim(
+        self,
+        key: PinKey,
+        value: object,
+        ttl_seconds: float,
+        eligible_values: Sequence[object] | None,
+        preserve_legacy_model_ids: bool,
+    ) -> Future[object]: ...
+    def claim_local(
+        self,
+        key: PinKey,
+        value: object,
+        ttl_seconds: float,
+        eligible_values: Sequence[object] | None,
+        preserve_legacy_model_ids: bool,
+    ) -> object: ...
 
 @final
 class NativeRouterUsage:
@@ -229,7 +294,7 @@ class NativeRouterUsage:
     def attach(self, client: NativeRedisClient) -> bool: ...
     @property
     def has_redis(self) -> bool: ...
-    def increment(self, counter: _UsageCounter, value: float, ttl_seconds: int) -> Future[float]: ...
+    def increment(self, counter: _UsageCounter, value: float, ttl_seconds: int) -> Future[float | None]: ...
     def increment_deployment(
         self,
         deployment_id: str,
@@ -239,7 +304,7 @@ class NativeRouterUsage:
         requests: int,
     ) -> Future[None]: ...
     def get_many(self, counters: Sequence[_UsageCounter]) -> Future[list[float | None]]: ...
-    def increment_sync(self, counter: _UsageCounter, value: float, ttl_seconds: int) -> float: ...
+    def increment_sync(self, counter: _UsageCounter, value: float, ttl_seconds: int) -> float | None: ...
     def increment_deployment_sync(
         self,
         deployment_id: str,
@@ -249,6 +314,17 @@ class NativeRouterUsage:
         requests: int,
     ) -> None: ...
     def get_many_sync(self, counters: Sequence[_UsageCounter]) -> list[float | None]: ...
+    def usage(self, counters: Sequence[_UsageCounter], send: NativeSend) -> NativeUsageRead: ...
+    def increment_pipeline(self, increments: Sequence[_CounterIncrement]) -> Future[list[float] | None]: ...
+    def increment_post_call(self, request: NativeRequestRedis, increments: Sequence[_CounterIncrement]) -> None: ...
+    def increment_remote(self, increments: Sequence[_CounterIncrement]) -> Future[list[float] | None]: ...
+    def increment_local(self, increment: _CounterIncrement) -> float: ...
+    def get_local(self, counter: _UsageCounter) -> float | None: ...
+    def get_local_many(self, counters: Sequence[_UsageCounter]) -> list[float | None]: ...
+    def set_local(self, counter: _UsageCounter, value: float) -> None: ...
+    def current(self, counter: _UsageCounter, limit: float) -> Future[float | None]: ...
+    def current_sync(self, counter: _UsageCounter, limit: float) -> float | None: ...
+    def shared_or_local(self, counter: _UsageCounter) -> Future[float | None]: ...
     def flush_local_counters(self) -> None: ...
     def snapshot(self) -> dict[str, float]: ...
 
@@ -543,6 +619,7 @@ def messages(
 def amessages(
     call: NativeCall,
 ) -> Execution: ...
+
 @final
 class ResponsesWebSocketConnection:
     def __new__(cls, _uninstantiable: Never, /) -> Never: ...
@@ -680,6 +757,7 @@ __all__ = [
     "NativeClickHouseSpendStorage",
     "NativeCostMapSource",
     "NativeDatabase",
+    "NativeDeploymentHealth",
     "NativeDiagnosticProcessor",
     "NativeFetchFailed",
     "NativeFetchPolicy",
@@ -697,11 +775,13 @@ __all__ = [
     "NativeRejected",
     "NativeRequestRedis",
     "NativeRouterCooldowns",
+    "NativeRouterSessionPins",
     "NativeRouterUsage",
     "NativeSend",
     "NativeSensitiveRoutePins",
     "NativeSpendCounters",
     "NativeTableSwapped",
+    "NativeUsageRead",
     "PostCallSettlement",
     "ProcessReservedForForking",
     "ResponsesWebSocketConnection",
@@ -890,20 +970,43 @@ class _PreRouteStep(_Step):
     fallback_depth: int
     retry: int
 
-# One RouterCache op against the router's DualCache. `key` is set for every op but `batch_get`,
-# and `increment_usage`, which set `keys`; `value` is the JSON to store (`set`), the amount
-# (`increment`) or one amount per key (`increment_usage`); `ttl` is in seconds; `local` reads or
-# writes this worker's in-memory tier only. Outcomes: get -> the JSON value or None; batch_get ->
-# one JSON value or None per key, in order; increment -> the new int or float; set, delete and
-# increment_usage -> None.
+# One deployment's per-minute usage counters: `model` is the model its usage is counted under,
+# `minute` is `HH-MM` in UTC.
+class _UsageWindow(TypedDict):
+    deployment_id: str
+    model: str
+    minute: str
+
+# One RouterCache op, answered from the router's stores. It names the state it touches, never a
+# Redis key. Fields by op: cooldowns (`ids`) -> one stored cooldown or None per id; put_cooldown
+# (`id`, `cooldown`, `ttl`) -> None; increment_allowed_fails (`id`, `suffix`, `ttl`) -> the new
+# count; add_usage (`window`, `tokens`, `requests`) -> None; add_request (`window`) -> None;
+# usage (`window`) -> [tokens, requests], each a number or None; health_states -> each checked
+# deployment's `{is_healthy: bool, timestamp: float}` by id, or None; outcomes (`id`) -> this
+# worker's [successes, fails] of the current minute; count_success (`id`) and count_failure (`id`)
+# -> None. `ttl` is in seconds.
 class _CacheStep(_Step):
     kind: Literal["cache"]
-    op: Literal["get", "set", "increment", "increment_usage", "batch_get", "delete"]
-    key: str | None
-    keys: list[str] | None
-    value: JsonValue
-    ttl: float | None
-    local: bool
+    op: Literal[
+        "cooldowns",
+        "put_cooldown",
+        "increment_allowed_fails",
+        "add_usage",
+        "add_request",
+        "usage",
+        "health_states",
+        "outcomes",
+        "count_success",
+        "count_failure",
+    ]
+    ids: NotRequired[list[str]]
+    id: NotRequired[str]
+    cooldown: NotRequired[JsonValue]
+    suffix: NotRequired[str | None]
+    ttl: NotRequired[float]
+    window: NotRequired[_UsageWindow]
+    tokens: NotRequired[int | float]
+    requests: NotRequired[int | float]
 
 # One lookup of a model-info query (router-core `ModelInfoLookup`): its `lookup` name and that
 # lookup's arguments, answered as the lookup documents.
@@ -1012,10 +1115,15 @@ class _ReportedStep(_Step):
     # The cooldown applied, in seconds; None when the deployment was not cooled down.
     cooldown_time: float | None
 
-# The end of a `RouterCoreHandle.report_success` or `count_success`.
+# The end of a `RouterCoreHandle.report_success`.
 class _CountedStep(_Step):
     kind: Literal["done"]
     key: str
+
+# The end of a `RouterCoreHandle.count_success`.
+class _SuccessCountedStep(_Step):
+    kind: Literal["done"]
+    counted: bool
 
 # One `os.environ/` reference a `secrets` step asks for: a top-level param (`key`), or an
 # env-only `dataSources[source].parameters[key]` (`env_only`).
@@ -1084,7 +1192,7 @@ _HealthySteps = _SelectStep | _PreRouteStep | _CacheStep | _HealthyStep | _Faile
 _BuildSteps = _SecretsStep | _BuildStep | _BuiltStep | _FailedStep
 _ModelInfoSteps = _ModelInfoStep | _ModelInfoDoneStep | _FailedStep
 _FailureReportSteps = _CacheStep | _ReportedStep | _FailedStep
-_SuccessReportSteps = _CacheStep | _CountedStep | _FailedStep
+_SuccessReportSteps = _CacheStep | _CountedStep | _SuccessCountedStep | _FailedStep
 
 class _AttemptSucceeded(TypedDict):
     ok: Literal[True]
@@ -1152,7 +1260,6 @@ class RouterCoreHandle:
     @staticmethod
     def configured_service_tiers(model_infos: list[object]) -> list[object]: ...
     # The routing-cache key a deployment counts `metric` (tpm, rpm, itpm, otpm) under in `minute`.
-    def usage_key(self, id: str, model: str, metric: str, minute: str) -> str: ...
     def registry_version(self) -> int: ...
     # The version the deployments before the newest appends last changed at.
     def registry_rewritten(self) -> int: ...
@@ -1181,12 +1288,10 @@ class RouterCoreHandle:
         tracks_usage: bool | None = None,
         callbacks: Mapping[str, bool] | None = None,
     ) -> RouterCall[_SuccessReportSteps]: ...
-    # Count a success against any id, driven like `report_failure`; `done` carries `key`.
+    # Count a success against any id, driven like `report_failure`; `done` carries `counted`.
     def count_success(
         self, id: str, callbacks: Mapping[str, bool] | None = None
     ) -> RouterCall[_SuccessReportSteps]: ...
-    # [(id, tpm_key, rpm_key)] for this minute, or None for a group with no deployment.
-    def usage_keys(self, model_group: str) -> list[tuple[str, str, str]] | None: ...
     # Every deployment as a `model_list` entry, in config order.
     def deployments(self) -> list[dict[str, JsonValue]]: ...
     def deployments_from(self, start: int) -> list[dict[str, JsonValue]]: ...

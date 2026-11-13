@@ -146,6 +146,7 @@ class UserAPIKeyAuthExceptionHandler:
         parent_otel_span: Span | None,
         api_key: str,
         resolved_identity: UserAPIKeyAuth | None = None,
+        dispatched_call_type: str | None = None,
     ) -> UserAPIKeyAuth:
         """
         Handles Connection Errors when reading a Virtual Key from LiteLLM DB
@@ -258,6 +259,7 @@ class UserAPIKeyAuthExceptionHandler:
                 user_api_key_dict=user_api_key_dict,
                 error_type=ProxyErrorTypes.auth_error,
                 route=route,
+                dispatched_call_type=dispatched_call_type,
             )
             # Use transformed exception if callback returned one, otherwise use original
             if transformed_exception is not None:

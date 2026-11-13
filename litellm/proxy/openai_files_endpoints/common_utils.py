@@ -3,7 +3,7 @@ import itertools
 import logging
 import mimetypes
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from types import MappingProxyType
@@ -17,6 +17,7 @@ from typing import (
     get_args,
     runtime_checkable,
 )
+from urllib.parse import unquote, urlparse
 
 from pydantic import TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
@@ -437,6 +438,50 @@ def get_original_file_id(encoded_id: str) -> str:
         return encoded_id
     except Exception:
         return encoded_id
+
+
+_GEMINI_FILES_HOST: Final = "generativelanguage.googleapis.com"
+
+
+def canonical_provider_file_id(file_id: str) -> str:
+    """The one spelling of a provider file id that ownership rows store and look up, so ``files/abc``,
+    ``files%2Fabc``, ``abc/`` and the Gemini file URL all resolve to the bare ``abc``. Every other URL or URI
+    (``s3://``, ``gs://``, a storage blob URL) is returned unchanged, so an upload whose name happens to contain
+    ``files/<id>`` never indexes someone else's ``<id>``."""
+    decoded: Final = unquote(file_id).strip()
+    is_url: Final = "://" in decoded
+    if is_url and urlparse(decoded).hostname != _GEMINI_FILES_HOST:
+        return file_id
+    path: Final = urlparse(decoded).path if is_url else decoded
+    files_index: Final = path.find("files/")
+    bare: Final = (path[files_index:] if files_index != -1 else path).strip("/").removeprefix("files/").strip("/")
+    return bare or decoded
+
+
+_GEMINI_FILES_URL: Final = "https://generativelanguage.googleapis.com/v1beta/files/"
+
+
+def _gemini_files_tail(file_id: str) -> str:
+    """The id Gemini resolves ``file_id`` to, whatever scheme or case wraps it: the text after its ``files/``."""
+    files_index: Final = file_id.find("files/")
+    return file_id[files_index:].strip("/").removeprefix("files/").strip("/") if files_index != -1 else ""
+
+
+def _iter_stored_forms(bare_ids: Sequence[str]) -> Iterator[str]:
+    for bare_id in bare_ids:
+        yield bare_id
+        yield f"files/{bare_id}"
+        yield f"{_GEMINI_FILES_URL}{bare_id}"
+
+
+def provider_file_id_spellings(file_id: str) -> tuple[str, ...]:
+    """Every spelling an ownership row may hold for ``file_id``: as sent, unwrapped from a model-encoded id and
+    canonicalized, reduced the way Gemini reduces it, plus the ``files/`` and Gemini URL forms that upload rows
+    stored before ids were canonicalized."""
+    original: Final = get_original_file_id(file_id)
+    reductions: Final = (canonical_provider_file_id(original), _gemini_files_tail(unquote(original)))
+    bare_ids: Final = tuple(dict.fromkeys(bare for bare in reductions if bare))
+    return tuple(dict.fromkeys((file_id, *_iter_stored_forms(bare_ids))))
 
 
 def is_model_embedded_id(file_id: str) -> bool:
