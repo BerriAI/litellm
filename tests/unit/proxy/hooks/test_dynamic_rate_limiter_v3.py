@@ -3165,6 +3165,21 @@ async def test_a_capped_borrowers_idle_usage_counts_toward_its_cap_but_not_towar
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("saturation", [0.0, 0.5], ids=["idle", "saturated"])
+async def test_a_capped_borrowers_reservation_is_sized_by_its_share_not_its_cap(
+    monkeypatch: pytest.MonkeyPatch, saturation: float
+):
+    """A prompt without max_tokens reserves a floor that scales with the limit it is sized against. Sizing it
+    against the cap would refuse a request its own share would let through, and would admit different
+    requests depending on whether the model happened to be saturated."""
+    handler: Final = _borrowing_handler(monkeypatch, borrows=True)
+    await _admit_at_the_hook(handler, _capped_team_key(2), tokens=160)
+    short_prompt_without_max_tokens: Final[dict[str, object]] = {"messages": [{"role": "user", "content": "hi"}]}
+    await _check(handler, _capped_team_key(2), saturation=saturation, data=short_prompt_without_max_tokens)
+    assert short_prompt_without_max_tokens["max_tokens"] == handler.v3_limiter.no_max_tokens_output_floor(100)
+
+
+@pytest.mark.asyncio
 async def test_a_capped_borrower_is_held_to_its_cap_while_idle_after_a_saturated_stretch(
     monkeypatch: pytest.MonkeyPatch,
 ):

@@ -1274,8 +1274,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             "tokens": 0,
         }
         team_reservation: Final = (
-            await self._team_token_reservation(held_team_share, data, model, call_type, user_api_key_dict)
-            if held_team_share is not None
+            await self._team_token_reservation(team_share.share, data, model, call_type, user_api_key_dict)
+            if team_share is not None and held_team_share is not None
             else 0
         )
         atomic_response: Final = await self.v3_limiter.atomic_check_and_increment_by_n(
@@ -1397,7 +1397,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         stash.borrowing_team_model_cap_reserved_window = (
             _reserved_window(atomic_response, team_cap) if team_reservation else None
         )
-        self._cap_admitted_output(held_team_share, team_reservation, data, call_type)
+        self._cap_admitted_output(None if team_share is None else team_share.share, team_reservation, data, call_type)
         if priority_descriptors and share is not None and not should_enforce_priority:
             get_or_create_request_stash().rate_limit_response = atomic_response
         elif priority_descriptors and not should_enforce_priority:
@@ -1476,7 +1476,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         held: Final = enforced if enforced is not None else cap
         reservation: Final = (
             await self._team_token_reservation(
-                held,
+                team_share.share,
                 {**request_data, "model": model},
                 model,
                 get_or_create_request_stash().call_type,
