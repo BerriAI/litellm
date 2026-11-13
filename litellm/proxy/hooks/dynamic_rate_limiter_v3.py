@@ -659,11 +659,18 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         return team_share(priority_class, members, normalized_weights, settings.default_priority)
 
     def _class_share_holder(self, user_api_key_dict: UserAPIKeyAuth) -> str | None:
-        """Whose slice of the class share the request counts against: the most specific listed entity it carries,
-        customer member, then customer organization, then team, then key. None keeps it on the class pool."""
+        """Whose slice of the class share the request counts against: its team when teams are listed, so customer
+        headers a caller picks cannot move it off its team's slice, then customer member, then customer organization,
+        then key. None keeps it on the class pool."""
         entities: Final = _get_priority_settings().class_share_split_entities
         hierarchy: Final = user_api_key_dict.customer_hierarchy
         candidates: Final = (
+            (
+                "team" in entities
+                and user_api_key_dict.team_id is not None
+                and _is_team_class_share_holder(user_api_key_dict.team_id),
+                lambda: str(user_api_key_dict.team_id),
+            ),
             (
                 "customer_member" in entities and hierarchy is not None and hierarchy.customer_member_id is not None,
                 lambda: customer_member("customer_member", str(hierarchy.customer_member_id if hierarchy else "")),
@@ -671,12 +678,6 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             (
                 "customer_organization" in entities and hierarchy is not None,
                 lambda: customer_member("customer_org", hierarchy.customer_org_id if hierarchy else ""),
-            ),
-            (
-                "team" in entities
-                and user_api_key_dict.team_id is not None
-                and _is_team_class_share_holder(user_api_key_dict.team_id),
-                lambda: str(user_api_key_dict.team_id),
             ),
             (
                 "key" in entities and user_api_key_dict.api_key is not None,
@@ -1021,6 +1022,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             connection_stash.priority_class_share_holder = self._class_share_holder(user_api_key_dict)
         borrowing: Final = self._borrowing_shares(model=requested_model, user_api_key_dict=user_api_key_dict)
         if not share_descriptors and not borrowing:
+            if connection_stash is not None:
+                self._track_frame_shares(connection_stash, borrowing, saturated=False)
             return
         saturation: Final = await self._check_model_saturation(requested_model, model_group_info)
         saturated: Final = saturation >= _get_priority_settings().saturation_threshold
@@ -1086,12 +1089,13 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         borrowing: Mapping[BorrowerKind, _BorrowingTeamShare],
         saturated: bool,
     ) -> None:
-        for kind, borrower_share in borrowing.items():
+        for kind in BORROWER_KINDS:
+            borrower_share = borrowing.get(kind)
             state = connection_stash.borrowing_shares[kind]
-            enforced = borrower_share.enforced(saturated)
+            enforced = None if borrower_share is None else borrower_share.enforced(saturated)
             state.limit = state.limit if enforced is None and state.reserved_tokens else enforced
-            state.share = borrower_share.share
-            state.cap = borrower_share.ceiling
+            state.share = None if borrower_share is None else borrower_share.share
+            state.cap = None if borrower_share is None else borrower_share.ceiling
 
     async def _admission_reservations(
         self,

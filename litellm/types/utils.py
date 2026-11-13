@@ -5412,7 +5412,7 @@ class PriorityClassShareConfig(LiteLLMBaseModel):
 
     split_equally_among_active: tuple[ClassShareEntity, ...] = Field(
         default=(),
-        description="Entity types that each take an equal slice of their priority class's share of a model, renormalized over the classes active on the model in the current window. Once the model saturates each is held to its own slice instead of the class pool. A request that matches several listed types counts under the most specific one: customer_member, then customer_organization, then team, then key.",
+        description="Entity types that each take an equal slice of their priority class's share of a model, renormalized over the classes active on the model in the current window. Once the model saturates each is held to its own slice instead of the class pool. A request that matches several listed types counts under one of them: its team first, so customer headers cannot move a team's key off the team's slice, then customer_member, then customer_organization, then key.",
     )
 
 

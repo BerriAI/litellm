@@ -4124,3 +4124,42 @@ async def test_a_team_id_shaped_like_a_customer_org_holder_does_not_draw_on_that
     await _use(handler, lookalike, 200, saturation=1.0, priority="interactive")
 
     await _check(handler, victim, saturation=0.52, priority="interactive")
+
+
+@pytest.mark.asyncio
+async def test_a_team_key_naming_a_new_customer_org_stays_on_its_teams_slice(monkeypatch: pytest.MonkeyPatch):
+    from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth
+
+    def team_key_for(org_id: str) -> UserAPIKeyAuth:
+        return _class_team("team-heavy").model_copy(
+            update={"customer_hierarchy": CustomerHierarchyAuth(customer_org_id=org_id, scopes=())}
+        )
+
+    handler: Final = _split_handler(monkeypatch, "team", "customer_organization", "customer_member")
+    await _use(handler, _class_team("team-light"), 20, saturation=1.0, priority="interactive")
+    await _use(handler, team_key_for("org-first"), 300, saturation=1.0, priority="interactive")
+    await _use(handler, team_key_for("org-first"), 200, saturation=1.0, priority="interactive")
+
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, team_key_for("org-fresh"), saturation=0.52, priority="interactive")
+    _held_to_class_share(exc.value)
+    assert "Team: team-heavy, Priority: interactive, Active callers in class: 2, " in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_a_websocket_turn_on_a_model_without_a_team_limit_is_not_charged_to_the_earlier_models_share(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.1)
+    await _check(handler, _team_key(), saturation=0.0)
+    await _settle_tokens(handler, 150)
+    await handler.enforce_token_limits_for_frame(user_api_key_dict=_team_key(), requested_model="shared-model")
+    await handler.enforce_token_limits_for_frame(user_api_key_dict=_team_key(), requested_model="other-model")
+    await _settle_tokens(
+        handler,
+        90,
+        response=[],
+        model_group="other-model",
+        combined_usage_object=litellm.Usage(prompt_tokens=60, completion_tokens=30, total_tokens=90),
+    )
+    assert await _team_tokens_remaining(handler) == 100
