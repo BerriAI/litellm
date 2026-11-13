@@ -52,19 +52,80 @@ _OPENAI_PREFIX: Final = "openai/"
 _INPUT_SIZE_FIELDS: Final = ("messages", "prompt", "input", "query", "documents", "tools", "tool_choice")
 
 
+def _cheap_payload_size(val: object) -> int:
+    if isinstance(val, str):
+        return len(val)
+    if isinstance(val, (int, float, bool)):
+        return 10
+    if isinstance(val, Mapping):
+        return sum(len(str(k)) + _cheap_payload_size(v) for k, v in val.items())
+    if isinstance(val, (list, tuple, set)):
+        return sum(_cheap_payload_size(item) for item in val)
+    return len(str(val))
+
+
+def _approximate_gemini_part_size(part: Mapping[str, object]) -> int:
+    if "inlineData" in part or "inline_data" in part or "fileData" in part or "file_data" in part:
+        return 0
+    text = part.get("text")
+    if isinstance(text, str):
+        return len(text)
+    for key in (
+        "functionResponse",
+        "function_response",
+        "functionCall",
+        "function_call",
+        "executableCode",
+        "executable_code",
+        "codeExecutionResult",
+        "code_execution_result",
+    ):
+        val = part.get(key)
+        if val is not None:
+            return _cheap_payload_size(val)
+    return 0
+
+
+def _approximate_gemini_payload_size(payload: object) -> int:
+    if isinstance(payload, str):
+        return len(payload)
+    if isinstance(payload, Mapping):
+        parts = payload.get("parts")
+        if isinstance(parts, list):
+            return sum(_approximate_gemini_payload_size(p) for p in parts)
+        text = payload.get("text")
+        if isinstance(text, str):
+            return len(text)
+        return _approximate_gemini_part_size(payload)
+    if isinstance(payload, list):
+        return sum(_approximate_gemini_payload_size(item) for item in payload)
+    return 0
+
+
 def _approximate_input_size(request_body: Mapping[str, object]) -> int:
     """Length of the request's input text, a cheap stand-in for tokenizing cost.
 
     Every field count_input_tokens_for_model hands the tokenizer is sized here,
     and rendering rather than walking keeps mapping keys in the total, which a
     tool schema's property names are."""
-    return sum(len(str(request_body.get(field, ""))) for field in _INPUT_SIZE_FIELDS)
+    size = sum(len(str(request_body.get(field, ""))) for field in _INPUT_SIZE_FIELDS)
+    contents = request_body.get("contents")
+    if contents is not None:
+        size += _approximate_gemini_payload_size(contents)
+    sys_inst = request_body.get("systemInstruction") or request_body.get("system_instruction")
+    if sys_inst is not None:
+        size += _approximate_gemini_payload_size(sys_inst)
+    response_schema = _extract_gemini_response_schema(request_body)
+    if response_schema is not None:
+        size += _cheap_payload_size(response_schema)
+    return size
 
 
 async def count_input_tokens(
     request_body: dict,
     raw_body: bytes | None,
     models: Sequence[str],
+    route: str | None = None,
 ) -> Mapping[str, int]:
     """Input-token count per model, sharing one native count across models that
     select the same tokenizer."""
@@ -79,6 +140,7 @@ async def count_input_tokens(
             raw_body=counted_raw_body,
             tokenizer=tokenizer,
             models=tuple(model for model, selected in tokenizers if selected == tokenizer),
+            route=route,
         )
         for tokenizer in groups
     ]
@@ -92,14 +154,16 @@ async def _count_group(
     raw_body: bytes | None,
     tokenizer: RustTokenizer | None,
     models: tuple[str, ...],
+    route: str | None = None,
 ) -> Mapping[str, int]:
     async def python() -> Mapping[str, int]:
         if _approximate_input_size(request_body) < TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS:
-            return _count_input_tokens_for_models(request_body=request_body, models=models)
+            return _count_input_tokens_for_models(request_body=request_body, models=models, route=route)
         return await asyncio.to_thread(
             _count_input_tokens_for_models,
             request_body=request_body,
             models=models,
+            route=route,
         )
 
     if tokenizer is None or raw_body is None:
@@ -134,12 +198,13 @@ async def _native_counts(
 def _count_input_tokens_for_models(
     request_body: dict,
     models: Sequence[str],
+    route: str | None = None,
 ) -> Mapping[str, int]:
     return MappingProxyType(
         {
             model: tokens
             for model in models
-            if (tokens := count_input_tokens_for_model(request_body=request_body, model=model)) is not None
+            if (tokens := count_input_tokens_for_model(request_body=request_body, model=model, route=route)) is not None
         }
     )
 
@@ -221,8 +286,236 @@ def _served_by_openai(deployment: object) -> bool:
     return served_provider == "openai"
 
 
-def count_input_tokens_for_model(request_body: dict, model: str) -> int | None:
+def _extract_gemini_part_text(part: Mapping[str, object]) -> str | None:
+    if not isinstance(part, Mapping):
+        return None
+    if isinstance(part.get("text"), str):
+        return part["text"]
+    for key in ("functionResponse", "function_response"):
+        if key in part:
+            val = part[key]
+            try:
+                return json.dumps(val) if val is not None else ""
+            except Exception:
+                return None
+    for key in ("functionCall", "function_call"):
+        if key in part:
+            val = part[key]
+            try:
+                return json.dumps(val) if val is not None else ""
+            except Exception:
+                return None
+    for key in ("executableCode", "executable_code"):
+        if key in part:
+            val = part[key]
+            try:
+                return json.dumps(val) if val is not None else ""
+            except Exception:
+                return None
+    for key in ("codeExecutionResult", "code_execution_result"):
+        if key in part:
+            val = part[key]
+            try:
+                return json.dumps(val) if val is not None else ""
+            except Exception:
+                return None
+    return None
+
+
+_GEMINI_BUILTIN_RETRIEVAL_TOOL_KEYS: Final = frozenset(
+    {
+        "urlContext",
+        "url_context",
+        "googleSearch",
+        "google_search",
+        "googleSearchRetrieval",
+        "google_search_retrieval",
+        "vertexRetrieval",
+        "vertex_retrieval",
+        "enterpriseWebSearch",
+        "enterprise_web_search",
+        "googleMaps",
+        "google_maps",
+        "retrieval",
+    }
+)
+
+
+def _has_gemini_retrieval_tool(tools: object) -> bool:
+    if isinstance(tools, Mapping):
+        return any(key in tools for key in _GEMINI_BUILTIN_RETRIEVAL_TOOL_KEYS)
+    if isinstance(tools, list):
+        for tool in tools:
+            if isinstance(tool, Mapping) and any(key in tool for key in _GEMINI_BUILTIN_RETRIEVAL_TOOL_KEYS):
+                return True
+    return False
+
+
+_GEMINI_RESPONSE_SCHEMA_KEYS: Final = (
+    "responseSchema",
+    "response_schema",
+    "responseJsonSchema",
+    "response_json_schema",
+)
+
+
+def _extract_gemini_response_schema(request_body: Mapping[str, object]) -> object | None:
+    for key in _GEMINI_RESPONSE_SCHEMA_KEYS:
+        if key in request_body:
+            return request_body[key]
+    for config_key in ("generationConfig", "generation_config", "config"):
+        cfg = request_body.get(config_key)
+        if isinstance(cfg, Mapping):
+            for key in _GEMINI_RESPONSE_SCHEMA_KEYS:
+                if key in cfg:
+                    return cfg[key]
+    return None
+
+
+def _extract_gemini_text(request_body: Mapping[str, object]) -> str | None:
+    extra_body = request_body.get("extra_body")
+    if isinstance(extra_body, Mapping):
+        if any(
+            key in extra_body
+            for key in (
+                "contents",
+                "systemInstruction",
+                "system_instruction",
+                "tools",
+                "cachedContent",
+                "cached_content",
+                "responseSchema",
+                "response_schema",
+                "responseJsonSchema",
+                "response_json_schema",
+                "generationConfig",
+                "generation_config",
+                "config",
+            )
+        ):
+            return None
+    if any(key in request_body for key in ("cachedContent", "cached_content")):
+        return None
+
+    texts: list[str] = []
+
+    sys_inst = request_body.get("systemInstruction") or request_body.get("system_instruction")
+    if isinstance(sys_inst, Mapping):
+        parts = sys_inst.get("parts")
+        if isinstance(parts, list):
+            for part in parts:
+                if isinstance(part, Mapping):
+                    part_text = _extract_gemini_part_text(part)
+                    if part_text is None:
+                        return None
+                    texts.append(part_text)
+                elif isinstance(part, str):
+                    texts.append(part)
+                else:
+                    return None
+        elif isinstance(sys_inst.get("text"), str):
+            texts.append(sys_inst["text"])
+        else:
+            return None
+    elif isinstance(sys_inst, str):
+        texts.append(sys_inst)
+    elif sys_inst is not None:
+        return None
+
+    tools = request_body.get("tools")
+    if tools is not None:
+        if _has_gemini_retrieval_tool(tools):
+            return None
+        try:
+            texts.append(json.dumps(tools))
+        except Exception:
+            return None
+
+    response_schema = _extract_gemini_response_schema(request_body)
+    if response_schema is not None:
+        if isinstance(response_schema, str):
+            texts.append(response_schema)
+        else:
+            try:
+                texts.append(json.dumps(response_schema))
+            except Exception:
+                return None
+
+    contents = request_body.get("contents")
+    if isinstance(contents, list):
+        for item in contents:
+            if isinstance(item, Mapping):
+                parts = item.get("parts")
+                if isinstance(parts, list):
+                    for part in parts:
+                        if isinstance(part, Mapping):
+                            part_text = _extract_gemini_part_text(part)
+                            if part_text is None:
+                                return None
+                            texts.append(part_text)
+                        elif isinstance(part, str):
+                            texts.append(part)
+                        else:
+                            return None
+                elif isinstance(item.get("text"), str):
+                    texts.append(item["text"])
+                else:
+                    return None
+            elif isinstance(item, str):
+                texts.append(item)
+            else:
+                return None
+    elif isinstance(contents, Mapping):
+        parts = contents.get("parts")
+        if isinstance(parts, list):
+            for part in parts:
+                if isinstance(part, Mapping):
+                    part_text = _extract_gemini_part_text(part)
+                    if part_text is None:
+                        return None
+                    texts.append(part_text)
+                elif isinstance(part, str):
+                    texts.append(part)
+                else:
+                    return None
+        elif isinstance(contents.get("text"), str):
+            texts.append(contents["text"])
+        else:
+            return None
+    elif isinstance(contents, str):
+        texts.append(contents)
+    elif contents is not None:
+        return None
+
+    combined = " ".join(texts)
+    return combined if combined else None
+
+
+_NATIVE_GEMINI_ACTIONS: Final = (
+    ":generateContent",
+    ":streamGenerateContent",
+    "/generateContent",
+    "/streamGenerateContent",
+)
+
+
+def is_native_gemini_route(route: str | None) -> bool:
+    if not route:
+        return False
+    clean_route = route.split("?", 1)[0].rstrip("/")
+    return clean_route.endswith(_NATIVE_GEMINI_ACTIONS)
+
+
+def count_input_tokens_for_model(request_body: dict, model: str, route: str | None = None) -> int | None:
     try:
+        if is_native_gemini_route(route):
+            if "contents" in request_body:
+                gemini_text: Final = _extract_gemini_text(request_body)
+                if gemini_text is not None:
+                    return _count_text_tokens(model=model, text=gemini_text)
+                return None
+            return None
+
         if "messages" in request_body:
             try:
                 return litellm.token_counter(
@@ -246,6 +539,11 @@ def count_input_tokens_for_model(request_body: dict, model: str) -> int | None:
                 text=request_body.get("documents"),
             )
             return query_tokens + document_tokens
+        if "contents" in request_body:
+            gemini_text: Final = _extract_gemini_text(request_body)
+            if gemini_text is not None:
+                return _count_text_tokens(model=model, text=gemini_text)
+            return None
     except Exception:
         verbose_proxy_logger.debug("Unable to count input tokens for budget reservation", exc_info=True)
     return None

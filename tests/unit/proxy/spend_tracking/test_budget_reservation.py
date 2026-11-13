@@ -28,17 +28,17 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 from litellm.proxy.common_utils.timezone_utils import BudgetResetSettings
 from litellm.proxy.spend_tracking.budget_reservation import (
     _get_team_member_budget_counter,
+    count_request_input_tokens,
     estimate_request_max_cost,
     get_budget_window_start,
     release_unbound_budget_reservation,
-    count_request_input_tokens,
     reserve_budget_for_request,
 )
 from litellm.proxy.utils import ProxyLogging
-from litellm.router import Router
-from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
+from litellm.router import Router
+from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
 TOKEN_COUNTING_ROUTES: Final = (
     "/responses/input_tokens",
@@ -374,7 +374,9 @@ async def test_release_unbound_budget_reservation_frees_the_counter(spend_counte
 
 
 @pytest.mark.asyncio
-async def test_release_unbound_budget_reservation_leaves_a_bound_one_to_its_callback(spend_counter_store: SpendCounterStore):
+async def test_release_unbound_budget_reservation_leaves_a_bound_one_to_its_callback(
+    spend_counter_store: SpendCounterStore,
+):
     counter_key: Final = f"spend:key:{TINY_BUDGET_KEY_TOKEN}"
     reservation: Final = await _reserve_for_tiny_budget_key(
         "/v1/chat/completions", {"model": "gpt-4o", "messages": [{"role": "user", "content": "hello"}]}
@@ -444,9 +446,7 @@ async def test_reservation_holds_cost_against_cached_org_and_project_budgets(spe
         },
     ]
     assert spend_counter_store.get_local("spend:org:org-budgeted") == pytest.approx(reserved_cost)
-    assert spend_counter_store.get_local("spend:project:project-budgeted") == pytest.approx(
-        reserved_cost
-    )
+    assert spend_counter_store.get_local("spend:project:project-budgeted") == pytest.approx(reserved_cost)
 
 
 @pytest.mark.parametrize(
@@ -716,3 +716,84 @@ def test_fixed_budget_window_requires_duration_and_reset_boundary(window: object
     from litellm.proxy.spend_tracking.budget_reservation import fixed_budget_window
 
     assert fixed_budget_window(window) is None
+
+
+def test_requested_output_tokens_gemini_generation_config() -> None:
+    from litellm.proxy.spend_tracking.budget_reservation import _requested_output_tokens
+
+    body_camel: Final = {"contents": [], "generationConfig": {"maxOutputTokens": 4096}}
+    assert _requested_output_tokens(body_camel) == 4096
+
+    body_snake: Final = {"contents": [], "generationConfig": {"max_output_tokens": 2048}}
+    assert _requested_output_tokens(body_snake) == 2048
+
+    body_config: Final = {"contents": [], "config": {"maxOutputTokens": 1024}}
+    assert _requested_output_tokens(body_config) == 1024
+
+    body_chat: Final = {"messages": [{"role": "user", "content": "hi"}], "generationConfig": {"maxOutputTokens": 1}}
+    assert _requested_output_tokens(body_chat, route="/v1/chat/completions") is None, (
+        "Non-native route with messages ignores generationConfig so client cannot artificially reduce reservation"
+    )
+
+    body_chat_decoy: Final = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "contents": [],
+        "generationConfig": {"maxOutputTokens": 1},
+    }
+    assert _requested_output_tokens(body_chat_decoy, route="/v1/chat/completions") is None, (
+        "Adding contents to a non-native chat route still ignores generationConfig"
+    )
+    assert (
+        _requested_output_tokens(body_chat_decoy, route="/openai/deployments/gemini-2.0-flash/chat/completions") is None
+    )
+    assert (
+        _requested_output_tokens(
+            body_chat_decoy,
+            route="/vertex_ai/v1/projects/proj/locations/us/publishers/anthropic/models/claude-3-5-sonnet:rawPredict",
+        )
+        is None
+    )
+    assert _requested_output_tokens(body_chat_decoy) is None
+
+    assert _requested_output_tokens(body_camel, route="/vertex_ai/models/gemini-pro:generateContent") == 4096, (
+        "Native route honors generationConfig"
+    )
+    route_responses_proj: Final = (
+        "/vertex_ai/v1/projects/responses-prod/locations/us-central1/publishers/google"
+        "/models/gemini-pro:generateContent"
+    )
+    assert _requested_output_tokens(body_camel, route=route_responses_proj) == 4096, (
+        "Native route with 'responses' in project ID must still honor generationConfig"
+    )
+
+    body_decoy: Final = {
+        "contents": [],
+        "config": {"maxOutputTokens": 65536},
+        "generationConfig": {"maxOutputTokens": 1},
+    }
+    assert _requested_output_tokens(body_decoy) == 65536, (
+        "Decoy generationConfig with small value cannot reduce higher config cap"
+    )
+
+
+def test_output_multiplier_gemini_candidate_count() -> None:
+    from litellm.proxy.spend_tracking.budget_reservation import _get_output_multiplier
+
+    body_cand: Final = {"contents": [], "generationConfig": {"candidateCount": 4}}
+    assert _get_output_multiplier(body_cand) == 4
+
+    body_config_cand: Final = {"contents": [], "config": {"candidate_count": 2}}
+    assert _get_output_multiplier(body_config_cand) == 2
+
+    body_chat: Final = {"messages": [{"role": "user", "content": "hi"}], "generationConfig": {"candidateCount": 5}}
+    assert _get_output_multiplier(body_chat, route="/v1/chat/completions") == 1, (
+        "Non-native chat completions route ignores generationConfig candidateCount"
+    )
+    assert _get_output_multiplier(body_chat, route="/openai/deployments/gemini-2.0-flash/chat/completions") == 1
+
+    body_decoy: Final = {
+        "contents": [],
+        "config": {"candidateCount": 8},
+        "generationConfig": {"candidateCount": 1},
+    }
+    assert _get_output_multiplier(body_decoy) == 8, "Decoy generationConfig cannot reduce higher candidate count"

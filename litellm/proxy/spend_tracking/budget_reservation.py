@@ -48,6 +48,7 @@ from litellm.proxy.spend_tracking.input_tokens import (
     count_input_tokens,
     count_input_tokens_for_model,
     inline_pdf_file_count,
+    is_native_gemini_route,
     models_counted_for,
     openai_chat_pdf_file_tokens,
 )
@@ -1484,7 +1485,7 @@ def _max_cost_for_cost_info(
     if estimated_input_tokens is None or output_tokens is None:
         return None
 
-    output_multiplier: Final = _get_output_multiplier(request_body=request_body)
+    output_multiplier: Final = _get_output_multiplier(request_body=request_body, route=route)
     tiered_pricing: Final = model_info.get("tiered_pricing")
     if isinstance(tiered_pricing, list) and tiered_pricing:
         tier: Final = select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=estimated_input_tokens)
@@ -1661,6 +1662,7 @@ async def count_request_input_tokens(
         request_body=request_body,
         raw_body=raw_body,
         models=tuple(dict.fromkeys(chain.from_iterable(counted_models.values()))),
+        route=route,
     )
     chat_pdf_files: Final = (
         inline_pdf_file_count(request_body.get("messages"))
@@ -1693,7 +1695,7 @@ def _estimate_input_tokens(
     counted: Final = (
         input_tokens
         if input_tokens is not None
-        else count_input_tokens_for_model(request_body=request_body, model=model)
+        else count_input_tokens_for_model(request_body=request_body, model=model, route=route)
     )
     if counted is not None:
         return counted
@@ -1716,7 +1718,7 @@ def _estimate_output_tokens(
     if _is_input_only_route(route=route):
         return 0
 
-    requested: Final = _requested_output_tokens(request_body)
+    requested: Final = _requested_output_tokens(request_body, route=route)
 
     # Clamp at min(requested-or-default, model_max-or-default). Two purposes:
     # (1) Without an explicit cap we still need a finite reservation so the
@@ -1733,7 +1735,53 @@ def _estimate_output_tokens(
 _OUTPUT_TOKEN_FIELDS: Final = ("max_completion_tokens", "max_tokens", "max_output_tokens")
 
 
-def _requested_output_tokens(request_body: Mapping[str, object]) -> int | None:
+def _is_native_gemini_request(request_body: Mapping[str, object], route: str | None = None) -> bool:
+    if route is not None:
+        return is_native_gemini_route(route)
+    return (
+        "contents" in request_body
+        and "messages" not in request_body
+        and "prompt" not in request_body
+        and "input" not in request_body
+    )
+
+
+def _extract_gemini_max_output_tokens(request_body: Mapping[str, object]) -> int | None:
+    found: list[int] = []
+    for token_key in ("maxOutputTokens", "max_output_tokens", "max_tokens", "max_completion_tokens"):
+        val = _to_int(request_body.get(token_key))
+        if val is not None:
+            found.append(val)
+    for cfg_key in ("config", "generationConfig", "generation_config"):
+        cfg = request_body.get(cfg_key)
+        if isinstance(cfg, Mapping):
+            for token_key in ("maxOutputTokens", "max_output_tokens"):
+                val = _to_int(cfg.get(token_key))
+                if val is not None:
+                    found.append(val)
+    return max(found) if found else None
+
+
+def _extract_gemini_candidate_count(request_body: Mapping[str, object]) -> int | None:
+    found: list[int] = []
+    for cand_key in ("candidateCount", "candidate_count"):
+        val = _to_int(request_body.get(cand_key))
+        if val is not None:
+            found.append(val)
+    for cfg_key in ("config", "generationConfig", "generation_config"):
+        cfg = request_body.get(cfg_key)
+        if isinstance(cfg, Mapping):
+            for cand_key in ("candidateCount", "candidate_count"):
+                val = _to_int(cfg.get(cand_key))
+                if val is not None:
+                    found.append(val)
+    return max(found) if found else None
+
+
+def _requested_output_tokens(request_body: Mapping[str, object], route: str | None = None) -> int | None:
+    if _is_native_gemini_request(request_body, route):
+        return _extract_gemini_max_output_tokens(request_body)
+
     inference_config: Final = request_body.get("inferenceConfig")
     candidates: Final = (
         *(request_body.get(field) for field in _OUTPUT_TOKEN_FIELDS),
@@ -1742,12 +1790,16 @@ def _requested_output_tokens(request_body: Mapping[str, object]) -> int | None:
     return next((tokens for tokens in map(_to_int, candidates) if tokens is not None), None)
 
 
-def _get_output_multiplier(request_body: dict) -> int:
+def _get_output_multiplier(request_body: dict, route: str | None = None) -> int:
     output_multiplier = 1
     for key in ("n", "best_of"):
         value = _to_int(request_body.get(key))
         if value is not None:
             output_multiplier = max(output_multiplier, value)
+    if _is_native_gemini_request(request_body, route):
+        cand_count = _extract_gemini_candidate_count(request_body)
+        if cand_count is not None:
+            output_multiplier = max(output_multiplier, cand_count)
     return output_multiplier
 
 

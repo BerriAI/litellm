@@ -280,3 +280,306 @@ def test_a_compaction_item_counts_only_its_summary(model: str) -> None:
     assert count_input_tokens_for_model(request_body=padded_body, model=model) == count_input_tokens_for_model(
         request_body=plain_body, model=model
     )
+
+
+def test_count_input_tokens_for_model_gemini_contents() -> None:
+    body: Final = {
+        "contents": [{"role": "user", "parts": [{"text": "Hello from Gemini Vertex AI passthrough"}]}],
+        "systemInstruction": {"parts": [{"text": "You are a helpful assistant"}]},
+    }
+    tokens: Final = count_input_tokens_for_model(request_body=body, model="gpt-4o")
+    assert tokens is not None
+    assert tokens > 0
+
+
+def test_count_input_tokens_for_model_gemini_function_call() -> None:
+    body: Final = {
+        "contents": [
+            {
+                "role": "model",
+                "parts": [{"functionCall": {"name": "get_weather", "args": {"location": "San Francisco"}}}],
+            },
+            {
+                "role": "user",
+                "parts": [{"functionResponse": {"name": "get_weather", "response": {"temperature": "70F"}}}],
+            },
+        ],
+    }
+    tokens: Final = count_input_tokens_for_model(request_body=body, model="gpt-4o")
+    assert tokens is not None
+    assert tokens > 0
+
+
+def test_count_input_tokens_for_model_gemini_inline_data_returns_none() -> None:
+    body: Final = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {"text": "What is in this image?"},
+                    {"inlineData": {"mimeType": "image/png", "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"}},
+                ],
+            }
+        ],
+    }
+    assert count_input_tokens_for_model(request_body=body, model="gpt-4o") is None
+
+
+def test_count_input_tokens_for_model_gemini_executable_code() -> None:
+    body: Final = {
+        "contents": [
+            {
+                "role": "model",
+                "parts": [{"executableCode": {"language": "PYTHON", "code": "print('hello world')"}}],
+            },
+            {
+                "role": "user",
+                "parts": [{"codeExecutionResult": {"outcome": "OUTCOME_OK", "output": "hello world\n"}}],
+            },
+        ],
+    }
+    tokens: Final = count_input_tokens_for_model(request_body=body, model="gpt-4o")
+    assert tokens is not None
+    assert tokens > 0
+
+
+def test_count_input_tokens_for_model_gemini_unrecognized_part_returns_none() -> None:
+    body: Final = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {"text": "Calculate something"},
+                    {"unrecognizedFutureBillablePart": {"foo": "bar"}},
+                ],
+            }
+        ],
+    }
+    assert count_input_tokens_for_model(request_body=body, model="gpt-4o") is None
+
+
+def test_count_input_tokens_for_model_gemini_cached_content_returns_none() -> None:
+    body: Final = {
+        "contents": [{"role": "user", "parts": [{"text": "Hello"}]}],
+        "cachedContent": "cachedContents/12345678",
+    }
+    assert count_input_tokens_for_model(request_body=body, model="gpt-4o") is None
+
+
+def test_count_input_tokens_for_model_gemini_cached_content_extra_body_returns_none() -> None:
+    body: Final = {
+        "contents": [{"role": "user", "parts": [{"text": "Hello"}]}],
+        "extra_body": {"cached_content": "cachedContents/12345678"},
+    }
+    assert count_input_tokens_for_model(request_body=body, model="gpt-4o") is None
+
+
+def test_approximate_input_size_skips_gemini_media_data() -> None:
+    from litellm.proxy.spend_tracking.input_tokens import _approximate_input_size
+
+    large_dummy_media: Final = "A" * 100_000
+    body: Final = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {"text": "Short prompt"},
+                    {"inlineData": {"mimeType": "image/png", "data": large_dummy_media}},
+                ],
+            }
+        ],
+    }
+    assert _approximate_input_size(body) < 1_000, (
+        "Sizing should only account for Short prompt, not 100k chars of inline media data"
+    )
+
+
+def test_approximate_gemini_part_size_cheap_payload_sizing() -> None:
+    from litellm.proxy.spend_tracking.input_tokens import _approximate_gemini_part_size
+
+    part: Final = {
+        "functionResponse": {
+            "name": "large_output",
+            "response": {"results": [{"id": i, "data": "item" * 10} for i in range(100)]},
+        }
+    }
+    size = _approximate_gemini_part_size(part)
+    assert size > 1_000, "Should size nested functionResponse payloads"
+
+
+def test_count_input_tokens_for_model_gemini_extra_body_overrides_return_none() -> None:
+    body_contents_override: Final = {
+        "contents": [{"role": "user", "parts": [{"text": "Hello"}]}],
+        "extra_body": {"contents": [{"role": "user", "parts": [{"text": "Overridden huge prompt"}]}]},
+    }
+    assert count_input_tokens_for_model(request_body=body_contents_override, model="gpt-4o") is None
+
+    body_sys_override: Final = {
+        "contents": [{"role": "user", "parts": [{"text": "Hello"}]}],
+        "extra_body": {"systemInstruction": "Overridden system prompt"},
+    }
+    assert count_input_tokens_for_model(request_body=body_sys_override, model="gpt-4o") is None
+
+    body_tools_override: Final = {
+        "contents": [{"role": "user", "parts": [{"text": "Hello"}]}],
+        "extra_body": {"tools": [{"functionDeclarations": []}]},
+    }
+    assert count_input_tokens_for_model(request_body=body_tools_override, model="gpt-4o") is None
+
+
+@pytest.mark.parametrize(
+    "retrieval_tool",
+    (
+        {"urlContext": {}},
+        {"url_context": {}},
+        {"googleSearch": {}},
+        {"google_search": {}},
+        {"googleSearchRetrieval": {}},
+        {"vertexRetrieval": {}},
+        {"enterpriseWebSearch": {}},
+    ),
+)
+def test_count_input_tokens_for_model_gemini_builtin_retrieval_returns_none(retrieval_tool: dict) -> None:
+    body: Final = {
+        "contents": [{"role": "user", "parts": [{"text": "What is on this website?"}]}],
+        "tools": [retrieval_tool],
+    }
+    assert (
+        count_input_tokens_for_model(
+            request_body=body, model="gpt-4o", route="/vertex_ai/models/gemini-pro:generateContent"
+        )
+        is None
+    ), "Built-in retrieval tools fetch external uncounted input, so must return None for max fallback"
+
+
+def test_count_input_tokens_for_model_gemini_function_declarations_counted() -> None:
+    body: Final = {
+        "contents": [{"role": "user", "parts": [{"text": "What is the weather?"}]}],
+        "tools": [{"functionDeclarations": [{"name": "get_weather", "description": "Get current weather"}]}],
+    }
+    tokens = count_input_tokens_for_model(
+        request_body=body, model="gpt-4o", route="/vertex_ai/models/gemini-pro:generateContent"
+    )
+    assert tokens is not None, "Function declarations without retrieval tools should be tokenized"
+    assert tokens > 5, "Tokens should account for prompt and function declaration schema"
+
+
+def test_count_input_tokens_for_model_responses_route_ignores_unrelated_contents() -> None:
+    long_input: Final = "This is a long input prompt for Responses endpoint " * 10
+    body: Final = {
+        "input": long_input,
+        "contents": "Hi",
+    }
+    tokens = count_input_tokens_for_model(request_body=body, model="gpt-4o", route="/v1/responses")
+    assert tokens is not None, "Responses route should count input tokens"
+    assert tokens > 20, "For /v1/responses route, the billable input is 'input', not the decoy 'contents'"
+
+    tokens_no_route = count_input_tokens_for_model(request_body=body, model="gpt-4o")
+    assert tokens_no_route == tokens, "Default route precedence should count input field over contents"
+
+
+def test_count_input_tokens_for_model_native_gemini_route_counts_contents() -> None:
+    body: Final = {
+        "contents": [{"role": "user", "parts": [{"text": "Hello Gemini native"}]}],
+        "input": "decoy",
+    }
+    tokens = count_input_tokens_for_model(
+        request_body=body, model="gpt-4o", route="/vertex_ai/models/gemini-pro:generateContent"
+    )
+    assert tokens is not None, "Native Gemini route should count contents"
+    assert tokens > 0, "On native Gemini route, contents is counted and decoy input is ignored"
+
+
+def test_count_input_tokens_for_model_gemini_preserves_whitespace() -> None:
+    whitespace_text: Final = ("\n\t \n " * 100) + "Hi"
+    body: Final = {"contents": [{"role": "user", "parts": [{"text": whitespace_text}]}]}
+    tokens = count_input_tokens_for_model(request_body=body, model="gpt-4o")
+    assert tokens is not None, "Input token count should not be None"
+    assert tokens > 10, "Whitespace tokens must be preserved, not stripped to 1 token"
+
+
+def test_count_input_tokens_for_model_azure_deployment_route_ignores_gemini_name() -> None:
+    body: Final = {
+        "messages": [{"role": "user", "content": "A long message with lots of tokens " * 10}],
+        "contents": "Hi",
+    }
+    route: Final = "/openai/deployments/gemini-2.0-flash/chat/completions"
+    tokens = count_input_tokens_for_model(request_body=body, model="gpt-4o", route=route)
+    assert tokens is not None, "Azure deployment route should count tokens"
+    assert tokens > 20, "Must count the long message tokens, not the 1 token from contents"
+
+
+def test_count_input_tokens_for_model_vertex_claude_raw_predict_counts_messages() -> None:
+    body: Final = {
+        "messages": [{"role": "user", "content": "A Vertex Claude prompt with several tokens " * 5}],
+    }
+    route: Final = (
+        "/vertex_ai/v1/projects/my-project/locations/us-east5/publishers/anthropic/models/claude-3-5-sonnet:rawPredict"
+    )
+    tokens = count_input_tokens_for_model(request_body=body, model="gpt-4o", route=route)
+    assert tokens is not None, "Vertex Claude rawPredict route should count tokens"
+    assert tokens > 20, "Must count Anthropic messages on rawPredict endpoints"
+
+
+def test_is_native_gemini_route_matches_endpoint_action_suffix() -> None:
+    from litellm.proxy.spend_tracking.input_tokens import is_native_gemini_route
+
+    route_with_responses_proj: Final = (
+        "/vertex_ai/v1/projects/responses-prod/locations/us-central1/publishers/google"
+        "/models/gemini-1.5-flash:generateContent"
+    )
+    assert is_native_gemini_route(route_with_responses_proj) is True, (
+        "Vertex route with project id containing 'responses' must match native action suffix"
+    )
+
+    route_with_query: Final = (
+        "/vertex_ai/v1/projects/my-proj/locations/us-central1/publishers/google"
+        "/models/gemini-1.5-flash:streamGenerateContent?alt=sse"
+    )
+    assert is_native_gemini_route(route_with_query) is True, "Route with query params must match action suffix"
+
+    assert is_native_gemini_route("/v1/chat/completions") is False
+    assert is_native_gemini_route("/openai/deployments/gemini-2.0-flash/chat/completions") is False
+    assert (
+        is_native_gemini_route("/vertex_ai/v1/projects/proj/locations/us/publishers/anthropic/models/claude:rawPredict")
+        is False
+    )
+
+
+def test_count_input_tokens_for_model_gemini_counts_response_schema() -> None:
+    schema: Final = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "age": {"type": "integer"},
+            "biography": {"type": "string", "description": "A long detailed life history " * 5},
+        },
+        "required": ["name", "age"],
+    }
+    body_prompt_only: Final = {"contents": [{"role": "user", "parts": [{"text": "Hello"}]}]}
+    tokens_prompt = count_input_tokens_for_model(request_body=body_prompt_only, model="gpt-4o")
+    assert tokens_prompt is not None, "Prompt tokens should be counted"
+
+    body_with_schema: Final = {
+        "contents": [{"role": "user", "parts": [{"text": "Hello"}]}],
+        "generationConfig": {"responseSchema": schema},
+    }
+    tokens_schema = count_input_tokens_for_model(request_body=body_with_schema, model="gpt-4o")
+    assert tokens_schema is not None, "Request with responseSchema should be counted"
+    assert tokens_schema > tokens_prompt, "Response schema must contribute billable input tokens to reservation"
+
+    body_snake: Final = {
+        "contents": [{"role": "user", "parts": [{"text": "Hello"}]}],
+        "generation_config": {"response_schema": schema},
+    }
+    assert count_input_tokens_for_model(request_body=body_snake, model="gpt-4o") == tokens_schema, (
+        "Snake case response_schema should yield identical token count"
+    )
+
+    body_extra_schema: Final = {
+        "contents": [{"role": "user", "parts": [{"text": "Hello"}]}],
+        "extra_body": {"responseSchema": schema},
+    }
+    assert count_input_tokens_for_model(request_body=body_extra_schema, model="gpt-4o") is None, (
+        "extra_body schema override must return None to preserve fallback"
+    )
