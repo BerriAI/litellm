@@ -1241,7 +1241,7 @@ async def test_mcp_read_resource_success():
         oauth2_headers=None,
         raw_headers=None,
         user_api_key_auth=user_api_key_auth,
-        scope_servers=[server],
+        scope_servers=(server,),
     )
     mock_manager.read_resource_from_server.assert_awaited_once_with(
         server=server,

@@ -143,6 +143,7 @@ from litellm.proxy.mcp_server.result_conversion import (
     handler_outcome,
     to_call_tool_result,
 )
+from litellm.proxy.mcp_server.stdio_gate import is_mcp_stdio_blocked
 from litellm.proxy.mcp_server.tool_registry import (
     global_mcp_tool_registry,
 )
@@ -261,6 +262,49 @@ class ListMCPToolsRestAPIResponseObject(MCPTool):
 class _MCPServerRateLimitAdmission:
     admitted_servers: tuple[MCPServer, ...]
     rejected_servers: tuple[tuple[MCPServer, ProxyRateLimitError], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _ResourceOwnerRateLimited:
+    error: ProxyRateLimitError
+
+
+@dataclass(frozen=True, slots=True)
+class _ResourceOwnerMissing:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class _ResourceOwnerAmbiguous:
+    server_names: tuple[str, ...]
+
+
+_ResourceOwnerFailure: TypeAlias = (
+    _ResourceOwnerRateLimited | ResourceListingFailed | _ResourceOwnerMissing | _ResourceOwnerAmbiguous
+)
+
+
+def _raise_resource_owner_failure(failure: _ResourceOwnerFailure, url: AnyUrl) -> NoReturn:
+    match failure:
+        case _ResourceOwnerRateLimited(error=error):
+            raise error
+        case ResourceListingFailed(server_name=server_name):
+            raise HTTPException(
+                status_code=502,
+                detail=f"Unable to list resources from MCP server '{server_name}'; resource owner is unknown.",
+            )
+        case _ResourceOwnerMissing():
+            raise HTTPException(status_code=404, detail=f"Resource '{url}' not found on any allowed MCP server.")
+        case _ResourceOwnerAmbiguous(server_names=server_names):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Resource URI '{url}' is ambiguous across MCP servers: {', '.join(server_names)}. "
+                    "Use /{server_name}/mcp or x-mcp-servers to select one server."
+                ),
+            )
+        case _:
+            assert_never(failure)
 
 
 _mcp_server_admission_memo: Final[ContextVar[dict[str, asyncio.Task[ProxyRateLimitError | None]] | None]] = ContextVar(
@@ -1001,7 +1045,7 @@ def _prepare_mcp_server_headers(
     oauth2_headers: dict[str, str] | None,
     raw_headers: dict[str, str] | None,
     user_api_key_auth: UserAPIKeyAuth | None = None,
-    scope_servers: list[MCPServer] | None = None,
+    scope_servers: Sequence[MCPServer] | None = None,
 ) -> tuple[dict[str, str] | str | None, dict[str, str] | None]:
     """Build auth and extra headers for a server.
 
@@ -3132,6 +3176,8 @@ async def mcp_read_resource(
             detail="User not allowed to read this resource.",
         )
 
+    candidates: Final = tuple(server for server in allowed_mcp_servers if not is_mcp_stdio_blocked(server.transport))
+
     async def owner(candidate: MCPServer) -> MCPServer | ResourceListingFailed | None:
         candidate_auth, candidate_headers = _prepare_mcp_server_headers(
             server=candidate,
@@ -3140,7 +3186,7 @@ async def mcp_read_resource(
             oauth2_headers=oauth2_headers,
             raw_headers=raw_headers,
             user_api_key_auth=user_api_key_auth,
-            scope_servers=allowed_mcp_servers,
+            scope_servers=candidates,
         )
         listing: Final = await global_mcp_server_manager.list_resources_from_server(
             server=candidate,
@@ -3155,40 +3201,33 @@ async def mcp_read_resource(
             return listing
         return candidate if any(str(resource.uri) == str(url) for resource in listing) else None
 
-    async def resolve_owner() -> MCPServer:
-        admission: Final = await _admit_mcp_servers(allowed_mcp_servers, user_api_key_auth)
+    async def resolve_owner() -> MCPServer | _ResourceOwnerFailure:
+        admission: Final = await _admit_mcp_servers(candidates, user_api_key_auth)
         if admission.rejected_servers:
-            raise admission.rejected_servers[0][1]
-        lookups: Final = tuple(asyncio.create_task(owner(candidate)) for candidate in allowed_mcp_servers)
+            return _ResourceOwnerRateLimited(error=admission.rejected_servers[0][1])
+        lookups: Final = tuple(asyncio.create_task(owner(candidate)) for candidate in candidates)
         try:
             for lookup in asyncio.as_completed(lookups):
                 if isinstance(failure := await lookup, ResourceListingFailed):
-                    raise HTTPException(
-                        status_code=502,
-                        detail=f"Unable to list resources from MCP server '{failure.server_name}'; resource owner is unknown.",
-                    )
+                    return failure
         finally:
             for lookup in lookups:
                 lookup.cancel()
             await asyncio.gather(*lookups, return_exceptions=True)
-        candidates: Final = tuple(lookup.result() for lookup in lookups)
-        owners: Final = tuple(candidate for candidate in candidates if isinstance(candidate, MCPServer))
+        results: Final = tuple(lookup.result() for lookup in lookups)
+        owners: Final = tuple(result for result in results if isinstance(result, MCPServer))
         if len(owners) == 1:
             return owners[0]
         if not owners:
-            raise HTTPException(status_code=404, detail=f"Resource '{url}' not found on any allowed MCP server.")
-        conflict: Final = ", ".join(candidate.name for candidate in owners)
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Resource URI '{url}' is ambiguous across MCP servers: {conflict}. "
-                "Use /{server_name}/mcp or x-mcp-servers to select one server."
-            ),
-        )
+            return _ResourceOwnerMissing()
+        return _ResourceOwnerAmbiguous(server_names=tuple(owner.name for owner in owners))
 
     if len(allowed_mcp_servers) == 1:
         await _enforce_mcp_server_rate_limit(user_api_key_auth, allowed_mcp_servers[0])
-    server: Final = allowed_mcp_servers[0] if len(allowed_mcp_servers) == 1 else await resolve_owner()
+    resolved: Final = allowed_mcp_servers[0] if len(allowed_mcp_servers) == 1 else await resolve_owner()
+    if isinstance(resolved, _ResourceOwnerFailure):
+        _raise_resource_owner_failure(resolved, url)
+    server: Final = resolved
 
     server_auth_header, extra_headers = _prepare_mcp_server_headers(
         server=server,
@@ -3197,7 +3236,7 @@ async def mcp_read_resource(
         oauth2_headers=oauth2_headers,
         raw_headers=raw_headers,
         user_api_key_auth=user_api_key_auth,
-        scope_servers=allowed_mcp_servers,
+        scope_servers=candidates,
     )
 
     return await global_mcp_server_manager.read_resource_from_server(

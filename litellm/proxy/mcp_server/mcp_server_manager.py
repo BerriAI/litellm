@@ -1627,7 +1627,7 @@ def _redacted_registry_dump(servers: dict[str, MCPServer]) -> dict[str, dict[str
 
 def caller_authorization_fans_out(
     server: MCPServer,
-    scope_servers: list[MCPServer] | None,
+    scope_servers: Sequence[MCPServer] | None,
 ) -> bool:
     """True when forwarding the caller's request-wide ``Authorization`` to ``server`` inside a
     listing fan-out would replay one credential against multiple upstreams: another server in the

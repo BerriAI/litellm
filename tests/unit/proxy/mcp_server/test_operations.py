@@ -141,14 +141,17 @@ async def test_resource_read_requires_unique_owner_from_complete_listings(
         )
 
     manager: Final = MCPServerManager(upstream_transport=httpx2.MockTransport(respond))
-    auth_type: Final = MCPAuth.true_passthrough if case == "scoped_bearer" else None
+    forwarding: Final = {
+        "owner": case in ("scoped_bearer", "blocked_stdio"),
+        "other": case == "scoped_bearer",
+    }
     http_servers: Final = tuple(
         MCPServer(
             server_id=name,
             name=name,
             url=f"https://{name}.example/mcp",
             transport=MCPTransport.http,
-            auth_type=auth_type,
+            auth_type=MCPAuth.true_passthrough if forwarding[name] else None,
             allow_all_keys=True,
             rpm=1,
         )
@@ -159,16 +162,21 @@ async def test_resource_read_requires_unique_owner_from_complete_listings(
         name="local",
         transport=MCPTransport.stdio,
         command="unused",
+        auth_type=MCPAuth.true_passthrough,
         allow_all_keys=True,
+        rpm=1,
     )
     servers: Final = (*http_servers, stdio_server) if case == "blocked_stdio" else http_servers
     caller: Final = UserAPIKeyAuth(api_key=hash_token("sk-resource-read"))
+    proxy_logging: Final = _mcp_rate_limited_proxy_logging()
     monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
-    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", _mcp_rate_limited_proxy_logging())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging)
     monkeypatch.delenv("LITELLM_ENABLE_MCP_STDIO", raising=False)
     for server in servers:
         monkeypatch.setitem(manager.config_mcp_servers, server.server_id, server)
+    if case == "blocked_stdio":
+        await proxy_logging.enforce_mcp_server_rate_limits(caller, stdio_server)
 
     async def read() -> object:
         return await operations.mcp_read_resource(
@@ -184,7 +192,9 @@ async def test_resource_read_requires_unique_owner_from_complete_listings(
         assert reads.qsize() == 1
         host, authorization = reads.get_nowait()
         assert host == "owner.example"
-        assert authorization != caller_bearer, "the caller bearer must not reach a gateway-selected owner"
+        assert (authorization == caller_bearer) == (case == "blocked_stdio"), (
+            "the caller bearer reaches the owner only when no other listable server also consumes it"
+        )
         return
     if case == "rate_limited":
         with pytest.raises(HTTPException) as first:
