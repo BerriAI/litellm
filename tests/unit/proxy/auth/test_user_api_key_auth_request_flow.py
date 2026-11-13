@@ -14444,7 +14444,7 @@ async def test_exhausted_cached_key_is_only_refused_before_the_body_where_a_mete
             return_exceptions=True,
         )
 
-    assert (getattr(outcome[0], "code", None) == "429") is refused
+    assert (outcome[0] is None, getattr(outcome[0], "code", None) == "429") == (not refused, refused)
 
 
 @pytest.mark.asyncio
