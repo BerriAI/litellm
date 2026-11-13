@@ -1769,7 +1769,14 @@ def _as_str_mapping(value: object) -> Mapping[str, object]:
 def _proxy_only_error_logged_metadata_keys(*, authenticated: bool, past_pre_call: bool) -> frozenset[str]:
     return frozenset(
         key
-        for key, logged in (("tags", authenticated), ("standard_logging_guardrail_information", past_pre_call))
+        for key, logged in (
+            ("tags", authenticated),
+            ("session_id", authenticated),
+            ("trace_user_id", authenticated),
+            ("trace_id", authenticated),
+            ("trace_name", authenticated),
+            ("standard_logging_guardrail_information", past_pre_call),
+        )
         if logged
     )
 
@@ -4270,6 +4277,8 @@ class ProxyLogging:
         )
         if litellm_logging_obj is None:
             from litellm._uuid import uuid
+            from litellm.proxy.litellm_pre_call_utils import key_and_team_logging_fields
+            from litellm.proxy.proxy_server import proxy_config
 
             request_data.setdefault("litellm_call_id", str(uuid.uuid4()))
 
@@ -4280,6 +4289,7 @@ class ProxyLogging:
                 **_proxy_only_error_log_fields(  # pyright: ignore[reportArgumentType]  # the allowlist never carries is_async_call
                     request_fields, logged_metadata_keys
                 ),
+                **key_and_team_logging_fields(user_api_key_dict=user_api_key_dict, proxy_config=proxy_config),
             )
             request_data["litellm_logging_obj"] = litellm_logging_obj  # rebind-ok: lifted then popped by the caller
             request_data.update({REJECTED_BEFORE_REQUEST_SETUP_KEY: REJECTED_BEFORE_REQUEST_SETUP})
@@ -4356,8 +4366,10 @@ class ProxyLogging:
                 input = request_data["input"]
                 litellm_logging_obj.model_call_details["input"] = input
                 body_shape_call_type = CallTypes.aembedding.value
-            resolved_call_type: Final = _call_type_for_route(route) or (
-                None if set_up_by_request else dispatched_call_type or body_shape_call_type
+            resolved_call_type: Final = (
+                dispatched_call_type
+                or _call_type_for_route(route)
+                or (None if set_up_by_request else body_shape_call_type)
             )
             if resolved_call_type is not None and litellm_logging_obj.call_type != CallTypes.pass_through.value:
                 litellm_logging_obj.call_type = resolved_call_type

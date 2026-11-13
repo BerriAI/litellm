@@ -21,8 +21,9 @@ from typing import Final, NamedTuple, Protocol, Union, cast
 import fastapi
 from fastapi import HTTPException, Request, WebSocket, status
 from fastapi.security.api_key import APIKeyHeader
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 from starlette.exceptions import WebSocketException
+from starlette.requests import ClientDisconnect
 
 import litellm
 from litellm._internal_context import service_target, set_request_parent_otel_span
@@ -2233,6 +2234,76 @@ async def _read_request_body_deferring_parse_failure(
     return populate_request_with_path_params(request_data=parsed_body, request=request), None
 
 
+PREFLIGHT_FAILURE_JSON_BODY_MAX_BYTES: Final = 64 * 1024
+
+
+async def _preflight_failure_request_data(
+    request: Request, route: str, cached_key: UserAPIKeyAuth
+) -> Mapping[str, object]:
+    from litellm.proxy.common_request_processing import resolve_litellm_call_id
+    from litellm.proxy.litellm_pre_call_utils import key_and_team_logging_fields
+    from litellm.proxy.proxy_server import llm_router, proxy_config
+    from litellm.proxy.utils import (
+        _call_type_for_route,  # pyright: ignore[reportPrivateUsage]  # share proxy failure route classification
+    )
+
+    body: Final = await _small_preflight_failure_json(request)
+    model: Final = _get_model_from_request_context(dict(body), route, request, llm_router, cached_key.team_id)
+    post_route: Final = re.sub(r"^/v1(?:beta)?/", "/", route)
+    call_type: Final = (
+        {
+            "/responses/compact": "acompact_responses",
+            "/interactions": "acreate_interaction",
+            "/videos": "avideo_generation",
+        }.get(post_route)
+        if request.method == "POST"
+        else None
+    ) or _call_type_for_route(route)
+    _seed_request_destinations(cached_key, request)
+    seed_request_identity(cached_key, model=model, request_data=body)
+    return {
+        **body,
+        **({"model": model} if model is not None else {}),
+        "litellm_call_id": resolve_litellm_call_id(request.headers.get("x-litellm-call-id")),
+        "call_type": call_type,
+        **key_and_team_logging_fields(user_api_key_dict=cached_key, proxy_config=proxy_config),
+    }
+
+
+async def _small_preflight_failure_json(request: Request) -> Mapping[str, object]:
+    declared: Final = request.headers.get("content-length", "")
+    content_type: Final = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if (
+        not declared.isdecimal()
+        or len(declared) > 10
+        or not 0 < int(declared) <= PREFLIGHT_FAILURE_JSON_BODY_MAX_BYTES
+        or request.headers.get("transfer-encoding") is not None
+        or content_type != "application/json"
+    ):
+        return {}
+    buffered: Final = bytearray()
+    try:
+        async for chunk in request.stream():
+            if len(buffered) + len(chunk) > PREFLIGHT_FAILURE_JSON_BODY_MAX_BYTES:
+                return {}
+            buffered.extend(chunk)
+        parsed: Final = _GENERAL_SETTINGS_ADAPTER.validate_json(buffered)
+    except (ValidationError, RuntimeError, ClientDisconnect):
+        return {}
+    return {
+        **({"model": parsed["model"]} if isinstance(parsed.get("model"), str) else {}),
+        **{
+            slot: {
+                name: value
+                for name, value in _GENERAL_SETTINGS_ADAPTER.validate_python(metadata).items()
+                if name in ("tags", "session_id", "trace_user_id", "trace_id", "trace_name")
+            }
+            for slot in ("metadata", "litellm_metadata")
+            if isinstance(metadata := parsed.get(slot), dict)
+        },
+    }
+
+
 async def _reject_from_headers_before_reading_body(
     request: Request, api_key: str | None, custom_litellm_key_header: str | None, route: str
 ) -> None:
@@ -2271,6 +2342,7 @@ async def _reject_from_headers_before_reading_body(
         return
     parent_otel_span: Final[Span | None] = getattr(request.state, "parent_otel_span", None)
     if cached_key.blocked is True:
+        request_data: Final = dict(await _preflight_failure_request_data(request, route, cached_key))
         await UserAPIKeyAuthExceptionHandler.handle_authentication_error(
             e=ProxyException(
                 message="Authentication Error, Key is blocked. Update via `/key/unblock` if you're an admin.",
@@ -2279,11 +2351,12 @@ async def _reject_from_headers_before_reading_body(
                 code=status.HTTP_401_UNAUTHORIZED,
             ),
             request=request,
-            request_data={},
+            request_data=request_data,
             route=route,
             parent_otel_span=parent_otel_span,
             api_key=bearer_token,
             resolved_identity=cached_key,
+            dispatched_call_type=str(request_data["call_type"]) if request_data["call_type"] is not None else None,
         )
         return
     limiter: Final = proxy_logging_obj.get_proxy_hook("parallel_request_limiter")
@@ -2299,11 +2372,13 @@ async def _reject_from_headers_before_reading_body(
     try:
         await limiter.raise_if_over_limit_before_body(rate_limited)
     except HTTPException as rejection:
+        failure_data: Final = dict(await _preflight_failure_request_data(request, route, rate_limited))
         transformed: Final = await proxy_logging_obj.post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # bare dict in sig
-            request_data={},
+            request_data=failure_data,
             original_exception=rejection,
             user_api_key_dict=rate_limited,
             route=route,
+            dispatched_call_type=str(failure_data["call_type"]) if failure_data["call_type"] is not None else None,
         )
         failure: Final = transformed if transformed is not None else rejection
         if isinstance(failure, ProxyException):

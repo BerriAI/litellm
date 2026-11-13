@@ -14349,3 +14349,122 @@ async def test_blocked_cached_key_is_refused_before_the_body_is_read() -> None:
 
     assert refusal.code == "401", refusal.message
     assert "Key is blocked" in refusal.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("small_body", (True, False), ids=("small-json", "large-unread"))
+async def test_preflight_rejection_preserves_failure_logging_context(small_body: bool) -> None:
+    from litellm.proxy.utils import hash_token
+
+    api_key: Final = "sk-preflight-logging"
+    cache: Final = DualCache()
+    identity: Final = UserAPIKeyAuth(
+        token=hash_token(api_key),
+        blocked=True,
+        metadata={
+            "logging": [{"callback_name": "langfuse", "callback_type": "success_and_failure", "callback_vars": {}}]
+        },
+    )
+    await cache_key_object(
+        hashed_token=hash_token(api_key),
+        user_api_key_obj=identity,
+        user_api_key_cache=cache,
+        proxy_logging_obj=None,
+    )
+    body: Final = json.dumps(
+        {
+            "model": "requested-model",
+            "metadata": {
+                "tags": ["caller-tag"],
+                "session_id": "caller-session",
+                "trace_user_id": "caller-user",
+            },
+            "failure_callback": ["untrusted-callback"],
+        }
+    ).encode()
+
+    async def receive() -> dict[str, object]:
+        assert small_body, "large refused bodies must not be read"
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body) if small_body else 8388608).encode()),
+                (b"x-litellm-call-id", b"caller-call-id"),
+            ],
+        },
+        receive=receive,
+    )
+    logging_obj: Final = MagicMock(post_call_failure_hook=AsyncMock(return_value=None))
+    with (
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.master_key", "sk-master"),
+        patch("litellm.proxy.proxy_server.open_telemetry_logger", None),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", cache),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", logging_obj),
+        pytest.raises(ProxyException) as failure,
+    ):
+        await user_api_key_auth(request=request, api_key=f"Bearer {api_key}")
+    assert failure.value.code == "401"
+    logging_obj.post_call_failure_hook.assert_awaited_once()
+    data: Final = logging_obj.post_call_failure_hook.call_args.kwargs["request_data"]
+    assert data["litellm_call_id"] == "caller-call-id"
+    assert data["failure_callback"] == ["langfuse"]
+    assert data["call_type"] == "acompletion"
+    if small_body:
+        assert data["model"] == "requested-model"
+        assert data["metadata"]["tags"] == ["caller-tag"]
+        assert data["metadata"]["session_id"] == "caller-session"
+        assert data["metadata"]["trace_user_id"] == "caller-user"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "headers,body,reads",
+    (
+        ((), b"{}", 0),
+        (((b"content-length", b"2"), (b"transfer-encoding", b"chunked")), b"{}", 0),
+        (((b"content-length", b"2"), (b"content-type", b"text/plain")), b"{}", 0),
+        (((b"content-length", b"bad"),), b"{}", 0),
+        (((b"content-length", b"10"),), b"{invalid", 1),
+        (((b"content-length", b"2"),), b"[]", 1),
+        (((b"content-length", b"2"),), b"x" * (64 * 1024 + 1), 1),
+    ),
+    ids=("no-length", "chunked", "not-json", "invalid-length", "invalid-json", "not-object", "actual-over-cap"),
+)
+async def test_preflight_logging_drops_unsafe_or_unparsable_bodies(
+    headers: tuple[tuple[bytes, bytes], ...], body: bytes, reads: int
+) -> None:
+    from litellm.proxy.auth.user_api_key_auth import _small_preflight_failure_json
+
+    receive: Final = AsyncMock(
+        return_value={
+            "type": "http.request",
+            "body": body,
+            "more_body": len(body) > 64 * 1024,
+        }
+    )
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "headers": [
+                *headers,
+                *(
+                    ()
+                    if any(name == b"content-type" for name, _ in headers)
+                    else ((b"content-type", b"application/json"),)
+                ),
+            ],
+        },
+        receive=receive,
+    )
+    assert await _small_preflight_failure_json(request) == {}
+    assert receive.await_count == reads
