@@ -163,6 +163,7 @@ pub struct BudgetReservation {
     #[serde(with = "crate::scalar::float")]
     pub input_cost: Option<f64>,
     pub input_tokens: Option<i64>,
+    pub not_a_mapping: Option<Scalar>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -453,6 +454,18 @@ mod tests {
                 None
             ])
         );
+    }
+
+    #[rstest]
+    fn a_reservation_python_held_as_another_type_is_not_an_empty_one() {
+        let held: BudgetReservation =
+            serde_json::from_value(json!({"not_a_mapping": "reserved"})).unwrap();
+        let empty: BudgetReservation = serde_json::from_value(json!({})).unwrap();
+        assert_eq!(
+            held.not_a_mapping.as_ref().map(Scalar::type_name),
+            Some("str")
+        );
+        assert_ne!(held, empty);
     }
 
     #[rstest]

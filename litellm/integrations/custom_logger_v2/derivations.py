@@ -41,7 +41,7 @@ _ABSENT: Final = object()
 _TAGS: Final[TypeAdapter[tuple[str | int | float | bool | Stringified | None, ...]]] = TypeAdapter(
     tuple[ScalarItem, ...]
 )
-_DERIVED_RESERVATION_MEMBERS: Final = frozenset({"rejected", "entries_is_list"})
+_DERIVED_RESERVATION_MEMBERS: Final = frozenset({"rejected", "entries_is_list", "not_a_mapping"})
 _LIMITER_HEADER_PREFIX: Final = "x-ratelimit-"
 
 
@@ -306,9 +306,12 @@ def _entries_members(entries: object) -> Mapping[str, object]:
 
 
 def budget_reservation(args: HookArgs) -> BudgetReservation | None:
-    members: Final = mapping(getattr(args.auth, "budget_reservation", None))
-    if members is None:
+    raw: Final[object] = getattr(args.auth, "budget_reservation", None)
+    if raw is None:
         return None
+    members: Final = mapping(raw)
+    if members is None:
+        return coerce_record(BudgetReservation, {"not_a_mapping": raw})
     return coerce_record(BudgetReservation, {**members, **_entries_members(members.get("entries"))})
 
 

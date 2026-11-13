@@ -5,7 +5,7 @@ from collections.abc import Callable, Generator, Mapping
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
-from types import UnionType
+from types import SimpleNamespace, UnionType
 from typing import Annotated, Final, Union, get_args, get_origin
 
 import pytest
@@ -1371,3 +1371,52 @@ def test_rate_limit_state_leaves_the_key_limits_absent_when_the_helper_raises() 
     state: Final = derivations.rate_limit_state(HookArgs(request={"litellm_params": {"metadata": "g"}}))
 
     assert state == RateLimitState(hidden_params_present=False, additional_headers_present=False)
+
+
+def _capacity_reservation_check_raises(reservation: object) -> str | None:
+    try:
+        _ = reservation.get("entries")  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # what _reservation_covers does
+    except AttributeError as error:
+        return str(error)
+    return None
+
+
+@pytest.mark.parametrize(
+    ("raw", "carried"),
+    [
+        pytest.param("reserved", "reserved", id="text"),
+        pytest.param("", "", id="empty_text"),
+        pytest.param(0, 0, id="zero"),
+        pytest.param(
+            [],
+            Stringified(
+                text="[]",
+                truthy=False,
+                hashable=False,
+                integer=False,
+                type_name="list",
+                hash_error="unhashable type: 'list'",
+            ),
+            id="empty_list",
+        ),
+    ],
+)
+def test_a_budget_reservation_that_is_not_a_mapping_is_told_apart_from_none(raw: object, carried: object) -> None:
+    read: Final = derivations.budget_reservation(HookArgs(auth=SimpleNamespace(budget_reservation=raw)))
+
+    assert read == BudgetReservation(not_a_mapping=carried)
+    assert read is not None
+    assert read.not_a_mapping is not None
+    assert _capacity_reservation_check_raises(raw) == f"'{type(raw).__name__}' object has no attribute 'get'"
+    assert derivations.budget_reservation(HookArgs(auth=SimpleNamespace(budget_reservation=None))) is None
+
+
+def test_a_reservation_write_never_stores_that_the_read_was_not_a_mapping() -> None:
+    auth: Final = SimpleNamespace(budget_reservation="reserved")
+    args: Final = HookArgs(auth=auth)
+    read: Final = derivations.budget_reservation(args)
+    assert read is not None
+
+    derivations.write_budget_reservation(args, read.model_copy(update={"finalized": True}))
+
+    assert auth.budget_reservation == {"finalized": True}

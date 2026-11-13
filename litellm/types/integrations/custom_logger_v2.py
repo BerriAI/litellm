@@ -266,6 +266,7 @@ class BudgetReservation(Record):
     callback_bound: Flag | None = None
     input_cost: FloatOrZero | None = None
     input_tokens: I64 | None = None
+    not_a_mapping: Scalar | None = None
 
 
 class RateLimitStatus(Strict):

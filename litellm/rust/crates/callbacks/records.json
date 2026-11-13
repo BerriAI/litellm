@@ -262,7 +262,8 @@
     "finalized": true,
     "callback_bound": true,
     "input_cost": 1.5,
-    "input_tokens": 7
+    "input_tokens": 7,
+    "not_a_mapping": 42
   },
   "rate_limit_statuses": {
     "rejected": [
