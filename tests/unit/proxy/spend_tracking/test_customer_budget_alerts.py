@@ -51,9 +51,41 @@ class _Database:
     litellm_customermembertable: _Table
 
 
+@dataclass(frozen=True, slots=True)
+class _RoutedClient:
+    db: _Database
+    writer_db: _Database
+
+
 def _database(records: Mapping[str, PrismaRecord | Exception | None]) -> _Database:
     table: Final = _Table(records)
     return _Database(table, table, table)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ("customer_org", "customer_team", "customer_member"))
+async def test_committed_crossing_reads_writer_spend_when_the_replica_lags(
+    scope: str, alerts: DualCache, respx_mock: respx.MockRouter
+) -> None:
+    receiver: Final = respx_mock.post(_URL).respond(200)
+    fields: Final = {
+        "customer_org_id": "org-1",
+        "customer_team_id": "team-1",
+        "parent_org": {"customer_org_id": "org-1"},
+        "parent_team": {"customer_team_id": "team-1", "parent_org": {"customer_org_id": "org-1"}},
+        "budget": {"max_budget": 1.0},
+    }
+    database: Final = _RoutedClient(
+        db=_database({"entity-1": _Record({**fields, "spend": 0.0})}),
+        writer_db=_database({"entity-1": _Record({**fields, "spend": 2.0})}),
+    )
+    await CustomerBudgetAlerting.detect_committed_batch(
+        {f"{scope}_list_transactions": {"entity-1": 2.0}}, database, alerts, now=_NOW
+    )
+    payloads: Final = tuple(_PAYLOAD.validate_json(call.request.content) for call in receiver.calls)
+    assert tuple((event["event"], event["scope"], event["spend"], event["budget"]) for event in payloads) == (
+        ("budget_crossed", scope, 2.0, 1.0),
+    )
 
 
 @pytest_asyncio.fixture

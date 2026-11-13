@@ -126,7 +126,7 @@ async def _detect_customer_events(
     level: _Level, entity_id: str, database: object, cache: CustomerBudgetClaims, now: datetime
 ) -> None:
     try:
-        table: Final = _TABLE.validate_python(getattr(getattr(database, "db", database), level.table))
+        table: Final = _TABLE.validate_python(getattr(getattr(database, "writer_db", database), level.table))
         record: Final = await table.find_unique(where={level.id_column: entity_id}, include=level.include)
         if record is None:
             return

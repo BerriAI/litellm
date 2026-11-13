@@ -1150,6 +1150,7 @@ async def test_committed_customer_budget_webhooks_include_scope_and_dedupe(
     transaction.batch_ = MagicMock(return_value=AsyncMock(__aenter__=AsyncMock(return_value=batch)))
     prisma: Final = MagicMock()
     prisma.db.tx.return_value = transaction
+    prisma.writer_db = prisma.db
     table: Final = {
         "org": "litellm_customerorganizationtable",
         "team": "litellm_customerteamtable",
