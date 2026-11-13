@@ -23,14 +23,120 @@ from litellm.proxy.auth.customer_hierarchy_auth import (
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_helpers.customer_hierarchy import ErrorCode, Failure
+from litellm.redis.stores.connection import connect
+from litellm.redis.stores.spend_counters import SpendCounterStore
 from litellm.types.proxy.auth.customer_hierarchy import (
     CustomerHierarchyAuth,
     CustomerRequestIdentity,
     CustomerScopeAuth,
 )
 from litellm.types.proxy.management_endpoints.customer_hierarchy import CustomerMember
+from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 NOW: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+
+@pytest.fixture(autouse=True)
+def customer_spend_store(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "spend_counter_store", SpendCounterStore(connect(None).spend_counters()))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("alias_only", (False, True))
+async def test_a_missing_shared_counter_reloads_spend_instead_of_seeding_a_stale_cached_snapshot(
+    alias_only: bool,
+) -> None:
+    cache: Final = UserApiKeyCache()
+    old: Final = _Prisma(
+        _MemberTable({"member-1": _row(org_budget={"max_budget": 1})}),
+        _OrganizationTable((_organization("tenant", max_budget=1),)),
+    )
+    persisted: Final = _Prisma(
+        _MemberTable({"member-1": _row(org_budget={"max_budget": 1}, spend=(2, 0, 0))}),
+        _OrganizationTable((_organization("tenant", max_budget=1, spend=2),)),
+    )
+    if alias_only:
+        _ = await get_customer_organization_hierarchy(
+            "tenant",
+            old,  # pyright: ignore[reportArgumentType]  # database boundary fixture
+            cache,
+        )
+    else:
+        _ = await get_customer_hierarchy(
+            "member-1",
+            old,  # pyright: ignore[reportArgumentType]  # database boundary fixture
+            cache,
+        )
+    identity: Final = CustomerRequestIdentity(
+        customer_org_alias="tenant" if alias_only else None,
+        customer_member_id=None if alias_only else "member-1",
+    )
+    with pytest.raises(litellm.BudgetExceededError) as rejected:
+        await resolve_customer_hierarchy(
+            identity,
+            persisted,  # pyright: ignore[reportArgumentType]  # database boundary fixture
+            cache,
+            None,
+            "model",
+            "/responses",
+        )
+    assert rejected.value.current_cost == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("level", ("org", "team", "member"))
+@pytest.mark.parametrize("alias_only", (False, True))
+async def test_settled_spend_reaches_another_workers_cached_hierarchy(
+    monkeypatch: pytest.MonkeyPatch, level: str, alias_only: bool
+) -> None:
+    from litellm.proxy import proxy_server
+
+    shared: Final[dict[str, object]] = {}
+    settling: Final = FakeSpendCounters(redis=shared).store()
+    reading: Final = FakeSpendCounters(redis=shared).store()
+    monkeypatch.setattr(proxy_server, "spend_counter_store", reading)
+    cache: Final = UserApiKeyCache()
+    row: Final = _row(template={"max_budget": 1.0}, team_budget={"max_budget": 1.0}, org_budget={"max_budget": 1.0})
+    prisma: Final = _Prisma(
+        _MemberTable({"member-1": row}), _OrganizationTable((_organization("tenant", max_budget=1),))
+    )
+    identity: Final = CustomerRequestIdentity(
+        customer_org_alias="tenant" if alias_only else None,
+        customer_member_id=None if alias_only else "member-1",
+    )
+    await resolve_customer_hierarchy(
+        identity,
+        prisma,  # pyright: ignore[reportArgumentType]  # database boundary fixture
+        cache,
+        None,
+        "model",
+        "/responses",
+    )
+    counter: Final = f"spend:customer_{level}:{level}-1:lifetime"
+    await settling.increment(counter, 1.25)
+    if alias_only and level != "org":
+        allowed: Final = await resolve_customer_hierarchy(
+            identity,
+            prisma,  # pyright: ignore[reportArgumentType]  # database boundary fixture
+            cache,
+            None,
+            "model",
+            "/responses",
+        )
+        assert allowed.customer_member_id is None
+        return
+    with pytest.raises(litellm.BudgetExceededError) as rejected:
+        await resolve_customer_hierarchy(
+            identity,
+            prisma,  # pyright: ignore[reportArgumentType]  # database boundary fixture
+            cache,
+            None,
+            "model",
+            "/responses",
+        )
+    assert (rejected.value.entity_type, rejected.value.current_cost) == (f"customer_{level}", 1.25)
 
 
 def _row(
