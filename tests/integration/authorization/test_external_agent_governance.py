@@ -315,3 +315,39 @@ def test_concurrent_first_frames_cannot_overwrite_the_bound_tenant(hook: Hook) -
         (hook.source_id,),
     )
     assert source == [{"tenant_id": agents[0]["external_agent_id"]}]
+
+
+@pytest.mark.parametrize(
+    ("email", "alias", "label"),
+    (
+        ("member@example.test", "Member alias", "member@example.test"),
+        (None, "Member alias", "Member alias"),
+        (None, None, None),
+    ),
+)
+def test_management_displays_current_user_and_bot_labels(
+    hook: Hook, email: str | None, alias: str | None, label: str | None
+) -> None:
+    with hook.gateway.scenario() as scenario:
+        user: Final = scenario.user(user_email=email, user_alias=alias)
+        hook.gateway.post(
+            "/v1/external_agents/actors/bulk",
+            {"source_id": hook.source_id, "mappings": [{"external_actor_id": "member", "user_id": user}]},
+        )
+        assert hook.send("bot-id").status_code == 200
+        agent: Final = hook.agents()[0]
+        assert agent["owner_display_name"] == label
+        patched: Final = hook.gateway.request(
+            "PATCH", "/v1/external_agents/bulk", {"agent_ids": [agent["id"]], "display_name": "Friendly bot"}
+        )
+        assert patched.status_code == 200, patched.text
+        response: Final = hook.gateway.request(
+            "GET", "/v1/external_agents/decisions", params={"source_id": hook.source_id}
+        )
+        assert response.status_code == 200, response.text
+        decisions: Final = OBJECTS.validate_json(response.content)
+        assert (decisions[0]["user_display_name"], decisions[0]["user_id"], decisions[0]["agent_display_name"]) == (
+            label,
+            user,
+            "Friendly bot",
+        )

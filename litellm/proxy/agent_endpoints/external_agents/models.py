@@ -53,6 +53,7 @@ class Agent(FrozenModel):
     display_name: str | None = None
     team_id: str | None = None
     owner_user_id: str | None = None
+    owner_display_name: str | None = None
     owner_inferred: bool = False
     status: Literal["active", "blocked"] = "active"
     first_seen_at: datetime
@@ -78,6 +79,8 @@ class Decision(FrozenModel):
     external_agent_id: str
     actor_id: str | None = None
     user_id: str | None = None
+    user_display_name: str | None = None
+    agent_display_name: str | None = None
     team_id: str | None = None
     frame_type: str
     tool_names: tuple[str, ...] = ()

@@ -27351,6 +27351,8 @@ export interface components {
              * Format: date-time
              */
             last_seen_at: string;
+            /** Owner Display Name */
+            owner_display_name?: string | null;
             /**
              * Owner Inferred
              * @default false
@@ -33924,6 +33926,8 @@ export interface components {
         Decision: {
             /** Actor Id */
             actor_id?: string | null;
+            /** Agent Display Name */
+            agent_display_name?: string | null;
             /**
              * Created At
              * Format: date-time
@@ -33950,6 +33954,8 @@ export interface components {
              * @default []
              */
             tool_names: string[];
+            /** User Display Name */
+            user_display_name?: string | null;
             /** User Id */
             user_id?: string | null;
             /**

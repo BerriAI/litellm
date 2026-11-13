@@ -272,7 +272,9 @@ export function BotsPanel({ token, sourceId, teams }: { token: string; sourceId:
                           </TableCell>
                           <TableCell>
                             <div className="space-y-1 min-w-36">
-                              <span>{bot.owner_user_id || t("agents.external.unassigned")}</span>
+                              <span>
+                                {bot.owner_display_name || bot.owner_user_id || t("agents.external.unassigned")}
+                              </span>
                               {bot.owner_inferred && (
                                 <div className="flex flex-wrap gap-1 items-center">
                                   <Badge variant="secondary">{t("agents.external.inferred")}</Badge>

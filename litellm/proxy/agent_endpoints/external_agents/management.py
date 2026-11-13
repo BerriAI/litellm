@@ -88,7 +88,8 @@ class ExternalAgentManagement:
     ) -> tuple[Agent, ...]:
         return TypeAdapter(tuple[Agent, ...]).validate_python(
             await self.db.query_raw(
-                "WITH bots AS (SELECT a.*,array_remove(ARRAY["
+                "WITH bots AS (SELECT a.*,COALESCE(NULLIF(u.user_email,''),NULLIF(u.user_alias,'')) "
+                "AS owner_display_name,array_remove(ARRAY["
                 "CASE WHEN a.team_id IS NULL THEN 'no team' END, "
                 "CASE WHEN a.owner_user_id IS NULL THEN 'no owner' END, "
                 "CASE WHEN a.owner_inferred THEN 'owner inferred' END, "
@@ -98,7 +99,8 @@ class ExternalAgentManagement:
                 'CASE WHEN EXISTS (SELECT 1 FROM "LiteLLM_ExternalAgentDecision" d WHERE d.source_id=a.source_id '
                 "AND d.external_agent_id=a.external_agent_id AND d.would_verdict='deny' "
                 "AND d.created_at >= NOW()-INTERVAL '24 hours') THEN 'denied recently' END],NULL) AS issues "
-                'FROM "LiteLLM_ExternalAgent" a WHERE ($1::text IS NULL OR a.source_id=$1) '
+                'FROM "LiteLLM_ExternalAgent" a LEFT JOIN "LiteLLM_UserTable" u ON u.user_id=a.owner_user_id '
+                "WHERE ($1::text IS NULL OR a.source_id=$1) "
                 "AND ($2::text IS NULL OR a.team_id=$2) "
                 "AND ($3::text IS NULL OR a.display_name ILIKE $3 OR a.external_agent_id ILIKE $3)) "
                 "SELECT * FROM bots WHERE (NOT $4 OR cardinality(issues)>0) "
@@ -228,9 +230,13 @@ class ExternalAgentManagement:
     ) -> tuple[Decision, ...]:
         return TypeAdapter(tuple[Decision, ...]).validate_python(
             await self.db.query_raw(
-                'SELECT * FROM "LiteLLM_ExternalAgentDecision" WHERE ($1::text IS NULL OR source_id=$1) '
-                "AND ($2::text IS NULL OR external_agent_id=$2) AND ($3::text IS NULL OR verdict=$3) "
-                "ORDER BY created_at DESC,request_id LIMIT $4 OFFSET $5",
+                "SELECT d.*,COALESCE(NULLIF(u.user_email,''),NULLIF(u.user_alias,'')) AS user_display_name, "
+                'a.display_name AS agent_display_name FROM "LiteLLM_ExternalAgentDecision" d '
+                'LEFT JOIN "LiteLLM_UserTable" u ON u.user_id=d.user_id '
+                'LEFT JOIN "LiteLLM_ExternalAgent" a ON a.source_id=d.source_id '
+                "AND a.external_agent_id=d.external_agent_id WHERE ($1::text IS NULL OR d.source_id=$1) "
+                "AND ($2::text IS NULL OR d.external_agent_id=$2) AND ($3::text IS NULL OR d.verdict=$3) "
+                "ORDER BY d.created_at DESC,d.request_id LIMIT $4 OFFSET $5",
                 source_id,
                 external_agent_id,
                 verdict,

@@ -68,10 +68,15 @@ export function DecisionsPanel({ token, sourceId }: { token: string; sourceId: s
                       query.data.map((decision) => (
                         <TableRow key={decision.request_id}>
                           <TableCell className="min-w-36">{displayTime(decision.created_at)}</TableCell>
-                          <TableCell>{decision.external_agent_id}</TableCell>
-                          <TableCell>{decision.actor_id || t("agents.external.unknown")}</TableCell>
+                          <TableCell>{decision.agent_display_name || decision.external_agent_id}</TableCell>
+                          <TableCell>
+                            {decision.user_display_name ||
+                              decision.user_id ||
+                              decision.actor_id ||
+                              t("agents.external.unknown")}
+                          </TableCell>
                           <TableCell>{decision.frame_type}</TableCell>
-                          <TableCell>{decision.tool_names.join(", ") || t("agents.external.none")}</TableCell>
+                          <TableCell>{decision.tool_names.join(", ") || "-"}</TableCell>
                           <TableCell>
                             <div className="space-y-1">
                               <Badge variant={decision.verdict === "deny" ? "destructive" : "outline"}>

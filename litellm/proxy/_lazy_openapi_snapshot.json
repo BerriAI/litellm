@@ -16044,6 +16044,17 @@
               "title": "Last Seen At",
               "type": "string"
             },
+            "owner_display_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Owner Display Name"
+            },
             "owner_inferred": {
               "default": false,
               "title": "Owner Inferred",
@@ -16180,6 +16191,17 @@
               ],
               "title": "Actor Id"
             },
+            "agent_display_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Agent Display Name"
+            },
             "created_at": {
               "format": "date-time",
               "title": "Created At",
@@ -16245,6 +16267,17 @@
               },
               "title": "Tool Names",
               "type": "array"
+            },
+            "user_display_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Display Name"
             },
             "user_id": {
               "anyOf": [
