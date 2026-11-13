@@ -84,10 +84,22 @@ def test_map_openai_params_named_sizes(size: str, expected: dict[str, str]):
 
 def test_map_openai_params_fractional_seconds_and_bad_values():
     assert ReplicateVideoConfig().map_openai_params({"seconds": "2.5"}, MODEL, False) == {"duration": 2.5}
-    with pytest.raises(ValueError, match="numeric"):
-        ReplicateVideoConfig().map_openai_params({"seconds": "auto"}, MODEL, False)
     with pytest.raises(ValueError, match="public image URL"):
         ReplicateVideoConfig().map_openai_params({"input_reference": b"bytes"}, MODEL, False)
+
+
+@pytest.mark.parametrize(
+    "seconds", ["auto", "nan", "inf", "-inf", "1e999", float("nan"), float("inf"), 10**400, True, None]
+)
+def test_map_openai_params_rejects_seconds_that_are_not_a_finite_number(seconds: object):
+    with pytest.raises(ReplicateError, match="finite number") as excinfo:
+        ReplicateVideoConfig().map_openai_params({"seconds": seconds}, MODEL, False)
+    assert excinfo.value.status_code == 400
+
+
+@pytest.mark.parametrize("size", ["²x²", "1280x²", "①x①"])
+def test_map_openai_params_drops_a_size_whose_digits_are_not_decimal(size: str):
+    assert ReplicateVideoConfig().map_openai_params({"size": size}, MODEL, False) == {}
 
 
 def test_map_openai_params_unsupported_native_fields():
