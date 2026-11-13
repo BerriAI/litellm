@@ -103,9 +103,21 @@ class JSONProviderRegistry:
 
     @classmethod
     def serves_endpoint(cls, slug: str, model: str | None, endpoint: str) -> bool:
+        from litellm.utils import catalog_with_runtime_registrations
+
         provider: Final = cls._providers.get(slug)
         if provider is None:
             return False
+        if model and provider.special_handling.get("use_model_supported_endpoints"):
+            catalog: Final = catalog_with_runtime_registrations()
+            bare_name: Final = model.removeprefix(f"{slug}/")
+            bare_entry: Final = catalog.get(bare_name, {})
+            catalog_entry: Final = catalog.get(
+                f"{slug}/{bare_name}", bare_entry if bare_entry.get("litellm_provider") == slug else {}
+            )
+            catalog_endpoints: Final = catalog_entry.get("supported_endpoints")
+            if isinstance(catalog_endpoints, (list, tuple)):
+                return endpoint in catalog_endpoints
         model_endpoints: Final = (
             provider.model_supported_endpoints.get(model.removeprefix(f"{slug}/"), ()) if model else ()
         )

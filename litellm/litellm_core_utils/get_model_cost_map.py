@@ -290,6 +290,7 @@ def adopt_model_cost_map(new_model_cost_map: dict) -> int:  # mutable-ok: main's
     model_cost_table.publish(new_model_cost_map)
     litellm.add_known_models(model_cost_map=new_model_cost_map)
     utils.reapply_runtime_model_cost_registrations()
+    litellm.refresh_model_discovery()
     return len(new_model_cost_map)
 
 

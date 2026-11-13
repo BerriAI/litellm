@@ -341,6 +341,30 @@ def test_the_loaded_catalog_follows_installs_and_ignores_registrations():
 
 
 @pytest.mark.usefixtures("own_model_cost")
+@pytest.mark.parametrize("discoverable", [True, False])
+def test_reload_keeps_registered_nous_models_discoverable(discoverable: bool) -> None:
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+
+    model: Final = f"nousresearch/lit-test/registered-chat-{discoverable}"
+    litellm.register_model(
+        {model: {"litellm_provider": "nousresearch", "mode": "chat"}},
+        add_to_provider_model_sets=discoverable,
+    )
+    assert (
+        model in litellm.get_valid_models(custom_llm_provider="nousresearch", check_provider_endpoint=False)
+    ) is discoverable
+
+    result: Final = install_model_cost_map(_BUNDLED)
+
+    assert isinstance(result, ModelCostMapReloaded)
+    assert (
+        model in litellm.get_valid_models(custom_llm_provider="nousresearch", check_provider_endpoint=False)
+    ) is discoverable
+    assert (model in get_known_models_from_wildcard("nousresearch/*")) is discoverable
+    assert litellm.model_cost[model]["litellm_provider"] == "nousresearch"
+
+
+@pytest.mark.usefixtures("own_model_cost")
 @pytest.mark.parametrize("add_to_provider_model_sets", [True, False])
 def test_register_model_adds_names_to_the_provider_sets_only_when_asked_and_a_reload_keeps_it_so(
     add_to_provider_model_sets: bool,
