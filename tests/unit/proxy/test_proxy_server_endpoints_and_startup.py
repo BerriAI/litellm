@@ -15822,75 +15822,117 @@ async def test_token_counter_loads_a_custom_tokenizer_once_per_identifier_revisi
         litellm.utils._select_custom_tokenizer_helper.cache_clear()
 
 
-@pytest.mark.asyncio
-async def test_auth_cache_invalidation_subscriber_evicts_byok_credentials_cached_by_this_worker():
-    """A peer worker's BYOK revocation broadcast must reach this worker's BYOK credential cache."""
-    from redis.asyncio import Redis
+def test_auth_cache_invalidation_starts_nothing_without_redis() -> None:
+    proxy_config: Final = proxy_server_module.ProxyConfig()
 
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    proxy_config.start_auth_cache_invalidation(redis_cache=None, user_api_key_cache=UserApiKeyCache())
+
+    assert proxy_config.auth_cache_invalidation is None
+
+
+def test_auth_cache_invalidation_runs_over_redis_until_shutdown() -> None:
+    proxy_config: Final = proxy_server_module.ProxyConfig()
+
+    proxy_config.start_auth_cache_invalidation(
+        redis_cache=RedisCache(host="127.0.0.1", port=1), user_api_key_cache=UserApiKeyCache()
+    )
+    started: Final = proxy_config.auth_cache_invalidation
+    proxy_config.stop_auth_cache_invalidation()
+
+    assert started is not None and started.publish("team_id:t-1")
+    assert proxy_config.auth_cache_invalidation is None
+
+
+def _redis_cache_from_cache_params(namespace: str | None) -> RedisCache:
+    cache: Final = litellm.Cache(type="redis", host="127.0.0.1", port=1, namespace=namespace).cache
+    assert isinstance(cache, RedisCache)
+    return cache
+
+
+@pytest.mark.parametrize(
+    ("redis_cache", "channel"),
+    [
+        pytest.param(
+            lambda: _redis_cache_from_cache_params("rslcns"),
+            "rslcns:litellm_proxy.auth_cache_invalidation",
+            id="cache_params-namespace-assigned-after-the-redis-cache-is-built",
+        ),
+        pytest.param(
+            lambda: RedisCache(host="127.0.0.1", port=1, namespace="rslcns"),
+            "rslcns:litellm_proxy.auth_cache_invalidation",
+            id="redis-cache-built-with-a-namespace",
+        ),
+        pytest.param(
+            lambda: _redis_cache_from_cache_params(""),
+            ":litellm_proxy.auth_cache_invalidation",
+            id="empty-namespace-is-still-a-prefix-on-main",
+        ),
+        pytest.param(
+            lambda: _redis_cache_from_cache_params(None),
+            "litellm_proxy.auth_cache_invalidation",
+            id="no-namespace",
+        ),
+    ],
+)
+def test_auth_cache_invalidation_channel_is_prefixed_with_the_redis_cache_namespace_like_main(
+    redis_cache: Callable[[], RedisCache], channel: str
+) -> None:
+    proxy_config: Final = proxy_server_module.ProxyConfig()
+
+    proxy_config.start_auth_cache_invalidation(redis_cache=redis_cache(), user_api_key_cache=UserApiKeyCache())
+    started: Final = proxy_config.auth_cache_invalidation
+    proxy_config.stop_auth_cache_invalidation()
+
+    assert started is not None and started.channel == channel
+
+
+def test_auth_cache_invalidation_evicts_byok_credentials_cached_by_this_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A peer worker's BYOK revocation broadcast must reach this worker's BYOK credential cache."""
     from litellm.proxy.mcp_server.byok_credential_cache import (
+        CachedByokCredential,
         byok_credential_cache,
         byok_credential_cache_key,
         cache_byok_credential,
         get_cached_byok_credential,
     )
+    from litellm.redis.stores.auth_cache import AuthCacheStore
+    from litellm.redis.stores.auth_cache_invalidation import AuthCacheInvalidation, PythonCaches
+    from litellm.redis.stores.connection import RedisStores
+    from tests.unit.redis.stores.auth_cache_invalidation_double import FakeChannel, Worker
 
-    class _QueuePubSub:
-        def __init__(self, messages: list[object]) -> None:
-            self.queue: asyncio.Queue[object] = asyncio.Queue()
-            for message in messages:
-                self.queue.put_nowait(message)
+    fake: Final = FakeChannel()
 
-        async def subscribe(self, *channels: str) -> None:
-            return None
+    def connect_fake(
+        redis: RedisStores,
+        namespace: str | None,
+        auth_cache: AuthCacheStore,
+        spend_counters: SpendCounterStore,
+        python_caches: PythonCaches,
+    ) -> AuthCacheInvalidation:
+        fake.workers.append(Worker(UserApiKeyCache(), python_caches))
+        return AuthCacheInvalidation(fake)
 
-        async def get_message(self, *, ignore_subscribe_messages: bool, timeout: float) -> object | None:
-            try:
-                return await asyncio.wait_for(self.queue.get(), timeout)
-            except asyncio.TimeoutError:
-                return None
-
-        async def aclose(self) -> None:
-            return None
-
-    class _PubSubRedisClient(Redis):
-        def __init__(self, pubsub: _QueuePubSub) -> None:
-            self._scripted_pubsub = pubsub
-
-        def pubsub(self) -> _QueuePubSub:
-            return self._scripted_pubsub
-
-    class _FakeRedisCache:
-        namespace = None
-
-        def __init__(self, client: object) -> None:
-            self._client = client
-
-        def init_pubsub_client(self) -> object:
-            return self._client
-
+    monkeypatch.setattr(proxy_server_module, "connect_invalidation", connect_fake)
     byok_credential_cache.flush_cache()
     cache_byok_credential("mallory", "srv-byok", "sk-revoked-elsewhere")
-    message: Final = {
-        "type": "message",
-        "data": json.dumps({"cache_key": byok_credential_cache_key("mallory", "srv-byok")}).encode(),
-    }
+    cache_byok_credential("alice", "srv-byok", "sk-kept")
     proxy_config: Final = proxy_server_module.ProxyConfig()
-    proxy_config.start_auth_cache_invalidation_subscriber(
-        redis_cache=_FakeRedisCache(_PubSubRedisClient(_QueuePubSub([message]))),  # pyright: ignore[reportArgumentType]  # fake pub/sub capable redis; no live redis in this unit test
-        user_api_key_cache=UserApiKeyCache(),
+    proxy_config.start_auth_cache_invalidation(
+        redis_cache=RedisCache(host="127.0.0.1", port=1), user_api_key_cache=UserApiKeyCache()
     )
     try:
-        for _ in range(200):
-            if get_cached_byok_credential("mallory", "srv-byok") is None:
-                break
-            await asyncio.sleep(0.01)
-        evicted: Final = get_cached_byok_credential("mallory", "srv-byok") is None
+        _ = fake.publish(byok_credential_cache_key("mallory", "srv-byok"))
+        revoked: Final = get_cached_byok_credential("mallory", "srv-byok")
+        kept: Final = get_cached_byok_credential("alice", "srv-byok")
     finally:
-        await proxy_config.stop_auth_cache_invalidation_subscriber()
+        proxy_config.stop_auth_cache_invalidation()
         byok_credential_cache.flush_cache()
 
-    assert evicted, "the subscriber does not evict the BYOK credential cache on a peer worker's broadcast"
+    assert revoked is None, "the subscription does not evict the BYOK credential cache on a peer worker's broadcast"
+    assert kept == CachedByokCredential(credential="sk-kept")
+    assert not fake.started
 
 
 @pytest.mark.asyncio

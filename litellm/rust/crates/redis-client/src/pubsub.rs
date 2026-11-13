@@ -139,6 +139,42 @@ impl Subscriber {
     }
 }
 
+/// One `PUBLISH` alone, several as one pipeline. redis-py connects before a command whose
+/// connection is down, while `ConnectionManager` fails that command with the error of its last
+/// attempt and reconnects behind it, so a publish that finds the connection down is sent once more,
+/// on the new one.
+pub(crate) async fn publish(
+    connection: &Connection,
+    channel: &str,
+    payloads: &[Vec<u8>],
+) -> RedisResult<()> {
+    let send = async || {
+        let mut connection = connection.clone();
+        match payloads {
+            [payload] => {
+                publish_cmd(channel, payload)
+                    .exec_async(&mut connection)
+                    .await
+            }
+            _ => {
+                let mut pipeline = redis::pipe();
+                for payload in payloads {
+                    pipeline.add_command(publish_cmd(channel, payload));
+                }
+                pipeline.exec_async(&mut connection).await
+            }
+        }
+    };
+    match send().await {
+        Err(error) if error.is_connection_dropped() => send().await,
+        sent => sent,
+    }
+}
+
+fn publish_cmd(channel: &str, payload: &[u8]) -> redis::Cmd {
+    redis::cmd("PUBLISH").arg(channel).arg(payload).to_owned()
+}
+
 async fn subscribe_connected(
     pubsub: &mut redis::aio::PubSub,
     channel: &str,

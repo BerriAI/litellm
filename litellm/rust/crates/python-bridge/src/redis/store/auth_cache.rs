@@ -200,7 +200,7 @@ impl PyAuthObject {
 /// `UserApiKeyCache`, always native: memory only until `attach` adds Redis. The sync methods back `DualCache`'s sync
 /// API and block with the GIL released, like redis-py's sync client.
 #[pyclass(frozen, name = "NativeAuthCache")]
-pub(crate) struct NativeAuthCache(Arc<AuthCache>);
+pub(crate) struct NativeAuthCache(pub(super) Arc<AuthCache>);
 
 #[pymethods]
 impl NativeAuthCache {

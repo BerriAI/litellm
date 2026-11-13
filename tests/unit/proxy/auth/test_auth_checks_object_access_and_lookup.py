@@ -10863,57 +10863,36 @@ async def test_invalidate_team_member_spend_state_raises_503_when_both_redis_wri
 
 
 @pytest.mark.asyncio
-async def test_invalidate_team_member_spend_state_broadcasts_the_spend_counter_to_remote_workers():
+async def test_invalidate_team_member_spend_state_broadcasts_the_spend_counter_to_remote_workers(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """The test above only proves the handling worker's own spend counter is
-    cleared. A remote worker's spend counter is a separate DualCache instance;
-    if the reset never reaches it, that worker keeps enforcing the pre-reset
-    spend the moment its own Redis read for the counter fails and it falls
-    back to its own (now-stale) in-memory copy. Drives the actual message
-    published onto the invalidation channel through a second, independent
-    AuthCacheInvalidationSubscriber standing in for that remote worker, rather
-    than asserting on the publish call args."""
-    from redis.asyncio import Redis
-
+    cleared. A remote worker's spend counter is a separate cache; if the reset
+    never reaches it, that worker keeps enforcing the pre-reset spend the moment
+    its own Redis read for the counter fails and it falls back to its own
+    (now-stale) in-memory copy. Drives every message published onto the
+    invalidation channel through a peer worker, rather than asserting on the
+    publish call args."""
     from litellm.caching.dual_cache import DualCache
     from litellm.caching.in_memory_cache import InMemoryCache
-    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import AuthCacheInvalidationSubscriber
+    from litellm.proxy import proxy_server
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.redis.stores.auth_cache_invalidation import PythonCaches
+    from tests.unit.redis.stores.auth_cache_invalidation_double import Worker, channel
 
-    published: list[tuple[str, str]] = []
-
-    class _RecordingRedisClient(Redis):
-        def __init__(self) -> None:
-            pass
-
-        async def publish(self, channel: str, message: str) -> int:
-            published.append((channel, message))
-            return 1
-
-    class _FakeRedisCache:
-        def __init__(self) -> None:
-            self.namespace = None
-
-        def init_pubsub_client(self) -> object:
-            return _RecordingRedisClient()
-
-    local_spend_counter_cache = DualCache()
-
-    remote_user_api_key_cache = UserApiKeyCache()
     remote_spend_counter_in_memory_cache = InMemoryCache()
     remote_spend_counter_in_memory_cache.set_cache("spend_db_floor:spend:team_member:user-1:team-1", 999.0)
-    remote_spend_counter_store = SpendCounterStore(connect(None).spend_counters())
-    remote_spend_counter_store.set_local("spend:team_member:user-1:team-1", 999.0)
+    invalidation, fake = channel(
+        Worker(UserApiKeyCache(), PythonCaches(copies=(remote_spend_counter_in_memory_cache,)))
+    )
+    monkeypatch.setattr(proxy_server.proxy_config, "auth_cache_invalidation", invalidation)
 
     with (
         patch(  # test-quality-ok: injects a real DualCache for the module global, not a behavior mock
-            "litellm.proxy.proxy_server.spend_counter_cache", local_spend_counter_cache
+            "litellm.proxy.proxy_server.spend_counter_cache", DualCache()
         ),
         patch(  # test-quality-ok: injects a real store for the module global, not a behavior mock
             "litellm.proxy.proxy_server.spend_counter_store", SpendCounterStore(connect(None).spend_counters())
-        ),
-        patch(  # test-quality-ok: injects a fake pub/sub-capable redis cache; no live redis in this unit test
-            "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
-            return_value=_FakeRedisCache(),
         ),
     ):
         await invalidate_team_member_spend_state(
@@ -10923,61 +10902,39 @@ async def test_invalidate_team_member_spend_state_broadcasts_the_spend_counter_t
             new_spend=0.0,
         )
 
-    def _published_message_for(cache_key: str) -> str:
-        matches = [message for _, message in published if json.loads(message)["cache_key"] == cache_key]
-        assert matches, f"{cache_key} never reached the cross-worker invalidation channel"
-        return matches[-1]
-
-    remote_subscriber = AuthCacheInvalidationSubscriber(
-        redis_cache=_FakeRedisCache(),
-        user_api_key_cache=remote_user_api_key_cache,
-        additional_in_memory_caches=(remote_spend_counter_in_memory_cache,),
-        spend_counters=remote_spend_counter_store,
-    )
-    for cache_key in ("spend:team_member:user-1:team-1", "spend_db_floor:spend:team_member:user-1:team-1"):
-        remote_subscriber._apply_message(  # pyright: ignore[reportPrivateUsage]  # exercising the real cross-worker message handler, not a public API
-            {"type": "message", "data": _published_message_for(cache_key)}
-        )
-
-    assert remote_spend_counter_store.get_local("spend:team_member:user-1:team-1") == 0.0
+    assert fake.published == [
+        ("spend:team_member:user-1:team-1", 0.0, 60),
+        ("spend_db_floor:spend:team_member:user-1:team-1", 0.0, 5),
+        (AuthObject.team_membership(team_id="team-1", user_id="user-1").key, None, None),
+        (AuthObject.team_membership_reservation(user_id="user-1", team_id="team-1").key, None, None),
+    ]
     assert remote_spend_counter_in_memory_cache.get_cache("spend_db_floor:spend:team_member:user-1:team-1") == 0.0, (
         "the DB-floor marker was not broadcast; a remote worker can re-raise the counter off its stale floor"
     )
 
 
 @pytest.mark.asyncio
-async def test_invalidate_team_member_spend_state_self_delivered_broadcast_does_not_erase_the_reset():
+async def test_invalidate_team_member_spend_state_self_delivered_broadcast_does_not_erase_the_reset(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """The handling worker subscribes to the same invalidation channel it publishes on, so it
     receives its own reset message. A delete-style broadcast would erase the post-reset counter
     and floor marker the handler just wrote, reopening the stale-floor race the reset closed
     (regression: PR #37971 Greptile finding). The broadcast carries the reset value as a SET, so
     applying the self-delivered message must leave both keys at the post-reset value."""
-    from redis.asyncio import Redis
-
     from litellm.caching.dual_cache import DualCache
-    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import AuthCacheInvalidationSubscriber
+    from litellm.proxy import proxy_server
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-
-    published: list[tuple[str, str]] = []
-
-    class _RecordingRedisClient(Redis):
-        def __init__(self) -> None:
-            pass
-
-        async def publish(self, channel: str, message: str) -> int:
-            published.append((channel, message))
-            return 1
-
-    class _FakeRedisCache:
-        def __init__(self) -> None:
-            self.namespace = None
-
-        def init_pubsub_client(self) -> object:
-            return _RecordingRedisClient()
+    from litellm.redis.stores.auth_cache_invalidation import PythonCaches
+    from tests.unit.redis.stores.auth_cache_invalidation_double import Worker, channel
 
     local_spend_counter_cache = DualCache()
     local_spend_counter_store = SpendCounterStore(connect(None).spend_counters())
     local_user_api_key_cache = UserApiKeyCache()
+    invalidation, _ = channel(
+        Worker(local_user_api_key_cache, PythonCaches(copies=(local_spend_counter_cache.in_memory_cache,)))
+    )
+    monkeypatch.setattr(proxy_server.proxy_config, "auth_cache_invalidation", invalidation)
 
     with (
         patch(  # test-quality-ok: injects a real DualCache for the module global, not a behavior mock
@@ -10986,27 +10943,12 @@ async def test_invalidate_team_member_spend_state_self_delivered_broadcast_does_
         patch(  # test-quality-ok: injects a real store for the module global, not a behavior mock
             "litellm.proxy.proxy_server.spend_counter_store", local_spend_counter_store
         ),
-        patch(  # test-quality-ok: injects a fake pub/sub-capable redis cache; no live redis in this unit test
-            "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
-            return_value=_FakeRedisCache(),
-        ),
     ):
         await invalidate_team_member_spend_state(
             user_id="user-1",
             team_id="team-1",
             user_api_key_cache=local_user_api_key_cache,
             new_spend=0.0,
-        )
-
-    own_subscriber = AuthCacheInvalidationSubscriber(
-        redis_cache=_FakeRedisCache(),
-        user_api_key_cache=local_user_api_key_cache,
-        additional_in_memory_caches=(local_spend_counter_cache.in_memory_cache,),
-        spend_counters=local_spend_counter_store,
-    )
-    for _, message in published:
-        own_subscriber._apply_message(  # pyright: ignore[reportPrivateUsage]  # exercising the real cross-worker message handler, not a public API
-            {"type": "message", "data": message}
         )
 
     assert local_spend_counter_store.get_local("spend:team_member:user-1:team-1") == 0.0, (

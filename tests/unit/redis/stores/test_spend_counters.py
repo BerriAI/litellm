@@ -119,19 +119,6 @@ async def test_without_redis_the_native_store_counts_and_answers_from_memory() -
     assert not store.increment_many_post_call((("spend:key:k", 1.0),))
 
 
-def test_a_broadcast_writes_and_drops_only_spend_counter_copies() -> None:
-    store: Final = SpendCounterStore(connect(None).spend_counters())
-    store.set_local("spend:key:k", 5.0)
-    store.set_local("spend:team:t", 5.0)
-
-    store.apply_broadcast("spend:key:k", 0.0, 60)
-    store.apply_broadcast("spend:team:t", None, None)
-    store.apply_broadcast("spend_db_floor:spend:key:k", 1.0, 5)
-    store.apply_broadcast("spend:unknown:x", 1.0, None)
-
-    assert store.snapshot() == {"spend:key:k": 0.0}
-
-
 @pytest.mark.parametrize(
     "kind, dropped",
     [("timeout", True), ("breaker_open", True), ("transport", False), ("rejected", False), ("memory", False)],
