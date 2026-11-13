@@ -1127,7 +1127,7 @@ def _initialize_loggers_with_handler(handler: logging.Handler):
         logging.getLogger().setLevel(resolve_log_level(configured_level))
 
 
-def _get_uvicorn_json_log_config():
+def _get_uvicorn_json_log_config() -> Mapping[str, object]:
     """
     Generate a uvicorn log_config dictionary that applies JSON formatting to all loggers.
 

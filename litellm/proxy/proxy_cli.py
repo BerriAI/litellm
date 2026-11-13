@@ -10,9 +10,10 @@ import subprocess
 import sys
 import urllib.parse as urlparse
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Annotated, Any, Final
+from typing import TYPE_CHECKING, Annotated, Any, Final, Protocol
 
 import click
 import httpx
@@ -37,6 +38,7 @@ from litellm.types.llms.base import LiteLLMBaseModel
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
+    from litellm.proxy.control_plane.main import Tls
     from litellm.proxy.rust_forward.peer import ASGIApp
     from litellm.proxy.rust_forward.server import PythonServer
 else:
@@ -597,8 +599,8 @@ class ProxyInitializationHelpers:
         app: FastAPI,
         host: str,
         port: int,
-        ssl_certfile_path: str,
-        ssl_keyfile_path: str,
+        ssl_certfile_path: str | None,
+        ssl_keyfile_path: str | None,
         ciphers: str | None = None,
     ):
         """
@@ -685,8 +687,8 @@ class ProxyInitializationHelpers:
         port: int,
         app: "ASGIApp",
         num_workers: int,
-        ssl_certfile_path: str,
-        ssl_keyfile_path: str,
+        ssl_certfile_path: str | None,
+        ssl_keyfile_path: str | None,
         max_requests_before_restart: int | None = None,
         max_requests_before_restart_jitter: int | None = None,
         max_request_header_size: int | None = None,
@@ -956,6 +958,50 @@ class ProxyInitializationHelpers:
         return multiproc_dir
 
     _maybe_setup_prometheus_multiproc_dir = maybe_setup_prometheus_multiproc_dir
+
+
+def control_plane_requested(control_plane: bool, skip_server_startup: bool, utility_command: bool = False) -> bool:
+    return control_plane and not skip_server_startup and not utility_command
+
+
+class _ControlPlaneLicense(Protocol):
+    def is_premium(self) -> bool: ...
+
+
+def _decrypt_env_var() -> Mapping[str, str]:
+    from litellm.secret_managers.aws_secret_manager import decrypt_env_var
+
+    return decrypt_env_var()
+
+
+def _control_plane_license_check() -> _ControlPlaneLicense:
+    from litellm.proxy.auth.litellm_license import LicenseCheck
+
+    return LicenseCheck()
+
+
+@dataclass(frozen=True, slots=True)
+class CliDependencies:
+    decrypt_env: Callable[[], Mapping[str, str]] = _decrypt_env_var
+    license_check: Callable[[], _ControlPlaneLicense] = _control_plane_license_check
+
+
+def _decrypt_kms_env_vars(decrypt_env: Callable[[], Mapping[str, str]]) -> None:
+    if os.getenv("USE_AWS_KMS") != "True":
+        return
+
+    for key, value in decrypt_env().items():
+        os.environ[key] = value
+
+
+def control_plane_tls(ssl_keyfile_path: str | None, ssl_certfile_path: str | None) -> "Tls | None":
+    from litellm.proxy.control_plane.main import Tls
+
+    if ssl_keyfile_path is None and ssl_certfile_path is None:
+        return None
+    if ssl_keyfile_path is None or ssl_certfile_path is None:
+        raise click.UsageError("--control-plane needs both --ssl_keyfile_path and --ssl_certfile_path for TLS")
+    return Tls(keyfile=ssl_keyfile_path, certfile=ssl_certfile_path)
 
 
 @click.command()
@@ -1266,6 +1312,17 @@ class ProxyInitializationHelpers:
     envvar="USE_V2_MIGRATION_RESOLVER",
 )
 @click.option(
+    "--control-plane",
+    "control_plane",
+    is_flag=True,
+    default=False,
+    envvar="LITELLM_CONTROL_PLANE",
+    help=(
+        "Serve the global control plane API instead of the proxy, on the same image. Enterprise only, "
+        "refuses to start without LITELLM_LICENSE. Configure with CONTROL_PLANE_* env vars."
+    ),
+)
+@click.option(
     "--use_legacy_migration_resolver",
     is_flag=True,
     default=False,
@@ -1295,7 +1352,9 @@ class ProxyInitializationHelpers:
     ),
     envvar="PROMETHEUS_METRICS_PORT",
 )
+@click.pass_context
 def run_server(
+    ctx: click.Context,
     cli_args,
     host: str,
     port: int,
@@ -1315,7 +1374,7 @@ def run_server(
     add_function_to_prompt,
     config,
     max_budget,
-    test,
+    test: str | bool | None,
     local,
     num_workers: int,
     granian_threads,
@@ -1324,18 +1383,18 @@ def run_server(
     azure_postgresql_auth: bool,
     num_requests,
     use_queue,
-    health,
+    health: bool,
     setup,
-    version,
+    version: bool,
     run_gunicorn,
     run_hypercorn,
     run_granian,
-    ssl_keyfile_path,
-    ssl_certfile_path,
+    ssl_keyfile_path: str | None,
+    ssl_certfile_path: str | None,
     ciphers,
-    log_config,
+    log_config: str | None,
     use_prisma_db_push: bool,
-    skip_server_startup,
+    skip_server_startup: bool,
     validate_config: bool,
     check_migrations_against_existing_data: bool,
     keepalive_timeout: int | None,
@@ -1349,7 +1408,9 @@ def run_server(
     use_legacy_migration_resolver: bool,
     reload: bool,
     prometheus_metrics_port: int | None,
+    control_plane: bool,
 ):
+    dependencies: Final = ctx.obj if isinstance(ctx.obj, CliDependencies) else CliDependencies()
     if cli_args:
         if cli_args == ("xai-oauth", "login"):
             from litellm.llms.xai.oauth import XAIOAuthAuthenticator
@@ -1366,6 +1427,30 @@ def run_server(
         from litellm.setup_wizard import run_setup_wizard
 
         run_setup_wizard()
+        return
+    utility_command: Final = bool(
+        version or validate_config or health or test or check_migrations_against_existing_data
+    )
+    if control_plane_requested(control_plane, skip_server_startup, utility_command):
+        if num_workers > 1:
+            raise click.UsageError("scale the control plane with replicas.")
+        from litellm.proxy.control_plane.main import serve
+
+        if run_gunicorn or run_hypercorn or run_granian or reload:
+            raise click.UsageError(
+                "--control-plane serves with plain uvicorn, drop --run_gunicorn, --run_hypercorn, --run_granian and --reload"
+            )
+        _decrypt_kms_env_vars(dependencies.decrypt_env)
+        serve(
+            host=host,
+            port=port,
+            tls=control_plane_tls(ssl_keyfile_path, ssl_certfile_path),
+            license_check=dependencies.license_check,
+            limit_concurrency=limit_concurrency,
+            log_config=log_config,
+            keepalive_timeout=keepalive_timeout,
+            max_request_header_size=max_request_header_size,
+        )
         return
 
     from pydantic import ValidationError
@@ -1513,17 +1598,7 @@ def run_server(
         if wants_rds_iam or wants_azure_entra:
             DatabaseURLSettings.from_env().apply_writer_url_to_env()
 
-        ### DECRYPT ENV VAR ###
-
-        from litellm.secret_managers.aws_secret_manager import decrypt_env_var
-
-        if os.getenv("USE_AWS_KMS", None) is not None and os.getenv("USE_AWS_KMS") == "True":
-            ## V2 IMPLEMENTATION OF AWS KMS - USER WANTS TO DECRYPT MULTIPLE KEYS IN THEIR ENV
-            new_env_var: Final = decrypt_env_var()
-
-            for k, v in new_env_var.items():
-                os.environ[k] = v
-
+        _decrypt_kms_env_vars(dependencies.decrypt_env)
         litellm_settings = None
         env_config_file: Final = os.environ.get("CONFIG_FILE_PATH")
         if (
