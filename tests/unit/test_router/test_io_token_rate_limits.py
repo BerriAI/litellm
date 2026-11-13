@@ -1036,7 +1036,9 @@ class TestModelRateLimitingCheckIOTokens:
         usage: Final = _memory_usage()
         reserved_minute_key: Final = _io("io-late-id", "bedrock_mantle/test", "otpm", "99-99")
         usage.increment_local(CounterIncrement(reserved_minute_key, 10, 60))
-        kwargs: Final = {"metadata": {ITPM_RESERVED_KEY: 0, OTPM_RESERVED_KEY: 10, OTPM_COUNTER_KEY: asdict(reserved_minute_key)}}
+        kwargs: Final = {
+            "metadata": {ITPM_RESERVED_KEY: 0, OTPM_RESERVED_KEY: 10, OTPM_COUNTER_KEY: asdict(reserved_minute_key)}
+        }
         response: Final = ModelResponse(
             choices=[{"message": {"role": "assistant", "content": "hi"}, "index": 0, "finish_reason": "stop"}],
             usage=Usage(prompt_tokens=4, completion_tokens=25, total_tokens=29),
@@ -1049,7 +1051,9 @@ class TestModelRateLimitingCheckIOTokens:
             await async_io_token_reconcile_success(usage, kwargs, response)
 
         finished_minutes: Final = {minute_before, get_utc_datetime().strftime("%H-%M")}
-        charged: Final = [usage.get_local(_io("io-late-id", "bedrock_mantle/test", "otpm", minute)) for minute in finished_minutes]
+        charged: Final = [
+            usage.get_local(_io("io-late-id", "bedrock_mantle/test", "otpm", minute)) for minute in finished_minutes
+        ]
         assert usage.get_local(reserved_minute_key) == 10
         assert sum(value or 0 for value in charged) == 25 - 10
 
@@ -1332,7 +1336,10 @@ def _counter(router: Router, kind: Literal["itpm", "otpm"], minutes: frozenset[s
     deployment: Final = router.model_list[0]
     usage: Final = router._core._usage  # pyright: ignore[reportPrivateUsage, reportAttributeAccessIssue]  # the store the router counts io tokens in
     return sum(
-        int(usage.get_local(_io(deployment["model_info"]["id"], deployment["litellm_params"]["model"], kind, minute)) or 0)
+        int(
+            usage.get_local(_io(deployment["model_info"]["id"], deployment["litellm_params"]["model"], kind, minute))
+            or 0
+        )
         for minute in minutes
     )
 
@@ -1632,7 +1639,12 @@ async def test_success_settles_a_reservation_held_only_in_litellm_params_metadat
     usage.increment_local(CounterIncrement(itpm_key, 40, 60))
     usage.increment_local(CounterIncrement(otpm_key, 4096, 60))
     kwargs: Final = _proxy_success_kwargs(
-        {ITPM_RESERVED_KEY: 40, OTPM_RESERVED_KEY: 4096, ITPM_COUNTER_KEY: asdict(itpm_key), OTPM_COUNTER_KEY: asdict(otpm_key)}
+        {
+            ITPM_RESERVED_KEY: 40,
+            OTPM_RESERVED_KEY: 4096,
+            ITPM_COUNTER_KEY: asdict(itpm_key),
+            OTPM_COUNTER_KEY: asdict(otpm_key),
+        }
     )
 
     for delivery in deliveries:
@@ -1818,8 +1830,6 @@ async def test_a_turn_counts_only_its_uncached_responses_input_toward_itpm(respo
     await async_io_token_reconcile_success(usage, _proxy_success_kwargs(reservation), responses_reply)
 
     assert usage.get_local(_turn_key("itpm")) == 10 + 50 - 30
-
-
 
 
 @pytest.mark.asyncio
@@ -2215,14 +2225,25 @@ async def test_an_output_cap_too_large_for_the_store_to_count_is_refused_instead
 
 
 @pytest.mark.asyncio
-async def test_an_output_cap_that_overflows_the_count_is_refused_instead_of_wrapping_negative() -> None:
-    check: Final = ModelRateLimitingCheck(usage=_memory_usage())
-    set_io_token_rate_limit_request_kwargs({"max_tokens": 1, "metadata": {}}, metadata_channel="metadata")
-    await check.async_pre_call_check(_otpm_limited_deployment())
-    set_io_token_rate_limit_request_kwargs({"max_tokens": 2**63 - 1, "metadata": {}}, metadata_channel="metadata")
+@pytest.mark.parametrize("asynchronous", [True, False], ids=["async", "sync"])
+async def test_an_output_cap_past_the_limit_is_refused_without_touching_what_was_counted(asynchronous: bool) -> None:
+    usage: Final = _memory_usage()
+    check: Final = ModelRateLimitingCheck(usage=usage)
+
+    async def pre_call(max_tokens: int) -> None:
+        set_io_token_rate_limit_request_kwargs({"max_tokens": max_tokens, "metadata": {}}, metadata_channel="metadata")
+        if asynchronous:
+            await check.async_pre_call_check(_otpm_limited_deployment())
+            return
+        check.pre_call_check(_otpm_limited_deployment())
+
+    await pre_call(40)
+    counted: Final = usage.snapshot()
 
     with pytest.raises(litellm.RateLimitError, match="OTPM limit=50"):
-        await check.async_pre_call_check(_otpm_limited_deployment())
+        await pre_call(2**63 - 1)
+
+    assert usage.snapshot() == counted
 
 
 def test_a_sync_output_cap_too_large_for_the_store_to_count_is_refused_instead_of_admitted() -> None:

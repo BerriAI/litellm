@@ -547,7 +547,7 @@ def _sync_increment_with_rollback(
 ) -> None:
     if value <= 0 or limit is None:
         return
-    if value > MAX_INCREMENT:
+    if value > min(limit, MAX_INCREMENT):
         raise _rate_limit_error(limit_label, limit, value)
     current: Final = usage.increment_sync(counter, value, RoutingArgsTTL)
     if current is not None and current > limit:
@@ -566,7 +566,7 @@ async def _increment_with_rollback(
 ) -> None:
     if value <= 0 or limit is None:
         return
-    if value > MAX_INCREMENT:
+    if value > min(limit, MAX_INCREMENT):
         raise _rate_limit_error(limit_label, limit, value)
     current: Final = await usage.increment(counter, value, RoutingArgsTTL)
     if current is not None and current > limit:
