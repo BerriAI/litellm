@@ -30,17 +30,30 @@ class ExternalAgentStore:
     def __init__(self, db: Session) -> None:
         self.db = db
 
-    async def source(self, source_id: str, lock: bool = False) -> Source | None:
-        suffix: Final = " FOR UPDATE" if lock else ""
+    async def source(self, source_id: str) -> Source | None:
         rows: Final = TypeAdapter(list[Source]).validate_python(
-            await self.db.query_raw('SELECT * FROM "ExternalAgentSource" WHERE source_id=$1' + suffix, source_id)
+            await self.db.query_raw('SELECT * FROM "LiteLLM_ExternalAgentSource" WHERE source_id=$1', source_id)
         )
         return rows[0] if rows else None
+
+    async def bind_tenant(self, source_id: str, tenant_id: str) -> HookFailure | None:
+        await self.db.execute_raw(
+            'UPDATE "LiteLLM_ExternalAgentSource" SET tenant_id=$2,updated_at=NOW() '
+            "WHERE source_id=$1 AND tenant_id IS NULL",
+            source_id,
+            tenant_id,
+        )
+        bound: Final = await self.source(source_id)
+        if bound is None:
+            return HookFailure(status=404, reason="Unknown source")
+        if bound.tenant_id != tenant_id:
+            return HookFailure(status=401, reason="Tenant does not match source")
+        return None
 
     async def decision(self, request_id: str) -> Decision | None:
         rows: Final = TypeAdapter(list[Decision]).validate_python(
             await self.db.query_raw(
-                'SELECT * FROM "ExternalAgentDecision" WHERE request_id=$1',
+                'SELECT * FROM "LiteLLM_ExternalAgentDecision" WHERE request_id=$1',
                 request_id,
             )
         )
@@ -49,7 +62,7 @@ class ExternalAgentStore:
     async def actor(self, source_id: str, actor_id: str | None) -> MappedUser | None:
         rows: Final = TypeAdapter(list[MappedUser]).validate_python(
             await self.db.query_raw(
-                'SELECT u.user_id, u.teams FROM "ExternalAgentActor" a JOIN "LiteLLM_UserTable" u '
+                'SELECT u.user_id, u.teams FROM "LiteLLM_ExternalAgentActor" a JOIN "LiteLLM_UserTable" u '
                 "ON u.user_id=a.user_id WHERE a.source_id=$1 AND a.external_actor_id=$2",
                 source_id,
                 actor_id,
@@ -62,15 +75,15 @@ class ExternalAgentStore:
         user_id: Final = user.user_id if user else None
         rows: Final = TypeAdapter(list[Agent]).validate_python(
             await self.db.query_raw(
-                'INSERT INTO "ExternalAgent" (id, source_id, external_agent_id, team_id, owner_user_id, '
+                'INSERT INTO "LiteLLM_ExternalAgent" (id, source_id, external_agent_id, team_id, owner_user_id, '
                 "owner_inferred, request_count, last_actor_id, last_model) "
                 "VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8) ON CONFLICT (source_id,external_agent_id) DO UPDATE SET "
-                'last_seen_at=NOW(), request_count="ExternalAgent".request_count+1, '
+                'last_seen_at=NOW(), request_count="LiteLLM_ExternalAgent".request_count+1, '
                 "last_actor_id=EXCLUDED.last_actor_id, last_model=EXCLUDED.last_model, "
-                'team_id=COALESCE("ExternalAgent".team_id,EXCLUDED.team_id), '
-                'owner_user_id=COALESCE("ExternalAgent".owner_user_id,EXCLUDED.owner_user_id), '
-                'owner_inferred=CASE WHEN "ExternalAgent".owner_user_id IS NULL AND EXCLUDED.owner_user_id IS NOT NULL '
-                'THEN true ELSE "ExternalAgent".owner_inferred END RETURNING *',
+                'team_id=COALESCE("LiteLLM_ExternalAgent".team_id,EXCLUDED.team_id), '
+                'owner_user_id=COALESCE("LiteLLM_ExternalAgent".owner_user_id,EXCLUDED.owner_user_id), '
+                'owner_inferred=CASE WHEN "LiteLLM_ExternalAgent".owner_user_id IS NULL AND EXCLUDED.owner_user_id IS NOT NULL '
+                'THEN true ELSE "LiteLLM_ExternalAgent".owner_inferred END RETURNING *',
                 str(uuid.uuid4()),
                 source_id,
                 event.external_agent_id,
@@ -86,7 +99,7 @@ class ExternalAgentStore:
     async def policy(self, source: Source, team_id: str | None) -> Policy | None:
         rows: Final = TypeAdapter(list[Policy]).validate_python(
             await self.db.query_raw(
-                'SELECT * FROM "ExternalAgentPolicy" WHERE source_id=$1 AND '
+                'SELECT * FROM "LiteLLM_ExternalAgentPolicy" WHERE source_id=$1 AND '
                 "((team_id=$2 AND $2::text IS NOT NULL) OR policy_id=$3 OR team_id IS NULL) "
                 "ORDER BY (team_id IS NOT NULL AND team_id=$2) DESC, (policy_id=$3) DESC NULLS LAST LIMIT 1",
                 source.source_id,
@@ -98,7 +111,7 @@ class ExternalAgentStore:
 
     async def log(self, decision: Decision) -> None:
         await self.db.execute_raw(
-            'INSERT INTO "ExternalAgentDecision" (request_id,source_id,external_agent_id,actor_id,user_id,team_id,'
+            'INSERT INTO "LiteLLM_ExternalAgentDecision" (request_id,source_id,external_agent_id,actor_id,user_id,team_id,'
             "frame_type,tool_names,verdict,would_verdict,reason,enforced,policy_id,created_at) "
             "VALUES ($1,$2,$3,$4,$5,$6,$7,$8::text[],$9,$10,$11,$12,$13,$14::timestamp) "
             "ON CONFLICT (request_id) DO NOTHING",
@@ -183,7 +196,7 @@ class ExternalAgentGovernance:
     async def _evaluate(self, source: Source, event: ObservedAgentEvent) -> Verdict | HookFailure:
         async with self.db.tx(timeout=2500) as transaction:
             store: Final = ExternalAgentStore(transaction)
-            current: Final = await store.source(source.source_id, lock=True)
+            current: Final = await store.source(source.source_id)
             if current is None:
                 return HookFailure(status=404, reason="Unknown source")
             if current.tenant_id is not None and current.tenant_id != event.tenant_id:
@@ -191,17 +204,15 @@ class ExternalAgentGovernance:
             if event.application == "config-test":
                 return await self._config_test(store, current, event)
             await transaction.execute_raw("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", event.request_id)
+            if current.tenant_id is None:
+                binding_failure: Final = await store.bind_tenant(current.source_id, event.tenant_id)
+                if binding_failure:
+                    return binding_failure
             previous: Final = await store.decision(event.request_id)
             if previous:
                 if previous.source_id != current.source_id:
                     return HookFailure(status=401, reason="Webhook id belongs to another source")
                 return decision_verdict(previous)
-            if current.tenant_id is None:
-                await transaction.execute_raw(
-                    'UPDATE "ExternalAgentSource" SET tenant_id=$1,updated_at=NOW() WHERE source_id=$2',
-                    event.tenant_id,
-                    current.source_id,
-                )
             user: Final = await store.actor(current.source_id, event.actor_id)
             agent: Final = await store.discover(current.source_id, event, user)
             policy: Final = await store.policy(current, agent.team_id)

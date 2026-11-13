@@ -261,11 +261,11 @@ _PRISMA_VIEWS: Final[frozenset[str]] = frozenset(
 _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
     (
         "LiteLLM_Alert",
-        "ExternalAgentSource",
-        "ExternalAgent",
-        "ExternalAgentActor",
-        "ExternalAgentPolicy",
-        "ExternalAgentDecision",
+        "LiteLLM_ExternalAgentSource",
+        "LiteLLM_ExternalAgent",
+        "LiteLLM_ExternalAgentActor",
+        "LiteLLM_ExternalAgentPolicy",
+        "LiteLLM_ExternalAgentDecision",
         "LiteLLM_PerformanceAlertState",
         "LiteLLM_BudgetTable",
         "LiteLLM_CustomerOrganizationTable",

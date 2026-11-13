@@ -4,6 +4,7 @@ import hmac
 import json
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Final, Literal
@@ -120,12 +121,14 @@ def hook(gateway: Gateway) -> Iterator[Hook]:
     try:
         yield Hook(gateway, source_id, secret)
     finally:
-        write_rows('DELETE FROM "ExternalAgentDecision" WHERE source_id=%s', (source_id,))
-        write_rows('DELETE FROM "ExternalAgentActor" WHERE source_id=%s', (source_id,))
-        write_rows('DELETE FROM "ExternalAgentPolicy" WHERE source_id=%s', (source_id,))
-        write_rows('DELETE FROM "ExternalAgent" WHERE source_id=%s', (source_id,))
-        write_rows('DELETE FROM "ExternalAgentSource" WHERE source_id=%s', (source_id,))
-        assert gateway.rows('SELECT source_id FROM "ExternalAgentSource" WHERE source_id=%s', (source_id,)) == []
+        write_rows('DELETE FROM "LiteLLM_ExternalAgentDecision" WHERE source_id=%s', (source_id,))
+        write_rows('DELETE FROM "LiteLLM_ExternalAgentActor" WHERE source_id=%s', (source_id,))
+        write_rows('DELETE FROM "LiteLLM_ExternalAgentPolicy" WHERE source_id=%s', (source_id,))
+        write_rows('DELETE FROM "LiteLLM_ExternalAgent" WHERE source_id=%s', (source_id,))
+        write_rows('DELETE FROM "LiteLLM_ExternalAgentSource" WHERE source_id=%s', (source_id,))
+        assert (
+            gateway.rows('SELECT source_id FROM "LiteLLM_ExternalAgentSource" WHERE source_id=%s', (source_id,)) == []
+        )
 
 
 def test_discovery_retry_team_inheritance_and_bulk_resolution(hook: Hook) -> None:
@@ -194,7 +197,7 @@ def test_discovery_retry_team_inheritance_and_bulk_resolution(hook: Hook) -> Non
         )
         assert hook.agents(exceptions_only=True) == ()
         rows: Final = hook.gateway.rows(
-            'SELECT to_jsonb(d) AS decision FROM "ExternalAgentDecision" d WHERE source_id=%s AND request_id=%s',
+            'SELECT to_jsonb(d) AS decision FROM "LiteLLM_ExternalAgentDecision" d WHERE source_id=%s AND request_id=%s',
             (hook.source_id, request_id),
         )
         assert len(rows) == 1
@@ -206,7 +209,10 @@ def test_config_test_is_not_discovered_and_tenant_or_signature_mismatch_is_rejec
     assert test.status_code == 200 and test.json() == {"action": "allow"}, test.text
     assert hook.agents() == ()
     assert (
-        hook.gateway.rows('SELECT request_id FROM "ExternalAgentDecision" WHERE source_id=%s', (hook.source_id,)) == []
+        hook.gateway.rows(
+            'SELECT request_id FROM "LiteLLM_ExternalAgentDecision" WHERE source_id=%s', (hook.source_id,)
+        )
+        == []
     )
     real: Final = hook.send("real-bot")
     wrong_tenant: Final = hook.send("other-bot", tenant="other-tenant")
@@ -228,7 +234,7 @@ def test_blocked_mcp_toolset_is_logged_and_shadow_mode_allows(
     verdict: Final = hook.send("mcp-bot", tool="CallMcpTool", toolset="RESTRICTED-SERVER", request_id=request_id)
     assert verdict.status_code == 200 and verdict.json()["action"] == action, verdict.text
     decisions: Final = hook.gateway.rows(
-        'SELECT verdict,would_verdict,enforced FROM "ExternalAgentDecision" WHERE request_id=%s',
+        'SELECT verdict,would_verdict,enforced FROM "LiteLLM_ExternalAgentDecision" WHERE request_id=%s',
         (request_id,),
     )
     assert decisions == [{"verdict": action, "would_verdict": "deny", "enforced": mode == "enforce"}]
@@ -249,3 +255,34 @@ def test_secret_rotation_retains_previous_signatures_without_returning_secrets(h
     new: Final = Hook(hook.gateway, hook.source_id, new_secret).send("new-secret-bot")
     assert old.status_code == new.status_code == 200, (old.text, new.text)
     assert old.json() == new.json() == {"action": "allow"}
+
+
+def test_concurrent_retries_discover_and_count_once(hook: Hook) -> None:
+    request_id: Final = str(uuid.uuid4())
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        responses: Final = tuple(executor.map(lambda _: hook.send("shared-bot", request_id=request_id), range(8)))
+    assert tuple(response.status_code for response in responses) == (200,) * 8
+    assert tuple(response.json() for response in responses) == ({"action": "allow"},) * 8
+    agents: Final = hook.agents()
+    assert len(agents) == 1
+    assert agents[0]["request_count"] == 1
+    decisions: Final = hook.gateway.rows(
+        'SELECT request_id FROM "LiteLLM_ExternalAgentDecision" WHERE source_id=%s',
+        (hook.source_id,),
+    )
+    assert decisions == [{"request_id": request_id}]
+
+
+def test_concurrent_first_frames_cannot_overwrite_the_bound_tenant(hook: Hook) -> None:
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        responses: Final = tuple(
+            executor.map(lambda tenant: hook.send(tenant, tenant=tenant), ("tenant-one", "tenant-two"))
+        )
+    assert sorted(response.status_code for response in responses) == [200, 401]
+    agents: Final = hook.agents()
+    assert len(agents) == 1
+    source: Final = hook.gateway.rows(
+        'SELECT tenant_id FROM "LiteLLM_ExternalAgentSource" WHERE source_id=%s',
+        (hook.source_id,),
+    )
+    assert source == [{"tenant_id": agents[0]["external_agent_id"]}]

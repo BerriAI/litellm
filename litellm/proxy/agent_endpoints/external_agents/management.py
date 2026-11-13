@@ -32,7 +32,7 @@ class ExternalAgentManagement:
             return valid
         rows: Final = TypeAdapter(list[Source]).validate_python(
             await self.db.query_raw(
-                'INSERT INTO "ExternalAgentSource" (source_id,display_name,signing_secret,mode,created_by,updated_by) '
+                'INSERT INTO "LiteLLM_ExternalAgentSource" (source_id,display_name,signing_secret,mode,created_by,updated_by) '
                 "VALUES ($1,$2,$3,$4,$5,$5) RETURNING *",
                 str(uuid.uuid4()),
                 data.display_name,
@@ -46,7 +46,7 @@ class ExternalAgentManagement:
     async def sources(self) -> tuple[Source, ...]:
         return TypeAdapter(tuple[Source, ...]).validate_python(
             await self.db.query_raw(
-                'SELECT * FROM "ExternalAgentSource" ORDER BY created_at,source_id',
+                'SELECT * FROM "LiteLLM_ExternalAgentSource" ORDER BY created_at,source_id',
             )
         )
 
@@ -57,7 +57,7 @@ class ExternalAgentManagement:
             return valid
         rows: Final = TypeAdapter(list[Source]).validate_python(
             await self.db.query_raw(
-                'UPDATE "ExternalAgentSource" SET display_name=COALESCE($2,display_name),mode=COALESCE($3,mode),'
+                'UPDATE "LiteLLM_ExternalAgentSource" SET display_name=COALESCE($2,display_name),mode=COALESCE($3,mode),'
                 "previous_signing_secret=CASE WHEN $4::text IS NULL THEN previous_signing_secret ELSE signing_secret END,"
                 "signing_secret=COALESCE($4,signing_secret),updated_by=$5,updated_at=NOW() WHERE source_id=$1 RETURNING *",
                 source_id,
@@ -80,13 +80,13 @@ class ExternalAgentManagement:
     ) -> tuple[Agent, ...]:
         return TypeAdapter(tuple[Agent, ...]).validate_python(
             await self.db.query_raw(
-                'SELECT a.* FROM "ExternalAgent" a WHERE ($1::text IS NULL OR a.source_id=$1) '
+                'SELECT a.* FROM "LiteLLM_ExternalAgent" a WHERE ($1::text IS NULL OR a.source_id=$1) '
                 "AND ($2::text IS NULL OR a.team_id=$2) "
                 "AND ($3::text IS NULL OR a.display_name ILIKE $3 OR a.external_agent_id ILIKE $3) "
                 "AND (NOT $4 OR a.team_id IS NULL OR a.owner_user_id IS NULL OR a.owner_inferred OR "
-                'NOT EXISTS (SELECT 1 FROM "ExternalAgentActor" m JOIN "LiteLLM_UserTable" u ON u.user_id=m.user_id '
+                'NOT EXISTS (SELECT 1 FROM "LiteLLM_ExternalAgentActor" m JOIN "LiteLLM_UserTable" u ON u.user_id=m.user_id '
                 "WHERE m.source_id=a.source_id AND m.external_actor_id=a.last_actor_id) OR "
-                'EXISTS (SELECT 1 FROM "ExternalAgentDecision" d WHERE d.source_id=a.source_id '
+                'EXISTS (SELECT 1 FROM "LiteLLM_ExternalAgentDecision" d WHERE d.source_id=a.source_id '
                 "AND d.external_agent_id=a.external_agent_id AND d.would_verdict='deny' "
                 "AND d.created_at >= NOW()-INTERVAL '24 hours')) "
                 "ORDER BY a.last_seen_at DESC,a.id LIMIT $5 OFFSET $6",
@@ -103,15 +103,15 @@ class ExternalAgentManagement:
         rows: Final = TypeAdapter(list[Summary]).validate_python(
             await self.db.query_raw(
                 "SELECT COUNT(*)::int AS discovered, "
-                'COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM "ExternalAgentPolicy" p '
+                'COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM "LiteLLM_ExternalAgentPolicy" p '
                 "WHERE p.source_id=a.source_id AND p.team_id=a.team_id))::int AS covered_by_team_policy, "
                 "COUNT(*) FILTER (WHERE owner_user_id IS NULL OR owner_inferred)::int AS needs_owner, "
-                'COUNT(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM "ExternalAgentActor" m '
+                'COUNT(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM "LiteLLM_ExternalAgentActor" m '
                 'JOIN "LiteLLM_UserTable" u ON u.user_id=m.user_id '
                 "WHERE m.source_id=a.source_id AND m.external_actor_id=a.last_actor_id))::int AS unmapped_actors, "
-                '(SELECT COUNT(*)::int FROM "ExternalAgentDecision" d WHERE d.source_id=$1 '
+                '(SELECT COUNT(*)::int FROM "LiteLLM_ExternalAgentDecision" d WHERE d.source_id=$1 '
                 "AND d.would_verdict='deny' AND d.created_at >= NOW()-INTERVAL '24 hours') AS denied_24h, "
-                'MAX(a.last_seen_at) AS last_event_at FROM "ExternalAgent" a WHERE a.source_id=$1',
+                'MAX(a.last_seen_at) AS last_event_at FROM "LiteLLM_ExternalAgent" a WHERE a.source_id=$1',
                 source_id,
             )
         )
@@ -119,7 +119,7 @@ class ExternalAgentManagement:
 
     async def bulk(self, data: AgentPatch) -> int:
         return await self.db.execute_raw(
-            'UPDATE "ExternalAgent" SET team_id=CASE WHEN $2 THEN $3 ELSE team_id END, '
+            'UPDATE "LiteLLM_ExternalAgent" SET team_id=CASE WHEN $2 THEN $3 ELSE team_id END, '
             "owner_user_id=CASE WHEN $4 THEN $5 ELSE owner_user_id END, "
             "owner_inferred=CASE WHEN $4 THEN false ELSE owner_inferred END, "
             "status=COALESCE($6,status),display_name=CASE WHEN $7 THEN $8 ELSE display_name END "
@@ -137,7 +137,7 @@ class ExternalAgentManagement:
     async def policies(self, source_id: str) -> tuple[Policy, ...]:
         return TypeAdapter(tuple[Policy, ...]).validate_python(
             await self.db.query_raw(
-                'SELECT * FROM "ExternalAgentPolicy" WHERE source_id=$1 ORDER BY policy_id',
+                'SELECT * FROM "LiteLLM_ExternalAgentPolicy" WHERE source_id=$1 ORDER BY policy_id',
                 source_id,
             )
         )
@@ -145,14 +145,14 @@ class ExternalAgentManagement:
     async def put_policy(self, data: PolicyPut) -> Policy | HookFailure:
         async with self.db.tx() as tx:
             source: Final = await tx.query_raw(
-                'SELECT source_id FROM "ExternalAgentSource" WHERE source_id=$1 FOR UPDATE',
+                'SELECT source_id FROM "LiteLLM_ExternalAgentSource" WHERE source_id=$1 FOR UPDATE',
                 data.source_id,
             )
             if not source:
                 return HookFailure(status=404, reason="Unknown source")
             existing: Final = TypeAdapter(list[Policy]).validate_python(
                 await tx.query_raw(
-                    'SELECT * FROM "ExternalAgentPolicy" WHERE source_id=$1 AND team_id IS NOT DISTINCT FROM $2',
+                    'SELECT * FROM "LiteLLM_ExternalAgentPolicy" WHERE source_id=$1 AND team_id IS NOT DISTINCT FROM $2',
                     data.source_id,
                     data.team_id,
                 )
@@ -160,7 +160,7 @@ class ExternalAgentManagement:
             policy_id: Final = existing[0].policy_id if existing else str(uuid.uuid4())
             rows: Final = TypeAdapter(list[Policy]).validate_python(
                 await tx.query_raw(
-                    'INSERT INTO "ExternalAgentPolicy" '
+                    'INSERT INTO "LiteLLM_ExternalAgentPolicy" '
                     "(policy_id,source_id,team_id,blocked_tools,allow_unmapped_actors,require_owner) "
                     "VALUES ($1,$2,$3,$4::text[],$5,$6) ON CONFLICT (policy_id) DO UPDATE SET "
                     "blocked_tools=EXCLUDED.blocked_tools,allow_unmapped_actors=EXCLUDED.allow_unmapped_actors,"
@@ -175,7 +175,7 @@ class ExternalAgentManagement:
             )
             if data.team_id is None:
                 await tx.execute_raw(
-                    'UPDATE "ExternalAgentSource" SET default_policy_id=$1 WHERE source_id=$2',
+                    'UPDATE "LiteLLM_ExternalAgentSource" SET default_policy_id=$1 WHERE source_id=$2',
                     policy_id,
                     data.source_id,
                 )
@@ -184,7 +184,7 @@ class ExternalAgentManagement:
     async def actors(self, data: ActorsPut) -> int | HookFailure:
         async with self.db.tx() as tx:
             source: Final = await tx.query_raw(
-                'SELECT source_id FROM "ExternalAgentSource" WHERE source_id=$1 FOR UPDATE', data.source_id
+                'SELECT source_id FROM "LiteLLM_ExternalAgentSource" WHERE source_id=$1 FOR UPDATE', data.source_id
             )
             if not source:
                 return HookFailure(status=404, reason="Unknown source")
@@ -194,7 +194,7 @@ class ExternalAgentManagement:
                     return HookFailure(status=400, reason="Unknown mapped user")
             for mapping in data.mappings:
                 await tx.execute_raw(
-                    'INSERT INTO "ExternalAgentActor" (id,source_id,external_actor_id,user_id) VALUES ($1,$2,$3,$4) '
+                    'INSERT INTO "LiteLLM_ExternalAgentActor" (id,source_id,external_actor_id,user_id) VALUES ($1,$2,$3,$4) '
                     "ON CONFLICT (source_id,external_actor_id) DO UPDATE SET user_id=EXCLUDED.user_id",
                     str(uuid.uuid4()),
                     data.source_id,
@@ -213,7 +213,7 @@ class ExternalAgentManagement:
     ) -> tuple[Decision, ...]:
         return TypeAdapter(tuple[Decision, ...]).validate_python(
             await self.db.query_raw(
-                'SELECT * FROM "ExternalAgentDecision" WHERE ($1::text IS NULL OR source_id=$1) '
+                'SELECT * FROM "LiteLLM_ExternalAgentDecision" WHERE ($1::text IS NULL OR source_id=$1) '
                 "AND ($2::text IS NULL OR external_agent_id=$2) AND ($3::text IS NULL OR verdict=$3) "
                 "ORDER BY created_at DESC,request_id LIMIT $4 OFFSET $5",
                 source_id,

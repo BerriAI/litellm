@@ -8,6 +8,7 @@ from prisma import Prisma
 
 from litellm.proxy.agent_endpoints.external_agents.governance import (
     ExternalAgentGovernance,
+    ExternalAgentStore,
     MappedUser,
     decision_verdict,
     evaluate_policy,
@@ -122,11 +123,27 @@ async def test_retry_returns_stored_verdict_without_rediscovery() -> None:
         created_at=NOW,
     )
     db: Final = database_with_rows(
-        [[SOURCE.model_dump(exclude=set()) | {"signing_secret": "encrypted"}], [decision.model_dump()]]
+        [
+            [SOURCE.model_dump(exclude=set()) | {"signing_secret": "encrypted", "tenant_id": "tenant"}],
+            [decision.model_dump()],
+        ]
     )
     result: Final = await ExternalAgentGovernance(db).evaluate(SOURCE, EVENT)
     assert result == Verdict(action="deny", deny_reason="Stored decision")
     assert db.query_raw.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tenant,status", [("tenant", None), ("other", 401), (None, 404)])
+async def test_first_tenant_binding_checks_the_committed_winner(tenant: str | None, status: int | None) -> None:
+    rows: Final = [SOURCE.model_dump() | {"signing_secret": "encrypted", "tenant_id": tenant}] if tenant else []
+    db: Final = database_with_rows([rows])
+    result: Final = await ExternalAgentStore(db).bind_tenant("source", "tenant")
+    assert result == (
+        HookFailure(status=status, reason="Unknown source" if status == 404 else "Tenant does not match source")
+        if status
+        else None
+    )
 
 
 @pytest.mark.asyncio

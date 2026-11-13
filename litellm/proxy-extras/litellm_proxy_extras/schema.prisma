@@ -1,4 +1,4 @@
-model ExternalAgentSource {
+model LiteLLM_ExternalAgentSource {
   source_id String @id @default(uuid())
   vendor String @default("grok_bot")
   display_name String
@@ -13,7 +13,7 @@ model ExternalAgentSource {
   updated_at DateTime @default(now()) @updatedAt
 }
 
-model ExternalAgent {
+model LiteLLM_ExternalAgent {
   id String @id @default(uuid())
   source_id String
   external_agent_id String
@@ -31,7 +31,7 @@ model ExternalAgent {
   @@index([source_id, team_id])
 }
 
-model ExternalAgentActor {
+model LiteLLM_ExternalAgentActor {
   id String @id @default(uuid())
   source_id String
   external_actor_id String
@@ -39,7 +39,7 @@ model ExternalAgentActor {
   @@unique([source_id, external_actor_id])
 }
 
-model ExternalAgentPolicy {
+model LiteLLM_ExternalAgentPolicy {
   policy_id String @id @default(uuid())
   source_id String
   team_id String?
@@ -49,7 +49,7 @@ model ExternalAgentPolicy {
   @@unique([source_id, team_id])
 }
 
-model ExternalAgentDecision {
+model LiteLLM_ExternalAgentDecision {
   request_id String @id
   source_id String
   external_agent_id String

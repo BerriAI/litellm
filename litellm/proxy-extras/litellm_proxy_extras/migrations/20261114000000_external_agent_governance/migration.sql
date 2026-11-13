@@ -1,4 +1,4 @@
-CREATE TABLE "ExternalAgentSource" (
+CREATE TABLE "LiteLLM_ExternalAgentSource" (
     "source_id" TEXT NOT NULL,
     "vendor" TEXT NOT NULL DEFAULT 'grok_bot',
     "display_name" TEXT NOT NULL,
@@ -12,10 +12,10 @@ CREATE TABLE "ExternalAgentSource" (
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT "ExternalAgentSource_pkey" PRIMARY KEY ("source_id")
+    CONSTRAINT "LiteLLM_ExternalAgentSource_pkey" PRIMARY KEY ("source_id")
 );
 
-CREATE TABLE "ExternalAgent" (
+CREATE TABLE "LiteLLM_ExternalAgent" (
     "id" TEXT NOT NULL,
     "source_id" TEXT NOT NULL,
     "external_agent_id" TEXT NOT NULL,
@@ -30,19 +30,19 @@ CREATE TABLE "ExternalAgent" (
     "last_actor_id" TEXT,
     "last_model" TEXT,
 
-    CONSTRAINT "ExternalAgent_pkey" PRIMARY KEY ("id")
+    CONSTRAINT "LiteLLM_ExternalAgent_pkey" PRIMARY KEY ("id")
 );
 
-CREATE TABLE "ExternalAgentActor" (
+CREATE TABLE "LiteLLM_ExternalAgentActor" (
     "id" TEXT NOT NULL,
     "source_id" TEXT NOT NULL,
     "external_actor_id" TEXT NOT NULL,
     "user_id" TEXT NOT NULL,
 
-    CONSTRAINT "ExternalAgentActor_pkey" PRIMARY KEY ("id")
+    CONSTRAINT "LiteLLM_ExternalAgentActor_pkey" PRIMARY KEY ("id")
 );
 
-CREATE TABLE "ExternalAgentPolicy" (
+CREATE TABLE "LiteLLM_ExternalAgentPolicy" (
     "policy_id" TEXT NOT NULL,
     "source_id" TEXT NOT NULL,
     "team_id" TEXT,
@@ -50,10 +50,10 @@ CREATE TABLE "ExternalAgentPolicy" (
     "allow_unmapped_actors" BOOLEAN NOT NULL DEFAULT true,
     "require_owner" BOOLEAN NOT NULL DEFAULT false,
 
-    CONSTRAINT "ExternalAgentPolicy_pkey" PRIMARY KEY ("policy_id")
+    CONSTRAINT "LiteLLM_ExternalAgentPolicy_pkey" PRIMARY KEY ("policy_id")
 );
 
-CREATE TABLE "ExternalAgentDecision" (
+CREATE TABLE "LiteLLM_ExternalAgentDecision" (
     "request_id" TEXT NOT NULL,
     "source_id" TEXT NOT NULL,
     "external_agent_id" TEXT NOT NULL,
@@ -69,17 +69,17 @@ CREATE TABLE "ExternalAgentDecision" (
     "policy_id" TEXT,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT "ExternalAgentDecision_pkey" PRIMARY KEY ("request_id")
+    CONSTRAINT "LiteLLM_ExternalAgentDecision_pkey" PRIMARY KEY ("request_id")
 );
 
-CREATE INDEX "ExternalAgent_source_id_team_id_idx" ON "ExternalAgent"("source_id", "team_id");
+CREATE INDEX "LiteLLM_ExternalAgent_source_id_team_id_idx" ON "LiteLLM_ExternalAgent"("source_id", "team_id");
 
-CREATE UNIQUE INDEX "ExternalAgent_source_id_external_agent_id_key" ON "ExternalAgent"("source_id", "external_agent_id");
+CREATE UNIQUE INDEX "LiteLLM_ExternalAgent_source_id_external_agent_id_key" ON "LiteLLM_ExternalAgent"("source_id", "external_agent_id");
 
-CREATE UNIQUE INDEX "ExternalAgentActor_source_id_external_actor_id_key" ON "ExternalAgentActor"("source_id", "external_actor_id");
+CREATE UNIQUE INDEX "LiteLLM_ExternalAgentActor_source_id_external_actor_id_key" ON "LiteLLM_ExternalAgentActor"("source_id", "external_actor_id");
 
-CREATE UNIQUE INDEX "ExternalAgentPolicy_source_id_team_id_key" ON "ExternalAgentPolicy"("source_id", "team_id");
+CREATE UNIQUE INDEX "LiteLLM_ExternalAgentPolicy_source_id_team_id_key" ON "LiteLLM_ExternalAgentPolicy"("source_id", "team_id");
 
-CREATE INDEX "ExternalAgentDecision_source_id_created_at_idx" ON "ExternalAgentDecision"("source_id", "created_at");
+CREATE INDEX "LiteLLM_ExternalAgentDecision_source_id_created_at_idx" ON "LiteLLM_ExternalAgentDecision"("source_id", "created_at");
 
-CREATE INDEX "ExternalAgentDecision_source_id_external_agent_id_created_a_idx" ON "ExternalAgentDecision"("source_id", "external_agent_id", "created_at");
+CREATE INDEX "LiteLLM_ExternalAgentDecision_source_id_external_agent_id_c_idx" ON "LiteLLM_ExternalAgentDecision"("source_id", "external_agent_id", "created_at");
