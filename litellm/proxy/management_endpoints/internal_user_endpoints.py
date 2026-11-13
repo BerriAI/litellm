@@ -439,7 +439,11 @@ def check_if_default_team_set() -> list[str] | list[NewUserRequestTeam] | None:
             return teams
         elif all(isinstance(team, dict) for team in teams):
             return [
-                NewUserRequestTeam(team_id=team.get("team_id"), user_role=team.get("user_role", "user"))
+                NewUserRequestTeam(
+                    team_id=team.get("team_id"),
+                    max_budget_in_team=team.get("max_budget_in_team"),
+                    user_role=team.get("user_role", "user"),
+                )
                 for team in teams
             ]
         else:
@@ -456,8 +460,12 @@ async def add_new_user_to_default_team(
     user_api_key_dict: UserAPIKeyAuth,
     teams: Sequence[str | NewUserRequestTeam],
     prisma_client: "PrismaClient",
+    teams_are_defaults: bool = True,
 ):
-    memberships: Final = tuple(_default_team_membership(team) for team in teams)
+    requested: Final = tuple(_default_team_membership(team) for team in teams)
+    memberships: Final = (
+        await _memberships_on_team_member_budget(requested, prisma_client) if teams_are_defaults else requested
+    )
     for membership in memberships:
         with contextlib.suppress(Exception):
             await _add_user_to_team(
@@ -468,6 +476,24 @@ async def add_new_user_to_default_team(
                 max_budget_in_team=membership.max_budget_in_team,
                 user_role=membership.user_role,
             )
+
+
+async def _memberships_on_team_member_budget(
+    memberships: tuple[NewUserRequestTeam, ...], prisma_client: "PrismaClient"
+) -> tuple[NewUserRequestTeam, ...]:
+    """A default team's max_budget_in_team is already the team's member budget, which also carries the reset."""
+    capped_team_ids: Final = [m.team_id for m in memberships if m.max_budget_in_team is not None]
+    if not capped_team_ids:
+        return memberships
+    team_rows: Final = await _team_table(prisma_client).find_many(where={"team_id": {"in": capped_team_ids}})
+    budgeted_team_ids: Final = frozenset(
+        row.team_id
+        for row in team_rows
+        if isinstance(row.metadata, dict) and row.metadata.get("team_member_budget_id") is not None
+    )
+    return tuple(
+        m.model_copy(update={"max_budget_in_team": None}) if m.team_id in budgeted_team_ids else m for m in memberships
+    )
 
 
 def _default_team_membership(team: str | NewUserRequestTeam) -> NewUserRequestTeam:
@@ -654,6 +680,7 @@ async def new_user(
                 user_api_key_dict=user_api_key_dict,
                 teams=teams,
                 prisma_client=prisma_client,
+                teams_are_defaults=data.teams is None,
             )
 
         user_id: Final = cast(str | None, response.get("user_id", None))
