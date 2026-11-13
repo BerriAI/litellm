@@ -380,7 +380,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         limit: Final = span_attribute_limit(span)
         carried: Final = carried_keys(span)
         new_keys: Final = tuple(key for key, _value in fields if key not in carried)
-        pending_usage: Final = (
+        pending_usage: Final[frozenset[str]] = (
             frozenset((USAGE_PROVIDER_STATUS_ATTRIBUTE, ESTIMATED_INPUT_TOKENS_ATTRIBUTE))
             if isinstance(kwargs.get(FAILED_PROMPT_TOKEN_ESTIMATE_KEY), int)
             else frozenset((USAGE_PROVIDER_STATUS_ATTRIBUTE,))
