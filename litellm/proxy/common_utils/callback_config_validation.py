@@ -547,7 +547,7 @@ def credential_reference_rejection(
     if isinstance(requested_logging, InvalidLoggingMetadata):
         return CredentialReferenceRejection(400, requested_logging.message)
     requested_names: Final = logging_credential_names(requested_logging)
-    normalized_stored: Final = normalize_logging_entries(stored_logging)
+    normalized_stored: Final = () if isinstance(stored_logging, str) else normalize_logging_entries(stored_logging)
     stored_names: Final = logging_credential_names(normalized_stored)
     references_involved: Final = bool(requested_names or stored_names)
     if references_involved and not is_proxy_admin and requested_logging != normalized_stored:

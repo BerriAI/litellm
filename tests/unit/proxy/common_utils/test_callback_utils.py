@@ -7,7 +7,6 @@ from typing import Final
 from unittest.mock import patch
 
 import pytest
-from fastapi import HTTPException
 
 import litellm
 from litellm.caching.caching import DualCache
@@ -889,11 +888,21 @@ def test_json_string_logging_is_encrypted_as_a_list_and_reads_like_list_metadata
 
 
 @pytest.mark.parametrize("value", ["not json", '{"a":1}', '"text"', "null", "[null]", {"bad": 1}, [1]])
-def test_invalid_logging_is_rejected_on_write_with_400(value: object) -> None:
-    with pytest.raises(HTTPException) as error:
-        encrypt_callback_vars({"logging": value})
-    assert error.value.status_code == 400
-    assert "metadata.logging must be a list of objects" in str(error.value.detail)
+def test_invalid_logging_passes_through_encryption_but_is_rejected_by_write_validation(value: object) -> None:
+    metadata: Final = {"logging": value}
+    assert encrypt_callback_vars(metadata) == metadata
+    assert decrypt_callback_vars(metadata) == metadata
+    assert "metadata.logging must be a list of objects" in str(logging_metadata_config_error(metadata))
+
+
+def test_encryption_preserves_malformed_siblings_and_encrypts_valid_entries(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_salt_key(monkeypatch)
+    original: Final = _sample_metadata()
+    metadata: Final = {**original, "logging": [None, "bad", *original["logging"]]}
+    encrypted: Final = encrypt_callback_vars(metadata)
+    assert encrypted["logging"][:2] == [None, "bad"]
+    assert encrypted["logging"][2]["callback_vars"]["langfuse_secret_key"].startswith("litellm_enc::")
+    assert decrypt_callback_vars(encrypted) == metadata
 
 
 @pytest.mark.parametrize("value", [[], "[]"])

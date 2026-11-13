@@ -530,16 +530,34 @@ def test_json_string_logging_cannot_bypass_credential_authorization(is_proxy_adm
 
 
 @pytest.mark.parametrize("stored_as_string", [False, True])
-def test_credential_reference_round_trip_accepts_a_legacy_json_string(stored_as_string: bool) -> None:
+def test_credential_reference_round_trip_requires_reapproval_for_legacy_strings(stored_as_string: bool) -> None:
+    rejection: Final = credential_reference_rejection(
+        {"logging": [_REFERENCE] if stored_as_string else json.dumps([_REFERENCE])},
+        json.dumps([_REFERENCE]) if stored_as_string else [_REFERENCE],
+        is_proxy_admin=False,
+        is_defined=lambda _: False,
+    )
+    assert (rejection.status_code if rejection is not None else None) == (403 if stored_as_string else None)
+
+
+def test_non_admin_can_resave_a_legacy_string_without_credential_references() -> None:
+    entries: Final = [{"callback_name": "langfuse", "callback_vars": {}}]
     assert (
         credential_reference_rejection(
-            {"logging": [_REFERENCE] if stored_as_string else json.dumps([_REFERENCE])},
-            json.dumps([_REFERENCE]) if stored_as_string else [_REFERENCE],
-            is_proxy_admin=False,
-            is_defined=lambda _: False,
+            {"logging": entries}, json.dumps(entries), is_proxy_admin=False, is_defined=lambda _: False
         )
         is None
     )
+
+
+@pytest.mark.parametrize("defined, expected_status", [(False, 400), (True, None)])
+def test_admin_reapproving_a_legacy_reference_must_use_a_defined_credential(
+    defined: bool, expected_status: int | None
+) -> None:
+    rejection: Final = credential_reference_rejection(
+        {"logging": [_REFERENCE]}, json.dumps([_REFERENCE]), is_proxy_admin=True, is_defined=lambda _: defined
+    )
+    assert (rejection.status_code if rejection is not None else None) == expected_status
 
 
 @pytest.mark.parametrize("stored_logging", ["not json", {"bad": 1}, [None]])
