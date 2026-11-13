@@ -3,6 +3,7 @@ import ipaddress
 import json
 import ssl
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 
@@ -13,6 +14,8 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 from integration._support.client import JSON_OBJECT, Gateway, object_value, string_value
 from integration._support.wire import Reply, Request, wire_server
+from integration.providers._dashscope_video_support import rate, settled_spend
+from pydantic import JsonValue
 
 _MODEL: Final = "bytedance/seedance-2.5/text-to-video"
 _H3_MODEL: Final = "minimax/h3/text-to-video"
@@ -431,3 +434,54 @@ def test_fal_h3_oversized_size_uses_top_resolution_tier_and_queues(gateway: Gate
         assert response.status_code == 200, response.text
         assert response.json()["status"] == "queued"
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", f"/{_H3_MODEL}")]
+
+
+_FLAT_PRICED_MODEL: Final = "fal-ai/ltx-video"
+_FLAT_PRICED_MODEL_AS_DEPLOYMENT_ID: Final = "fal-ai/ovi"
+_PER_SECOND_RATE: Final = 0.1
+_OFF_PEAK_NEVER_OPEN: Final[JsonValue] = {"hours_utc": "00:00-00:00", "output_cost_per_second": 0.05}
+
+
+@pytest.mark.parametrize(
+    ("fal_model", "model_info"),
+    [
+        pytest.param(
+            _FLAT_PRICED_MODEL,
+            {"off_peak_pricing": _OFF_PEAK_NEVER_OPEN},
+            id="deployment_also_sets_off_peak_pricing",
+        ),
+        pytest.param(
+            _FLAT_PRICED_MODEL_AS_DEPLOYMENT_ID,
+            {"id": f"fal_ai/{_FLAT_PRICED_MODEL_AS_DEPLOYMENT_ID}"},
+            id="deployment_id_equals_the_catalog_key",
+        ),
+    ],
+)
+def test_deployment_per_second_price_bills_a_fal_model_the_catalog_prices_per_video(
+    gateway: Gateway, fal_model: str, model_info: Mapping[str, JsonValue]
+) -> None:
+    request_id: Final = "fal-flat-req-" + uuid.uuid4().hex
+    assert rate("fal_ai", "output_cost_per_video", fal_model) != 5 * _PER_SECOND_RATE
+
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert request.target == f"/{fal_model}"
+        return Reply(body=json.dumps({"status": "IN_QUEUE", "request_id": request_id, "queue_position": 0}).encode())
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model=f"fal_ai/{fal_model}",
+            api_base=wire.url,
+            api_key="synthetic-fal-key",
+            output_cost_per_second=_PER_SECOND_RATE,
+            model_info=model_info,
+        )
+        key: Final = scenario.key(models=[model])
+        created: Final = gateway.request(
+            "POST",
+            "/v1/videos",
+            {"model": model, "prompt": "a cat playing volleyball on a beach", "seconds": "5"},
+            key=key,
+        )
+        assert created.status_code == 200, created.text
+        settled_spend(key, 5 * _PER_SECOND_RATE)

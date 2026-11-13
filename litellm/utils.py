@@ -4183,13 +4183,27 @@ def native_structured_output_support(model_info: Mapping[str, object]) -> bool |
     return declared if isinstance(declared, bool) else None
 
 
-def _base_fields_replaced_by(value: Mapping[str, object]) -> frozenset[str]:
-    return (
+def _sets_video_price_per_second(value: Mapping[str, object]) -> bool:
+    return any(
+        price is not None and name.startswith(("output_cost_per_second", "output_cost_per_video_per_second"))
+        for name, price in value.items()
+    )
+
+
+def base_fields_replaced_by(value: Mapping[str, object]) -> frozenset[str]:
+    """Base-row fields a registration supersedes without naming them."""
+    explicit_cache_read: Final[frozenset[str]] = (
         frozenset({"explicit_cache_read_input_token_cost"})
         if value.get("cache_read_input_token_cost") is not None
         and value.get("explicit_cache_read_input_token_cost") is None
         else frozenset()
     )
+    flat_video_price: Final[frozenset[str]] = (
+        frozenset({"output_cost_per_video"})
+        if value.get("output_cost_per_video") is None and _sets_video_price_per_second(value)
+        else frozenset()
+    )
+    return explicit_cache_read | flat_video_price
 
 
 def model_cost_registration_write(
@@ -4206,7 +4220,7 @@ def model_cost_registration_write(
     }
     entry: Final = {
         **update_dictionary(existing_model, registration),
-        **dict.fromkeys(_base_fields_replaced_by(registration)),
+        **dict.fromkeys(base_fields_replaced_by(registration)),
     }
     names: Final = current.names if isinstance(current, AliasedCostEntry) else ()
     previous_fields: Final[frozenset[str]] = (
