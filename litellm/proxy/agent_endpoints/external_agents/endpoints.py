@@ -14,6 +14,7 @@ from litellm.proxy.agent_endpoints.external_agents.models import (
     Agent,
     AgentPatch,
     Decision,
+    ExternalAgentSummary,
     HookFailure,
     ObservedAgentEvent,
     Policy,
@@ -21,7 +22,6 @@ from litellm.proxy.agent_endpoints.external_agents.models import (
     Source,
     SourceCreate,
     SourcePatch,
-    Summary,
     Updated,
     Verdict,
 )
@@ -105,6 +105,7 @@ async def patch_source(id: str, data: SourcePatch, auth: Admin, db: DB) -> Sourc
     )
 
 
+@router.get("/v1/external_agents", response_model=tuple[Agent, ...], include_in_schema=False)
 @router.get("/v1/external_agents/", response_model=tuple[Agent, ...])
 async def list_agents(
     auth: Admin,
@@ -120,8 +121,8 @@ async def list_agents(
     return await ExternalAgentManagement(db).agents(source_id, team_id, exceptions_only, search, offset, limit)
 
 
-@router.get("/v1/external_agents/summary", response_model=Summary)
-async def summary(source_id: str, auth: Admin, db: DB) -> Summary:
+@router.get("/v1/external_agents/summary", response_model=ExternalAgentSummary)
+async def summary(source_id: str, auth: Admin, db: DB) -> ExternalAgentSummary:
     """Summarize discovered bots and unresolved governance exceptions."""
     return await ExternalAgentManagement(db).summary(source_id)
 

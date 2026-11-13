@@ -16002,6 +16002,21 @@
               "title": "Id",
               "type": "string"
             },
+            "issues": {
+              "default": [],
+              "items": {
+                "enum": [
+                  "no team",
+                  "no owner",
+                  "owner inferred",
+                  "unmapped member",
+                  "denied recently"
+                ],
+                "type": "string"
+              },
+              "title": "Issues",
+              "type": "array"
+            },
             "last_actor_id": {
               "anyOf": [
                 {
@@ -16272,6 +16287,52 @@
           "title": "Decision",
           "type": "object"
         },
+        "ExternalAgentSummary": {
+          "properties": {
+            "covered_by_team_policy": {
+              "title": "Covered By Team Policy",
+              "type": "integer"
+            },
+            "denied_24h": {
+              "title": "Denied 24H",
+              "type": "integer"
+            },
+            "discovered": {
+              "title": "Discovered",
+              "type": "integer"
+            },
+            "last_event_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last Event At"
+            },
+            "needs_owner": {
+              "title": "Needs Owner",
+              "type": "integer"
+            },
+            "unmapped_actors": {
+              "title": "Unmapped Actors",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "discovered",
+            "covered_by_team_policy",
+            "needs_owner",
+            "unmapped_actors",
+            "denied_24h",
+            "last_event_at"
+          ],
+          "title": "ExternalAgentSummary",
+          "type": "object"
+        },
         "HTTPValidationError": {
           "properties": {
             "detail": {
@@ -16506,52 +16567,6 @@
             }
           },
           "title": "SourcePatch",
-          "type": "object"
-        },
-        "Summary": {
-          "properties": {
-            "covered_by_team_policy": {
-              "title": "Covered By Team Policy",
-              "type": "integer"
-            },
-            "denied_24h": {
-              "title": "Denied 24H",
-              "type": "integer"
-            },
-            "discovered": {
-              "title": "Discovered",
-              "type": "integer"
-            },
-            "last_event_at": {
-              "anyOf": [
-                {
-                  "format": "date-time",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Last Event At"
-            },
-            "needs_owner": {
-              "title": "Needs Owner",
-              "type": "integer"
-            },
-            "unmapped_actors": {
-              "title": "Unmapped Actors",
-              "type": "integer"
-            }
-          },
-          "required": [
-            "discovered",
-            "covered_by_team_policy",
-            "needs_owner",
-            "unmapped_actors",
-            "denied_24h",
-            "last_event_at"
-          ],
-          "title": "Summary",
           "type": "object"
         },
         "Updated": {
@@ -17292,7 +17307,7 @@
               "content": {
                 "application/json": {
                   "schema": {
-                    "$ref": "#/components/schemas/Summary"
+                    "$ref": "#/components/schemas/ExternalAgentSummary"
                   }
                 }
               },

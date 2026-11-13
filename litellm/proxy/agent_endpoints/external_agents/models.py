@@ -60,6 +60,7 @@ class Agent(FrozenModel):
     request_count: int
     last_actor_id: str | None = None
     last_model: str | None = None
+    issues: tuple[Literal["no team", "no owner", "owner inferred", "unmapped member", "denied recently"], ...] = ()
 
 
 class Policy(FrozenModel):
@@ -126,7 +127,7 @@ class ActorsPut(FrozenModel):
     mappings: tuple[ActorMapping, ...] = Field(min_length=1, max_length=1000)
 
 
-class Summary(FrozenModel):
+class ExternalAgentSummary(FrozenModel):
     discovered: int
     covered_by_team_policy: int
     needs_owner: int

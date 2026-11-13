@@ -10,13 +10,13 @@ from litellm.proxy.agent_endpoints.external_agents.models import (
     Agent,
     AgentPatch,
     Decision,
+    ExternalAgentSummary,
     HookFailure,
     Policy,
     PolicyPut,
     Source,
     SourceCreate,
     SourcePatch,
-    Summary,
 )
 from litellm.proxy.agent_endpoints.external_agents.source import signing_key
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
@@ -88,16 +88,21 @@ class ExternalAgentManagement:
     ) -> tuple[Agent, ...]:
         return TypeAdapter(tuple[Agent, ...]).validate_python(
             await self.db.query_raw(
-                'SELECT a.* FROM "LiteLLM_ExternalAgent" a WHERE ($1::text IS NULL OR a.source_id=$1) '
-                "AND ($2::text IS NULL OR a.team_id=$2) "
-                "AND ($3::text IS NULL OR a.display_name ILIKE $3 OR a.external_agent_id ILIKE $3) "
-                "AND (NOT $4 OR a.team_id IS NULL OR a.owner_user_id IS NULL OR a.owner_inferred OR "
-                'NOT EXISTS (SELECT 1 FROM "LiteLLM_ExternalAgentActor" m JOIN "LiteLLM_UserTable" u ON u.user_id=m.user_id '
-                "WHERE m.source_id=a.source_id AND m.external_actor_id=a.last_actor_id) OR "
-                'EXISTS (SELECT 1 FROM "LiteLLM_ExternalAgentDecision" d WHERE d.source_id=a.source_id '
+                "WITH bots AS (SELECT a.*,array_remove(ARRAY["
+                "CASE WHEN a.team_id IS NULL THEN 'no team' END, "
+                "CASE WHEN a.owner_user_id IS NULL THEN 'no owner' END, "
+                "CASE WHEN a.owner_inferred THEN 'owner inferred' END, "
+                'CASE WHEN NOT EXISTS (SELECT 1 FROM "LiteLLM_ExternalAgentActor" m '
+                'JOIN "LiteLLM_UserTable" u ON u.user_id=m.user_id '
+                "WHERE m.source_id=a.source_id AND m.external_actor_id=a.last_actor_id) THEN 'unmapped member' END, "
+                'CASE WHEN EXISTS (SELECT 1 FROM "LiteLLM_ExternalAgentDecision" d WHERE d.source_id=a.source_id '
                 "AND d.external_agent_id=a.external_agent_id AND d.would_verdict='deny' "
-                "AND d.created_at >= NOW()-INTERVAL '24 hours')) "
-                "ORDER BY a.last_seen_at DESC,a.id LIMIT $5 OFFSET $6",
+                "AND d.created_at >= NOW()-INTERVAL '24 hours') THEN 'denied recently' END],NULL) AS issues "
+                'FROM "LiteLLM_ExternalAgent" a WHERE ($1::text IS NULL OR a.source_id=$1) '
+                "AND ($2::text IS NULL OR a.team_id=$2) "
+                "AND ($3::text IS NULL OR a.display_name ILIKE $3 OR a.external_agent_id ILIKE $3)) "
+                "SELECT * FROM bots WHERE (NOT $4 OR cardinality(issues)>0) "
+                "ORDER BY last_seen_at DESC,id LIMIT $5 OFFSET $6",
                 source_id,
                 team_id,
                 f"%{search}%" if search else None,
@@ -107,8 +112,8 @@ class ExternalAgentManagement:
             )
         )
 
-    async def summary(self, source_id: str) -> Summary:
-        rows: Final = TypeAdapter(list[Summary]).validate_python(
+    async def summary(self, source_id: str) -> ExternalAgentSummary:
+        rows: Final = TypeAdapter(list[ExternalAgentSummary]).validate_python(
             await self.db.query_raw(
                 "SELECT COUNT(*)::int AS discovered, "
                 'COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM "LiteLLM_ExternalAgentPolicy" p '

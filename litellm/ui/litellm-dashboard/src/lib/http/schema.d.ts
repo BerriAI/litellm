@@ -27248,6 +27248,11 @@ export interface components {
             first_seen_at: string;
             /** Id */
             id: string;
+            /**
+             * Issues
+             * @default []
+             */
+            issues: ("no team" | "no owner" | "owner inferred" | "unmapped member" | "denied recently")[];
             /** Last Actor Id */
             last_actor_id?: string | null;
             /** Last Model */
@@ -34638,6 +34643,21 @@ export interface components {
          * @enum {string}
          */
         ExportType: "daily" | "daily_with_keys" | "daily_with_models" | "daily_with_users";
+        /** ExternalAgentSummary */
+        ExternalAgentSummary: {
+            /** Covered By Team Policy */
+            covered_by_team_policy: number;
+            /** Denied 24H */
+            denied_24h: number;
+            /** Discovered */
+            discovered: number;
+            /** Last Event At */
+            last_event_at: string | null;
+            /** Needs Owner */
+            needs_owner: number;
+            /** Unmapped Actors */
+            unmapped_actors: number;
+        };
         /** ExtractionAnswer */
         ExtractionAnswer: {
             /** Confidence */
@@ -85856,7 +85876,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Summary"];
+                    "application/json": components["schemas"]["ExternalAgentSummary"];
                 };
             };
             /** @description Validation Error */

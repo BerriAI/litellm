@@ -4,8 +4,8 @@ import hmac
 import json
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Iterator, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Final, Literal
 
@@ -84,7 +84,7 @@ class Hook:
     def agents(self, exceptions_only: bool = False) -> tuple[Mapping[str, JsonValue], ...]:
         response: Final = self.gateway.request(
             "GET",
-            "/v1/external_agents/",
+            "/v1/external_agents",
             params={
                 "source_id": self.source_id,
                 "exceptions_only": str(exceptions_only).lower(),
@@ -159,11 +159,13 @@ def test_discovery_retry_team_inheritance_and_bulk_resolution(hook: Hook) -> Non
             discovered["owner_inferred"],
             discovered["request_count"],
         ) == (team, single, True, 1)
+        assert discovered["issues"] == ["owner inferred"]
         multi: Final = hook.send("multi-team-bot", "multiple")
         assert multi.status_code == 200 and multi.json() == {"action": "allow"}, multi.text
         multi_agent: Final = next(agent for agent in hook.agents() if agent["external_agent_id"] == "multi-team-bot")
         assert multi_agent["team_id"] is None
         assert multi_agent["owner_user_id"] == multiple
+        assert multi_agent["issues"] == ["no team", "owner inferred"]
         hook.policy(team, ("Shell",))
         before: Final = hook.gateway.get("/v1/external_agents/summary", {"source_id": hook.source_id})
         assert {
@@ -196,6 +198,7 @@ def test_discovery_retry_team_inheritance_and_bulk_resolution(hook: Hook) -> Non
             False,
         )
         assert hook.agents(exceptions_only=True) == ()
+        assert all(agent["issues"] == [] for agent in hook.agents())
         rows: Final = hook.gateway.rows(
             'SELECT to_jsonb(d) AS decision FROM "LiteLLM_ExternalAgentDecision" d WHERE source_id=%s AND request_id=%s',
             (hook.source_id, request_id),
@@ -241,6 +244,7 @@ def test_blocked_mcp_toolset_is_logged_and_shadow_mode_allows(
     summary: Final = hook.gateway.get("/v1/external_agents/summary", {"source_id": hook.source_id})
     assert (summary["discovered"], summary["denied_24h"], summary["unmapped_actors"]) == (1, 1, 1)
     assert len(hook.agents(exceptions_only=True)) == 1
+    assert hook.agents()[0]["issues"] == ["no team", "no owner", "unmapped member", "denied recently"]
 
 
 def test_secret_rotation_retains_previous_signatures_without_returning_secrets(hook: Hook) -> None:
