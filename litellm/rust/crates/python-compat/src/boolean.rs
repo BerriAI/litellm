@@ -1,4 +1,3 @@
-/// LiteLLM's `str_to_bool(text)`: only `true` and `false` after `str.strip()`, ignoring case.
 pub fn str_to_bool(text: &str) -> Option<bool> {
     let token = strip(text);
     if token.eq_ignore_ascii_case("true") {
