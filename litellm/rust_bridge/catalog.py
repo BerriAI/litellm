@@ -201,7 +201,7 @@ RULES: Final[Rules] = (
         targets=frozenset({Target.CHAT_COMPLETIONS, Target.RESPONSES, Target.MESSAGES_PASSTHROUGH}),
     ),
     RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, features=MESSAGES_PYTHON_FEATURES),
-    RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED, providers=frozenset({"anthropic"})),
+    RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED, providers=frozenset({"anthropic", "azure_ai"})),
     RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY),
     RouteRule(Route.RESPONSES, Rollout.PYTHON_ONLY, features=RESPONSES_PYTHON_FEATURES),
     RouteRule(Route.RESPONSES, Rollout.PYTHON_ONLY),

@@ -923,24 +923,6 @@ async def test_other_providers_keep_python_for_the_same_features(
     assert shipped_native == []
 
 
-@pytest.fixture
-def azure_ai_cut_over() -> Iterator[list[str]]:
-    calls: Final[list[str]] = []
-    _shipped_native(calls)
-    anthropic_only: Final = frozenset({"anthropic"})
-    with routed(
-        *(
-            RouteRule(rule.route, rule.rollout, providers=anthropic_only | {"azure_ai"})
-            if rule.providers == anthropic_only
-            else rule
-            for rule in RULES
-        )
-    ):
-        yield calls
-    NATIVE_MESSAGES.reset()
-    NATIVE_AMESSAGES.reset()
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", (False, True), ids=("sync", "async"))
 @pytest.mark.parametrize(
@@ -958,14 +940,15 @@ def azure_ai_cut_over() -> Iterator[list[str]]:
         pytest.param("azure_ai/Claude-Sonnet-4-5", None, True, id="claude-mixed-case"),
     ),
 )
-async def test_a_rust_required_azure_ai_serves_natively_only_what_its_claude_config_serves(
+async def test_azure_ai_runs_on_rust_only_where_its_claude_config_serves_the_call(
     monkeypatch: pytest.MonkeyPatch,
-    azure_ai_cut_over: list[str],
+    shipped_native: list[str],
     asynchronous: bool,
     model: str,
     model_info: Mapping[str, object] | None,
     native: bool,
 ) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "0")
     monkeypatch.setattr(litellm, "callbacks", [])
     python_result: Final = response(model)
 
@@ -982,21 +965,32 @@ async def test_a_rust_required_azure_ai_serves_natively_only_what_its_claude_con
             {"api_base": "https://fuzz.services.ai.azure.com/models", "model_info": model_info},
         )
 
-    assert (azure_ai_cut_over, result is python_result) == (
+    assert (shipped_native, result is python_result) == (
         (["async" if asynchronous else "sync"], False) if native else ([], True)
     )
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("model", "refused"),
+    ("model", "kwargs", "refused"),
     (
-        pytest.param("anthropic/claude-sonnet-4-5", True, id="anthropic"),
-        pytest.param("deepseek/deepseek-v4-flash", False, id="deepseek"),
+        pytest.param("anthropic/claude-sonnet-4-5", {}, True, id="anthropic"),
+        pytest.param("azure_ai/claude-sonnet-4-5", {}, True, id="azure-ai-claude"),
+        pytest.param(
+            "azure_ai/Phi-4",
+            {"model_info": {"supported_endpoints": ["/v1/messages"]}},
+            False,
+            id="azure-ai-non-claude-passthrough",
+        ),
+        pytest.param("deepseek/deepseek-v4-flash", {}, False, id="deepseek"),
     ),
 )
 async def test_a_failing_detector_refuses_only_the_rust_only_provider(
-    monkeypatch: pytest.MonkeyPatch, shipped_native: list[str], model: str, refused: bool
+    monkeypatch: pytest.MonkeyPatch,
+    shipped_native: list[str],
+    model: str,
+    kwargs: Mapping[str, object],
+    refused: bool,
 ) -> None:
     monkeypatch.setattr(litellm, "callbacks", [])
     python_result: Final = response(model)
@@ -1012,10 +1006,10 @@ async def test_a_failing_detector_refuses_only_the_rust_only_provider(
         rebound(dispatch, "_PYTHON_AMESSAGES", apython),
     ):
         if not refused:
-            assert await _public(True, model, {}) is python_result
+            assert await _public(True, model, kwargs) is python_result
             return
         with pytest.raises(UnsupportedParamsError, match="does not support this call"):
-            await _public(True, model, {})
+            await _public(True, model, kwargs)
     assert shipped_native == []
 
 

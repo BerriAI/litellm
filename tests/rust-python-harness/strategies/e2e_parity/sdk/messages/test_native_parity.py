@@ -475,7 +475,6 @@ class Case:
     nones: tuple[str, ...] = ()
     busy_before_reading: float = 0
     warned: bool = False
-    rust_providers: frozenset[str] = frozenset()
 
     def aspects(self) -> tuple[str, ...]:
         return (
@@ -3397,181 +3396,174 @@ A10_CALLER_BEARER_ON_ENTRA: Final = (
     "Python overwrites it with the deployment's Entra token"
 )
 
-AZURE_AI: Final = frozenset({"azure_ai"})
-
-AZURE_AUTH_CASES: Final = tuple(
-    replace(case, rust_providers=AZURE_AI)
-    for case in (
-        Case("azure_ai_api_key", model=AZURE_CLAUDE),
-        Case(
-            "azure_ai_module_api_key",
-            _kw(api_key=None),
-            model=AZURE_CLAUDE,
-            settings=MappingProxyType({"api_key": "sk-module"}),
-        ),
-        Case(
-            "azure_ai_module_azure_key",
-            _kw(api_key=None),
-            model=AZURE_CLAUDE,
-            settings=MappingProxyType({"azure_key": "sk-azure-module"}),
-        ),
-        Case(
-            "azure_ai_module_api_key_before_azure_key",
-            _kw(api_key=None),
-            model=AZURE_CLAUDE,
-            settings=MappingProxyType({"api_key": "sk-module", "azure_key": "sk-azure-module"}),
-        ),
-        Case(
-            "azure_ai_module_key_before_environment",
-            _kw(api_key=None),
-            model=AZURE_CLAUDE,
-            settings=MappingProxyType({"azure_key": "sk-azure-module"}),
-            env=MappingProxyType({"AZURE_OPENAI_API_KEY": "sk-openai-env"}),
-        ),
-        Case(
-            "azure_ai_openai_key_env_before_azure_key_env",
-            _kw(api_key=None),
-            model=AZURE_CLAUDE,
-            env=MappingProxyType({"AZURE_OPENAI_API_KEY": "sk-openai-env", "AZURE_API_KEY": "sk-azure-env"}),
-        ),
-        Case(
-            "azure_ai_empty_api_key_falls_to_environment",
-            _kw(api_key=""),
-            model=AZURE_CLAUDE,
-            env=MappingProxyType({"AZURE_API_KEY": "sk-azure-env"}),
-        ),
-        Case(
-            "azure_ai_blank_api_key",
-            _kw(api_key="  "),
-            model=AZURE_CLAUDE,
-            env=MappingProxyType({"AZURE_API_KEY": "sk-azure-env"}),
-        ),
-        Case("azure_ai_entra_token", _kw(api_key=None, azure_ad_token="entra-token"), model=AZURE_CLAUDE),
-        Case(
-            "azure_ai_entra_token_from_environment",
-            _kw(api_key=None),
-            model=AZURE_CLAUDE,
-            env=MappingProxyType({"AZURE_AD_TOKEN": "entra-env-token"}),
-        ),
-        Case("azure_ai_key_outranks_entra_token", _kw(azure_ad_token="entra-token"), model=AZURE_CLAUDE),
-        Case(
-            "azure_ai_entra_token_provider", _kw(api_key=None, azure_ad_token_provider=_entra_token), model=AZURE_CLAUDE
-        ),
-        Case(
-            "azure_ai_entra_token_provider_outranks_token",
-            _kw(api_key=None, azure_ad_token="entra-token", azure_ad_token_provider=_entra_token),
-            model=AZURE_CLAUDE,
-        ),
-        Case(
-            "azure_ai_entra_token_provider_raises",
-            _kw(api_key=None, azure_ad_token_provider=_failing_entra_provider),
-            model=AZURE_CLAUDE,
-            upstream=(),
-        ),
-        Case(
-            "azure_ai_entra_provider_rejection_is_an_authentication_error",
-            _kw(api_key=None, azure_ad_token_provider=_rejected_entra_provider),
-            model=AZURE_CLAUDE,
-            upstream=(),
-        ),
-        Case(
-            "azure_ai_entra_provider_rejection_redacts_guids",
-            _kw(api_key=None, azure_ad_token_provider=_unknown_application_entra_provider),
-            model=AZURE_CLAUDE,
-            upstream=(),
-        ),
-        Case(
-            "azure_ai_entra_provider_unlisted_code_is_a_runtime_error",
-            _kw(api_key=None, azure_ad_token_provider=_unlisted_entra_provider),
-            model=AZURE_CLAUDE,
-            upstream=(),
-        ),
-        Case(
-            "azure_ai_uncallable_token_provider_keeps_the_token",
-            _kw(api_key=None, azure_ad_token="entra-token", azure_ad_token_provider="not-callable"),
-            model=AZURE_CLAUDE,
-        ),
-        Case(
-            "azure_ai_oidc_reference_is_minted_by_python",
-            _kw(api_key=None, azure_ad_token="oidc/env/AZURE_PARITY_MISSING_ASSERTION", tenant_id="t", client_id="c"),
-            model=AZURE_CLAUDE,
-            upstream=(),
-        ),
-        Case(
-            "azure_ai_token_refresh_outranks_a_static_token",
-            _kw(api_key=None, azure_ad_token="entra-token"),
-            model=AZURE_CLAUDE,
-            settings=MappingProxyType({"enable_azure_ad_token_refresh": True}),
-            env=MappingProxyType({"AZURE_CREDENTIAL": "ClientSecretCredential"}),
-            upstream=(),
-        ),
-        Case(
-            "azure_ai_username_and_password_are_minted_by_python",
-            _kw(api_key=None, azure_username="u", azure_password="p", client_id="c"),
-            model=AZURE_CLAUDE,
-            env=MappingProxyType({"AZURE_AUTHORITY_HOST": "http://127.0.0.1:9"}),
-            upstream=(),
-        ),
-        Case(
-            "azure_ai_caller_bearer_on_entra_deployment",
-            _kw(api_key=None, azure_ad_token="entra-token", extra_headers={"Authorization": "Bearer caller-token"}),
-            model=AZURE_CLAUDE,
-            gaps=_gaps(request=A10_CALLER_BEARER_ON_ENTRA),
-        ),
-        Case(
-            "azure_ai_caller_lowercase_authorization_with_entra",
-            _kw(api_key=None, azure_ad_token="entra-token", extra_headers={"authorization": "Bearer caller-token"}),
-            model=AZURE_CLAUDE,
-            gaps=_gaps(request=CALLER_CREDENTIAL_SKIPS_ENTRA),
-        ),
-        Case(
-            "azure_ai_caller_x_api_key_with_entra",
-            _kw(api_key=None, azure_ad_token="entra-token", extra_headers={"x-api-key": "sk-caller"}),
-            model=AZURE_CLAUDE,
-            gaps=_gaps(request=CALLER_CREDENTIAL_SKIPS_ENTRA),
-        ),
-        Case(
-            "azure_ai_caller_upper_case_api_key",
-            _kw(extra_headers={"API-KEY": "sk-caller"}),
-            model=AZURE_CLAUDE,
-            gaps=_gaps(request=A09_MIXED_CASE_API_KEY),
-        ),
-        Case(
-            "azure_ai_caller_basic_authorization",
-            _kw(extra_headers={"Authorization": "Basic Y2FsbGVyOnNlY3JldA=="}),
-            model=AZURE_CLAUDE,
-            gaps=_gaps(request=NON_BEARER_CALLER_AUTHORIZATION),
-        ),
-        Case(
-            "azure_ai_no_credential",
-            _kw(api_key=None),
-            model=AZURE_CLAUDE,
-            upstream=(_failure(401, "authentication_error", "missing credentials"),),
-        ),
-        Case("azure_ai_caller_api_key", _kw(extra_headers={"api-key": "sk-caller"}), model=AZURE_CLAUDE),
-        Case(
-            "azure_ai_caller_mixed_case_api_key",
-            _kw(extra_headers={"Api-Key": "sk-caller"}),
-            model=AZURE_CLAUDE,
-            gaps=_gaps(request=A09_MIXED_CASE_API_KEY),
-        ),
-        Case(
-            "azure_ai_caller_x_api_key",
-            _kw(extra_headers={"x-api-key": "sk-caller"}),
-            model=AZURE_CLAUDE,
-            gaps=_gaps(request=A06_A08_CALLER_CREDENTIAL),
-        ),
-        Case(
-            "azure_ai_caller_bearer",
-            _kw(extra_headers={"Authorization": "Bearer caller-token"}),
-            model=AZURE_CLAUDE,
-            gaps=_gaps(request=A06_A08_CALLER_CREDENTIAL),
-        ),
-    )
+AZURE_AUTH_CASES: Final = (
+    Case("azure_ai_api_key", model=AZURE_CLAUDE),
+    Case(
+        "azure_ai_module_api_key",
+        _kw(api_key=None),
+        model=AZURE_CLAUDE,
+        settings=MappingProxyType({"api_key": "sk-module"}),
+    ),
+    Case(
+        "azure_ai_module_azure_key",
+        _kw(api_key=None),
+        model=AZURE_CLAUDE,
+        settings=MappingProxyType({"azure_key": "sk-azure-module"}),
+    ),
+    Case(
+        "azure_ai_module_api_key_before_azure_key",
+        _kw(api_key=None),
+        model=AZURE_CLAUDE,
+        settings=MappingProxyType({"api_key": "sk-module", "azure_key": "sk-azure-module"}),
+    ),
+    Case(
+        "azure_ai_module_key_before_environment",
+        _kw(api_key=None),
+        model=AZURE_CLAUDE,
+        settings=MappingProxyType({"azure_key": "sk-azure-module"}),
+        env=MappingProxyType({"AZURE_OPENAI_API_KEY": "sk-openai-env"}),
+    ),
+    Case(
+        "azure_ai_openai_key_env_before_azure_key_env",
+        _kw(api_key=None),
+        model=AZURE_CLAUDE,
+        env=MappingProxyType({"AZURE_OPENAI_API_KEY": "sk-openai-env", "AZURE_API_KEY": "sk-azure-env"}),
+    ),
+    Case(
+        "azure_ai_empty_api_key_falls_to_environment",
+        _kw(api_key=""),
+        model=AZURE_CLAUDE,
+        env=MappingProxyType({"AZURE_API_KEY": "sk-azure-env"}),
+    ),
+    Case(
+        "azure_ai_blank_api_key",
+        _kw(api_key="  "),
+        model=AZURE_CLAUDE,
+        env=MappingProxyType({"AZURE_API_KEY": "sk-azure-env"}),
+    ),
+    Case("azure_ai_entra_token", _kw(api_key=None, azure_ad_token="entra-token"), model=AZURE_CLAUDE),
+    Case(
+        "azure_ai_entra_token_from_environment",
+        _kw(api_key=None),
+        model=AZURE_CLAUDE,
+        env=MappingProxyType({"AZURE_AD_TOKEN": "entra-env-token"}),
+    ),
+    Case("azure_ai_key_outranks_entra_token", _kw(azure_ad_token="entra-token"), model=AZURE_CLAUDE),
+    Case("azure_ai_entra_token_provider", _kw(api_key=None, azure_ad_token_provider=_entra_token), model=AZURE_CLAUDE),
+    Case(
+        "azure_ai_entra_token_provider_outranks_token",
+        _kw(api_key=None, azure_ad_token="entra-token", azure_ad_token_provider=_entra_token),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_entra_token_provider_raises",
+        _kw(api_key=None, azure_ad_token_provider=_failing_entra_provider),
+        model=AZURE_CLAUDE,
+        upstream=(),
+    ),
+    Case(
+        "azure_ai_entra_provider_rejection_is_an_authentication_error",
+        _kw(api_key=None, azure_ad_token_provider=_rejected_entra_provider),
+        model=AZURE_CLAUDE,
+        upstream=(),
+    ),
+    Case(
+        "azure_ai_entra_provider_rejection_redacts_guids",
+        _kw(api_key=None, azure_ad_token_provider=_unknown_application_entra_provider),
+        model=AZURE_CLAUDE,
+        upstream=(),
+    ),
+    Case(
+        "azure_ai_entra_provider_unlisted_code_is_a_runtime_error",
+        _kw(api_key=None, azure_ad_token_provider=_unlisted_entra_provider),
+        model=AZURE_CLAUDE,
+        upstream=(),
+    ),
+    Case(
+        "azure_ai_uncallable_token_provider_keeps_the_token",
+        _kw(api_key=None, azure_ad_token="entra-token", azure_ad_token_provider="not-callable"),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_oidc_reference_is_minted_by_python",
+        _kw(api_key=None, azure_ad_token="oidc/env/AZURE_PARITY_MISSING_ASSERTION", tenant_id="t", client_id="c"),
+        model=AZURE_CLAUDE,
+        upstream=(),
+    ),
+    Case(
+        "azure_ai_token_refresh_outranks_a_static_token",
+        _kw(api_key=None, azure_ad_token="entra-token"),
+        model=AZURE_CLAUDE,
+        settings=MappingProxyType({"enable_azure_ad_token_refresh": True}),
+        env=MappingProxyType({"AZURE_CREDENTIAL": "ClientSecretCredential"}),
+        upstream=(),
+    ),
+    Case(
+        "azure_ai_username_and_password_are_minted_by_python",
+        _kw(api_key=None, azure_username="u", azure_password="p", client_id="c"),
+        model=AZURE_CLAUDE,
+        env=MappingProxyType({"AZURE_AUTHORITY_HOST": "http://127.0.0.1:9"}),
+        upstream=(),
+    ),
+    Case(
+        "azure_ai_caller_bearer_on_entra_deployment",
+        _kw(api_key=None, azure_ad_token="entra-token", extra_headers={"Authorization": "Bearer caller-token"}),
+        model=AZURE_CLAUDE,
+        gaps=_gaps(request=A10_CALLER_BEARER_ON_ENTRA),
+    ),
+    Case(
+        "azure_ai_caller_lowercase_authorization_with_entra",
+        _kw(api_key=None, azure_ad_token="entra-token", extra_headers={"authorization": "Bearer caller-token"}),
+        model=AZURE_CLAUDE,
+        gaps=_gaps(request=CALLER_CREDENTIAL_SKIPS_ENTRA),
+    ),
+    Case(
+        "azure_ai_caller_x_api_key_with_entra",
+        _kw(api_key=None, azure_ad_token="entra-token", extra_headers={"x-api-key": "sk-caller"}),
+        model=AZURE_CLAUDE,
+        gaps=_gaps(request=CALLER_CREDENTIAL_SKIPS_ENTRA),
+    ),
+    Case(
+        "azure_ai_caller_upper_case_api_key",
+        _kw(extra_headers={"API-KEY": "sk-caller"}),
+        model=AZURE_CLAUDE,
+        gaps=_gaps(request=A09_MIXED_CASE_API_KEY),
+    ),
+    Case(
+        "azure_ai_caller_basic_authorization",
+        _kw(extra_headers={"Authorization": "Basic Y2FsbGVyOnNlY3JldA=="}),
+        model=AZURE_CLAUDE,
+        gaps=_gaps(request=NON_BEARER_CALLER_AUTHORIZATION),
+    ),
+    Case(
+        "azure_ai_no_credential",
+        _kw(api_key=None),
+        model=AZURE_CLAUDE,
+        upstream=(_failure(401, "authentication_error", "missing credentials"),),
+    ),
+    Case("azure_ai_caller_api_key", _kw(extra_headers={"api-key": "sk-caller"}), model=AZURE_CLAUDE),
+    Case(
+        "azure_ai_caller_mixed_case_api_key",
+        _kw(extra_headers={"Api-Key": "sk-caller"}),
+        model=AZURE_CLAUDE,
+        gaps=_gaps(request=A09_MIXED_CASE_API_KEY),
+    ),
+    Case(
+        "azure_ai_caller_x_api_key",
+        _kw(extra_headers={"x-api-key": "sk-caller"}),
+        model=AZURE_CLAUDE,
+        gaps=_gaps(request=A06_A08_CALLER_CREDENTIAL),
+    ),
+    Case(
+        "azure_ai_caller_bearer",
+        _kw(extra_headers={"Authorization": "Bearer caller-token"}),
+        model=AZURE_CLAUDE,
+        gaps=_gaps(request=A06_A08_CALLER_CREDENTIAL),
+    ),
 )
 
 AZURE_URL_CASES: Final = tuple(
-    replace(case, model=AZURE_CLAUDE, rust_providers=AZURE_AI)
+    replace(case, model=AZURE_CLAUDE)
     for case in (
         Case(
             "azure_ai_base_userinfo_starting_with_anthropic",
@@ -3618,7 +3610,7 @@ _MALFORMED_BASES: Final = (
     ("base_out_of_range_port", _kw(api_base="http://fuzz.invalid:99999/anthropic")),
 )
 MALFORMED_BASE_CASES: Final = tuple(
-    Case(f"{provider}_{shape}", kwargs, model=model, upstream=(), rust_providers=AZURE_AI)
+    Case(f"{provider}_{shape}", kwargs, model=model, upstream=())
     for provider, model in (("anthropic", SONNET), ("azure_ai", AZURE_CLAUDE))
     for shape, kwargs in _MALFORMED_BASES
 )
@@ -3666,540 +3658,537 @@ def _beta(value: str) -> Mapping[str, object]:
     return {"anthropic-beta": value}
 
 
-AZURE_SHAPING_CASES: Final = tuple(
-    replace(case, rust_providers=AZURE_AI)
-    for case in (
-        Case(
-            "azure_ai_beta_mixed_padded_list",
-            _kw(
-                extra_headers=_beta(
-                    " web-search-2025-03-05 , bash_20250124,parity-unlisted-2030-01-01,context-1m-2025-08-07,,"
-                    "web-search-2025-03-05"
-                )
-            ),
-            model=AZURE_CLAUDE,
+AZURE_SHAPING_CASES: Final = (
+    Case(
+        "azure_ai_beta_mixed_padded_list",
+        _kw(
+            extra_headers=_beta(
+                " web-search-2025-03-05 , bash_20250124,parity-unlisted-2030-01-01,context-1m-2025-08-07,,"
+                "web-search-2025-03-05"
+            )
         ),
-        Case(
-            "azure_ai_beta_all_dropped",
-            _kw(extra_headers=_beta("mcp-servers-2025-12-04,advisor-tool-2026-03-01,parity-unlisted-2030-01-01")),
-            model=AZURE_CLAUDE,
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_beta_all_dropped",
+        _kw(extra_headers=_beta("mcp-servers-2025-12-04,advisor-tool-2026-03-01,parity-unlisted-2030-01-01")),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_beta_title_case_header",
+        _kw(extra_headers={"Anthropic-Beta": "mcp-servers-2025-12-04,effort-2025-11-24"}),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_beta_upper_case_header_null_beta",
+        _kw(extra_headers={"ANTHROPIC-BETA": "bash_20241022"}),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_beta_two_casings",
+        _kw(
+            extra_headers={
+                "Anthropic-Beta": "interleaved-thinking-2025-05-14,text_editor_20250124",
+                "anthropic-beta": "fine-grained-tool-streaming-2025-05-14",
+            }
         ),
-        Case(
-            "azure_ai_beta_title_case_header",
-            _kw(extra_headers={"Anthropic-Beta": "mcp-servers-2025-12-04,effort-2025-11-24"}),
-            model=AZURE_CLAUDE,
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_beta_stream",
+        _kw(stream=True, extra_headers=_beta("mcp-servers-2025-12-04,context-1m-2025-08-07")),
+        model=AZURE_CLAUDE,
+        upstream=(_stream(TEXT_STREAM),),
+    ),
+    Case(
+        "azure_ai_beta_context_management",
+        _kw(context_management={"edits": [{"type": "clear_tool_uses_20250919"}]}),
+        model=AZURE_CLAUDE,
+    ),
+    Case("azure_ai_beta_native_compaction", _kw(compaction={}), model=AZURE_CLAUDE),
+    Case(
+        "azure_ai_beta_tool_search",
+        _kw(
+            tools=[
+                {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+                {**WEATHER_TOOL, "defer_loading": True},
+            ]
         ),
-        Case(
-            "azure_ai_beta_upper_case_header_null_beta",
-            _kw(extra_headers={"ANTHROPIC-BETA": "bash_20241022"}),
-            model=AZURE_CLAUDE,
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_beta_output_config_with_a_null_caller_beta",
+        _kw(output_config={"format": dict(JSON_SCHEMA_FORMAT)}, extra_headers=_beta("mcp-servers-2025-12-04")),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_beta_thinking_display_and_binding",
+        _kw(
+            max_tokens=2048,
+            thinking={"type": "enabled", "budget_tokens": 1024, "display": "updates", "block_binding": "strict"},
         ),
-        Case(
-            "azure_ai_beta_two_casings",
-            _kw(
-                extra_headers={
-                    "Anthropic-Beta": "interleaved-thinking-2025-05-14,text_editor_20250124",
-                    "anthropic-beta": "fine-grained-tool-streaming-2025-05-14",
-                }
-            ),
-            model=AZURE_CLAUDE,
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_beta_per_turn_output_config",
+        _kw(messages=[{**USER, "output_config": {"effort": "low"}}]),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_beta_features_with_an_unknown_caller_beta",
+        _kw(
+            max_tokens=2048,
+            output_format=dict(JSON_SCHEMA_FORMAT),
+            context_management={"edits": [{"type": "clear_tool_uses_20250919"}]},
+            thinking={"type": "enabled", "budget_tokens": 1024, "display": "updates"},
+            tools=[{"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"}],
+            extra_headers=_beta("parity-unlisted-2030-02-02"),
         ),
-        Case(
-            "azure_ai_beta_stream",
-            _kw(stream=True, extra_headers=_beta("mcp-servers-2025-12-04,context-1m-2025-08-07")),
-            model=AZURE_CLAUDE,
-            upstream=(_stream(TEXT_STREAM),),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_beta_features_stream",
+        _kw(stream=True, output_format=dict(JSON_SCHEMA_FORMAT), extra_headers=_beta("mcp-servers-2025-12-04")),
+        model=AZURE_CLAUDE,
+        upstream=(_stream(TEXT_STREAM),),
+    ),
+    Case("azure_ai_advisor_tool", _kw(tools=[dict(ADVISOR_TOOL)]), model=AZURE_CLAUDE),
+    Case(
+        "azure_ai_advisor_tool_with_a_caller_beta",
+        _kw(tools=[dict(ADVISOR_TOOL)], extra_headers=_beta("context-1m-2025-08-07")),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_beta_not_ascii_dropped",
+        _kw(extra_headers=_beta("ZWJ\u200djoined,context-1m-2025-08-07")),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_beta_not_ascii_dropped_under_drop_params",
+        _kw(drop_params=True, extra_headers={"Anthropic-Beta": "ZWJ\u200djoined"}),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_beta_not_ascii_dropped_stream",
+        _kw(stream=True, extra_headers=_beta("ZWJ\u200djoined")),
+        model=AZURE_CLAUDE,
+        upstream=(_stream(TEXT_STREAM),),
+    ),
+    Case(
+        "azure_ai_advisor_tool_stream",
+        _kw(stream=True, tools=[dict(ADVISOR_TOOL)]),
+        model=AZURE_CLAUDE,
+    ),
+    Case("azure_ai_speed_refused", _kw(speed="fast"), model=AZURE_CLAUDE, upstream=()),
+    Case("azure_ai_speed_dropped", _kw(speed="fast", drop_params=True), model=AZURE_CLAUDE, warned=True),
+    Case(
+        "azure_ai_clear_at_stripped_under_drop_params",
+        _kw(
+            drop_params=True,
+            messages=_mid_conversation_system(content="Be brief.", clear_at={"type": "turns", "value": 2}),
         ),
-        Case(
-            "azure_ai_beta_context_management",
-            _kw(context_management={"edits": [{"type": "clear_tool_uses_20250919"}]}),
-            model=AZURE_CLAUDE,
+        model=AZURE_OPUS_4_8,
+        warned=True,
+    ),
+    Case(
+        "azure_ai_clear_at_kept_with_its_beta",
+        _kw(
+            drop_params=True,
+            messages=_mid_conversation_system(content="Be brief.", clear_at={"type": "turns", "value": 2}),
+            extra_headers=_beta("mid-conversation-system-clear-at-2026-08-21"),
         ),
-        Case("azure_ai_beta_native_compaction", _kw(compaction={}), model=AZURE_CLAUDE),
-        Case(
-            "azure_ai_beta_tool_search",
-            _kw(
-                tools=[
-                    {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
-                    {**WEATHER_TOOL, "defer_loading": True},
+        model=AZURE_OPUS_4_8,
+        warned=True,
+    ),
+    Case(
+        "azure_ai_clear_at_kept_without_drop_params",
+        _kw(messages=_mid_conversation_system(content="Be brief.", clear_at={"type": "turns", "value": 2})),
+        model=AZURE_OPUS_4_8,
+    ),
+    Case(
+        "azure_ai_clear_at_stripped_before_conversion",
+        _kw(
+            drop_params=True,
+            messages=_mid_conversation_system(content="Be brief.", clear_at={"type": "turns", "value": 2}),
+        ),
+        model=AZURE_CLAUDE,
+        warned=True,
+    ),
+    Case(
+        "azure_ai_tool_addition_stripped_under_drop_params",
+        _kw(
+            drop_params=True,
+            messages=_mid_conversation_system(
+                content=[
+                    {"type": "text", "text": "A new tool."},
+                    {"type": "tool_addition", "tool": dict(WEATHER_TOOL)},
                 ]
             ),
-            model=AZURE_CLAUDE,
         ),
-        Case(
-            "azure_ai_beta_output_config_with_a_null_caller_beta",
-            _kw(output_config={"format": dict(JSON_SCHEMA_FORMAT)}, extra_headers=_beta("mcp-servers-2025-12-04")),
-            model=AZURE_CLAUDE,
-        ),
-        Case(
-            "azure_ai_beta_thinking_display_and_binding",
-            _kw(
-                max_tokens=2048,
-                thinking={"type": "enabled", "budget_tokens": 1024, "display": "updates", "block_binding": "strict"},
+        model=AZURE_OPUS_4_8,
+        warned=True,
+    ),
+    Case(
+        "azure_ai_tool_reference_addition_kept_under_drop_params",
+        _kw(
+            drop_params=True,
+            tools=[{**WEATHER_TOOL, "defer_loading": True}],
+            messages=_mid_conversation_system(
+                content=[{"type": "tool_addition", "tool": {"type": "tool_reference", "tool_name": "get_weather"}}]
             ),
-            model=AZURE_CLAUDE,
         ),
-        Case(
-            "azure_ai_beta_per_turn_output_config",
-            _kw(messages=[{**USER, "output_config": {"effort": "low"}}]),
-            model=AZURE_CLAUDE,
-        ),
-        Case(
-            "azure_ai_beta_features_with_an_unknown_caller_beta",
-            _kw(
-                max_tokens=2048,
-                output_format=dict(JSON_SCHEMA_FORMAT),
-                context_management={"edits": [{"type": "clear_tool_uses_20250919"}]},
-                thinking={"type": "enabled", "budget_tokens": 1024, "display": "updates"},
-                tools=[{"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"}],
-                extra_headers=_beta("parity-unlisted-2030-02-02"),
+        model=AZURE_OPUS_4_8,
+        warned=True,
+    ),
+    Case(
+        "azure_ai_tool_reference_addition_stripped_before_conversion",
+        _kw(
+            drop_params=True,
+            tools=[{**WEATHER_TOOL, "defer_loading": True}],
+            messages=_mid_conversation_system(
+                content=[
+                    {"type": "text", "text": "A new tool."},
+                    {"type": "tool_addition", "tool": {"type": "tool_reference", "tool_name": "get_weather"}},
+                ]
             ),
-            model=AZURE_CLAUDE,
         ),
-        Case(
-            "azure_ai_beta_features_stream",
-            _kw(stream=True, output_format=dict(JSON_SCHEMA_FORMAT), extra_headers=_beta("mcp-servers-2025-12-04")),
-            model=AZURE_CLAUDE,
-            upstream=(_stream(TEXT_STREAM),),
+        model=AZURE_CLAUDE,
+        warned=True,
+    ),
+    Case(
+        "azure_ai_tool_addition_only_turn_dropped_before_conversion",
+        _kw(
+            drop_params=True,
+            messages=_mid_conversation_system(content=[{"type": "tool_addition", "tool": dict(WEATHER_TOOL)}]),
         ),
-        Case("azure_ai_advisor_tool", _kw(tools=[dict(ADVISOR_TOOL)]), model=AZURE_CLAUDE),
-        Case(
-            "azure_ai_advisor_tool_with_a_caller_beta",
-            _kw(tools=[dict(ADVISOR_TOOL)], extra_headers=_beta("context-1m-2025-08-07")),
-            model=AZURE_CLAUDE,
-        ),
-        Case(
-            "azure_ai_beta_not_ascii_dropped",
-            _kw(extra_headers=_beta("ZWJ\u200djoined,context-1m-2025-08-07")),
-            model=AZURE_CLAUDE,
-        ),
-        Case(
-            "azure_ai_beta_not_ascii_dropped_under_drop_params",
-            _kw(drop_params=True, extra_headers={"Anthropic-Beta": "ZWJ\u200djoined"}),
-            model=AZURE_CLAUDE,
-        ),
-        Case(
-            "azure_ai_beta_not_ascii_dropped_stream",
-            _kw(stream=True, extra_headers=_beta("ZWJ\u200djoined")),
-            model=AZURE_CLAUDE,
-            upstream=(_stream(TEXT_STREAM),),
-        ),
-        Case(
-            "azure_ai_advisor_tool_stream",
-            _kw(stream=True, tools=[dict(ADVISOR_TOOL)]),
-            model=AZURE_CLAUDE,
-        ),
-        Case("azure_ai_speed_refused", _kw(speed="fast"), model=AZURE_CLAUDE, upstream=()),
-        Case("azure_ai_speed_dropped", _kw(speed="fast", drop_params=True), model=AZURE_CLAUDE, warned=True),
-        Case(
-            "azure_ai_clear_at_stripped_under_drop_params",
-            _kw(
-                drop_params=True,
-                messages=_mid_conversation_system(content="Be brief.", clear_at={"type": "turns", "value": 2}),
+        model=AZURE_CLAUDE,
+        warned=True,
+    ),
+    Case(
+        "azure_ai_system_output_config_converted",
+        _kw(messages=_mid_conversation_system(content="Be brief.", output_config={"effort": "low"})),
+        model=AZURE_CLAUDE,
+    ),
+    Case("azure_ai_contentless_system_converted", _kw(messages=_mid_conversation_system()), model=AZURE_CLAUDE),
+    Case(
+        "azure_ai_null_content_system_with_clear_at_converted",
+        _kw(messages=_mid_conversation_system(content=None, clear_at={"type": "turns", "value": 2})),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_contentless_system_with_clear_at_dropped_under_drop_params",
+        _kw(drop_params=True, messages=_mid_conversation_system(clear_at={"type": "turns", "value": 2})),
+        model=AZURE_CLAUDE,
+        warned=True,
+    ),
+    Case(
+        "azure_ai_contentless_system_output_config_adds_per_turn_control",
+        _kw(messages=_mid_conversation_system(output_config={"effort": "high"})),
+        model=AZURE_OPUS_4_8,
+    ),
+    Case(
+        "azure_ai_contentless_system_with_clear_at_dropped_where_the_role_is_accepted",
+        _kw(drop_params=True, messages=_mid_conversation_system(clear_at={"type": "turns"})),
+        model=AZURE_OPUS_4_8,
+        warned=True,
+    ),
+    Case(
+        "azure_ai_unparsed_system_tool_reference_addition_adds_its_beta",
+        _kw(
+            tools=[{**WEATHER_TOOL, "defer_loading": True}],
+            messages=_mid_conversation_system(
+                content=[
+                    {"type": "text", "text": "Note.", "id": 5},
+                    {"type": "tool_addition", "tool": {"type": "tool_reference", "tool_name": "get_weather"}},
+                ]
             ),
-            model=AZURE_OPUS_4_8,
-            warned=True,
         ),
-        Case(
-            "azure_ai_clear_at_kept_with_its_beta",
-            _kw(
-                drop_params=True,
-                messages=_mid_conversation_system(content="Be brief.", clear_at={"type": "turns", "value": 2}),
-                extra_headers=_beta("mid-conversation-system-clear-at-2026-08-21"),
-            ),
-            model=AZURE_OPUS_4_8,
-            warned=True,
-        ),
-        Case(
-            "azure_ai_clear_at_kept_without_drop_params",
-            _kw(messages=_mid_conversation_system(content="Be brief.", clear_at={"type": "turns", "value": 2})),
-            model=AZURE_OPUS_4_8,
-        ),
-        Case(
-            "azure_ai_clear_at_stripped_before_conversion",
-            _kw(
-                drop_params=True,
-                messages=_mid_conversation_system(content="Be brief.", clear_at={"type": "turns", "value": 2}),
-            ),
-            model=AZURE_CLAUDE,
-            warned=True,
-        ),
-        Case(
-            "azure_ai_tool_addition_stripped_under_drop_params",
-            _kw(
-                drop_params=True,
-                messages=_mid_conversation_system(
-                    content=[
-                        {"type": "text", "text": "A new tool."},
-                        {"type": "tool_addition", "tool": dict(WEATHER_TOOL)},
-                    ]
-                ),
-            ),
-            model=AZURE_OPUS_4_8,
-            warned=True,
-        ),
-        Case(
-            "azure_ai_tool_reference_addition_kept_under_drop_params",
-            _kw(
-                drop_params=True,
-                tools=[{**WEATHER_TOOL, "defer_loading": True}],
-                messages=_mid_conversation_system(
-                    content=[{"type": "tool_addition", "tool": {"type": "tool_reference", "tool_name": "get_weather"}}]
-                ),
-            ),
-            model=AZURE_OPUS_4_8,
-            warned=True,
-        ),
-        Case(
-            "azure_ai_tool_reference_addition_stripped_before_conversion",
-            _kw(
-                drop_params=True,
-                tools=[{**WEATHER_TOOL, "defer_loading": True}],
-                messages=_mid_conversation_system(
-                    content=[
-                        {"type": "text", "text": "A new tool."},
-                        {"type": "tool_addition", "tool": {"type": "tool_reference", "tool_name": "get_weather"}},
-                    ]
-                ),
-            ),
-            model=AZURE_CLAUDE,
-            warned=True,
-        ),
-        Case(
-            "azure_ai_tool_addition_only_turn_dropped_before_conversion",
-            _kw(
-                drop_params=True,
-                messages=_mid_conversation_system(content=[{"type": "tool_addition", "tool": dict(WEATHER_TOOL)}]),
-            ),
-            model=AZURE_CLAUDE,
-            warned=True,
-        ),
-        Case(
-            "azure_ai_system_output_config_converted",
-            _kw(messages=_mid_conversation_system(content="Be brief.", output_config={"effort": "low"})),
-            model=AZURE_CLAUDE,
-        ),
-        Case("azure_ai_contentless_system_converted", _kw(messages=_mid_conversation_system()), model=AZURE_CLAUDE),
-        Case(
-            "azure_ai_null_content_system_with_clear_at_converted",
-            _kw(messages=_mid_conversation_system(content=None, clear_at={"type": "turns", "value": 2})),
-            model=AZURE_CLAUDE,
-        ),
-        Case(
-            "azure_ai_contentless_system_with_clear_at_dropped_under_drop_params",
-            _kw(drop_params=True, messages=_mid_conversation_system(clear_at={"type": "turns", "value": 2})),
-            model=AZURE_CLAUDE,
-            warned=True,
-        ),
-        Case(
-            "azure_ai_contentless_system_output_config_adds_per_turn_control",
-            _kw(messages=_mid_conversation_system(output_config={"effort": "high"})),
-            model=AZURE_OPUS_4_8,
-        ),
-        Case(
-            "azure_ai_contentless_system_with_clear_at_dropped_where_the_role_is_accepted",
-            _kw(drop_params=True, messages=_mid_conversation_system(clear_at={"type": "turns"})),
-            model=AZURE_OPUS_4_8,
-            warned=True,
-        ),
-        Case(
-            "azure_ai_unparsed_system_tool_reference_addition_adds_its_beta",
-            _kw(
-                tools=[{**WEATHER_TOOL, "defer_loading": True}],
-                messages=_mid_conversation_system(
-                    content=[
+        model=AZURE_OPUS_4_8,
+    ),
+    Case(
+        "azure_ai_unparsed_message_cache_control_scope_dropped",
+        _kw(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
                         {"type": "text", "text": "Note.", "id": 5},
-                        {"type": "tool_addition", "tool": {"type": "tool_reference", "tool_name": "get_weather"}},
-                    ]
-                ),
-            ),
-            model=AZURE_OPUS_4_8,
+                        {"type": "text", "text": "Hi.", "cache_control": {"type": "ephemeral", "scope": "global"}},
+                    ],
+                }
+            ]
         ),
-        Case(
-            "azure_ai_unparsed_message_cache_control_scope_dropped",
-            _kw(
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": "Note.", "id": 5},
-                            {"type": "text", "text": "Hi.", "cache_control": {"type": "ephemeral", "scope": "global"}},
-                        ],
-                    }
-                ]
-            ),
-            model=AZURE_CLAUDE,
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_beta_signed_compaction_in_an_unparsed_message",
+        _kw(
+            messages=[
+                dict(USER),
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "Note.", "id": 5},
+                        {"type": "compaction", "content": "Summary.", "signature": "sig"},
+                    ],
+                },
+                {"role": "user", "content": "Go on."},
+            ]
         ),
-        Case(
-            "azure_ai_beta_signed_compaction_in_an_unparsed_message",
-            _kw(
-                messages=[
-                    dict(USER),
-                    {
-                        "role": "assistant",
-                        "content": [
-                            {"type": "text", "text": "Note.", "id": 5},
-                            {"type": "compaction", "content": "Summary.", "signature": "sig"},
-                        ],
-                    },
-                    {"role": "user", "content": "Go on."},
-                ]
-            ),
-            model=AZURE_CLAUDE,
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_unparsed_message_non_string_text_block_dropped",
+        _kw(messages=[{"role": "user", "content": [{"type": "text", "text": 5}, {"type": "text", "text": "Hi."}]}]),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_unparsed_message_emptied_by_the_sanitizer_dropped",
+        _kw(
+            messages=[
+                dict(USER),
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": 5}, {"type": "thinking", "thinking": ""}],
+                },
+                {"role": "user", "content": "Go on."},
+            ]
         ),
-        Case(
-            "azure_ai_unparsed_message_non_string_text_block_dropped",
-            _kw(messages=[{"role": "user", "content": [{"type": "text", "text": 5}, {"type": "text", "text": "Hi."}]}]),
-            model=AZURE_CLAUDE,
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_unparsed_message_tool_use_ids_sanitized",
+        _kw(
+            tools=[dict(WEATHER_TOOL)],
+            messages=[
+                dict(USER),
+                {
+                    "role": "assistant",
+                    "content": [
+                        dict(UNPARSED_BLOCK),
+                        {"type": "tool_use", "id": "functions.get_weather:0", "name": "get_weather", "input": {}},
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "functions.get_weather:0", "content": "Sunny."},
+                        dict(UNPARSED_BLOCK),
+                    ],
+                },
+            ],
         ),
-        Case(
-            "azure_ai_unparsed_message_emptied_by_the_sanitizer_dropped",
-            _kw(
-                messages=[
-                    dict(USER),
-                    {
-                        "role": "assistant",
-                        "content": [{"type": "text", "text": 5}, {"type": "thinking", "thinking": ""}],
-                    },
-                    {"role": "user", "content": "Go on."},
-                ]
-            ),
-            model=AZURE_CLAUDE,
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_unparsed_message_web_search_result_flattened",
+        _kw(
+            messages=_unparsed_turn(
+                "assistant",
+                {
+                    "type": "server_tool_use",
+                    "id": "srvtoolu_01Parity",
+                    "name": "web_search",
+                    "input": {"query": "paris"},
+                },
+                {
+                    "type": "web_search_tool_result",
+                    "tool_use_id": "srvtoolu_01Parity",
+                    "content": [
+                        {
+                            "type": "web_search_result",
+                            "url": "https://example.com",
+                            "title": "Paris",
+                            "snippet": "Capital.",
+                        }
+                    ],
+                },
+            )
         ),
-        Case(
-            "azure_ai_unparsed_message_tool_use_ids_sanitized",
-            _kw(
-                tools=[dict(WEATHER_TOOL)],
-                messages=[
-                    dict(USER),
-                    {
-                        "role": "assistant",
-                        "content": [
-                            dict(UNPARSED_BLOCK),
-                            {"type": "tool_use", "id": "functions.get_weather:0", "name": "get_weather", "input": {}},
-                        ],
-                    },
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "tool_result", "tool_use_id": "functions.get_weather:0", "content": "Sunny."},
-                            dict(UNPARSED_BLOCK),
-                        ],
-                    },
-                ],
-            ),
-            model=AZURE_CLAUDE,
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_unparsed_message_provider_specific_fields_dropped",
+        _kw(
+            messages=_unparsed_turn(
+                "assistant", {"type": "text", "text": "Paris.", "provider_specific_fields": {"citations": None}}
+            )
         ),
-        Case(
-            "azure_ai_unparsed_message_web_search_result_flattened",
-            _kw(
-                messages=_unparsed_turn(
-                    "assistant",
-                    {
-                        "type": "server_tool_use",
-                        "id": "srvtoolu_01Parity",
-                        "name": "web_search",
-                        "input": {"query": "paris"},
-                    },
-                    {
-                        "type": "web_search_tool_result",
-                        "tool_use_id": "srvtoolu_01Parity",
-                        "content": [
-                            {
-                                "type": "web_search_result",
-                                "url": "https://example.com",
-                                "title": "Paris",
-                                "snippet": "Capital.",
-                            }
-                        ],
-                    },
-                )
-            ),
-            model=AZURE_CLAUDE,
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_unparsed_assistant_advisor_blocks_stripped",
+        _kw(
+            messages=_unparsed_turn(
+                "assistant",
+                {"type": "server_tool_use", "id": "srvtoolu_01Parity", "name": "advisor", "input": {}},
+                {
+                    "type": "advisor_tool_result",
+                    "tool_use_id": "srvtoolu_01Parity",
+                    "content": {"type": "advisor_result", "text": "Use channels."},
+                },
+            )
         ),
-        Case(
-            "azure_ai_unparsed_message_provider_specific_fields_dropped",
-            _kw(
-                messages=_unparsed_turn(
-                    "assistant", {"type": "text", "text": "Paris.", "provider_specific_fields": {"citations": None}}
-                )
-            ),
-            model=AZURE_CLAUDE,
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_unparsed_assistant_encrypted_reasoning_stripped",
+        _kw(
+            messages=_unparsed_turn(
+                "assistant",
+                {"type": "thinking", "thinking": "Hmm.", "signature": "litellm_encrypted_reasoning:abc"},
+                {"type": "redacted_thinking", "data": "litellm_encrypted_reasoning:def"},
+            )
         ),
-        Case(
-            "azure_ai_unparsed_assistant_advisor_blocks_stripped",
-            _kw(
-                messages=_unparsed_turn(
-                    "assistant",
-                    {"type": "server_tool_use", "id": "srvtoolu_01Parity", "name": "advisor", "input": {}},
-                    {
-                        "type": "advisor_tool_result",
-                        "tool_use_id": "srvtoolu_01Parity",
-                        "content": {"type": "advisor_result", "text": "Use channels."},
-                    },
-                )
-            ),
-            model=AZURE_CLAUDE,
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_redacted_thinking_converse_wrapper_unwrapped",
+        _kw(
+            messages=[
+                dict(USER),
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "redacted_thinking", "data": "UVVKRA=="},
+                        {"type": "text", "text": "Paris."},
+                    ],
+                },
+                {"role": "user", "content": "Go on."},
+            ]
         ),
-        Case(
-            "azure_ai_unparsed_assistant_encrypted_reasoning_stripped",
-            _kw(
-                messages=_unparsed_turn(
-                    "assistant",
-                    {"type": "thinking", "thinking": "Hmm.", "signature": "litellm_encrypted_reasoning:abc"},
-                    {"type": "redacted_thinking", "data": "litellm_encrypted_reasoning:def"},
-                )
-            ),
-            model=AZURE_CLAUDE,
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_unparsed_redacted_thinking_converse_wrapper_unwrapped",
+        _kw(messages=_unparsed_turn("assistant", {"type": "redacted_thinking", "data": "UVVKRA=="})),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_leading_system_unparsed_block_hoisted",
+        _kw(messages=[{"role": "system", "content": [dict(UNCACHEABLE_SYSTEM_BLOCK)]}, dict(USER)]),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_leading_system_non_list_content_hoisted",
+        _kw(system="Answer in one word.", messages=[{"role": "system", "content": 5}, dict(USER)]),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_system_list_with_an_unparsed_block_loses_its_billing_block",
+        _kw(
+            system=[
+                {"type": "text", "text": "x-anthropic-billing-header: cc_version=2.1.0"},
+                {"type": "text", "text": "Be terse.", "cache_control": {"type": "ephemeral", "scope": "global"}},
+                dict(UNPARSED_BLOCK),
+            ]
         ),
-        Case(
-            "azure_ai_redacted_thinking_converse_wrapper_unwrapped",
-            _kw(
-                messages=[
-                    dict(USER),
-                    {
-                        "role": "assistant",
-                        "content": [
-                            {"type": "redacted_thinking", "data": "UVVKRA=="},
-                            {"type": "text", "text": "Paris."},
-                        ],
-                    },
-                    {"role": "user", "content": "Go on."},
-                ]
-            ),
-            model=AZURE_CLAUDE,
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_mid_system_unparsed_block_converted",
+        _kw(messages=_mid_conversation_system(content=[dict(UNCACHEABLE_SYSTEM_BLOCK)])),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_mid_system_moved_after_an_unparsed_tool_result",
+        _kw(
+            tools=[dict(WEATHER_TOOL)],
+            messages=[
+                dict(USER),
+                dict(TOOL_USE_TURN),
+                {"role": "system", "content": [dict(UNCACHEABLE_SYSTEM_BLOCK)]},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "functions.get_weather:0", "content": "Sunny."},
+                        dict(UNPARSED_BLOCK),
+                    ],
+                },
+            ],
         ),
-        Case(
-            "azure_ai_unparsed_redacted_thinking_converse_wrapper_unwrapped",
-            _kw(messages=_unparsed_turn("assistant", {"type": "redacted_thinking", "data": "UVVKRA=="})),
-            model=AZURE_CLAUDE,
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_contentless_leading_system_hoisted",
+        _kw(messages=[{"role": "system", "content": "Be terse."}, {"role": "system"}, dict(USER)]),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_leading_system_tool_addition_under_drop_params",
+        _kw(
+            drop_params=True,
+            messages=[
+                {
+                    "role": "system",
+                    "content": [
+                        {"type": "text", "text": "Be terse."},
+                        {"type": "tool_addition", "tool": dict(WEATHER_TOOL)},
+                    ],
+                },
+                dict(USER),
+            ],
         ),
-        Case(
-            "azure_ai_leading_system_unparsed_block_hoisted",
-            _kw(messages=[{"role": "system", "content": [dict(UNCACHEABLE_SYSTEM_BLOCK)]}, dict(USER)]),
-            model=AZURE_CLAUDE,
+        model=AZURE_OPUS_4_8,
+        warned=True,
+    ),
+    Case(
+        "azure_ai_thinking_gated_fields_kept_under_drop_params",
+        _kw(
+            drop_params=True,
+            max_tokens=2048,
+            thinking={"type": "enabled", "budget_tokens": 1024, "display": "updates", "block_binding": "strict"},
         ),
-        Case(
-            "azure_ai_leading_system_non_list_content_hoisted",
-            _kw(system="Answer in one word.", messages=[{"role": "system", "content": 5}, dict(USER)]),
-            model=AZURE_CLAUDE,
+        model=AZURE_CLAUDE,
+        warned=True,
+    ),
+    Case(
+        "azure_ai_non_object_output_format_under_drop_params",
+        _kw(drop_params=True, output_format="json"),
+        model=AZURE_CLAUDE,
+        warned=True,
+    ),
+    Case("azure_ai_system_string", _kw(system="Answer in one word."), model=AZURE_CLAUDE),
+    Case("azure_ai_system_empty_string", _kw(system=""), model=AZURE_CLAUDE),
+    Case(
+        "azure_ai_system_string_stream",
+        _kw(stream=True, system="Answer in one word."),
+        model=AZURE_CLAUDE,
+        upstream=(_stream(TEXT_STREAM),),
+    ),
+    Case(
+        "azure_ai_system_string_with_a_leading_system_turn",
+        _kw(system="Answer in one word.", messages=[{"role": "system", "content": "Be terse."}, dict(USER)]),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_system_blocks_with_cache_control",
+        _kw(
+            system=[
+                {
+                    "type": "text",
+                    "text": "Answer in one word.",
+                    "cache_control": {"type": "ephemeral", "scope": "global"},
+                }
+            ]
         ),
-        Case(
-            "azure_ai_system_list_with_an_unparsed_block_loses_its_billing_block",
-            _kw(
-                system=[
-                    {"type": "text", "text": "x-anthropic-billing-header: cc_version=2.1.0"},
-                    {"type": "text", "text": "Be terse.", "cache_control": {"type": "ephemeral", "scope": "global"}},
-                    dict(UNPARSED_BLOCK),
-                ]
-            ),
-            model=AZURE_CLAUDE,
-        ),
-        Case(
-            "azure_ai_mid_system_unparsed_block_converted",
-            _kw(messages=_mid_conversation_system(content=[dict(UNCACHEABLE_SYSTEM_BLOCK)])),
-            model=AZURE_CLAUDE,
-        ),
-        Case(
-            "azure_ai_mid_system_moved_after_an_unparsed_tool_result",
-            _kw(
-                tools=[dict(WEATHER_TOOL)],
-                messages=[
-                    dict(USER),
-                    dict(TOOL_USE_TURN),
-                    {"role": "system", "content": [dict(UNCACHEABLE_SYSTEM_BLOCK)]},
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "tool_result", "tool_use_id": "functions.get_weather:0", "content": "Sunny."},
-                            dict(UNPARSED_BLOCK),
-                        ],
-                    },
-                ],
-            ),
-            model=AZURE_CLAUDE,
-        ),
-        Case(
-            "azure_ai_contentless_leading_system_hoisted",
-            _kw(messages=[{"role": "system", "content": "Be terse."}, {"role": "system"}, dict(USER)]),
-            model=AZURE_CLAUDE,
-        ),
-        Case(
-            "azure_ai_leading_system_tool_addition_under_drop_params",
-            _kw(
-                drop_params=True,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": [
-                            {"type": "text", "text": "Be terse."},
-                            {"type": "tool_addition", "tool": dict(WEATHER_TOOL)},
-                        ],
-                    },
-                    dict(USER),
-                ],
-            ),
-            model=AZURE_OPUS_4_8,
-            warned=True,
-        ),
-        Case(
-            "azure_ai_thinking_gated_fields_kept_under_drop_params",
-            _kw(
-                drop_params=True,
-                max_tokens=2048,
-                thinking={"type": "enabled", "budget_tokens": 1024, "display": "updates", "block_binding": "strict"},
-            ),
-            model=AZURE_CLAUDE,
-            warned=True,
-        ),
-        Case(
-            "azure_ai_non_object_output_format_under_drop_params",
-            _kw(drop_params=True, output_format="json"),
-            model=AZURE_CLAUDE,
-            warned=True,
-        ),
-        Case("azure_ai_system_string", _kw(system="Answer in one word."), model=AZURE_CLAUDE),
-        Case("azure_ai_system_empty_string", _kw(system=""), model=AZURE_CLAUDE),
-        Case(
-            "azure_ai_system_string_stream",
-            _kw(stream=True, system="Answer in one word."),
-            model=AZURE_CLAUDE,
-            upstream=(_stream(TEXT_STREAM),),
-        ),
-        Case(
-            "azure_ai_system_string_with_a_leading_system_turn",
-            _kw(system="Answer in one word.", messages=[{"role": "system", "content": "Be terse."}, dict(USER)]),
-            model=AZURE_CLAUDE,
-        ),
-        Case(
-            "azure_ai_system_blocks_with_cache_control",
-            _kw(
-                system=[
-                    {
-                        "type": "text",
-                        "text": "Answer in one word.",
-                        "cache_control": {"type": "ephemeral", "scope": "global"},
-                    }
-                ]
-            ),
-            model=AZURE_CLAUDE,
-        ),
-        Case("azure_ai_extra_body", _kw(extra_body={"parity_extra": 1}), model=AZURE_CLAUDE),
-        Case("azure_ai_unknown_top_level_param", _kw(parity_unknown_param="x"), model=AZURE_CLAUDE),
-        Case("azure_ai_latest_alias", model="azure_ai/claude-sonnet-latest"),
-        Case(
-            "azure_ai_pre_request_hook_names_a_non_claude_model",
-            callbacks=(_NonClaudeModelHook,),
-            model=AZURE_CLAUDE,
-            upstream=(),
-        ),
-    )
+        model=AZURE_CLAUDE,
+    ),
+    Case("azure_ai_extra_body", _kw(extra_body={"parity_extra": 1}), model=AZURE_CLAUDE),
+    Case("azure_ai_unknown_top_level_param", _kw(parity_unknown_param="x"), model=AZURE_CLAUDE),
+    Case("azure_ai_latest_alias", model="azure_ai/claude-sonnet-latest"),
+    Case(
+        "azure_ai_pre_request_hook_names_a_non_claude_model",
+        callbacks=(_NonClaudeModelHook,),
+        model=AZURE_CLAUDE,
+        upstream=(),
+    ),
 )
 
 UNREACHABLE_AZURE_BASE: Final = "http://127.0.0.1:9/d/dep-e03/anthropic"
 
 AZURE_ERROR_CASES: Final = tuple(
-    replace(case, model=AZURE_CLAUDE, rust_providers=AZURE_AI)
+    replace(case, model=AZURE_CLAUDE)
     for case in (
         Case("azure_ai_upstream_404", upstream=(_failure(404, "not_found_error", "Resource not found"),)),
         Case(
@@ -4257,7 +4246,7 @@ ANTHROPIC_ON_AZURE_CLAUDE_ERROR_CASES: Final = (
 )
 
 AZURE_STREAM_CACHE_CASES: Final = tuple(
-    replace(case, name=f"azure_ai_{case.name}", model=AZURE_CLAUDE, rust_providers=AZURE_AI)
+    replace(case, name=f"azure_ai_{case.name}", model=AZURE_CLAUDE)
     for case in CACHE_CASES
     if case.name in ("cache_hit_stream", "cache_stream_without_output")
 )
@@ -4268,7 +4257,7 @@ MESSAGES_PASSTHROUGH: Final = MappingProxyType({"supported_endpoints": ["/v1/mes
 # H01: Python forwards a non-Claude deployment that opted into /v1/messages untranslated through its
 # OpenAI-compatible config, which Rust does not have, so the call stays on Python.
 AZURE_PASSTHROUGH_CASES: Final = tuple(
-    replace(case, model=AZURE_NON_CLAUDE, rust_providers=AZURE_AI)
+    replace(case, model=AZURE_NON_CLAUDE)
     for case in (
         Case("azure_ai_non_claude_messages_passthrough", _kw(model_info=dict(MESSAGES_PASSTHROUGH))),
         Case(
@@ -4395,29 +4384,6 @@ def _environment(env: Mapping[str, str]) -> Generator[None]:
             patch.delenv(name, raising=False)
         for name, value in env.items():
             patch.setenv(name, value)
-        yield
-
-
-@contextmanager
-def _served_natively(providers: frozenset[str]) -> Generator[None]:
-    """Serves a provider the shipped rules keep on Python natively, ahead of every other rule, wherever its
-    Messages config serves the call."""
-    if not providers:
-        yield
-        return
-    with rebound(
-        catalog,
-        "RULES",
-        (
-            catalog.RouteRule(
-                catalog.Route.MESSAGES,
-                Rollout.RUST_REQUIRED,
-                providers=providers,
-                targets=frozenset({catalog.Target.MESSAGES}),
-            ),
-            *catalog.RULES,
-        ),
-    ):
         yield
 
 
@@ -4791,7 +4757,6 @@ async def _leg(case: Case, server: RecordingServer, probe: FallbackProbe | None)
         isolated_callback_registries(),
         _environment(case.env),
         _settings(case.settings),
-        _served_natively(case.rust_providers),
         _cache(case.cache),
         _classifier(case.classifier, classified),
         _interceptor(case.interceptor),
@@ -4992,7 +4957,16 @@ def _comparable(value: object) -> object:
     "case",
     [
         pytest.param(case, id=case.name)
-        for case in (*SERVED_NATIVELY_CASES, *AGENTIC_CASES, *SAFEGUARDS_CASES, *SHORT_CIRCUIT_CASES)
+        for case in (
+            *SERVED_NATIVELY_CASES,
+            *AGENTIC_CASES,
+            *SAFEGUARDS_CASES,
+            *SHORT_CIRCUIT_CASES,
+            *AZURE_AUTH_CASES,
+            *AZURE_URL_CASES,
+            *AZURE_SHAPING_CASES,
+            *AZURE_ERROR_CASES,
+        )
     ],
 )
 def test_catalog_serves_the_case_natively(case: Case, parity_server: RecordingServer) -> None:
@@ -5452,7 +5426,6 @@ async def _deployment_beta_sent(
     with contextlib.ExitStack() as stack:
         stack.enter_context(isolated_callback_registries())
         stack.enter_context(_environment({}))
-        stack.enter_context(_served_natively(AZURE_AI))
         if not native:
             stack.enter_context(rebound(litellm, "anthropic_messages", _PYTHON_AMESSAGES))
         router: Final = litellm.Router(
@@ -5574,7 +5547,6 @@ async def _unread_stream(
     with contextlib.ExitStack() as stack:
         stack.enter_context(isolated_callback_registries())
         stack.enter_context(_environment({}))
-        stack.enter_context(_served_natively(AZURE_AI))
         errors: Final = stack.enter_context(_warnings(verbose_proxy_logger))
         litellm.callbacks.append(recorder)
         await _leave_unread(server, native, closed, model)
@@ -5619,7 +5591,6 @@ async def _entered_stream(server: RecordingServer, native: bool, model: str) -> 
     with contextlib.ExitStack() as stack:
         stack.enter_context(isolated_callback_registries())
         stack.enter_context(_environment({}))
-        stack.enter_context(_served_natively(AZURE_AI))
         stream: Final = cast(
             AsyncGenerator[object],
             await acall(
