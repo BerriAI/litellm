@@ -238,6 +238,7 @@ if TYPE_CHECKING:
     from prisma import models as prisma_models
 
     from litellm.integrations.opentelemetry import OpenTelemetry
+    from litellm.proxy.common_utils.key_expiry_alert_manager import KeyExpiryAlertManager
     from litellm.proxy.health_check_utils.shared_health_check_manager import SharedHealthCheckManager
     from litellm.types.proxy.model_listing import ModelInfoResponse
 
@@ -12231,8 +12232,25 @@ class ProxyStartupEvent:
         else:
             verbose_proxy_logger.debug("Key rotation disabled (set LITELLM_KEY_ROTATION_ENABLED=true to enable)")
 
-        if premium_user is True and prisma_client is not None:
+        expiry_alert_manager: Final = cls._build_key_expiry_alert_manager()
+        if expiry_alert_manager is not None:
             from litellm.constants import LITELLM_KEY_EXPIRY_ALERT_CHECK_INTERVAL_SECONDS
+
+            scheduler.add_job(  # pyright: ignore[reportUnknownMemberType]  # APScheduler stubs are incomplete
+                expiry_alert_manager.process_alerts,
+                "interval",
+                seconds=LITELLM_KEY_EXPIRY_ALERT_CHECK_INTERVAL_SECONDS,
+                id="key_expiry_alert_job",
+            )
+        await cls._initialize_expired_ui_session_key_cleanup_background_job(scheduler=scheduler)
+
+    @classmethod
+    def _build_key_expiry_alert_manager(cls) -> "KeyExpiryAlertManager | None":
+        """The expiry email job, or None when it is off or misconfigured. Setup errors are logged, never raised,
+        so the background jobs registered after it still start."""
+        if premium_user is not True or prisma_client is None:
+            return None
+        try:
             from litellm.proxy.common_utils.key_expiry_alert_manager import (
                 KeyExpiryAlertManager,
                 KeyExpiryEmailLogger,
@@ -12248,32 +12266,32 @@ class ProxyStartupEvent:
             )
             default_expiry_days: Final = key_expiry_alert_days(configured_expiry_days)
             if configured_expiry_days is not None and default_expiry_days is None:
-                raise ValueError(f"general_settings.{KEY_EXPIRY_ALERT_DAYS_ERROR}")
+                verbose_proxy_logger.error(
+                    "Key expiry alerts not scheduled: general_settings.%s", KEY_EXPIRY_ALERT_DAYS_ERROR
+                )
+                return None
 
             expiry_email_loggers: Final = litellm.logging_callback_manager.get_custom_loggers_for_type(
                 callback_type=key_expiry_email_logger_type()
             )
             expiry_alerting_config: Final = _GENERAL_SETTINGS_VIEW.validate_python(general_settings).get("alerting")
-            if expiry_email_loggers or "email" in (as_object_list(expiry_alerting_config) or ()):
-                expiry_email_logger: Final = next(
-                    (logger for logger in expiry_email_loggers if isinstance(logger, KeyExpiryEmailLogger)),
-                    proxy_logging_obj.email_logging_instance,
-                )
-                if isinstance(expiry_email_logger, KeyExpiryEmailLogger):
-                    expiry_alert_manager: Final = KeyExpiryAlertManager(
-                        prisma_client=prisma_client,
-                        cache=proxy_logging_obj.internal_usage_cache.dual_cache,
-                        email_logger=expiry_email_logger,
-                        default_days=default_expiry_days,
-                    )
-                    scheduler.add_job(  # pyright: ignore[reportUnknownMemberType]  # APScheduler stubs are incomplete
-                        expiry_alert_manager.process_alerts,
-                        "interval",
-                        seconds=LITELLM_KEY_EXPIRY_ALERT_CHECK_INTERVAL_SECONDS,
-                        id="key_expiry_alert_job",
-                    )
-
-        await cls._initialize_expired_ui_session_key_cleanup_background_job(scheduler=scheduler)
+            if not expiry_email_loggers and "email" not in (as_object_list(expiry_alerting_config) or ()):
+                return None
+            expiry_email_logger: Final = next(
+                (logger for logger in expiry_email_loggers if isinstance(logger, KeyExpiryEmailLogger)),
+                proxy_logging_obj.email_logging_instance,
+            )
+            if not isinstance(expiry_email_logger, KeyExpiryEmailLogger):
+                return None
+            return KeyExpiryAlertManager(
+                prisma_client=prisma_client,
+                cache=proxy_logging_obj.internal_usage_cache.dual_cache,
+                email_logger=expiry_email_logger,
+                default_days=default_expiry_days,
+            )
+        except Exception:  # noqa: BLE001  # a setup failure must not stop later background jobs registering
+            verbose_proxy_logger.exception("Failed to set up key expiry alert job")
+            return None
 
     @classmethod
     async def _initialize_expired_ui_session_key_cleanup_background_job(cls, scheduler: AsyncIOScheduler):

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import sys
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Final
@@ -253,3 +254,41 @@ async def test_bad_metadata_does_not_block_another_key() -> None:
     )
     await manager.process_alerts()
     assert email.send_key_expiring_email.await_count == 1
+
+
+def _email_enabled_proxy(monkeypatch: pytest.MonkeyPatch, settings: dict[str, object]) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    monkeypatch.setattr(proxy_server, "prisma_client", _database(()))
+    monkeypatch.setattr(proxy_server, "general_settings", {"alerting": ["email"], **settings})
+    monkeypatch.setattr(proxy_server.proxy_logging_obj, "email_logging_instance", _EmailTransport())
+
+
+def test_startup_builds_expiry_job_with_global_default_on_a_six_hour_interval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.constants import LITELLM_KEY_EXPIRY_ALERT_CHECK_INTERVAL_SECONDS
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+
+    _email_enabled_proxy(monkeypatch, {"key_expiry_alert_days": 7})
+    manager: Final = ProxyStartupEvent._build_key_expiry_alert_manager()
+    assert manager is not None
+    assert manager.default_days == 7
+    assert LITELLM_KEY_EXPIRY_ALERT_CHECK_INTERVAL_SECONDS == 6 * 60 * 60
+
+
+@pytest.mark.parametrize("value", [0, [7], "7"])
+def test_startup_skips_expiry_job_for_invalid_global_default(monkeypatch: pytest.MonkeyPatch, value: object) -> None:
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+
+    _email_enabled_proxy(monkeypatch, {"key_expiry_alert_days": value})
+    assert ProxyStartupEvent._build_key_expiry_alert_manager() is None
+
+
+def test_startup_expiry_setup_failure_returns_none_instead_of_raising(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+
+    _email_enabled_proxy(monkeypatch, {})
+    monkeypatch.setitem(sys.modules, "litellm_enterprise.enterprise_callbacks.send_emails.base_email", None)
+    assert ProxyStartupEvent._build_key_expiry_alert_manager() is None
