@@ -4,7 +4,7 @@ from types import MappingProxyType
 from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding selects a sync result or an async awaitable
 
 from litellm.exceptions import BadRequestError, UnsupportedParamsError
-from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.litellm_core_utils.get_llm_provider_logic import resolve_llm_provider
 from litellm.llms.anthropic.messages.native import handler as main
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.rust_bridge import catalog, detectors
@@ -87,7 +87,7 @@ def _public_request(
 
 def _resolved_model(model: str, provider: str | None) -> tuple[str, str | None]:
     try:
-        resolved_model, resolved_provider, _, _ = get_llm_provider(model, provider)
+        resolved_model, resolved_provider, _, _ = resolve_llm_provider(model, provider)
     except BadRequestError:
         return model, provider
     return resolved_model, resolved_provider

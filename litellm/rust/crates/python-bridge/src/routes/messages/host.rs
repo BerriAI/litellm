@@ -1,4 +1,5 @@
 use crate::cache::{CacheCall, PythonCache, Selection};
+use litellm_core_utils::get_llm_provider_logic::{ProviderRequest, Resolution};
 use litellm_host_python::{PythonHostCalls, PythonOwned};
 
 use std::sync::{
@@ -117,6 +118,27 @@ fn json_messages(messages: &Bound<'_, PyAny>) -> PyResult<Value> {
 
 pub(super) const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.host.routes.messages";
 const MODEL_CAPABILITIES_MODULE: &str = "litellm.rust_bridge.host.model_capabilities";
+
+fn inferred_provider(
+    py: Python<'_>,
+    model: &str,
+    api_base: Option<&str>,
+) -> PyResult<Option<String>> {
+    let request = ProviderRequest {
+        model,
+        api_base,
+        ..ProviderRequest::default()
+    };
+    match crate::provider::resolution(py, request)? {
+        Resolution::Resolved(resolved) => Ok(resolved.custom_llm_provider),
+        Resolution::Failed(failure) if !failure.announce => Ok(None),
+        Resolution::Failed(_) | Resolution::Deferred => py
+            .import(ROUTE_HOST_MODULE)?
+            .getattr("inferred_provider")?
+            .call1((model, api_base))?
+            .extract(),
+    }
+}
 
 fn merge_headers(
     forwarded: Option<Map<String, Value>>,
@@ -451,15 +473,9 @@ impl MessagesPythonHost {
             .flatten();
         let api_key = string("api_key")?;
         let api_base = string("api_base")?;
-        // Python's handler resolves a bare model name (`claude-sonnet-4-5`) through
-        // `get_llm_provider`'s model lists, which the native prefix lookup does not carry.
         let custom_llm_provider = match string("custom_llm_provider")? {
             Some(provider) => Some(provider),
-            None => py
-                .import(ROUTE_HOST_MODULE)?
-                .getattr("inferred_provider")?
-                .call1((&model, api_base.as_deref()))?
-                .extract()?,
+            None => inferred_provider(py, &model, api_base.as_deref())?,
         };
         let (extra_headers, mut unencodable_request_header) = match settings.extra_headers {
             Some(headers) => (Some(headers), None),

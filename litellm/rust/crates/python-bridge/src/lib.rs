@@ -12,6 +12,7 @@ mod marshal;
 mod model_cost;
 mod model_registry;
 mod preflight;
+mod provider;
 mod python_settings;
 mod redis;
 mod router;
@@ -46,6 +47,8 @@ mod _native {
     };
     #[pymodule_export]
     use crate::model_registry::bundled_model_cost_map;
+    #[pymodule_export]
+    use crate::provider::{NativeLlmProvider, NativeLlmProviderError, get_llm_provider};
     #[pymodule_export]
     use crate::redis::breaker::{NativeAdmission, NativeRedisBreaker, native_redis_breaker_states};
     #[pymodule_export]
@@ -188,6 +191,9 @@ mod tests {
                 "NativeRejected",
                 "NativeRegistered",
                 "NativeTableSwapped",
+                "NativeLlmProvider",
+                "NativeLlmProviderError",
+                "get_llm_provider",
                 "NativeProvenance",
                 "NativeCostMapSource",
                 "NativeFetchPolicy",

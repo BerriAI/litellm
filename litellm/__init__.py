@@ -1053,7 +1053,10 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
     then refresh `models_by_provider` from those sets so the additions reach wildcard expansion.
     The refresh updates the dict in place, so references captured before a reload stay live.
     """
+    from litellm.litellm_core_utils.get_llm_provider_logic import provider_set_writes
+
     _populate_provider_model_sets(model_cost_map if model_cost_map is not None else model_cost)
+    provider_set_writes.record()
     models_by_provider.update(_build_models_by_provider())
 
 

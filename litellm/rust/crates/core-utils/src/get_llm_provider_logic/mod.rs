@@ -1,3 +1,13 @@
+mod endpoint;
+mod provider_info;
+mod resolve;
+mod secrets;
+pub mod tables;
+
+pub use resolve::{ProviderFailure, ProviderRequest, Resolution, Resolved, get_llm_provider};
+pub use secrets::{Deferred, ProcessEnvironment, SecretReader};
+pub use tables::{ProviderSnapshot, ProviderTables};
+
 use strum::{EnumString, IntoStaticStr};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

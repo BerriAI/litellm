@@ -53,6 +53,15 @@ def get_model_latest_aliases() -> Mapping[str, Mapping[str, str]]:
     )
 
 
+def latest_alias_rows() -> tuple[tuple[str, str, str | None], ...]:
+    """``(key, target, litellm_provider)`` for every alias row in the cost map, as ``_alias_target`` reads them"""
+    return tuple(
+        (key, entry.names[0], provider if isinstance(provider := entry.get("litellm_provider"), str) else None)
+        for key in _cost_map()
+        if (entry := _alias_entry(key)) is not None
+    )
+
+
 def resolve_model_latest_alias(model: str, provider: str) -> str:
     return _alias_target(f"{provider}/{model}", provider) or _alias_target(model, provider) or model
 
