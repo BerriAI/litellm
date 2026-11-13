@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DailyData, MetricWithMetadata, SpendMetrics } from "@/components/UsagePage/types";
 import { rankCustomerModels, rankCustomerUsage, type CustomerUsageRow } from "./customerUsageData";
-
 const metrics = (spend: number, tokens: number, requests: number): SpendMetrics => ({
   spend,
   prompt_tokens: tokens,

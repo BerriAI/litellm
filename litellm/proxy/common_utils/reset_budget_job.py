@@ -45,7 +45,7 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     LiteLLM_VerificationToken,
 )
-from litellm.proxy.auth.customer_hierarchy_auth import customer_member_cache_key
+from litellm.proxy.auth.customer_hierarchy_auth import customer_member_cache_key, customer_org_alias_cache_key
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import broadcast_evictions
 from litellm.proxy.common_utils.timezone_utils import (
     BudgetResetSettings,
@@ -113,6 +113,9 @@ CustomerSpendEntity: TypeAlias = Literal["member", "team", "org"]
 class _CustomerOrgRow(Protocol):
     @property
     def customer_org_id(self) -> str: ...
+
+    @property
+    def alias(self) -> str | None: ...
 
 
 class _BudgetCapRow(Protocol):
@@ -459,6 +462,7 @@ class _BudgetCascade:
     cache_keys: tuple[str, ...] = ()
     rollover_caps: Mapping[str, float] = field(default_factory=lambda: MappingProxyType({}))
     customer_ids: Mapping[CustomerSpendEntity, tuple[str, ...]] = field(default_factory=lambda: MappingProxyType({}))
+    customer_org_alias_keys: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -734,11 +738,15 @@ class ResetBudgetJob:
             if lease is _Lease.LEADER and self.pod_lock_manager is not None:
                 await self.pod_lock_manager.release_lock(cronjob_id=RESET_BUDGET_JOB_NAME)
 
+    async def _evict_on_every_worker(self, keys: Sequence[str]) -> None:
+        if not keys:
+            return
+        await self._invalidate_cache("user_api_key_cache", keys)
+        await broadcast_evictions(keys)
+
     async def _invalidate_customer_budget_caches(self, entity: CustomerSpendEntity, identities: Sequence[str]) -> None:
         if entity == "member":
-            keys: Final = tuple(customer_member_cache_key(identity) for identity in identities)
-            await self._invalidate_cache("user_api_key_cache", keys)
-            await broadcast_evictions(keys)
+            await self._evict_on_every_worker(tuple(customer_member_cache_key(identity) for identity in identities))
             return
         table: Final = CustomerMemberRepository(self.prisma_client, use_writer=True).table
         parents: Final = (
@@ -1020,6 +1028,9 @@ class ResetBudgetJob:
             ),
             rollover_caps=rollover_caps,
             customer_ids=MappingProxyType({"org": tuple(row.customer_org_id for row in customer_orgs)}),
+            customer_org_alias_keys=tuple(
+                customer_org_alias_cache_key(row.alias) for row in customer_orgs if row.alias
+            ),
             cache_keys=(
                 *(key for row in team_memberships for key in _team_membership_cache_keys(row)),
                 *(key for row in keys for key in _key_cache_keys(row)),
@@ -1190,6 +1201,7 @@ class ResetBudgetJob:
             counter_keys=tuple(counter_key for counter_key, _ in cascade.counter_resets),
             cache_keys=cascade.cache_keys,
         )
+        await self._evict_on_every_worker(cascade.customer_org_alias_keys)
         for entity, identities in cascade.customer_ids.items():
             if not identities:
                 continue

@@ -110,6 +110,7 @@ export default function CustomerHierarchyUsagePage() {
             onMetricChange={setMetric}
             onBucketChange={setBucket}
           />
+          {data && <CustomerMemberSpend data={data} onMemberClick={(id) => drillDown("members", id)} />}
           {!usage.isPending && (
             <>
               <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -131,7 +132,6 @@ export default function CustomerHierarchyUsagePage() {
               />
             </>
           )}
-          {data && <CustomerMemberSpend data={data} onMemberClick={(id) => drillDown("members", id)} />}
           {(params.team || params.member) && (
             <Button variant="link" className="h-auto p-0 text-xs text-muted-foreground" onClick={selectOrganization}>
               {t("customerPortal.analytics.allOrganizationUsage")}

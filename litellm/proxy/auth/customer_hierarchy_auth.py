@@ -29,6 +29,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_
 from litellm.proxy.common_utils.customer_usage import CustomerIdentifier
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, get_management_object_ttl
 from litellm.proxy.management_helpers.customer_hierarchy import (
+    ErrorCode,
     Failure,
     PrismaRecord,
     customer_row_reset_at,
@@ -292,6 +293,7 @@ async def get_customer_hierarchy(
     cached: Final = await user_api_key_cache.async_get_cache(key=cache_key, model_type=CustomerHierarchyAuth)
     if cached is not None:
         return cached
+    lease: Final = await user_api_key_cache.lease(cache_key)
     row: Final = await _member_table(prisma_client).find_unique(
         where={"customer_member_id": customer_member_id}, include=_MEMBER_INCLUDE
     )
@@ -310,10 +312,8 @@ async def get_customer_hierarchy(
     )
     row_values: Final = {**row.model_dump(), "teams": tuple(team.model_dump() for team in teams)}
     hierarchy: Final = customer_hierarchy_from_member_row(row_values, loaded_at)
-    await user_api_key_cache.async_set_cache(
-        key=cache_key,
-        value=hierarchy,
-        ttl=_cache_ttl(row_values, loaded_at, get_management_object_ttl(user_api_key_cache)),
+    _ = await user_api_key_cache.async_set_leased(
+        lease, hierarchy, _cache_ttl(row_values, loaded_at, get_management_object_ttl(user_api_key_cache))
     )
     return hierarchy
 
@@ -382,6 +382,7 @@ async def get_customer_organization_hierarchy(
     cached: Final = await user_api_key_cache.async_get_cache(key=cache_key, model_type=CustomerHierarchyAuth)
     if cached is not None:
         return cached
+    lease: Final = await user_api_key_cache.lease(cache_key)
     rows: Final = await _organization_table(prisma_client).find_many(
         where={"alias": customer_org_alias}, include=_ORGANIZATION_INCLUDE, take=2
     )
@@ -392,9 +393,7 @@ async def get_customer_organization_hierarchy(
     hierarchy: Final = customer_hierarchy_from_organization_row(
         rows[0].model_dump(), now if now is not None else utc_now()
     )
-    await user_api_key_cache.async_set_cache(
-        key=cache_key, value=hierarchy, ttl=get_management_object_ttl(user_api_key_cache)
-    )
+    _ = await user_api_key_cache.async_set_leased(lease, hierarchy, get_management_object_ttl(user_api_key_cache))
     return hierarchy
 
 
@@ -540,16 +539,25 @@ async def _register_organization(
     prisma_client: "PrismaClient",
     user_api_key_cache: UserApiKeyCache,
     register: OrganizationRegistrar,
+    key_metadata: Mapping[str, object],
 ) -> CustomerHierarchyAuth | None:
     """An alias the proxy has never seen becomes an organization with that id and alias, so a customer's first
-    request is charged to it instead of running untracked."""
+    request is charged to it instead of running untracked. A key pinned to another organization is refused first."""
     if not _registrable(customer_org_alias):
         verbose_proxy_logger.warning(
             "Could not register customer organization: alias is not a valid customer identifier"
         )
         return _untracked(f"organization alias not found: {customer_org_alias}", CUSTOMER_ORG_ALIAS_HEADER)
+    _check_key_scope(customer_org_alias, key_metadata)
     registered: Final = await register(customer_org_alias, prisma_client)
     if isinstance(registered, Failure):
+        if registered.code is ErrorCode.FREE_TIER_LIMIT:
+            verbose_proxy_logger.warning(
+                "CUSTOMER TRACKING OFF for organization %s because the free customer portal limit was reached. "
+                "Upgrade to Enterprise to remove the limits: https://www.litellm.ai/enterprise",
+                customer_org_alias,
+            )
+            return None
         verbose_proxy_logger.warning(
             "Could not register customer organization %s: %s", customer_org_alias, registered.code.value
         )
@@ -565,12 +573,15 @@ async def _organization_named_by_alias(
     prisma_client: "PrismaClient | None",
     user_api_key_cache: UserApiKeyCache,
     register: OrganizationRegistrar,
+    key_metadata: Mapping[str, object],
 ) -> CustomerHierarchyAuth | None:
     if prisma_client is None:
         return _untracked(f"organization alias not found: {customer_org_alias}", CUSTOMER_ORG_ALIAS_HEADER)
     found: Final = await get_customer_organization_hierarchy(customer_org_alias, prisma_client, user_api_key_cache)
     if found is None:
-        return await _register_organization(customer_org_alias, prisma_client, user_api_key_cache, register)
+        return await _register_organization(
+            customer_org_alias, prisma_client, user_api_key_cache, register, key_metadata
+        )
     return _organization_from_lookup(customer_org_alias, found)
 
 
@@ -607,6 +618,13 @@ async def _register_member(
         return None
     registered: Final = await register(organization.customer_org_id, customer_member_id, prisma_client)
     if isinstance(registered, Failure):
+        if registered.code is ErrorCode.FREE_TIER_LIMIT:
+            verbose_proxy_logger.warning(
+                "CUSTOMER TRACKING OFF for member %s because the free customer portal limit was reached. "
+                "Upgrade to Enterprise to remove the limits: https://www.litellm.ai/enterprise",
+                customer_member_id,
+            )
+            return None
         verbose_proxy_logger.warning(
             "Could not register customer member %s in organization %s: %s",
             customer_member_id,
@@ -654,7 +672,7 @@ async def load_customer_hierarchy(
     alone is charged. A key pinned to another organization is refused before any row is created."""
     organization: Final = (
         await _organization_named_by_alias(
-            identity.customer_org_alias, prisma_client, user_api_key_cache, register_organization
+            identity.customer_org_alias, prisma_client, user_api_key_cache, register_organization, key_metadata
         )
         if identity.customer_org_alias is not None
         else None
@@ -676,7 +694,7 @@ async def load_customer_hierarchy(
             f"aliased {identity.customer_org_alias}",
             CUSTOMER_ORG_ALIAS_HEADER,
         )
-    if identity.customer_team_id is None:
+    if identity.customer_team_id is None or hierarchy.customer_member_id is None:
         return hierarchy
     selected: Final = select_customer_team(hierarchy, identity.customer_team_id)
     if selected is None:
@@ -741,8 +759,12 @@ async def check_customer_hierarchy_access(
 
 def check_customer_hierarchy_key_scope(hierarchy: CustomerHierarchyAuth, key_metadata: Mapping[str, object]) -> None:
     """A key whose metadata pins ``customer_org_id`` may only act for members of that organization."""
+    _check_key_scope(hierarchy.customer_org_id, key_metadata)
+
+
+def _check_key_scope(customer_org_id: str, key_metadata: Mapping[str, object]) -> None:
     key_customer_org_id: Final = key_metadata.get("customer_org_id")
-    if key_customer_org_id is None or key_customer_org_id == hierarchy.customer_org_id:
+    if key_customer_org_id is None or key_customer_org_id == customer_org_id:
         return
     raise ProxyException(
         message="API key is not allowed to act for this customer member's organization",
