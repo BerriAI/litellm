@@ -1914,9 +1914,26 @@ class TestV1MigrationFailuresLogAtError:
         deploy_timeout: bool = False,
         diff_stderr: Optional[str] = None,
         database_url: Optional[str] = None,
+        member_budget_rename_pending: bool = False,
     ) -> tuple[bool, list[list[str]], list[int]]:
         import litellm_proxy_extras.utils as utils_module
 
+        class _MemberColumnCheck:
+            def __enter__(self) -> "_MemberColumnCheck":
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def execute(self, query: str, params: tuple[str]) -> "_MemberColumnCheck":
+                return self
+
+            def fetchone(self) -> tuple[int] | None:
+                return (1,) if member_budget_rename_pending else None
+
+        monkeypatch.setattr(
+            "psycopg.connect", lambda conninfo, *, connect_timeout, autocommit: _MemberColumnCheck()
+        )
         calls: Final[list[list[str]]] = []
         killed_pids: Final[list[int]] = []
 
@@ -2123,6 +2140,19 @@ class TestV1MigrationFailuresLogAtError:
         assert succeeded is True
         assert tuple(calls[0][-2:]) == ("migrate", "deploy")
         assert self._error_messages(caplog) == []
+
+    def test_a_baseline_refuses_while_the_member_budget_rename_is_pending(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        with pytest.raises(RuntimeError) as err:
+            self._run_v1_migrations(
+                monkeypatch,
+                tmp_path,
+                deploy_stderr=_P3005_STDERR,
+                database_url="postgresql://user:pass@db:5432/litellm",
+                member_budget_rename_pending=True,
+            )
+        assert "20261112120000_rename_customer_member_budget_columns" in str(err.value)
 
     def test_a_failed_baseline_recovery_logs_its_stderr_at_error(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture

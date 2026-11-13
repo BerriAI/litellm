@@ -694,10 +694,10 @@ class ProxyExtrasDBManager:
             connect,
         ):
             raise RuntimeError(
-                "LiteLLM_CustomerMemberTable still has the budget_template_id column. prisma db push would drop it "
+                "LiteLLM_CustomerMemberTable still has the budget_template_id column. Syncing the schema would drop it "
                 "and treat every customer member budget override as the member's budget. Apply the shipped "
                 "20261112120000_rename_customer_member_budget_columns migration to this database schema "
-                "before retrying. Deployments using migration history can upgrade without --use_prisma_db_push instead."
+                "before retrying. Deployments with migration history upgrade without this step."
             )
 
     @staticmethod
@@ -1650,6 +1650,7 @@ class ProxyExtrasDBManager:
                             logger.info(
                                 "Database schema is not empty, creating baseline migration. In read-only file system, please set an environment variable `LITELLM_MIGRATION_DIR` to a writable directory to enable migrations. Learn more - https://docs.litellm.ai/docs/proxy/prod#read-only-file-system"
                             )
+                            ProxyExtrasDBManager.raise_if_customer_member_budget_rename_pending()
                             ProxyExtrasDBManager._create_baseline_migration(schema_path)
                             logger.info("Baseline migration created, resolving all migrations")
                             ProxyExtrasDBManager._resolve_all_migrations(migrations_dir, schema_path)
