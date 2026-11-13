@@ -3,7 +3,7 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use azure_core::cloud::{CloudConfiguration, CustomConfiguration};
 use azure_core::credentials::{Secret, TokenCredential};
-use azure_core::http::{ClientOptions, RetryOptions};
+use azure_core::http::ClientOptions;
 use azure_identity::{
     ClientAssertion, ClientAssertionCredential, ClientAssertionCredentialOptions,
     ClientSecretCredential, ClientSecretCredentialOptions, DeveloperToolsCredential,
@@ -19,7 +19,7 @@ use litellm_secret_value::SecretValue;
 use super::credential_provider_cache::{
     AzureCredentialProviderCache, AzureCredentialProviderCacheKey,
 };
-use super::token_retry::entra_token_retry;
+use super::token_retry::TokenRetry;
 
 #[derive(Clone, Debug)]
 pub(crate) enum NativeAzureRequest {
@@ -526,7 +526,7 @@ fn build_credential(
                 client_options: client_options(
                     authority.map(Sourced::into_value),
                     transport,
-                    entra_token_retry(),
+                    TokenRetry::AzureIdentity,
                 ),
             }),
         )
@@ -545,7 +545,7 @@ fn build_credential(
                 client_options: client_options(
                     authority.map(Sourced::into_value),
                     transport,
-                    RetryOptions::none(),
+                    TokenRetry::Never,
                 ),
             }),
         )
@@ -561,7 +561,7 @@ fn build_credential(
                 client_options: client_options(
                     authority.map(Sourced::into_value),
                     transport,
-                    entra_token_retry(),
+                    TokenRetry::AzureIdentity,
                 ),
             },
             client_id: Some(client_id.into_value()),
@@ -574,7 +574,7 @@ fn build_credential(
                 user_assigned_id: client_id
                     .map(Sourced::into_value)
                     .map(UserAssignedId::ClientId),
-                client_options: client_options(None, transport, RetryOptions::default()),
+                client_options: client_options(None, transport, TokenRetry::SdkDefault),
             }))
             .map(|credential| credential as Arc<dyn TokenCredential>)
         }
@@ -592,17 +592,19 @@ fn build_credential(
 fn client_options(
     authority: Option<String>,
     transport: Option<azure_core::http::Transport>,
-    retry: RetryOptions,
+    retry: TokenRetry,
 ) -> ClientOptions {
     let cloud = authority.map(|authority_host| {
         let mut custom = CustomConfiguration::default();
         custom.authority_host = authority_host;
         Arc::new(CloudConfiguration::from(custom))
     });
+    let (retry, per_call_policies) = retry.into_options();
     ClientOptions {
         cloud,
         transport,
         retry,
+        per_call_policies,
         ..Default::default()
     }
 }
@@ -792,49 +794,80 @@ mod tests {
         StatusCode::InternalServerError,
         None,
         4,
-        Duration::from_millis(4800)
+        Duration::from_millis(4800),
+        "AADSTS90033"
     )]
     #[case::workload_identity_500_retries_three_times_with_backoff(
         workload_identity_token_request,
         StatusCode::InternalServerError,
         None,
         4,
-        Duration::from_millis(4800)
+        Duration::from_millis(4800),
+        "AADSTS90033"
     )]
     #[case::client_secret_503_waits_retry_after_instead_of_backoff(
         client_secret_token_request,
         StatusCode::ServiceUnavailable,
         Some("1"),
         4,
-        Duration::from_secs(3)
+        Duration::from_secs(3),
+        "AADSTS90033"
     )]
     #[case::client_secret_429_zero_retry_after_keeps_backoff(
         client_secret_token_request,
         StatusCode::TooManyRequests,
         Some("0"),
         4,
-        Duration::from_millis(4800)
+        Duration::from_millis(4800),
+        "AADSTS90033"
     )]
     #[case::client_secret_401_invalid_client_posts_once(
         client_secret_token_request,
         StatusCode::Unauthorized,
         None,
         1,
-        Duration::ZERO
+        Duration::ZERO,
+        "AADSTS90033"
+    )]
+    #[case::client_secret_500_waits_retry_after(
+        client_secret_token_request,
+        StatusCode::InternalServerError,
+        Some("2"),
+        4,
+        Duration::from_secs(6),
+        "AADSTS90033"
+    )]
+    #[case::client_secret_401_with_retry_after_is_retried(
+        client_secret_token_request,
+        StatusCode::Unauthorized,
+        Some("2"),
+        4,
+        Duration::from_secs(6),
+        "AADSTS90033"
+    )]
+    #[case::client_secret_malformed_retry_after_fails_after_one_post(
+        client_secret_token_request,
+        StatusCode::InternalServerError,
+        Some("soon"),
+        1,
+        Duration::ZERO,
+        "Invalid HTTP date"
     )]
     #[case::client_assertion_503_posts_once(
         client_assertion_token_request,
         StatusCode::ServiceUnavailable,
         None,
         1,
-        Duration::ZERO
+        Duration::ZERO,
+        "AADSTS90033"
     )]
     #[case::client_secret_400_posts_once(
         client_secret_token_request,
         StatusCode::BadRequest,
         None,
         1,
-        Duration::ZERO
+        Duration::ZERO,
+        "AADSTS90033"
     )]
     #[tokio::test(start_paused = true)]
     async fn entra_token_endpoint_failures_retry_like_python(
@@ -843,6 +876,7 @@ mod tests {
         #[case] retry_after: Option<&'static str>,
         #[case] expected_posts: usize,
         #[case] expected_wait: Duration,
+        #[case] expected_reason: &str,
     ) {
         let endpoint = Arc::new(FailingTokenEndpoint {
             status,
@@ -858,7 +892,7 @@ mod tests {
         assert!(
             litellm_error::Report::new(&error)
                 .to_string()
-                .contains("AADSTS90033"),
+                .contains(expected_reason),
             "{error:?}"
         );
         assert_eq!(
