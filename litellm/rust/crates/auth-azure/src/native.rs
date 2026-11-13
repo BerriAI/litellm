@@ -803,7 +803,8 @@ mod tests {
     }
 
     // Python's counts and delays come from azure-core 1.41.0 RetryPolicy defaults (retry_status=3,
-    // retry_backoff_factor=0.8, Retry-After honoured) that azure-identity 1.25.2 uses for token POSTs.
+    // retry_backoff_factor=0.8, Retry-After honoured) that azure-identity 1.25.2 uses for token POSTs,
+    // checked 2026-11-13.
     // OIDC is minted by litellm's own HTTPHandler in Python, which posts once.
     #[rstest::rstest]
     #[case::client_secret_500_retries_three_times_with_backoff(

@@ -2143,10 +2143,10 @@ _TRANSIENT: Final = json.dumps({"error": "temporarily_unavailable", "error_descr
 _JSON: Final = (("content-type", "application/json"),)
 
 
-# The "Authentication failed: ..." texts are azure-identity 1.25.2 and MSAL 1.37.0 wording: MSAL raises
-# "HTTP Error: <status>" for a 5xx (throttled_http_client.py), azure-core 1.41.0 raises "Invalid HTTP date"
-# for an unparseable Retry-After (pipeline/policies/_utils.py), CPython 3.12's time.sleep refuses a wait past
-# its time_t range and json raises its own decode error.
+# The "Authentication failed: ..." texts are azure-identity 1.25.2 and MSAL 1.37.0 wording, checked 2026-11-13:
+# MSAL raises "HTTP Error: <status>" for a 5xx (throttled_http_client.py), azure-core 1.41.0 raises "Invalid HTTP
+# date" for an unparseable Retry-After (pipeline/policies/_utils.py), CPython 3.12.3's time.sleep refuses a wait
+# past its time_t range and json raises its own decode error.
 @pytest.mark.parametrize(
     ("status", "headers", "body", "raised", "status_code", "message"),
     [

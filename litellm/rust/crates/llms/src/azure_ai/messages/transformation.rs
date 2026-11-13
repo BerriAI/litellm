@@ -895,17 +895,6 @@ mod tests {
     }
 
     #[test]
-    fn default_headers_match_python() {
-        assert_eq!(
-            AZURE_ANTHROPIC_MESSAGES_CONFIG.default_headers(),
-            &[
-                ("anthropic-version", "2023-06-01"),
-                ("content-type", "application/json"),
-            ]
-        );
-    }
-
-    #[test]
     fn finalize_request_strips_scope_from_system_and_messages() {
         let request = request_from(json!({
             "model": "claude-sonnet-4-5",

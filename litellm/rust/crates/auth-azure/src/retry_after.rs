@@ -280,8 +280,9 @@ mod tests {
         retry_after(&headers, now())
     }
 
-    // Each expectation is what azure-core 1.41.0 on CPython 3.12 does with the value: the seconds
-    // it sleeps, a fall back to its backoff, or the exception that ends the token request.
+    // Each expectation is what azure-core 1.41.0 on CPython 3.12.3 does with the value, checked
+    // 2026-11-13: the seconds it sleeps, a fall back to its backoff, or the exception that ends the
+    // token request.
     #[rstest::rstest]
     #[case::seconds("retry-after", "7", RetryAfter::Wait(Duration::seconds(7)))]
     #[case::fractional_seconds(
