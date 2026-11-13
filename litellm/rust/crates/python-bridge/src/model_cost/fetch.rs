@@ -1,13 +1,14 @@
 use std::time::Duration;
 
 use litellm_http::{ClientVariant, HttpClientConfig};
-use litellm_model_catalog_refresh::{Failed, Fetched, RetryPolicy, S3Access, Start};
+use litellm_model_catalog_refresh::{Failed, Fetched, GcsAccess, RetryPolicy, S3Access, Start};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
 /// A cost map URL and how to connect to it. An `s3://` URL reaches S3 as an AWS SDK finds it in the environment,
-/// with LiteLLM's `AWS_REGION_NAME` winning over the region it finds
+/// with LiteLLM's `AWS_REGION_NAME` winning over the region it finds. A `gs://` URL reaches Cloud Storage with Google
+/// application default credentials
 #[pyclass(
     frozen,
     name = "NativeCostMapSource",
@@ -42,8 +43,15 @@ impl NativeCostMapSource {
         let policy = policy.0;
         crate::execution::run_async_value(py, async move {
             Ok(Outcome(
-                litellm_model_catalog_refresh::fetch(&client, &s3(), &url, policy, Start::Fresh)
-                    .await,
+                litellm_model_catalog_refresh::fetch(
+                    &client,
+                    &s3(),
+                    &GcsAccess::Environment,
+                    &url,
+                    policy,
+                    Start::Fresh,
+                )
+                .await,
             ))
         })
     }
@@ -68,6 +76,7 @@ impl NativeCostMapSource {
                 litellm_host_python::run_isolated(litellm_model_catalog_refresh::fetch(
                     &client,
                     &s3(),
+                    &GcsAccess::Environment,
                     &url,
                     policy,
                     start,

@@ -1050,6 +1050,34 @@ def test_bedrock_gpt_oss_vision_is_explicitly_disabled_for_the_router_gate() -> 
     assert litellm.utils.is_vision_explicitly_disabled("bedrock_mantle/openai.gpt-oss-20b") is True
 
 
+def _nace_rows(path: Path) -> Mapping[str, Mapping[str, JsonValue]]:
+    prices: Final = TypeAdapter(dict[str, dict[str, JsonValue]]).validate_json(path.read_bytes())
+    return {key: row for key, row in prices.items() if key.startswith("nace/")}
+
+
+@pytest.mark.parametrize("model", ("drex-v1.0", "drex-v1.5", "drex-latest", "drex-max"))
+def test_drex_alias_metadata_matches_the_served_version(local_model_cost_map: None, model: str) -> None:
+    alias: Final = litellm.model_cost[f"nace/{model}"]
+    served: Final = litellm.model_cost["nace/drex-max-v1.1"]
+    for field in ("input_cost_per_token", "output_cost_per_token", "max_input_tokens", "supports_vision"):
+        assert alias.get(field) == served[field]
+    assert litellm.supports_vision(f"nace/{model}") is True
+
+
+def test_drex_max_metadata_supports_decisions_and_input_billing(local_model_cost_map: None) -> None:
+    served: Final = litellm.model_cost["nace/drex-max-v1.1"]
+    assert served["input_cost_per_token"] > 0
+    assert served["output_cost_per_token"] == 0
+    assert (served["litellm_provider"], served["mode"]) == ("nace", "evaluation")
+    assert served["max_input_tokens"] > 0
+    assert litellm.supports_vision("nace/drex-max-v1.1") is True
+
+
+def test_nace_backup_rows_match_the_main_catalog() -> None:
+    assert {"nace/drex-max", "nace/drex-max-v1.1"} <= _nace_rows(PRICES_PATH).keys()
+    assert _nace_rows(BACKUP_PRICES_PATH) == _nace_rows(PRICES_PATH)
+
+
 @pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
 def test_azure_ai_claude_rows_bill_web_search_like_their_anthropic_rows(path: Path) -> None:
     prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())

@@ -6,9 +6,9 @@ use litellm_host::{
     machine::HostServices,
     protocol::{Protocol, Reply},
 };
-use litellm_host_python::{json_to_py, to_py};
+use litellm_host_python::to_py;
 use litellm_inference_messages::{
-    Delivered, Error, Transport, TransportBody, TransportRequest, TransportResponse,
+    Delivered, Error, Transport, TransportRequest, TransportResponse,
 };
 use pyo3::{
     exceptions::{PyBaseException, PyException, PyStopAsyncIteration},
@@ -160,10 +160,6 @@ impl HostedTransport {
                     .handler
                     .as_ref()
                     .ok_or(litellm_host_python::Error::MissingState)?;
-                let body = match &sent.body {
-                    TransportBody::Json(body) => json_to_py(py, body)?.unbind(),
-                    TransportBody::Signed(bytes) => PyBytes::new(py, bytes).into_any().unbind(),
-                };
                 let awaitable = py
                     .import(ROUTE_HOST_MODULE)?
                     .getattr("transport_send")?
@@ -172,7 +168,7 @@ impl HostedTransport {
                         request,
                         &sent.url,
                         to_py(py, &sent.headers)?,
-                        body,
+                        PyBytes::new(py, &sent.body),
                         sent.stream,
                     ))?;
                 self.pending = Some(Pending::Send(reply));

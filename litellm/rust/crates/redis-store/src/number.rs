@@ -70,13 +70,16 @@ impl Number {
     }
 }
 
-/// Python's `+`: two ints stay an int, anything with a float is a float.
+/// Python's `+`: two ints stay an int, anything with a float is a float. An int sum past `i64`
+/// becomes the nearest float, which still compares above any limit the way Python's int does.
 impl Add for Number {
     type Output = Self;
 
     fn add(self, other: Self) -> Self {
         match (self, other) {
-            (Self::Int(left), Self::Int(right)) => Self::Int(left + right),
+            (Self::Int(left), Self::Int(right)) => left
+                .checked_add(right)
+                .map_or_else(|| Self::Float(left as f64 + right as f64), Self::Int),
             (left, right) => Self::Float(left.as_f64() + right.as_f64()),
         }
     }

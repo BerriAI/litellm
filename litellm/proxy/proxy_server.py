@@ -2993,6 +2993,7 @@ _ROUTE_MAX_REQUEST_SIZE_MB: Final[Mapping[tuple[str, str], float]] = MappingProx
         ("POST", "/claude-code/plugins/upload"): 11,
         ("POST", "/skill-hub/skills/upload"): 11,
         ("PUT", "/skill-hub/skills/{name}/upload"): 11,
+        ("PUT", "/skill-hub/submissions/{submission_id}/upload"): 11,
     }
 )
 
@@ -5857,6 +5858,16 @@ def _reload_settings_store(section: Section, store: SettingsStore, section_confi
         store["pass_through_endpoints"] = serving_pass_throughs
 
 
+def _clear_db_settings_beside_pass_through_endpoints(section: Section, store: SettingsStore) -> None:
+    stored_pass_throughs: Final = store.db_value("pass_through_endpoints")
+    store.apply_db_row(
+        section,
+        MappingProxyType({"pass_through_endpoints": stored_pass_throughs})
+        if isinstance(stored_pass_throughs, list)
+        else _EMPTY_SETTINGS_MAPPING,
+    )
+
+
 def _general_settings_row_is_readable(row: _ConfigParamValueRow | None) -> bool:
     return row is None or row.param_value is None or isinstance(row.param_value, Mapping)
 
@@ -6707,7 +6718,7 @@ class ProxyConfig:
             )
         else:
             for section, store in self._settings_stores.items():
-                store.apply_db_row(section, _EMPTY_SETTINGS_MAPPING)
+                _clear_db_settings_beside_pass_through_endpoints(section, store)
 
         config = self._config_with_resolved_settings(config)
 
@@ -7080,7 +7091,7 @@ class ProxyConfig:
                 elif key == "priority_reservation_settings":
                     from litellm.types.utils import PriorityReservationSettings
 
-                    litellm.priority_reservation_settings = PriorityReservationSettings(**value)
+                    litellm.priority_reservation_settings = PriorityReservationSettings.model_validate(value)
                 elif key == "callbacks":
                     initialize_callbacks_on_proxy(
                         value=value,
@@ -11935,6 +11946,35 @@ class ProxyStartupEvent:
             max_instances=1,
             coalesce=True,
             misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+        )
+
+        async def send_performance_alert_summaries() -> None:
+            from litellm.integrations.performance_alert_notifications import PerformanceAlertNotifier
+            from litellm.repositories.alert_repository import AlertRepository
+
+            slack: Final = proxy_logging_obj.slack_alerting_instance
+            email_connected: Final = bool(os.getenv("SMTP_HOST") and os.getenv("SMTP_SENDER_EMAIL"))
+            if not email_connected and not slack.performance_alert_webhooks():
+                return
+            if _current_general_settings().get("performance_alerts_enabled", True) is not True:
+                return
+            if not (
+                await PerformanceAlertRepository(prisma_client, enterprise=premium_user is True).monitoring()
+            ).enabled:
+                return
+            await PerformanceAlertNotifier(
+                ConfigRepository(prisma_client, use_writer=True), AlertRepository(prisma_client)
+            ).run(slack)
+
+        scheduler.add_job(  # pyright: ignore[reportUnknownMemberType]  # APScheduler does not provide typed job methods
+            send_performance_alert_summaries,
+            "interval",
+            minutes=5,
+            next_run_time=datetime.now(timezone.utc),
+            id="performance_alert_summaries",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
         )
 
         ### PTU DAILY ROLLUP ###
@@ -19930,6 +19970,7 @@ async def _generate_onboarding_ui_session_token(user_obj: _UserTableRow) -> str:
     response: Final = await generate_key_helper_fn(
         llm_router=llm_router,
         request_type="key",
+        actor=None,
         **{
             "user_role": user_obj.user_role,
             "duration": LITELLM_UI_SESSION_DURATION,

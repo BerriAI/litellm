@@ -31,6 +31,7 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
 )
 from litellm.proxy.utils import jsonify_object
 from litellm.repositories.budget_repository import BudgetRepository
+from litellm.repositories.table_repositories import CustomerOrganizationRepository
 
 router: Final = APIRouter()
 
@@ -369,6 +370,18 @@ async def delete_budget(
         raise HTTPException(
             status_code=400,
             detail={"error": f"{CommonProxyErrors.not_allowed_access.value}, your role={user_api_key_dict.user_role}"},
+        )
+
+    customer_org_count: Final = await CustomerOrganizationRepository(prisma_client).table.count(
+        where={"budget_ids": {"has": data.id}}
+    )
+    if customer_org_count:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "Budget is a customer organization default budget. Delete it through "
+                "/management/v1/customer_organizations/{customer_org_id}/default_budgets/{budget_id}"
+            },
         )
 
     response: Final = await BudgetRepository(prisma_client).table.delete(where={"budget_id": data.id})
