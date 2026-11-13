@@ -2140,6 +2140,9 @@ class LiteLLMProxyRequestSetup:
             user_api_key_customer_member_id=customer.customer_member_id if customer else None,
             user_api_key_customer_team_id=customer.customer_team_id if customer else None,
             user_api_key_customer_org_id=customer.customer_org_id if customer else None,
+            user_api_key_customer_org_alias=customer.customer_org_alias if customer else None,
+            user_api_key_customer_team_alias=customer.customer_team_alias if customer else None,
+            user_api_key_customer_member_alias=customer.customer_member_alias if customer else None,
             user_api_key_user_email=user_api_key_dict.user_email,
             user_api_key_request_route=user_api_key_dict.request_route,
             user_api_key_budget_reset_at=(

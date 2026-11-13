@@ -216,6 +216,12 @@ _STAMPED_METADATA_KEYS: Final = frozenset(
         "is_silent_experiment",
         BILLED_RETRY_ATTEMPT_METADATA_KEY,
         "user_api_key_user_email",
+        "user_api_key_customer_org_id",
+        "user_api_key_customer_org_alias",
+        "user_api_key_customer_team_id",
+        "user_api_key_customer_team_alias",
+        "user_api_key_customer_member_id",
+        "user_api_key_customer_member_alias",
     )
 )
 
@@ -227,6 +233,14 @@ class _UpstreamProviderMetadata(TypedDict, total=False):
 def _stored_user_email(metadata: Mapping[str, object]) -> str | None:
     email: Final = metadata.get("user_api_key_user_email")
     return email if isinstance(email, str) and email.strip() else None
+
+
+_CUSTOMER_METADATA_ADAPTER: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
+
+
+def _stored_customer_identity_field(metadata: Mapping[object, object], key: str) -> str | None:
+    value: Final = metadata.get(key)
+    return value if isinstance(value, str) and value.strip() else None
 
 
 def _get_spend_logs_metadata(
@@ -312,9 +326,26 @@ def _get_spend_logs_metadata(
     retry_key: Final = BILLED_RETRY_ATTEMPT_METADATA_KEY
     billed_retry_attempt: Final = retry_key in metadata and metadata[retry_key] is True
     # Filter the metadata dictionary to include only the specified keys
+    customer_metadata: Final = _CUSTOMER_METADATA_ADAPTER.validate_python(metadata)
     clean_metadata: Final = SpendLogsMetadata(
         **MappingProxyType(
             {key: metadata.get(key) for key in SpendLogsMetadata.__annotations__ if key not in _STAMPED_METADATA_KEYS}
+        ),
+        user_api_key_customer_org_id=_stored_customer_identity_field(customer_metadata, "user_api_key_customer_org_id"),
+        user_api_key_customer_org_alias=_stored_customer_identity_field(
+            customer_metadata, "user_api_key_customer_org_alias"
+        ),
+        user_api_key_customer_team_id=_stored_customer_identity_field(
+            customer_metadata, "user_api_key_customer_team_id"
+        ),
+        user_api_key_customer_team_alias=_stored_customer_identity_field(
+            customer_metadata, "user_api_key_customer_team_alias"
+        ),
+        user_api_key_customer_member_id=_stored_customer_identity_field(
+            customer_metadata, "user_api_key_customer_member_id"
+        ),
+        user_api_key_customer_member_alias=_stored_customer_identity_field(
+            customer_metadata, "user_api_key_customer_member_alias"
         ),
         **upstream_provider_metadata,
         autorouter_savings=autorouter_savings,

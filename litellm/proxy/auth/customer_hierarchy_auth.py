@@ -60,6 +60,7 @@ class _OrganizationRow(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     customer_org_id: str
+    alias: str | None = None
     spend: float = 0.0
     budget: Mapping[str, object] | None = None
 
@@ -68,6 +69,7 @@ class _TeamRow(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     customer_team_id: str
+    alias: str | None = None
     spend: float = 0.0
     budget: Mapping[str, object] | None = None
     parent_org: _OrganizationRow
@@ -77,6 +79,7 @@ class _MemberRow(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     customer_member_id: str
+    alias: str | None = None
     spend: float = 0.0
     budget: Mapping[str, object] | None = None
     budget_override: Mapping[str, object] | None = None
@@ -155,8 +158,11 @@ def customer_hierarchy_from_member_row(row: Mapping[str, object], now: datetime)
     override: Final = related_budget(member.budget_override, now, template.max_budget if template is not None else None)
     return CustomerHierarchyAuth(
         customer_member_id=member.customer_member_id,
+        customer_member_alias=member.alias,
         customer_team_id=team.customer_team_id,
+        customer_team_alias=team.alias,
         customer_org_id=organization.customer_org_id,
+        customer_org_alias=organization.alias,
         scopes=(
             _scope(
                 "customer_org",
@@ -180,6 +186,7 @@ def customer_hierarchy_from_organization_row(row: Mapping[str, object], now: dat
     organization: Final = _OrganizationRow.model_validate(row)
     return CustomerHierarchyAuth(
         customer_org_id=organization.customer_org_id,
+        customer_org_alias=organization.alias,
         scopes=(
             _scope(
                 "customer_org",
@@ -412,6 +419,17 @@ async def resolve_customer_hierarchy(
     """Load the hierarchy the headers name and admit the request against it. ``request_model`` is the model the
     route will actually serve, which may differ from the body."""
     hierarchy: Final = await load_customer_hierarchy(identity, prisma_client, user_api_key_cache, register)
+    check_customer_hierarchy_access(hierarchy, llm_router, request_model, route, key_metadata)
+    return hierarchy
+
+
+def check_customer_hierarchy_access(
+    hierarchy: CustomerHierarchyAuth,
+    llm_router: "RegistryReader | None",
+    request_model: str | Sequence[str] | None,
+    route: str,
+    key_metadata: Mapping[str, object] | None = None,
+) -> None:
     check_customer_hierarchy_key_scope(hierarchy, key_metadata or {})
     if not RouteChecks.is_info_route(route):
         check_customer_hierarchy_budget(hierarchy)
@@ -419,7 +437,6 @@ async def resolve_customer_hierarchy(
     for model in requested:
         if model:
             check_customer_hierarchy_model_access(hierarchy, model, llm_router)
-    return hierarchy
 
 
 def check_customer_hierarchy_key_scope(hierarchy: CustomerHierarchyAuth, key_metadata: Mapping[str, object]) -> None:

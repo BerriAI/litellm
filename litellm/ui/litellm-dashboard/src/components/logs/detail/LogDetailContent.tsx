@@ -28,6 +28,7 @@ import { ConfigInfoMessage } from "./sections/ConfigInfoMessage";
 import { VectorStoreViewer } from "./sections/VectorStoreViewer";
 import { CREDENTIAL_LABELS, KUBERNETES_POD_ROUTING_LABELS } from "../constants";
 import { TruncatedValue } from "./TruncatedValue";
+import { CustomerSection } from "./CustomerSection";
 import { TokenFlow } from "./TokenFlow";
 import { JsonViewer } from "./JsonViewer";
 import { RoutingDecisionCard, type RoutingDecision } from "./RoutingDecisionCard";
@@ -196,6 +197,8 @@ export function LogDetailContent({
           </CardContent>
         </Card>
       </div>
+
+      <CustomerSection metadata={metadata} />
 
       {/* Batch Results */}
       {isBatchCallType(logEntry.call_type) && <BatchResultsSection logEntry={logEntry} metadata={metadata} />}

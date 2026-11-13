@@ -14383,6 +14383,12 @@
         "filePlaceholder": "[File]",
         "audioPlaceholder": "[Audio]"
       },
+      "customer": {
+        "title": "Customer",
+        "org": "Customer org",
+        "team": "Customer team",
+        "member": "Customer member"
+      },
       "drawer": {
         "secondsSuffix": "s",
         "agentCountSuffix": " Agent",

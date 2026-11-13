@@ -40,8 +40,11 @@ class CustomerHierarchyAuth(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     customer_org_id: str
+    customer_org_alias: str | None = None
     customer_team_id: str | None = None
+    customer_team_alias: str | None = None
     customer_member_id: str | None = None
+    customer_member_alias: str | None = None
     scopes: tuple[CustomerScopeAuth, ...]
 
 

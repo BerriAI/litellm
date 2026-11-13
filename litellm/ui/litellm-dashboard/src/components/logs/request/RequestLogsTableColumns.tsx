@@ -305,6 +305,30 @@ export const getRequestLogsTableColumns = (
     cell: ({ row }) => <TruncatedText value={readMetaString(row.original.metadata, "user_api_key_team_alias")} />,
   },
   {
+    id: "customer",
+    header: t("logs.detail.customer.title"),
+    size: 190,
+    enableSorting: false,
+    cell: ({ row }) => {
+      const metadata = row.original.metadata;
+      const customerOrg =
+        readMetaString(metadata, "user_api_key_customer_org_alias") ??
+        readMetaString(metadata, "user_api_key_customer_org_id");
+      const customerMember = readMetaString(metadata, "user_api_key_customer_member_id");
+      if (!customerOrg && !customerMember) return <span className="text-muted-foreground">-</span>;
+      return (
+        <div className="flex flex-col gap-0.5">
+          {customerOrg && (
+            <TruncatedText value={customerOrg} tooltip={`${t("logs.detail.customer.org")}: ${customerOrg}`} />
+          )}
+          {customerMember && (
+            <TruncatedText value={customerMember} tooltip={`${t("logs.detail.customer.member")}: ${customerMember}`} />
+          )}
+        </div>
+      );
+    },
+  },
+  {
     id: "key_hash",
     header: t("logs.request.columns.keyHash"),
     size: 110,
