@@ -373,7 +373,7 @@ async def delete_budget(
         )
 
     customer_org_count: Final = await CustomerOrganizationRepository(prisma_client).table.count(
-        where={"budget_ids": {"has": data.id}}
+        where={"budget_template_ids": {"has": data.id}}
     )
     if customer_org_count:
         raise HTTPException(

@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from litellm.types.integrations.slack_alerting import Litellm_EntityType
 
@@ -16,6 +16,7 @@ class CustomerRequestIdentity:
 
     customer_member_id: str | None = None
     customer_org_alias: str | None = None
+    customer_team_id: str | None = None
 
 
 class CustomerScopeAuth(BaseModel):
@@ -43,6 +44,10 @@ class CustomerHierarchyAuth(BaseModel):
     customer_team_id: str | None = None
     customer_member_id: str | None = None
     scopes: tuple[CustomerScopeAuth, ...]
+    team_scopes: tuple[CustomerScopeAuth, ...] = Field(
+        default=(),
+        description="Every team the member belongs to, in parent_team_ids order; scopes holds the selected one",
+    )
 
 
 @dataclass(frozen=True, slots=True)

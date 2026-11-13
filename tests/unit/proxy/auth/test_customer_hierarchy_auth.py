@@ -3,12 +3,14 @@ from datetime import datetime, timedelta, timezone
 from typing import Final
 
 import pytest
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.proxy._types import ProxyException
 from litellm.proxy.auth.customer_hierarchy_auth import (
     CUSTOMER_MEMBER_ID_HEADER,
     CUSTOMER_ORG_ALIAS_HEADER,
+    CUSTOMER_TEAM_ID_HEADER,
     AmbiguousOrganizationAlias,
     check_customer_hierarchy_budget,
     check_customer_hierarchy_key_scope,
@@ -20,6 +22,7 @@ from litellm.proxy.auth.customer_hierarchy_auth import (
     get_customer_hierarchy,
     get_customer_organization_hierarchy,
     resolve_customer_hierarchy,
+    select_customer_team,
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_helpers.customer_hierarchy import ErrorCode, Failure
@@ -45,18 +48,16 @@ def _row(
     org_spend, team_spend, member_spend = spend
     return {
         "customer_member_id": "member-1",
-        "parent_team_id": "team-1",
+        "parent_org_id": "org-1",
+        "parent_team_ids": ("team-1",),
         "spend": member_spend,
         "budget": template,
         "budget_override": override,
         "budget_override_expires_at": override_expires_at,
-        "parent_team": {
-            "customer_team_id": "team-1",
-            "parent_org_id": "org-1",
-            "spend": team_spend,
-            "budget": team_budget,
-            "parent_org": {"customer_org_id": "org-1", "spend": org_spend, "budget": org_budget},
-        },
+        "parent_org": {"customer_org_id": "org-1", "spend": org_spend, "budget": org_budget},
+        "teams": (
+            {"customer_team_id": "team-1", "parent_org_id": "org-1", "spend": team_spend, "budget": team_budget},
+        ),
     }
 
 
@@ -95,6 +96,74 @@ def test_member_row_yields_org_team_and_member_scopes_with_the_effective_member_
         3.0,
     )
     assert member.model_tpm_limit == {"gpt-4o": 400}
+
+
+def test_a_team_override_caps_the_team_scope_until_it_expires() -> None:
+    base: Final = _row(template={"max_budget": 10.0}, team_budget={"max_budget": 50.0, "rpm_limit": 5})
+    team: Final = {**_team_of(base), "budget_override": {"max_budget": 500.0}}
+
+    active: Final = _scopes(
+        customer_hierarchy_from_member_row(
+            {**base, "teams": ({**team, "budget_override_expires_at": NOW + timedelta(days=1)},)}, NOW
+        )
+    )["customer_team"]
+    expired: Final = _scopes(
+        customer_hierarchy_from_member_row(
+            {**base, "teams": ({**team, "budget_override_expires_at": NOW - timedelta(seconds=1)},)}, NOW
+        )
+    )["customer_team"]
+
+    assert (active.max_budget, active.rpm_limit) == (500.0, 5)
+    assert (expired.max_budget, expired.rpm_limit) == (50.0, 5)
+
+
+def _team_of(row: Mapping[str, object]) -> Mapping[str, object]:
+    return TypeAdapter(tuple[Mapping[str, object], ...]).validate_python(row["teams"])[0]
+
+
+def test_a_member_in_two_teams_is_charged_to_the_first_unless_the_request_names_another() -> None:
+    base: Final = _row(template={"max_budget": 10.0}, team_budget={"max_budget": 50.0})
+    second: Final = {
+        "customer_team_id": "team-2",
+        "parent_org_id": "org-1",
+        "spend": 7.0,
+        "budget": {"max_budget": 5.0},
+    }
+    hierarchy: Final = customer_hierarchy_from_member_row(
+        {**base, "parent_team_ids": ("team-1", "team-2"), "teams": (*_teams_of(base), second)}, NOW
+    )
+
+    assert hierarchy.customer_team_id == "team-1"
+    assert tuple(scope.entity_id for scope in hierarchy.scopes) == ("org-1", "team-1", "member-1")
+    assert tuple(scope.entity_id for scope in hierarchy.team_scopes) == ("team-1", "team-2")
+    selected: Final = select_customer_team(hierarchy, "team-2")
+    assert selected is not None
+    assert selected.customer_team_id == "team-2"
+    assert tuple((scope.entity_id, scope.max_budget) for scope in selected.scopes) == (
+        ("org-1", None),
+        ("team-2", 5.0),
+        ("member-1", 10.0),
+    )
+    with pytest.raises(litellm.BudgetExceededError):
+        check_customer_hierarchy_budget(selected)
+    assert select_customer_team(hierarchy, "team-9") is None
+
+
+@pytest.mark.asyncio
+async def test_a_team_header_must_name_one_of_the_members_teams() -> None:
+    prisma: Final = _Prisma(_MemberTable({"member-1": _row(template={"max_budget": 10.0})}))
+
+    selected: Final = await _resolve(
+        prisma, CustomerRequestIdentity(customer_member_id="member-1", customer_team_id="team-1")
+    )
+    assert selected.customer_team_id == "team-1"
+    with pytest.raises(ProxyException) as exc:
+        await _resolve(prisma, CustomerRequestIdentity(customer_member_id="member-1", customer_team_id="team-9"))
+    assert (exc.value.code, exc.value.param) == ("403", CUSTOMER_TEAM_ID_HEADER)
+
+
+def _teams_of(row: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    return TypeAdapter(tuple[Mapping[str, object], ...]).validate_python(row["teams"])
 
 
 def test_an_expired_override_leaves_the_member_on_its_template() -> None:
@@ -201,9 +270,27 @@ class _OrganizationTable:
         return matching[:take] if take is not None else matching
 
 
+class _TeamTable:
+    """Serves the team rows the member fixtures embed under ``teams``, as the proxy's second lookup would."""
+
+    def __init__(self, members: _MemberTable) -> None:
+        self.members = members
+
+    async def find_many(self, where: Mapping[str, object], include: Mapping[str, object] | None = None):
+        wanted: Final = TypeAdapter(Mapping[str, Sequence[str]]).validate_python(where["customer_team_id"])["in"]
+        teams: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+        return [
+            _Record(team)
+            for row in self.members.rows.values()
+            for team in teams.validate_python(row.get("teams") or ())
+            if team["customer_team_id"] in wanted
+        ]  # comprehension-ok: flattening the fixture rows' embedded teams
+
+
 class _Db:
     def __init__(self, table: _MemberTable, organizations: _OrganizationTable) -> None:
         self.litellm_customermembertable = table
+        self.litellm_customerteamtable = _TeamTable(table)
         self.litellm_customerorganizationtable = organizations
 
 
@@ -238,7 +325,8 @@ class _Registrar:
         return CustomerMember.model_validate(
             {
                 "customer_member_id": member_id,
-                "parent_team_id": "team-1",
+                "parent_org_id": "org-1",
+                "parent_team_ids": ("team-1",),
                 "effective_budget": {"max_budget": 10.0},
                 "created_at": NOW,
                 "created_by": "x",

@@ -33157,6 +33157,12 @@ export interface components {
             customer_team_id?: string | null;
             /** Scopes */
             scopes: components["schemas"]["CustomerScopeAuth"][];
+            /**
+             * Team Scopes
+             * @description Every team the member belongs to, in parent_team_ids order; scopes holds the selected one
+             * @default []
+             */
+            team_scopes: components["schemas"]["CustomerScopeAuth"][];
         };
         /** CustomerMember */
         CustomerMember: {
@@ -33181,8 +33187,10 @@ export interface components {
             /** Customer Member Id */
             customer_member_id: string;
             effective_budget: components["schemas"]["Budget"];
-            /** Parent Team Id */
-            parent_team_id: string;
+            /** Parent Org Id */
+            parent_org_id: string;
+            /** Parent Team Ids */
+            parent_team_ids: string[];
             /**
              * Spend
              * @default 0
@@ -40476,8 +40484,16 @@ export interface components {
             budget_override_expires_at?: string | null;
             /** Customer Member Id */
             customer_member_id?: string | null;
-            /** Parent Team Id */
-            parent_team_id: string;
+            /**
+             * Parent Org Id
+             * @description Must match the parent teams' organization when set
+             */
+            parent_org_id?: string | null;
+            /**
+             * Parent Team Ids
+             * @description Teams the member belongs to, first is default
+             */
+            parent_team_ids: string[];
         };
         /** MemberPatch */
         MemberPatch: {
@@ -42369,8 +42385,8 @@ export interface components {
             created_by: string;
             /** Customer Org Id */
             customer_org_id: string;
-            /** Default Budget Id */
-            default_budget_id?: string | null;
+            /** Default Budget Template Id */
+            default_budget_template_id?: string | null;
             /**
              * Default Budgets
              * @default []
@@ -49299,6 +49315,11 @@ export interface components {
             budget?: components["schemas"]["Budget"] | null;
             /** Budget Id */
             budget_id?: string | null;
+            budget_override?: components["schemas"]["Budget"] | null;
+            /** Budget Override Expires At */
+            budget_override_expires_at?: string | null;
+            /** Budget Override Id */
+            budget_override_id?: string | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /**
@@ -49310,6 +49331,7 @@ export interface components {
             created_by: string;
             /** Customer Team Id */
             customer_team_id: string;
+            effective_budget: components["schemas"]["Budget"];
             /** Parent Org Id */
             parent_org_id: string;
             /**
@@ -49453,6 +49475,9 @@ export interface components {
             /** Alias */
             alias?: string | null;
             budget?: components["schemas"]["Budget"] | null;
+            budget_override?: components["schemas"]["Budget"] | null;
+            /** Budget Override Expires At */
+            budget_override_expires_at?: string | null;
             /** Customer Team Id */
             customer_team_id?: string | null;
             /** Parent Org Id */
@@ -49942,6 +49967,9 @@ export interface components {
             /** Alias */
             alias?: string | null;
             budget?: components["schemas"]["Budget"] | null;
+            budget_override?: components["schemas"]["Budget"] | null;
+            /** Budget Override Expires At */
+            budget_override_expires_at?: string | null;
         };
         /** TeamUserSpendResponse */
         TeamUserSpendResponse: {

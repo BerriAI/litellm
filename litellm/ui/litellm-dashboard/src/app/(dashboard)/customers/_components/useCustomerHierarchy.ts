@@ -57,7 +57,7 @@ async function customerHierarchyChildren(
     });
     if (
       !response.data ||
-      response.data.data.some((member) => member.parent_team_id !== context.team?.customer_team_id)
+      response.data.data.some((member) => !member.parent_team_ids.includes(context.team?.customer_team_id ?? ""))
     ) {
       throw scopeFailure();
     }
