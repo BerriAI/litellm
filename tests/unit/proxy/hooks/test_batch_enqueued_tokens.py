@@ -27,6 +27,7 @@ from litellm.proxy.hooks.batch_enqueued_tokens import (
     batch_response_view,
     canonical_provider_batch_id,
     project_has_model_batch_enqueued_token_limits,
+    project_limits_batch_model,
     resolve_batch_enqueued_token_scopes,
     resolve_project_model_batch_enqueued_token_scopes,
 )
@@ -150,6 +151,21 @@ def test_project_model_scopes_ignore_unusable_limits(user):
             user, row_tokens_by_model={"gpt-5.5": 10}, routing_model="gpt-5.5", batch_tokens=10, model_group_of=str
         )
         == ()
+    )
+
+
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [("gpt-5.5", True), ("gpt-latest", True), ("unlisted-model", False), (None, False)],
+    ids=["limited model", "alias of a limited group", "unlisted model", "unknown routing model"],
+)
+def test_project_limits_batch_model_only_for_models_with_a_limit(model, expected):
+    groups: Final = MappingProxyType({"gpt-latest": "gpt-5.5"})
+    assert (
+        project_limits_batch_model(
+            _project_user({"gpt-5.5": 100}), model, model_group_of=lambda name: groups.get(name, name)
+        )
+        is expected
     )
 
 

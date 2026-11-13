@@ -2375,8 +2375,9 @@ PTU_PRUNE_SKEW_GRACE_SECONDS: Final[int] = 300
 BATCH_ENQUEUED_TOKEN_TTL_SECONDS: Final[int] = 8 * 24 * 60 * 60
 
 # Key/team metadata field that opts batches into enqueued-token limiting, and its
-# per-model project counterpart. Only proxy admins may write them: when present they
-# replace the standard RPM/TPM checks for batch submissions.
+# per-model project counterpart. Only proxy admins may write them. When one covers the
+# whole batch (key, team, or the project limit of the model the batch routes to) it
+# replaces the standard per-minute checks for that submission; daily caps still apply.
 BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY: Final = "batch_enqueued_token_limit"
 MODEL_BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY: Final = "model_batch_enqueued_token_limit"
 MAX_BATCH_FILE_RECORDS_KEY: Final = "max_batch_file_records"

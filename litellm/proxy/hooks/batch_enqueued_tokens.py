@@ -192,6 +192,19 @@ def _limited_model_charges(
             yield group, limit, tokens
 
 
+def project_limits_batch_model(
+    user_api_key_dict: UserAPIKeyAuth,
+    model: str | None,
+    model_group_of: Callable[[str], str],
+) -> bool:
+    if model is None:
+        return False
+    charges: Final = _limited_model_charges(
+        _read_project_model_limits(user_api_key_dict), MappingProxyType({model: 0}), model_group_of
+    )
+    return next(charges, None) is not None
+
+
 def resolve_project_model_batch_enqueued_token_scopes(
     user_api_key_dict: UserAPIKeyAuth,
     row_tokens_by_model: Mapping[str, int],

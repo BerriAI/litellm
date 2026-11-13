@@ -8,6 +8,7 @@ VERIA-39 regression tests:
 """
 
 from collections.abc import Callable, Mapping
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -2365,6 +2366,62 @@ async def test_project_model_enqueued_limit_for_another_model_leaves_the_batch_o
     assert data["_batch_token_count"] > 10
     stash = get_request_stash()
     assert stash is None or stash.batch_enqueued_reservation is None
+
+
+@pytest.mark.asyncio
+async def test_per_minute_limits_still_apply_when_only_a_rows_model_has_a_project_allowance():
+    from litellm.proxy.hooks.batch_enqueued_tokens import BatchEnqueuedTokenScope
+
+    rate_limiter, local_cache = _enqueued_rate_limiter()
+    afile_content_mock, patches = _enqueued_batch_patches(_MIXED_MODEL_BATCH_FILE_CONTENT)
+    allowance: Final = 1000000
+
+    with patches[0], patches[1], patches[2], patch("litellm.afile_content", new=afile_content_mock):
+        per_minute_capped = _project_model_limited_user({"gpt-5.5": allowance}).model_copy(
+            update={"rpm_limit": 1, "tpm_limit": 10}
+        )
+        with pytest.raises(HTTPException) as exc:
+            await rate_limiter.async_pre_call_hook(
+                user_api_key_dict=per_minute_capped,
+                cache=local_cache,
+                data={"input_file_id": "file-abc123", "model": "gpt-4o-mini"},
+                call_type="acreate_batch",
+            )
+
+    assert exc.value.status_code == 429
+    assert "Batch enqueued token limit" not in str(exc.value.detail)
+    whole_allowance = BatchEnqueuedTokenScope(
+        key="project_model", value="project-enqueued-batch:gpt-5.5", limit=allowance, tokens=allowance
+    )
+    refilled = await rate_limiter.parallel_request_limiter.batch_enqueued_token_store.reserve(
+        tokens=allowance, scopes=(whole_allowance,)
+    )
+    assert refilled.scopes == (whole_allowance,)
+
+
+@pytest.mark.asyncio
+async def test_a_project_allowance_for_the_routing_model_replaces_per_minute_limits():
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import get_request_stash
+
+    rate_limiter, local_cache = _enqueued_rate_limiter()
+    afile_content_mock, patches = _enqueued_batch_patches()
+
+    with patches[0], patches[1], patches[2], patch("litellm.afile_content", new=afile_content_mock):
+        per_minute_capped = _project_model_limited_user({"gpt-4o-mini": 1000000}).model_copy(
+            update={"rpm_limit": 1, "tpm_limit": 10}
+        )
+        data = {"input_file_id": "file-abc123", "model": "gpt-4o-mini"}
+        result = await rate_limiter.async_pre_call_hook(
+            user_api_key_dict=per_minute_capped,
+            cache=local_cache,
+            data=data,
+            call_type="acreate_batch",
+        )
+
+    assert result is data
+    stash = get_request_stash()
+    assert stash is not None and stash.batch_enqueued_reservation is not None
+    assert stash.batch_enqueued_reservation.tokens == data["_batch_token_count"] > 10
 
 
 @pytest.mark.asyncio

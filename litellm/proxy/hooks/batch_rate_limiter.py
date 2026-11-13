@@ -57,6 +57,7 @@ from litellm.proxy.hooks.batch_enqueued_tokens import (
     BatchEnqueuedTokenReservation,
     BatchEnqueuedTokenScope,
     project_has_model_batch_enqueued_token_limits,
+    project_limits_batch_model,
     resolve_batch_enqueued_token_scopes,
     resolve_project_model_batch_enqueued_token_scopes,
 )
@@ -624,9 +625,10 @@ class _PROXY_BatchRateLimiter(CustomLogger):
     ) -> None:
         """Reserve the batch's estimated tokens against the caller's enqueued-token allowance.
 
-        Runs instead of the per-minute counter charge when the key or team
-        opted in via ``batch_enqueued_token_limit`` metadata, or the project via
-        ``model_batch_enqueued_token_limit`` for a model the batch runs. The reservation
+        Runs instead of the per-minute counter charge when the key or team opted
+        in via ``batch_enqueued_token_limit`` metadata, or the project limits the
+        batch's routing model via ``model_batch_enqueued_token_limit``; otherwise it
+        runs alongside the normal counters. The reservation
         is stashed on the request so the v3 limiter's post-call hooks can
         persist it (keyed by the provider batch id) and refund it when the
         batch reaches a terminal state.
@@ -1346,6 +1348,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             data["_batch_token_count"] = batch_usage.total_tokens
             data["_batch_request_count"] = batch_usage.request_count
 
+            routing_model: Final = self._get_batch_routing_model(data)  # pyright: ignore[reportUnknownMemberType]  # hook data is the untyped proxy request dict
             enqueued_scopes: Final = (
                 *key_and_team_scopes,
                 *resolve_project_model_batch_enqueued_token_scopes(
@@ -1353,7 +1356,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     row_tokens_by_model=MappingProxyType(
                         {model: usage.get("total_tokens", 0) for model, usage in batch_usage.per_model_usage.items()}
                     ),
-                    routing_model=self._get_batch_routing_model(data),  # pyright: ignore[reportUnknownMemberType]  # hook data is the untyped proxy request dict
+                    routing_model=routing_model,
                     batch_tokens=batch_usage.total_tokens,
                     model_group_of=self._model_group_of,
                 ),
@@ -1365,7 +1368,10 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     batch_usage=batch_usage,
                     scopes=enqueued_scopes,
                 )
-                daily_descriptors: Final = [
+                reservation_covers_batch: Final = bool(key_and_team_scopes) or project_limits_batch_model(
+                    user_api_key_dict, routing_model, self._model_group_of
+                )
+                remaining_descriptors: Final = [
                     descriptor
                     for descriptor in (
                         batch_rate_limit_descriptors
@@ -1374,17 +1380,17 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                             user_api_key_dict=user_api_key_dict, data=data
                         )
                     )
-                    if descriptor["key"].endswith(BATCH_TPD_DESCRIPTOR_SUFFIX)
+                    if not reservation_covers_batch or descriptor["key"].endswith(BATCH_TPD_DESCRIPTOR_SUFFIX)
                 ]
-                if daily_descriptors:
+                if remaining_descriptors or not reservation_covers_batch:
                     await self._refund_enqueued_reservation_if_rejected(
                         user_api_key_dict,
                         self._check_and_increment_batch_counters(  # pyright: ignore[reportUnknownMemberType]  # hook data is the untyped proxy request dict
                             user_api_key_dict=user_api_key_dict,
                             data=data,
                             batch_usage=batch_usage,
-                            descriptors=daily_descriptors,
-                            include_project_io_limits=False,
+                            descriptors=remaining_descriptors,
+                            include_project_io_limits=not reservation_covers_batch,
                         ),
                     )
                 verbose_proxy_logger.debug("Batch enqueued-token reservation succeeded")
