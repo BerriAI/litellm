@@ -6672,6 +6672,10 @@ def test_regular_path_never_bills_the_batch_tier_keys(_local_model_cost_map, mon
     assert completion_cost == pytest.approx(64 * 8e-6)
 
 
+# https://developers.openai.com/api/docs/pricing lists "-" for these models' Batch long context price (2026-11-13)
+_OPENAI_MODELS_WITHOUT_A_LONG_CONTEXT_BATCH_PRICE: Final = frozenset({"gpt-5.5-pro"})
+
+
 @pytest.mark.parametrize("prefix", _BATCH_RATE_PREFIXES)
 def test_every_openai_entry_with_a_long_context_rate_and_a_batch_rate_declares_the_batch_tier(
     _local_model_cost_map: None, prefix: str
@@ -6680,6 +6684,7 @@ def test_every_openai_entry_with_a_long_context_rate_and_a_batch_rate_declares_t
         name
         for name, entry in litellm.model_cost.items()
         if isinstance(entry, dict)
+        and name not in _OPENAI_MODELS_WITHOUT_A_LONG_CONTEXT_BATCH_PRICE
         and entry.get("litellm_provider") == "openai"
         and entry.get(f"{prefix}_above_272k_tokens") is not None
         and entry.get(f"{prefix}_batches") is not None

@@ -44,7 +44,7 @@ export default function CustomerMemberSpend({
   const page = Math.max(1, Math.min(table.memberPage, lastPage));
   const start = (page - 1) * PAGE_SIZE;
   return (
-    <section className="border-t pt-6" aria-label={t("customerPortal.analytics.memberSpend")}>
+    <section className="border-b pb-6" aria-label={t("customerPortal.analytics.memberSpend")}>
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-base font-medium tracking-tight">{t("customerPortal.analytics.memberSpend")}</h2>

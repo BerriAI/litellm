@@ -4,7 +4,8 @@ from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from functools import reduce
-from typing import Final
+from itertools import chain
+from typing import TYPE_CHECKING, Final, cast
 
 import pytest
 from prisma import Json
@@ -13,11 +14,22 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from litellm.models.budget import BudgetLimit, LiteLLM_BudgetTable
 from litellm.proxy._types import BudgetWriteRequest
 from litellm.proxy.management_helpers.customer_hierarchy import (
+    CustomerHierarchy,
+    ErrorCode,
+    Failure,
     budget_row_values,
     effective_member_budget,
     related_budget,
 )
-from litellm.types.proxy.management_endpoints.customer_hierarchy import Budget
+from litellm.types.proxy.management_endpoints.customer_hierarchy import (
+    Budget,
+    MemberCreate,
+    OrganizationCreate,
+    TeamCreate,
+)
+
+if TYPE_CHECKING:
+    from prisma import Prisma
 
 NOW: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
@@ -112,6 +124,8 @@ class Table:
         return await self.include(row, include)
 
     async def update(self, where: Mapping[str, object], data: Mapping[str, object]) -> Record | None:
+        from prisma import Json
+
         row_id: Final = str(where[self.id_field])
         if row_id not in self.rows:
             return None
@@ -119,6 +133,33 @@ class Table:
         row: Final = self.rows[row_id].model_copy(update=values)
         self.rows = {**self.rows, row_id: row}
         return row
+
+    async def upsert(self, where: Mapping[str, object], data: Mapping[str, object]) -> Record:
+        existing: Final = await self.find_unique(where)
+        values: Final = TypeAdapter(Mapping[str, object]).validate_python(data["update" if existing else "create"])
+        if existing is None:
+            return await self.create(values)
+        updated: Final = await self.update(where, values)
+        assert updated is not None
+        return updated
+
+    def matches(self, row: Record, where: Mapping[str, object]) -> bool:
+        values: Final = row.model_dump()
+        for key, value in where.items():
+            if key == "AND":
+                clauses: Final = TypeAdapter(tuple[Mapping[str, object], ...]).validate_python(value)
+                if not all(self.matches(row, clause) for clause in clauses):
+                    return False
+            elif isinstance(value, Mapping) and "none" in value:
+                if self.database.has_budget_reference(str(values[self.id_field]), key):
+                    return False
+            elif isinstance(value, Mapping) and "is" in value:
+                related: Final = self.database.litellm_customerteamtable.rows.get(str(values.get("parent_team_id")))
+                if related is None or not self.database.litellm_customerteamtable.matches(related, value["is"]):
+                    return False
+            elif not matches_where(values, {key: value}):
+                return False
+        return True
 
     async def find_many(
         self,
@@ -128,7 +169,7 @@ class Table:
         skip: int = 0,
         take: int | None = None,
     ) -> tuple[Record, ...]:
-        matches: Final = tuple(row for row in self.rows.values() if matches_where(row.model_dump(), where or {}))
+        matches: Final = tuple(row for row in self.rows.values() if self.matches(row, where or {}))
         ordered: Final = reduce(
             lambda rows, key: tuple(
                 sorted(
@@ -164,16 +205,68 @@ class Table:
         return len(matched)
 
 
+class BoundedChildrenTable(Table):
+    def __init__(self, id_field: str, database: "Database") -> None:
+        super().__init__(id_field, database)
+        self.batch_sizes: tuple[int, ...] = ()
+
+    async def find_many(
+        self,
+        where: Mapping[str, object] | None = None,
+        order: Sequence[Mapping[str, object]] | None = None,
+        include: Mapping[str, object] | None = None,
+        skip: int = 0,
+        take: int | None = None,
+    ) -> tuple[Record, ...]:
+        rows: Final = await super().find_many(where=where, order=order, include=include, skip=skip, take=take)
+        if where is not None and any(name in where for name in ("parent_org_id", "parent_team_id", "parent_team_ids")):
+            assert take == 100
+            self.batch_sizes = (*self.batch_sizes, len(rows))
+        return rows
+
+
+class DeleteConflictTable(Table):
+    def __init__(self, id_field: str, database: "Database") -> None:
+        super().__init__(id_field, database)
+        self.members_at_delete: int | None = None
+
+    async def delete(self, where: Mapping[str, object]) -> Record | None:
+        from prisma.errors import ForeignKeyViolationError
+
+        self.members_at_delete = len(self.database.litellm_customermembertable.rows)
+        raise ForeignKeyViolationError({})
+
+
 class Database:
     def __init__(self) -> None:
         self.litellm_customerorganizationtable = Table("customer_org_id", self)
         self.litellm_customerteamtable = Table("customer_team_id", self)
         self.litellm_customermembertable = Table("customer_member_id", self)
         self.litellm_budgettable = Table("budget_id", self)
+        self.litellm_verificationtoken = Table("token", self)
+        self.litellm_projecttable = Table("project_id", self)
         self.litellm_customerbudgetincreaserequest = Table("request_id", self)
         self.locked_organization_ids: tuple[str, ...] = ()
 
+    def has_budget_reference(self, budget_id: str, relation: str) -> bool:
+        references: Final = {
+            "customer_organization_defaults": (self.litellm_customerorganizationtable, "default_budget_id"),
+            "customer_organizations": (self.litellm_customerorganizationtable, "budget_id"),
+            "customer_teams": (self.litellm_customerteamtable, "budget_id"),
+            "customer_members": (self.litellm_customermembertable, "budget_id"),
+            "customer_member_overrides": (self.litellm_customermembertable, "budget_override_id"),
+            "keys": (self.litellm_verificationtoken, "budget_id"),
+            "projects": (self.litellm_projecttable, "budget_id"),
+        }
+        reference: Final = references.get(relation)
+        if reference is None:
+            return False
+        table, field = reference
+        return any(row.model_dump().get(field) == budget_id for row in table.rows.values())
+
     async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
+        if "pg_advisory_xact_lock" in query:
+            return ()
         if "SELECT EXISTS" in query:
             return ({"referenced": False},)
         if "FOR UPDATE" in query:
@@ -184,12 +277,23 @@ class Database:
             connection.executescript(
                 'CREATE TABLE "LiteLLM_CustomerTeamTable" (customer_team_id TEXT, parent_org_id TEXT);'
                 'CREATE TABLE "LiteLLM_CustomerMemberTable" (customer_member_id TEXT, parent_org_id TEXT);'
+                "CREATE TABLE member_teams (team_id TEXT);"
             )
             connection.executemany(
                 'INSERT INTO "LiteLLM_CustomerTeamTable" VALUES (?, ?)',
                 tuple(
                     (row.model_dump()["customer_team_id"], row.model_dump()["parent_org_id"])
                     for row in self.litellm_customerteamtable.rows.values()
+                ),
+            )
+            connection.executemany(
+                "INSERT INTO member_teams VALUES (?)",
+                tuple(
+                    (team_id,)
+                    for team_id in chain.from_iterable(
+                        TypeAdapter(tuple[str, ...]).validate_python(row.model_dump()["parent_team_ids"])
+                        for row in self.litellm_customermembertable.rows.values()
+                    )
                 ),
             )
             connection.executemany(
@@ -202,8 +306,13 @@ class Database:
             return tuple(
                 dict(row)
                 for row in connection.execute(
-                    query.replace("= ANY($1::text[])", "IN (SELECT value FROM json_each($1))"),
-                    tuple(json.dumps(arg) for arg in args),
+                    query.replace("= ANY($1::text[])", "IN (SELECT value FROM json_each($1))").replace(
+                        '"LiteLLM_CustomerMemberTable", unnest(parent_team_ids) AS team_id', "member_teams"
+                    ),
+                    {
+                        str(index): json.dumps(arg) if not isinstance(arg, int) else arg
+                        for index, arg in enumerate(args, 1)
+                    },
                 )
             )
 
@@ -214,6 +323,8 @@ class Database:
             self.litellm_customerteamtable,
             self.litellm_customermembertable,
             self.litellm_budgettable,
+            self.litellm_verificationtoken,
+            self.litellm_projecttable,
         )
         snapshots: Final = tuple(table.rows for table in tables)
         try:
@@ -222,6 +333,53 @@ class Database:
             for table, rows in zip(tables, snapshots):
                 table.rows = rows
             raise
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("premium", (False, True))
+async def test_customer_portal_capacity_caps_every_parent(premium: bool) -> None:
+    database: Final = Database()
+    hierarchy: Final = CustomerHierarchy(
+        cast("Prisma", database), premium_user=premium, clock=lambda: NOW
+    )  # cast-ok: in-memory Prisma edge
+    for index in range(5):
+        assert not isinstance(
+            await hierarchy.create_organization(OrganizationCreate(customer_org_id=f"org-{index}"), "admin"), Failure
+        )
+    sixth_org: Final = await hierarchy.create_organization(OrganizationCreate(customer_org_id="sixth"), "admin")
+    assert isinstance(sixth_org, Failure) is not premium
+    if not premium:
+        assert sixth_org == Failure(ErrorCode.FREE_TIER_LIMIT)
+    for index in range(5):
+        assert not isinstance(
+            await hierarchy.create_team(TeamCreate(customer_team_id=f"team-{index}", parent_org_id="org-0"), "admin"),
+            Failure,
+        )
+    sixth_team: Final = await hierarchy.create_team(
+        TeamCreate(customer_team_id="sixth", parent_org_id="org-0"), "admin"
+    )
+    assert isinstance(sixth_team, Failure) is not premium
+    if not premium:
+        assert sixth_team == Failure(ErrorCode.FREE_TIER_LIMIT)
+    for index in range(5):
+        assert not isinstance(
+            await hierarchy.create_member(
+                MemberCreate(
+                    customer_member_id=f"member-{index}",
+                    parent_team_ids=("team-0", "team-1"),
+                    budget_override=Budget(max_budget=10),
+                ),
+                "admin",
+            ),
+            Failure,
+        )
+    sixth_member: Final = await hierarchy.create_member(
+        MemberCreate(customer_member_id="sixth", parent_team_ids=("team-1",), budget_override=Budget(max_budget=10)),
+        "admin",
+    )
+    assert isinstance(sixth_member, Failure) is not premium
+    if not premium:
+        assert sixth_member == Failure(ErrorCode.FREE_TIER_LIMIT)
 
 
 @pytest.mark.parametrize("expires_at", (None, datetime(2027, 1, 1, tzinfo=timezone.utc)))

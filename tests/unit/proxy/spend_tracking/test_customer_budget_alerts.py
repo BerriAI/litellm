@@ -15,11 +15,25 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
 from litellm.proxy.management_helpers.customer_hierarchy import PrismaRecord
 from litellm.proxy.spend_tracking.customer_budget_alerts import CustomerBudgetAlerting
-from litellm.types.integrations.customer_budget import CustomerBudgetEvent
+from litellm.types.integrations.customer_budget import CustomerBudgetEvent, CustomerBudgetScope
 
 _NOW: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
 _PAYLOAD: Final = TypeAdapter(Mapping[str, object])
 _URL: Final = "https://alerts.example/customer-budget"
+_ROWS: Final[Mapping[CustomerBudgetScope, Mapping[str, object]]] = {
+    "customer_org": {"customer_org_id": "org-1", "alias": "customer-test"},
+    "customer_team": {
+        "customer_team_id": "team-1",
+        "alias": "customer-team",
+        "parent_org": {"customer_org_id": "org-1", "alias": "customer-test"},
+    },
+    "customer_member": {
+        "customer_member_id": "member-1",
+        "alias": "customer-member",
+        "parent_org": {"customer_org_id": "org-1", "alias": "customer-test"},
+        "parent_team_ids": ["team-1", "team-2"],
+    },
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,10 +47,13 @@ class _Record:
 @dataclass(frozen=True, slots=True)
 class _Table:
     records: Mapping[str, PrismaRecord | Exception | None]
+    relations: frozenset[str]
 
     async def find_unique(
         self, where: Mapping[str, object], include: Mapping[str, object] | None = None
     ) -> PrismaRecord | None:
+        if include is not None and not include.keys() <= self.relations:
+            raise ValueError("Unknown customer relation")
         entity_id: Final = next(iter(where.values()))
         record: Final = self.records.get(entity_id) if isinstance(entity_id, str) else None
         if isinstance(record, Exception):
@@ -58,21 +75,21 @@ class _RoutedClient:
 
 
 def _database(records: Mapping[str, PrismaRecord | Exception | None]) -> _Database:
-    table: Final = _Table(records)
-    return _Database(table, table, table)
+    return _Database(
+        _Table(records, frozenset(("budget",))),
+        _Table(records, frozenset(("budget", "budget_override", "parent_org"))),
+        _Table(records, frozenset(("budget", "budget_override", "parent_org"))),
+    )
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("scope", ("customer_org", "customer_team", "customer_member"))
 async def test_committed_crossing_reads_writer_spend_when_the_replica_lags(
-    scope: str, alerts: DualCache, respx_mock: respx.MockRouter
+    scope: CustomerBudgetScope, alerts: DualCache, respx_mock: respx.MockRouter
 ) -> None:
     receiver: Final = respx_mock.post(_URL).respond(200)
     fields: Final = {
-        "customer_org_id": "org-1",
-        "customer_team_id": "team-1",
-        "parent_org": {"customer_org_id": "org-1"},
-        "parent_team": {"customer_team_id": "team-1", "parent_org": {"customer_org_id": "org-1"}},
+        **_ROWS[scope],
         "budget": {"max_budget": 1.0},
     }
     database: Final = _RoutedClient(
@@ -110,10 +127,8 @@ async def test_customer_member_alert_uses_effective_override_and_customer_identi
             "budget": {"max_budget": 10.0, "soft_budget": 8.0},
             "budget_override": {"max_budget": 2.0, "soft_budget": 1.0},
             "budget_override_expires_at": expires,
-            "parent_team": {
-                "customer_team_id": "customer-team-1",
-                "parent_org": {"customer_org_id": "customer-org-1", "alias": "customer-test"},
-            },
+            "parent_org": {"customer_org_id": "customer-org-1", "alias": "customer-test"},
+            "parent_team_ids": ["customer-team-1", "customer-team-2"],
         }
     )
     await CustomerBudgetAlerting.detect_committed_batch(
@@ -133,7 +148,8 @@ async def test_customer_member_alert_uses_effective_override_and_customer_identi
         assert payload["period"] == "lifetime"
         assert payload["customer_org_id"] == "customer-org-1"
         assert payload["customer_org_alias"] == "customer-test"
-        assert payload["customer_team_id"] == "customer-team-1"
+        assert payload["customer_team_id"] is None
+        assert payload["customer_team_alias"] is None
         assert payload["customer_member_id"] == customer_member_id
         assert "team_id" not in payload
         assert "organization_id" not in payload
@@ -179,34 +195,83 @@ async def test_one_unreadable_customer_does_not_hide_another_customers_alerts(
     assert payloads[0]["entity_id"] == "customer-org-good"
 
 
+@pytest.mark.parametrize("scope", ("customer_org", "customer_team", "customer_member"))
 @pytest.mark.asyncio
 async def test_customer_budget_reset_allows_the_next_periods_crossing(
-    alerts: DualCache, respx_mock: respx.MockRouter
+    scope: CustomerBudgetScope, alerts: DualCache, respx_mock: respx.MockRouter
 ) -> None:
     receiver: Final = respx_mock.post(_URL).respond(200)
-    for reset in (_NOW, _NOW + timedelta(days=1)):
+    for reset in (_NOW + timedelta(days=1), _NOW + timedelta(days=2)):
         record: Final = _Record(
             {
-                "customer_org_id": "customer-org-1",
-                "alias": "customer-test",
-                "budget_reset_at": reset,
+                **_ROWS[scope],
                 "spend": 2.0,
-                "budget": {"max_budget": 1.0, "soft_budget": 0.5},
+                "budget": {
+                    "max_budget": 1.0,
+                    "soft_budget": 0.5,
+                    "budget_duration": "1d",
+                    "budget_reset_at": reset,
+                },
             }
         )
         for _ in range(2):
             await CustomerBudgetAlerting.detect_committed_batch(
-                {"customer_org_list_transactions": {"customer-org-1": 1.0}},
-                _database({"customer-org-1": record}),
+                {f"{scope}_list_transactions": {"entity-1": 1.0}},
+                _database({"entity-1": record}),
                 alerts,
                 now=_NOW,
             )
     payloads: Final = tuple(_PAYLOAD.validate_json(call.request.content) for call in receiver.calls)
     assert len(payloads) == 4
     assert {item["period"] for item in payloads} == {
-        _NOW.isoformat(),
         (_NOW + timedelta(days=1)).isoformat(),
+        (_NOW + timedelta(days=2)).isoformat(),
     }
+    assert {item["customer_org_id"] for item in payloads} == {"org-1"}
+    assert {item["customer_team_id"] for item in payloads} == ({"team-1"} if scope == "customer_team" else {None})
+
+
+@pytest.mark.parametrize("scope", ("customer_team", "customer_member"))
+@pytest.mark.parametrize("expires", (None, _NOW + timedelta(hours=1), _NOW - timedelta(seconds=1)))
+@pytest.mark.parametrize("override_duration", (None, "1d"))
+@pytest.mark.asyncio
+async def test_override_uses_its_effective_budget_and_period(
+    scope: CustomerBudgetScope,
+    expires: datetime | None,
+    override_duration: str | None,
+    alerts: DualCache,
+    respx_mock: respx.MockRouter,
+) -> None:
+    receiver: Final = respx_mock.post(_URL).respond(200)
+    template_reset: Final = _NOW + timedelta(days=30)
+    override_reset: Final = _NOW + timedelta(days=1)
+    record: Final = _Record(
+        {
+            **_ROWS[scope],
+            "spend": 20.0,
+            "budget": {
+                "max_budget": 10.0,
+                "budget_duration": "30d",
+                "budget_reset_at": template_reset,
+            },
+            "budget_override": {
+                "max_budget": 1.0,
+                "budget_duration": override_duration,
+                "budget_reset_at": override_reset,
+            },
+            "budget_override_expires_at": expires,
+        }
+    )
+    await CustomerBudgetAlerting.detect_committed_batch(
+        {f"{scope}_list_transactions": {"entity-1": 1.0}}, _database({"entity-1": record}), alerts, now=_NOW
+    )
+    expired: Final = expires is not None and expires <= _NOW
+    expected: Final = template_reset if expired or override_duration is None else override_reset
+    assert tuple(
+        (payload["period"], payload["budget"])
+        for call in receiver.calls
+        for payload in (_PAYLOAD.validate_json(call.request.content),)
+    ) == ((expected.isoformat(), 10.0 if expired else 1.0),)
 
 
 @pytest.mark.parametrize("transactions", ({}, {"customer_org_list_transactions": {"customer-org-1": 1.0}}))
@@ -236,8 +301,12 @@ async def test_crossings_do_not_repeat_after_a_day_or_near_the_end_of_the_budget
                 {
                     "customer_org_id": "org",
                     "spend": 2.0,
-                    "budget_reset_at": reset,
-                    "budget": {"max_budget": 1.0, "soft_budget": 0.5},
+                    "budget": {
+                        "max_budget": 1.0,
+                        "soft_budget": 0.5,
+                        "budget_duration": "30d" if reset is not None else None,
+                        "budget_reset_at": reset,
+                    },
                 }
             )
         }

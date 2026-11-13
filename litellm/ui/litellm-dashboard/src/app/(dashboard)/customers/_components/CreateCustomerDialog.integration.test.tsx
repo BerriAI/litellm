@@ -1,12 +1,16 @@
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
+import { toast } from "sonner";
 import { fireEvent, renderWithProviders, screen, testQueryClient, waitFor } from "../../../../../tests/test-utils";
 import CreateCustomerDialog from "./CreateCustomerDialog";
 
 const creations: unknown[] = [];
 let rejectCreation = false;
+let freeTierReached = false;
 const onCreated = vi.fn();
+
+vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 function Harness() {
   const [open, setOpen] = useState(true);
@@ -21,6 +25,8 @@ function Harness() {
 beforeEach(() => {
   creations.length = 0;
   rejectCreation = false;
+  freeTierReached = false;
+  vi.mocked(toast.error).mockClear();
   onCreated.mockClear();
   testQueryClient.clear();
   vi.stubGlobal(
@@ -32,6 +38,11 @@ beforeEach(() => {
       }
       if (url.pathname === "/management/v1/customer_organizations" && request.method === "POST") {
         creations.push(await request.json());
+        if (freeTierReached)
+          return Response.json(
+            { detail: "Free customer portal limit reached. Upgrade to Enterprise." },
+            { status: 403 },
+          );
         return rejectCreation
           ? Response.json({ detail: "Customer entity ID already exists." }, { status: 409 })
           : Response.json({ customer_org_id: "created-org", alias: "Example customer" }, { status: 201 });
@@ -47,6 +58,17 @@ afterEach(() => {
 });
 
 describe("CreateCustomerDialog", () => {
+  it("surfaces the free-tier 403 detail", async () => {
+    freeTierReached = true;
+    renderWithProviders(<Harness />);
+    fireEvent.change(screen.getByLabelText("Customer name"), { target: { value: "Sixth customer" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create customer" }));
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        expect.stringContaining("Free customer portal limit reached. Upgrade to Enterprise."),
+      ),
+    );
+  });
   it("adds a custom group and selects a remaining default when that group is removed", async () => {
     const user = userEvent.setup();
     renderWithProviders(<Harness />);

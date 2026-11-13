@@ -21,6 +21,7 @@ from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
     can_key_call_resolved_model,
     can_token_call_search_tool,
+    check_customer_model_access,
     dashboard_model_billing_auth,
 )
 from litellm.router_api import RegistryReader, RoutingContext
@@ -170,10 +171,14 @@ class RouterFallbackAccessCheck:
             return True
         if _is_search_request(request_kwargs):
             return await is_search_tool_authorized_for_token(search_tool_name=model, valid_token=valid_token)
-        if self.is_enforced() and not await is_model_authorized_for_token(
-            model=model, valid_token=valid_token, llm_router=ctx
-        ):
+        enforced: Final = self.is_enforced()
+        if enforced and not await is_model_authorized_for_token(model=model, valid_token=valid_token, llm_router=ctx):
             return False
+        if not enforced:
+            try:
+                check_customer_model_access(model=model, valid_token=valid_token, llm_router=ctx)
+            except ProxyException:
+                return False
         try:
             return await prepare_dashboard_fallback_billing(model, request_kwargs, valid_token, ctx)
         except Exception as e:  # noqa: BLE001  # a fallback without its granting team's billing controls cannot run

@@ -5679,6 +5679,7 @@ async def _can_key_call_resolved_model(
         user_api_key_cache,
     )
 
+    check_customer_model_access(model=model, valid_token=valid_token, llm_router=llm_router)
     if valid_token.customer_hierarchy is not None:
         check_customer_hierarchy_model_access(valid_token.customer_hierarchy, model, llm_router)
     skip_key_model_check: Final = valid_token.config or (
@@ -5984,9 +5985,9 @@ def can_project_access_model(
     )
 
 
-def can_customer_access_model(
-    model: str | list[str],
-    end_user_object: LiteLLM_EndUserTable,
+def _can_customer_scope_call_model(
+    model: str | Sequence[str],
+    models: Sequence[str],
     llm_router: RegistryReader | None,
     valid_token: UserAPIKeyAuth | None,
 ) -> Literal[True]:
@@ -5998,12 +5999,12 @@ def can_customer_access_model(
         team_target: Final = (
             _live_team_alias_target(name, team_model_aliases, team_id, llm_router) if team_model_aliases else name
         )
-        if team_target != name and name in (end_user_object.models or ()):
+        if team_target != name and name in models:
             return
         can_object_call_model(
             model=team_target,
             llm_router=llm_router,
-            models=end_user_object.models,
+            models=list(models),
             key_model_aliases=key_model_aliases,
             object_type="customer",
         )
@@ -6011,6 +6012,22 @@ def can_customer_access_model(
     for name in (model,) if isinstance(model, str) else model:
         check(name)
     return True
+
+
+def can_customer_access_model(
+    model: str | list[str],
+    end_user_object: LiteLLM_EndUserTable,
+    llm_router: RegistryReader | None,
+    valid_token: UserAPIKeyAuth | None,
+) -> Literal[True]:
+    return _can_customer_scope_call_model(model, end_user_object.models or (), llm_router, valid_token)
+
+
+def check_customer_model_access(
+    model: str | Sequence[str], valid_token: UserAPIKeyAuth, llm_router: RegistryReader | None
+) -> None:
+    for scope in valid_token.customer_model_scopes:
+        _can_customer_scope_call_model(model, scope, llm_router, valid_token)
 
 
 async def can_user_call_model(

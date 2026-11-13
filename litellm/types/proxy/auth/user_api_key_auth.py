@@ -183,6 +183,17 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         self.budget_reservation = billed.budget_reservation
         self.matched_model_access_groups = billed.matched_model_access_groups
 
+    _customer_model_scopes: tuple[tuple[str, ...], ...] = PrivateAttr(default=())
+
+    @property
+    def customer_model_scopes(self) -> tuple[tuple[str, ...], ...]:
+        return self._customer_model_scopes
+
+    def with_customer_model_scopes(self, scopes: tuple[tuple[str, ...], ...]) -> "UserAPIKeyAuth":
+        scoped: Final = self.model_copy()
+        scoped._customer_model_scopes = scopes
+        return scoped
+
     @property
     def access_group_rule_grants(self) -> frozenset[str]:
         return self._access_group_rule_grants
