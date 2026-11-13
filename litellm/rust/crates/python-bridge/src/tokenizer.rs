@@ -22,8 +22,8 @@ use pyo3::{
 };
 #[cfg(feature = "tiktoken")]
 use pyo3::{
-    exceptions::{PyKeyError, PyRuntimeError},
-    types::PyBytes,
+    exceptions::{PyKeyError, PyOverflowError, PyRuntimeError},
+    types::{PyBytes, PyInt},
 };
 
 #[cfg(not(all(feature = "tiktoken", feature = "huggingface")))]
@@ -270,7 +270,7 @@ impl Tokenizer {
     ) -> PyResult<(Vec<u32>, Vec<Vec<u32>>)> {
         enter_native()?;
         let tokenizer = self.tiktoken()?;
-        let text = self.text(text)?;
+        let text = text.to_cow()?;
         Ok(release_gil(py, || {
             tokenizer.encode_with_unstable(&text, &allowed)
         }))
@@ -292,8 +292,13 @@ impl Tokenizer {
     }
 
     #[cfg(feature = "tiktoken")]
-    fn is_special_token(&self, token: u32) -> PyResult<bool> {
-        Ok(self.vocabulary()?.is_special_token(token))
+    fn is_special_token(&self, token: &Bound<'_, PyInt>) -> PyResult<bool> {
+        let vocabulary = self.vocabulary()?;
+        match token.extract::<u32>() {
+            Ok(rank) => Ok(vocabulary.is_special_token(rank)),
+            Err(error) if error.is_instance_of::<PyOverflowError>(token.py()) => Ok(false),
+            Err(error) => Err(error),
+        }
     }
 
     /// Every mergeable token's bytes, sorted bytewise like tiktoken's `token_byte_values`.
@@ -768,5 +773,81 @@ impl HuggingFaceEncoding {
         )?;
         self.inner.truncate(max_length, stride, direction);
         Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "tiktoken"))]
+mod tests {
+    use std::{ffi::CString, path::Path};
+
+    use rstest::rstest;
+
+    use super::*;
+
+    fn cl100k_tokenizer() -> Tokenizer {
+        let dir =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../litellm_core_utils/tokenizers");
+        let codec = TiktokenTokenizer::from_cached_ranks("cl100k_base", |file| {
+            std::fs::read_to_string(dir.join(file))
+        })
+        .expect("bundled cl100k_base ranks should load");
+        Tokenizer::new(Codec::Tiktoken(codec))
+    }
+
+    #[rstest]
+    #[case::negative_one("-1", false)]
+    #[case::below_i64_min("-(1 << 100)", false)]
+    #[case::u32_overflow("1 << 32", false)]
+    #[case::above_u64("1 << 100", false)]
+    #[case::u32_max("(1 << 32) - 1", false)]
+    #[case::zero("0", false)]
+    #[case::bool_false("False", false)]
+    #[case::bool_true("True", false)]
+    #[case::eot_token("100257", true)]
+    fn is_special_token_handles_arbitrary_python_ints(#[case] expr: &str, #[case] expected: bool) {
+        Python::initialize();
+        Python::attach(|py| {
+            let tokenizer = cl100k_tokenizer();
+            let code = CString::new(expr).unwrap();
+            let value = py.eval(&code, None, None).unwrap();
+            let token = value.cast::<PyInt>().unwrap();
+            assert_eq!(tokenizer.is_special_token(token).unwrap(), expected);
+        });
+    }
+
+    #[rstest]
+    #[case::high_surrogate("'\\ud800'", vec![])]
+    #[case::trailing_low_surrogate("'x\\udc80'", vec![])]
+    #[case::surrogate_pair("'\\ud83d\\ude42'", vec![])]
+    #[case::with_allowed_special("'a\\ud800<|endoftext|>'", vec!["<|endoftext|>".to_owned()])]
+    fn encode_with_unstable_rejects_lone_surrogates(
+        #[case] expr: &str,
+        #[case] allowed: Vec<String>,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let tokenizer = cl100k_tokenizer();
+            let code = CString::new(expr).unwrap();
+            let value = py.eval(&code, None, None).unwrap();
+            let text = value.cast::<PyString>().unwrap();
+
+            let err = tokenizer
+                .encode_with_unstable(py, text, allowed)
+                .expect_err("lone surrogates must raise UnicodeEncodeError");
+            assert!(err.is_instance_of::<PyUnicodeEncodeError>(py));
+        });
+    }
+
+    #[test]
+    fn encode_with_unstable_succeeds_for_valid_utf8() {
+        Python::initialize();
+        Python::attach(|py| {
+            let tokenizer = cl100k_tokenizer();
+            let text = PyString::new(py, "hello world");
+            let (stable, completions) = tokenizer
+                .encode_with_unstable(py, &text, Vec::new())
+                .unwrap();
+            assert!(!stable.is_empty() || !completions.is_empty());
+        });
     }
 }

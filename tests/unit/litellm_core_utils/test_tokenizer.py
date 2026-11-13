@@ -322,6 +322,57 @@ def test_openai_encoding_exposes_the_tiktoken_vocabulary_surface(name: str) -> N
         encoding.encode_single_token("<|not-a-token|>")
 
 
+@pytest.mark.parametrize("name", ("cl100k_base", "o200k_base"))
+@pytest.mark.parametrize(
+    ("text", "allowed_special", "disallowed_special"),
+    (
+        ("\ud800", frozenset(), "all"),
+        ("x\udc80", frozenset(), "all"),
+        ("\ud83d\ude42", frozenset(), "all"),
+        ("<|endoftext|>\ud800", "all", "all"),
+        ("a\ud800<|endoftext|>", frozenset(), ()),
+    ),
+)
+def test_openai_encoding_unstable_rejects_lone_surrogates_like_tiktoken(
+    name: str,
+    text: str,
+    allowed_special: frozenset[str] | Literal["all"],
+    disallowed_special: tuple[()] | Literal["all"],
+) -> None:
+    reference: Final = tiktoken.get_encoding(name)
+    encoding: Final = OpenAIEncoding.from_tiktoken(name)
+
+    with pytest.raises(UnicodeEncodeError):
+        reference.encode_with_unstable(text, allowed_special=allowed_special, disallowed_special=disallowed_special)
+    with pytest.raises(UnicodeEncodeError):
+        encoding.encode_with_unstable(text, allowed_special=allowed_special, disallowed_special=disallowed_special)
+    assert encoding.encode(text, allowed_special=allowed_special, disallowed_special=disallowed_special) == (
+        reference.encode(text, allowed_special=allowed_special, disallowed_special=disallowed_special)
+    )
+
+
+def test_openai_encoding_unstable_checks_disallowed_special_before_surrogates() -> None:
+    reference: Final = tiktoken.get_encoding("cl100k_base")
+    encoding: Final = OpenAIEncoding.from_tiktoken("cl100k_base")
+
+    with pytest.raises(ValueError, match="disallowed special token"):
+        reference.encode_with_unstable("<|endoftext|>\ud800")
+    with pytest.raises(ValueError, match="disallowed special token"):
+        encoding.encode_with_unstable("<|endoftext|>\ud800")
+
+
+@pytest.mark.parametrize(
+    "token",
+    (-(2**100), -(2**31) - 1, -1, 0, 2**32 - 1, 2**32, 2**64, 2**100, True, False),
+)
+def test_openai_encoding_is_special_token_handles_ints_outside_u32_like_tiktoken(token: int) -> None:
+    reference: Final = tiktoken.get_encoding("cl100k_base")
+    encoding: Final = OpenAIEncoding.from_tiktoken("cl100k_base")
+
+    assert encoding.is_special_token(token) is reference.is_special_token(token)
+    assert encoding.is_special_token(reference.eot_token) is True
+
+
 def test_huggingface_tokenizer_exposes_the_tokenizers_vocabulary_surface() -> None:
     reference: Final = ReferenceTokenizer.from_str(TOKENIZER_JSON)
     reference.enable_padding(pad_id=0, pad_token="[UNK]", length=4)
