@@ -620,7 +620,6 @@ class RequestRateLimiterStash:
     reserved_model: RateLimitedModel | None = None
     reserved_scopes: frozenset[tuple[str, str]] = field(default_factory=frozenset)
     fallback_models: frozenset[str] = field(default_factory=frozenset)
-    steered_from_model: str | None = None
     ptu_ceiling: PTUTeamCeiling | None = None
     ptu_reserved_tokens: int = 0
     ptu_reserved_window_identities: frozenset[ReservationWindowIdentity] = field(default_factory=frozenset)
