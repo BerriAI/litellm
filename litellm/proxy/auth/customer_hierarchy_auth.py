@@ -541,14 +541,16 @@ async def _register_organization(
     prisma_client: "PrismaClient",
     user_api_key_cache: UserApiKeyCache,
     register: OrganizationRegistrar,
+    key_metadata: Mapping[str, object],
 ) -> CustomerHierarchyAuth | None:
     """An alias the proxy has never seen becomes an organization with that id and alias, so a customer's first
-    request is charged to it instead of running untracked."""
+    request is charged to it instead of running untracked. A key pinned to another organization is refused first."""
     if not _registrable(customer_org_alias):
         verbose_proxy_logger.warning(
             "Could not register customer organization: alias is not a valid customer identifier"
         )
         return _untracked(f"organization alias not found: {customer_org_alias}", CUSTOMER_ORG_ALIAS_HEADER)
+    _check_key_scope(customer_org_alias, key_metadata)
     registered: Final = await register(customer_org_alias, prisma_client)
     if isinstance(registered, Failure):
         if registered.code is ErrorCode.FREE_TIER_LIMIT:
@@ -579,11 +581,9 @@ async def _organization_named_by_alias(
         return _untracked(f"organization alias not found: {customer_org_alias}", CUSTOMER_ORG_ALIAS_HEADER)
     found: Final = await get_customer_organization_hierarchy(customer_org_alias, prisma_client, user_api_key_cache)
     if found is None:
-        if key_metadata.get("customer_org_id") not in (None, customer_org_alias):
-            raise _forbidden(
-                "API key is not allowed to register another customer organization", CUSTOMER_ORG_ALIAS_HEADER
-            )
-        return await _register_organization(customer_org_alias, prisma_client, user_api_key_cache, register)
+        return await _register_organization(
+            customer_org_alias, prisma_client, user_api_key_cache, register, key_metadata
+        )
     return _organization_from_lookup(customer_org_alias, found)
 
 
@@ -761,8 +761,12 @@ async def check_customer_hierarchy_access(
 
 def check_customer_hierarchy_key_scope(hierarchy: CustomerHierarchyAuth, key_metadata: Mapping[str, object]) -> None:
     """A key whose metadata pins ``customer_org_id`` may only act for members of that organization."""
+    _check_key_scope(hierarchy.customer_org_id, key_metadata)
+
+
+def _check_key_scope(customer_org_id: str, key_metadata: Mapping[str, object]) -> None:
     key_customer_org_id: Final = key_metadata.get("customer_org_id")
-    if key_customer_org_id is None or key_customer_org_id == hierarchy.customer_org_id:
+    if key_customer_org_id is None or key_customer_org_id == customer_org_id:
         return
     raise ProxyException(
         message="API key is not allowed to act for this customer member's organization",

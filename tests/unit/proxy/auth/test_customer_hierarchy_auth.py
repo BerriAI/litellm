@@ -676,7 +676,7 @@ async def test_a_scoped_key_cannot_create_another_organization_before_being_reje
             register_organization=registrar,
         )
 
-    assert (denied.value.code, denied.value.param) == ("403", CUSTOMER_ORG_ALIAS_HEADER)
+    assert (denied.value.code, denied.value.param) == ("403", CUSTOMER_MEMBER_ID_HEADER)
     assert registrar.calls == ()
     assert tuple(row["customer_org_id"] for row in organizations.rows) == ("org-1",)
 
@@ -815,6 +815,30 @@ async def test_a_key_pinned_to_another_organization_is_refused_before_any_member
         )
 
     assert (denied.value.code, registrar.calls, members.rows) == ("403", (), {})
+
+
+@pytest.mark.asyncio
+async def test_a_key_pinned_to_another_organization_is_refused_before_an_unknown_alias_is_registered() -> None:
+    organizations: Final = _OrganizationTable((_organization("acme"),))
+    registrar: Final = _OrganizationRegistrar(organizations)
+    prisma: Final = _Prisma(_MemberTable({}), organizations)
+
+    with pytest.raises(ProxyException) as denied:
+        await _resolve(
+            prisma,
+            CustomerRequestIdentity(customer_org_alias="ghost"),
+            key_metadata={"customer_org_id": "org-1"},
+            register_organization=registrar,
+        )
+    assert (denied.value.code, registrar.calls, len(organizations.rows)) == ("403", (), 1)
+
+    own: Final = await _resolve(
+        prisma,
+        CustomerRequestIdentity(customer_org_alias="ghost"),
+        key_metadata={"customer_org_id": "ghost"},
+        register_organization=registrar,
+    )
+    assert own is not None and (own.customer_org_id, registrar.calls) == ("ghost", ("ghost",))
 
 
 @pytest.mark.asyncio
