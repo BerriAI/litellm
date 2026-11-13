@@ -409,5 +409,11 @@
     "error_type": "text",
     "error_text": "text"
   },
-  "logged_payload_not_a_mapping": 42
+  "logged_payload_not_a_mapping": 42,
+  "metadata_labels": [
+    {
+      "name": "text",
+      "value": "text"
+    }
+  ]
 }

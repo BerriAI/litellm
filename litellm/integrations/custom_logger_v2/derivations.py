@@ -22,6 +22,7 @@ from litellm.types.integrations.custom_logger_v2 import (
     LoggedRequest,
     McpToolCall,
     MetadataKind,
+    MetadataLabel,
     ModelInfo,
     ModelPreference,
     Outcome,
@@ -637,6 +638,21 @@ def logged_payload_not_a_mapping(args: HookArgs) -> str | int | float | bool | S
     return coerce_value("logged_payload_not_a_mapping", _SCALAR, raw)
 
 
+def metadata_labels(args: HookArgs) -> tuple[MetadataLabel, ...]:
+    from litellm.integrations.prometheus import (
+        _get_combined_custom_metadata_from_standard_logging_payload,  # pyright: ignore[reportPrivateUsage]  # the metadata prometheus labels from
+        get_custom_labels_from_metadata,
+    )
+
+    payload: Final = member(args.request, "standard_logging_object")
+    logged: Final = payload if isinstance(payload, dict) else None  # pyright: ignore[reportUnknownVariableType]  # the payload prometheus reads
+    combined: Final = _get_combined_custom_metadata_from_standard_logging_payload(logged)  # pyright: ignore[reportUnknownArgumentType]  # the payload prometheus reads
+    return tuple(
+        MetadataLabel(name=name, value=value)
+        for name, value in get_custom_labels_from_metadata(combined).items()  # pyright: ignore[reportArgumentType]  # prometheus passes its combined dict
+    )
+
+
 def payload_copy(
     args: HookArgs,
 ) -> dict[str, object] | None:  # mutable-ok: the shallow copy handed to Rust by reference
@@ -667,6 +683,7 @@ RECORD_TYPES: Final[Mapping[Field, object]] = MappingProxyType(
         Field.logged_key_identity: LoggedKeyIdentity,
         Field.logged_model_group: LoggedModelGroup,
         Field.logged_payload_not_a_mapping: Scalar,
+        Field.metadata_labels: tuple[MetadataLabel, ...],
     }
 )
 
@@ -675,6 +692,7 @@ LOGGING_SLOTS: Final[Mapping[Field, Slot]] = MappingProxyType(
         Field.logged_key_identity: derived(logged_key_identity),
         Field.logged_model_group: derived(logged_model_group),
         Field.logged_payload_not_a_mapping: derived(logged_payload_not_a_mapping),
+        Field.metadata_labels: derived(metadata_labels),
         Field.deployment: derived(deployment),
         Field.request_tags: derived(request_tags),
         Field.guardrail_info: derived(guardrail_info),
@@ -748,6 +766,7 @@ __all__ = [
     "mapping",
     "mcp_tool_call",
     "member",
+    "metadata_labels",
     "model_group",
     "payload_copy",
     "payload_of",

@@ -471,6 +471,11 @@
       "name": "logged_payload_not_a_mapping",
       "bit": 44,
       "tier": "small_record"
+    },
+    {
+      "name": "metadata_labels",
+      "bit": 45,
+      "tier": "small_record"
     }
   ],
   "tiers": [
@@ -505,6 +510,7 @@
     "logged_payload_not_a_mapping",
     "logged_request",
     "mcp_tool_call",
+    "metadata_labels",
     "outcome",
     "output_cap",
     "rate_limit_state",

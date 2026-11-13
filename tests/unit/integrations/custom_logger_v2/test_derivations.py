@@ -11,6 +11,7 @@ from typing import Annotated, Final, Union, get_args, get_origin
 import pytest
 from pydantic import BaseModel, TypeAdapter
 
+import litellm
 from litellm.integrations.custom_logger_v2 import derivations
 from litellm.integrations.custom_logger_v2.derivations import RECORD_TYPES
 from litellm.integrations.custom_logger_v2.slots import HookArgs
@@ -31,6 +32,7 @@ from litellm.types.integrations.custom_logger_v2 import (
     LoggedKeyIdentity,
     LoggedModelGroup,
     MetadataKind,
+    MetadataLabel,
     ModelInfo,
     ModelPreference,
     Moment,
@@ -1471,3 +1473,37 @@ def test_a_logging_payload_that_is_not_a_mapping_is_served_apart_from_a_missing_
 
 def test_a_missing_logging_payload_is_not_served_as_one_that_is_not_a_mapping() -> None:
     assert derivations.logged_payload_not_a_mapping(HookArgs(request={})) is None
+
+
+def test_metadata_labels_are_the_str_values_prometheus_labels_in_config_order(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "custom_prometheus_metadata_labels",
+        ["region", "metadata.team_tier", "nested.a", "user_api_key_team_alias", "absent", "is_silent_experiment"],
+    )
+    payload: Final = {
+        "metadata": {
+            "team_tier": "gold",
+            "user_api_key_team_alias": 7,
+            "is_silent_experiment": True,
+            "requester_metadata": {"region": "eu", "nested": {"a": "b"}},
+        }
+    }
+
+    labels: Final = derivations.metadata_labels(HookArgs(request={"standard_logging_object": payload}))
+
+    assert labels == (
+        MetadataLabel(name="region", value="eu"),
+        MetadataLabel(name="metadata_team_tier", value="gold"),
+        MetadataLabel(name="nested_a", value="b"),
+        MetadataLabel(name="is_silent_experiment", value="true"),
+    )
+
+
+@pytest.mark.parametrize("payload", [None, "payload", {"metadata": ["x"]}], ids=repr)
+def test_metadata_labels_are_empty_where_prometheus_finds_no_metadata(
+    payload: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "custom_prometheus_metadata_labels", ["region"])
+
+    assert derivations.metadata_labels(HookArgs(request={"standard_logging_object": payload})) == ()

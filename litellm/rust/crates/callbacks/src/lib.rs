@@ -27,9 +27,9 @@ pub use payload::{PayloadHost, PayloadRef, RenderOptions, Rendered, render_all};
 pub use record::{
     AttemptTiming, BudgetPlan, BudgetPlanCounter, BudgetReservation, Cost, Deployment,
     EstimatedOutputTokens, GuardrailEntry, KeyIdentity, KeyLimits, LoggedKeyIdentity,
-    LoggedModelGroup, LoggedRequest, McpToolCall, MetadataKind, ModelInfo, ModelPreference, Moment,
-    Outcome, OutputCap, RateLimitState, RateLimitStatus, RateLimitStatuses, ReservationEntry,
-    Usage, UsageRecord, ZeroCost,
+    LoggedModelGroup, LoggedRequest, McpToolCall, MetadataKind, MetadataLabel, ModelInfo,
+    ModelPreference, Moment, Outcome, OutputCap, RateLimitState, RateLimitStatus,
+    RateLimitStatuses, ReservationEntry, Usage, UsageRecord, ZeroCost,
 };
 pub use scalar::Scalar;
 pub use verdict::{Abort, AbortError, Patch, PatchOp, Verdict};

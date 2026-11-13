@@ -378,6 +378,11 @@ class LoggedRequest(Record):
     stream: Scalar | None = None
 
 
+class MetadataLabel(Strict):
+    name: str
+    value: str
+
+
 class McpToolCall(Record):
     name: Scalar | None = None
     server_name: Scalar | None = None
@@ -458,6 +463,7 @@ __all__ = [
     "LoggedModelGroup",
     "LoggedRequest",
     "McpToolCall",
+    "MetadataLabel",
     "MetadataKind",
     "ModelInfo",
     "ModelPreference",

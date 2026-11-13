@@ -338,6 +338,13 @@ pub struct LoggedRequest {
     pub stream: Option<Scalar>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MetadataLabel {
+    pub name: String,
+    pub value: String,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct McpToolCall {
@@ -390,6 +397,7 @@ mod tests {
             Field::LoggedPayloadNotAMapping => {
                 round_trip::<typed::LoggedPayloadNotAMapping>(sample)
             }
+            Field::MetadataLabels => round_trip::<typed::MetadataLabels>(sample),
             other => panic!("{other:?} has no typed record sample"),
         }
     }
@@ -403,7 +411,7 @@ mod tests {
             assert_eq!(&decoded(field, sample), sample, "{name}");
         }
         let typed: Vec<&str> = samples.keys().map(String::as_str).collect();
-        assert_eq!(typed.len(), 21);
+        assert_eq!(typed.len(), 22);
     }
 
     #[rstest]

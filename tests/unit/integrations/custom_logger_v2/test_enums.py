@@ -20,13 +20,13 @@ def test_field_round_trips_from_its_config_string() -> None:
 
 def test_field_bits_are_distinct_and_fit_a_u64_bitset() -> None:
     bits = [member.bit for member in Field]
-    assert len(set(bits)) == len(bits) == 45
+    assert len(set(bits)) == len(bits) == 46
     assert all(0 <= bit < 64 for bit in bits)
 
 
 def test_fields_fall_in_the_four_cost_tiers_of_the_design() -> None:
     assert Counter(member.tier for member in Field) == {
-        FieldTier.small_record: 25,
+        FieldTier.small_record: 26,
         FieldTier.content: 12,
         FieldTier.wire: 4,
         FieldTier.compatibility: 4,
@@ -86,4 +86,5 @@ def test_field_bits_are_the_wire_contract_shared_with_the_rust_manifest() -> Non
         "logged_key_identity": 42,
         "logged_model_group": 43,
         "logged_payload_not_a_mapping": 44,
+        "metadata_labels": 45,
     }
