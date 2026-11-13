@@ -9921,6 +9921,26 @@ export interface paths {
         patch: operations["update_customer_budget_template_management_v1_customer_organizations__customer_org_id__default_budgets__budget_id__patch"];
         trace?: never;
     };
+    "/management/v1/customer_portal/limits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Customer Portal Limits
+         * @description Get customer portal free-tier limits and current capacity. Proxy admins only.
+         */
+        get: operations["get_customer_portal_limits_management_v1_customer_portal_limits_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/customer_teams": {
         parameters: {
             query?: never;
@@ -33419,6 +33439,30 @@ export interface components {
             updated_at: string;
             /** Updated By */
             updated_by: string;
+        };
+        /** CustomerPortalLimits */
+        CustomerPortalLimits: {
+            /** Any Limit Reached */
+            any_limit_reached: boolean;
+            /** Limits Apply */
+            limits_apply: boolean;
+            /**
+             * Members Per Team Limit
+             * @default 5
+             */
+            members_per_team_limit: number;
+            /** Organization Count */
+            organization_count: number;
+            /**
+             * Organization Limit
+             * @default 5
+             */
+            organization_limit: number;
+            /**
+             * Teams Per Organization Limit
+             * @default 5
+             */
+            teams_per_organization_limit: number;
         };
         /**
          * CustomerResponse
@@ -69334,6 +69378,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_customer_portal_limits_management_v1_customer_portal_limits_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomerPortalLimits"];
                 };
             };
         };
