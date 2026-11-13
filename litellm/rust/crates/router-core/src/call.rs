@@ -236,7 +236,9 @@ fn group_members(
 /// An MCP tool call reached its server before `error`: every later attempt, a retry or any
 /// fallback of any level, would run the tool again, so the whole walk raises it as it is.
 fn sent_tool_calls(error: &Error) -> bool {
-    error.attempt().is_some_and(|failure| failure.tool_calls_sent)
+    error
+        .attempt()
+        .is_some_and(|failure| failure.tool_calls_sent)
 }
 
 fn defers_to_regular_fallbacks(error: &Error) -> bool {
