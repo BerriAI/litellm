@@ -6373,6 +6373,43 @@ def test_tool_choice_type_kept_when_no_tool_config_choice_conflicts():
     }
 
 
+@pytest.mark.parametrize("non_default_params", ({}, {"parallel_tool_calls": False}), ids=("alone", "with-parallel"))
+def test_claude_tool_choice_none_reaches_converse_as_anthropic_tool_choice(
+    non_default_params: Mapping[str, object],
+) -> None:
+    config = AmazonConverseConfig()
+    model = "global.anthropic.claude-opus-5"
+
+    optional_params = config.map_openai_params(
+        non_default_params={**non_default_params, "tool_choice": "none", "tools": _TOOL_PARAM},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    request_data = config._transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Summarize the weather you already looked up."}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert "toolChoice" not in request_data["toolConfig"]
+    assert request_data["additionalModelRequestFields"]["tool_choice"] == {"type": "none"}
+
+
+def test_tool_choice_none_still_unsupported_for_non_claude_converse_models() -> None:
+    config = AmazonConverseConfig()
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="tool_choice=none"):
+        config.map_openai_params(
+            non_default_params={"tool_choice": "none", "tools": _TOOL_PARAM},
+            optional_params={},
+            model="amazon.nova-pro-v1:0",
+            drop_params=False,
+        )
+
+
 def test_drop_tool_choice_type_leaves_other_passthrough_fields_untouched():
     additional_request_params = {
         "tool_choice": {"type": "tool", "name": "get_weather", "disable_parallel_tool_use": True},

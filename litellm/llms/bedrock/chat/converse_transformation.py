@@ -176,6 +176,10 @@ UNSUPPORTED_BEDROCK_CONVERSE_BETA_PATTERNS: Final = [
 ]
 
 
+# Converse's toolChoice has no "none", so for Claude it travels as Anthropic's own
+# tool_choice in additionalModelRequestFields, the way Invoke sends it.
+_ANTHROPIC_TOOL_CHOICE_NONE: Final = "_anthropic_tool_choice_none"
+
 _TOOLS_AS_SENT: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 _JSON_VALUE: Final = TypeAdapter(object)
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
@@ -1177,7 +1181,13 @@ class AmazonConverseConfig(BaseConfig):
                     non_default_params=request_params,
                     optional_params=optional_params,
                 )
-            if param == "tool_choice":
+            if (
+                param == "tool_choice"
+                and value == "none"
+                and BedrockModelInfo.get_base_model(model).startswith("anthropic")
+            ):
+                optional_params[_ANTHROPIC_TOOL_CHOICE_NONE] = True  # rebind-ok: out-param store like siblings
+            elif param == "tool_choice":
                 _tool_choice_value = self.map_tool_choice_values(
                     model=model,
                     tool_choice=value,
@@ -2235,6 +2245,7 @@ class AmazonConverseConfig(BaseConfig):
                     break
 
         bedrock_tool_config: ToolConfigBlock | None = None
+        tool_choice_none: Final = additional_request_params.pop(_ANTHROPIC_TOOL_CHOICE_NONE, False)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # _prepare_request_params hands back a bare dict
         if len(bedrock_tools) > 0:
             tool_choice_values: Final[ToolChoiceValuesBlock] = inference_params.pop("tool_choice", None)
             bedrock_tool_config = ToolConfigBlock(
@@ -2243,6 +2254,8 @@ class AmazonConverseConfig(BaseConfig):
             if tool_choice_values is not None:
                 bedrock_tool_config["toolChoice"] = tool_choice_values
                 self._drop_tool_choice_type_conflicting_with_tool_config(additional_request_params)
+            if tool_choice_none:
+                additional_request_params["tool_choice"] = {"type": "none"}
 
         config_block_entries: Final = tuple(
             (config_name, config_class, inference_params.pop(config_name, None))
