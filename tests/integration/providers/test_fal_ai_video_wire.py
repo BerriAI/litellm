@@ -13,9 +13,11 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 from integration._support.client import JSON_OBJECT, Gateway, object_value, string_value
 from integration._support.wire import Reply, Request, wire_server
+from integration.providers._dashscope_video_support import rate, settled_spend
 
 _MODEL: Final = "bytedance/seedance-2.5/text-to-video"
 _H3_MODEL: Final = "minimax/h3/text-to-video"
+_UPSCALE_MODEL: Final = "google/gemini-omni-flash/v1.2/upscale"
 _MP4: Final = b"\x00\x00\x00\x18ftypmp42" + uuid.uuid4().bytes * 4
 _OVERSIZED_SIDE: Final = "9" * 30
 
@@ -431,3 +433,26 @@ def test_fal_h3_oversized_size_uses_top_resolution_tier_and_queues(gateway: Gate
         assert response.status_code == 200, response.text
         assert response.json()["status"] == "queued"
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", f"/{_H3_MODEL}")]
+
+
+def test_fal_video_without_a_resolution_bills_the_rows_default_rate(gateway: Gateway) -> None:
+    request_id: Final = "fal-upscale-req-" + uuid.uuid4().hex
+    source_video: Final = "https://example.com/source.mp4"
+
+    def respond(request: Request) -> Reply:
+        assert (request.method, request.target) == ("POST", f"/{_UPSCALE_MODEL}")
+        assert json.loads(request.body) == {"prompt": "sharpen the clip", "duration": "10", "video_url": source_video}
+        return _h3_queue_reply(request_id)
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=f"fal_ai/{_UPSCALE_MODEL}", api_base=wire.url, api_key="synthetic-fal-key")
+        key: Final = scenario.key(models=[model])
+        created: Final = gateway.post(
+            "/v1/videos",
+            {"model": model, "prompt": "sharpen the clip", "seconds": "10", "video_url": source_video},
+            key=key,
+        )
+        assert created["status"] == "queued"
+        default_rate: Final = rate("fal_ai", "output_cost_per_second", _UPSCALE_MODEL)
+        assert default_rate != rate("fal_ai", "output_cost_per_second_720p", _UPSCALE_MODEL)
+        settled_spend(key, 10 * default_rate)
