@@ -1,24 +1,34 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Final
 
 import pytest
 
 import litellm
-from litellm.caching.caching import DualCache
 from litellm.proxy._types import ProxyException
 from litellm.proxy.auth.customer_hierarchy_auth import (
     CUSTOMER_MEMBER_ID_HEADER,
+    CUSTOMER_ORG_ALIAS_HEADER,
+    AmbiguousOrganizationAlias,
     check_customer_hierarchy_budget,
     check_customer_hierarchy_key_scope,
     check_customer_hierarchy_model_access,
     customer_hierarchy_from_member_row,
+    customer_identity_from_headers,
     customer_member_id_from_headers,
+    forget_customer_organization_aliases,
     get_customer_hierarchy,
+    get_customer_organization_hierarchy,
     resolve_customer_hierarchy,
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerScopeAuth
+from litellm.proxy.management_helpers.customer_hierarchy import ErrorCode, Failure
+from litellm.types.proxy.auth.customer_hierarchy import (
+    CustomerHierarchyAuth,
+    CustomerRequestIdentity,
+    CustomerScopeAuth,
+)
+from litellm.types.proxy.management_endpoints.customer_hierarchy import CustomerMember
 
 NOW: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
@@ -178,20 +188,87 @@ class _Record:
         return self.values
 
 
+class _OrganizationTable:
+    def __init__(self, rows: Sequence[Mapping[str, object]] = ()) -> None:
+        self.rows = rows
+        self.lookups = 0
+
+    async def find_many(
+        self, where: Mapping[str, object], include: Mapping[str, object] | None = None, take: int | None = None
+    ):
+        self.lookups += 1
+        matching: Final = [_Record(row) for row in self.rows if row.get("alias") == where["alias"]]
+        return matching[:take] if take is not None else matching
+
+
 class _Db:
-    def __init__(self, table: _MemberTable) -> None:
+    def __init__(self, table: _MemberTable, organizations: _OrganizationTable) -> None:
         self.litellm_customermembertable = table
+        self.litellm_customerorganizationtable = organizations
 
 
 class _Prisma:
-    def __init__(self, table: _MemberTable) -> None:
-        self.db = _Db(table)
+    def __init__(self, table: _MemberTable, organizations: _OrganizationTable | None = None) -> None:
+        self.db = _Db(table, organizations if organizations is not None else _OrganizationTable())
+
+
+def _organization(
+    alias: str, org_id: str = "org-1", spend: float = 0.0, max_budget: float | None = None
+) -> Mapping[str, object]:
+    budget: Final = {"max_budget": max_budget} if max_budget is not None else None
+    return {"customer_org_id": org_id, "alias": alias, "spend": spend, "budget": budget}
+
+
+class _Registrar:
+    """Stands in for ensure_customer_member: records the ask and adds the member row, or fails."""
+
+    def __init__(self, members: _MemberTable, failure: Failure | None = None) -> None:
+        self.members = members
+        self.failure = failure
+        self.calls: tuple[tuple[str, str], ...] = ()
+
+    async def __call__(self, org_id: str, member_id: str, prisma_client: object) -> CustomerMember | Failure:
+        self.calls = (*self.calls, (org_id, member_id))
+        if self.failure is not None:
+            return self.failure
+        self.members.rows = {
+            **self.members.rows,
+            member_id: {**_row(template={"max_budget": 10.0}), "customer_member_id": member_id},
+        }
+        return CustomerMember.model_validate(
+            {
+                "customer_member_id": member_id,
+                "parent_team_id": "team-1",
+                "effective_budget": {"max_budget": 10.0},
+                "created_at": NOW,
+                "created_by": "x",
+                "updated_at": NOW,
+                "updated_by": "x",
+            }
+        )
+
+
+def _resolve(
+    prisma: _Prisma,
+    identity: CustomerRequestIdentity,
+    route: str = "/chat/completions",
+    register: _Registrar | None = None,
+):
+    return resolve_customer_hierarchy(
+        identity=identity,
+        prisma_client=prisma,  # pyright: ignore[reportArgumentType]  # test double
+        user_api_key_cache=UserApiKeyCache(),
+        llm_router=None,
+        request_model="gpt-4o",
+        route=route,
+        register=register if register is not None else _Registrar(_MemberTable({}), Failure(ErrorCode.NOT_FOUND)),
+    )
 
 
 @pytest.mark.asyncio
 async def test_hierarchy_is_loaded_once_and_then_served_from_the_cache() -> None:
     table: Final = _MemberTable({"member-1": _row(template={"max_budget": 10.0})})
-    cache: Final = UserApiKeyCache(DualCache())
+    cache: Final = UserApiKeyCache()
     prisma: Final = _Prisma(table)
 
     first: Final = await get_customer_hierarchy("member-1", prisma, cache, now=NOW)  # pyright: ignore[reportArgumentType]  # test double
@@ -204,10 +281,10 @@ async def test_hierarchy_is_loaded_once_and_then_served_from_the_cache() -> None
 
 @pytest.mark.asyncio
 async def test_resolution_refuses_an_unknown_member_and_a_proxy_without_a_database() -> None:
-    cache: Final = UserApiKeyCache(DualCache())
+    cache: Final = UserApiKeyCache()
     with pytest.raises(ProxyException) as missing:
         await resolve_customer_hierarchy(
-            customer_member_id="ghost",
+            identity=CustomerRequestIdentity(customer_member_id="ghost"),
             prisma_client=_Prisma(_MemberTable({})),  # pyright: ignore[reportArgumentType]  # test double
             user_api_key_cache=cache,
             llm_router=None,
@@ -217,7 +294,7 @@ async def test_resolution_refuses_an_unknown_member_and_a_proxy_without_a_databa
     assert missing.value.code == "401"
     with pytest.raises(ProxyException):
         await resolve_customer_hierarchy(
-            customer_member_id="member-1",
+            identity=CustomerRequestIdentity(customer_member_id="member-1"),
             prisma_client=None,
             user_api_key_cache=cache,
             llm_router=None,
@@ -228,11 +305,11 @@ async def test_resolution_refuses_an_unknown_member_and_a_proxy_without_a_databa
 
 @pytest.mark.asyncio
 async def test_resolution_enforces_budget_on_model_routes_but_not_on_info_routes() -> None:
-    cache: Final = UserApiKeyCache(DualCache())
+    cache: Final = UserApiKeyCache()
     prisma: Final = _Prisma(_MemberTable({"member-1": _row(template={"max_budget": 1.0}, spend=(0.0, 0.0, 1.0))}))
     with pytest.raises(litellm.BudgetExceededError):
         await resolve_customer_hierarchy(
-            customer_member_id="member-1",
+            identity=CustomerRequestIdentity(customer_member_id="member-1"),
             prisma_client=prisma,  # pyright: ignore[reportArgumentType]  # test double
             user_api_key_cache=cache,
             llm_router=None,
@@ -240,7 +317,7 @@ async def test_resolution_enforces_budget_on_model_routes_but_not_on_info_routes
             route="/chat/completions",
         )
     hierarchy: Final = await resolve_customer_hierarchy(
-        customer_member_id="member-1",
+        identity=CustomerRequestIdentity(customer_member_id="member-1"),
         prisma_client=prisma,  # pyright: ignore[reportArgumentType]  # test double
         user_api_key_cache=cache,
         llm_router=None,
@@ -257,3 +334,132 @@ def test_a_key_pinned_to_another_organization_cannot_act_for_the_member() -> Non
     assert denied.value.code == "403"
     check_customer_hierarchy_key_scope(hierarchy, {"customer_org_id": "org-1"})
     check_customer_hierarchy_key_scope(hierarchy, {})
+
+
+@pytest.mark.parametrize(
+    "headers, expected",
+    [
+        ({"X-LiteLLM-Customer-Org-Alias": " acme "}, CustomerRequestIdentity(customer_org_alias="acme")),
+        (
+            {CUSTOMER_ORG_ALIAS_HEADER: "acme", CUSTOMER_MEMBER_ID_HEADER: "member-1"},
+            CustomerRequestIdentity(customer_member_id="member-1", customer_org_alias="acme"),
+        ),
+        ({CUSTOMER_MEMBER_ID_HEADER: "member-1"}, CustomerRequestIdentity(customer_member_id="member-1")),
+        ({CUSTOMER_ORG_ALIAS_HEADER: "  ", "x-litellm-end-user-id": "end-user"}, None),
+        (None, None),
+    ],
+)
+def test_the_request_identity_is_read_from_both_customer_headers(
+    headers: Mapping[str, object] | None, expected: CustomerRequestIdentity | None
+) -> None:
+    assert customer_identity_from_headers(headers) == expected
+
+
+@pytest.mark.asyncio
+async def test_an_alias_alone_charges_only_the_organization_and_enforces_its_budget() -> None:
+    prisma: Final = _Prisma(_MemberTable({}), _OrganizationTable((_organization("acme", max_budget=5.0, spend=1.0),)))
+    hierarchy: Final = await _resolve(prisma, CustomerRequestIdentity(customer_org_alias="acme"))
+
+    assert (hierarchy.customer_org_id, hierarchy.customer_team_id, hierarchy.customer_member_id) == (
+        "org-1",
+        None,
+        None,
+    )
+    assert tuple((scope.key, scope.entity_id, scope.max_budget, scope.spend) for scope in hierarchy.scopes) == (
+        ("customer_org", "org-1", 5.0, 1.0),
+    )
+
+    exhausted: Final = _Prisma(
+        _MemberTable({}), _OrganizationTable((_organization("acme", max_budget=5.0, spend=5.0),))
+    )
+    with pytest.raises(litellm.BudgetExceededError) as exc:
+        await _resolve(exhausted, CustomerRequestIdentity(customer_org_alias="acme"))
+    assert (exc.value.entity_type, exc.value.entity_id) == ("customer_org", "org-1")
+
+
+@pytest.mark.asyncio
+async def test_an_alias_next_to_a_member_must_name_that_members_organization() -> None:
+    members: Final = _MemberTable({"member-1": _row(template={"max_budget": 10.0})})
+    organizations: Final = _OrganizationTable((_organization("acme"), _organization("other", org_id="org-2")))
+    prisma: Final = _Prisma(members, organizations)
+
+    matching: Final = await _resolve(
+        prisma, CustomerRequestIdentity(customer_member_id="member-1", customer_org_alias="acme")
+    )
+    assert (matching.customer_org_id, matching.customer_member_id) == ("org-1", "member-1")
+    assert tuple(scope.key for scope in matching.scopes) == ("customer_org", "customer_team", "customer_member")
+
+    with pytest.raises(ProxyException) as denied:
+        await _resolve(prisma, CustomerRequestIdentity(customer_member_id="member-1", customer_org_alias="other"))
+    assert (denied.value.code, denied.value.param) == ("403", CUSTOMER_ORG_ALIAS_HEADER)
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_alias_is_refused_and_a_shared_alias_is_rejected_as_ambiguous() -> None:
+    with pytest.raises(ProxyException) as missing:
+        await _resolve(_Prisma(_MemberTable({})), CustomerRequestIdentity(customer_org_alias="ghost"))
+    assert (missing.value.code, missing.value.param) == ("401", CUSTOMER_ORG_ALIAS_HEADER)
+
+    shared: Final = _Prisma(
+        _MemberTable({}), _OrganizationTable((_organization("acme"), _organization("acme", org_id="org-2")))
+    )
+    with pytest.raises(ProxyException) as ambiguous:
+        await _resolve(shared, CustomerRequestIdentity(customer_org_alias="acme"))
+    assert ambiguous.value.code == "400"
+
+
+@pytest.mark.asyncio
+async def test_an_organization_alias_is_loaded_once_then_served_from_the_cache_until_forgotten() -> None:
+    organizations: Final = _OrganizationTable((_organization("acme"),))
+    prisma: Final = _Prisma(_MemberTable({}), organizations)
+    cache: Final = UserApiKeyCache()
+
+    first: Final = await get_customer_organization_hierarchy("acme", prisma, cache, now=NOW)  # pyright: ignore[reportArgumentType]  # test double
+    second: Final = await get_customer_organization_hierarchy("acme", prisma, cache, now=NOW)  # pyright: ignore[reportArgumentType]  # test double
+    assert isinstance(first, CustomerHierarchyAuth) and second == first
+    assert organizations.lookups == 1
+
+    await forget_customer_organization_aliases(("acme", None), cache)
+    await get_customer_organization_hierarchy("acme", prisma, cache, now=NOW)  # pyright: ignore[reportArgumentType]  # test double
+    assert organizations.lookups == 2
+    assert await get_customer_organization_hierarchy("ghost", prisma, cache, now=NOW) is None  # pyright: ignore[reportArgumentType]  # test double
+    shared: Final = _Prisma(
+        _MemberTable({}), _OrganizationTable((_organization("acme"), _organization("acme", org_id="org-2")))
+    )
+    assert isinstance(
+        await get_customer_organization_hierarchy("acme", shared, UserApiKeyCache(), now=NOW),  # pyright: ignore[reportArgumentType]  # test double
+        AmbiguousOrganizationAlias,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_member_the_aliased_organization_has_never_seen_is_registered_there_and_served() -> None:
+    members: Final = _MemberTable({})
+    registrar: Final = _Registrar(members)
+    prisma: Final = _Prisma(members, _OrganizationTable((_organization("acme"),)))
+
+    hierarchy: Final = await _resolve(
+        prisma, CustomerRequestIdentity(customer_member_id="user-7", customer_org_alias="acme"), register=registrar
+    )
+
+    assert registrar.calls == (("org-1", "user-7"),)
+    assert (hierarchy.customer_org_id, hierarchy.customer_member_id) == ("org-1", "user-7")
+    assert _scopes(hierarchy)["customer_member"].max_budget == 10.0
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_member_stays_refused_without_an_alias_or_when_registration_fails() -> None:
+    members: Final = _MemberTable({})
+    registrar: Final = _Registrar(members)
+    with pytest.raises(ProxyException) as no_alias:
+        await _resolve(_Prisma(members), CustomerRequestIdentity(customer_member_id="user-7"), register=registrar)
+    assert (no_alias.value.code, registrar.calls) == ("401", ())
+
+    failing: Final = _Registrar(members, Failure(ErrorCode.BUDGET_REQUIRED))
+    prisma: Final = _Prisma(members, _OrganizationTable((_organization("acme"),)))
+    with pytest.raises(ProxyException) as failed:
+        await _resolve(
+            prisma, CustomerRequestIdentity(customer_member_id="user-7", customer_org_alias="acme"), register=failing
+        )
+    assert (failed.value.code, failing.calls) == ("401", (("org-1", "user-7"),))
+    assert "user-7" not in members.rows

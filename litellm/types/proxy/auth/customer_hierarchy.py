@@ -1,5 +1,6 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
@@ -7,6 +8,14 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from litellm.types.integrations.slack_alerting import Litellm_EntityType
 
 CustomerScopeKey: TypeAlias = Literal["customer_org", "customer_team", "customer_member"]
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerRequestIdentity:
+    """What a request's headers said about the customer it runs for: the member id, the organization alias, or both."""
+
+    customer_member_id: str | None = None
+    customer_org_alias: str | None = None
 
 
 class CustomerScopeAuth(BaseModel):
@@ -26,23 +35,26 @@ class CustomerScopeAuth(BaseModel):
 
 
 class CustomerHierarchyAuth(BaseModel):
+    """The levels a request is charged to. A request that named only an organization alias has no team or member."""
+
     model_config = ConfigDict(frozen=True)
 
-    customer_member_id: str
-    customer_team_id: str
     customer_org_id: str
+    customer_team_id: str | None = None
+    customer_member_id: str | None = None
     scopes: tuple[CustomerScopeAuth, ...]
 
 
 @dataclass(frozen=True, slots=True)
 class CustomerHierarchyIds:
-    """The three rows a request's spend is charged to, as the request metadata recorded them."""
+    """The rows a request's spend is charged to, as the request metadata recorded them. Team and member are absent
+    when the request named only an organization."""
 
-    customer_member_id: str
-    customer_team_id: str
     customer_org_id: str
+    customer_team_id: str | None = None
+    customer_member_id: str | None = None
 
-    def entities(self) -> Mapping[str, str]:
+    def entities(self) -> Mapping[str, str | None]:
         return {
             "customer_member_id": self.customer_member_id,
             "customer_team_id": self.customer_team_id,
@@ -50,34 +62,44 @@ class CustomerHierarchyIds:
         }
 
     def spend_entities(self) -> tuple[tuple[Litellm_EntityType, str], ...]:
-        return (
+        levels: Final = (
             (Litellm_EntityType.CUSTOMER_ORG, self.customer_org_id),
             (Litellm_EntityType.CUSTOMER_TEAM, self.customer_team_id),
             (Litellm_EntityType.CUSTOMER_MEMBER, self.customer_member_id),
         )
+        return tuple((entity_type, entity_id) for entity_type, entity_id in levels if entity_id)
 
 
 _FIELDS: Final = TypeAdapter(Mapping[str, object])
+_NO_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 def _mapping(value: object) -> Mapping[str, object]:
     try:
         return _FIELDS.validate_python(value)
     except ValidationError:
-        return {}
+        return _NO_FIELDS
 
 
 def _stamped_metadata(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
     """The proxy stamps auth ids into ``litellm_metadata`` on routes whose body owns ``metadata``, else into ``metadata``."""
     buckets: Final = tuple(_mapping(litellm_params.get(name)) for name in ("litellm_metadata", "metadata"))
-    return next((bucket for bucket in buckets if "user_api_key_customer_member_id" in bucket), {})
+    return next((bucket for bucket in buckets if "user_api_key_customer_org_id" in bucket), _NO_FIELDS)
+
+
+def _stamped_id(metadata: Mapping[str, object], level: str) -> str | None:
+    value: Final = metadata.get(f"user_api_key_customer_{level}_id")
+    return value if isinstance(value, str) and value else None
 
 
 def customer_hierarchy_ids_from_request(kwargs: Mapping[str, object]) -> CustomerHierarchyIds | None:
-    """The ids auth stamped into the request's proxy metadata, or None when the request named no customer member."""
+    """The ids auth stamped into the request's proxy metadata, or None when the request named no customer."""
     metadata: Final = _stamped_metadata(_mapping(kwargs.get("litellm_params")))
-    ids: Final = tuple(metadata.get(f"user_api_key_customer_{level}_id") for level in ("member", "team", "org"))
-    if not all(isinstance(value, str) and value for value in ids):
+    org_id: Final = _stamped_id(metadata, "org")
+    if org_id is None:
         return None
-    member_id, team_id, org_id = ids
-    return CustomerHierarchyIds(str(member_id), str(team_id), str(org_id))
+    return CustomerHierarchyIds(
+        customer_org_id=org_id,
+        customer_team_id=_stamped_id(metadata, "team"),
+        customer_member_id=_stamped_id(metadata, "member"),
+    )

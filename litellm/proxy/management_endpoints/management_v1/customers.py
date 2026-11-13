@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 from typing_extensions import assert_never
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.auth.customer_hierarchy_auth import forget_customer_hierarchies
+from litellm.proxy.auth.customer_hierarchy_auth import forget_customer_hierarchies, forget_customer_organization_aliases
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.list_api.common import (
@@ -192,8 +192,10 @@ async def update_customer_organization(
     hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
     cache: AuthCache,
 ) -> Organization:
+    previous: Final = resolve(await hierarchy.get_organization(customer_org_id))
     organization: Final = resolve(await hierarchy.update_organization(customer_org_id, data, actor))
     await forget_customer_hierarchies(resolve(await hierarchy.member_ids_in_organization(customer_org_id)), cache)
+    await forget_customer_organization_aliases((previous.alias, organization.alias), cache)
     return organization
 
 
@@ -206,8 +208,11 @@ async def update_customer_organization(
 async def delete_customer_organization(
     customer_org_id: str,
     hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+    cache: AuthCache,
 ) -> Response:
+    previous: Final = resolve(await hierarchy.get_organization(customer_org_id))
     resolve(await hierarchy.delete_organization(customer_org_id))
+    await forget_customer_organization_aliases((previous.alias,), cache)
     return Response(status_code=204)
 
 
