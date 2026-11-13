@@ -5212,6 +5212,11 @@
         "managedByConfig": "Managed by the deployment configuration."
       },
       "settings": {
+        "disableAria": {
+          "label": "Hide Aria Agent for everyone",
+          "description": "Hides Aria from navigation, Usage, and its workspace for all users, including admins. Active dashboards check for changes every 30 seconds.",
+          "managedByConfig": "Managed by the deployment configuration."
+        },
         "disableModelAdd": {
           "label": "Disable model add for internal users"
         },

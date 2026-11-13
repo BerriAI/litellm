@@ -6802,8 +6802,7 @@ export const exchangeLoginCode = async (code: string, workerBaseUrl?: string | n
   return data.token;
 };
 
-export const getUiSettings = async () => {
-  const proxyBaseUrl = getProxyBaseUrl();
+export const getUiSettings = async (proxyBaseUrl = getProxyBaseUrl()) => {
   const url = proxyBaseUrl ? `${proxyBaseUrl}/get/ui_settings` : `/get/ui_settings`;
   const response = await fetch(url, {
     method: "GET",
