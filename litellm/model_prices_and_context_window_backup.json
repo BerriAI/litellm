@@ -67803,6 +67803,7 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_response_schema": true,
+        "supports_reasoning": true,
         "supports_vision": false,
         "source": "https://deepinfra.com/pricing"
     },
@@ -68225,6 +68226,7 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_response_schema": true,
+        "supports_reasoning": true,
         "supports_vision": false,
         "source": "https://deepinfra.com/pricing"
     },
@@ -68270,6 +68272,7 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_response_schema": true,
+        "supports_reasoning": true,
         "supports_vision": true,
         "source": "https://deepinfra.com/pricing"
     },
