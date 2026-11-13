@@ -4535,6 +4535,6 @@
         "default_value": null
       }
     ],
-    "default_model_placeholder": "bineric/claude-sonnet-5.5"
+    "default_model_placeholder": "bineric/lynx-30b"
   }
 ]
