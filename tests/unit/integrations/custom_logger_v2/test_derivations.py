@@ -417,7 +417,7 @@ def test_a_stringified_value_carries_the_error_text_python_raises_when_it_hashes
 @pytest.mark.parametrize(
     ("raw", "type_name"),
     [([], "list"), ({}, "dict"), (set(), "set"), ((), "tuple"), (frozenset(), "frozenset"), (_Falsy(), "_Falsy")],
-    ids=repr,
+    ids=("list", "dict", "set", "tuple", "frozenset", "object"),
 )
 def test_a_stringified_value_carries_the_type_name_float_names_when_it_refuses_it(raw: object, type_name: str) -> None:
     carried: Final = coerce_record(UsageRecord, {"prompt_tokens": raw}).prompt_tokens
