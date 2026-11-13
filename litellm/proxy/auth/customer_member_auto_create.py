@@ -79,7 +79,7 @@ async def ensure_customer_organization(
     created: Final = await hierarchy.create_organization(
         OrganizationCreate(customer_org_id=customer_org_alias, alias=customer_org_alias), AUTO_CREATE_ORG_ACTOR
     )
-    if isinstance(created, Failure) and created.code is ErrorCode.ALREADY_EXISTS:
+    if isinstance(created, Failure) and created.code in (ErrorCode.ALREADY_EXISTS, ErrorCode.ALIAS_ALREADY_EXISTS):
         return await hierarchy.get_organization(customer_org_alias)
     if not isinstance(created, Failure):
         verbose_proxy_logger.info("Registered customer organization %s", customer_org_alias)
