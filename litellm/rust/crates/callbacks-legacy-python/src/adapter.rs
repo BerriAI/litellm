@@ -416,6 +416,11 @@ impl LegacyLogging {
         stream: &DeliveredStream,
         teardown: bool,
     ) -> PyResult<()> {
+        // Python's Messages stream iterator starts on the first read, so a stream the caller
+        // closed or dropped unread bills nothing.
+        if stream.first_chunk.is_none() {
+            return Ok(());
+        }
         let logger = self.logger()?;
         let billing = self.stream_billing().ok_or(HostError::MissingState)?;
         let billed = Streaming::Success.call(
@@ -2627,10 +2632,13 @@ assert chunks[1] is last
     }
 
     #[rstest]
-    #[case::cancelled_mid_stream(None, &["stamp_stream_head", "stream_opened", "stream_success", "restore"])]
-    #[case::after_success(Some(true), &["stamp_stream_head", "stream_opened", "stream_success", "restore"])]
-    #[case::after_failure(Some(false), &["stamp_stream_head", "stream_opened", "stream_failure", "restore"])]
+    #[case::cancelled_mid_stream(true, None, &["stamp_stream_head", "stream_opened", "stream_success", "restore"])]
+    #[case::dropped_unread(false, None, &["stamp_stream_head", "stream_opened", "restore"])]
+    #[case::closed_unread(false, Some(true), &["stamp_stream_head", "stream_opened", "restore"])]
+    #[case::after_success(true, Some(true), &["stamp_stream_head", "stream_opened", "stream_success", "restore"])]
+    #[case::after_failure(true, Some(false), &["stamp_stream_head", "stream_opened", "stream_failure", "restore"])]
     fn closing_an_unfinished_stream_bills_its_delivered_chunks_once(
+        #[case] read: bool,
         #[case] ended: Option<bool>,
         #[case] expected: &[&str],
     ) {
@@ -2647,9 +2655,11 @@ assert chunks[1] is last
             logging
                 .on_stream_open(py, &local(&locals, "head").unbind())
                 .unwrap();
-            logging
-                .on_stream_chunk(py, &local(&locals, "first").unbind())
-                .unwrap();
+            if read {
+                logging
+                    .on_stream_chunk(py, &local(&locals, "first").unbind())
+                    .unwrap();
+            }
             match ended {
                 Some(true) => drop(succeed(py, &locals, &mut logging)),
                 Some(false) => drop(fail(py, &locals, &mut logging)),

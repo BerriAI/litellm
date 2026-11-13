@@ -23,6 +23,7 @@ import asyncio
 import contextlib
 import copy
 import datetime
+import gc
 import gzip
 import json
 import logging
@@ -52,7 +53,7 @@ import pytest
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
-from litellm._logging import verbose_logger
+from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.anthropic_interface.exceptions.exception_mapping_utils import AnthropicExceptionMapping
 from litellm.caching.caching import Cache, CacheMode
 from litellm.caching.caching_handler import (
@@ -4560,14 +4561,16 @@ class _WarningLines(logging.Handler):
 
 
 @contextmanager
-def _warnings() -> Generator[list[str]]:  # mutable-ok: filled while the call runs
+def _warnings(
+    logger: logging.Logger = verbose_logger,
+) -> Generator[list[str]]:  # mutable-ok: filled while the call runs
     lines: Final[list[str]] = []
     handler: Final = _WarningLines(lines)
-    verbose_logger.addHandler(handler)
+    logger.addHandler(handler)
     try:
         yield lines
     finally:
-        verbose_logger.removeHandler(handler)
+        logger.removeHandler(handler)
 
 
 def _cache_entries(cache: Cache) -> tuple[str, ...]:
@@ -5201,6 +5204,54 @@ async def test_both_lanes_bill_a_stream_abandoned_after_its_first_chunk_alike(
 ) -> None:
     python: Final = await _abandoned_stream(parity_server, native=False, upstream=_burst(TEXT_STREAM))
     native: Final = await _abandoned_stream(parity_server, native=True, upstream=_burst(TEXT_STREAM))
+
+    assert native_messages.calls == 0
+    assert native == python
+
+
+async def _leave_unread(server: RecordingServer, native: bool, closed: bool) -> None:
+    acall: Final = _PUBLIC_AMESSAGES if native else _PYTHON_AMESSAGES
+    stream: Final = cast(
+        AsyncGenerator[object],
+        await acall(
+            model=SONNET,
+            max_tokens=64,
+            messages=[dict(USER)],
+            api_key=API_KEY,
+            api_base=server.base_url,
+            stream=True,
+        ),
+    )
+    if closed:
+        await stream.aclose()
+
+
+async def _unread_stream(
+    server: RecordingServer, native: bool, closed: bool
+) -> tuple[tuple[str, ...], tuple[Mapping[str, object], ...]]:
+    server.enqueue(_burst(TEXT_STREAM))
+    recorder: Final = _AttemptRecorder()
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(isolated_callback_registries())
+        stack.enter_context(_environment({}))
+        errors: Final = stack.enter_context(_warnings(verbose_proxy_logger))
+        litellm.callbacks.append(recorder)
+        await _leave_unread(server, native, closed)
+        gc.collect()
+        for _ in range(5):
+            await drain_logging()
+            await asyncio.sleep(0.05)
+    server.responses.clear()
+    return tuple(errors), tuple(recorder.seen)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("closed", (False, True), ids=("dropped", "closed"))
+async def test_both_lanes_log_nothing_for_a_stream_never_read(
+    parity_server: RecordingServer, native_messages: FallbackProbe, closed: bool
+) -> None:
+    python: Final = await _unread_stream(parity_server, native=False, closed=closed)
+    native: Final = await _unread_stream(parity_server, native=True, closed=closed)
 
     assert native_messages.calls == 0
     assert native == python
