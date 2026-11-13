@@ -67,7 +67,23 @@ async def _awaited(returned: object) -> object:
     return await returned if inspect.isawaitable(returned) else returned
 
 
-def _decides(hook: Hook, result: object) -> bool:
+def _contained(hook: Hook, entry: Entry, result: object) -> bool:
+    if entry.subscription.legacy or HOOK_SPECS[hook].request_path:
+        return False
+    match result:
+        case Abort() | Respond():
+            return True
+        case ContractViolation():
+            return False
+        case Exception():
+            return True
+        case _:
+            return False
+
+
+def _decides(hook: Hook, entry: Entry, result: object) -> bool:
+    if _contained(hook, entry, result):
+        return False
     match result:
         case Abort() | Respond():
             return True
@@ -179,7 +195,7 @@ class Dispatcher:
     def open_scope(self, selection: RequestSelection) -> "RequestScope":
         return RequestScope(self, self.registry.snapshot, selection)
 
-    def record_failure(self, entry: Entry, hook: Hook, error: BaseException) -> None:
+    def record_failure(self, entry: Entry, hook: Hook, error: BaseException | Abort | Respond) -> None:
         self.failures[(entry.manifest.selection.name, hook)] += 1
         _LOGGER.warning("custom logger v2 %s failed on %s: %r", entry.manifest.selection.name, hook.value, error)
 
@@ -362,7 +378,7 @@ class RequestScope:
 
     def _fold(self, hook: Hook, stage: tuple[Entry, ...], results: tuple[object, ...], chain: _Chain) -> _Chain:
         pairs: Final = tuple(zip(stage, results, strict=True))
-        decisive: Final = next((pair for pair in pairs if _decides(hook, pair[1])), None)
+        decisive: Final = next((pair for pair in pairs if _decides(hook, pair[0], pair[1])), None)
         self._count_failures(hook, tuple(pair for pair in pairs if pair is not decisive))
         match decisive:
             case (_, BaseException() as error):
@@ -383,8 +399,13 @@ class RequestScope:
 
     def _count_failures(self, hook: Hook, pairs: Sequence[tuple[Entry, object]]) -> None:
         for entry, result in pairs:
-            if isinstance(result, BaseException) and not entry.subscription.legacy:
-                self._dispatcher.record_failure(entry, hook, result)
+            match result:
+                case BaseException() if not entry.subscription.legacy:
+                    self._dispatcher.record_failure(entry, hook, result)
+                case Abort() | Respond() if _contained(hook, entry, result):
+                    self._dispatcher.record_failure(entry, hook, result)
+                case _:
+                    pass
 
     def _swallow(self, hook: Hook, entries: Sequence[Entry], results: tuple[object, ...]) -> None:
         pairs: Final = tuple(zip(entries, results, strict=True))

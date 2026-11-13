@@ -15613,3 +15613,44 @@ async def test_a_v2_callback_in_litellm_callbacks_gets_attempt_ended_after_an_ac
         "legacy",
         "v2",
     ]
+
+
+class _BrokenStamp(CustomLoggerV2):
+    def __init__(self, journal: list[object], outcome: Exception | Abort) -> None:
+        self.journal = journal
+        self.outcome = outcome
+
+    @on(Hook.log_prepare, reads={Field.standard_logging_payload}, writes={Field.standard_logging_payload})
+    async def log_prepare(self, view: object, ctx: CallContext[object]) -> Abort | None:
+        self.journal.append("v2")
+        if isinstance(self.outcome, Exception):
+            raise self.outcome
+        return self.outcome
+
+
+@pytest.mark.parametrize("outcome", [KeyError("stamped_by"), Abort(status=403, message="no")])
+async def test_a_failing_v2_log_prepare_writer_is_contained_and_async_success_still_reaches_every_logger(
+    logging_obj: LitellmLogging, monkeypatch: pytest.MonkeyPatch, outcome: Exception | Abort
+) -> None:
+    journal: Final[list[object]] = []
+    recorder: Final = _EndedRecorder(journal)
+    _plane_lists(
+        monkeypatch,
+        _async_success_callback=[
+            _Entry("first", journal),
+            _BrokenStamp(journal, outcome),
+            recorder,
+            _Entry("last", journal),
+        ],
+    )
+    logging_obj.stream = False
+    logging_obj.update_environment_variables(litellm_params={"acompletion": True}, optional_params={})
+    now: Final = datetime.datetime.now()
+
+    await logging_obj.async_success_handler(result=ModelResponse(id="served"), start_time=now, end_time=now)
+
+    assert [entry[0] for entry in _ran(journal, "hook")] == ["first", "last"]
+    assert [entry[0] for entry in _ran(journal, "success")] == ["first", "last"]
+    assert journal.count("v2") == 2
+    assert recorder.done.is_set()
+
