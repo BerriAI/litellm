@@ -7,15 +7,15 @@ use jiff::Timestamp;
 use litellm_cost::call::CallContext;
 use litellm_cost::money::UnitPrice;
 use litellm_cost::price::{
-    Adjustments, CacheReadMode, CacheTtl, Channel, InputUnit, Meter, OutputUnit, Prices, Residency,
+    Adjustments, CacheReadMode, CacheTtl, Channel, InputUnit, Meter, OutputUnit, Residency,
     ServiceTier, TokenKind,
 };
 use litellm_cost::priced::Outcome;
 use litellm_cost::quote::Quote;
 use litellm_cost::usage::{Characters, DurationMeter, Images, Search, Tokens, Usage};
 use litellm_host_python::json_from_py;
-use litellm_model_catalog::billed_prices;
 use litellm_model_catalog::wire::{EntryWire, Fields};
+use litellm_model_catalog::{BilledPrices, billed_prices};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyMapping, PyString};
@@ -25,7 +25,7 @@ use serde_json::Value;
 /// price main could not parse was. A row the catalog checks would reject is still priced, see `billed_prices`
 #[pyclass(frozen, name = "NativePrices", module = "litellm.rust_bridge._native")]
 pub(crate) struct NativePrices {
-    prices: Prices,
+    prices: BilledPrices,
     adjustments: Adjustments,
 }
 
@@ -91,7 +91,8 @@ impl NativePrices {
     }
 
     fn calculate(&self, usage: &NativeTokenUsage, call: &NativeCallContext) -> NativePriced {
-        match litellm_cost::calculate(&self.prices, &self.adjustments, &usage.0, &call.0) {
+        let prices = self.prices.for_prompt(usage.0.prompt_tokens);
+        match litellm_cost::calculate(prices, &self.adjustments, &usage.0, &call.0) {
             Outcome::Priced(priced) => NativePriced {
                 prompt_cost: priced.prompt.get(),
                 completion_cost: priced.completion.get(),
@@ -104,7 +105,10 @@ impl NativePrices {
     }
 
     fn quote(&self, prompt_tokens: u64, call: &NativeCallContext) -> NativeQuote {
-        let quote = self.prices.quote(&call.0, prompt_tokens);
+        let quote = self
+            .prices
+            .for_prompt(prompt_tokens)
+            .quote(&call.0, prompt_tokens);
         let cache_write = |ttl| {
             billed(
                 &quote,
@@ -141,18 +145,18 @@ impl NativePrices {
 
 #[pymethods]
 impl NativeTokenUsage {
-    /// Quantities main's parsing already settled: uncached prompt tokens by modality, cached tokens by modality,
-    /// cache writes by lifetime (`cache_write_tokens` is every write not reported as 1h or 12h), completion tokens by
-    /// modality with reasoning apart. `prompt_tokens` only picks the band. `explicit_cache_read` bills the cached
-    /// tokens as reads of a cache the caller created
+    /// Quantities main's parsing already settled. `prompt_tokens` only picks the band. The `input_*` counts are what
+    /// the cache did not serve, the `cached_*` counts are cache reads, and `explicit_cache_read` says those reads hit
+    /// a cache the caller created. `cache_write_tokens` is every write not reported as 1h or 12h. The `output_*`
+    /// counts leave reasoning out
     #[new]
     #[pyo3(signature = (
         *,
         prompt_tokens,
-        text_tokens,
-        audio_tokens,
-        image_tokens,
-        video_tokens,
+        input_text_tokens,
+        input_audio_tokens,
+        input_image_tokens,
+        input_video_tokens,
         cached_text_tokens,
         cached_audio_tokens,
         cached_image_tokens,
@@ -160,24 +164,24 @@ impl NativeTokenUsage {
         cache_write_tokens,
         cache_write_1h_tokens,
         cache_write_12h_tokens,
-        characters,
-        images,
-        video_seconds,
-        audio_seconds,
+        input_characters,
+        input_images,
+        input_audio_seconds,
+        input_video_seconds,
         queries,
         output_text_tokens,
         output_audio_tokens,
-        reasoning_tokens,
         output_image_tokens,
         output_video_tokens,
+        reasoning_tokens,
     ))]
     #[allow(clippy::too_many_arguments)] // one keyword per billed quantity, read by name in Python
     fn new(
         prompt_tokens: u64,
-        text_tokens: u64,
-        audio_tokens: u64,
-        image_tokens: u64,
-        video_tokens: u64,
+        input_text_tokens: u64,
+        input_audio_tokens: u64,
+        input_image_tokens: u64,
+        input_video_tokens: u64,
         cached_text_tokens: u64,
         cached_audio_tokens: u64,
         cached_image_tokens: u64,
@@ -185,16 +189,16 @@ impl NativeTokenUsage {
         cache_write_tokens: u64,
         cache_write_1h_tokens: u64,
         cache_write_12h_tokens: u64,
-        characters: u64,
-        images: u64,
-        video_seconds: f64,
-        audio_seconds: f64,
+        input_characters: u64,
+        input_images: u64,
+        input_audio_seconds: f64,
+        input_video_seconds: f64,
         queries: u64,
         output_text_tokens: u64,
         output_audio_tokens: u64,
-        reasoning_tokens: u64,
         output_image_tokens: u64,
         output_video_tokens: u64,
+        reasoning_tokens: u64,
     ) -> PyResult<Self> {
         let mode = if explicit_cache_read {
             CacheReadMode::Explicit
@@ -205,10 +209,10 @@ impl NativeTokenUsage {
             prompt_tokens,
             tokens: Tokens {
                 input: BTreeMap::from([
-                    (TokenKind::Text, text_tokens),
-                    (TokenKind::Audio, audio_tokens),
-                    (TokenKind::Image, image_tokens),
-                    (TokenKind::Video, video_tokens),
+                    (TokenKind::Text, input_text_tokens),
+                    (TokenKind::Audio, input_audio_tokens),
+                    (TokenKind::Image, input_image_tokens),
+                    (TokenKind::Video, input_video_tokens),
                 ]),
                 cache_read: BTreeMap::from([
                     ((TokenKind::Text, mode), cached_text_tokens),
@@ -233,15 +237,15 @@ impl NativeTokenUsage {
                 citation: 0,
             },
             characters: Characters {
-                prompt: characters,
+                prompt: input_characters,
                 completion: 0,
             },
             durations: BTreeMap::from([
-                (DurationMeter::InputVideo, seconds(video_seconds)?),
-                (DurationMeter::InputAudio, seconds(audio_seconds)?),
+                (DurationMeter::InputAudio, seconds(input_audio_seconds)?),
+                (DurationMeter::InputVideo, seconds(input_video_seconds)?),
             ]),
             images: Images {
-                input: images,
+                input: input_images,
                 ..Images::default()
             },
             search: Search {

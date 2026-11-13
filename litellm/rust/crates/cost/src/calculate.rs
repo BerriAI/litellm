@@ -7,8 +7,9 @@ use crate::priced::{Line, Outcome, Priced, Quantity, Side};
 use crate::quote::Quote;
 use crate::usage::{DurationMeter, Usage};
 
-/// Prices the token, character, image, second and query meters of one online call. Each side is
-/// summed in the order main sums it, so the two totals equal main's to the last bit
+/// Prices one online call from its prompt and completion tokens, prompt characters, input images,
+/// input audio and video time and queries. No other field of `usage` is read. Each side is summed
+/// in the order main sums it, so the two totals equal main's to the last bit
 pub fn calculate(
     prices: &Prices,
     adjustments: &Adjustments,
@@ -191,9 +192,11 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::call::{InferenceGeo, Speed};
     use crate::money::UnitPrice;
     use crate::price::{
-        Billing, CacheReadMode, CacheTtl, OffPeakRates, Residency, ServiceTier::Standard, Uplift,
+        Billing, CacheReadMode, CacheTtl, Channel, OffPeakRates, Residency, ServiceTier::Standard,
+        Uplift,
     };
     use crate::testing::{
         AUDIO_INPUT, BASE, CACHE_WRITE_HOUR, call, off_peak_all_day, over, prices, prices_with,
@@ -543,6 +546,59 @@ mod tests {
         assert_eq!(
             priced.lines.iter().map(|line| line.amount).sum::<Usd>(),
             priced.total()
+        );
+    }
+
+    #[rstest]
+    #[case::speed(
+        CallContext { speed: Some(Speed::Fast), ..call() },
+        (300.0, 60.0)
+    )]
+    #[case::inference_geo(
+        CallContext { inference_geo: Some(InferenceGeo::new("US")), ..call() },
+        (150.0, 30.0)
+    )]
+    #[case::another_geo(
+        CallContext { inference_geo: Some(InferenceGeo::new("eu")), ..call() },
+        (100.0, 20.0)
+    )]
+    #[case::speed_then_geo(
+        CallContext {
+            speed: Some(Speed::Fast),
+            inference_geo: Some(InferenceGeo::new("us")),
+            ..call()
+        },
+        (450.0, 90.0)
+    )]
+    fn a_speed_or_geo_uplift_the_row_carries_applies_to_the_call_that_names_it(
+        #[case] call: CallContext,
+        #[case] expected: (f64, f64),
+    ) {
+        let prices = prices(&[(INPUT, Standard, BASE, 1.0), (OUTPUT, Standard, BASE, 2.0)]);
+        let adjustments = Adjustments::new([
+            (Uplift::Speed(Speed::Fast), Multiplier::new(3.0).unwrap()),
+            (
+                Uplift::InferenceGeo(InferenceGeo::new("us")),
+                Multiplier::new(1.5).unwrap(),
+            ),
+        ]);
+        let priced = priced_with(&prices, &adjustments, &text(100, 100, 10), &call);
+
+        assert_eq!(sides(&priced), expected);
+    }
+
+    #[rstest]
+    #[case::batch(CallContext { channel: Channel::Batch, ..call() })]
+    #[case::custom_pricing(CallContext { overlay: Some(Prices::default()), ..call() })]
+    fn a_batch_call_or_one_with_custom_pricing_is_unpriced_not_billed_online(
+        #[case] call: CallContext,
+    ) {
+        let prices = prices(&[(INPUT, Standard, BASE, 1.0), (OUTPUT, Standard, BASE, 2.0)]);
+        assert_eq!(
+            calculate(&prices, &Adjustments::default(), &text(100, 100, 10), &call),
+            Outcome::Unpriced {
+                missing: vec![INPUT, OUTPUT]
+            }
         );
     }
 

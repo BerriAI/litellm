@@ -13,6 +13,8 @@ pub struct Quote<'a> {
     prompt_tokens: u64,
     /// The off-peak rates, only while a window is open
     off_peak: Option<&'a OffPeakRates>,
+    /// Whether this crate prices the call at all
+    priced_here: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -23,8 +25,10 @@ pub struct Rate {
 }
 
 impl Prices {
+    /// A batch or decisions call, or one with custom pricing, gets a quote with no rates. Python still prices those
     pub fn quote(&self, call: &CallContext, prompt_tokens: u64) -> Quote<'_> {
         Quote {
+            priced_here: call.channel == Channel::Online && call.overlay.is_none(),
             prices: self,
             tier: call.tier,
             prompt_tokens,
@@ -39,6 +43,9 @@ impl Prices {
 impl Quote<'_> {
     /// `None` when the row has no price for `meter` and nothing to borrow one from
     pub fn rate(&self, meter: &Meter) -> Option<Rate> {
+        if !self.priced_here {
+            return None;
+        }
         match meter {
             Meter::Input(InputUnit::Token(TokenKind::Text)) => self
                 .off_peak(|rates| rates.input)
@@ -712,6 +719,16 @@ mod tests {
             quoted(&prices, &tier_call(Priority), prompt_tokens, &CACHE_READ),
             Some(expected)
         );
+    }
+
+    #[rstest]
+    #[case::batch(CallContext { channel: Channel::Batch, ..call() })]
+    #[case::decisions(CallContext { channel: Channel::Decisions, ..call() })]
+    #[case::custom_pricing(CallContext { overlay: Some(Prices::default()), ..call() })]
+    fn a_call_this_crate_cannot_price_yet_has_no_rates(#[case] call: CallContext) {
+        let prices = prices(&[(INPUT, Standard, BASE, 1.0), (OUTPUT, Standard, BASE, 3.0)]);
+        assert_eq!(quoted(&prices, &call, 10, &INPUT), None);
+        assert_eq!(quoted(&prices, &call, 10, &REASONING), None);
     }
 
     #[rstest]

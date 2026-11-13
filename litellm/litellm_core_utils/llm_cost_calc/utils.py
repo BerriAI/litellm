@@ -14,7 +14,7 @@ from typing_extensions import Buffer, ReadOnly
 import litellm
 from litellm._internal_context import current_billing_time
 from litellm._logging import verbose_logger
-from litellm.rust_bridge._native import NativeCallContext, NativePrices, NativeTokenUsage
+from litellm.rust_bridge._native import NativeCallContext, NativePrices, NativeQuote, NativeTokenUsage
 from litellm.types.utils import (
     CacheCreationTokenDetails,
     CallTypes,
@@ -885,12 +885,17 @@ def _count(value: float | None) -> int:
     return max(int(value or 0), 0)
 
 
-def reads_explicit_cache(usage: Usage) -> bool:
-    """Whether the cached tokens are reads of a cache the caller created, billed at the explicit cache-read price."""
+def _reads_explicit_cache(usage: Usage) -> bool:
     details: Final = usage.prompt_tokens_details
     if details is None or getattr(details, "cache_type", None) != "ephemeral":
         return False
     return parse_prompt_tokens_details(usage)["cache_hit_tokens"] > 0
+
+
+def billed_cache_read_rate(quote: NativeQuote, usage: Usage) -> float:
+    """The rate ``usage``'s cached tokens bill at: the explicit cache-read rate when they are reads of a
+    cache the caller created, the implicit one otherwise."""
+    return quote.explicit_cache_read if _reads_explicit_cache(usage) else quote.cache_read
 
 
 def billed_quantities(usage: Usage) -> NativeTokenUsage:
@@ -914,29 +919,29 @@ def billed_quantities(usage: Usage) -> NativeTokenUsage:
     )
     return NativeTokenUsage(
         prompt_tokens=_count(usage.prompt_tokens),
-        text_tokens=_count(prompt["text_tokens"]),
-        audio_tokens=_count(prompt["audio_tokens"]),
-        image_tokens=_count(prompt["image_tokens"]),
-        video_tokens=_count(prompt["video_tokens"]),
+        input_text_tokens=_count(prompt["text_tokens"]),
+        input_audio_tokens=_count(prompt["audio_tokens"]),
+        input_image_tokens=_count(prompt["image_tokens"]),
+        input_video_tokens=_count(prompt["video_tokens"]),
         cached_text_tokens=_count(
             prompt["cached_text_tokens"] + max(prompt["cache_hit_tokens"] - classified_cached_tokens, 0)
         ),
         cached_audio_tokens=_count(prompt["cached_audio_tokens"]),
         cached_image_tokens=_count(prompt["cached_image_tokens"]),
-        explicit_cache_read=reads_explicit_cache(usage),
+        explicit_cache_read=_reads_explicit_cache(usage),
         cache_write_tokens=_count(unattributed_writes + short_lived_writes),
         cache_write_1h_tokens=one_hour_writes,
         cache_write_12h_tokens=twelve_hour_writes,
-        characters=_count(prompt["character_count"]),
-        images=_count(prompt["image_count"]),
-        video_seconds=max(float(prompt["video_length_seconds"]), 0.0),
-        audio_seconds=max(float(prompt["audio_length_seconds"]), 0.0),
+        input_characters=_count(prompt["character_count"]),
+        input_images=_count(prompt["image_count"]),
+        input_audio_seconds=max(float(prompt["audio_length_seconds"]), 0.0),
+        input_video_seconds=max(float(prompt["video_length_seconds"]), 0.0),
         queries=_count(prompt["query_count"]),
         output_text_tokens=_count(completion["text_tokens"]),
         output_audio_tokens=_count(completion["audio_tokens"]),
-        reasoning_tokens=_count(completion["reasoning_tokens"]),
         output_image_tokens=_count(completion["image_tokens"]),
         output_video_tokens=_count(completion["video_tokens"]),
+        reasoning_tokens=_count(completion["reasoning_tokens"]),
     )
 
 
@@ -1102,7 +1107,7 @@ def _cost_map_billed_rates(
         _count(usage.prompt_tokens),
         call_context(service_tier, data_residency, vertex_location, current_time),
     )
-    cache_read_rate: Final = quote.explicit_cache_read if reads_explicit_cache(usage) else quote.cache_read
+    cache_read_rate: Final = billed_cache_read_rate(quote, usage)
     multiplier: Final = (
         quote.uplift
         * get_provider_specific_geo_multiplier(model_info=model_info, usage=usage)
@@ -1249,7 +1254,7 @@ def calculate_prompt_caching_savings(
         call_context(service_tier, data_residency, vertex_location, billed_at),
     )
     prompt_base_cost: Final = quote.input
-    effective_cache_read_cost: Final = quote.explicit_cache_read if reads_explicit_cache(usage) else quote.cache_read
+    effective_cache_read_cost: Final = billed_cache_read_rate(quote, usage)
     write_rate: Final = quote.cache_write or prompt_base_cost
     prompt_tokens_details: Final = parse_prompt_tokens_details(usage)
     cache_read_tokens: Final = max(prompt_tokens_details["cache_hit_tokens"], 0)

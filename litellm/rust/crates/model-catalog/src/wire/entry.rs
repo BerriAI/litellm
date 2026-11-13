@@ -178,6 +178,82 @@ mod tests {
     }
 
     #[rstest]
+    fn a_malformed_off_peak_window_is_reported_and_the_well_formed_ones_are_kept() {
+        use litellm_cost::schedule::Weekday;
+
+        use crate::wire::blocks::{OffPeakWindow, UtcHours};
+
+        let window = |hours: &str| hours.parse().unwrap();
+        let wire = read(json!({"off_peak_pricing": {
+            "hours_utc": ["bad", "13:00-16:00"],
+            "windows": [
+                "00:00-00:00",
+                {"hours_utc": 1630},
+                {"hours_utc": ["25:00-26:00", "01:00-02:00"], "weekdays": [0, 8, "noday", true, 6]},
+                {"hours_utc": "03:00-04:00", "weekdays": "sat"},
+                {"weekdays": [6]},
+                {"hours_utc": "05:00-06:00", "days": [1]},
+                {"hours_utc": "07:00-08:00", "weekdays": ["Sun"]}
+            ],
+            "input_cost_per_token": 1e-6
+        }}));
+        let block = wire.off_peak.as_ref().unwrap();
+
+        assert_eq!(
+            block.hours_utc,
+            Some(UtcHours::Multiple(vec![window("13:00-16:00")]))
+        );
+        assert_eq!(
+            block.windows,
+            Some(vec![
+                OffPeakWindow {
+                    hours_utc: UtcHours::Multiple(vec![window("01:00-02:00")]),
+                    weekdays: Some(vec![Weekday::Saturday]),
+                },
+                OffPeakWindow {
+                    hours_utc: UtcHours::Single(window("03:00-04:00")),
+                    weekdays: Some(Vec::new()),
+                },
+                OffPeakWindow {
+                    hours_utc: UtcHours::Single(window("05:00-06:00")),
+                    weekdays: None,
+                },
+                OffPeakWindow {
+                    hours_utc: UtcHours::Single(window("07:00-08:00")),
+                    weekdays: Some(vec![Weekday::Sunday]),
+                },
+            ])
+        );
+        assert_eq!(
+            problem_keys(&wire),
+            [
+                "/off_peak_pricing/hours_utc",
+                "/off_peak_pricing/windows/0",
+                "/off_peak_pricing/windows/1",
+                "/off_peak_pricing/windows/2",
+                "/off_peak_pricing/windows/3",
+                "/off_peak_pricing/windows/4",
+                "/off_peak_pricing/windows/5",
+            ]
+        );
+    }
+
+    #[rstest]
+    #[case::hours_not_a_window(json!({"off_peak_pricing": {"hours_utc": 1630}}))]
+    #[case::one_malformed_window(json!({"off_peak_pricing": {"hours_utc": "25:00-26:00"}}))]
+    #[case::windows_not_a_list(json!({"off_peak_pricing": {"windows": "00:00-00:00"}}))]
+    fn off_peak_hours_main_cannot_read_are_left_out(#[case] entry: Value) {
+        let wire = read(entry);
+        let block = wire.off_peak.as_ref().unwrap();
+
+        assert_eq!(
+            (block.hours_utc.as_ref(), block.windows.as_ref()),
+            (None, None)
+        );
+        assert_eq!(wire.problems.len(), 1);
+    }
+
+    #[rstest]
     #[case::tiers_not_a_list(json!({"tiered_pricing": {"range": [0, 1]}}), "/tiered_pricing")]
     #[case::row_not_an_object(json!({"tiered_pricing": [3]}), "/tiered_pricing/0")]
     #[case::off_peak_not_an_object(json!({"off_peak_pricing": true}), "/off_peak_pricing")]

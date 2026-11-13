@@ -240,6 +240,14 @@ class TestDashscopeCostCalculator:
         assert rates is not None
         assert rates.cache_read_input_token_cost == 3e-07
 
+    def test_a_tier_only_model_bills_a_request_with_no_input_tokens_nothing(self):
+        assert "tiered_pricing" in litellm.model_cost["dashscope/qwen-flash"]
+        assert "input_cost_per_token" not in litellm.model_cost["dashscope/qwen-flash"]
+
+        assert dashscope_cost_per_token(
+            model="qwen-flash", usage=Usage(prompt_tokens=0, completion_tokens=700, total_tokens=700)
+        ) == (0.0, 0.0)
+
     def test_dashscope_flat_pricing_fallback(self):
         """
         Tests that the dashscope calculator falls back to flat pricing for models
