@@ -244,6 +244,37 @@ async def test_custom_metadata_filters_internal_fields():
 
 
 @pytest.mark.asyncio
+async def test_custom_metadata_skips_every_key_record_field():
+    """The proxy writes the calling key's record into the request metadata under
+    user_api_key* names, including ones no fixed list names: the whole UserAPIKeyAuth
+    object, its metadata, the budget reservation and the request route. None of them
+    is a custom property, and the key's hash and budgets must not reach PostHog."""
+    posthog_logger = PostHogLogger()
+    standard_payload = create_standard_logging_payload()
+
+    kwargs = {
+        "standard_logging_object": standard_payload,
+        "litellm_params": {
+            "metadata": {
+                "custom_field": "should_appear",
+                "user_api_key_auth": {"token": "hash123", "max_budget": 10.0, "spend": 2.5},
+                "user_api_key_auth_metadata": {"tags": ["prod"]},
+                "user_api_key_budget_reservation": {"amount": 1.0},
+                "user_api_key_request_route": "/chat/completions",
+                "user_api_key_user_spend": 2.5,
+                "user_api_key_team_metadata": {"team": "legal"},
+            }
+        },
+    }
+
+    event_payload = posthog_logger.create_posthog_event_payload(kwargs)
+
+    assert event_payload["properties"]["custom_field"] == "should_appear"
+    leaked = [key for key in event_payload["properties"] if key.startswith("user_api_key")]
+    assert leaked == []
+
+
+@pytest.mark.asyncio
 async def test_custom_metadata_with_no_metadata():
     """Test that logger handles cases with no metadata gracefully"""
     posthog_logger = PostHogLogger()
