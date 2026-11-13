@@ -3593,6 +3593,19 @@ async def test_an_idle_fallback_served_for_an_uncapped_team_publishes_its_share_
 
 
 @pytest.mark.asyncio
+async def test_an_uncapped_alias_request_served_while_the_model_is_idle_publishes_its_share(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True, model_group_alias={"alias-model": "shared-model"})
+    registry = _prometheus_sink(monkeypatch)
+    assert await handler.async_pre_call_hook(_team_key(), DualCache(), {"model": "alias-model"}, "completion") is None
+    await _settle_tokens(handler, 150, model_group="alias-model")
+    alias: Final = {"model_group": "alias-model", "team": "team-a", "priority": "default"}
+    assert _sample(registry, "litellm_dynamic_limiter_share_tokens", **alias) == 100
+    assert _sample(registry, "litellm_dynamic_limiter_borrowed_tokens", **alias) == 0
+
+
+@pytest.mark.asyncio
 async def test_an_idle_fallback_to_a_model_the_team_has_no_share_on_publishes_no_share_there(
     monkeypatch: pytest.MonkeyPatch,
 ):

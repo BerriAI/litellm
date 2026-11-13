@@ -698,7 +698,12 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                     hold.share
                     if hold is not None
                     else _share_on_model(
-                        stash.borrowing_team_model_share, settlement.user_api_key_team_id, model_group
+                        stash.borrowing_team_model_share,
+                        settlement.user_api_key_team_id,
+                        (
+                            self.v3_limiter.rate_limited_model(model_group)
+                            or RateLimitedModel(requested=model_group, group=model_group)
+                        ).group,
                     ),
                 )
             )
