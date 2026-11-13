@@ -38823,7 +38823,6 @@
         "input_cost_per_token_above_272k_tokens": 6e-05,
         "input_cost_per_token_flex": 1.5e-05,
         "input_cost_per_token_batches": 1.5e-05,
-        "input_cost_per_token_above_272k_tokens_batches": 3e-05,
         "litellm_provider": "openai",
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
@@ -38832,7 +38831,6 @@
         "output_cost_per_token_above_272k_tokens": 0.00027,
         "output_cost_per_token_flex": 9e-05,
         "output_cost_per_token_batches": 9e-05,
-        "output_cost_per_token_above_272k_tokens_batches": 0.000135,
         "reasoning_contexts": [
             "auto",
             "current_turn",
