@@ -39,22 +39,24 @@ async def test_missing_oathbreaker_key_never_sends_openai_credentials(
         assert len(upstream.calls) == 0
 
 
-def test_oathbreaker_resolves_environment_and_explicit_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("model", ["oathbreaker-glm-5.3", "oathbreaker-glm-5.3-flash"])
+def test_oathbreaker_resolves_environment_and_explicit_credentials(monkeypatch: pytest.MonkeyPatch, model: str) -> None:
     monkeypatch.setenv("OATHBREAKER_API_KEY", "fake-environment-key")
-    assert get_llm_provider(model="oathbreaker/oathbreaker-glm-5.3") == (
-        "oathbreaker-glm-5.3",
+    assert get_llm_provider(model=f"oathbreaker/{model}") == (
+        model,
         "oathbreaker",
         "fake-environment-key",
         "https://oathbreaker.ai/v1",
     )
     assert get_llm_provider(
-        model="oathbreaker/oathbreaker-glm-5.3", api_key="fake-explicit-key", api_base="https://gateway.example/v1"
-    ) == ("oathbreaker-glm-5.3", "oathbreaker", "fake-explicit-key", "https://gateway.example/v1")
+        model=f"oathbreaker/{model}", api_key="fake-explicit-key", api_base="https://gateway.example/v1"
+    ) == (model, "oathbreaker", "fake-explicit-key", "https://gateway.example/v1")
 
 
 @pytest.mark.parametrize("cached_tokens", [0, 80])
+@pytest.mark.parametrize("model", ["oathbreaker-glm-5.3", "oathbreaker-glm-5.3-flash"])
 def test_oathbreaker_chat_forwards_tools_and_accounts_for_cache(
-    monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None, cached_tokens: int
+    monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None, cached_tokens: int, model: str
 ) -> None:
     monkeypatch.setenv("OATHBREAKER_API_KEY", "fake-environment-key")
     tool: Final = {
@@ -73,7 +75,7 @@ def test_oathbreaker_chat_forwards_tools_and_accounts_for_cache(
                 "id": "chatcmpl-test",
                 "object": "chat.completion",
                 "created": 1,
-                "model": "oathbreaker-glm-5.3",
+                "model": model,
                 "choices": [
                     {
                         "index": 0,
@@ -90,7 +92,7 @@ def test_oathbreaker_chat_forwards_tools_and_accounts_for_cache(
             },
         )
         response: Final = litellm.completion(
-            model="oathbreaker/oathbreaker-glm-5.3",
+            model=f"oathbreaker/{model}",
             messages=[{"role": "user", "content": "Get a number"}],
             max_tokens=64,
             reasoning_effort="low",
@@ -102,7 +104,7 @@ def test_oathbreaker_chat_forwards_tools_and_accounts_for_cache(
     body: Final = json.loads(request.content)
     assert request.headers["authorization"] == "Bearer fake-environment-key"
     assert body == {
-        "model": "oathbreaker-glm-5.3",
+        "model": model,
         "messages": [{"role": "user", "content": "Get a number"}],
         "max_tokens": 64,
         "reasoning_effort": "low",
@@ -112,7 +114,7 @@ def test_oathbreaker_chat_forwards_tools_and_accounts_for_cache(
     }
     assert response.choices[0].message.tool_calls[0].model_dump() == tool_call
     assert response.choices[0].finish_reason == "tool_calls"
-    rates: Final = litellm.model_cost["oathbreaker/oathbreaker-glm-5.3"]
+    rates: Final = litellm.model_cost[f"oathbreaker/{model}"]
     expected: Final = (
         (100 - cached_tokens) * rates["input_cost_per_token"]
         + cached_tokens * rates["cache_read_input_token_cost"]
