@@ -8,6 +8,8 @@ from collections.abc import Awaitable, Sequence
 from datetime import datetime, timezone
 from typing import Final, TypeVar
 
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
+
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -23,6 +25,32 @@ from litellm.types.utils import StandardAuditLogPayload
 
 _audit_log_callback_cache: Final[dict[str, CustomLogger]] = {}
 ALLOW_LITELLM_CHANGED_BY_HEADER_METADATA_KEY: Final = "allow_litellm_changed_by_header"
+_AUDIT_JSON: Final = TypeAdapter(JsonValue)
+
+
+class _AuditValues(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    updated_values: str | None = None
+
+
+def with_audit_actor(record: LiteLLM_AuditLogs, auth: UserAPIKeyAuth) -> LiteLLM_AuditLogs:
+    if auth.impersonated_by is None:
+        return record
+    updated_values: Final = _AuditValues.model_validate(record).updated_values
+    values: Final = _AUDIT_JSON.validate_json(updated_values) if updated_values is not None else {}
+    return record.model_copy(
+        update={
+            "changed_by": auth.user_id,
+            "changed_by_api_key": auth.token,
+            "updated_values": json.dumps(
+                {
+                    **(values if isinstance(values, dict) else {"value": values}),
+                    "_litellm_impersonation": {"impersonated_by": auth.impersonated_by, "subject": auth.user_id},
+                }
+            ),
+        }
+    )
 
 
 def is_audit_logging_enabled(store_audit_logs: bool | None = None) -> bool:
@@ -245,16 +273,19 @@ async def create_object_audit_log(
     )
 
     await create_audit_log_for_update(
-        request_data=LiteLLM_AuditLogs(
-            id=str(uuid.uuid4()),
-            updated_at=datetime.now(timezone.utc),
-            changed_by=_changed_by,
-            changed_by_api_key=user_api_key_dict.api_key,
-            table_name=table_name,
-            object_id=object_id,
-            action=action,
-            updated_values=after_value,
-            before_value=before_value,
+        request_data=with_audit_actor(
+            LiteLLM_AuditLogs(
+                id=str(uuid.uuid4()),
+                updated_at=datetime.now(timezone.utc),
+                changed_by=_changed_by,
+                changed_by_api_key=user_api_key_dict.api_key,
+                table_name=table_name,
+                object_id=object_id,
+                action=action,
+                updated_values=after_value,
+                before_value=before_value,
+            ),
+            user_api_key_dict,
         )
     )
 

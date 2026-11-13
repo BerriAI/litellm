@@ -189,6 +189,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     mcp_forwards_caller_authorization: bool = Field(default=False, exclude=True)
     mcp_toolset_id: str | None = Field(default=None, exclude=True)
     authenticated_by_custom_auth: bool = Field(default=False, exclude=True)
+    impersonated_by: str | None = Field(default=None, exclude=True)
     via_virtual_key: bool = Field(
         default=False,
         exclude=True,
@@ -253,6 +254,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         values.pop("mcp_toolset_id", None)
         values.pop("via_virtual_key", None)
         values.pop("authenticated_by_custom_auth", None)
+        values.pop("impersonated_by", None)
         values.pop("agent_caller", None)
         values.pop("managed_agent_context", None)
         values.pop("managed_agent_policy", None)

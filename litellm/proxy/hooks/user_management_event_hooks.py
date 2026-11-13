@@ -24,6 +24,7 @@ from litellm.proxy.management_helpers.audit_logs import (
     create_audit_log_for_update,
     is_audit_logging_enabled,
     track_audit_task,
+    with_audit_actor,
 )
 from litellm.repositories.user_repository import UserRepository
 
@@ -229,19 +230,22 @@ class UserManagementEventHooks:
         )
 
         await create_audit_log_for_update(
-            request_data=LiteLLM_AuditLogs(
-                id=str(uuid.uuid4()),
-                updated_at=datetime.now(timezone.utc),
-                changed_by=get_audit_log_changed_by(
-                    litellm_changed_by=litellm_changed_by,
-                    user_api_key_dict=user_api_key_dict,
-                    litellm_proxy_admin_name=litellm_proxy_admin_name,
+            request_data=with_audit_actor(
+                LiteLLM_AuditLogs(
+                    id=str(uuid.uuid4()),
+                    updated_at=datetime.now(timezone.utc),
+                    changed_by=get_audit_log_changed_by(
+                        litellm_changed_by=litellm_changed_by,
+                        user_api_key_dict=user_api_key_dict,
+                        litellm_proxy_admin_name=litellm_proxy_admin_name,
+                    ),
+                    changed_by_api_key=user_api_key_dict.api_key,
+                    table_name=LitellmTableNames.USER_TABLE_NAME,
+                    object_id=user_id,
+                    action=action,
+                    updated_values=after_value,
+                    before_value=before_value,
                 ),
-                changed_by_api_key=user_api_key_dict.api_key,
-                table_name=LitellmTableNames.USER_TABLE_NAME,
-                object_id=user_id,
-                action=action,
-                updated_values=after_value,
-                before_value=before_value,
+                user_api_key_dict,
             )
         )

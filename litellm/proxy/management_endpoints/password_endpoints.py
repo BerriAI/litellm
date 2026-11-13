@@ -154,7 +154,7 @@ async def change_password(
     await revoke_ui_session_keys(
         user_id=user_id,
         user_api_key_dict=user_api_key_dict,
-        keep_hashed_token=user_api_key_dict.token,
+        keep_hashed_token=None if user_api_key_dict.impersonated_by is not None else user_api_key_dict.token,
     )
 
     verbose_proxy_logger.info("Password changed via /user/password/change for user_id=%s", user_id)
