@@ -1334,6 +1334,8 @@ class Logging(LiteLLMLoggingBaseClass):
             base_litellm_params["litellm_metadata"] = kwargs["litellm_metadata"]
             if "metadata" not in base_litellm_params:
                 base_litellm_params["metadata"] = kwargs["litellm_metadata"].copy()
+        if "no-log" in kwargs:
+            base_litellm_params["no-log"] = kwargs["no-log"]
 
         if litellm_params:
             # Merge metadata carefully — don't overwrite the merged metadata
