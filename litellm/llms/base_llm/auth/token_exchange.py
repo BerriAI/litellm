@@ -292,8 +292,12 @@ def _cache_key(spec: TokenExchangeSpec) -> str:
 def _shares_one_assertion_across_workers(spec: TokenExchangeSpec) -> bool:
     """The store exists so the workers reading one projected token file don't each spend that file's
     single-use ``jti``. A source that mints its own assertion per exchange shares nothing with another
-    worker, so it never reads the store, never finds a hit there, and keeps its minted token off disk."""
-    return spec.assertion_source is None
+    worker, and a Google metadata-server token carries no ``jti`` (Anthropic only enforces single use on
+    assertions that do), so a stored token would only hand a mandatory refresh back the token it is
+    replacing. Neither reads the store, finds a hit there, or puts its minted token on disk."""
+    from litellm.secret_managers.main import GOOGLE_OIDC_SECRET_PREFIX
+
+    return spec.assertion_source is None and not spec.assertion_ref.startswith(GOOGLE_OIDC_SECRET_PREFIX)
 
 
 def _assertion_digest(assertion: SecretStr) -> str:
