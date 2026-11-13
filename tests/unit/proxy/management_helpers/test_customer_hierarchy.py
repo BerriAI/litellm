@@ -12,7 +12,11 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm.models.budget import BudgetLimit, LiteLLM_BudgetTable
 from litellm.proxy._types import BudgetWriteRequest
-from litellm.proxy.management_helpers.customer_hierarchy import effective_member_budget, related_budget
+from litellm.proxy.management_helpers.customer_hierarchy import (
+    budget_row_values,
+    effective_member_budget,
+    related_budget,
+)
 from litellm.types.proxy.management_endpoints.customer_hierarchy import Budget
 
 NOW: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -50,7 +54,9 @@ def matches_where(row: Mapping[str, object], where: Mapping[str, object]) -> boo
             if "has" in value:
                 return value["has"] in TypeAdapter(tuple[str, ...]).validate_python(row.get(key) or ())
             if "has_some" in value:
-                return bool(set(value["has_some"]) & set(TypeAdapter(tuple[str, ...]).validate_python(row.get(key) or ())))
+                return bool(
+                    set(value["has_some"]) & set(TypeAdapter(tuple[str, ...]).validate_python(row.get(key) or ()))
+                )
             if "not" in value:
                 return not matches_where(row, {key: value["not"]})
             if "contains" in value:
@@ -244,10 +250,14 @@ def test_budget_windows_reject_invalid_caps(request_type: type[BaseModel], maxim
 @pytest.mark.parametrize("request_type", (Budget, BudgetWriteRequest))
 def test_budget_windows_reject_duplicate_durations(request_type: type[BaseModel]) -> None:
     with pytest.raises(ValidationError):
-        request_type.model_validate({"budget_limits": [
-            {"budget_duration": "1mo", "max_budget": 0},
-            {"budget_duration": "1mo", "max_budget": 10},
-        ]})
+        request_type.model_validate(
+            {
+                "budget_limits": [
+                    {"budget_duration": "1mo", "max_budget": 0},
+                    {"budget_duration": "1mo", "max_budget": 10},
+                ]
+            }
+        )
 
 
 @pytest.mark.parametrize("request_type", (Budget, BudgetWriteRequest))
@@ -258,10 +268,14 @@ def test_budget_windows_reject_noncanonical_durations(request_type: type[BaseMod
 
 
 def test_window_override_preserves_other_period_and_scalar_fields() -> None:
-    template: Final = Budget(max_budget=500, budget_duration="30d", budget_limits=(
-        BudgetLimit(budget_duration="1mo", max_budget=100),
-        BudgetLimit(budget_duration="12mo", max_budget=1000),
-    ))
+    template: Final = Budget(
+        max_budget=500,
+        budget_duration="30d",
+        budget_limits=(
+            BudgetLimit(budget_duration="1mo", max_budget=100),
+            BudgetLimit(budget_duration="12mo", max_budget=1000),
+        ),
+    )
     override: Final = Budget(budget_limits=(BudgetLimit(budget_duration="1mo", max_budget=0),))
     effective: Final = effective_member_budget(template, override, None, NOW)
     assert effective.budget_limits == (
@@ -297,3 +311,11 @@ def test_existing_budget_model_applies_temporary_increase_using_injected_now(exp
 def test_member_temporary_increase_is_added_to_its_inherited_maximum(expiry: datetime, expected: float) -> None:
     resolved: Final = related_budget({"temp_budget_increase": 5, "temp_budget_expiry": expiry}, NOW, 100)
     assert resolved == Budget(max_budget=expected)
+
+
+def test_a_budget_row_without_windows_writes_budget_limits_as_prisma_json_null() -> None:
+    values: Final = budget_row_values({"max_budget": 1.0, "budget_limits": None, "model_tpm_limit": None})
+    assert values["max_budget"] == 1.0
+    assert isinstance(values["budget_limits"], Json)
+    assert values["budget_limits"].data is None
+    assert "model_tpm_limit" not in values

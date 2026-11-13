@@ -174,16 +174,21 @@ def budget_limit_json(value: object) -> "Json":
     )
 
 
-def budget_row_values(values: Mapping[str, object]) -> Mapping[str, object]:
-    """Prisma writes Json columns only through ``Json``; the per-model limit maps are the budget's Json columns."""
+def _budget_json_column(key: str, value: object) -> object:
     from prisma import Json
 
+    if key == "budget_limits":
+        return budget_limit_json(value) if value is not None else Json(None)
+    if key in _JSON_BUDGET_COLUMNS:
+        return Json(_MODEL_LIMIT_MAP.validate_python(value))
+    return value
+
+
+def budget_row_values(values: Mapping[str, object]) -> Mapping[str, object]:
+    """Prisma writes Json columns only through ``Json``: a budget without windows carries ``Json(None)``, the same
+    JSON null the key path writes, since a bare ``None`` on a ``Json?`` column is rejected by the query engine."""
     return {
-        key: budget_limit_json(value)
-        if key == "budget_limits" and value is not None
-        else Json(_MODEL_LIMIT_MAP.validate_python(value))
-        if key in _JSON_BUDGET_COLUMNS
-        else value
+        key: _budget_json_column(key, value)
         for key, value in values.items()
         if not (key in _JSON_BUDGET_COLUMNS and value is None)
     }

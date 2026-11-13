@@ -4,8 +4,9 @@ Same request and approval shape as MCP server and skill submissions: a key actin
 in ``pending_review``, a proxy admin approves or rejects it, and an approval lands as the member's budget override.
 """
 
-from datetime import datetime, timezone
-from typing import Annotated, Final, Literal, TypeAlias
+from collections.abc import Awaitable, Callable
+from datetime import datetime
+from typing import Annotated, Final, Literal, TypeAlias, TypeVar
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -23,10 +24,18 @@ from litellm.proxy.management_endpoints.management_v1.customers import (
     list_response,
     resolve,
 )
-from litellm.proxy.management_helpers.customer_hierarchy import CustomerHierarchy, ErrorCode, Failure, Page
+from litellm.proxy.management_helpers.customer_hierarchy import (
+    CustomerHierarchy,
+    CustomerHierarchyStore,
+    ErrorCode,
+    Failure,
+    Page,
+    PrismaRecord,
+)
 from litellm.proxy.management_helpers.utils import (
     management_endpoint_wrapper,  # pyright: ignore[reportUnknownVariableType]  # legacy decorator is untyped
 )
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.types.proxy.management_endpoints.customer_hierarchy import (
     Budget,
     BudgetIncreaseRejection,
@@ -47,12 +56,20 @@ Caller: TypeAlias = Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]
 Admin: TypeAlias = Annotated[str, Depends(customer_actor)]
 Cache: TypeAlias = Annotated[UserApiKeyCache, Depends(get_user_api_key_cache)]
 
+T = TypeVar("T")
 _REQUEST: Final = TypeAdapter(BudgetIncreaseRequest)
 _REQUESTS: Final = TypeAdapter(tuple[BudgetIncreaseRequest, ...])
 
 
-def _requests_table(hierarchy: CustomerHierarchy):  # noqa: ANN202  # the in-memory and prisma tables share the actions used here
-    return hierarchy.db.litellm_customerbudgetincreaserequest  # pyright: ignore[reportAttributeAccessIssue]  # prisma table
+def _requests_table(store: CustomerHierarchyStore) -> TableActions[PrismaRecord]:
+    return store.db.litellm_customerbudgetincreaserequest  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportAny]  # prisma tables are generated at build time
+
+
+async def _in_transaction(
+    hierarchy: CustomerHierarchy, operation: Callable[[CustomerHierarchyStore], Awaitable[T]]
+) -> T:
+    """Every request-table read and write runs through the hierarchy's transaction, which also maps Prisma errors."""
+    return resolve(await hierarchy.transaction(operation))
 
 
 def _allows_increase(member: CustomerMember) -> bool:
@@ -102,20 +119,28 @@ async def request_budget_increase(
     now: Final = hierarchy.clock()
     if data.expires_at <= now:
         resolve(Failure(ErrorCode.EXPIRY_IN_PAST))
-    table: Final = _requests_table(hierarchy)
-    if await table.count(where={"customer_member_id": data.customer_member_id, "status": "pending_review"}) > 0:
+    pending_count: Final = await _in_transaction(
+        hierarchy,
+        lambda store: _requests_table(store).count(
+            where={"customer_member_id": data.customer_member_id, "status": "pending_review"}
+        ),
+    )
+    if pending_count > 0:
         resolve(Failure(ErrorCode.REQUEST_ALREADY_PENDING))
-    row: Final = await table.create(
-        data={
-            "request_id": str(uuid4()),
-            "customer_member_id": data.customer_member_id,
-            "requested_max_budget": data.requested_max_budget,
-            "expires_at": data.expires_at,
-            "reason": data.reason,
-            "status": "pending_review",
-            "submitted_by": caller.user_id or caller.key_alias or "unknown",
-            "submitted_at": now,
-        }
+    row: Final = await _in_transaction(
+        hierarchy,
+        lambda store: _requests_table(store).create(
+            data={
+                "request_id": str(uuid4()),
+                "customer_member_id": data.customer_member_id,
+                "requested_max_budget": data.requested_max_budget,
+                "expires_at": data.expires_at,
+                "reason": data.reason,
+                "status": "pending_review",
+                "submitted_by": caller.user_id or caller.key_alias or "unknown",
+                "submitted_at": now,
+            }
+        ),
     )
     return _REQUEST.validate_python(row, from_attributes=True)
 
@@ -136,18 +161,22 @@ async def list_budget_increase_requests(
         **({"status": status} if status is not None else {}),
         **({"customer_member_id": customer_member_id} if customer_member_id is not None else {}),
     }
-    table: Final = _requests_table(hierarchy)
-    rows: Final = await table.find_many(
-        where=where, order=[{"submitted_at": "desc"}], skip=(page - 1) * page_size, take=page_size
+    rows: Final = await _in_transaction(
+        hierarchy,
+        lambda store: _requests_table(store).find_many(
+            where=where, order=[{"submitted_at": "desc"}], skip=(page - 1) * page_size, take=page_size
+        ),
     )
-    total: Final = await table.count(where=where)
+    total: Final = await _in_transaction(hierarchy, lambda store: _requests_table(store).count(where=where))
     return list_response(
         Page(data=_REQUESTS.validate_python(rows, from_attributes=True), total_count=total), request, page, page_size
     )
 
 
 async def _pending(hierarchy: CustomerHierarchy, request_id: str) -> BudgetIncreaseRequest:
-    row: Final = await _requests_table(hierarchy).find_unique(where={"request_id": request_id})
+    row: Final = await _in_transaction(
+        hierarchy, lambda store: _requests_table(store).find_unique(where={"request_id": request_id})
+    )
     if row is None:
         resolve(Failure(ErrorCode.NOT_FOUND))
     pending: Final = _REQUEST.validate_python(row, from_attributes=True)
@@ -163,9 +192,12 @@ async def _review(
     status: Literal["approved", "rejected"],
     notes: str | None,
 ) -> BudgetIncreaseRequest:
-    row: Final = await _requests_table(hierarchy).update(
-        where={"request_id": request_id},
-        data={"status": status, "reviewed_by": actor, "reviewed_at": datetime.now(timezone.utc), "review_notes": notes},
+    row: Final = await _in_transaction(
+        hierarchy,
+        lambda store: _requests_table(store).update(
+            where={"request_id": request_id},
+            data={"status": status, "reviewed_by": actor, "reviewed_at": store.now, "review_notes": notes},
+        ),
     )
     return _REQUEST.validate_python(row, from_attributes=True)
 
@@ -174,7 +206,9 @@ async def _review(
 @management_endpoint_wrapper
 async def get_budget_increase_request(request_id: str, actor: Admin, hierarchy: Hierarchy) -> BudgetIncreaseRequest:
     """One request. Proxy admins only."""
-    row: Final = await _requests_table(hierarchy).find_unique(where={"request_id": request_id})
+    row: Final = await _in_transaction(
+        hierarchy, lambda store: _requests_table(store).find_unique(where={"request_id": request_id})
+    )
     if row is None:
         resolve(Failure(ErrorCode.NOT_FOUND))
     return _REQUEST.validate_python(row, from_attributes=True)
