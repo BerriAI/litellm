@@ -23,6 +23,7 @@ from litellm.llms.anthropic.common_utils import (
     OBJECT_MAPPING_ADAPTER,
     AnthropicModelInfo,
     carried_thinking_keys,
+    carries_signed_compaction_block,
     validated_object_mapping,
 )
 from litellm.llms.anthropic.messages.native.transformation import (
@@ -42,6 +43,7 @@ from litellm.llms.bedrock.common_utils import (
     apply_bedrock_invoke_structured_output,
     bedrock_native_output_format,
     bedrock_native_output_retry_requested,
+    bedrock_supports_per_turn_control,
     bedrock_supports_tool_search,
     ensure_bedrock_anthropic_messages_tool_names,
     for_bedrock_json_tool_retry,
@@ -81,6 +83,7 @@ else:
 
 
 _MODEL_INFO: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+_MESSAGE_LIST: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 
 
 class AmazonAnthropicClaudeMessagesConfig(
@@ -112,6 +115,13 @@ class AmazonAnthropicClaudeMessagesConfig(
 
     def drops_dangerous_tool_use_beta_without_safeguards(self) -> bool:
         return True
+
+    def model_specific_anthropic_betas(self, model: str, litellm_params: GenericLiteLLMParams) -> frozenset[str]:
+        if bedrock_supports_per_turn_control(
+            model, _MODEL_INFO.validate_python(getattr(litellm_params, "model_info", None))
+        ):
+            return frozenset({ANTHROPIC_BETA_HEADER_VALUES.PER_TURN_CONTROL_2026_07_01.value})
+        return frozenset()
 
     BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS = frozenset(BedrockInvokeAnthropicMessagesRequest.__annotations__.keys())
 
@@ -563,6 +573,19 @@ class AmazonAnthropicClaudeMessagesConfig(
             "edits": retained_edits,
         }
 
+    @staticmethod
+    def _add_compaction_beta_for_bedrock_invoke(
+        anthropic_messages_request: Mapping[str, object],
+        beta_set: set[str],  # mutable-ok: the caller's beta set is grown in place, like the sibling helpers
+    ) -> None:
+        """``compaction`` and an adopted signed block both need the compact-2026-09-04 beta on Bedrock.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-compaction.html
+        """
+        messages: Final = _MESSAGE_LIST.validate_python(anthropic_messages_request.get("messages") or ())
+        if isinstance(anthropic_messages_request.get("compaction"), dict) or carries_signed_compaction_block(messages):
+            beta_set.add("compact-2026-09-04")
+
     def strips_beta_gated_fields_from_final_headers(self) -> bool:
         return False
 
@@ -574,6 +597,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         headers: dict,
         anthropic_messages_request: dict,
         injected_thinking_for_clear_thinking: bool,
+        litellm_params: GenericLiteLLMParams,
     ) -> list[str]:
         anthropic_model_info: Final = AnthropicModelInfo()
         tools: Final = anthropic_messages_optional_request_params.get("tools")
@@ -630,6 +654,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             anthropic_messages_request=anthropic_messages_request,
             beta_set=beta_set,
         )
+        self._add_compaction_beta_for_bedrock_invoke(anthropic_messages_request, beta_set)  # pyright: ignore[reportUnknownArgumentType]  # built from the base signature's bare dict
 
         self._get_tool_search_beta_header_for_bedrock(
             model=model,
@@ -642,16 +667,22 @@ class AmazonAnthropicClaudeMessagesConfig(
         if "tool-search-tool-2025-10-19" in beta_set:
             beta_set.add("tool-examples-2025-10-29")
 
+        model_supported_betas: Final = self.model_specific_anthropic_betas(model, litellm_params) & user_beta_set
         beta_provider: Final = self.beta_headers_provider
         filtered_betas: Final = sorted(
-            filter_and_transform_beta_headers(
-                beta_headers=list(beta_set),
-                provider=beta_provider,
-            )
+            {
+                *filter_and_transform_beta_headers(
+                    beta_headers=list(beta_set),
+                    provider=beta_provider,
+                ),
+                *model_supported_betas,
+            }
         )
 
         dropped_user_betas: Final = sorted(
-            b for b in user_beta_set if not filter_and_transform_beta_headers([b], provider=beta_provider)
+            b
+            for b in user_beta_set - model_supported_betas
+            if not filter_and_transform_beta_headers([b], provider=beta_provider)
         )
         if dropped_user_betas:
             verbose_logger.warning(
@@ -837,10 +868,19 @@ class AmazonAnthropicClaudeMessagesConfig(
             headers=headers,
             anthropic_messages_request=anthropic_messages_request,
             injected_thinking_for_clear_thinking=injected_thinking_for_clear_thinking,
+            litellm_params=litellm_params,
         )
 
         if filtered_betas:
             anthropic_messages_request["anthropic_beta"] = filtered_betas
+
+        if "compaction" in anthropic_messages_request and not (
+            isinstance(anthropic_messages_request["compaction"], dict) and "compact-2026-09-04" in filtered_betas
+        ):
+            verbose_logger.debug(
+                "Bedrock Invoke: dropping `compaction`; compact-2026-09-04 is not served on this route"
+            )
+            del anthropic_messages_request["compaction"]
 
         final_request: Final = OBJECT_MAPPING_ADAPTER.validate_python(anthropic_messages_request)  # pyright: ignore[reportUnknownArgumentType]  # built from the base signature's bare dict
         gated: Final = strip_beta_gated_native_request(

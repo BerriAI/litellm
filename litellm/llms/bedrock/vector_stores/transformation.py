@@ -1,17 +1,25 @@
+import re
 from collections.abc import Mapping
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, Final, cast
+from itertools import product
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast, runtime_checkable
 from urllib.parse import urlparse
 
 import httpx
+from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
+from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, drops_unsupported_params, keyword_arguments
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.types.integrations.rag.bedrock_knowledgebase import (
     BedrockKBContent,
+    BedrockKBImageFormat,
     BedrockKBResponse,
     BedrockKBRetrievalConfiguration,
     BedrockKBRetrievalQuery,
@@ -19,11 +27,14 @@ from litellm.types.integrations.rag.bedrock_knowledgebase import (
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
+    RETRIEVAL_QUERY_PARAMS,
     VECTOR_STORE_OPENAI_PARAMS,
     BaseVectorStoreAuthCredentials,
     VectorStoreIndexEndpoints,
     VectorStoreResultContent,
+    VectorStoreSearchImageMediaType,
     VectorStoreSearchOptionalRequestParams,
+    VectorStoreSearchQueryImage,
     VectorStoreSearchResponse,
     VectorStoreSearchResult,
 )
@@ -32,6 +43,97 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+@runtime_checkable
+class _SupportsSetDefault(Protocol):
+    def setdefault(self, key: str, default: object, /) -> object: ...
+
+
+@runtime_checkable
+class _SupportsSetItem(Protocol):
+    def __setitem__(self, key: str, value: object, /) -> None: ...
+
+
+def _setdefault_target(value: object) -> _SupportsSetDefault:
+    if isinstance(value, _SupportsSetDefault):
+        return value
+    raise AttributeError(f"{type(value).__name__!r} object has no attribute 'setdefault'", name="setdefault", obj=value)
+
+
+def _item_assignment_target(value: object) -> _SupportsSetItem:
+    if isinstance(value, _SupportsSetItem):
+        return value
+    raise TypeError(f"'{type(value).__name__}' object does not support item assignment")
+
+
+def _vector_search_configuration(retrieval_config: object) -> Mapping[str, object]:
+    return decoded_json_object(decoded_json_object(retrieval_config).get("vectorSearchConfiguration", {}))
+
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _KBResponseFields(TypedDict, total=False, extra_items=object):
+    pass
+
+
+_BEDROCK_IMAGE_FORMATS: Final[Mapping[VectorStoreSearchImageMediaType, BedrockKBImageFormat]] = MappingProxyType(
+    {"image/jpeg": "jpeg", "image/png": "png", "image/gif": "gif", "image/webp": "webp"}
+)
+_BASE64_DATA_URI: Final = re.compile(r"data:(?P<media_type>[^;,]*)[^,]*;base64,(?P<data>.*)", re.DOTALL)
+_SOURCE_FILE_MIME_TYPE_KEY: Final = "x-amz-bedrock-kb-source-file-mime-type"
+_UNKNOWN_MEDIA_TYPE: Final = "application/octet-stream"
+_RETRIEVAL_QUERY_UNSUPPORTED: Final = (
+    "bedrock vector stores do not take retrievalQuery. Send query, or query_image to search by image. To drop it, "
+    "set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
+)
+
+
+class _QueryImageParams(TypedDict, total=False):
+    query_image: ReadOnly[VectorStoreSearchQueryImage | None]
+
+
+def _retrieval_query(query: str, params: _QueryImageParams) -> BedrockKBRetrievalQuery:
+    query_image: Final = params.get("query_image")
+    if query_image is None:
+        return BedrockKBRetrievalQuery(text=query)
+    return BedrockKBRetrievalQuery(
+        type="IMAGE",
+        image={"format": _BEDROCK_IMAGE_FORMATS[query_image["media_type"]], "inlineContent": query_image["data"]},
+    )
+
+
+def _image_content(byte_content: str, metadata: Mapping[str, object]) -> VectorStoreResultContent:
+    data_uri: Final = _BASE64_DATA_URI.fullmatch(byte_content)
+    declared_media_type: Final = data_uri.group("media_type") if data_uri is not None else ""
+    source_file_media_type: Final = metadata.get(_SOURCE_FILE_MIME_TYPE_KEY)
+    return VectorStoreResultContent(
+        type="image",
+        source={
+            "type": "base64",
+            "media_type": (
+                source_file_media_type
+                if isinstance(source_file_media_type, str) and source_file_media_type.startswith("image/")
+                else declared_media_type or _UNKNOWN_MEDIA_TYPE
+            ),
+            "data": data_uri.group("data") if data_uri is not None else byte_content,
+        },
+    )
+
+
+def _result_content(
+    content: BedrockKBContent | None, metadata: Mapping[str, object], include_images: bool
+) -> VectorStoreResultContent | None:
+    if content is None:
+        return None
+    text: Final = content.get("text")
+    if text is not None:
+        return VectorStoreResultContent(text=text, type="text")
+    byte_content: Final = content.get("byteContent")
+    if not include_images or content.get("type") != "IMAGE" or not byte_content:
+        return None
+    return _image_content(byte_content, metadata)
 
 
 class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
@@ -59,7 +161,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         }
 
     def get_supported_openai_params(self, model: str) -> list[VECTOR_STORE_OPENAI_PARAMS]:
-        return ["filters", "max_num_results", "ranking_options"]
+        return ["filters", "max_num_results", "ranking_options", "query_image"]
 
     def _map_operator_to_aws(self, operator: str) -> str:
         """
@@ -206,7 +308,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
-        extra_body: dict[str, Any] | None = None,
+        extra_body: dict[str, object] | None = None,
     ) -> tuple[str, dict]:
         if isinstance(query, list):
             query = " ".join(query)
@@ -214,37 +316,46 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         encoded_vector_store_id: Final = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
         url: Final = join_api_base(api_base, f"{encoded_vector_store_id}/retrieve")
 
+        caller_params: Final = decoded_json_object(litellm_params)
+        caller_sources: Final = self._caller_sources(extra_body=extra_body, litellm_params=caller_params)
+        if self._caller_value(caller_sources, RETRIEVAL_QUERY_PARAMS) is not None and not drops_unsupported_params(
+            caller_params.get("drop_params")
+        ):
+            raise BadRequestError(message=_RETRIEVAL_QUERY_UNSUPPORTED, model="", llm_provider="bedrock")
         request_body: Final[dict[str, object]] = {
-            "retrievalQuery": BedrockKBRetrievalQuery(text=query),
+            "retrievalQuery": _retrieval_query(query, vector_store_search_optional_params),
         }
 
-        retrieval_config: dict[str, Any] = {}
-
-        if isinstance(extra_body, dict):
-            retrieval_config = deepcopy(
-                extra_body.get("retrievalConfiguration") or extra_body.get("retrieval_configuration") or {}
-            )
+        retrieval_config: Final[object] = (
+            deepcopy(extra_body.get("retrievalConfiguration") or extra_body.get("retrieval_configuration") or {})
+            if isinstance(extra_body, dict)
+            else {}
+        )
         max_results: Final = vector_store_search_optional_params.get("max_num_results")
         if max_results is not None:
-            existing_number_of_results = retrieval_config.get("vectorSearchConfiguration", {}).get("numberOfResults")
+            existing_number_of_results: Final = _vector_search_configuration(retrieval_config).get("numberOfResults")
             if existing_number_of_results is not None and existing_number_of_results != max_results:
                 verbose_logger.debug(
                     "Overriding extra_body retrievalConfiguration.vectorSearchConfiguration.numberOfResults (%s) with max_num_results=%s",
                     existing_number_of_results,
                     max_results,
                 )
-            retrieval_config.setdefault("vectorSearchConfiguration", {})["numberOfResults"] = max_results
+            _item_assignment_target(_setdefault_target(retrieval_config).setdefault("vectorSearchConfiguration", {}))[
+                "numberOfResults"
+            ] = max_results
         filters: Final = vector_store_search_optional_params.get("filters")
         if filters is not None:
-            existing_filter: Final = retrieval_config.get("vectorSearchConfiguration", {}).get("filter")
+            existing_filter: Final = _vector_search_configuration(retrieval_config).get("filter")
             if existing_filter is not None and existing_filter != filters:
                 verbose_logger.debug(
                     "Overriding extra_body retrievalConfiguration.vectorSearchConfiguration.filter with filters from vector_store_search_optional_params"
                 )
-            retrieval_config.setdefault("vectorSearchConfiguration", {})["filter"] = filters
+            _item_assignment_target(_setdefault_target(retrieval_config).setdefault("vectorSearchConfiguration", {}))[
+                "filter"
+            ] = filters
         if retrieval_config:
             request_body["retrievalConfiguration"] = cast(BedrockKBRetrievalConfiguration, retrieval_config)
-        user_context: Final = self._user_context(extra_body=extra_body, litellm_params=litellm_params)
+        user_context: Final = self._user_context(caller_sources)
         if user_context is not None:
             request_body["userContext"] = user_context
 
@@ -252,19 +363,18 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         return url, request_body
 
     @staticmethod
-    def _user_context(
+    def _caller_sources(
         extra_body: Mapping[str, object] | None, litellm_params: Mapping[str, object]
-    ) -> BedrockKBUserContext | None:
-        sources: Final = tuple(source for source in (extra_body, litellm_params) if isinstance(source, Mapping))
-        found: Final = next(
-            (
-                source[key]
-                for source in sources
-                for key in ("userContext", "user_context")
-                if source.get(key) is not None
-            ),
-            None,
-        )
+    ) -> tuple[Mapping[str, object], ...]:
+        return tuple(source for source in (extra_body, litellm_params) if isinstance(source, Mapping))
+
+    @staticmethod
+    def _caller_value(sources: tuple[Mapping[str, object], ...], keys: tuple[str, ...]) -> object:
+        return next((source[key] for source, key in product(sources, keys) if source.get(key) is not None), None)
+
+    @staticmethod
+    def _user_context(sources: tuple[Mapping[str, object], ...]) -> BedrockKBUserContext | None:
+        found: Final = BedrockVectorStoreConfig._caller_value(sources, ("userContext", "user_context"))
         return None if found is None else cast(BedrockKBUserContext, found)
 
     def sign_request(
@@ -331,16 +441,19 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         self, response: httpx.Response, litellm_logging_obj: LiteLLMLoggingObj
     ) -> VectorStoreSearchResponse:
         try:
-            response_data: Final = BedrockKBResponse(**response.json())
+            response_data: Final = BedrockKBResponse(
+                **_KBResponseFields(
+                    **keyword_arguments(_DECODED_JSON.validate_python(response.json()), BedrockKBResponse)
+                )
+            )
+            include_images: Final = litellm_logging_obj.model_call_details.get("query_image") is not None
             results: Final[list[VectorStoreSearchResult]] = []
             for item in response_data.get("retrievalResults", []) or []:
-                content: BedrockKBContent | None = item.get("content")
-                text = content.get("text") if content else None
-                if text is None:
+                metadata = item.get("metadata", {}) or {}
+                result_content = _result_content(item.get("content"), metadata, include_images)
+                if result_content is None:
                     continue
 
-                # Extract metadata and use helper functions
-                metadata = item.get("metadata", {}) or {}
                 file_id = self._get_file_id_from_metadata(metadata)
                 filename = self._get_filename_from_metadata(metadata)
                 attributes = self._get_attributes_from_metadata(metadata)
@@ -348,7 +461,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
                 results.append(
                     VectorStoreSearchResult(
                         score=item.get("score"),
-                        content=[VectorStoreResultContent(text=text, type="text")],
+                        content=[result_content],
                         file_id=file_id,
                         filename=filename,
                         attributes=attributes,

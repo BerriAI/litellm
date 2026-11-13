@@ -7,8 +7,8 @@ host registry.
 router-core holds the rules: a deployment's model info (``get_router_model_info``,
 ``get_deployment_model_info``: ``router-core/src/model_info.rs``), a model group's info and the
 configured-value reads (``_set_model_group_info``, ``get_model_listing_info``, the configured token
-limits, mode, display name and service tiers: ``router-core/src/group_info.rs``), and the usage
-counters' keys (``RouterCoreHandle.usage_key``). What lives in this process is answered here as a
+limits, mode, display name and service tiers: ``router-core/src/group_info.rs``); the usage
+counters' keys are the ``router_usage`` store's. What lives in this process is answered here as a
 query asks for it, at query time: the cost map (``get_model_info``, ``litellm.model_cost``),
 provider resolution, the wildcard pattern routes, what the background refresh discovered, and a
 group deployment's validated params, supported params, endpoints, fast mode and reasoning efforts.
@@ -33,8 +33,8 @@ from pydantic import BaseModel, TypeAdapter
 from typing_extensions import overload
 
 import litellm
-from litellm._internal_context import service_target
 from litellm._logging import verbose_router_logger
+from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE
 from litellm.litellm_core_utils.add_retry_fallback_headers import (
     apply_quality_router_decision_headers,
     apply_remaining_usage_headers,
@@ -46,6 +46,7 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
 from litellm.litellm_core_utils.batch_utils import deployment_supported_endpoints
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, coerce_token_limit
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+from litellm.litellm_core_utils.litellm_logging import resolve_vertex_location_for_cost
 from litellm.litellm_core_utils.reasoning_effort_capability import (
     deployment_is_catalog_mapped,
     intersect_supported_reasoning_efforts,
@@ -54,13 +55,15 @@ from litellm.litellm_core_utils.reasoning_effort_capability import (
 from litellm.litellm_core_utils.routing_common_utils import team_may_use_deployment
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model
-from litellm.redis.stores.router_usage import ROUTER_USAGE_TARGET, RouterUsage, UsageCounter
+from litellm.redis.stores.router_usage import RouterUsage, UsageCounter
 from litellm.router_python_host import python_host
+from litellm.router_utils.model_group_pricing import deployment_pricing
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import build_io_token_rate_limit_headers
 from litellm.router_utils.router_callbacks.track_deployment_metrics import find_deployment_metadata
 from litellm.types.router import (
     Deployment,
     DeploymentModelListingInfo,
+    DeploymentPricing,
     DeploymentTypedDict,
     DiscoveredDeploymentModelInfo,
     LiteLLM_Params,
@@ -71,6 +74,7 @@ from litellm.types.utils import ModelInfo as ModelMapInfo
 from litellm.utils import get_utc_datetime, is_generalized_model_info
 
 if TYPE_CHECKING:
+    from litellm.router_rust.surface.registry import GroupCounters
     from litellm.rust_bridge._native import (
         RouterCall,
         RouterCoreHandle,
@@ -78,6 +82,7 @@ if TYPE_CHECKING:
     )
 
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 # The key router-core's merge reads as an opaque value (``router-core/src/model_info.rs``).
 _OPAQUE_KEY: Final = "__litellm_python_value__"
@@ -140,6 +145,11 @@ def _configured_model_info(deployment: Mapping[str, object]) -> Mapping[str, obj
     return _MODEL_INFO_ADAPTER.validate_python(deployment.get("model_info") or {})
 
 
+def _configured_deployment_id(deployment: Mapping[str, object]) -> str | None:
+    deployment_id: Final = _configured_model_info(deployment).get("id")
+    return deployment_id if isinstance(deployment_id, str) else None
+
+
 def _operator_max_input_tokens(deployment: Mapping[str, object]) -> int | None:
     """``_operator_max_input_tokens``: the deployment's own limit, skipping one a saved
     ``/model/info`` response copied from the cost map."""
@@ -187,6 +197,7 @@ class _GroupBuild:
     # Filled as the lookups arrive.
     params: dict[int, LiteLLM_Params] = dataclasses.field(default_factory=dict)  # mutable-ok: see above
     info: ModelGroupInfo | None = None
+    pricing: tuple[DeploymentPricing, ...] = ()
 
 
 def _usage_total(values: Sequence[object]) -> int | None:
@@ -245,8 +256,11 @@ class HostModelInfo:
     """Mixed into ``HostRegistry``, which holds the model list, the indexes and the host."""
 
     _core_usage_store: RouterUsage
+    _group_counters_cache: dict[str, "GroupCounters"]  # mutable-ok: by model group
 
     def _live_handle(self) -> "RouterCoreHandle | None": ...  # the registry's: the handle ``RustCore`` set
+
+    def _group_members(self, model_group: str) -> tuple[tuple[object, object], ...] | None: ...  # the registry's
 
     def _core_handle(self) -> "RouterCoreHandle":
         handle: Final = self._live_handle()
@@ -358,6 +372,7 @@ class HostModelInfo:
             return None
         for field, value in (as_str_mapping(answer["assignments"]) or {}).items():
             setattr(group.info, field, _group_field(field, wire.from_wire(value)))
+        group.info.deployment_pricing = group.pricing
         return group.info
 
     def _answer_group_lookup(self, step: Mapping[str, object], group: "_GroupBuild", wire: "_Wire") -> object:
@@ -384,6 +399,17 @@ class HostModelInfo:
                 efforts: Final = resolve_supported_reasoning_efforts(
                     model_info, deployment_is_mapped=step["mapped"] is True
                 )
+                pricing: Final = deployment_pricing(
+                    llm_provider,
+                    _configured_deployment_id(deployment),
+                    group.params[int(str(step["index"]))].model,
+                    model_info,
+                    resolve_vertex_location_for_cost(
+                        llm_provider, deployment.get("litellm_params"), None, litellm_model
+                    ),
+                )
+                if pricing is not None and pricing not in group.pricing:
+                    group.pricing = (*group.pricing, pricing)  # rebind-ok: the merge's state
                 return {
                     "supported_endpoints": wire.to_wire(
                         list(
@@ -740,6 +766,20 @@ class HostModelInfo:
         )
         return tuple(wire.from_wire(tier) for tier in tiers)
 
+    def _core_get_pinned_reasoning_efforts(self, model_name: str, team_id: str | None = None) -> tuple[object, ...]:
+        """
+        Return the litellm_params.reasoning_effort each deployment a request
+        from team_id to model_name can route to (see _routable_deployments)
+        pins, unvalidated and in model_list order, None for a deployment that
+        pins none; the caller decides how the deployments combine.
+
+        Returns an empty tuple for wildcard-expanded or unknown names.
+        """
+        return tuple(
+            _LITELLM_PARAMS_ADAPTER.validate_python(deployment["litellm_params"]).get("reasoning_effort")
+            for deployment in self._routable_deployments(model_name, team_id)
+        )
+
     def _core_get_configured_max_input_tokens(
         self, model_name: str, team_id: str | None = None
     ) -> tuple[int | None, ...]:
@@ -762,17 +802,24 @@ class HostModelInfo:
         """This minute's tpm and rpm counters of every deployment in ``model_group`` (can be a wildcard route),
         under the model sent to ``litellm.completion()``, as the usage writes name them."""
         current_minute: Final = get_utc_datetime().strftime("%H-%M")  # use the same timezone regardless of system clock
-        model_list: Final = self._core_get_model_list(model_name=model_group)
-        if model_list is None:  # no matching deployments
+        members: Final = self._group_members(model_group)
+        if members is None:  # no matching deployments
             return None
-        named: Final = tuple(
-            (model.get("model_info", {}).get("id"), model["litellm_params"].get("model")) for model in model_list
-        )
-        deployments: Final = tuple(pair for pair in named if pair[0] is not None and pair[1] is not None)
-        return tuple(
-            tuple(UsageCounter(id, litellm_model, current_minute, kind) for id, litellm_model in deployments)
+        cached: Final = self._group_counters_cache.get(model_group)
+        if cached is not None and cached[0] is members and cached[1] == current_minute:
+            return cached[2]
+        deployments: Final = tuple(pair for pair in members if pair[0] is not None and pair[1] is not None)
+        counters: Final = tuple(
+            tuple(
+                UsageCounter("global_router", id, litellm_model, current_minute, kind)  # pyright: ignore[reportArgumentType]  # what the listing names, as the Python core passed it
+                for id, litellm_model in deployments
+            )
             for kind in ("tpm", "rpm")
         )
+        if len(self._group_counters_cache) >= DEFAULT_MAX_LRU_CACHE_SIZE:
+            self._group_counters_cache.clear()
+        self._group_counters_cache[model_group] = (members, current_minute, counters)
+        return counters
 
     async def _core_get_model_group_usage(self, model_group: str) -> tuple[int | None, int | None]:
         """Current (tpm, rpm) usage of ``model_group``."""
@@ -794,30 +841,31 @@ class HostModelInfo:
         """
         Returns current ITPM/OTPM usage for a model group (sum across deployments).
         """
-        dt: Final = get_utc_datetime()
-        current_minute: Final = dt.strftime("%H-%M")
-        itpm_keys: Final[list[str]] = []  # mutable-ok: ported from the Python core unchanged
-        otpm_keys: Final[list[str]] = []  # mutable-ok: ported from the Python core unchanged
-
+        current_minute: Final = get_utc_datetime().strftime("%H-%M")
         model_list: Final = self._core_get_model_list(model_name=model_group)
         if model_list is None:
             return None, None
 
-        for model in model_list:
-            model_id: str | None = model.get("model_info", {}).get("id")
-            litellm_model: str | None = model["litellm_params"].get("model")
-            if model_id is None or litellm_model is None:
-                continue
-            itpm_keys.append(self._core_handle().usage_key(model_id, litellm_model, "itpm", current_minute))
-            otpm_keys.append(self._core_handle().usage_key(model_id, litellm_model, "otpm", current_minute))
+        named: Final[tuple[tuple[object, object], ...]] = tuple(
+            (model.get("model_info", {}).get("id"), model["litellm_params"].get("model")) for model in model_list
+        )
+        deployments: Final = tuple(
+            (f"{model_id}", f"{litellm_model}")
+            for model_id, litellm_model in named
+            if model_id is not None and litellm_model is not None
+        )
+        itpm_counters: Final = tuple(
+            UsageCounter("global_router", model_id, litellm_model, current_minute, "itpm")
+            for model_id, litellm_model in deployments
+        )
+        otpm_counters: Final = tuple(
+            UsageCounter("global_router", model_id, litellm_model, current_minute, "otpm")
+            for model_id, litellm_model in deployments
+        )
+        combined_values: Final = await self._core_usage_store.get_many((*itpm_counters, *otpm_counters))
 
-        with service_target(ROUTER_USAGE_TARGET):
-            combined_values: Final = await self._core_cache.async_batch_get_cache(keys=itpm_keys + otpm_keys)
-        if combined_values is None:
-            return None, None
-
-        itpm_values: Final = combined_values[: len(itpm_keys)]
-        otpm_values: Final = combined_values[len(itpm_keys) :]
+        itpm_values: Final = combined_values[: len(itpm_counters)]
+        otpm_values: Final = combined_values[len(itpm_counters) :]
 
         total_itpm: int | None = None  # rebind-ok: ported from the Python core unchanged
         for value in itpm_values:

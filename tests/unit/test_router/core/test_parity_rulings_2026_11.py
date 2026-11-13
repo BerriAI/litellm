@@ -135,7 +135,7 @@ async def test_an_unreadable_health_timestamp_drops_only_that_record(
     }
     health_checks: Final = core.health().health_checks
     # As another writer left it in the shared cache, then merged by this router's own writer.
-    _sync(health_checks.cache, "set_cache")(key=health_checks.CACHE_KEY, value=states)
+    health_checks.store.set_sync(states, 60)
     await _async(core, "acompletion")(model="g", messages=MESSAGES)
     health_checks.set_deployment_health_states(states)  # pyright: ignore[reportArgumentType]  # a record with a bad timestamp, on purpose
     await _async(core, "acompletion")(model="g", messages=MESSAGES)

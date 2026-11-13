@@ -259,6 +259,29 @@ def test_cache_rejects_unsupported_type() -> None:
     assert str(raised.value).split("Supported types: ")[1].split(", ") == [member.value for member in LiteLLMCacheType]
 
 
+class _PingableInMemoryCache(InMemoryCache):
+    async def ping(self) -> bool:
+        return True
+
+    async def delete_cache_keys(self, keys: list[str]) -> None:
+        for key in keys:
+            self.delete_cache(key)
+
+
+@pytest.mark.asyncio
+async def test_cache_ping_and_delete_cache_keys_reach_a_backend_that_supports_them() -> None:
+    backend: Final = _PingableInMemoryCache()
+    cache: Final = Cache(type="local", _backend=backend)
+    backend.set_cache("kept", "kept value")
+    backend.set_cache("dropped", "dropped value")
+
+    assert await cache.ping() is True
+    await cache.delete_cache_keys(["dropped"])
+
+    assert backend.get_cache("dropped") is None
+    assert backend.get_cache("kept") == "kept value"
+
+
 def test_semantic_cache_scope_rejects_unknown_value():
     with pytest.raises(ValueError, match="'team' is not a valid SemanticCacheScope"):
         _semantic_cache(semantic_cache_scope="team")
