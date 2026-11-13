@@ -1,11 +1,12 @@
 from asyncio import Future
 from collections.abc import Callable, Mapping, Sequence
-from typing import Generic, Literal, Never, NotRequired, Protocol, TypedDict, TypeVar, final
+from typing import ClassVar, Generic, Literal, Never, NotRequired, Protocol, TypedDict, TypeVar, final
 
 import httpx
 from pydantic import JsonValue
 from typing_extensions import disjoint_base
 
+from litellm.proxy._types import LiteLLM_JWTAuth
 from litellm.redis.store_settings import RedisBreakerSettings, RedisStoreSettings
 from litellm.redis.stores.router_session_pins.keys import PinKey
 from litellm.rust_bridge.execution import Execution
@@ -492,6 +493,70 @@ def auth_route_matches_denied(route: str, denied_route: str) -> bool: ...
 def auth_first_denied_route(forwarded_routes: Sequence[str], denied_routes: Sequence[str]) -> str | None: ...
 def auth_jwt_team_routes_grant(route: str, team_allowed_routes: Sequence[str]) -> bool: ...
 def auth_allowed_routes_grant(route: str, *, key: Sequence[str] | None, team: Sequence[str] | None) -> bool: ...
+
+class _AuthRequest(Protocol):
+    @property
+    def route(self) -> str: ...
+    @property
+    def token(self) -> str | None: ...
+    @property
+    def is_llm_api_route(self) -> bool: ...
+    @property
+    def is_info_route(self) -> bool: ...
+    @property
+    def pass_through_open(self) -> bool: ...
+    @property
+    def from_custom_auth(self) -> bool: ...
+
+class _HostFacts(Protocol):
+    @property
+    def premium(self) -> bool: ...
+    @property
+    def metrics_require_auth(self) -> bool: ...
+
+@final
+class RustAuthSettings:
+    def __new__(
+        cls, general_settings: Mapping[str, object], litellm_jwtauth: LiteLLM_JWTAuth | None, facts: _HostFacts
+    ) -> RustAuthSettings: ...
+
+@final
+class RustPlan:
+    __hash__: ClassVar[None]  # type: ignore[assignment]  # pyright: ignore[reportIncompatibleMethodOverride]  # PyO3 `eq` without `hash` sets it to None
+    Public: ClassVar[RustPlan]
+    OAuth2Introspection: ClassVar[RustPlan]
+    OAuth2Proxy: ClassVar[RustPlan]
+    JwtWithOperatorCode: ClassVar[RustPlan]
+    Jwt: ClassVar[RustPlan]
+    PassThroughOpen: ClassVar[RustPlan]
+    Key: ClassVar[RustPlan]
+
+@disjoint_base
+class RustDenial:
+    @final
+    class Proxy(RustDenial):
+        __match_args__: tuple[Literal["status"], Literal["message"], Literal["error_type"], Literal["param"]] = (
+            "status",
+            "message",
+            "error_type",
+            "param",
+        )
+        def __new__(cls, status: int, message: str, error_type: str, param: str | None) -> RustDenial.Proxy: ...
+        @property
+        def status(self) -> int: ...
+        @property
+        def message(self) -> str: ...
+        @property
+        def error_type(self) -> str: ...
+        @property
+        def param(self) -> str | None: ...
+
+@final
+class RustAuth:
+    @staticmethod
+    def plan(request: _AuthRequest, settings: RustAuthSettings) -> RustPlan | RustDenial: ...
+    @staticmethod
+    def oauth2_introspection_applies(request: _AuthRequest, settings: RustAuthSettings) -> bool: ...
 @final
 class NativeAuthCache:
     def __new__(
@@ -795,7 +860,11 @@ __all__ = [
     "ResponsesWebSocketConnection",
     "RouterCall",
     "RouterCoreHandle",
+    "RustAuth",
+    "RustAuthSettings",
     "RustBridgeDeclined",
+    "RustDenial",
+    "RustPlan",
     "RustUpstreamError",
     "SpendRead",
     "TokenCounter",

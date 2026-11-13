@@ -60,6 +60,7 @@ litellm-router-types.workspace = true
 litellm-router-core.workspace = true
 litellm-gateway-auth-core.workspace = true
 http.workspace = true
+litellm-config.workspace = true
 litellm-host-python.workspace = true
 litellm-model-catalog.workspace = true
 litellm-model-catalog-refresh.workspace = true

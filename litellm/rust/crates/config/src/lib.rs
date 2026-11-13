@@ -1,3 +1,4 @@
+mod auth;
 mod error;
 mod includes;
 mod mcp;
@@ -10,6 +11,7 @@ use std::{fmt, path::Path};
 
 use serde::Deserialize;
 
+pub use auth::{JwtAuthSettings, JwtRoutingOverride, OneOrMany, RoutingPath};
 pub use error::Error;
 pub use litellm_router_types::{LitellmParams, Spelled};
 pub use mcp::{McpAuth, McpServer, McpTransport};

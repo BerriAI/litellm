@@ -27,6 +27,8 @@ mod _native {
     use pyo3::{prelude::*, types::PyModule};
 
     #[pymodule_export]
+    use crate::auth::{AuthCall, AuthSettings, DenialView, PlanView};
+    #[pymodule_export]
     use crate::auth::{
         auth_allowed_routes_grant, auth_first_denied_route, auth_jwt_team_routes_grant,
         auth_managed_agent_route_allowed, auth_managed_route, auth_route_matches_denied,
@@ -216,6 +218,10 @@ mod tests {
                 "auth_route_matches_denied",
                 "auth_route_matches_prefix",
                 "auth_route_matches_wildcard",
+                "RustAuth",
+                "RustAuthSettings",
+                "RustDenial",
+                "RustPlan",
             ];
             #[cfg(feature = "huggingface")]
             expected.push("HuggingFaceEncoding");
