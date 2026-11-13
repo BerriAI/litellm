@@ -9586,6 +9586,90 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/customer_budget_increase_requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Budget Increase Requests
+         * @description The admin review queue. Proxy admins only.
+         */
+        get: operations["list_budget_increase_requests_management_v1_customer_budget_increase_requests_get"];
+        put?: never;
+        /**
+         * Request Budget Increase
+         * @description File a temporary increase for a member whose budget is set to pause_allow_increase. Waits for an admin.
+         */
+        post: operations["request_budget_increase_management_v1_customer_budget_increase_requests_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/customer_budget_increase_requests/{request_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Budget Increase Request
+         * @description One request. Proxy admins only.
+         */
+        get: operations["get_budget_increase_request_management_v1_customer_budget_increase_requests__request_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/customer_budget_increase_requests/{request_id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Approve Budget Increase Request
+         * @description Grant the increase: the member's override takes the requested cap until the request's expiry. Proxy admins only.
+         */
+        put: operations["approve_budget_increase_request_management_v1_customer_budget_increase_requests__request_id__approve_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/customer_budget_increase_requests/{request_id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Reject Budget Increase Request
+         * @description Decline the increase and leave the member paused, with optional review notes. Proxy admins only.
+         */
+        put: operations["reject_budget_increase_request_management_v1_customer_budget_increase_requests__request_id__reject_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/customer_members": {
         parameters: {
             query?: never;
@@ -29448,6 +29532,11 @@ export interface components {
             budget_duration?: string | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimit"][] | null;
+            /**
+             * Cap Policy
+             * @description What a paused member can do at the cap: wait for the reset (default) or request a temporary increase
+             */
+            cap_policy?: ("pause_until_reset" | "pause_allow_increase") | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Model Rpm Limit */
@@ -29480,6 +29569,53 @@ export interface components {
         BudgetDeleteRequest: {
             /** Id */
             id: string;
+        };
+        /** BudgetIncreaseRejection */
+        BudgetIncreaseRejection: {
+            /** Review Notes */
+            review_notes?: string | null;
+        };
+        /** BudgetIncreaseRequest */
+        BudgetIncreaseRequest: {
+            /** Customer Member Id */
+            customer_member_id: string;
+            /** Expires At */
+            expires_at?: string | null;
+            /** Reason */
+            reason?: string | null;
+            /** Request Id */
+            request_id: string;
+            /** Requested Max Budget */
+            requested_max_budget: number;
+            /** Review Notes */
+            review_notes?: string | null;
+            /** Reviewed At */
+            reviewed_at?: string | null;
+            /** Reviewed By */
+            reviewed_by?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending_review" | "approved" | "rejected";
+            /**
+             * Submitted At
+             * Format: date-time
+             */
+            submitted_at: string;
+            /** Submitted By */
+            submitted_by: string;
+        };
+        /** BudgetIncreaseRequestCreate */
+        BudgetIncreaseRequestCreate: {
+            /** Customer Member Id */
+            customer_member_id: string;
+            /** Expires At */
+            expires_at?: string | null;
+            /** Reason */
+            reason?: string | null;
+            /** Requested Max Budget */
+            requested_max_budget: number;
         };
         /** BudgetLimit */
         BudgetLimit: {
@@ -29556,6 +29692,11 @@ export interface components {
             budget_duration?: string | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimit"][] | null;
+            /**
+             * Cap Policy
+             * @description What a paused member can do at the cap: wait for the reset (default) or request a temporary increase
+             */
+            cap_policy?: ("pause_until_reset" | "pause_allow_increase") | null;
             /**
              * Is Default
              * @default false
@@ -33274,6 +33415,8 @@ export interface components {
              * @default []
              */
             budget_limits: components["schemas"]["BudgetLimit"][];
+            /** Cap Policy */
+            cap_policy?: ("pause_until_reset" | "pause_allow_increase") | null;
             /** Entity Id */
             entity_id: string;
             /**
@@ -36289,6 +36432,13 @@ export interface components {
         ListPromptsResponse: {
             /** Prompts */
             prompts: components["schemas"]["PromptSpec"][];
+        };
+        /** ListResponse[BudgetIncreaseRequest] */
+        ListResponse_BudgetIncreaseRequest_: {
+            /** Data */
+            data: components["schemas"]["BudgetIncreaseRequest"][];
+            links: components["schemas"]["ListLinks"];
+            meta: components["schemas"]["ListMeta"];
         };
         /** ListResponse[BudgetListItem] */
         ListResponse_BudgetListItem_: {
@@ -42460,6 +42610,11 @@ export interface components {
             budget_id: string;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimit"][] | null;
+            /**
+             * Cap Policy
+             * @description What a paused member can do at the cap: wait for the reset (default) or request a temporary increase
+             */
+            cap_policy?: ("pause_until_reset" | "pause_allow_increase") | null;
             /**
              * Is Default
              * @default false
@@ -50133,6 +50288,11 @@ export interface components {
             budget_duration?: string | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimit"][] | null;
+            /**
+             * Cap Policy
+             * @description What a paused member can do at the cap: wait for the reset (default) or request a temporary increase
+             */
+            cap_policy?: ("pause_until_reset" | "pause_allow_increase") | null;
             /** Is Default */
             is_default?: boolean | null;
             /** Max Budget */
@@ -68233,6 +68393,170 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ListResponse_BudgetListItem_"];
+                };
+            };
+        };
+    };
+    list_budget_increase_requests_management_v1_customer_budget_increase_requests_get: {
+        parameters: {
+            query?: {
+                status?: ("pending_review" | "approved" | "rejected") | null;
+                customer_member_id?: string | null;
+                page?: number;
+                page_size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListResponse_BudgetIncreaseRequest_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    request_budget_increase_management_v1_customer_budget_increase_requests_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetIncreaseRequestCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetIncreaseRequest"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_budget_increase_request_management_v1_customer_budget_increase_requests__request_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetIncreaseRequest"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    approve_budget_increase_request_management_v1_customer_budget_increase_requests__request_id__approve_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetIncreaseRequest"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reject_budget_increase_request_management_v1_customer_budget_increase_requests__request_id__reject_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["BudgetIncreaseRejection"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetIncreaseRequest"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
