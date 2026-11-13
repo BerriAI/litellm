@@ -4876,6 +4876,7 @@ class ProxyLogging:
         response,
         user_api_key_dict: UserAPIKeyAuth,
         request_data: dict[str, object],
+        guardrails_only: bool = False,
     ):
         """
         Allow user to modify outgoing streaming data -> Given a whole response iterator.
@@ -4883,6 +4884,9 @@ class ProxyLogging:
 
         Covers:
         1. /chat/completions
+
+        With ``guardrails_only`` the walk is limited to guardrails and guardrail pipelines, as on
+        ``pre_call_hook``: other callbacks, such as response id encryption, leave the stream as is.
         """
         caps: Final = ProxyLogging.callback_capabilities()
         post_call_pipelines: Final = _streamable_post_call_pipelines(request_data, user_api_key_dict)
@@ -4915,9 +4919,10 @@ class ProxyLogging:
         running_overrides: Final = tuple(
             (callback, kind)
             for callback, kind in caps.iterator_overrides
-            if not isinstance(callback, CustomGuardrail)
+            if (not isinstance(callback, CustomGuardrail) and not guardrails_only)
             or (
-                callback.guardrail_name not in pipeline_gated_names
+                isinstance(callback, CustomGuardrail)
+                and callback.guardrail_name not in pipeline_gated_names
                 and callback.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.post_call) is True
             )
         )

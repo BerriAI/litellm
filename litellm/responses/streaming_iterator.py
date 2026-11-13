@@ -7,7 +7,7 @@ import json
 import time
 import traceback
 import uuid
-from collections.abc import AsyncIterable, Awaitable, Callable, Coroutine, Iterable, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Callable, Coroutine, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from functools import lru_cache
@@ -2323,12 +2323,14 @@ class GuardedResponsesWsFrame:
     """A ``response.create`` frame after the proxy's pre_call guardrails ran on it: the frame to forward (guardrails
     may rewrite ``input`` and ``instructions``), the guardrail records that bill against this turn only, the
     Presidio ``pii_tokens`` the walk masked with, which the handler needs to unmask the provider's reply, and how
-    to carry those guardrail records onto the connection's failure row when the deployment then refuses the turn."""
+    to carry those guardrail records onto the connection's failure row when the deployment then refuses the turn.
+    ``guard_output`` runs the turn's streamed reply through the post_call guardrails HTTP ``/v1/responses`` runs."""
 
     frame: str
     guardrail_information: tuple[Mapping[str, object], ...] = ()
     pii_tokens: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
     bill_refusal: Callable[[Exception], None] | None = None
+    guard_output: Callable[[AsyncIterable[object]], AsyncGenerator[object, None]] | None = None
 
 
 ResponsesWsFrameGuard: TypeAlias = Callable[[str], Awaitable[GuardedResponsesWsFrame]]
@@ -3524,17 +3526,35 @@ class ManagedResponsesWebSocketHandler:
         call_kwargs["litellm_metadata"]["proxy_server_request"] = proxy_server_request
         call_kwargs["proxy_server_request"] = proxy_server_request
 
-    async def _stream_and_forward(self, model: str, call_kwargs: dict[str, object]) -> _MutableJsonObject | None:
+    async def _stream_and_forward(
+        self,
+        model: str,
+        call_kwargs: dict[str, object],
+        guard_output: Callable[[AsyncIterable[object]], AsyncGenerator[object, None]] | None = None,
+    ) -> _MutableJsonObject | None:
         """
-        Stream ``litellm.aresponses`` and forward every chunk over the WebSocket.
+        Stream ``litellm.aresponses`` and forward every chunk over the WebSocket. Returns the terminal event dict,
+        or ``None``.
 
+        ``guard_output`` wraps the provider stream in the turn's post_call guardrails, so the client and the turn
+        history get what they let through, and a guardrail block raises, ending the turn with an error frame.
+        """
+        stream_response: Final = await litellm.aresponses(model=model, **call_kwargs)
+        provider_stream: Final = cast(  # cast-ok: aresponses returns an async stream
+            AsyncIterable[object], stream_response
+        )
+        if guard_output is None:
+            return await self._forward_chunks(provider_stream)
+        async with contextlib.aclosing(guard_output(provider_stream)) as served:
+            return await self._forward_chunks(served)
+
+    async def _forward_chunks(self, served: AsyncIterable[object]) -> _MutableJsonObject | None:
+        """
         Captures the first terminal (``response.completed`` or ``response.incomplete``) event from the chunk object
-        directly (before serialization) to avoid a redundant JSON round-trip on every chunk. Returns the terminal
-        event dict, or ``None``.
+        directly (before serialization) to avoid a redundant JSON round-trip on every chunk.
         """
         terminal_event: _MutableJsonObject | None = None
-        stream_response: Final = await litellm.aresponses(model=model, **call_kwargs)
-        async for chunk in cast(AsyncIterable[object], stream_response):  # cast-ok: aresponses returns an async stream
+        async for chunk in served:
             if chunk is None:
                 continue
             # Read type from the object before serializing to avoid double JSON parse
@@ -3677,7 +3697,7 @@ class ManagedResponsesWebSocketHandler:
         }
 
         try:
-            terminal_event: Final = await self._stream_and_forward(model, call_kwargs)
+            terminal_event: Final = await self._stream_and_forward(model, call_kwargs, guarded.guard_output)
         except Exception as exc:
             verbose_logger.exception("ManagedResponsesWS: error processing response.create: %s", exc)
             await self._send_error(str(exc))
