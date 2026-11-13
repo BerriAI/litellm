@@ -12,16 +12,16 @@ from litellm.llms.base_llm.image_generation.transformation import BaseImageGener
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # shared HTTP factory lacks typed params
-    get_httpx_client,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # shared HTTP factory is private
 )
 from litellm.llms.replicate.common_utils import (
     ReplicateError,
     async_replicate_download,
     async_wait_for_replicate_prediction,
     replicate_api_base,
+    replicate_async_httpx_client,
     replicate_auth_headers,
     replicate_download,
+    replicate_httpx_client,
     replicate_output_urls,
     replicate_positive_int,
     replicate_prediction_failure,
@@ -30,7 +30,7 @@ from litellm.llms.replicate.common_utils import (
     wait_for_replicate_prediction,
 )
 from litellm.types.llms.openai import AllMessageValues, OpenAIImageGenerationOptionalParams
-from litellm.types.utils import ImageObject, ImageResponse, LlmProviders
+from litellm.types.utils import ImageObject, ImageResponse
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -53,19 +53,11 @@ def _aspect_ratio(size: object) -> Mapping[str, str]:
 _NATIVE_INPUT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
-def _get_replicate_httpx_client(ssl_verify: object) -> HTTPHandler:
-    return get_httpx_client(params={"ssl_verify": ssl_verify})
-
-
-def _get_replicate_async_httpx_client(ssl_verify: object) -> AsyncHTTPHandler:
-    return get_async_httpx_client(llm_provider=LlmProviders.REPLICATE, params={"ssl_verify": ssl_verify})
-
-
 class ReplicateImageGenerationConfig(BaseImageGenerationConfig):
     def __init__(
         self,
-        sync_client_factory: Callable[[object], HTTPHandler] = _get_replicate_httpx_client,
-        async_client_factory: Callable[[object], AsyncHTTPHandler] = _get_replicate_async_httpx_client,
+        sync_client_factory: Callable[[object], HTTPHandler] = replicate_httpx_client,
+        async_client_factory: Callable[[object], AsyncHTTPHandler] = replicate_async_httpx_client,
     ) -> None:
         self._sync_client_factory: Final = sync_client_factory
         self._async_client_factory: Final = async_client_factory
