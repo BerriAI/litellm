@@ -820,7 +820,9 @@ class TestFalAIVideoTransformation:
         rows = {
             model: row
             for model, row in litellm.model_cost.items()
-            if row.get("litellm_provider") == "fal_ai" and row.get("mode") == "video_generation"
+            if row.get("litellm_provider") == "fal_ai"
+            and row.get("mode") == "video_generation"
+            and not row.get("output_cost_per_video_clip")
         }
         assert rows
         for model, row in rows.items():
@@ -836,6 +838,27 @@ class TestFalAIVideoTransformation:
             assert default_video_cost_calculator(model, 5, "fal_ai", video_resolution="9999p") == (
                 5 * row["output_cost_per_second"]
             )
+
+    def test_video_cost_uses_catalog_clip_cells(self) -> None:
+        models: Final = tuple(
+            model
+            for model, row in litellm.model_cost.items()
+            if row.get("litellm_provider") == "fal_ai"
+            and row.get("mode") == "video_generation"
+            and row.get("output_cost_per_video_clip")
+        )
+        for model in models:
+            info: Final = litellm.get_model_info(model=model, custom_llm_provider="fal_ai")
+            prices: Final = info.get("output_cost_per_video_clip")
+            assert prices is not None
+            for duration, tiers in prices.items():
+                seconds: Final = float(duration.removesuffix("s"))
+                for resolution, price in tiers.items():
+                    assert default_video_cost_calculator(model, seconds, "fal_ai", video_resolution=resolution) == price
+                    assert (
+                        video_generation_cost(model, seconds, "fal_ai", model_info=info, video_resolution=resolution)
+                        == price
+                    )
 
     def test_h3_video_cost_uses_model_info_tiers(self, local_model_cost_map):
         row = litellm.model_cost[f"fal_ai/{H3_TEXT_MODEL}"]
