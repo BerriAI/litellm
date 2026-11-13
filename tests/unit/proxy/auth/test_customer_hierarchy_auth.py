@@ -24,13 +24,18 @@ from litellm.proxy.auth.customer_hierarchy_auth import (
     resolve_customer_hierarchy,
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-from litellm.proxy.management_helpers.customer_hierarchy import ErrorCode, Failure
+from litellm.proxy.management_helpers.customer_hierarchy import CustomerHierarchy, ErrorCode, Failure
 from litellm.types.proxy.auth.customer_hierarchy import (
     CustomerHierarchyAuth,
     CustomerRequestIdentity,
     CustomerScopeAuth,
 )
-from litellm.types.proxy.management_endpoints.customer_hierarchy import CustomerMember
+from litellm.types.proxy.management_endpoints.customer_hierarchy import (
+    BudgetTemplate,
+    CustomerMember,
+    OrganizationCreate,
+)
+from tests.unit.proxy.management_helpers.test_customer_hierarchy import Database
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -96,6 +101,31 @@ async def test_email_resolution_uses_the_same_customer_scopes_and_member_id_take
             await resolve_customer_hierarchy(email_only, typed_prisma, cache, None, "model-a", "/v1/messages")
             == hierarchy
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("member_id", (None, "unissued-member"))
+async def test_cross_customer_key_cannot_register_an_email(member_id: str | None) -> None:
+    members: Final = _MemberTable({})
+    prisma: Final = _Prisma(members, _OrganizationTable((_organization("other-customer"),)))
+    identity: Final = CustomerRequestIdentity(
+        customer_org_alias="other-customer",
+        customer_member_id=member_id,
+        customer_member_email="person@example.test",
+    )
+    with pytest.raises(ProxyException) as denied:
+        await resolve_customer_hierarchy(
+            identity,
+            cast("PrismaClient", prisma),  # cast-ok: in-memory Prisma edge
+            UserApiKeyCache(),
+            None,
+            "model-a",
+            "/v1/responses",
+            key_metadata={"customer_org_id": "bound-customer"},
+        )
+    assert denied.value.code == "403"
+    assert members.lookups == 0
+    assert members.rows == {}
 
 
 def _row(
@@ -275,6 +305,81 @@ class _Db:
 class _Prisma:
     def __init__(self, table: _MemberTable, organizations: _OrganizationTable | None = None) -> None:
         self.db = _Db(table, organizations if organizations is not None else _OrganizationTable())
+
+
+class _EmailMemberTable:
+    def __init__(self, database: Database) -> None:
+        self.database = database
+
+    async def find_unique(self, where: Mapping[str, object], include: Mapping[str, object] | None = None):
+        member: Final = await self.database.litellm_customermembertable.find_unique(where, include=include)
+        if member is None:
+            return None
+        values: Final = member.model_dump()
+        team: Final = self.database.litellm_customerteamtable.rows[str(values["parent_team_id"])].model_dump()
+        organization: Final = self.database.litellm_customerorganizationtable.rows[
+            str(team["parent_org_id"])
+        ].model_dump()
+        return _Record({**values, "parent_team": {**team, "parent_org": organization}})
+
+
+class _EmailPrisma:
+    def __init__(self, database: Database) -> None:
+        self.database = database
+        self.db = self
+        self.litellm_customermembertable = _EmailMemberTable(database)
+        self.litellm_customerorganizationtable = database.litellm_customerorganizationtable
+
+    def tx(self):
+        return self.database.tx()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("default_budget", (True, False))
+async def test_uncached_email_registration_respects_scope_and_preserves_the_email_for_its_owner(
+    default_budget: bool,
+) -> None:
+    database: Final = Database()
+    prisma: Final = cast("PrismaClient", _EmailPrisma(database))  # cast-ok: in-memory Prisma edge
+    created: Final = await CustomerHierarchy(prisma, clock=lambda: NOW).create_organization(
+        OrganizationCreate(
+            customer_org_id="org-1",
+            alias="customer-alias",
+            default_budgets=(BudgetTemplate(name="default", max_budget=10, is_default=True),) if default_budget else (),
+        ),
+        "actor",
+    )
+    assert not isinstance(created, Failure)
+    cache: Final = UserApiKeyCache()
+    attacker: Final = CustomerRequestIdentity(
+        customer_org_alias="customer-alias",
+        customer_member_email="person@example.test",
+        customer_member_id="attacker-selected-id",
+    )
+    with pytest.raises(ProxyException) as forbidden:
+        await resolve_customer_hierarchy(
+            attacker, prisma, cache, None, "model-a", "/v1/responses", key_metadata={"customer_org_id": "other-org"}
+        )
+    assert forbidden.value.code == "403"
+    assert database.litellm_customermembertable.rows == {}
+    owner: Final = CustomerRequestIdentity(
+        customer_org_alias="customer-alias",
+        customer_member_email="person@example.test",
+        customer_member_id="real-member-id",
+    )
+    if not default_budget:
+        with pytest.raises(ProxyException) as missing_budget:
+            await resolve_customer_hierarchy(owner, prisma, cache, None, "model-a", "/v1/responses")
+        assert missing_budget.value.code == "401"
+        assert database.litellm_customermembertable.rows == {}
+        return
+    resolved: Final = await resolve_customer_hierarchy(owner, prisma, cache, None, "model-a", "/v1/responses")
+    assert (resolved.customer_member_id, resolved.customer_member_email) == ("real-member-id", "person@example.test")
+    assert tuple(database.litellm_customermembertable.rows) == ("real-member-id",)
+    email_only: Final = CustomerRequestIdentity(
+        customer_org_alias="customer-alias", customer_member_email="person@example.test"
+    )
+    assert await resolve_customer_hierarchy(email_only, prisma, cache, None, "model-a", "/v1/messages") == resolved
 
 
 def _organization(

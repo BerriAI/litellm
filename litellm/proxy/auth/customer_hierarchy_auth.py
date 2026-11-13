@@ -433,6 +433,7 @@ async def load_customer_hierarchy(
     prisma_client: "PrismaClient | None",
     user_api_key_cache: UserApiKeyCache,
     register: MemberRegistrar = ensure_customer_member,
+    key_metadata: Mapping[str, object] | None = None,
 ) -> CustomerHierarchyAuth:
     """The hierarchy the headers name. An unknown alias is refused rather than treated as unrestricted: the caller
     asked for a budgeted identity that does not exist. A member header next to an alias header must name a member
@@ -442,6 +443,8 @@ async def load_customer_hierarchy(
         if identity.customer_org_alias is not None
         else None
     )
+    if organization is not None:
+        check_customer_hierarchy_key_scope(organization, key_metadata or {})
     if identity.customer_member_email is not None and organization is None:
         raise ProxyException(
             message=f"{CUSTOMER_MEMBER_EMAIL_HEADER} requires {CUSTOMER_ORG_ALIAS_HEADER}",
@@ -504,7 +507,9 @@ async def resolve_customer_hierarchy(
 ) -> CustomerHierarchyAuth:
     """Load the hierarchy the headers name and admit the request against it. ``request_model`` is the model the
     route will actually serve, which may differ from the body."""
-    hierarchy: Final = await load_customer_hierarchy(identity, prisma_client, user_api_key_cache, register)
+    hierarchy: Final = await load_customer_hierarchy(
+        identity, prisma_client, user_api_key_cache, register, key_metadata=key_metadata
+    )
     check_customer_hierarchy_key_scope(hierarchy, key_metadata or {})
     if not RouteChecks.is_info_route(route):
         check_customer_hierarchy_budget(hierarchy)
