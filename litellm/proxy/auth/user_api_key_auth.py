@@ -2249,16 +2249,7 @@ async def _preflight_failure_request_data(
 
     body: Final = await _small_preflight_failure_json(request)
     model: Final = _get_model_from_request_context(dict(body), route, request, llm_router, cached_key.team_id)
-    post_route: Final = re.sub(r"^/v1(?:beta)?/", "/", route)
-    call_type: Final = (
-        {
-            "/responses/compact": "acompact_responses",
-            "/interactions": "acreate_interaction",
-            "/videos": "avideo_generation",
-        }.get(post_route)
-        if request.method == "POST"
-        else None
-    ) or _call_type_for_route(route)
+    call_type: Final = _call_type_for_route(route, method=request.method)
     _seed_request_destinations(cached_key, request)
     seed_request_identity(cached_key, model=model, request_data=body)
     return {

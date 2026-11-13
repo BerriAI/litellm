@@ -1689,11 +1689,20 @@ def _deployment_attribution_for_model_group(model_group: object, team_id: str | 
     )
 
 
-def _call_type_for_route(route: str | None) -> str | None:
+def _call_type_for_route(route: str | None, *, method: str | None = None) -> str | None:
     """The route's call type when it maps to a single operation (its async and sync variants);
-    None for routes shared by several operations, since the method is not known here."""
+    None for routes shared by several operations unless the method disambiguates them."""
     if route is None:
         return None
+    normalized_route: Final = re.sub(r"^/v1(?:beta)?/", "/", route)
+    endpoint_call_type: Final = {
+        "/responses/compact": "acompact_responses",
+        "/interactions": "acreate_interaction",
+    }.get(normalized_route)
+    if endpoint_call_type is not None:
+        return endpoint_call_type
+    if normalized_route == "/videos" and method == "POST":
+        return "avideo_generation"
     call_types: Final = get_call_types_for_route(route)
     if not call_types:
         return None
@@ -4366,10 +4375,8 @@ class ProxyLogging:
                 input = request_data["input"]
                 litellm_logging_obj.model_call_details["input"] = input
                 body_shape_call_type = CallTypes.aembedding.value
-            resolved_call_type: Final = (
-                dispatched_call_type
-                or _call_type_for_route(route)
-                or (None if set_up_by_request else body_shape_call_type)
+            resolved_call_type: Final = _call_type_for_route(route) or (
+                None if set_up_by_request else dispatched_call_type or body_shape_call_type
             )
             if resolved_call_type is not None and litellm_logging_obj.call_type != CallTypes.pass_through.value:
                 litellm_logging_obj.call_type = resolved_call_type
