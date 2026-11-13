@@ -41,7 +41,7 @@ from litellm.constants import (
 )
 from litellm.cost_calculator import ocr_batch_cost
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.integrations.custom_logger_v2 import Abort, CallContext, CustomLoggerV2, Field, Hook, Patch, on
+from litellm.integrations.custom_logger_v2 import Abort, CallContext, CustomLoggerV2, Field, Hook, OptOutBy, Patch, on
 from litellm.integrations.custom_logger_v2.host import V2Outcome, get_dispatcher
 from litellm.integrations.custom_logger_v2.offpath import InProcessSink
 from litellm.integrations.custom_logger_v2.selection import RequestSelection, Selection
@@ -15778,6 +15778,40 @@ async def test_a_logged_request_still_reaches_a_v2_observer_that_honors_no_log(
     assert journal == ["v2"]
 
 
+class _CallerOptOutObserver(_EndedRecorder):
+    selection = Selection(name="opt_out_observer", opt_out_by=frozenset({OptOutBy.admin, OptOutBy.caller}))
+
+
+@pytest.mark.parametrize(
+    ("source", "allowed", "expected"),
+    [("header", True, []), ("key", True, []), ("header", False, ["v2"]), ("key", False, ["v2"])],
+)
+async def test_a_caller_opt_out_without_a_bound_scope_skips_a_v2_observer_as_should_run_callback_would(
+    logging_obj: LitellmLogging,
+    monkeypatch: pytest.MonkeyPatch,
+    source: str,
+    allowed: bool,
+    expected: list[object],
+) -> None:
+    journal: Final[list[object]] = []
+    _plane_lists(monkeypatch, _async_success_callback=[_CallerOptOutObserver(journal)])
+    monkeypatch.setattr(litellm, "allow_dynamic_callback_disabling", allowed)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    logging_obj.stream = False
+    headers: Final = {"x-litellm-disable-callbacks": "Opt_Out_Observer"} if source == "header" else {}
+    logging_obj.standard_callback_dynamic_params = (
+        {"litellm_disabled_callbacks": ["opt_out_observer"]} if source == "key" else {}
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={"acompletion": True, "proxy_server_request": {"headers": headers}}, optional_params={}
+    )
+    now: Final = datetime.datetime.now(datetime.timezone.utc)
+
+    await logging_obj.async_success_handler(result=ModelResponse(id="served"), start_time=now, end_time=now)
+
+    assert journal == expected
+
+
 async def test_a_v2_attempt_ended_subscriber_gets_one_failure_when_both_failure_handlers_run(
     logging_obj: LitellmLogging, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -15824,9 +15858,9 @@ async def test_mcp_failure_logging_on_the_loop_delivers_an_awaited_v2_attempt_en
     logging_obj.stream = False
     logging_obj.update_environment_variables(litellm_params={}, optional_params={})
 
-    await fire_mcp_tool_call_failure_logging(
-        logging_obj, ValueError("tool failed"), datetime.datetime.now(), None, {}  # noqa: DTZ005  # the MCP path's naive start time
-    )
+    started: Final = datetime.datetime.now()  # noqa: DTZ005  # the MCP path's naive start time
+
+    await fire_mcp_tool_call_failure_logging(logging_obj, ValueError("tool failed"), started, None, {})
 
     assert journal == [("sync", "failure", None), ("async", "failure", None), "v2"]
     assert submitted == []
