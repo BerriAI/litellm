@@ -46,6 +46,7 @@ from typing import (
     Final,
     Literal,
     NamedTuple,
+    NoReturn,
     Optional,
     Protocol,
     TypeAlias,
@@ -1000,6 +1001,8 @@ from litellm.proxy.spend_tracking.background_interaction_settlement import (
     install_background_interaction_settlement,
 )
 from litellm.proxy.spend_tracking.budget_reservation import (
+    BudgetCounter,
+    customer_window_counters,
     get_budget_window_start,
     release_unbound_budget_reservation,
     stamp_budget_reservation_actual_cost,
@@ -1122,6 +1125,7 @@ from litellm.types.llms.openai import (
     ResponseInProgressEvent,
     ResponsesAPIResponse,
 )
+from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyIds, CustomerScopeAuth
 from litellm.types.proxy.carried_budget_state import EntitySpendCounterKeys
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
@@ -1595,7 +1599,7 @@ async def _connect_to_count_stored_values(resources: AsyncExitStack) -> Supports
     if prisma_client is None:
         resources.push_async_callback(client.aclose)
     await client.connect()
-    return client.writer_db
+    return client.writer_db  # pyright: ignore[reportReturnType]  # PrismaWrapper forwards query_raw via __getattr__
 
 
 async def _own_database(resources: AsyncExitStack, client: PrismaClient | None) -> database_runtime.Database | None:
@@ -3418,7 +3422,7 @@ def fail_closed_budget_enforcement_enabled() -> bool:
     return _fail_closed_budget_enforcement()
 
 
-def _raise_budget_unverifiable(counter_key: str) -> None:
+def _raise_budget_unverifiable(counter_key: str) -> NoReturn:
     verbose_proxy_logger.warning(
         "fail_closed_budget_enforcement: rejecting request — spend for %s could "
         "not be verified against Redis or the database",
@@ -3430,7 +3434,7 @@ def _raise_budget_unverifiable(counter_key: str) -> None:
             "error": (
                 "Budget enforcement unavailable: current spend could not be "
                 "verified against Redis or the database, and "
-                "fail_closed_budget_enforcement is enabled, so the request was "
+                "an authoritative budget balance is required, so the request was "
                 "rejected to avoid exceeding the configured budget. Retry shortly."
             )
         },
@@ -3446,6 +3450,8 @@ async def get_current_spend(
     window_duration: str | None = None,
     window_start: datetime | None = None,
     fallback_authoritative: bool = False,
+    *,
+    require_authoritative_window: bool = False,
 ) -> float:
     """
     Read current spend from the cross-pod spend counter.
@@ -3476,7 +3482,16 @@ async def get_current_spend(
     and cached in-process for a few seconds, so a persistently stale counter
     drives at most one read per counter per window rather than one per request.
     """
-    current, verified = await _read_spend_counter_estimate(counter_key=counter_key, fallback_spend=fallback_spend)
+    current, verified = (
+        (
+            await _read_authoritative_window_spend(
+                counter_key, window_entity_type, window_entity_id, window_duration, window_start
+            ),
+            True,
+        )
+        if require_authoritative_window
+        else await _read_spend_counter_estimate(counter_key=counter_key, fallback_spend=fallback_spend)
+    )
     if fallback_authoritative:
         verified = True
 
@@ -3644,6 +3659,30 @@ async def read_spend_counter_cache_value(counter_key: str) -> tuple[float | None
     return (float(value) if value is not None else None), authoritative
 
 
+async def _read_authoritative_window_spend(
+    counter_key: str,
+    entity_type: str | None,
+    entity_id: str | None,
+    window_duration: str | None,
+    window_start: datetime | None,
+) -> float:
+    if entity_type is None or entity_id is None or window_start is None:
+        raise ValueError("Authoritative window reads require the window entity and start")
+    window_spend: Final = await SpendCounterReseed.coalesced_window(
+        prisma_client=prisma_client,
+        spend_counter_store=spend_counter_store,
+        counter_key=counter_key,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        window_duration=window_duration,
+        window_start=window_start,
+        require_authoritative=True,
+    )
+    if window_spend is None:
+        _raise_budget_unverifiable(counter_key)
+    return window_spend
+
+
 async def _read_spend_counter_estimate(counter_key: str, fallback_spend: float) -> tuple[float, bool]:
     """Return (spend, authoritative). ``authoritative`` is True when the value
     came from Redis or a fresh DB read (cross-pod truth), False when it came
@@ -3680,6 +3719,7 @@ async def increment_spend_counters(
     project_id: str | None = None,
     committed_spend_scope: EntitySpendCounterKeys | None = None,
     windows_from_ledger: bool = False,
+    customer_counters: Sequence[BudgetCounter] = (),
 ):
     """
     Atomically increment spend counters for budget enforcement.
@@ -3702,7 +3742,8 @@ async def increment_spend_counters(
             tags=tags,
             model_access_groups=model_access_groups,
             project_id=project_id,
-        ),
+        )
+        | frozenset(counter.counter_key for counter in customer_counters),
     ):
         await _increment_spend_counters_batched(
             token=token,
@@ -3718,6 +3759,7 @@ async def increment_spend_counters(
             project_id=project_id,
             committed_spend_scope=committed_spend_scope,
             windows_from_ledger=windows_from_ledger,
+            customer_counters=customer_counters,
         )
 
 
@@ -3747,7 +3789,44 @@ def _finish_pending_read(absent_key: str, pending_read: str, remember_absent: bo
     user_api_key_cache.budget_windows_absent_cache.delete_cache(absent_key)
 
 
-async def accounting_window_keys(token: str | None, team_id: str | None) -> tuple[Mapping[str, object], ...]:
+async def customer_accounting_counters(
+    ids: CustomerHierarchyIds | None,
+    admitted_scopes: tuple[CustomerScopeAuth, ...] | None = None,
+) -> tuple[BudgetCounter, ...]:
+    if ids is None:
+        return ()
+    from itertools import chain
+
+    from litellm.proxy.auth.customer_hierarchy_auth import get_customer_scopes_for_accounting
+
+    try:
+        scopes: Final = (
+            admitted_scopes
+            if admitted_scopes is not None
+            else (
+                await get_customer_scopes_for_accounting(ids, prisma_client, user_api_key_cache)
+                if prisma_client is not None
+                else ()
+            )
+        )
+    except Exception:
+        logging.getLogger(verbose_proxy_logger.name).exception(
+            "Unable to load customer budget windows for spend accounting"
+        )
+        return ()
+    now: Final = datetime.now(timezone.utc)
+    return tuple(
+        chain.from_iterable(
+            customer_window_counters(scope.key, scope.entity_id, scope.budget_limits, now=now) for scope in scopes
+        )
+    )
+
+
+async def accounting_window_keys(
+    token: str | None,
+    team_id: str | None,
+    customer_counters: Sequence[BudgetCounter] = (),
+) -> tuple[Mapping[str, object], ...]:
     scopes: Final = tuple(
         (entity_type, entity_id, cache_key)
         for entity_type, entity_id, cache_key in (
@@ -3764,7 +3843,16 @@ async def accounting_window_keys(token: str | None, team_id: str | None) -> tupl
     )
     from itertools import chain
 
-    return tuple(chain.from_iterable(snapshots))
+    return tuple(chain.from_iterable(snapshots)) + tuple(
+        {
+            "entity_type": counter.entity_type,
+            "entity_id": counter.entity_id,
+            "window_duration": counter.window_duration,
+            "window_start": counter.window_start.isoformat(),
+        }
+        for counter in customer_counters
+        if counter.window_start is not None
+    )
 
 
 async def _accounting_scope_windows(
@@ -3834,6 +3922,7 @@ async def _increment_spend_counters_batched(
     project_id: str | None = None,
     committed_spend_scope: EntitySpendCounterKeys | None = None,
     windows_from_ledger: bool = False,
+    customer_counters: Sequence[BudgetCounter] = (),
 ):
     """Runs inside one spend counter batch: the reservation reconcile and the warm checks share a single MGET, and
     the reconcile adjustments go out in the same INCRBYFLOAT pipeline as the counter increments."""
@@ -3858,25 +3947,22 @@ async def _increment_spend_counters_batched(
 
     cost: Final[float] = response_cost
 
-    async def _window_increment(
-        entity_type: Litellm_EntityType, entity_id: str, window: object
+    async def _resolved_window_increment(
+        entity_type: Litellm_EntityType,
+        entity_id: str,
+        window_counter: str,
+        duration: str,
+        window_start: datetime | None,
+        window_reset_at: datetime | str | None,
     ) -> PendingSpendIncrement | None:
-        duration: Final = (
-            window["budget_duration"] if isinstance(window, dict) else getattr(window, "budget_duration", None)
-        )
-        window_reset_at: Final = (
-            window.get("reset_at") if isinstance(window, dict) else getattr(window, "reset_at", None)
-        )
-        window_counter: Final = (
-            key_window_counter(entity_id, str(duration))
-            if entity_type is Litellm_EntityType.KEY
-            else team_window_counter(entity_id, str(duration))
-        )
-        window_start: Final = get_budget_window_start(window)
         pending_window: Final = (
             await _prepare_window_spend_counter_increment(
                 counter_key=window_counter,
-                entity_type=entity_type.value.capitalize(),
+                entity_type=(
+                    entity_type.value.capitalize()
+                    if entity_type in (Litellm_EntityType.KEY, Litellm_EntityType.TEAM)
+                    else entity_type.value
+                ),
                 entity_id=entity_id,
                 window_duration=duration,
                 window_start=window_start,
@@ -3896,6 +3982,42 @@ async def _increment_spend_counters_batched(
                 request_started_at=request_started_at,
             )
         return pending_window
+
+    async def _window_increment(
+        entity_type: Litellm_EntityType, entity_id: str, window: object
+    ) -> PendingSpendIncrement | None:
+        duration: Final = (
+            window["budget_duration"] if isinstance(window, dict) else getattr(window, "budget_duration", None)
+        )
+        window_reset_at: Final = (
+            window.get("reset_at") if isinstance(window, dict) else getattr(window, "reset_at", None)
+        )
+        window_counter: Final = (
+            key_window_counter(entity_id, str(duration))
+            if entity_type is Litellm_EntityType.KEY
+            else team_window_counter(entity_id, str(duration))
+        )
+        return await _resolved_window_increment(
+            entity_type, entity_id, window_counter, duration, get_budget_window_start(window), window_reset_at
+        )
+
+    async def _customer_windows() -> tuple[PendingSpendIncrement | BaseException, ...]:
+        pending: Final = await asyncio.gather(
+            *(
+                _resolved_window_increment(
+                    Litellm_EntityType(counter.entity_type),
+                    counter.entity_id,
+                    counter.counter_key,
+                    counter.window_duration,
+                    counter.window_start,
+                    counter.reset_at,
+                )
+                for counter in customer_counters
+                if counter.window_duration is not None
+            ),
+            return_exceptions=True,
+        )
+        return tuple(item for item in pending if item is not None)
 
     async def _window_increments(
         entity_type: Litellm_EntityType, entity_id: str, budget_limits: object
@@ -3996,6 +4118,7 @@ async def _increment_spend_counters_batched(
     scope_coros: Final = tuple(
         coro
         for coro in (
+            _customer_windows() if customer_counters else None,
             _key_scope(token) if token is not None else None,
             _team_scope(team_id) if team_id is not None else None,
             _team_member_scope(user_id, team_id) if user_id is not None and team_id is not None else None,

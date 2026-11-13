@@ -27,14 +27,14 @@ const members = [
   {
     ...audit,
     customer_member_id: "member-a",
-    parent_team_id: "team-a",
+    parent_team_ids: ["team-a"],
     alias: "Member One",
     effective_budget: { max_budget: 10 },
   },
   {
     ...audit,
     customer_member_id: "member-b",
-    parent_team_id: "team-b",
+    parent_team_ids: ["team-b"],
     alias: "Member Two",
     effective_budget: { max_budget: 20 },
   },
@@ -148,7 +148,9 @@ const serve = (input: Parameters<typeof fetch>[0]): Response => {
     return json(list([teams[page - 1]], page, 2));
   }
   if (url.pathname === "/management/v1/customer_members")
-    return json(list(members.filter((member) => member.parent_team_id === url.searchParams.get("parent_team_id"))));
+    return json(
+      list(members.filter((member) => member.parent_team_ids.includes(url.searchParams.get("parent_team_id") ?? ""))),
+    );
   const team = teams.find((team) => url.pathname.endsWith(`/customer_teams/${team.customer_team_id}`));
   if (team) return json(team);
   const member = members.find((member) => url.pathname.endsWith(`/customer_members/${member.customer_member_id}`));
@@ -276,10 +278,10 @@ describe("customerHierarchyUsageCall", () => {
     const result = await customerHierarchyUsageCall(request);
     expect(dailyUrls().every((url) => url.searchParams.get("customer_org_ids") === "org-1")).toBe(true);
     expect(result.teams).toEqual([
-      { id: "", label: "Unassigned or removed team", spend: 4, tokens: 600, requests: 10 },
+      { id: "", label: "Unassigned or removed customer team", spend: 4, tokens: 600, requests: 10 },
     ]);
     expect(result.members).toEqual([
-      { id: "", label: "Unassigned or removed member", spend: 4, tokens: 600, requests: 10 },
+      { id: "", label: "Unassigned or removed customer member", spend: 4, tokens: 600, requests: 10 },
     ]);
   });
 

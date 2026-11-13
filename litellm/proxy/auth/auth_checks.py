@@ -385,6 +385,9 @@ class _PrismaMaxBudgetRow(Protocol):
     @property
     def max_budget(self) -> float | None: ...
 
+    @property
+    def budget_limits(self) -> object: ...
+
 
 class _PrismaModelAccessGroupBudgetRow(Protocol):
     access_group_name: str
@@ -1812,6 +1815,9 @@ async def get_default_end_user_budget(
             )
             return None
 
+        from litellm.proxy.management_helpers.utils import reject_budget_windows
+
+        reject_budget_windows(budget_record.dict())
         _budget_obj: Final = LiteLLM_BudgetTable.model_validate(budget_record.dict())
         # Cache the budget for 60 seconds
         await user_api_key_cache.async_set_cache(
@@ -1823,6 +1829,8 @@ async def get_default_end_user_budget(
 
         return _budget_obj
 
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.error("Error fetching default end user budget: %s", e)
         return None
@@ -1877,6 +1885,9 @@ async def get_team_member_default_budget(
         verbose_proxy_logger.warning("Team-default member budget not found in database: %s", budget_id)
         return None
 
+    from litellm.proxy.management_helpers.utils import reject_budget_windows
+
+    reject_budget_windows(budget_record.dict())
     budget: Final = LiteLLM_BudgetTable.model_validate(budget_record.dict())
     await user_api_key_cache.async_set_cache(
         key=cache_key,
@@ -2508,6 +2519,8 @@ async def _fetch_uncached_model_access_group_budgets(
                 model_type=ModelAccessGroupBudget,
                 ttl=get_management_object_ttl(user_api_key_cache),
             )
+    except HTTPException:
+        raise
     except Exception as e:  # noqa: BLE001  # fail-safe: a budget fetch error must yield "no budget rows", never break auth
         verbose_proxy_logger.debug("Error batch fetching model access group budgets from database: %s", e)
         return ()
@@ -2516,7 +2529,11 @@ async def _fetch_uncached_model_access_group_budgets(
 
 
 def _model_access_group_budget(row: _PrismaModelAccessGroupBudgetRow) -> ModelAccessGroupBudget:
+    from litellm.proxy.management_helpers.utils import reject_budget_windows
+
     budget_table: Final = row.litellm_budget_table
+    if budget_table is not None:
+        reject_budget_windows({"budget_limits": budget_table.budget_limits})
     return ModelAccessGroupBudget(
         access_group_name=row.access_group_name,
         spend=row.spend or 0.0,
@@ -5627,6 +5644,7 @@ async def can_key_call_resolved_model(
         user_api_key_cache,
     )
 
+    check_customer_model_access(model=model, valid_token=valid_token, llm_router=llm_router)
     if valid_token.customer_hierarchy is not None:
         check_customer_hierarchy_model_access(valid_token.customer_hierarchy, model, llm_router)
     skip_key_model_check: Final = valid_token.config or (
@@ -5932,9 +5950,9 @@ def can_project_access_model(
     )
 
 
-def can_customer_access_model(
-    model: str | list[str],
-    end_user_object: LiteLLM_EndUserTable,
+def _can_customer_scope_call_model(
+    model: str | Sequence[str],
+    models: Sequence[str],
     llm_router: RegistryReader | None,
     valid_token: UserAPIKeyAuth | None,
 ) -> Literal[True]:
@@ -5946,12 +5964,12 @@ def can_customer_access_model(
         team_target: Final = (
             _live_team_alias_target(name, team_model_aliases, team_id, llm_router) if team_model_aliases else name
         )
-        if team_target != name and name in (end_user_object.models or ()):
+        if team_target != name and name in models:
             return
         can_object_call_model(
             model=team_target,
             llm_router=llm_router,
-            models=end_user_object.models,
+            models=list(models),
             key_model_aliases=key_model_aliases,
             object_type="customer",
         )
@@ -5959,6 +5977,22 @@ def can_customer_access_model(
     for name in (model,) if isinstance(model, str) else model:
         check(name)
     return True
+
+
+def can_customer_access_model(
+    model: str | list[str],
+    end_user_object: LiteLLM_EndUserTable,
+    llm_router: RegistryReader | None,
+    valid_token: UserAPIKeyAuth | None,
+) -> Literal[True]:
+    return _can_customer_scope_call_model(model, end_user_object.models or (), llm_router, valid_token)
+
+
+def check_customer_model_access(
+    model: str | Sequence[str], valid_token: UserAPIKeyAuth, llm_router: RegistryReader | None
+) -> None:
+    for scope in valid_token.customer_model_scopes:
+        _can_customer_scope_call_model(model, scope, llm_router, valid_token)
 
 
 async def can_user_call_model(

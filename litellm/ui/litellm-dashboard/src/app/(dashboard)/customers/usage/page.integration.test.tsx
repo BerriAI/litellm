@@ -48,14 +48,14 @@ const members = [
   {
     ...audit,
     customer_member_id: "member-a",
-    parent_team_id: "team-a",
+    parent_team_ids: ["team-a"],
     alias: "Member One",
     effective_budget: { max_budget: 10 },
   },
   {
     ...audit,
     customer_member_id: "member-b",
-    parent_team_id: "team-b",
+    parent_team_ids: ["team-b"],
     alias: "Member Two",
     effective_budget: { max_budget: 20 },
   },
@@ -136,7 +136,9 @@ const serve = (input: Parameters<typeof fetch>[0]): Response => {
   if (url.pathname === "/management/v1/customer_organizations/org-1") return json(organization);
   if (url.pathname === "/management/v1/customer_teams") return json(list(teams));
   if (url.pathname === "/management/v1/customer_members")
-    return json(list(members.filter((member) => member.parent_team_id === url.searchParams.get("parent_team_id"))));
+    return json(
+      list(members.filter((member) => member.parent_team_ids.includes(url.searchParams.get("parent_team_id") ?? ""))),
+    );
   const team = teams.find((team) => url.pathname.endsWith(`/customer_teams/${team.customer_team_id}`));
   if (team) return json(team);
   const member = members.find((member) => url.pathname.endsWith(`/customer_members/${member.customer_member_id}`));
@@ -166,11 +168,18 @@ describe("CustomerHierarchyUsagePage", () => {
     renderWithProviders(<CustomerHierarchyUsagePage />, { searchParams: initialUrl });
 
     expect(await screen.findByRole("heading", { name: "Customer organization" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Teams", exact: true })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Customer teams", exact: true })).toHaveAttribute(
       "href",
       "/ui/customers/manage?org=org-1",
     );
     expect(screen.getByText("$15.00")).toBeInTheDocument();
+    const budget = screen.getByRole("region", { name: "Current budget" });
+    expect(within(budget).getByText("$40.00 / $100.00")).toBeInTheDocument();
+    expect(within(budget).getByText("Recorded budget spend")).toBeInTheDocument();
+    expect(within(budget).getByRole("link", { name: "Edit budget" })).toHaveAttribute(
+      "href",
+      "/ui/customers/manage?org=org-1&tab=settings",
+    );
     expect(screen.getByTitle("700 tokens")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Usage over time" })).toBeInTheDocument();
     expect(tableRows("Models")[0]).toHaveTextContent("model-a");
@@ -194,7 +203,7 @@ describe("CustomerHierarchyUsagePage", () => {
 
     for (const [tab, leader] of [
       ["API keys", "Search key"],
-      ["Teams", "Operations"],
+      ["Customer teams", "Operations"],
     ]) {
       await selectBreakdown(user, tab);
       expect(tableRows(tab)[0]).toHaveTextContent(leader);
@@ -203,8 +212,8 @@ describe("CustomerHierarchyUsagePage", () => {
     }
 
     await user.click(screen.getByRole("radio", { name: "Requests" }));
-    expect(tableRows("Teams")[0]).toHaveTextContent("Operations");
-    expect(within(tableRows("Teams")[0]).getByText("71.4%")).toBeInTheDocument();
+    expect(tableRows("Customer teams")[0]).toHaveTextContent("Operations");
+    expect(within(tableRows("Customer teams")[0]).getByText("71.4%")).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "Requests" })).toHaveAttribute("aria-sort", "descending");
   });
 
@@ -214,16 +223,30 @@ describe("CustomerHierarchyUsagePage", () => {
     renderWithProviders(<CustomerHierarchyUsagePage />, { searchParams: initialUrl, onUrlUpdate });
     await screen.findByRole("heading", { name: "Customer organization" });
 
-    await selectBreakdown(user, "Teams");
-    await user.click(within(screen.getByRole("table", { name: "Teams" })).getByRole("button", { name: "Product" }));
+    await selectBreakdown(user, "Customer teams");
+    await user.click(
+      within(screen.getByRole("table", { name: "Customer teams" })).getByRole("button", { name: "Product" }),
+    );
     expect(await screen.findByRole("heading", { name: "Product" })).toBeInTheDocument();
     expect(activityUrl("customer_teams", "team-a")?.pathname).toBe("/management/v1/customer_teams/daily/activity");
     expect(activityUrl("customer_teams", "team-a")?.searchParams.get("customer_team_ids")).toBe("team-a");
+    const teamBudget = screen.getByRole("region", { name: "Current budget" });
+    expect(within(teamBudget).getByText("$40.00 / No cap")).toBeInTheDocument();
+    expect(within(teamBudget).getByRole("link", { name: "Set budget" })).toHaveAttribute(
+      "href",
+      "/ui/customers/manage?org=org-1&team=team-a&tab=settings",
+    );
 
     await user.click(
-      within(screen.getByRole("table", { name: "Member spend" })).getByRole("button", { name: "Member One" }),
+      within(screen.getByRole("table", { name: "Customer member spend" })).getByRole("button", { name: "Member One" }),
     );
     expect(await screen.findByRole("heading", { name: "Member One" })).toBeInTheDocument();
+    const memberBudget = screen.getByRole("region", { name: "Current budget" });
+    expect(within(memberBudget).getByText("$40.00 / $10.00")).toBeInTheDocument();
+    expect(within(memberBudget).getByRole("link", { name: "Edit budget" })).toHaveAttribute(
+      "href",
+      "/ui/customers/manage?org=org-1&team=team-a&member=member-a&tab=settings",
+    );
     const memberUrl = activityUrl("customer_members", "member-a")!;
     expect(memberUrl.pathname).toBe("/management/v1/customer_members/daily/activity");
     expect(memberUrl.searchParams.get("customer_member_ids")).toBe("member-a");
@@ -248,12 +271,12 @@ describe("CustomerHierarchyUsagePage", () => {
 
     expect(await screen.findByRole("table", { name: "Models" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Top models" })).toBeInTheDocument();
-    expect(screen.getByRole("table", { name: "Member spend" })).toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "Customer member spend" })).toBeInTheDocument();
     await user.click(screen.getByRole("combobox", { name: "Break down by" }));
     expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual([
       "Models",
       "API keys",
-      "Teams",
+      "Customer teams",
     ]);
   });
 
@@ -261,21 +284,23 @@ describe("CustomerHierarchyUsagePage", () => {
     const user = userEvent.setup();
     const onUrlUpdate = vi.fn();
     renderWithProviders(<CustomerHierarchyUsagePage />, { searchParams: initialUrl, onUrlUpdate });
-    const table = await screen.findByRole("table", { name: "Member spend" });
+    const table = await screen.findByRole("table", { name: "Customer member spend" });
     const firstMember = within(table).getAllByRole("row")[1];
     expect(firstMember).toHaveTextContent("Member One");
     expect(within(firstMember).getByText("$12.00")).toBeInTheDocument();
     expect(within(firstMember).getByText("$40.00 / $10.00")).toBeInTheDocument();
     expect(within(firstMember).getByText("Over budget")).toBeInTheDocument();
 
-    await selectBreakdown(user, "Teams");
+    await selectBreakdown(user, "Customer teams");
     await user.click(screen.getByRole("radio", { name: "Tokens" }));
 
-    expect(tableRows("Teams")[0]).toHaveTextContent("Operations");
+    expect(tableRows("Customer teams")[0]).toHaveTextContent("Operations");
     expect(within(table).getAllByRole("row")[1]).toHaveTextContent("Member One");
     const requestCount = fetchMock.mock.calls.length;
     act(() =>
-      fireEvent.change(screen.getByRole("textbox", { name: "Search members" }), { target: { value: "Member One" } }),
+      fireEvent.change(screen.getByRole("textbox", { name: "Search customer members" }), {
+        target: { value: "Member One" },
+      }),
     );
     expect(within(table).queryByText("Member Two")).not.toBeInTheDocument();
     expect(within(table).getByText("Member One")).toBeInTheDocument();
@@ -294,10 +319,12 @@ describe("CustomerHierarchyUsagePage", () => {
     const user = userEvent.setup();
     renderWithProviders(<CustomerHierarchyUsagePage />, { searchParams: initialUrl });
     await screen.findByRole("heading", { name: "Customer organization" });
-    await selectBreakdown(user, "Teams");
+    await selectBreakdown(user, "Customer teams");
     fetchMock.mockImplementation(() => new Promise<Response>(() => {}));
 
-    await user.click(within(screen.getByRole("table", { name: "Teams" })).getByRole("button", { name: "Product" }));
+    await user.click(
+      within(screen.getByRole("table", { name: "Customer teams" })).getByRole("button", { name: "Product" }),
+    );
 
     expect(screen.getByRole("status", { name: "Loading customer usage" })).toBeInTheDocument();
     expect(screen.queryByText("$15.00")).not.toBeInTheDocument();
@@ -377,7 +404,28 @@ describe("CustomerHierarchyUsagePage", () => {
     renderWithProviders(<CustomerHierarchyUsagePage />, { searchParams: "?source=portal" });
 
     expect(screen.getByText("Open a customer organization to explore its usage.")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Back to customers" })).toHaveAttribute("href", "/ui/customers");
+    expect(screen.getByRole("link", { name: "Back to customer organizations" })).toHaveAttribute(
+      "href",
+      "/ui/customers",
+    );
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("should show a zero effective member budget and its UTC reset without substituting the organization budget", async () => {
+    fetchMock.mockImplementation((input) =>
+      Promise.resolve(
+        requestUrl(input).pathname.endsWith("/customer_members/member-a")
+          ? json({ ...members[0], effective_budget: { max_budget: 0 }, budget_reset_at: "2026-12-01T00:00:00Z" })
+          : serve(input),
+      ),
+    );
+    renderWithProviders(<CustomerHierarchyUsagePage />, {
+      searchParams: `${initialUrl}&team=team-a&member=member-a`,
+    });
+    const budget = await screen.findByRole("region", { name: "Current budget" });
+    expect(within(budget).getByText("$40.00 / $0.00")).toBeInTheDocument();
+    expect(within(budget).getByRole("progressbar")).toHaveAttribute("aria-valuenow", "100");
+    expect(within(budget).getByText(/Configured reset:.*UTC/)).toBeInTheDocument();
+    expect(within(budget).queryByRole("link", { name: "Set budget" })).not.toBeInTheDocument();
   });
 });

@@ -131,6 +131,7 @@ from litellm.proxy.auth.auth_utils import (
     route_in_additonal_public_routes,
 )
 from litellm.proxy.auth.customer_hierarchy_auth import (
+    CustomerBudgetExceededError,
     customer_identity_from_headers,
     resolve_customer_hierarchy,
 )
@@ -248,6 +249,13 @@ def _route_requires_auth_despite_public(route: str, general_settings: dict | Non
         return litellm.require_auth_for_metrics_endpoint is not False
 
     return False
+
+
+def _is_unauthenticated_public_route(route: str) -> bool:
+    """A route the builder serves without credentials, so nothing on the request may create or charge anything."""
+    return not _route_requires_auth_despite_public(route=route, general_settings=None) and (
+        route in LiteLLMRoutes.public_routes.value or route_in_additonal_public_routes(current_route=route)
+    )
 
 
 custom_litellm_key_header: Final = APIKeyHeader(
@@ -2612,9 +2620,7 @@ async def user_api_key_auth_builder(
         """
 
         ######## Route Checks Before Reading DB / Cache for "token" ################
-        if not _route_requires_auth_despite_public(route=route, general_settings=general_settings) and (
-            route in LiteLLMRoutes.public_routes.value or route_in_additonal_public_routes(current_route=route)
-        ):
+        if _is_unauthenticated_public_route(route):
             # check if public endpoint
             return UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
 
@@ -4548,21 +4554,26 @@ async def _authorize_authenticated_request(
             safe_get_request_headers(request)  # pyright: ignore[reportUnknownArgumentType]  # request headers are untyped
         )
         user_api_key_auth_obj.customer_hierarchy = None  # rebind-ok: request state, never inherited from a cached key
-        if customer_identity is not None:
+        if customer_identity is not None and not _is_unauthenticated_public_route(route):
             with tracer.trace("litellm.proxy.auth.resolve_customer_hierarchy"):  # pyright: ignore[reportUnknownMemberType]  # tracer is the untyped proxy tracer
-                user_api_key_auth_obj.customer_hierarchy = await resolve_customer_hierarchy(  # rebind-ok: the gate updates the request-owned auth object in place
-                    identity=customer_identity,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    llm_router=llm_router,
-                    request_model=_get_model_from_request_context(
-                        request_data, route, request, llm_router, team_id=user_api_key_auth_obj.team_id
-                    ),
-                    route=route,
-                    key_metadata=_KEY_METADATA_ADAPTER.validate_python(
-                        user_api_key_auth_obj.metadata or {}  # pyright: ignore[reportUnknownMemberType]  # untyped key metadata, validated here
-                    ),
-                )
+                try:
+                    hierarchy: Final = await resolve_customer_hierarchy(
+                        identity=customer_identity,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                        llm_router=llm_router,
+                        request_model=_get_model_from_request_context(
+                            request_data, route, request, llm_router, team_id=user_api_key_auth_obj.team_id
+                        ),
+                        route=route,
+                        key_metadata=_KEY_METADATA_ADAPTER.validate_python(
+                            user_api_key_auth_obj.metadata or {}  # pyright: ignore[reportUnknownMemberType]  # untyped key metadata, validated here
+                        ),
+                    )
+                except CustomerBudgetExceededError as error:
+                    user_api_key_auth_obj.customer_hierarchy = error.customer_hierarchy  # rebind-ok: request state
+                    raise
+                user_api_key_auth_obj.customer_hierarchy = hierarchy  # rebind-ok: request state
 
         grants: Final = await access_group_ids_for_identity(user_api_key_auth_obj)
         user_api_key_auth_obj.apply_access_group_rule_grants(grants)
