@@ -6,6 +6,7 @@ from typing import Final
 import pytest
 
 from litellm.redis.stores.connection import connect
+from litellm.redis.stores.deployment_health import DeploymentHealthStates, DeploymentHealthStore
 from litellm.redis.stores.router_cooldowns import CooldownCacheValue, RouterCooldownStore
 from litellm.redis.stores.router_usage import RouterUsageStore
 from litellm.router_rust.routing_stores import (
@@ -19,6 +20,7 @@ from litellm.router_rust.routing_stores import (
     UsageStep,
 )
 from litellm.router_utils.cooldown_cache import CooldownCache
+from litellm.router_utils.health_state_cache import DeploymentHealthCache
 from tests.unit.redis.stores.test_router_cooldowns import FakeCooldowns
 
 _ENTRY: Final[CooldownCacheValue] = {
@@ -59,22 +61,19 @@ class SlowRedis(FakeCooldowns):
 
 
 class NoHealthStates:
-    async def async_get_states(self) -> object:
+    async def async_get_states(self) -> DeploymentHealthStates | None:
         return None
 
-    def get_states(self) -> object:
+    def get_states(self) -> DeploymentHealthStates | None:
         return None
 
 
-@dataclass(frozen=True)
-class CachedHealthStates:
-    raw: object
-
-    async def async_get_states(self) -> object:
-        return self.raw
-
-    def get_states(self) -> object:
-        return self.raw
+def _health_cache(written: Mapping[str, object] | None) -> DeploymentHealthCache:
+    """The native health store holding what a writer left, decoded the way it is when read back from Redis."""
+    handle: Final = connect(None).deployment_health()
+    if written is not None:
+        handle.set_sync(written, 90.0)
+    return DeploymentHealthCache(store=DeploymentHealthStore(handle), staleness_threshold=60.0)
 
 
 def _stores(health: HealthStates) -> RoutingStores:
@@ -140,12 +139,12 @@ async def test_an_async_cooldown_step_waiting_on_redis_lets_other_requests_run(
         pytest.param(None, {}, id="nothing_cached"),
     ],
 )
-async def test_health_states_reach_router_core_as_the_python_filter_reads_them(
-    raw: object, states: Mapping[str, object]
+async def test_health_states_reach_router_core_as_mains_python_filter_read_them(
+    raw: Mapping[str, object] | None, states: Mapping[str, object]
 ) -> None:
-    """router-core takes each state as a strict bool and float, so the leniency of ``_extract_unhealthy_ids``
-    (a falsy flag is unhealthy, a missing one healthy, a bad timestamp stale) has to be applied before it crosses."""
-    stores: Final = _stores(CachedHealthStates(raw))
+    """router-core takes each state as a strict bool and float, so the store's decoder applies main's leniency
+    (a falsy flag is unhealthy, a missing one healthy, a bad timestamp stale) before a record crosses."""
+    stores: Final = _stores(_health_cache(raw))
     step: Final = CACHE_STEP.validate_python({"op": "health_states"})
     assert isinstance(step, HealthStatesStep)
 
