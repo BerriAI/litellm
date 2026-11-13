@@ -3,7 +3,7 @@ import itertools
 import logging
 import mimetypes
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from types import MappingProxyType
@@ -17,6 +17,7 @@ from typing import (
     get_args,
     runtime_checkable,
 )
+from urllib.parse import unquote, urlparse
 
 from pydantic import TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
@@ -24,7 +25,8 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import MAX_FILE_LIST_LIMIT
 from litellm.litellm_core_utils.batch_utils import batch_cost_is_final
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.cloud_storage_security import REQUEST_S3_BUCKET_PARAMS
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
 from litellm.llms.base_llm.managed_resources.utils import is_base64_encoded_unified_id
 from litellm.proxy._types import ProxyException
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
@@ -436,6 +438,50 @@ def get_original_file_id(encoded_id: str) -> str:
         return encoded_id
     except Exception:
         return encoded_id
+
+
+_GEMINI_FILES_HOST: Final = "generativelanguage.googleapis.com"
+
+
+def canonical_provider_file_id(file_id: str) -> str:
+    """The one spelling of a provider file id that ownership rows store and look up, so ``files/abc``,
+    ``files%2Fabc``, ``abc/`` and the Gemini file URL all resolve to the bare ``abc``. Every other URL or URI
+    (``s3://``, ``gs://``, a storage blob URL) is returned unchanged, so an upload whose name happens to contain
+    ``files/<id>`` never indexes someone else's ``<id>``."""
+    decoded: Final = unquote(file_id).strip()
+    is_url: Final = "://" in decoded
+    if is_url and urlparse(decoded).hostname != _GEMINI_FILES_HOST:
+        return file_id
+    path: Final = urlparse(decoded).path if is_url else decoded
+    files_index: Final = path.find("files/")
+    bare: Final = (path[files_index:] if files_index != -1 else path).strip("/").removeprefix("files/").strip("/")
+    return bare or decoded
+
+
+_GEMINI_FILES_URL: Final = "https://generativelanguage.googleapis.com/v1beta/files/"
+
+
+def _gemini_files_tail(file_id: str) -> str:
+    """The id Gemini resolves ``file_id`` to, whatever scheme or case wraps it: the text after its ``files/``."""
+    files_index: Final = file_id.find("files/")
+    return file_id[files_index:].strip("/").removeprefix("files/").strip("/") if files_index != -1 else ""
+
+
+def _iter_stored_forms(bare_ids: Sequence[str]) -> Iterator[str]:
+    for bare_id in bare_ids:
+        yield bare_id
+        yield f"files/{bare_id}"
+        yield f"{_GEMINI_FILES_URL}{bare_id}"
+
+
+def provider_file_id_spellings(file_id: str) -> tuple[str, ...]:
+    """Every spelling an ownership row may hold for ``file_id``: as sent, unwrapped from a model-encoded id and
+    canonicalized, reduced the way Gemini reduces it, plus the ``files/`` and Gemini URL forms that upload rows
+    stored before ids were canonicalized."""
+    original: Final = get_original_file_id(file_id)
+    reductions: Final = (canonical_provider_file_id(original), _gemini_files_tail(unquote(original)))
+    bare_ids: Final = tuple(dict.fromkeys(bare for bare in reductions if bare))
+    return tuple(dict.fromkeys((file_id, *_iter_stored_forms(bare_ids))))
 
 
 def is_model_embedded_id(file_id: str) -> bool:
@@ -884,6 +930,8 @@ def apply_team_provider_credentials(
     llm_router: Optional["Router"],
     user_api_key_dict: "UserAPIKeyAuth",
     custom_llm_provider: str,
+    *,
+    keep_request_buckets: bool = False,
 ) -> None:
     """
     Resolve credentials for a provider-only request (no model pinned) via
@@ -901,7 +949,11 @@ def apply_team_provider_credentials(
     )
     if credentials is None:
         return
-    prepare_data_with_credentials(data=data, credentials={**credentials, **explicit_request_credentials(data)})
+    prepare_data_with_credentials(
+        data=data,
+        credentials={**credentials, **explicit_request_credentials(data)},
+        keep_request_buckets=keep_request_buckets,
+    )
 
 
 def add_deployment_model_info(
@@ -925,10 +977,16 @@ def add_deployment_model_info(
     }
 
 
+_REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object])
+_NO_REQUEST_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
+
+
 def prepare_data_with_credentials(
     data: dict,
     credentials: dict,
     file_id: str | None = None,
+    *,
+    keep_request_buckets: bool = False,
 ) -> None:
     """
     Update data dictionary with model credentials (in-place).
@@ -937,8 +995,15 @@ def prepare_data_with_credentials(
         data: Data dictionary to update
         credentials: Credentials from router
         file_id: Optional original file_id to set (for decoded file IDs)
+        keep_request_buckets: Keep an S3 bucket the request already carries over the deployment's. Only
+            file upload and batch create set it, after checking the bucket against the caller's allowlist.
+            Reads keep the deployment's bucket so a request cannot widen which buckets a file id may point at.
     """
-    data.update(credentials)
+    request_fields: Final = _REQUEST_FIELDS.validate_python(data) if keep_request_buckets else _NO_REQUEST_FIELDS
+    request_buckets: Final = MappingProxyType(
+        {key: request_fields[key] for key in REQUEST_S3_BUCKET_PARAMS if key in request_fields}
+    )
+    data.update({**credentials, **request_buckets})
     data.pop("custom_llm_provider", None)
 
     if file_id is not None:
@@ -1547,7 +1612,7 @@ async def resolve_output_file_ids_to_unified(response, prisma_client) -> None:
     if not prisma_client:
         return
     for attr in ("output_file_id", "error_file_id"):
-        raw_id = getattr(response, attr, None)
+        raw_id = attribute_or_none(response, attr)
         if not raw_id or is_base64_encoded_unified_file_id(raw_id):
             continue
         try:

@@ -119,7 +119,7 @@ def _responses_prompt(request_data: Mapping[str, object]) -> _ResponsesPrompt | 
         )
         messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(  # pyright: ignore[reportUnknownMemberType]  # its input type is untyped
             input=cast(str | ResponseInputParam, request_input),  # cast-ok: a bad item raises and is caught here
-            responses_api_request={"instructions": request_data.get("instructions")},
+            responses_api_request={"instructions": request_data.get("instructions"), "tools": request_tools},
             item_cache_control=True,
             only_since_compaction=True,
         )
