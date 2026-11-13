@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { ChevronRight, Plus, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -70,10 +71,12 @@ const groupBudgetFields = [
 ] as const;
 
 export default function CreateCustomerDialog({ open, onOpenChange, onCreated }: Props) {
+  const queryClient = useQueryClient();
   const { t } = useTranslation();
   const [fields, setFields] = useState(initialCustomerOrganizationFields);
   const [error, setError] = useState<CustomerOrganizationFormError | null>(null);
   const create = $api.useMutation("post", "/management/v1/customer_organizations", {
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["get", "/management/v1/customer_portal/limits"] }),
     onSuccess: (customer) => {
       toast.success(t("customerPortal.toasts.created", { name: customer.alias || fields.name.trim() }));
       onCreated(customer.customer_org_id);
