@@ -906,6 +906,14 @@ class TestFalAIVideoTransformation:
             and row.get("mode") == "video_generation"
             and row.get("output_cost_per_video_clip")
         )
+        pixverse_model: Final = "fal_ai/fal-ai/pixverse/v5/text-to-video"
+        assert pixverse_model in models
+        pixverse_prices: Final = litellm.get_model_info(model=pixverse_model, custom_llm_provider="fal_ai").get(
+            "output_cost_per_video_clip"
+        )
+        assert pixverse_prices
+        pixverse_tiers: Final = next(iter(pixverse_prices.values()))
+        assert next(iter(pixverse_tiers.values())) > 0
         for model in models:
             info: Final = litellm.get_model_info(model=model, custom_llm_provider="fal_ai")
             prices: Final = info.get("output_cost_per_video_clip")
