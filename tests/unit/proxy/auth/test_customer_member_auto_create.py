@@ -21,7 +21,7 @@ def _prisma(database: Database) -> "PrismaClient":
 
 
 async def _organization(database: Database, org_id: str, default_budget: bool = True) -> None:
-    templates: Final = (BudgetTemplate(name="std", max_budget=10.0, is_default=True),) if default_budget else ()
+    templates: Final = (BudgetTemplate(name="std", max_budget=10.0),) if default_budget else ()
     created: Final = await CustomerHierarchy(_prisma(database), clock=lambda: NOW).create_organization(
         OrganizationCreate(customer_org_id=org_id, default_budgets=templates), "admin"
     )
