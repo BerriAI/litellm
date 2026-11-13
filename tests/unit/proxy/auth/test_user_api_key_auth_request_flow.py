@@ -85,10 +85,7 @@ from litellm.proxy.auth.user_api_key_auth import (
     _ensure_parent_otel_span_on_request_state,
     _load_team_member_default_model_budget,
     _PendingAutoRegister,
-    _matches_routing_override,
     _reserve_budget_after_common_checks,
-    _route_requires_auth_despite_public,
-    _routing_selector_matches_claim,
     _authorize_authenticated_request,
     run_centralized_common_checks,
     _run_post_custom_auth_checks,
@@ -204,17 +201,6 @@ def test_get_api_key():
     ) == (api_key, passed_in_key)
 
 
-def test_route_requires_auth_despite_public_for_metrics(monkeypatch):
-    monkeypatch.setattr(litellm, "require_auth_for_metrics_endpoint", True)
-
-    assert _route_requires_auth_despite_public("/metrics", {}) is True
-    assert _route_requires_auth_despite_public("/metrics/", {}) is True
-
-    monkeypatch.setattr(litellm, "require_auth_for_metrics_endpoint", False)
-
-    assert _route_requires_auth_despite_public("/metrics", {}) is False
-
-
 def test_public_ai_hub_routes_remain_public():
     for route in (
         "/public/model_hub",
@@ -224,7 +210,6 @@ def test_public_ai_hub_routes_remain_public():
         "/public/skill_hub",
     ):
         assert route in LiteLLMRoutes.public_routes.value
-        assert _route_requires_auth_despite_public(route, {}) is False
 
 
 @pytest.mark.asyncio
@@ -864,146 +849,6 @@ def _assert_get_api_key_with_custom_litellm_key_header(custom_litellm_key_header
         route="",
         request=MagicMock(),
     ) == (api_key, passed_in_key)
-
-
-@pytest.mark.parametrize(
-    "selector_value, claim_value, expected, split_space_delimited",
-    [
-        (None, "any-value", True, False),
-        ("issuer.example.com", "issuer.example.com", True, False),
-        ("issuer.example.com", "other-issuer.example.com", False, False),
-        # iss (and other non-scope claims) must not match via space-split injection
-        (
-            "trusted.example.com",
-            "trusted.example.com attacker.example.com",
-            False,
-            False,
-        ),
-        # Wildcard iss must not match space-containing claim strings (fnmatch * spans spaces)
-        (
-            "trusted.*",
-            "trusted.example.com attacker.example.com",
-            False,
-            False,
-        ),
-        ("trusted.*", "trusted.example.com", True, False),
-        (
-            ["issuer-a.example.com", "issuer-b.example.com"],
-            "issuer-b.example.com",
-            True,
-            False,
-        ),
-        ("*MID_LITELLM", "STREAM_MID_LITELLM", True, False),
-        ("*MID_LITELLM", "REDIS_LITELLM", False, False),
-        ("machine-??", "machine-01", True, False),
-        ("machine-??", "machine-001", False, False),
-        # Wildcard matching is case-sensitive (fnmatch.fnmatchcase)
-        ("*litellm", "BATCH_LITELLM", False, False),
-        ("*LITELLM", "BATCH_LITELLM", True, False),
-        ("App:LiteLLM", "App:LiteLLM openid", True, True),
-        ("App:*", "App:LiteLLM openid", True, True),
-        (["openid", "App:LiteLLM"], "openid profile", True, True),
-        (["service-*", "batch-*"], "batch-123", True, False),
-        (["service-*", "batch-*"], "other-123", False, False),
-        ("App:LiteLLM", ["openid", "App:LiteLLM"], True, False),
-        ("App:LiteLLM", None, False, False),
-    ],
-)
-def test_routing_selector_matches_claim_parametrized(selector_value, claim_value, expected, split_space_delimited):
-    assert (
-        _routing_selector_matches_claim(
-            selector_value=selector_value,
-            claim_value=claim_value,
-            split_space_delimited=split_space_delimited,
-        )
-        is expected
-    )
-
-
-@pytest.mark.parametrize(
-    "override, token_claims, expected",
-    [
-        # Only iss selector is required and should match.
-        (
-            JWTRoutingOverride(iss="oauth-issuer.example.com", path="oauth2"),
-            {"iss": "oauth-issuer.example.com"},
-            True,
-        ),
-        # Scope selector narrows the match.
-        (
-            JWTRoutingOverride(
-                iss="oauth-issuer.example.com",
-                scope="App:LiteLLM",
-                path="oauth2",
-            ),
-            {"iss": "oauth-issuer.example.com", "scope": "App:LiteLLM openid"},
-            True,
-        ),
-        # client_id wildcard selector narrows the match.
-        (
-            JWTRoutingOverride(
-                iss="oauth-issuer.example.com",
-                client_id="*MID_LITELLM",
-                path="oauth2",
-            ),
-            {"iss": "oauth-issuer.example.com", "client_id": "BATCH_MID_LITELLM"},
-            True,
-        ),
-        (
-            JWTRoutingOverride(
-                iss="oauth-issuer.example.com",
-                client_id="*MID_LITELLM",
-                path="oauth2",
-            ),
-            {"iss": "oauth-issuer.example.com", "client_id": "BATCH_PORTAL"},
-            False,
-        ),
-        # aud selector still works with list claims.
-        (
-            JWTRoutingOverride(
-                iss="oauth-issuer.example.com",
-                aud=["api://litellm", "api://fallback"],
-                path="oauth2",
-            ),
-            {
-                "iss": "oauth-issuer.example.com",
-                "aud": ["api://other", "api://litellm"],
-            },
-            True,
-        ),
-        # All provided selectors are AND-ed.
-        (
-            JWTRoutingOverride(
-                iss="oauth-issuer.example.com",
-                scope="App:LiteLLM",
-                client_id="*MID_LITELLM",
-                path="oauth2",
-            ),
-            {
-                "iss": "oauth-issuer.example.com",
-                "scope": "App:LiteLLM openid",
-                "client_id": "BATCH_MID_LITELLM",
-            },
-            True,
-        ),
-        (
-            JWTRoutingOverride(
-                iss="oauth-issuer.example.com",
-                scope="App:LiteLLM",
-                client_id="*MID_LITELLM",
-                path="oauth2",
-            ),
-            {
-                "iss": "oauth-issuer.example.com",
-                "scope": "App:Other openid",
-                "client_id": "BATCH_MID_LITELLM",
-            },
-            False,
-        ),
-    ],
-)
-def test_matches_routing_override_parametrized(override, token_claims, expected):
-    assert _matches_routing_override(token_claims=token_claims, override=override) is expected
 
 
 def test_get_api_key_with_custom_litellm_key_header_bearer_prefix():
@@ -2129,7 +1974,7 @@ async def test_standard_jwt_auth_propagates_user_email():
     ):
         result = await user_api_key_auth_builder(
             request=mock_request,
-            api_key=jwt_token,
+            api_key=f"Bearer {jwt_token}",
             azure_api_key_header="",
             anthropic_api_key_header=None,
             google_ai_studio_api_key_header=None,
@@ -2199,7 +2044,7 @@ async def test_jwt_auth_propagates_agent_id_to_user_api_key_auth(is_proxy_admin:
     ):
         result = await user_api_key_auth_builder(
             request=mock_request,
-            api_key=jwt_token,
+            api_key=f"Bearer {jwt_token}",
             azure_api_key_header="",
             anthropic_api_key_header=None,
             google_ai_studio_api_key_header=None,
@@ -2764,7 +2609,7 @@ async def test_auto_register_map_existing_key_first_request_runs_key_checks(
     ):
         call = user_api_key_auth(
             request=mock_request,
-            api_key=jwt_token,
+            api_key=f"Bearer {jwt_token}",
             azure_api_key_header="",
             anthropic_api_key_header=None,
             google_ai_studio_api_key_header=None,
@@ -2873,7 +2718,7 @@ async def test_auto_register_first_request_propagates_user_email(active: bool) -
             with pytest.raises(ProxyException, match="deactivated via SCIM") as exc:
                 await user_api_key_auth_builder(
                     request=mock_request,
-                    api_key=jwt_token,
+                    api_key=f"Bearer {jwt_token}",
                     azure_api_key_header="",
                     anthropic_api_key_header=None,
                     google_ai_studio_api_key_header=None,
@@ -2885,7 +2730,7 @@ async def test_auto_register_first_request_propagates_user_email(active: bool) -
             return
         result = await user_api_key_auth_builder(
             request=mock_request,
-            api_key=jwt_token,
+            api_key=f"Bearer {jwt_token}",
             azure_api_key_header="",
             anthropic_api_key_header=None,
             google_ai_studio_api_key_header=None,
@@ -3105,7 +2950,7 @@ async def test_jwt_auto_register_forwards_bound_agent_id():
     ):
         result = await user_api_key_auth_builder(
             request=mock_request,
-            api_key=jwt_token,
+            api_key=f"Bearer {jwt_token}",
             azure_api_key_header="",
             anthropic_api_key_header=None,
             google_ai_studio_api_key_header=None,
@@ -3423,7 +3268,7 @@ class TestJWTOAuth2Coexistence:
         ):
             result = await user_api_key_auth_builder(
                 request=mock_request,
-                api_key=jwt_token,
+                api_key=f"Bearer {jwt_token}",
                 azure_api_key_header="",
                 anthropic_api_key_header=None,
                 google_ai_studio_api_key_header=None,
@@ -3504,7 +3349,7 @@ class TestJWTOAuth2Coexistence:
         ):
             result = await user_api_key_auth_builder(
                 request=mock_request,
-                api_key=jwt_token,
+                api_key=f"Bearer {jwt_token}",
                 azure_api_key_header="",
                 anthropic_api_key_header=None,
                 google_ai_studio_api_key_header=None,
@@ -3580,7 +3425,7 @@ class TestJWTOAuth2Coexistence:
         ):
             result = await user_api_key_auth_builder(
                 request=mock_request,
-                api_key=jwt_token,
+                api_key=f"Bearer {jwt_token}",
                 azure_api_key_header="",
                 anthropic_api_key_header=None,
                 google_ai_studio_api_key_header=None,
@@ -3652,7 +3497,7 @@ class TestJWTOAuth2Coexistence:
         ):
             result = await user_api_key_auth_builder(
                 request=mock_request,
-                api_key=jwt_token,
+                api_key=f"Bearer {jwt_token}",
                 azure_api_key_header="",
                 anthropic_api_key_header=None,
                 google_ai_studio_api_key_header=None,
@@ -12716,7 +12561,7 @@ async def test_auth_flow_enters_virtual_key_mapping_when_only_an_issuer_configur
     ):
         result = await user_api_key_auth_builder(
             request=mock_request,
-            api_key=jwt_token,
+            api_key=f"Bearer {jwt_token}",
             azure_api_key_header="",
             anthropic_api_key_header=None,
             google_ai_studio_api_key_header=None,

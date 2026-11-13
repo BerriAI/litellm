@@ -1,4 +1,4 @@
-use litellm_config::{Config, Error, Spelled, TracingStoreSettings};
+use litellm_config::{Config, Error, RouteList, Spelled, TracingStoreSettings};
 use rstest::rstest;
 
 #[rstest]
@@ -447,6 +447,28 @@ fn pass_through_flags_read_like_python(
 }
 
 #[rstest]
+#[case::bool_true("true", true)]
+#[case::bool_false("false", false)]
+#[case::string_true("'true'", false)]
+#[case::environment_reference("os.environ/ENABLE_JWT_AUTH", false)]
+#[case::number("1", false)]
+fn auth_flags_are_on_only_for_boolean_true(#[case] value: &str, #[case] expected: bool) {
+    let config = Config::from_yaml(&format!(
+        "general_settings: {{enable_jwt_auth: {value}, enable_oauth2_auth: {value}, enable_oauth2_proxy_auth: {value}}}"
+    ))
+    .unwrap();
+    let general = config.general_settings;
+    assert_eq!(
+        [
+            general.enable_jwt_auth,
+            general.enable_oauth2_auth,
+            general.enable_oauth2_proxy_auth
+        ],
+        [expected; 3]
+    );
+}
+
+#[rstest]
 fn a_pass_through_endpoint_without_a_path_fails_the_load_like_registration() {
     assert!(
         Config::from_yaml(
@@ -476,4 +498,15 @@ fn debug_hides_inline_callback_settings(#[case] field: &str) {
     ))
     .unwrap();
     assert!(!format!("{config:?}").contains("callback-list-secret"));
+}
+
+#[rstest]
+#[case::list("[/a/*, /b]", Some(RouteList::Valid(["/a/*".to_owned(), "/b".to_owned()].into())))]
+#[case::bare_string("/a/*", Some(RouteList::Malformed))]
+#[case::non_string_entry("[/a, 5, /b/*]", Some(RouteList::Malformed))]
+#[case::null("null", None)]
+fn public_routes_never_fail_the_load(#[case] value: &str, #[case] expected: Option<RouteList>) {
+    let config =
+        Config::from_yaml(&format!("general_settings: {{public_routes: {value}}}")).unwrap();
+    assert_eq!(config.general_settings.public_routes, expected);
 }

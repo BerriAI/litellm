@@ -50,7 +50,6 @@ from litellm.proxy.auth.oauth2_check import OAuth2TokenValidationError
 from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401  # legacy module exports
     _get_bearer_token_or_received_api_key,  # pyright: ignore[reportPrivateUsage]  # shared x-litellm-api-key parser lives with user_api_key_auth
     _run_centralized_common_checks,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
-    oauth2_introspection_applies,
     run_centralized_common_checks,
     user_api_key_auth,
 )
@@ -94,6 +93,7 @@ from litellm.repositories.table_repositories import (
     AgentsRepository,
     MCPServerRepository,
 )
+from litellm.rust_bridge._native import RustAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 
@@ -290,23 +290,17 @@ async def _bearer_is_litellm_credential(token: str) -> bool:
 def _identity_check(token: str, route: str, settings: Mapping[str, object]) -> _IdentityCheck | None:
     """The identity check LiteLLM's own auth would run on ``token`` for ``route``, in its order: OAuth2
     introspection, then trusted reverse-proxy identity headers, then a JWT whose issuer may be LiteLLM's."""
+    from litellm.proxy.auth import core as auth_core  # noqa: PLC0415  # proxy import cycle
     from litellm.proxy.auth.handle_jwt import JWTHandler  # noqa: PLC0415  # proxy import cycle
     from litellm.proxy.mcp_server.bridge_token_flow import (  # noqa: PLC0415  # bridge flow imports this module
         jwt_issuer_may_be_litellm,
     )
     from litellm.proxy.proxy_server import (  # noqa: PLC0415  # startup owns the active auth configuration
-        jwt_handler,
         premium_user,
     )
 
     enable_jwt_auth: Final = settings.get("enable_jwt_auth") is True
-    if oauth2_introspection_applies(
-        token,
-        route,
-        enable_oauth2_auth=settings.get("enable_oauth2_auth") is True,
-        enable_jwt_auth=enable_jwt_auth,
-        jwt_handler=jwt_handler,
-    ):
+    if RustAuth.oauth2_introspection_applies(auth_core.request(token, route), auth_core.proxy_settings()):
         return "oauth2" if premium_user is True else None
     if settings.get("enable_oauth2_proxy_auth") is True:
         return "oauth2_proxy"

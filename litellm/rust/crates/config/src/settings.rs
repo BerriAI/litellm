@@ -1,10 +1,12 @@
+use litellm_python_compat::lenient::IsTrue;
 use litellm_secret_value::SecretValue;
 use serde::Deserialize;
+use serde_with::serde_as;
 use veil::Redact;
 
 use crate::{
-    AdditionalFields, CacheSettings, Object, PassThroughEndpoint, RedisSettings, Spelled, Value,
-    value::one_or_many,
+    AdditionalFields, CacheSettings, JwtAuthSettings, Object, PassThroughEndpoint, RedisSettings,
+    RouteList, Spelled, Value, value::one_or_many,
 };
 
 #[derive(Clone, Debug, Deserialize)]
@@ -37,6 +39,7 @@ pub struct TracingSettings {
     pub additional_fields: AdditionalFields,
 }
 
+#[serde_as]
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default)]
 pub struct GeneralSettings {
@@ -71,6 +74,15 @@ pub struct GeneralSettings {
     pub mcp_allowed_hosts: Option<Box<[String]>>,
     pub mcp_allowed_origins: Box<[String]>,
     pub pass_through_endpoints: Option<Box<[PassThroughEndpoint]>>,
+    /// `general_settings.get(...) is True`, how the proxy reads each auth flag.
+    #[serde_as(as = "IsTrue")]
+    pub enable_jwt_auth: bool,
+    #[serde_as(as = "IsTrue")]
+    pub enable_oauth2_auth: bool,
+    #[serde_as(as = "IsTrue")]
+    pub enable_oauth2_proxy_auth: bool,
+    pub public_routes: Option<RouteList>,
+    pub litellm_jwtauth: Option<JwtAuthSettings>,
     #[serde(flatten)]
     pub additional_fields: AdditionalFields,
 }
@@ -109,6 +121,11 @@ impl Default for GeneralSettings {
             mcp_allowed_hosts: None,
             mcp_allowed_origins: Box::default(),
             pass_through_endpoints: None,
+            enable_jwt_auth: false,
+            enable_oauth2_auth: false,
+            enable_oauth2_proxy_auth: false,
+            public_routes: None,
+            litellm_jwtauth: None,
             additional_fields: AdditionalFields::default(),
         }
     }
@@ -171,4 +188,21 @@ pub struct LiteLlmSettings {
     pub set_verbose: Option<bool>,
     #[serde(flatten)]
     pub additional_fields: AdditionalFields,
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::JwtAuthSettings;
+
+    #[test]
+    fn jwt_auth_settings_hide_unknown_fields() {
+        let settings: JwtAuthSettings =
+            serde_json::from_value(serde_json::json!({"future_secret": "credential-value"}))
+                .unwrap();
+
+        let debug = format!("{settings:?}");
+
+        assert!(!debug.contains("credential-value"), "{debug}");
+        assert!(debug.contains("[REDACTED]"), "{debug}");
+    }
 }
