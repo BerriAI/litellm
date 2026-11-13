@@ -102,18 +102,19 @@ describe("customer organization usage", () => {
     const onUrlUpdate = vi.fn();
     renderWithProviders(<CustomersPage />, { searchParams: "?page=2", onUrlUpdate });
     const row = await screen.findByRole("row", { name: /Customer A/ });
-    expect(within(row).getByText("$51.00 / $500.00")).toBeInTheDocument();
-    expect(within(row).getByText("10.2% used")).toBeInTheDocument();
+    expect(within(row).getByRole("cell", { name: "$51.00 / $500.00 10.2% used" })).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "Budget usage" })).not.toBeInTheDocument();
     expect(within(row).getByText("3")).toBeInTheDocument();
     expect(within(row).getByText("40")).toBeInTheDocument();
     expect(within(row).getByText("800")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /1 Mar 2024/ }));
     await user.click(screen.getByRole("button", { name: /Previous month/ }));
-    await user.click(screen.getByRole("button", { name: "Apply", exact: true }));
+    await user.click(screen.getByRole("button", { name: "Apply" }));
     expect(await screen.findByText("$7.00")).toBeInTheDocument();
     const updatedRow = screen.getByRole("row", { name: /Customer A/ });
-    expect(within(updatedRow).getByText("10.2% used")).toBeInTheDocument();
-    expect(within(updatedRow).getByText("$51.00 / $500.00")).toBeInTheDocument();
+    expect(
+      within(updatedRow).getByRole("cell", { name: "$7.00 Current budget $51.00 / $500.00 10.2% used" }),
+    ).toBeInTheDocument();
     expect(within(updatedRow).getByText("3")).toBeInTheDocument();
     expect(requests.at(-1)?.searchParams.get("start_date")).toBe("2024-02-01");
     expect(requests.at(-1)?.searchParams.get("end_date")).toBe("2024-02-29");
@@ -135,7 +136,7 @@ describe("customer organization usage", () => {
     await user.click(screen.getByRole("button", { name: /3 Jan 2024/ }));
     fireEvent.change(screen.getByLabelText("Start date"), { target: { value: "2024-02-01" } });
     fireEvent.change(screen.getByLabelText("End date"), { target: { value: "2024-02-29" } });
-    await user.click(screen.getByRole("button", { name: "Apply", exact: true }));
+    await user.click(screen.getByRole("button", { name: "Apply" }));
     expect(await screen.findByText("$7.00")).toBeInTheDocument();
     expect(requests.at(-1)?.searchParams.get("end_date")).toBe("2024-02-29");
   });
@@ -143,13 +144,13 @@ describe("customer organization usage", () => {
   it("shows over-budget percentages, zero and missing limits, and members without usage", async () => {
     renderWithProviders(<CustomersPage />);
     const over = await screen.findByRole("row", { name: /over-budget/ });
-    expect(within(over).getByText("$750.00 / $500.00")).toBeInTheDocument();
+    expect(within(over).getByText("Current budget $750.00 / $500.00")).toBeInTheDocument();
     expect(within(over).getByText("150% used")).toBeInTheDocument();
     const zero = screen.getByRole("row", { name: /zero-budget/ });
-    expect(within(zero).getByText("$1.00 / $0.00")).toBeInTheDocument();
+    expect(within(zero).getByText("Current budget $1.00 / $0.00")).toBeInTheDocument();
     expect(within(zero).getByText("Percentage unavailable for a $0 budget")).toBeInTheDocument();
     const uncapped = screen.getByRole("row", { name: /no-budget/ });
-    expect(within(uncapped).getAllByText("$0.00")).toHaveLength(2);
+    expect(within(uncapped).getByText("$0.00")).toBeInTheDocument();
     expect(within(uncapped).getByText("No max budget")).toBeInTheDocument();
     const unused = screen.getByRole("row", { name: /unused-budget/ });
     expect(within(unused).getByText("$0.00 / $500.00")).toBeInTheDocument();
@@ -168,11 +169,11 @@ describe("customer organization usage", () => {
   it("creates an organization using the entered ID and alias", async () => {
     const user = userEvent.setup();
     renderWithProviders(<CustomersPage />);
-    await user.click(screen.getByRole("button", { name: "Create Customer", exact: true }));
+    await user.click(screen.getByRole("button", { name: "Create Customer" }));
     fireEvent.change(screen.getByLabelText("Customer organization id"), { target: { value: " new-org " } });
     fireEvent.change(screen.getByLabelText("Alias"), { target: { value: " New customer " } });
     const dialog = screen.getByRole("dialog");
-    await user.click(within(dialog).getByRole("button", { name: "Create", exact: true }));
+    await user.click(within(dialog).getByRole("button", { name: "Create" }));
     await waitFor(() =>
       expect(creations).toEqual([{ customer_org_id: "new-org", alias: "New customer", default_budgets: [] }]),
     );

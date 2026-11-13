@@ -4,7 +4,7 @@ type Totals = Readonly<{ spend: number; requests: number; tokens: number }>;
 
 export function customerUsageTotals(days: readonly components["schemas"]["DailySpendData"][]): Record<string, Totals> {
   return days.reduce<Record<string, Totals>>((totals, day) => {
-    for (const [id, entity] of Object.entries(day.breakdown.entities ?? {})) {
+    for (const [id, entity] of Object.entries(day.breakdown?.entities ?? {})) {
       const previous = totals[id];
       totals[id] = {
         spend: (previous?.spend ?? 0) + entity.metrics.spend,

@@ -30,7 +30,15 @@ export default function CustomersPage() {
   return <CustomerOrganizations />;
 }
 
-function CustomerBudgetUsage({ spend, maxBudget }: { spend: number; maxBudget: number | null }) {
+function CustomerSpend({
+  spend,
+  budgetSpend,
+  maxBudget,
+}: {
+  spend: number;
+  budgetSpend: number;
+  maxBudget: number | null;
+}) {
   const { t } = useTranslation();
   const spendLabel = t("format.usd", { val: spend });
   if (maxBudget === null) {
@@ -45,17 +53,26 @@ function CustomerBudgetUsage({ spend, maxBudget }: { spend: number; maxBudget: n
     maxBudget > 0
       ? t("customerPortal.list.budgetUsed", {
           percentage: t("format.number", {
-            val: spend / maxBudget,
+            val: budgetSpend / maxBudget,
             style: "percent",
             maximumFractionDigits: 1,
           }),
         })
       : t("customerPortal.list.zeroBudgetPercentage");
+  const budgetSpendLabel = t("format.usd", { val: budgetSpend });
+  const budgetLabel = t("customerPortal.list.budgetUsage", {
+    spend: budgetSpendLabel,
+    max: t("format.usd", { val: maxBudget }),
+  });
+  const matchesBudgetSpend = spendLabel === budgetSpendLabel;
   return (
     <>
-      <p className="whitespace-nowrap font-medium">
-        {t("customerPortal.list.budgetUsage", { spend: spendLabel, max: t("format.usd", { val: maxBudget }) })}
-      </p>
+      <p className="whitespace-nowrap font-medium">{matchesBudgetSpend ? budgetLabel : spendLabel}</p>
+      {!matchesBudgetSpend && (
+        <p className="text-xs text-muted-foreground">
+          {t("customerPortal.list.currentBudget", { budget: budgetLabel })}
+        </p>
+      )}
       <p className="text-xs text-muted-foreground">{percentage}</p>
     </>
   );
@@ -142,21 +159,20 @@ function CustomerOrganizations() {
                 <TableHead className="text-right">{t("customerPortal.list.columns.spend")}</TableHead>
                 <TableHead className="text-right">{t("customerPortal.list.columns.requests")}</TableHead>
                 <TableHead className="text-right">{t("customerPortal.list.columns.tokens")}</TableHead>
-                <TableHead className="text-right">{t("customerPortal.list.columns.budgetUsage")}</TableHead>
                 <TableHead className="pr-4 text-right">{t("customerPortal.list.columns.members")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {loading && (
                 <TableRow>
-                  <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
+                  <TableCell colSpan={5} className="py-8 text-center text-muted-foreground">
                     {t("customerPortal.list.loading")}
                   </TableCell>
                 </TableRow>
               )}
               {!loading && rows.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
+                  <TableCell colSpan={5} className="py-8 text-center text-muted-foreground">
                     {t(search ? "customerPortal.list.noMatches" : "customerPortal.list.empty")}
                   </TableCell>
                 </TableRow>
@@ -169,16 +185,17 @@ function CustomerOrganizations() {
                       <p className="font-mono text-[11px] text-muted-foreground">{customer.customer_org_id}</p>
                     </TableCell>
                     <TableCell className="text-right tabular-nums">
-                      {t("format.usd", { val: totals[customer.customer_org_id]?.spend ?? 0 })}
+                      <CustomerSpend
+                        spend={totals[customer.customer_org_id]?.spend ?? 0}
+                        budgetSpend={customer.spend}
+                        maxBudget={customer.budget?.max_budget ?? null}
+                      />
                     </TableCell>
                     <TableCell className="text-right tabular-nums">
                       {t("format.number", { val: totals[customer.customer_org_id]?.requests ?? 0 })}
                     </TableCell>
                     <TableCell className="text-right tabular-nums">
                       {t("format.number", { val: totals[customer.customer_org_id]?.tokens ?? 0 })}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      <CustomerBudgetUsage spend={customer.spend} maxBudget={customer.budget?.max_budget ?? null} />
                     </TableCell>
                     <TableCell className="pr-4 text-right tabular-nums">
                       {t("format.number", { val: customer.member_count })}

@@ -20621,7 +20621,6 @@
         "requests": "Requests",
         "tokens": "Tokens",
         "members": "Members",
-        "budgetUsage": "Budget usage",
         "budget": "Budget",
         "keys": "Keys",
         "status": "Status"
@@ -20632,10 +20631,11 @@
       "error": "Could not load customer organization usage.",
       "attribution": "Usage is attributed to the customer organization and team recorded for each member request. Dates are inclusive UTC calendar days. Tokens include input and output tokens.",
       "budgetUsage": "{{spend}} / {{max}}",
+      "currentBudget": "Current budget {{budget}}",
       "budgetUsed": "{{percentage}} used",
       "noMaxBudget": "No max budget",
       "zeroBudgetPercentage": "Percentage unavailable for a $0 budget",
-      "budgetAndMembersHelp": "Spend, requests and tokens use the selected dates. Budget usage shows the current budget-period counter and max budget. Members includes all currently registered members, even those with no usage."
+      "budgetAndMembersHelp": "Spend, requests and tokens use the selected dates. Budget percentages use the current budget period, shown under Spend when it differs. Members includes all currently registered members, even those with no usage."
     },
     "detail": {
       "spendThisMonth": "Spend this month",

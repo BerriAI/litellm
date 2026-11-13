@@ -4,12 +4,14 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from itertools import chain
-from typing import TYPE_CHECKING, Final, Generic, LiteralString, Protocol, TypeVar
+from typing import TYPE_CHECKING, Final, Generic, Protocol, TypeVar
 from uuid import uuid4
 
 from pydantic import ConfigDict, Field, TypeAdapter, model_validator
+from typing_extensions import LiteralString
 
 from litellm.models.budget import LiteLLM_BudgetTable
+from litellm.proxy.db.db_span import db_span
 from litellm.proxy.list_api.common import escape_like
 from litellm.repositories.budget_repository import create_budget_row, update_budget_row
 from litellm.repositories.chunked_in import find_many_in
@@ -241,7 +243,8 @@ class CustomerHierarchyStore:
         budgets: Final = {budget.budget_id: budget for budget in resolved}
 
         async def query_rows(query: LiteralString, *args: object) -> Sequence[Mapping[str, object]]:
-            return _QUERY_ROWS.validate_python(await self.db.query_raw(query, *args))
+            async with db_span("find_many", "LiteLLM_CustomerTeamTable"):
+                return _QUERY_ROWS.validate_python(await self.db.query_raw(query, *args))
 
         counts: Final = await CustomerActivityRepository(query_rows).member_counts(
             tuple(record.customer_org_id for record in records)

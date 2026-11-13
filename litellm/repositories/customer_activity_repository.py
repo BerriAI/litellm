@@ -1,9 +1,9 @@
 from collections.abc import Awaitable, Mapping, Sequence
 from enum import Enum
-from typing import Final, LiteralString, Protocol
+from typing import Final, Protocol
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
-from typing_extensions import assert_never
+from typing_extensions import LiteralString, assert_never
 
 
 class QueryRows(Protocol):
