@@ -599,14 +599,26 @@ async def _scoped_file_rows(
     return _SCOPED_FILE_ROWS.validate_python(rows)
 
 
-def _iter_provider_file_id_pairs(
-    rows: Sequence[_ManagedFileRow],
-    requested_provider_file_ids: frozenset[str],
-) -> Iterator[tuple[str, str]]:
+def _iter_canonical_provider_file_ids(rows: Sequence[_ManagedFileRow]) -> Iterator[tuple[str, str]]:
     for row in rows:
         for provider_file_id in row.flat_model_file_ids:
-            if provider_file_id in requested_provider_file_ids:
-                yield provider_file_id, row.unified_file_id
+            yield canonical_provider_file_id(provider_file_id), row.unified_file_id
+
+
+def _iter_requested_provider_file_id_spellings(provider_file_ids: Sequence[str]) -> Iterator[str]:
+    for provider_file_id in provider_file_ids:
+        yield from provider_file_id_spellings(provider_file_id)
+
+
+def _iter_provider_file_id_pairs(
+    rows: Sequence[_ManagedFileRow],
+    requested_provider_file_ids: Sequence[str],
+) -> Iterator[tuple[str, str]]:
+    unified_by_canonical_id: Final = dict(_iter_canonical_provider_file_ids(rows))
+    for requested_provider_file_id in requested_provider_file_ids:
+        unified_file_id: Final = unified_by_canonical_id.get(canonical_provider_file_id(requested_provider_file_id))
+        if unified_file_id is not None:
+            yield requested_provider_file_id, unified_file_id
 
 
 def _managed_object_table(prisma_client: _ManagedResourcePrismaClient) -> _ManagedObjectTableActions:
@@ -1635,7 +1647,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             return MappingProxyType({})
 
         provider_file_ids_list: Final = [  # mutable-ok: Prisma hasSome requires a list
-            provider_file_id for provider_file_id in unique_provider_file_ids
+            *dict.fromkeys(_iter_requested_provider_file_id_spellings(unique_provider_file_ids))
         ]
         rows: Final = await _managed_file_table(self.prisma_client).find_many(
             where={  # mutable-ok: Prisma requires a plain dictionary for where
@@ -1647,10 +1659,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         )
         return MappingProxyType(
             dict(
-                _iter_provider_file_id_pairs(
-                    rows,
-                    frozenset(unique_provider_file_ids),
-                )
+                _iter_provider_file_id_pairs(rows, unique_provider_file_ids)
             )
         )
 

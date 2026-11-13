@@ -5675,62 +5675,48 @@ async def test_fine_tuning_provider_format_id_not_enforced():
     prisma_client.db.litellm_managedobjecttable.find_first.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "call_type", ["afile_content", "afile_retrieve", "afile_delete"]
-)
-@pytest.mark.parametrize(
-    "file_id", [MODEL_ENCODED_OUTPUT_FILE_ID, RAW_PROVIDER_FILE_ID]
-)
-async def test_team_b_cannot_access_team_a_provider_format_file(
-    call_type, file_id
-):
-    """
-    Cross-team content/retrieve/delete of a model-encoded or raw provider
-    file id must 403 when an ownership row exists for another team.
-    """
-    from litellm.proxy._types import UserAPIKeyAuth
+def _team_a_output_row() -> LiteLLM_ManagedFileTable:
+    return LiteLLM_ManagedFileTable(
+        unified_file_id="file-encoded-team-a-output",
+        file_object=OpenAIFileObject(
+            id="file-encoded-team-a-output",
+            object="file",
+            bytes=0,
+            created_at=1,
+            filename="output.jsonl",
+            purpose="batch_output",
+            status="processed",
+        ),
+        model_mappings={"gpt-4o-team-alias": RAW_PROVIDER_FILE_ID},
+        flat_model_file_ids=[RAW_PROVIDER_FILE_ID],
+        created_by="user_a",
+        team_id="team_a",
+    )
 
-    prisma_client = AsyncMock()
-    prisma_client.db.litellm_managedfiletable.find_first.return_value = (
-        _owned_record(created_by="user_a", team_id="team_a")
-    )
-    proxy_managed_files = PROXY_LiteLLMManagedFiles(
-        MagicMock(), prisma_client=prisma_client
-    )
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", ["afile_content", "afile_retrieve", "afile_delete"])
+@pytest.mark.parametrize("file_id", [MODEL_ENCODED_OUTPUT_FILE_ID, RAW_PROVIDER_FILE_ID])
+async def test_team_b_cannot_access_team_a_provider_format_file(call_type: str, file_id: str):
+    proxy_managed_files, _ = _managed_files_with_fake_prisma(_team_a_output_row())
 
     with pytest.raises(HTTPException) as exc_info:
         await proxy_managed_files.async_pre_call_hook(
-            user_api_key_dict=UserAPIKeyAuth(
-                user_id="user_b", team_id="team_b", parent_otel_span=MagicMock()
-            ),
+            user_api_key_dict=UserAPIKeyAuth(user_id="user_b", team_id="team_b", parent_otel_span=MagicMock()),
             cache=MagicMock(),
             data={"file_id": file_id},
             call_type=call_type,
         )
 
     assert exc_info.value.status_code == 403
-    lookup: Final = prisma_client.db.litellm_managedfiletable.find_first.await_args.kwargs["where"]
-    assert file_id in lookup["OR"][0]["unified_file_id"]["in"]
-    assert file_id in lookup["OR"][1]["flat_model_file_ids"]["hasSome"]
 
 
 @pytest.mark.asyncio
 async def test_same_team_can_access_provider_format_file():
-    from litellm.proxy._types import UserAPIKeyAuth
-
-    prisma_client = AsyncMock()
-    prisma_client.db.litellm_managedfiletable.find_first.return_value = (
-        _owned_record(created_by="user_a", team_id="team_a")
-    )
-    proxy_managed_files = PROXY_LiteLLMManagedFiles(
-        MagicMock(), prisma_client=prisma_client
-    )
+    proxy_managed_files, _ = _managed_files_with_fake_prisma(_team_a_output_row())
 
     result = await proxy_managed_files.async_pre_call_hook(
-        user_api_key_dict=UserAPIKeyAuth(
-            user_id="teammate_of_a", team_id="team_a", parent_otel_span=MagicMock()
-        ),
+        user_api_key_dict=UserAPIKeyAuth(user_id="teammate_of_a", team_id="team_a", parent_otel_span=MagicMock()),
         cache=MagicMock(),
         data={"file_id": MODEL_ENCODED_OUTPUT_FILE_ID},
         call_type="afile_content",
@@ -6718,3 +6704,22 @@ async def test_store_unified_file_id_indexes_the_canonical_provider_file_id():
     assert written["create"]["flat_model_file_ids"] == ["upload-1"]
     assert written["update"]["flat_model_file_ids"] == ["upload-1"]
     assert json.loads(written["create"]["model_mappings"]) == {"model-gemini": _GEMINI_UPLOAD_URI}
+
+
+@pytest.mark.asyncio
+async def test_get_unified_file_ids_for_provider_file_ids_maps_every_spelling_onto_the_canonical_row():
+    canonical_row: Final = _gemini_upload_row_stored_as_its_uri().model_copy(
+        update={"flat_model_file_ids": ["upload-1"]}
+    )
+    managed_files, _ = _managed_files_with_fake_prisma(canonical_row)
+    owner: Final = UserAPIKeyAuth(user_id="owner", team_id="team-owner")
+
+    mapping: Final = await managed_files.get_unified_file_ids_for_provider_file_ids(
+        [_GEMINI_UPLOAD_URI, "files/upload-1", "upload-1", "upload-other"], owner
+    )
+
+    assert dict(mapping) == {
+        _GEMINI_UPLOAD_URI: "file-encoded-gemini-upload",
+        "files/upload-1": "file-encoded-gemini-upload",
+        "upload-1": "file-encoded-gemini-upload",
+    }
