@@ -1614,6 +1614,13 @@ async def test_new_user_default_teams_flow(mocker):
     persisted_user_row = mocker.MagicMock()
     persisted_user_row.teams = ["96fed65b-0182-4ff4-8429-2721cd7d42af"]
     mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(return_value=persisted_user_row)
+    mock_prisma_client.db.litellm_teamtable.find_many = mocker.AsyncMock(
+        return_value=[
+            SimpleNamespace(
+                team_id="96fed65b-0182-4ff4-8429-2721cd7d42af", metadata={"team_member_budget_id": "team-budget"}
+            )
+        ]
+    )
 
     # Mock duplicate checks to pass
     async def mock_check_duplicate_user_email(*args, **kwargs):
@@ -1707,6 +1714,9 @@ async def test_new_user_default_teams_flow(mocker):
         assert team_call_kwargs["team_id"] == "96fed65b-0182-4ff4-8429-2721cd7d42af"
         assert team_call_kwargs["user_email"] == "test@example.com"
         assert team_call_kwargs["user_role"] == "user"
+        assert team_call_kwargs["max_budget_in_team"] is None, (
+            "the team already has a member budget, a private copy of the cap has no budget_duration and never resets"
+        )
 
         # Verify response structure
         assert response.user_id == "test-user-123"
@@ -4384,18 +4394,36 @@ async def test_resolve_user_email_metadata_skips_db_when_no_user_ids(mocker):
     find_many.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    ("teams_are_defaults", "team_metadata", "expected_max_budget_in_team"),
+    [
+        pytest.param(True, {"team_member_budget_id": "team-budget"}, None, id="default-team-with-a-member-budget"),
+        pytest.param(True, {}, 25.0, id="default-team-without-a-member-budget"),
+        pytest.param(False, {"team_member_budget_id": "team-budget"}, 25.0, id="team-named-in-the-request"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_add_new_user_to_default_team_propagates_max_budget_in_team(mocker):
-    """A configured per-member budget on a default team must reach the membership
-    write; dropping it means the member is unlimited within the team budget."""
+async def test_add_new_user_to_default_team_only_drops_the_cap_the_team_member_budget_already_holds(
+    mocker: MockerFixture,
+    teams_are_defaults: bool,
+    team_metadata: dict[str, str],
+    expected_max_budget_in_team: float | None,
+) -> None:
+    """A private copy of a default team's cap has no budget_duration and never resets, so the member
+    joins on the team's member budget when it exists. A cap with no team budget behind it, or one the
+    caller asked for in /user/new, must still reach the membership write."""
     from litellm.proxy._types import NewUserRequestTeam
     from litellm.proxy.management_endpoints.internal_user_endpoints import (
         add_new_user_to_default_team,
     )
 
-    mock_add = mocker.patch(
+    mock_add: Final = mocker.patch(
         "litellm.proxy.management_endpoints.internal_user_endpoints._add_user_to_team",
         new_callable=mocker.AsyncMock,
+    )
+    prisma_client: Final = mocker.MagicMock()
+    prisma_client.db.litellm_teamtable.find_many = mocker.AsyncMock(
+        return_value=[SimpleNamespace(team_id="budgeted-team", metadata=team_metadata)]
     )
 
     await add_new_user_to_default_team(
@@ -4406,11 +4434,12 @@ async def test_add_new_user_to_default_team_propagates_max_budget_in_team(mocker
             NewUserRequestTeam(team_id="budgeted-team", max_budget_in_team=25.0, user_role="admin"),
             NewUserRequestTeam(team_id="uncapped-team"),
         ],
-        prisma_client=mocker.MagicMock(),
+        prisma_client=prisma_client,
+        teams_are_defaults=teams_are_defaults,
     )
 
-    calls = {c.kwargs["team_id"]: c.kwargs for c in mock_add.call_args_list}
-    assert calls["budgeted-team"]["max_budget_in_team"] == 25.0
+    calls: Final = {c.kwargs["team_id"]: c.kwargs for c in mock_add.call_args_list}
+    assert calls["budgeted-team"]["max_budget_in_team"] == expected_max_budget_in_team
     assert calls["budgeted-team"]["user_role"] == "admin"
     assert calls["uncapped-team"]["max_budget_in_team"] is None
 
