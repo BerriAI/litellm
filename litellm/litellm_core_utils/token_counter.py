@@ -1867,7 +1867,13 @@ def _count_anthropic_content(
 
 
 _TEXT_FIELD_BY_BLOCK_TYPE: Final = MappingProxyType(
-    {"text": "text", "thinking": "thinking", "redacted_thinking": "thinking", "compaction": "content"}
+    {
+        "text": "text",
+        "thinking": "thinking",
+        "redacted_thinking": "thinking",
+        "compaction": "content",
+        "refusal": "refusal",
+    }
 )
 
 
@@ -1974,7 +1980,7 @@ def _count_content_list(
                     f"Invalid content item type: {content_type}. "
                     f"Expected str or dict with 'type' field "
                     f"(text, image_url, image, document, file, tool_use, tool_result, thinking, redacted_thinking, "
-                    f"compaction, tool_reference, tool_addition, tool_removal, search_result, "
+                    f"compaction, tool_reference, tool_addition, tool_removal, search_result, refusal, "
                     f"or Anthropic server tool blocks)."
                 )
         return num_tokens
