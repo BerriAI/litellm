@@ -2,6 +2,7 @@ import logging
 import math
 from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 from typing import Final, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
@@ -13,7 +14,8 @@ from litellm.proxy.utils import PrismaClient
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.user_repository import UserRepository
 
-_METADATA: Final = TypeAdapter(dict[str, object])
+_METADATA: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+_NO_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
 _ROWS: Final = TypeAdapter(tuple[object, ...])
 _EXPIRING_KEYS_SQL: Final = """
 SELECT token, key_alias, key_name, user_id, expires, metadata
@@ -51,7 +53,10 @@ class ExpiryAlertCache(Protocol):
 
 
 def _metadata(value: object) -> Mapping[str, object]:
-    return _METADATA.validate_json(value) if isinstance(value, str) else _METADATA.validate_python(value)
+    """Key metadata as a mapping. A key created without metadata stores JSON null, which reads as empty so the
+    global default still applies to it."""
+    parsed: Final = _METADATA.validate_json(value) if isinstance(value, str) else _METADATA.validate_python(value)
+    return _NO_METADATA if parsed is None else parsed
 
 
 @runtime_checkable

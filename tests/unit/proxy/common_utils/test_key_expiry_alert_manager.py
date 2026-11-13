@@ -171,6 +171,18 @@ async def test_key_metadata_overrides_global_default(
     assert email.send_key_expiring_email.await_count == int(sends)
 
 
+@pytest.mark.parametrize("stored_metadata", [None, "null"])
+@pytest.mark.parametrize(("default_days", "sends"), [(7, 1), (None, 0)])
+@pytest.mark.asyncio
+async def test_key_created_without_metadata_follows_global_default(
+    stored_metadata: str | None, default_days: int | None, sends: int
+) -> None:
+    db: Final = _database((_key(metadata=stored_metadata),))
+    email: Final = MagicMock(send_key_expiring_email=AsyncMock())
+    await KeyExpiryAlertManager(db, DualCache(), email, lambda: NOW, default_days).process_alerts()
+    assert email.send_key_expiring_email.await_count == sends
+
+
 @pytest.mark.asyncio
 async def test_global_default_widens_query_to_keys_without_metadata() -> None:
     db: Final = _database(())
