@@ -73,9 +73,9 @@
     {
       "name": "aws_secret_key",
       "display_name": "AWS Secret Key",
-      "pattern": "\\b([A-Za-z0-9/+=]{40})\\b",
+      "pattern": "(?-i:(?<![A-Za-z0-9/+])(?=[A-Za-z0-9/+]*[a-z])(?=[A-Za-z0-9/+]*[A-Z])(?=[A-Za-z0-9/+]*[\\d/+])(?!(?:[a-z0-9]*(?:[A-Z][a-z0-9]+)*/){3,}[a-z0-9]*(?:[A-Z][a-z0-9]+)*(?![A-Za-z0-9/+]))[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+]))",
       "category": "Credential Patterns",
-      "description": "Detects AWS secret keys (40 characters)"
+      "description": "Detects AWS secret keys (40-character base64)"
     },
     {
       "name": "github_token",
