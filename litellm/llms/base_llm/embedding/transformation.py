@@ -36,6 +36,20 @@ def split_extra_body(
     return {k: v for k, v in params.items() if k != "extra_body"}, extra_body_fields(params)
 
 
+def _merged_field(extra_value: object, body_value: object) -> object:
+    if isinstance(extra_value, Mapping) and isinstance(body_value, Mapping):
+        return merge_extra_body_under(
+            _BODY_FIELDS.validate_python(extra_value), _BODY_FIELDS.validate_python(body_value)
+        )
+    return body_value
+
+
+def merge_extra_body_under(extra_body: Mapping[str, object], body: Mapping[str, object]) -> Mapping[str, object]:
+    """The provider body with the ``extra_body`` fields it lacks. Objects on both sides combine field by field, and the
+    provider body wins on any other shared field."""
+    return {**extra_body, **{k: _merged_field(extra_body.get(k), v) for k, v in body.items()}}
+
+
 class BaseEmbeddingConfig(BaseConfig, ABC):
     @abstractmethod
     def transform_embedding_request(

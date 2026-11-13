@@ -16,7 +16,7 @@ import litellm
 from litellm.constants import BEDROCK_EMBEDDING_PROVIDERS_LITERAL
 from litellm.litellm_core_utils.hidden_params import set_hidden_param
 from litellm.litellm_core_utils.url_utils import join_api_base
-from litellm.llms.base_llm.embedding.transformation import extra_body_fields
+from litellm.llms.base_llm.embedding.transformation import extra_body_fields, merge_extra_body_under
 from litellm.llms.cohere.embed.handler import embedding as cohere_embedding
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -77,6 +77,32 @@ _OPTIONAL_STR: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
 def _without_region_path(model: str) -> str:
     region, model_id = split_bedrock_region_path(model)
     return model if region is None else model_id
+
+
+_NO_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
+_NOVA_PARAMS: Final = TypeAdapter(dict[str, object])
+_NOVA_PARAMS_KEYS: Final = ("segmentedEmbeddingParams", "singleEmbeddingParams")
+_DEFAULTED_FIELDS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
+    {
+        "cohere": ("input_type",),
+        "nova": ("embeddingPurpose", "embeddingDimension"),
+        "twelvelabs": ("textTruncate",),
+    }
+)
+
+
+def _nova_params(extra_body: Mapping[str, object]) -> Mapping[str, object]:
+    nested: Final = (extra_body.get(key) for key in _NOVA_PARAMS_KEYS)
+    return next((_NOVA_PARAMS.validate_python(params) for params in nested if isinstance(params, Mapping)), _NO_FIELDS)
+
+
+def _caller_values_for_defaults(provider: str, model: str, extra_body: Mapping[str, object]) -> Mapping[str, object]:
+    """The ``extra_body`` values for fields the provider transform only fills with a default, passed as params so the
+    default is skipped while an explicit argument for the same field still wins."""
+    if provider == "twelvelabs" and TwelveLabsMarengoEmbeddingConfig(model=model).is_marengo_3:
+        return {}
+    source: Final = _nova_params(extra_body) if provider == "nova" else extra_body
+    return {k: source[k] for k in _DEFAULTED_FIELDS.get(provider, ()) if k in source}
 
 
 class BedrockEmbedding(BaseAWSLLM):
@@ -283,7 +309,7 @@ class BedrockEmbedding(BaseAWSLLM):
         self,
         client: HTTPHandler | None,
         timeout: float | httpx.Timeout | None,
-        batch_data: list[dict],
+        batch_data: list[dict[str, object]],
         credentials: Credentials | None,
         extra_headers: dict | None,
         endpoint_url: str,
@@ -296,7 +322,7 @@ class BedrockEmbedding(BaseAWSLLM):
         extra_body: Mapping[str, object] = MappingProxyType({}),
     ):
         responses: Final[list[dict]] = []
-        for data in ({**extra_body, **item} for item in batch_data):
+        for data in (dict(merge_extra_body_under(extra_body, item)) for item in batch_data):
             headers = {"Content-Type": "application/json"}
             if extra_headers is not None:
                 headers = {"Content-Type": "application/json", **extra_headers}
@@ -353,7 +379,7 @@ class BedrockEmbedding(BaseAWSLLM):
         self,
         client: AsyncHTTPHandler | None,
         timeout: float | httpx.Timeout | None,
-        batch_data: list[dict],
+        batch_data: list[dict[str, object]],
         credentials: Credentials | None,
         extra_headers: dict | None,
         endpoint_url: str,
@@ -366,7 +392,7 @@ class BedrockEmbedding(BaseAWSLLM):
         extra_body: Mapping[str, object] = MappingProxyType({}),
     ):
         responses: Final[list[dict]] = []
-        for data in ({**extra_body, **item} for item in batch_data):
+        for data in (dict(merge_extra_body_under(extra_body, item)) for item in batch_data):
             headers = {"Content-Type": "application/json"}
             if extra_headers is not None:
                 headers = {"Content-Type": "application/json", **extra_headers}
@@ -464,14 +490,18 @@ class BedrockEmbedding(BaseAWSLLM):
                 f"Unable to determine bedrock embedding provider for model: {bedrock_model}. "
                 f"Supported providers: {list(get_args(BEDROCK_EMBEDDING_PROVIDERS_LITERAL))}"
             )
+        extra_body: Final = extra_body_fields(optional_params)
         inference_params = copy.deepcopy(optional_params)
         inference_params = {
-            k: v
-            for k, v in inference_params.items()
-            if k.lower() not in self.aws_authentication_params and k != "extra_body"
+            **_caller_values_for_defaults(provider, bedrock_model, extra_body),
+            **{
+                k: v
+                for k, v in inference_params.items()
+                if k.lower() not in self.aws_authentication_params and k != "extra_body"
+            },
         }
         inference_params.pop("user", None)  # make sure user is not passed in for bedrock call
-        extra_body: Final = extra_body_fields(optional_params)
+        output_s3_uri: Final = _OPTIONAL_STR.validate_python(inference_params.get("output_s3_uri"))
 
         data: CohereEmbeddingRequest | None = None
         batch_data: list | None = None
@@ -526,7 +556,7 @@ class BedrockEmbedding(BaseAWSLLM):
                     inference_params=inference_params,
                     async_invoke_route=has_async_invoke,
                     model_id=modelId,
-                    output_s3_uri=inference_params.get("output_s3_uri"),
+                    output_s3_uri=output_s3_uri,
                     drop_params=drop_params_enabled(litellm_params),
                 )
                 batch_data.append(twelvelabs_request)
@@ -538,11 +568,11 @@ class BedrockEmbedding(BaseAWSLLM):
                     inference_params=inference_params,
                     async_invoke_route=has_async_invoke,
                     model_id=modelId,
-                    output_s3_uri=inference_params.get("output_s3_uri"),
+                    output_s3_uri=output_s3_uri,
                 )
                 batch_data.append(nova_request)
 
-        request_data: Final = None if data is None else {**extra_body, **data}
+        request_data: Final = None if data is None else dict(merge_extra_body_under(extra_body, data))
 
         ### SET RUNTIME ENDPOINT ###
         endpoint_url, proxy_endpoint_url = self.get_runtime_endpoint(
