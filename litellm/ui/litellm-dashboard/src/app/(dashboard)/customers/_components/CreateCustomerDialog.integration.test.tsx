@@ -1,7 +1,14 @@
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
-import { fireEvent, renderWithProviders, screen, testQueryClient, waitFor } from "../../../../../tests/test-utils";
+import {
+  chooseSelectOption,
+  fireEvent,
+  renderWithProviders,
+  screen,
+  testQueryClient,
+  waitFor,
+} from "../../../../../tests/test-utils";
 import CreateCustomerDialog from "./CreateCustomerDialog";
 
 const creations: unknown[] = [];
@@ -47,6 +54,38 @@ afterEach(() => {
 });
 
 describe("CreateCustomerDialog", () => {
+  it("saves independent cap policies for starter and added groups", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<Harness />);
+    fireEvent.change(screen.getByLabelText("Customer name"), { target: { value: "Example customer" } });
+    await chooseSelectOption(
+      user,
+      screen.getByRole("combobox", { name: "Group 1 cap policy" }),
+      "Pause and allow temporary increase requests",
+    );
+    await user.click(screen.getByRole("button", { name: "Add budget group" }));
+    fireEvent.change(screen.getByLabelText("Group 4 name"), { target: { value: "custom_user" } });
+    fireEvent.change(screen.getByLabelText("Group 4 monthly budget (USD)"), { target: { value: "25" } });
+    await chooseSelectOption(
+      user,
+      screen.getByRole("combobox", { name: "Group 4 cap policy" }),
+      "Pause and allow temporary increase requests",
+    );
+    await chooseSelectOption(user, screen.getByRole("combobox", { name: "Group 4 cap policy" }), "Pause until reset");
+    await user.click(screen.getByRole("button", { name: "Create customer" }));
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith("created-org"));
+    expect(creations).toEqual([
+      expect.objectContaining({
+        default_budgets: [
+          expect.objectContaining({ name: "power_user", cap_policy: "pause_allow_increase" }),
+          expect.objectContaining({ name: "default_user", cap_policy: "pause_until_reset" }),
+          expect.objectContaining({ name: "low_user", cap_policy: "pause_until_reset" }),
+          expect.objectContaining({ name: "custom_user", cap_policy: "pause_until_reset" }),
+        ],
+      }),
+    ]);
+  });
+
   it("adds a custom group and selects a remaining default when that group is removed", async () => {
     const user = userEvent.setup();
     renderWithProviders(<Harness />);
@@ -86,10 +125,18 @@ describe("CreateCustomerDialog", () => {
     fireEvent.change(screen.getByLabelText("Customer name"), { target: { value: "Example customer" } });
     fireEvent.change(screen.getByLabelText("Alias"), { target: { value: "existing-id" } });
     fireEvent.change(screen.getByLabelText("Group 2 yearly budget (USD)"), { target: { value: "450" } });
+    await chooseSelectOption(
+      user,
+      screen.getByRole("combobox", { name: "Group 2 cap policy" }),
+      "Pause and allow temporary increase requests",
+    );
     await user.click(screen.getByRole("button", { name: "Create customer" }));
     await waitFor(() => expect(creations).toHaveLength(1));
     expect(await screen.findByRole("button", { name: "Create customer" })).toBeEnabled();
     expect(screen.getByLabelText("Group 2 yearly budget (USD)")).toHaveValue(450);
+    expect(screen.getByRole("combobox", { name: "Group 2 cap policy" })).toHaveTextContent(
+      "Pause and allow temporary increase requests",
+    );
     expect(onCreated).not.toHaveBeenCalled();
     rejectCreation = false;
     fireEvent.change(screen.getByLabelText("Alias"), { target: { value: "new-id" } });
@@ -101,6 +148,7 @@ describe("CreateCustomerDialog", () => {
       default_budgets: expect.arrayContaining([
         expect.objectContaining({
           name: "default_user",
+          cap_policy: "pause_allow_increase",
           budget_limits: expect.arrayContaining([{ budget_duration: "12mo", max_budget: 450 }]),
         }),
       ]),
@@ -108,6 +156,7 @@ describe("CreateCustomerDialog", () => {
     await user.click(screen.getByRole("button", { name: "Open customer form" }));
     expect(screen.getByLabelText("Customer name")).toHaveValue("");
     expect(screen.getByLabelText("Group 2 yearly budget (USD)")).toHaveValue(500);
+    expect(screen.getByRole("combobox", { name: "Group 2 cap policy" })).toHaveTextContent("Pause until reset");
     expect(screen.getByRole("radio", { name: "Use default_user as default" })).toBeChecked();
   });
 });

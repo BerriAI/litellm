@@ -4,7 +4,12 @@ from typing import Annotated, Final, Literal, TypeAlias
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import ConfigDict
 
-from litellm.proxy.auth.person_budget import PersonBudgetRecord, load_person_budget, person_budget_windows
+from litellm.proxy.auth.person_budget import (
+    PersonBudgetRecord,
+    load_person_budget,
+    person_budget_record,
+    person_budget_windows,
+)
 from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V1_PREFIX
 from litellm.proxy.management_endpoints.management_v1.customers import (
     customer_actor,
@@ -96,9 +101,7 @@ def assignment_patch_error(
 async def _validate_assignment_patch(
     store: CustomerHierarchyStore, current: PersonBudgetRecord, patch: MemberPatch
 ) -> None:
-    template_id: Final = (
-        patch.budget_template_id if "budget_template_id" in patch.model_fields_set else current.budget_template_id
-    )
+    template_id: Final = patch.budget_id if "budget_id" in patch.model_fields_set else current.budget_template_id
     template: Final = (
         await store.budgets.find_unique(where={"budget_id": template_id}) if template_id is not None else None
     )
@@ -122,9 +125,7 @@ async def update_user_budget(
         return Failure(ErrorCode.NOT_FOUND)
     current: Final = PersonBudgetRecord.model_validate(row.model_dump())
     await _validate_assignment_patch(store, current, patch)
-    template_id: Final = (
-        patch.budget_template_id if "budget_template_id" in patch.model_fields_set else current.budget_template_id
-    )
+    template_id: Final = patch.budget_id if "budget_id" in patch.model_fields_set else current.budget_template_id
     if template_id is not None:
         await store.db.query_raw(
             'SELECT budget_id FROM "LiteLLM_BudgetTable" WHERE budget_id = $1 FOR KEY SHARE', template_id
@@ -162,11 +163,11 @@ async def _update_customer_budget(
         member_id,
     )
     row: Final = await store.members.find_unique(
-        where={"customer_member_id": member_id}, include={"budget": True, "budget_template": True}
+        where={"customer_member_id": member_id}, include={"budget": True, "budget_override": True}
     )
     if row is None:
         return Failure(ErrorCode.NOT_FOUND)
-    await _validate_assignment_patch(store, PersonBudgetRecord.model_validate(row.model_dump()), patch)
+    await _validate_assignment_patch(store, person_budget_record(row.model_dump(), "customer_member"), patch)
     result: Final = await store.update_member(member_id, patch, actor)
     return result if isinstance(result, Failure) else None
 

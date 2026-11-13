@@ -1,10 +1,12 @@
 import type { components } from "@/lib/http/schema";
+import type { BudgetCapPolicy } from "@/components/shared/BudgetCapPolicySelect";
 
 export interface CustomerBudgetGroupFields {
   id: string;
   name: string;
   monthlyBudget: string;
   yearlyBudget: string;
+  capPolicy: BudgetCapPolicy;
 }
 
 export interface CustomerOrganizationFields {
@@ -24,9 +26,9 @@ export const initialCustomerOrganizationFields = (): CustomerOrganizationFields 
   tpm: "",
   rpm: "",
   groups: [
-    { id: "power", name: "power_user", monthlyBudget: "200", yearlyBudget: "2000" },
-    { id: "default", name: "default_user", monthlyBudget: "50", yearlyBudget: "500" },
-    { id: "low", name: "low_user", monthlyBudget: "10", yearlyBudget: "100" },
+    { id: "power", name: "power_user", monthlyBudget: "200", yearlyBudget: "2000", capPolicy: "pause_until_reset" },
+    { id: "default", name: "default_user", monthlyBudget: "50", yearlyBudget: "500", capPolicy: "pause_until_reset" },
+    { id: "low", name: "low_user", monthlyBudget: "10", yearlyBudget: "100", capPolicy: "pause_until_reset" },
   ],
   defaultGroupId: "default",
 });
@@ -93,7 +95,7 @@ export function buildCustomerOrganizationBody(fields: CustomerOrganizationFields
       name: group.name.trim(),
       is_default: group.id === fields.defaultGroupId,
       budget_limits: [...limit(group.monthlyBudget, "1mo"), ...limit(group.yearlyBudget, "12mo")],
-      cap_policy: "pause_until_reset" as const,
+      cap_policy: group.capPolicy,
     })),
   } satisfies components["schemas"]["OrganizationCreate"];
   return { ok: true, body } as const;

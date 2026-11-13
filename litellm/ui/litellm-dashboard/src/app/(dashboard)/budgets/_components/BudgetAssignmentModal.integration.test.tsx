@@ -56,6 +56,7 @@ it("sends a customer member's direct increase with its target window and UTC exp
   fireEvent.change(screen.getByLabelText("Person ID"), { target: { value: "member" } });
   await user.click(screen.getByRole("button", { name: "Load budget" }));
   fireEvent.change(await screen.findByLabelText("Personal monthly limit (USD)"), { target: { value: "50" } });
+  fireEvent.change(screen.getByLabelText("Profile ID"), { target: { value: "power-profile" } });
   fireEvent.change(screen.getByLabelText("Temporary increase (USD)"), { target: { value: "25" } });
   fireEvent.change(screen.getByLabelText("Increase expires (UTC)"), { target: { value: "2028-03-01T12:00" } });
   await chooseSelectOption(user, screen.getByRole("combobox", { name: "Increase applies to" }), "Annual limit");
@@ -64,6 +65,7 @@ it("sends a customer member's direct increase with its target window and UTC exp
     expect(patch).toHaveBeenCalledWith("/management/v1/budget_assignments/customer_member/member", {
       accessToken: "test-token",
       body: {
+        budget_id: "power-profile",
         budget_override: {
           budget_limits: [{ budget_duration: "1mo", max_budget: 50 }],
           temp_budget_increase: 25,

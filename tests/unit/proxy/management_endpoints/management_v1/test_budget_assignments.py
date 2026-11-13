@@ -64,12 +64,12 @@ def test_profile_override_and_direct_increase_apply_to_one_person(subject_type: 
         for person in ("first", "second"):
             assert http.post(
                 "/management/v1/customer_members",
-                json={"customer_member_id": person, "parent_team_id": "team", "budget_template_id": "standard"},
+                json={"customer_member_id": person, "parent_team_id": "team", "budget_id": "standard"},
             ).status_code == 201
     else:
         for person in ("first", "second"):
             assert http.patch(
-                f"/management/v1/budget_assignments/user/{person}", json={"budget_template_id": "standard"}
+                f"/management/v1/budget_assignments/user/{person}", json={"budget_id": "standard"}
             ).status_code == 200
     path: Final = f"/management/v1/budget_assignments/{subject_type}/first"
     override: Final = http.patch(

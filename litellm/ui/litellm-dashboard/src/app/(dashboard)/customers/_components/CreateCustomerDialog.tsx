@@ -5,6 +5,7 @@ import { ChevronRight, Plus, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { $api } from "@/lib/http/api";
+import { BudgetCapPolicySelect } from "@/components/shared/BudgetCapPolicySelect";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -239,6 +240,24 @@ export default function CreateCustomerDialog({ open, onOpenChange, onCreated }: 
                     >
                       <Trash2 className="size-3.5" />
                     </Button>
+                    <div className="col-span-2 space-y-1.5 sm:col-span-5">
+                      <Label htmlFor={`cc-policy-${group.id}`}>{t("budgetProfiles.cap")}</Label>
+                      <BudgetCapPolicySelect
+                        id={`cc-policy-${group.id}`}
+                        aria-label={t("customerPortal.createDialog.capPolicyLabel", { index: index + 1 })}
+                        aria-describedby={`cc-policy-help-${group.id}`}
+                        value={group.capPolicy}
+                        onValueChange={(capPolicy) => updateGroup(group.id, { capPolicy })}
+                        disabled={create.isPending}
+                      />
+                      <p id={`cc-policy-help-${group.id}`} className="text-xs text-muted-foreground">
+                        {t(
+                          group.capPolicy === "pause_allow_increase"
+                            ? "budgetProfiles.allowIncreaseHelp"
+                            : "budgetProfiles.waitHelp",
+                        )}
+                      </p>
+                    </div>
                   </div>
                 ))}
               </RadioGroup>
@@ -251,7 +270,13 @@ export default function CreateCustomerDialog({ open, onOpenChange, onCreated }: 
                     ...fields,
                     groups: [
                       ...fields.groups,
-                      { id: crypto.randomUUID(), name: "", monthlyBudget: "", yearlyBudget: "" },
+                      {
+                        id: crypto.randomUUID(),
+                        name: "",
+                        monthlyBudget: "",
+                        yearlyBudget: "",
+                        capPolicy: "pause_until_reset",
+                      },
                     ],
                   })
                 }
@@ -261,6 +286,9 @@ export default function CreateCustomerDialog({ open, onOpenChange, onCreated }: 
               </Button>
               <p className="text-xs text-muted-foreground">{t("customerPortal.createDialog.defaultHelp")}</p>
               <p className="text-xs text-muted-foreground">{t("customerPortal.createDialog.resetHelp")}</p>
+              {fields.groups.some((group) => group.capPolicy === "pause_allow_increase") && (
+                <p className="text-xs text-muted-foreground">{t("budgetProfiles.customerRequestHelp")}</p>
+              )}
             </section>
             <details className="group border-t pt-4">
               <summary className="flex cursor-pointer list-none items-center gap-1 text-sm font-medium">

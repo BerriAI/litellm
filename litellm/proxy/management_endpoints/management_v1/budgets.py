@@ -86,7 +86,7 @@ SELECTED_COLUMNS: Final = ", ".join(f'"{name}"' for name in BudgetListItem.model
 _MEMBER_COUNT: Final = (
     '(SELECT count(*) FROM "LiteLLM_UserTable" u WHERE u.budget_template_id = "LiteLLM_BudgetTable".budget_id)'
     ' + (SELECT count(*) FROM "LiteLLM_CustomerMemberTable" m'
-    ' WHERE m.budget_template_id = "LiteLLM_BudgetTable".budget_id)'
+    ' WHERE m.budget_id = "LiteLLM_BudgetTable".budget_id)'
 )
 
 

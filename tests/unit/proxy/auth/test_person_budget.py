@@ -12,6 +12,7 @@ from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
 from litellm.proxy.management_helpers.customer_hierarchy import effective_member_budget
 from litellm.types.proxy.management_endpoints.customer_hierarchy import Budget
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+from tests.unit.proxy.management_helpers.test_customer_hierarchy import Record
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -119,7 +120,9 @@ async def test_admission_reseeds_persisted_spend_and_denies_at_the_cap(
     database: Final = MagicMock()
     record: Final = PersonBudgetRecord(budget_template=profile().model_dump())
     database.db.litellm_usertable.find_unique = AsyncMock(return_value=record)
-    database.db.litellm_customermembertable.find_unique = AsyncMock(return_value=record)
+    database.db.litellm_customermembertable.find_unique = AsyncMock(
+        return_value=Record(budget=profile().model_dump())
+    )
     database.db.litellm_budgetwindowspend.find_unique = AsyncMock(
         return_value=SimpleNamespace(window_start=datetime(2028, 2, 1, tzinfo=timezone.utc), spend=spend)
     )

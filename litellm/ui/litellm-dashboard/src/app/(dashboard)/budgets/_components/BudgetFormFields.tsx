@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { Controller } from "react-hook-form";
 import { z } from "zod";
 import { FormField } from "@/components/shared/form/FormField";
+import { BudgetCapPolicySelect } from "@/components/shared/BudgetCapPolicySelect";
 import { Badge } from "@/components/ui/badge";
 import { ButtonGroup } from "@/components/ui/button-group";
 import {
@@ -48,6 +49,7 @@ export function budgetFormPayload(values: BudgetFormValues, changed: Partial<Bud
   if (!values.is_profile) return rest;
   return {
     ...rest,
+    cap_policy: values.cap_policy ?? "pause_until_reset",
     ...("monthly_budget" in changed || "annual_budget" in changed
       ? {
           budget_limits: [
@@ -205,26 +207,26 @@ export function BudgetFormFields({ form, isEditing }: { form: BudgetForm; isEdit
           <FormField control={form.control} name="annual_budget" label={t("budgetProfiles.profileAnnual")}>
             {(field) => <Input {...numberProps(field)} min={0} step={0.01} />}
           </FormField>
-          <FormField control={form.control} name="cap_policy" label={t("budgetProfiles.cap")}>
+          <FormField
+            control={form.control}
+            name="cap_policy"
+            label={t("budgetProfiles.cap")}
+            description={t(
+              form.watch("cap_policy") === "pause_allow_increase"
+                ? "budgetProfiles.allowIncreaseHelp"
+                : "budgetProfiles.waitHelp",
+            )}
+          >
             {(field) => (
-              <Select
+              <BudgetCapPolicySelect
+                id={field.id}
+                aria-describedby={field["aria-describedby"]}
                 value={field.value ?? "pause_until_reset"}
                 onValueChange={field.onChange}
-                items={[
-                  { value: "pause_allow_increase", label: t("budgetProfiles.contactAdmin") },
-                  { value: "pause_until_reset", label: t("budgetProfiles.wait") },
-                ]}
-              >
-                <SelectTrigger id={field.id}>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="pause_allow_increase">{t("budgetProfiles.contactAdmin")}</SelectItem>
-                  <SelectItem value="pause_until_reset">{t("budgetProfiles.wait")}</SelectItem>
-                </SelectContent>
-              </Select>
+              />
             )}
           </FormField>
+          <FieldDescription>{t("budgetProfiles.customerRequestHelp")}</FieldDescription>
           <FieldDescription>{t("budgetProfiles.resetHelp")}</FieldDescription>
         </>
       ) : (

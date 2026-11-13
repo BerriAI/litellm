@@ -137,6 +137,13 @@ def test_serves_the_columns_the_budgets_page_renders(query_raw, as_proxy_admin):
         "tpd_limit",
         "budget_duration",
         "budget_reset_at",
+        "budget_limits",
+        "is_profile",
+        "cap_policy",
+        "temp_budget_increase",
+        "temp_budget_expiry",
+        "temp_budget_duration",
+        "member_count",
         "created_at",
         "updated_at",
     }
@@ -272,7 +279,7 @@ def test_admins_and_admin_viewers_may_read_every_budget(query_raw, role):
 
     assert response.status_code == 200
     assert [row["budget_id"] for row in response.json()["data"]] == ["b-1"]
-    assert "WHERE" not in _select_call(query_raw)[0]
+    assert "WHERE" not in _select_call(query_raw)[0].rsplit(' FROM "LiteLLM_BudgetTable"', 1)[1]
 
 
 def test_a_denied_caller_stays_denied_whatever_they_filter_on(query_raw):
@@ -503,7 +510,7 @@ def test_the_spec_serves_what_the_row_model_declares():
     missing from the other and produce a row the validator rejects."""
     from litellm.proxy.management_endpoints.management_v1.budgets import SELECTED_COLUMNS
 
-    assert SELECTED_COLUMNS == ", ".join(f'"{name}"' for name in BudgetListItem.model_fields)
+    assert SELECTED_COLUMNS == ", ".join(f'"{name}"' for name in BudgetListItem.model_fields if name != "member_count")
     assert BUDGETS_LIST_SPEC.tiebreaker in BudgetListItem.model_fields
     assert BUDGETS_LIST_SPEC.sortable <= frozenset(BudgetListItem.model_fields)
     assert frozenset(BUDGETS_LIST_SPEC.filters) <= frozenset(BudgetListItem.model_fields)

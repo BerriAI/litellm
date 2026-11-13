@@ -10,7 +10,15 @@ describe("buildCustomerOrganizationBody", () => {
       monthlyBudget: "1000.25",
       tpm: "3000",
       rpm: "25",
-      groups: [{ id: "custom", name: " power ", monthlyBudget: "200.50", yearlyBudget: "1500" }],
+      groups: [
+        {
+          id: "custom",
+          name: " power ",
+          monthlyBudget: "200.50",
+          yearlyBudget: "1500",
+          capPolicy: "pause_allow_increase" as const,
+        },
+      ],
       defaultGroupId: "custom",
     };
     const result = buildCustomerOrganizationBody(input);
@@ -28,7 +36,7 @@ describe("buildCustomerOrganizationBody", () => {
               { budget_duration: "1mo", max_budget: 200.5 },
               { budget_duration: "12mo", max_budget: 1500 },
             ],
-            cap_policy: "pause_until_reset",
+            cap_policy: "pause_allow_increase",
           },
         ],
       },
@@ -51,8 +59,20 @@ describe("buildCustomerOrganizationBody", () => {
       ...fields(),
       monthlyBudget: "0",
       groups: [
-        { id: "monthly", name: "monthly", monthlyBudget: "0", yearlyBudget: "" },
-        { id: "yearly", name: "yearly", monthlyBudget: "", yearlyBudget: "120" },
+        {
+          id: "monthly",
+          name: "monthly",
+          monthlyBudget: "0",
+          yearlyBudget: "",
+          capPolicy: "pause_allow_increase" as const,
+        },
+        {
+          id: "yearly",
+          name: "yearly",
+          monthlyBudget: "",
+          yearlyBudget: "120",
+          capPolicy: "pause_until_reset" as const,
+        },
       ],
       defaultGroupId: "yearly",
     };
@@ -65,6 +85,10 @@ describe("buildCustomerOrganizationBody", () => {
       [{ budget_duration: "12mo", max_budget: 120 }],
     ]);
     expect(result.body.default_budgets.map((group) => group.is_default)).toEqual([false, true]);
+    expect(result.body.default_budgets.map((group) => group.cap_policy)).toEqual([
+      "pause_allow_increase",
+      "pause_until_reset",
+    ]);
   });
 
   it.each(["-1", "Infinity", "NaN", "invalid"])("rejects invalid amounts %s at either level", (value) => {

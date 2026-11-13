@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from prisma import Prisma
 
 _INCLUDE: Final = {"budget": True, "budget_template": True}
+_MEMBER_INCLUDE: Final = {"budget": True, "budget_override": True}
 _DURATION: Final = TypeAdapter(Literal["1mo", "12mo"])
 
 
@@ -47,6 +48,22 @@ class PersonBudgetRecord(LiteLLMBaseModel):
         )
 
 
+def person_budget_record(
+    row: Mapping[str, object], subject_type: Literal["user", "customer_member"]
+) -> PersonBudgetRecord:
+    if subject_type == "user":
+        return PersonBudgetRecord.model_validate(row)
+    return PersonBudgetRecord.model_validate(
+        {
+            **row,
+            "budget_template_id": row.get("budget_id"),
+            "budget_template": row.get("budget"),
+            "budget_id": row.get("budget_override_id"),
+            "budget": row.get("budget_override"),
+        }
+    )
+
+
 async def load_person_budget(
     db: "Prisma", subject_type: Literal["user", "customer_member"], subject_id: str
 ) -> PersonBudgetRecord | None:
@@ -55,12 +72,14 @@ async def load_person_budget(
     )
     id_column: Final = "user_id" if subject_type == "user" else "customer_member_id"
     try:
-        row: Final = await table.find_unique(where={id_column: subject_id}, include=_INCLUDE)
+        row: Final = await table.find_unique(
+            where={id_column: subject_id}, include=_INCLUDE if subject_type == "user" else _MEMBER_INCLUDE
+        )
     except Exception as error:  # noqa: BLE001  # a failed authoritative lookup must deny admission
         raise litellm.ServiceUnavailableError(
             message="Personal budget assignment is unavailable", model="", llm_provider=""
         ) from error
-    return PersonBudgetRecord.model_validate(row.model_dump()) if row is not None else None
+    return person_budget_record(row.model_dump(), subject_type) if row is not None else None
 
 
 def person_budget_windows(

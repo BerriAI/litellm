@@ -90,18 +90,17 @@ describe("BudgetModal", () => {
     expect(createMock).not.toHaveBeenCalled();
   });
 
-  it("creates a profile with independent monthly and annual limits", async () => {
+  it.each([
+    ["Pause and allow temporary increase requests", "pause_allow_increase"],
+    ["Pause until reset", "pause_until_reset"],
+  ])("creates a profile with independent monthly and annual limits and %s", async (label, policy) => {
     const user = userEvent.setup();
     renderModal();
     fireEvent.change(screen.getByLabelText("Budget ID"), { target: { value: "standard-profile" } });
     await chooseSelectOption(user, screen.getByRole("combobox", { name: "Budget type" }), "Reusable profile");
     fireEvent.change(screen.getByLabelText("Monthly limit per person (USD)"), { target: { value: "100" } });
     fireEvent.change(screen.getByLabelText("Annual limit per person (USD)"), { target: { value: "1000" } });
-    await chooseSelectOption(
-      user,
-      screen.getByRole("combobox", { name: "At the cap" }),
-      "Pause, contact an admin for more",
-    );
+    await chooseSelectOption(user, screen.getByRole("combobox", { name: "At the cap" }), label);
     await create(user);
     await waitFor(() => expect(createMock).toHaveBeenCalledTimes(1));
     const expected = {
@@ -111,7 +110,7 @@ describe("BudgetModal", () => {
         { budget_duration: "1mo", max_budget: 100 },
         { budget_duration: "12mo", max_budget: 1000 },
       ],
-      cap_policy: "pause_allow_increase",
+      cap_policy: policy,
       max_budget: null,
       budget_duration: null,
       tpm_limit: null,

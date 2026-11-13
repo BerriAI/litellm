@@ -65,7 +65,7 @@ function AssignmentEditor({
       (field) => form.formState.dirtyFields[field],
     );
     await onSave({
-      ...(form.formState.dirtyFields.profile ? { budget_template_id: values.profile.trim() || null } : {}),
+      ...(form.formState.dirtyFields.profile ? { budget_id: values.profile.trim() || null } : {}),
       ...(overrideChanged
         ? {
             budget_override: {

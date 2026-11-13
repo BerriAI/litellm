@@ -440,7 +440,7 @@ async def delete_budget(
         profile_row: Final = await tx.litellm_budgettable.find_unique(where={"budget_id": data.id})
         if profile_row is not None and profile_row.model_dump().get("is_profile") is True:
             attached_users: Final = await tx.litellm_usertable.count(where={"budget_template_id": data.id})
-            attached_members: Final = await tx.litellm_customermembertable.count(where={"budget_template_id": data.id})
+            attached_members: Final = await tx.litellm_customermembertable.count(where={"budget_id": data.id})
             if attached_users or attached_members:
                 raise HTTPException(status_code=409, detail="Unassign this profile before deleting it")
             return await tx.litellm_budgettable.delete(where={"budget_id": data.id})

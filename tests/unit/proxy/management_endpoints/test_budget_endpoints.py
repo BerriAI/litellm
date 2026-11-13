@@ -14,6 +14,7 @@ from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.proxy_server import app
+from tests.unit.proxy.management_helpers.test_customer_hierarchy import Record
 
 
 @pytest.fixture
@@ -23,6 +24,7 @@ def client_and_mocks(monkeypatch):
     mock_table = MagicMock()
     mock_table.create = AsyncMock(side_effect=lambda *, data: data)
     mock_table.update = AsyncMock(side_effect=lambda *, where, data: {**where, **data})
+    mock_table.find_unique = AsyncMock(return_value=Record(budget_id="budget_456"))
 
     mock_prisma.db = types.SimpleNamespace(
         litellm_budgettable=mock_table,
@@ -521,6 +523,8 @@ def admin_client(client_and_mocks):
     client, mock_prisma, mock_table = client_and_mocks
     mock_table.delete = AsyncMock(return_value={"budget_id": "tpl-1"})
     mock_prisma.db.litellm_customerorganizationtable = MagicMock()
+    mock_prisma.db.query_raw = AsyncMock(return_value=())
+    mock_prisma.tx.return_value.__aenter__.return_value = mock_prisma.db
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
     )
