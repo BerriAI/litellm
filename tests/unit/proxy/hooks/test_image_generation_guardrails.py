@@ -292,3 +292,63 @@ async def test_non_default_guardrail_skipped_for_image_generation():
     assert (
         guardrail.called is False
     ), "Opt-in guardrail should not fire without explicit request"
+
+
+# ---------------------------------------------------------------------------
+# 6. Pre-call PII guardrail redaction is preserved for image generation
+# ---------------------------------------------------------------------------
+
+
+class MaskingGuardrail(CustomGuardrail):
+    """Guardrail that masks PII in the prompt (pre-call hook)."""
+
+    def __init__(self):
+        super().__init__(
+            guardrail_name="masking_guardrail",
+            default_on=True,
+            event_hook=GuardrailEventHooks.pre_call,
+        )
+
+    async def async_pre_call_hook(
+        self,
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        call_type: str,
+    ) -> dict:
+        # Simulate PII redaction: replace SSN pattern with [REDACTED]
+        prompt = data.get("prompt", "")
+        if "123-45-6789" in prompt:
+            data["prompt"] = prompt.replace("123-45-6789", "[REDACTED_SSN]")
+        return data
+
+
+@pytest.mark.asyncio
+async def test_pre_call_pii_redaction_preserved_for_image_generation():
+    """
+    Verify that when a pre-call guardrail redacts data["prompt"], the redacted
+    value is preserved and not overwritten by rebuilding from messages.
+    
+    This tests the fix for issue #46473 where the image generation endpoint
+    was rebuilding prompt from messages after the guardrail ran, which
+    discarded the redacted value.
+    """
+    guardrail = MaskingGuardrail()
+    original_prompt = "Generate an image for user SSN: 123-45-6789"
+    
+    with patch("litellm.callbacks", [guardrail]):
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        
+        data = {"model": "dall-e-3", "prompt": original_prompt}
+        user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
+        
+        # Run pre_call_hook (this is what the endpoint does)
+        result = await proxy_logging.pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            data=data,
+            call_type="image_generation",
+        )
+    
+    # The prompt should be redacted
+    assert result["prompt"] == "Generate an image for user SSN: [REDACTED_SSN]"
+    # Original prompt should NOT appear in the result
+    assert "123-45-6789" not in result["prompt"]
