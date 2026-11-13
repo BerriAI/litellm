@@ -28,6 +28,8 @@ class BillingVendor:
         self.empty = False
 
     def respond(self, request: httpx.Request) -> httpx.Response:
+        assert request.url.host == "billing.example.test"
+        assert request.url.path == "/v2/teams/billing-items"
         return httpx.Response(
             200,
             json={
@@ -64,7 +66,9 @@ async def test_vendor_sync_replaces_real_database_rows_idempotently_and_clears_d
     vendor: Final = BillingVendor(now)
     source_id: Final = connected.connection.source_id
     async with httpx.AsyncClient(transport=httpx.MockTransport(vendor.respond)) as client:
-        sync: Final = SpendSync(ProxyDatabase(db.prisma.db), client, lambda: now)
+        sync: Final = SpendSync(
+            ProxyDatabase(db.prisma.db), client, lambda: now, base_url="https://billing.example.test"
+        )
         initial: Final = await sync.save_key(source_id, "billing-test-key")
         assert initial == SyncResult(rows=1)
         again: Final = await sync.run(source_id)

@@ -104,13 +104,16 @@ async def test_key_save_validates_once_encrypts_and_syncs_all_pages(db: Database
     assert db.source is not None
     vendor: Final = Vendor((page(item(), more=True, cursor="page-2"), page(item(usage={"requests": "3"}))))
     async with httpx.AsyncClient(transport=httpx.MockTransport(vendor.respond)) as client:
-        result: Final = await SpendSync(db, client, lambda: NOW).save_key(db.source.source_id, vendor.key)
+        result: Final = await SpendSync(db, client, lambda: NOW, base_url="https://billing.example.test/").save_key(
+            db.source.source_id, vendor.key
+        )
     assert result == SyncResult(rows=1)
     assert db.source.admin_api_key != vendor.key
     assert decrypt_value_helper(db.source.admin_api_key, "admin_api_key") == vendor.key
     assert db.persisted[0].cost_micros == 246914
     assert db.persisted[0].requests == 4
     assert len(vendor.requests) == 2
+    assert all(request.url.host == "billing.example.test" for request in vendor.requests)
     assert "cursor" not in vendor.requests[0].url.params
     assert vendor.requests[1].url.params["cursor"] == "page-2"
     assert vendor.requests[0].url.params["startTime"] == vendor.requests[1].url.params["startTime"]
@@ -192,10 +195,9 @@ async def test_empty_sync_replaces_window_with_empty_totals(db: DatabaseDouble) 
 
 
 @pytest.mark.asyncio
-async def test_operator_environment_can_redirect_billing_to_a_scripted_server(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LITELLM_EXTERNAL_CLOUD_AGENTS_BILLING_BASE_URL", "http://127.0.0.1:19199/")
+async def test_injected_base_url_can_redirect_billing_to_a_scripted_server() -> None:
     vendor: Final = Vendor((page(),))
     async with httpx.AsyncClient(transport=httpx.MockTransport(vendor.respond)) as client:
-        result: Final = await fetch_page(client, vendor.key, window_start(NOW), NOW)
+        result: Final = await fetch_page(client, vendor.key, window_start(NOW), NOW, base_url="http://127.0.0.1:19199/")
     assert not isinstance(result, Failure)
     assert str(vendor.requests[0].url).startswith("http://127.0.0.1:19199/v2/teams/billing-items?")

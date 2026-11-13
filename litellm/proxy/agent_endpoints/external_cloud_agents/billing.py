@@ -1,5 +1,4 @@
 import json
-import os
 from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
@@ -17,7 +16,7 @@ from litellm.proxy.agent_endpoints.external_cloud_agents.inventory import get_so
 from litellm.proxy.agent_endpoints.external_cloud_agents.models import DailySpend, Failure, FrozenModel, SyncResult
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
 
-BILLING_URL: Final = "https://api.cursor.com/v2/teams/billing-items"
+BILLING_BASE_URL: Final = "https://api.cursor.com"
 BILLING_TIMEOUT: Final = 20.0
 
 
@@ -120,7 +119,13 @@ def aggregate(items: tuple[BillingItem, ...], start: datetime, end: datetime) ->
 
 
 async def fetch_page(
-    client: HTTPClient, key: str, start: datetime, end: datetime, cursor: str | None = None
+    client: HTTPClient,
+    key: str,
+    start: datetime,
+    end: datetime,
+    cursor: str | None = None,
+    *,
+    base_url: str = BILLING_BASE_URL,
 ) -> BillingPage | Failure:
     params: Final = MappingProxyType(
         {
@@ -132,8 +137,7 @@ async def fetch_page(
         }
     )
     try:
-        base_url: Final = os.getenv("LITELLM_EXTERNAL_CLOUD_AGENTS_BILLING_BASE_URL")
-        url: Final = base_url.rstrip("/") + "/v2/teams/billing-items" if base_url else BILLING_URL
+        url: Final = base_url.rstrip("/") + "/v2/teams/billing-items"
         response: Final = await client.get(url, params=params, auth=httpx.BasicAuth(key, ""), timeout=BILLING_TIMEOUT)
         if response.status_code == 429:
             retry_header: Final = TypeAdapter(str).validate_python(response.headers.get("Retry-After", "unspecified"))
@@ -150,9 +154,16 @@ async def fetch_page(
 
 class BillingScan:
     def __init__(
-        self, client: HTTPClient, key: str, start: datetime, end: datetime, first_page: BillingPage | None
+        self,
+        client: HTTPClient,
+        key: str,
+        start: datetime,
+        end: datetime,
+        first_page: BillingPage | None,
+        base_url: str = BILLING_BASE_URL,
     ) -> None:
         self.client = client
+        self.base_url = base_url
         self.key = key
         self.start = start
         self.end = end
@@ -163,7 +174,9 @@ class BillingScan:
         self.finished = False
 
     async def advance(self) -> Failure | None:
-        page: Final = self.preloaded or await fetch_page(self.client, self.key, self.start, self.end, self.cursor)
+        page: Final = self.preloaded or await fetch_page(
+            self.client, self.key, self.start, self.end, self.cursor, base_url=self.base_url
+        )
         self.preloaded = None
         if isinstance(page, Failure):
             return page
@@ -180,17 +193,25 @@ class BillingScan:
 
 
 class SpendSync:
-    def __init__(self, db: Database, client: HTTPClient, clock: Callable[[], datetime] = utc_now) -> None:
+    def __init__(
+        self,
+        db: Database,
+        client: HTTPClient,
+        clock: Callable[[], datetime] = utc_now,
+        *,
+        base_url: str = BILLING_BASE_URL,
+    ) -> None:
         self.db = db
         self.client = client
         self.clock = clock
+        self.base_url = base_url
 
     async def save_key(self, source_id: str, key: str) -> SyncResult | Failure:
         source: Final = await get_source(self.db, source_id)
         if source is None:
             return Failure(status=404, message="Unknown source")
         end: Final = self.clock()
-        first: Final = await fetch_page(self.client, key, window_start(end), end)
+        first: Final = await fetch_page(self.client, key, window_start(end), end, base_url=self.base_url)
         if isinstance(first, Failure):
             await self.record_error(source_id, first)
             return first
@@ -218,7 +239,7 @@ class SpendSync:
         if not api_key:
             return Failure(status=400, message="Set a GrokBot Admin API key before syncing spend")
         until: Final = end or self.clock()
-        scan: Final = BillingScan(self.client, api_key, window_start(until), until, first_page)
+        scan: Final = BillingScan(self.client, api_key, window_start(until), until, first_page, self.base_url)
         try:
             while not scan.finished:
                 failure = await scan.advance()
