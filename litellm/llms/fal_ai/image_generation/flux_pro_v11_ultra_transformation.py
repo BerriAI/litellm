@@ -34,6 +34,7 @@ class FalAIFluxProV11UltraConfig(FalAIBaseConfig):
     """
 
     IMAGE_GENERATION_ENDPOINT: str = "fal-ai/flux-pro/v1.1-ultra"
+    MODEL_FAMILY_ROOTS: tuple[str, ...] = ("fal-ai/flux-pro/",)
 
     def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
         """

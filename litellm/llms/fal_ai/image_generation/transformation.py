@@ -71,6 +71,7 @@ class FalAIBaseConfig(BaseImageGenerationConfig):
 
     DEFAULT_BASE_URL: str = "https://fal.run"
     IMAGE_GENERATION_ENDPOINT: str = ""
+    MODEL_FAMILY_ROOTS: tuple[str, ...] = ()
 
     def get_complete_url(
         self,
@@ -89,7 +90,16 @@ class FalAIBaseConfig(BaseImageGenerationConfig):
         base_url: Final = api_base or get_secret_str("FAL_AI_API_BASE") or self.DEFAULT_BASE_URL
         if not self.IMAGE_GENERATION_ENDPOINT:
             return base_url.rstrip("/")
-        return join_api_base(base_url, self.IMAGE_GENERATION_ENDPOINT)
+        return join_api_base(base_url, self._endpoint_for_model(model))
+
+    def _endpoint_for_model(self, model: str) -> str:
+        path: Final = model.strip("/")
+        names_default_endpoint: Final = path.lower().removeprefix(
+            "fal-ai/"
+        ) == self.IMAGE_GENERATION_ENDPOINT.removeprefix("fal-ai/")
+        if names_default_endpoint or not path.lower().startswith(self.MODEL_FAMILY_ROOTS):
+            return self.IMAGE_GENERATION_ENDPOINT
+        return path
 
     def validate_environment(
         self,
