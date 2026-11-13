@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, patch
 
 import httpx2
 import pytest
-from fastapi import HTTPException
 from mcp.server.context import ServerRequestContext
 from mcp.types import (
     GetPromptRequest,
@@ -19,7 +18,7 @@ from mcp.types import (
     TextResourceContents,
 )
 from mcp.types import Tool as MCPTool
-from pydantic import AnyUrl, TypeAdapter
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.caching.dual_cache import DualCache
@@ -193,12 +192,17 @@ async def test_resource_read_requires_unique_owner_from_complete_listings(
     if case == "blocked_stdio":
         await proxy_logging.enforce_mcp_server_rate_limits(caller, stdio_server)
 
+    from mcp.shared.exceptions import MCPError
+    from mcp.types import INVALID_REQUEST, ReadResourceRequest, ReadResourceRequestParams
+
     async def read() -> object:
-        return await operations.mcp_read_resource(
-            url=AnyUrl(uri),
-            user_api_key_auth=caller,
-            oauth2_headers={"Authorization": caller_bearer},
-            raw_headers={"authorization": caller_bearer, "x-litellm-api-key": "sk-resource-read"},
+        return await GatewayOperations().execute(
+            ReadResourceRequest(params=ReadResourceRequestParams(uri=uri)),
+            prepare_context(
+                caller,
+                oauth2_headers={"Authorization": caller_bearer},
+                raw_headers={"authorization": caller_bearer, "x-litellm-api-key": "sk-resource-read"},
+            ),
         )
 
     if case in ("unique", "blocked_stdio", "scoped_bearer", "legacy_delegates"):
@@ -217,21 +221,24 @@ async def test_resource_read_requires_unique_owner_from_complete_listings(
         )
         return
     if case == "rate_limited":
-        with pytest.raises(HTTPException) as first:
+        with pytest.raises(MCPError) as first:
             await read()
-        assert first.value.status_code == 404
-        with pytest.raises(ProxyRateLimitError):
+        assert first.value.error.code == INVALID_REQUEST
+        assert "not found" in first.value.error.message.lower()
+        with pytest.raises(MCPError) as limited:
             await read()
+        assert limited.value.error.code == INVALID_REQUEST
+        assert "rate limit" in limited.value.error.message.lower()
         assert reads.empty()
         return
-    with pytest.raises(HTTPException) as rejected:
+    with pytest.raises(MCPError) as rejected:
         await asyncio.wait_for(read(), timeout=30)
-    assert rejected.value.status_code == {"ambiguous": 400, "missing": 404, "failure": 502, "slow_failure": 502}[case]
+    assert rejected.value.error.code == INVALID_REQUEST, "owner failures must reach MCP clients as MCPError, not 500"
     assert {"ambiguous": "ambiguous", "missing": "not found", "failure": "list resources", "slow_failure": "owner"}[
         case
-    ] in str(rejected.value.detail).lower()
+    ] in rejected.value.error.message.lower()
     assert reads.empty()
-    assert "private upstream diagnostic" not in str(rejected.value.detail)
+    assert "private upstream diagnostic" not in rejected.value.error.message
     if case == "slow_failure":
         await asyncio.wait_for(slow_listing_cancelled.wait(), timeout=30)
 
@@ -1122,7 +1129,10 @@ async def test_catalog_helpers_preserve_context_results_and_failure_policy(metho
         patch.object(operations.global_mcp_server_manager, manager_method, upstream),
     ):
         if collection is None and state != "success":
-            expected_error = RuntimeError if state == "upstream_failure" else HTTPException
+            from mcp.shared.exceptions import MCPError
+
+            access_error = MCPError if method == "resources/read" else HTTPException
+            expected_error = RuntimeError if state == "upstream_failure" else access_error
             with pytest.raises(expected_error):
                 await getattr(server, handler_name)(ctx, operation.params)
         else:

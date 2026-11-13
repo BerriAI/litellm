@@ -3792,21 +3792,27 @@ async def _execute_read_resource(
         _client_ip,
     ) = context.legacy_auth()
 
-    read_resource_result: Final = await mcp_read_resource(
-        url=params.uri,
-        user_api_key_auth=user_api_key_auth,
-        mcp_auth_header=mcp_auth_header,
-        mcp_servers=mcp_servers,
-        mcp_server_auth_headers=mcp_server_auth_headers,
-        oauth2_headers=oauth2_headers,
-        raw_headers=raw_headers,
-        client_ip=_client_ip,
-        input_responses=params.input_responses,
-        request_state=params.request_state,
-        allow_input_required=context.wire_compat is WireCompat.MODERN,
-    )
+    from mcp.shared.exceptions import MCPError
+    from mcp.types import INVALID_REQUEST
 
-    return read_resource_result
+    try:
+        return await mcp_read_resource(
+            url=params.uri,
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=mcp_auth_header,
+            mcp_servers=mcp_servers,
+            mcp_server_auth_headers=mcp_server_auth_headers,
+            oauth2_headers=oauth2_headers,
+            raw_headers=raw_headers,
+            client_ip=_client_ip,
+            input_responses=params.input_responses,
+            request_state=params.request_state,
+            allow_input_required=context.wire_compat is WireCompat.MODERN,
+        )
+    except MCPError:
+        raise
+    except HTTPException as error:
+        raise MCPError(code=INVALID_REQUEST, message=_http_detail_message(error.detail)) from error
 
 
 def _reject_mcp_proxy_operation() -> NoReturn:
