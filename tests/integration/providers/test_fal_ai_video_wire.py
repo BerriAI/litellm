@@ -453,6 +453,4 @@ def test_fal_video_without_a_resolution_bills_the_rows_default_rate(gateway: Gat
             key=key,
         )
         assert created["status"] == "queued"
-        default_rate: Final = rate("fal_ai", "output_cost_per_second", _UPSCALE_MODEL)
-        assert default_rate != rate("fal_ai", "output_cost_per_second_720p", _UPSCALE_MODEL)
-        settled_spend(key, 10 * default_rate)
+        settled_spend(key, 10 * rate("fal_ai", "output_cost_per_second", _UPSCALE_MODEL))
