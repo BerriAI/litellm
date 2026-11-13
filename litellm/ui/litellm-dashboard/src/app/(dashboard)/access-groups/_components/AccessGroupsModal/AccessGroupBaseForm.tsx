@@ -1,6 +1,6 @@
 "use client";
 
-import { BotIcon, InfoIcon, LayersIcon, ServerIcon, SparklesIcon } from "lucide-react";
+import { BotIcon, DatabaseIcon, InfoIcon, LayersIcon, ServerIcon, SparklesIcon } from "lucide-react";
 import type { UseFormReturn } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { z } from "zod";
@@ -17,6 +17,7 @@ import SkillSelector from "@/components/skills/SkillSelector";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import VectorStoreSelector from "@/components/vector_store_management/VectorStoreSelector";
 import i18n from "@/i18n/i18n";
 
 export const accessGroupFormSchema = z.object({
@@ -27,6 +28,7 @@ export const accessGroupFormSchema = z.object({
   mcpToolPermissions: z.record(z.string(), z.array(z.string())),
   agentIds: z.array(z.string()),
   skillNames: z.array(z.string()),
+  vectorStoreIds: z.array(z.string()),
 });
 
 export type AccessGroupFormValues = z.output<typeof accessGroupFormSchema>;
@@ -36,6 +38,7 @@ export const MODELS_TAB = "models";
 export const MCP_SERVERS_TAB = "mcp-servers";
 export const AGENTS_TAB = "agents";
 export const SKILLS_TAB = "skills";
+export const VECTOR_STORES_TAB = "vector-stores";
 
 interface AccessGroupBaseFormProps {
   form: UseFormReturn<AccessGroupFormValues>;
@@ -98,7 +101,7 @@ export function AccessGroupBaseForm({
 
   return (
     <Tabs value={activeTab} onValueChange={onTabChange}>
-      <TabsList className="w-full">
+      <TabsList className="w-full flex-wrap group-data-horizontal/tabs:h-auto">
         <TabsTrigger value={GENERAL_TAB}>
           <InfoIcon size={16} />
           {t("accessGroups.form.tabs.general")}
@@ -118,6 +121,10 @@ export function AccessGroupBaseForm({
         <TabsTrigger value={SKILLS_TAB}>
           <SparklesIcon size={16} />
           {t("accessGroups.form.tabs.skills")}
+        </TabsTrigger>
+        <TabsTrigger value={VECTOR_STORES_TAB}>
+          <DatabaseIcon size={16} />
+          {t("accessGroups.form.tabs.vectorStores")}
         </TabsTrigger>
       </TabsList>
 
@@ -194,6 +201,26 @@ export function AccessGroupBaseForm({
               value={value}
               accessToken={accessToken || ""}
               placeholder={t("accessGroups.form.skills.placeholder")}
+            />
+          )}
+        </FormField>
+      </TabsContent>
+
+      <TabsContent value={VECTOR_STORES_TAB} className="pt-4">
+        <FormField
+          control={form.control}
+          name="vectorStoreIds"
+          label={t("accessGroups.form.vectorStores.label")}
+          description={t("accessGroups.form.vectorStores.description")}
+        >
+          {({ id, value, onChange, "aria-describedby": describedBy }) => (
+            <VectorStoreSelector
+              id={id}
+              aria-describedby={describedBy}
+              onChange={onChange}
+              value={value}
+              accessToken={accessToken || ""}
+              placeholder={t("accessGroups.form.vectorStores.placeholder")}
             />
           )}
         </FormField>
