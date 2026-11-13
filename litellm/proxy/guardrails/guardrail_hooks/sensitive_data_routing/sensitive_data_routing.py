@@ -23,7 +23,7 @@ from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.patterns im
     get_compiled_pattern,
 )
 from litellm.types.guardrails import GuardrailEventHooks, Mode
-from litellm.types.llms.openai import ChatCompletionToolCallChunk
+from litellm.types.llms.openai import ChatCompletionToolCallChunk, ChatCompletionToolParam
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 from litellm.types.proxy.guardrails.guardrail_hooks.sensitive_data_routing import (
     DEFAULT_SESSION_TTL_SECONDS,
@@ -106,6 +106,16 @@ def tool_call_argument_texts(
         yield from _argument_texts(tool_call)
 
 
+def tool_definition_texts(tools: Sequence[ChatCompletionToolParam] | None) -> Iterator[str]:
+    """Yield every string in the tool definitions (names, descriptions, schema values), which reach the model too."""
+    for tool in tools or ():
+        try:
+            definition = _JSON_VALUE.validate_python(tool)
+        except ValidationError:
+            continue
+        yield from _string_leaves(definition)
+
+
 class SensitiveDataRoutingGuardrail(CustomGuardrail):
     """
     Reroutes a request to an on-premise model when sensitive data is detected.
@@ -174,7 +184,11 @@ class SensitiveDataRoutingGuardrail(CustomGuardrail):
             return inputs
 
         detected: Final = self.detect(
-            [*(inputs.get("texts") or ()), *tool_call_argument_texts(inputs.get("tool_calls"))]
+            [
+                *(inputs.get("texts") or ()),
+                *tool_call_argument_texts(inputs.get("tool_calls")),
+                *tool_definition_texts(inputs.get("tools")),
+            ]
         )
         if detected is None:
             return inputs

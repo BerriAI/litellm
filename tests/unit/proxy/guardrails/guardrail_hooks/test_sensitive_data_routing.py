@@ -169,6 +169,66 @@ class TestSensitiveDataRoutingGuardrailDetection:
         assert result is inputs
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "function",
+        [
+            {"name": "lookup", "description": "SSN 123-45-6789"},
+            {
+                "name": "lookup",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"ssn": {"type": "string", "default": "123-45-6789"}},
+                },
+            },
+            {
+                "name": "lookup",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"ssn": {"type": "string", "enum": ["123-45-6789"]}},
+                },
+            },
+        ],
+    )
+    async def test_tool_definitions_are_scanned(self, function):
+        """Regression: tool definitions are forwarded to the model, so a match there must reroute too."""
+        guardrail = make_guardrail(prebuilt_patterns=["us_ssn"], regex_patterns=None, keywords=None)
+        inputs = {"texts": ["look this person up"], "tools": [{"type": "function", "function": function}]}
+
+        with pytest.raises(SensitiveDataRouteException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data={"metadata": {"session_id": "abc-123"}},
+                input_type="request",
+            )
+
+        assert exc_info.value.detection_info == {"detection_type": "prebuilt_pattern", "rule": "us_ssn"}
+
+    @pytest.mark.asyncio
+    async def test_clean_tool_definitions_are_untouched(self):
+        guardrail = make_guardrail()
+        inputs = {
+            "texts": ["weather please"],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "weather",
+                        "description": "Get the weather for a city",
+                        "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+                    },
+                }
+            ],
+        }
+
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data={"metadata": {"session_id": "abc-123"}},
+            input_type="request",
+        )
+
+        assert result is inputs
+
+    @pytest.mark.asyncio
     async def test_detection_never_leaks_the_matched_value(self):
         guardrail = make_guardrail()
 
