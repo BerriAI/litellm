@@ -11,8 +11,17 @@
 
 import datetime
 import enum
-from collections.abc import Mapping, Sequence
-from typing import Any, Final, Protocol, SupportsIndex, SupportsInt, runtime_checkable
+import inspect
+from collections.abc import Callable, Mapping, Sequence
+from typing import (
+    Any,
+    Final,
+    Protocol,
+    SupportsIndex,
+    SupportsInt,
+    cast,  # noqa: TID251  # pickle rebuild uses a runtime-checked constructor boundary
+    runtime_checkable,
+)
 
 import httpx
 import openai
@@ -168,6 +177,69 @@ _NO_UPSTREAM_REQUEST_URL: Final = "https://cloud.google.com/vertex-ai/"
 _MINIMAL_ERROR_RESPONSE: httpx.Response | None = None
 
 
+class _ExceptionConstructor(Protocol):
+    def __call__(
+        self,
+        **kwargs: object,  # kwargs-ok: supported exception constructors expose heterogeneous optional keywords
+    ) -> Exception: ...
+
+
+def _rebuild_exception(
+    cls: type[Exception],
+    message: str,
+    llm_provider: str,
+    model: str,
+    status_code: int,
+    request_data: object,
+) -> Exception:
+    constructor: Final[_ExceptionConstructor] = (
+        cast(  # cast-ok: pickle reduction only supplies supported exception classes
+            _ExceptionConstructor, cls
+        )
+    )
+    parameters: Final[Mapping[str, inspect.Parameter]] = inspect.signature(constructor).parameters
+    base_kwargs: Final[dict[str, object]] = {  # mutable-ok: Python constructors require a concrete kwargs mapping
+        "message": message,
+        "llm_provider": llm_provider,
+        "model": model,
+    }
+    status_kwargs: Final = {"status_code": status_code} if "status_code" in parameters else {}
+    request_kwargs: Final = {"request_data": request_data} if "request_data" in parameters else {}
+    kwargs: Final = base_kwargs | status_kwargs | request_kwargs
+    try:
+        return constructor(**kwargs)
+    except TypeError:
+        response: Final = httpx.Response(
+            status_code=status_code,
+            request=httpx.Request("POST", "https://litellm.ai"),
+        )
+        return constructor(**(kwargs | {"response": response}))
+
+
+def _exception_reduce(
+    self: Exception,
+) -> tuple[
+    Callable[..., Exception],
+    tuple[type[Exception], str, str, str, int, object],
+]:
+    raw_message: Final[object] = getattr(self, "_raw_message", str(self))
+    llm_provider: Final[object] = getattr(self, "llm_provider", "")
+    model: Final[object] = getattr(self, "model", "")
+    status_code: Final[object] = getattr(self, "status_code", 500)
+    request_data: Final[object] = getattr(self, "request_data", {})
+    return (
+        _rebuild_exception,
+        (
+            type(self),
+            raw_message if isinstance(raw_message, str) else str(self),
+            llm_provider if isinstance(llm_provider, str) else "",
+            model if isinstance(model, str) else "",
+            status_code if isinstance(status_code, int) else 500,
+            request_data,
+        ),
+    )
+
+
 def _get_minimal_error_response() -> httpx.Response:
     """Get a cached minimal httpx.Response object for error cases."""
     global _MINIMAL_ERROR_RESPONSE
@@ -194,6 +266,7 @@ class AuthenticationError(openai.AuthenticationError):
         self.status_code = 401
         self.message = f"litellm.AuthenticationError: {message}"
         self.llm_provider = llm_provider
+        self._raw_message: str = message
         self.model = model
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
@@ -221,6 +294,8 @@ class AuthenticationError(openai.AuthenticationError):
         if self.max_retries:
             _message += f", LiteLLM Max Retries: {self.max_retries}"
         return _message
+
+    __reduce__ = _exception_reduce
 
 
 class CallerCredentialAuthenticationError(AuthenticationError):
@@ -246,6 +321,7 @@ class NotFoundError(openai.NotFoundError):
         self.message = f"litellm.NotFoundError: {message}"
         self.model = model
         self.llm_provider = llm_provider
+        self._raw_message: str = message
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
@@ -273,6 +349,8 @@ class NotFoundError(openai.NotFoundError):
             _message += f", LiteLLM Max Retries: {self.max_retries}"
         return _message
 
+    __reduce__ = _exception_reduce
+
 
 class BadRequestError(openai.BadRequestError):
     def __init__(
@@ -290,6 +368,8 @@ class BadRequestError(openai.BadRequestError):
         self.message = f"litellm.BadRequestError: {message}"
         self.model = model
         self.llm_provider = llm_provider
+        if not hasattr(self, "_raw_message"):
+            self._raw_message: str = message
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
@@ -316,6 +396,8 @@ class BadRequestError(openai.BadRequestError):
         if self.max_retries:
             _message += f", LiteLLM Max Retries: {self.max_retries}"
         return _message
+
+    __reduce__ = _exception_reduce
 
 
 class ImageFetchError(BadRequestError):
@@ -403,6 +485,7 @@ class UnprocessableEntityError(openai.UnprocessableEntityError):
         self.message = f"litellm.UnprocessableEntityError: {message}"
         self.model = model
         self.llm_provider = llm_provider
+        self._raw_message: str = message
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
@@ -425,6 +508,8 @@ class UnprocessableEntityError(openai.UnprocessableEntityError):
         if self.max_retries:
             _message += f", LiteLLM Max Retries: {self.max_retries}"
         return _message
+
+    __reduce__ = _exception_reduce
 
 
 class Timeout(openai.APITimeoutError):
@@ -451,6 +536,7 @@ class Timeout(openai.APITimeoutError):
         self.message = f"litellm.Timeout: {message}"
         self.model = model
         self.llm_provider = llm_provider
+        self._raw_message: str = message
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
@@ -475,6 +561,8 @@ class Timeout(openai.APITimeoutError):
             _message += f", LiteLLM Max Retries: {self.max_retries}"
         return _message
 
+    __reduce__ = _exception_reduce
+
 
 class PermissionDeniedError(openai.PermissionDeniedError):
     def __init__(
@@ -490,6 +578,7 @@ class PermissionDeniedError(openai.PermissionDeniedError):
         self.status_code = 403
         self.message = f"litellm.PermissionDeniedError: {message}"
         self.llm_provider = llm_provider
+        self._raw_message: str = message
         self.model = model
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
@@ -513,6 +602,8 @@ class PermissionDeniedError(openai.PermissionDeniedError):
         if self.max_retries:
             _message += f", LiteLLM Max Retries: {self.max_retries}"
         return _message
+
+    __reduce__ = _exception_reduce
 
 
 class RateLimitError(openai.RateLimitError):
@@ -549,6 +640,7 @@ class RateLimitError(openai.RateLimitError):
         self.status_code = 429
         self.message = f"litellm.RateLimitError: {message}"
         self.llm_provider = llm_provider
+        self._raw_message: str = message
         self.model = model
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
@@ -602,6 +694,8 @@ class RateLimitError(openai.RateLimitError):
             _message += f", LiteLLM Max Retries: {self.max_retries}"
         return _message
 
+    __reduce__ = _exception_reduce
+
 
 class CallerCredentialRateLimitError(RateLimitError):
     """429 raised when a per-user credential exchange is rate limited by the
@@ -623,6 +717,7 @@ class ContextWindowExceededError(BadRequestError):
         self.status_code = 400
         self.model = model
         self.llm_provider = llm_provider
+        self._raw_message: str = message
         self.litellm_debug_info = litellm_debug_info
         super().__init__(
             message=message,
@@ -651,6 +746,8 @@ class ContextWindowExceededError(BadRequestError):
         if self.max_retries:
             _message += f", LiteLLM Max Retries: {self.max_retries}"
         return _message
+
+    __reduce__ = _exception_reduce
 
 
 class PaymentRequiredError(BadRequestError):
@@ -710,6 +807,7 @@ class RejectedRequestError(BadRequestError):
         self.message = f"litellm.RejectedRequestError: {message}"
         self.model = model
         self.llm_provider = llm_provider
+        self._raw_message: str = message
         self.litellm_debug_info = litellm_debug_info
         self.request_data = request_data
         request: Final = httpx.Request(method="POST", url="https://api.openai.com/v1")
@@ -738,6 +836,8 @@ class RejectedRequestError(BadRequestError):
             _message += f", LiteLLM Max Retries: {self.max_retries}"
         return _message
 
+    __reduce__ = _exception_reduce
+
 
 class ContentPolicyViolationError(BadRequestError):
     #  Error code: 400 - {'error': {'code': 'content_policy_violation', 'message': 'Your request was rejected as a result of our safety system. Image descriptions generated from your prompt may contain text that is not allowed by our safety system. If you believe this was done in error, your request may succeed if retried, or by adjusting your prompt.', 'param': None, 'type': 'invalid_request_error'}}
@@ -755,6 +855,7 @@ class ContentPolicyViolationError(BadRequestError):
         self.message = f"litellm.ContentPolicyViolationError: {message}"
         self.model = model
         self.llm_provider = llm_provider
+        self._raw_message: str = message
         self.litellm_debug_info = litellm_debug_info
         self.provider_specific_fields = provider_specific_fields
         super().__init__(
@@ -783,6 +884,8 @@ class ContentPolicyViolationError(BadRequestError):
             _message += f", LiteLLM Max Retries: {self.max_retries}"
         return _message
 
+    __reduce__ = _exception_reduce
+
 
 class ServiceUnavailableError(openai.APIStatusError):
     def __init__(
@@ -798,6 +901,8 @@ class ServiceUnavailableError(openai.APIStatusError):
         self.status_code = 503
         self.message = f"litellm.ServiceUnavailableError: {message}"
         self.llm_provider = llm_provider
+        if not hasattr(self, "_raw_message"):
+            self._raw_message: str = message
         self.model = model
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
@@ -823,6 +928,8 @@ class ServiceUnavailableError(openai.APIStatusError):
             _message += f", LiteLLM Max Retries: {self.max_retries}"
         return _message
 
+    __reduce__ = _exception_reduce
+
 
 class BadGatewayError(openai.APIStatusError):
     response: httpx.Response  # pyright: ignore[reportIncompatibleVariableOverride]  # LiteLLM constructs an HTTPX response
@@ -841,6 +948,7 @@ class BadGatewayError(openai.APIStatusError):
         self.status_code = 502
         self.message = f"litellm.BadGatewayError: {message}"
         self.llm_provider = llm_provider
+        self._raw_message: str = message
         self.model = model
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
@@ -868,6 +976,8 @@ class BadGatewayError(openai.APIStatusError):
             _message += f", LiteLLM Max Retries: {self.max_retries}"
         return _message
 
+    __reduce__ = _exception_reduce
+
 
 class InternalServerError(openai.InternalServerError):
     response: httpx.Response  # pyright: ignore[reportIncompatibleVariableOverride]  # LiteLLM constructs an HTTPX response
@@ -890,6 +1000,7 @@ class InternalServerError(openai.InternalServerError):
         self.provider_status_code = provider_status_code
         self.message = f"litellm.InternalServerError: {message}"
         self.llm_provider = llm_provider
+        self._raw_message: str = message
         self.model = model
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
@@ -918,6 +1029,8 @@ class InternalServerError(openai.InternalServerError):
             _message += f", LiteLLM Max Retries: {self.max_retries}"
         return _message
 
+    __reduce__ = _exception_reduce
+
 
 # raise this when the API returns an invalid response object - https://github.com/openai/openai-python/blob/1be14ee34a0f8e42d3f9aa5451aa4cb161f1781f/openai/api_requestor.py#L401
 class APIError(openai.APIError):
@@ -937,6 +1050,7 @@ class APIError(openai.APIError):
         self.status_code = status_code
         self.message = f"litellm.APIError: {message}"
         self.llm_provider = llm_provider
+        self._raw_message: str = message
         self.model = model
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
@@ -963,6 +1077,8 @@ class APIError(openai.APIError):
             _message += f", LiteLLM Max Retries: {self.max_retries}"
         return _message
 
+    __reduce__ = _exception_reduce
+
 
 # raised if an invalid request (not get, delete, put, post) is made
 class APIConnectionError(openai.APIConnectionError):
@@ -980,6 +1096,7 @@ class APIConnectionError(openai.APIConnectionError):
     ):
         self.message = f"litellm.APIConnectionError: {message}"
         self.llm_provider = llm_provider
+        self._raw_message: str = message
         self.model = model
         self.status_code = 500
         self.litellm_debug_info = litellm_debug_info
@@ -1007,6 +1124,8 @@ class APIConnectionError(openai.APIConnectionError):
             _message += f", LiteLLM Max Retries: {self.max_retries}"
         return _message
 
+    __reduce__ = _exception_reduce
+
 
 # raised if an invalid request (not get, delete, put, post) is made
 class APIResponseValidationError(openai.APIResponseValidationError):
@@ -1024,6 +1143,7 @@ class APIResponseValidationError(openai.APIResponseValidationError):
     ):
         self.message = f"litellm.APIResponseValidationError: {message}"
         self.llm_provider = llm_provider
+        self._raw_message: str = message
         self.model = model
         request: Final = httpx.Request(method="POST", url="https://api.openai.com/v1")
         response: Final = httpx.Response(status_code=500, request=request)
@@ -1051,6 +1171,8 @@ class APIResponseValidationError(openai.APIResponseValidationError):
         if self.max_retries:
             _message += f", LiteLLM Max Retries: {self.max_retries}"
         return _message
+
+    __reduce__ = _exception_reduce
 
 
 class JSONSchemaValidationError(APIResponseValidationError):
@@ -1085,6 +1207,7 @@ class UnsupportedParamsError(BadRequestError):
         self.message = f"litellm.UnsupportedParamsError: {message}"
         self.model = model
         self.llm_provider = llm_provider
+        self._raw_message: str = message
         self.litellm_debug_info = litellm_debug_info
         response = response or httpx.Response(
             status_code=self.status_code,
@@ -1163,6 +1286,7 @@ class InvalidRequestError(openai.BadRequestError):
         self.message = message
         self.model = model
         self.llm_provider = llm_provider
+        self._raw_message: str = message
         self.response = httpx.Response(
             status_code=400,
             request=httpx.Request(method="GET", url="https://litellm.ai"),  # mock request object
@@ -1172,6 +1296,8 @@ class InvalidRequestError(openai.BadRequestError):
             response=self.response,  # pyright: ignore[reportArgumentType]  # SDK accepts HTTPX at runtime
             body=None,
         )  # Call the base class constructor with the parameters it needs
+
+    __reduce__ = _exception_reduce
 
 
 class MockException(openai.APIError):
@@ -1190,6 +1316,7 @@ class MockException(openai.APIError):
         self.status_code = status_code
         self.message = f"litellm.MockException: {message}"
         self.llm_provider = llm_provider
+        self._raw_message: str = message
         self.model = model
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
@@ -1197,6 +1324,8 @@ class MockException(openai.APIError):
         if request is None:
             request = httpx.Request(method="POST", url="https://api.openai.com/v1")
         super().__init__(self.message, request=request, body=None)
+
+    __reduce__ = _exception_reduce
 
 
 class LiteLLMUnknownProvider(BadRequestError):
@@ -1288,6 +1417,7 @@ class MidStreamFallbackError(ServiceUnavailableError):
         self.message = f"litellm.MidStreamFallbackError: {message}"
         self.model = model
         self.llm_provider = llm_provider
+        self._raw_message: str = message
         self.original_exception = original_exception
         inherited_debug_info: Final[object] = getattr(original_exception, "litellm_debug_info", None)
         self.litellm_debug_info = litellm_debug_info or (
