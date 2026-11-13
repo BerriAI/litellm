@@ -1,3 +1,5 @@
+SET LOCAL lock_timeout = '10s';
+
 CREATE TABLE IF NOT EXISTS "LiteLLM_ExternalAgentSource" (
     "source_id" TEXT NOT NULL,
     "vendor" TEXT NOT NULL DEFAULT 'grok_bot',
