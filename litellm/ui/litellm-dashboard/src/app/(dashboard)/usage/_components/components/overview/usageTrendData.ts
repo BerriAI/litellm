@@ -157,23 +157,27 @@ const sumByKey = (items: readonly KeyedTotals[]): ReadonlyMap<string, Totals> =>
 
 const entriesOf = (day: DailyData, dimension: TrendDimension) => Object.entries(day.breakdown[dimension] ?? {});
 
-const byContribution = (a: KeyedTotals, b: KeyedTotals): number => {
-  const larger = [b.spend - a.spend, b.tokens - a.tokens, b.requests - a.requests].find(
-    (difference) => difference !== 0,
-  );
-  return larger ?? byKey(a.key, b.key);
-};
+const byContribution =
+  (rankBy: TrendMetric) =>
+  (a: KeyedTotals, b: KeyedTotals): number => {
+    const larger = [b[rankBy] - a[rankBy], b.spend - a.spend, b.tokens - a.tokens, b.requests - a.requests].find(
+      (difference) => difference !== 0,
+    );
+    return larger ?? byKey(a.key, b.key);
+  };
 
-const modelTotals = (results: readonly DailyData[], dimension: TrendDimension): readonly KeyedTotals[] =>
+const modelTotals = (
+  results: readonly DailyData[],
+  dimension: TrendDimension,
+  rankBy: TrendMetric,
+): readonly KeyedTotals[] =>
   [
     ...sumByKey(
       results.flatMap((day) => entriesOf(day, dimension).map(([key, entry]) => ({ key, ...totalsOf(entry.metrics) }))),
     ),
   ]
     .map(([key, totals]) => ({ key, ...totals }))
-    .sort(byContribution);
-
-const hasUsage = (row: Totals): boolean => row.spend !== 0 || row.tokens !== 0 || row.requests !== 0;
+    .sort(byContribution(rankBy));
 
 const share = (part: number, whole: number): number | null => (whole > 0 ? (part / whole) * 100 : null);
 
@@ -232,19 +236,22 @@ export const usageTrend = ({
   granularity,
   colorByModel,
   dimension = "model_groups",
+  rankBy = "spend",
 }: {
   results: readonly DailyData[];
   range: DayRange;
   granularity: TrendGranularity;
   colorByModel: ReadonlyMap<string, string>;
   dimension?: TrendDimension;
+  rankBy?: TrendMetric;
 }): UsageTrend => {
   const covered = coveringRange(range, results);
   const buckets = trendBuckets(covered, granularity);
-  const models = modelTotals(results, dimension);
-  const leaders = models.filter(hasUsage).slice(0, LEADING_MODEL_LIMIT);
+  const models = modelTotals(results, dimension, rankBy);
+  const contributes = (row: Totals): boolean => row[rankBy] !== 0;
+  const leaders = models.filter(contributes).slice(0, LEADING_MODEL_LIMIT);
   const leaderIndex = new Map(leaders.map((row, index) => [row.key, index]));
-  const hasOther = models.some((row) => !leaderIndex.has(row.key) && hasUsage(row));
+  const hasOther = models.some((row) => !leaderIndex.has(row.key) && contributes(row));
   const labels = [...leaders.map((row) => row.key), ...(hasOther ? [i18n.t("usage.overview.otherSeries")] : [])];
   const keys = labels.map((_, index) => `s${index}`);
   const colors = labels.map((label, index) =>

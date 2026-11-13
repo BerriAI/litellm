@@ -893,7 +893,7 @@ describe("UsagePage", () => {
     expect(within(bucketSize).getByRole("radio", { name: "Daily" })).toBeChecked();
   });
 
-  it("stacks tokens and spend by the same model in the shared palette without inventing an Other segment", async () => {
+  it("stacks the selected metric by model in the shared palette without inventing an Other segment", async () => {
     const { container } = renderWithProviders(<UsagePage {...defaultProps} />, {
       searchParams: "?from=2025-01-01&to=2025-01-01",
     });
@@ -912,7 +912,7 @@ describe("UsagePage", () => {
     };
 
     await waitFor(() => {
-      expect(spendBars()).toHaveLength(2);
+      expect(spendBars()).toHaveLength(1);
     });
 
     const fills = new Set(spendBars().map((rect) => rect.getAttribute("fill")));
@@ -920,6 +920,22 @@ describe("UsagePage", () => {
     expect(fills).not.toContain(OTHER_COLOR);
     expect(screen.getByText(/differs from the daily totals by \$50\.25 and 35,000 tokens/)).toBeInTheDocument();
     expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
+  });
+
+  it("drives Usage trend and Top agents from one shared metric and bucket control", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<UsagePage {...defaultProps} />, { searchParams: "?from=2025-01-01&to=2025-01-01" });
+    const controls = await overview().findByRole("group", { name: "Chart options" });
+
+    expect(controls).toHaveTextContent("Applies to Usage trend and Top agents");
+    expect(overview().getAllByRole("radiogroup", { name: "Metric" })).toHaveLength(1);
+    expect(overview().getAllByRole("radiogroup", { name: "Bucket size" })).toHaveLength(1);
+
+    await user.click(within(controls).getByRole("radio", { name: "Spend" }));
+    await user.click(within(controls).getByRole("radio", { name: "Weekly" }));
+
+    expect(await overview().findByRole("group", { name: "Weekly spend by model" })).toBeInTheDocument();
+    expect(within(overview().getByTestId("top-agents")).getByText(/^Weekly spend by client/)).toBeVisible();
   });
 
   it("should switch between usage views correctly", async () => {

@@ -10,7 +10,8 @@
 --   * demo-subscription-chat: tokens with zero metered spend
 --   * no traffic at all in the fifth month, a real zero bucket
 --   * demo-legacy-completion stops after month eight, demo-coding-assistant starts in month four
---   * the coding key's traffic is also tagged as Claude Code, so the client panel has data
+--   * seven keys, so the Top Virtual Keys dropdown has more than five to show
+--   * coding, research and batch traffic carry Claude Code, Codex and python-requests User-Agent tags
 
 DO $$
 BEGIN
@@ -61,7 +62,7 @@ models (
       'usage-demo-user-b', 600, 14000, 900, 0.70, 3.00, 15.00, 0.0, 3.0, 3, 11),
     (5, 'demo-embeddings', 'openai/demo-embeddings', 'openai', 'usage-demo-key-batch', 'usage-demo-user-a',
       4000, 600, 0, 0.0, 0.02, 0.0, 0.0, 0.3, 0, 11),
-    (6, 'demo-image-gen', 'openai/demo-image-gen', 'openai', 'usage-demo-key-support', 'usage-demo-user-a',
+    (6, 'demo-image-gen', 'openai/demo-image-gen', 'openai', 'usage-demo-key-images', 'usage-demo-user-a',
       60, 0, 0, 0.0, 0.0, 0.0, 0.04, 0.5, 0, 11),
     (7, 'demo-subscription-chat', 'chatgpt/demo-subscription-chat', 'chatgpt', 'usage-demo-key-coding',
       'usage-demo-user-b', 300, 3000, 700, 0.30, 0.0, 0.0, 0.0, 1.0, 0, 11),
@@ -69,12 +70,12 @@ models (
       'usage-demo-user-a', 150, 9000, 600, 0.0, 0.80, 4.00, 0.0, 0.0, 0, 11),
     (9, 'demo-vision', 'gemini/demo-vision', 'gemini', 'usage-demo-key-research', 'usage-demo-user-b',
       120, 2500, 300, 0.0, 1.25, 5.00, 0.0, 0.4, 0, 11),
-    (10, 'demo-legacy-completion', 'azure/demo-legacy-completion', 'azure', 'usage-demo-key-support',
+    (10, 'demo-legacy-completion', 'azure/demo-legacy-completion', 'azure', 'usage-demo-key-legacy',
       'usage-demo-user-a', 700, 1200, 300, 0.0, 1.50, 2.00, 0.0, -0.9, 0, 7),
     (11, 'demo-eu-regional-assistant-with-a-deliberately-long-model-group-name',
       'vertex_ai/demo-eu-regional-assistant-with-a-deliberately-long-model-group-name', 'vertex_ai',
       'usage-demo-key-research', 'usage-demo-user-b', 40, 2000, 400, 0.20, 1.25, 5.00, 0.0, 0.2, 0, 11),
-    (12, 'demo-moderation', 'openai/demo-moderation', 'openai', 'usage-demo-key-support', 'usage-demo-user-a',
+    (12, 'demo-moderation', 'openai/demo-moderation', 'openai', 'usage-demo-key-moderation', 'usage-demo-user-a',
       500, 300, 0, 0.0, 0.01, 0.0, 0.0, 0.0, 0, 11)
 ),
 volumes AS (
@@ -146,14 +147,21 @@ INSERT INTO "LiteLLM_DailyTagSpend" (
   created_at, updated_at
 )
 SELECT
-  'usage-demo-tag-' || md5(id),
-  'User-Agent: claude-cli/2.1.263 (external, cli)',
-  date, api_key, model, model_group, custom_llm_provider,
-  prompt_tokens, completion_tokens, cache_read_input_tokens, cache_creation_input_tokens,
-  spend, api_requests, successful_requests, failed_requests, total_response_time_ms, timed_requests,
+  'usage-demo-tag-' || md5(s.id),
+  c.tag,
+  s.date, s.api_key, s.model, s.model_group, s.custom_llm_provider,
+  s.prompt_tokens, s.completion_tokens, s.cache_read_input_tokens, s.cache_creation_input_tokens,
+  s.spend, s.api_requests, s.successful_requests, s.failed_requests,
+  s.total_response_time_ms, s.timed_requests,
   now(), now()
-FROM "LiteLLM_DailyUserSpend"
-WHERE api_key = 'usage-demo-key-coding' AND user_id = 'usage-demo-user-b';
+FROM "LiteLLM_DailyUserSpend" s
+JOIN (
+  VALUES
+    ('usage-demo-key-coding', 'User-Agent: claude-cli/2.1.263 (external, cli)'),
+    ('usage-demo-key-research', 'User-Agent: codex_cli_rs/0.40.0'),
+    ('usage-demo-key-batch', 'User-Agent: python-requests/2.32.3')
+) AS c (api_key, tag) ON c.api_key = s.api_key
+WHERE s.user_id LIKE 'usage-demo-user-%';
 
 -- Gateway request tallies for the same synthetic days, so the request tiles that prefer
 -- them agree with the spend aggregate. The route name keeps these rows in the demo namespace.

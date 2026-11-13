@@ -1,35 +1,37 @@
 "use client";
 
 import { useTerminology } from "@/contexts/TerminologyContext";
-import React, { useMemo, useState } from "react";
+import React, { useMemo } from "react";
 import type { ParseKeys } from "i18next";
 import { useTranslation } from "react-i18next";
 import { ArrowRight, Bot, Monitor, Terminal } from "lucide-react";
-import { StackedUsageChart } from "@/components/shared/charts";
+import { stackedUsageColor } from "@/components/shared/charts";
 import { Logo } from "@/components/molecules/logo/Logo";
 import type { DailyData } from "@/components/UsagePage/types";
 import { cn } from "@/lib/cva.config";
-import {
-  bucketTotals,
-  labelForDate,
-  formatCompact,
-  formatCompactUsd,
-  formatMetricValue,
-  seriesBy,
-  type UsageMetric,
-} from "./overviewData";
-import { ChartSkeleton, Panel, PANEL_INSET_X, Segmented } from "./Primitives";
+import { ChartSkeleton, Panel, PANEL_INSET_X } from "./Primitives";
 import { agentDailyData, agentDisplayLabel, topAgents, type AgentRow, type TagSummaryRow } from "./agentCatalog";
+import TrendChart, { GRANULARITY_ADJECTIVE, METRIC_NOUN, PartialPeriodNote } from "./TrendChart";
+import { COMPACT_FORMAT } from "./trendFormat";
+import type { TrendSelection } from "./trendSelection";
+import { usageTrend, type DayRange, type TrendMetric } from "./usageTrendData";
 
 const ROWS = 10;
-const CHART_SERIES = 6;
+const ONE_DECIMAL = { minimumFractionDigits: 1, maximumFractionDigits: 1 } as const;
+const VALUE_LABEL = {
+  tokens: "usage.topAgents.value.tokens",
+  spend: "usage.topAgents.value.spend",
+  requests: "usage.topAgents.value.requests",
+} as const satisfies Readonly<Record<TrendMetric, ParseKeys>>;
+
+const agentValue = (agent: AgentRow, metric: TrendMetric): number => agent[metric];
+
+const byKindThenMetric =
+  (metric: TrendMetric) =>
+  (a: AgentRow, b: AgentRow): number =>
+    Number(a.kind !== "agent") - Number(b.kind !== "agent") || agentValue(b, metric) - agentValue(a, metric);
 /** Below this share of tokens carrying a User-Agent, say so rather than imply the list is the whole picture. */
 const COVERAGE_NOTE_BELOW = 0.5;
-const METRICS = [
-  { value: "tokens", labelKey: "usage.topAgents.metricOptions.tokens" },
-  { value: "spend", labelKey: "usage.topAgents.metricOptions.spend" },
-  { value: "requests", labelKey: "usage.topAgents.metricOptions.requests" },
-] as const satisfies readonly { value: UsageMetric; labelKey: ParseKeys }[];
 
 /** Brand-tinted monograms for runtimes that have no logo file, so a top spender never shows a blank tile. */
 const MONOGRAMS: Readonly<Record<string, { text: string; className: string }>> = {
@@ -81,12 +83,14 @@ function AgentItem({
   rank,
   share,
   color,
+  metric,
   onOpen,
 }: {
   agent: AgentRow;
   rank: number;
   share: number;
   color: string | undefined;
+  metric: TrendMetric;
   onOpen?: (agent: AgentRow) => void;
 }) {
   const { t } = useTranslation();
@@ -118,10 +122,10 @@ function AgentItem({
       </span>
       <span className="text-right">
         <span className="block text-sm tabular-nums text-foreground">
-          {t("usage.topAgents.tokens", { tokens: formatCompact(agent.tokens) })}
+          {t(VALUE_LABEL[metric], { value: COMPACT_FORMAT[metric](agentValue(agent, metric)) })}
         </span>
         <span className="block text-xs tabular-nums text-muted-foreground">
-          {formatCompactUsd(agent.spend)} · {share.toFixed(1)}%
+          {t("usage.topAgents.share", { percent: t("format.number", { val: share, ...ONE_DECIMAL }) })}
         </span>
       </span>
     </>
@@ -156,52 +160,68 @@ function TopAgentsBody({ loading, empty, children }: { loading: boolean; empty: 
   return <>{children}</>;
 }
 
+interface TopAgentsProps {
+  rows: readonly TagSummaryRow[] | undefined;
+  daily: readonly DailyData[];
+  loading: boolean;
+  totalTokens: number;
+  range: DayRange | null;
+  selection: TrendSelection;
+  onOpenAgent?: (agent: AgentRow) => void;
+}
+
 /**
- * The agents and clients driving traffic, read from the proxy's `User-Agent:` tags: a daily stacked
- * chart (like Top models) over a ranked list. Named agents lead the list; SDKs and scripts follow,
- * so agents are not buried under raw HTTP clients that can outspend them. Each row opens User Agent
- * Activity filtered to that agent's tags.
+ * Clients are recognised only from each request's `User-Agent:` tag by `agentCatalog`; traffic
+ * without one stays unattributed. Each day's tags are folded into clients before re-bucketing,
+ * so a bare product tag and its versioned tags are never counted twice in a week or month.
  */
 export default function TopAgents({
   rows,
   daily,
   loading,
   totalTokens,
+  range,
+  selection,
   onOpenAgent,
-}: {
-  rows: readonly TagSummaryRow[] | undefined;
-  /** Tag daily activity; each day's tags are folded into agents for the chart. */
-  daily: readonly DailyData[];
-  loading: boolean;
-  /** All tokens in the range, so the panel can say how much traffic carried no User-Agent to attribute. */
-  totalTokens: number;
-  onOpenAgent?: (agent: AgentRow) => void;
-}) {
+}: TopAgentsProps) {
   const { t } = useTranslation();
-  const [metric, setMetric] = useState<UsageMetric>("tokens");
+  const { metric, granularity } = selection;
   const allAgents = useMemo(() => topAgents(rows ?? []), [rows]);
-  const agents = useMemo(
-    () =>
-      [
-        ...allAgents.filter((agent) => agent.kind === "agent"),
-        ...allAgents.filter((agent) => agent.kind === "sdk"),
-      ].slice(0, ROWS),
+  const agents = useMemo(() => [...allAgents].sort(byKindThenMetric(metric)).slice(0, ROWS), [allAgents, metric]);
+  const colorByAgent = useMemo(
+    () => new Map(allAgents.map((agent, index) => [agent.label, stackedUsageColor(index)])),
     [allAgents],
   );
-  const series = useMemo(() => seriesBy(agentDailyData(daily), "models", metric, CHART_SERIES), [daily, metric]);
-  const totalsByDay = useMemo(() => bucketTotals(series), [series]);
+  const agentDays = useMemo(() => agentDailyData(daily), [daily]);
+  const trend = useMemo(() => {
+    if (range === null) return null;
+    const input = {
+      results: agentDays,
+      range,
+      granularity,
+      colorByModel: colorByAgent,
+      dimension: "models",
+      rankBy: metric,
+    } as const;
+    return usageTrend(input);
+  }, [agentDays, range, granularity, colorByAgent, metric]);
+  const series = trend?.series[metric];
   const colorOf = (label: string) => {
-    const index = series.labels.indexOf(label);
-    return index === -1 ? undefined : series.colors[index];
+    const index = series ? series.labels.indexOf(label) : -1;
+    return index === -1 || series === undefined ? undefined : series.colors[index];
   };
 
-  const totalShare = agents.reduce((sum, agent) => sum + agent.tokens, 0);
+  const listTotal = agents.reduce((sum, agent) => sum + agentValue(agent, metric), 0);
   const attributedTokens = allAgents.reduce((sum, agent) => sum + agent.tokens, 0);
   const coverage = totalTokens > 0 ? Math.min(attributedTokens / totalTokens, 1) : 1;
+  const caption = t("usage.topAgents.caption", {
+    granularity: t(GRANULARITY_ADJECTIVE[granularity]),
+    metric: t(METRIC_NOUN[metric]),
+  });
   const subtitle =
     coverage < COVERAGE_NOTE_BELOW
-      ? t("usage.topAgents.subtitleLowCoverage", { percent: Math.round(coverage * 100) })
-      : t("usage.topAgents.subtitle");
+      ? t("usage.topAgents.subtitleLowCoverage", { caption, percent: Math.round(coverage * 100) })
+      : t("usage.topAgents.subtitle", { caption });
   const half = Math.ceil(agents.length / 2);
 
   return (
@@ -210,30 +230,21 @@ export default function TopAgents({
       title={t("usage.topAgents.title")}
       subtitle={subtitle}
       testId="top-agents"
-      action={
-        <Segmented
-          label={t("usage.topAgents.metricLabel")}
-          value={metric}
-          options={METRICS.map(({ value, labelKey }) => ({ value, label: t(labelKey) }))}
-          onChange={setMetric}
-        />
-      }
       bodyClassName="px-0 pt-4 pb-0"
     >
       <TopAgentsBody loading={loading} empty={agents.length === 0}>
-        <div className="px-2 pb-2">
-          <StackedUsageChart
-            data={series.data}
-            series={series.keys}
-            labels={series.labels.map((label) => agentDisplayLabel(label, t))}
-            colors={series.colors}
-            xKey="date"
-            xLabel={(date) => labelForDate(series, date)}
-            format={(value) => formatMetricValue(value, metric)}
-            totalFor={(date) => totalsByDay.get(date)}
-            className="h-64"
-          />
-        </div>
+        {trend !== null && series !== undefined && (
+          <div className="grid gap-2 px-5 pb-2">
+            <TrendChart
+              trend={trend}
+              selection={selection}
+              labels={series.labels.map((label) => agentDisplayLabel(label, t))}
+              ariaLabel={caption}
+              className="h-64"
+            />
+            <PartialPeriodNote trend={trend} granularity={granularity} />
+          </div>
+        )}
         <div className={cn("grid gap-x-10 border-t py-2 md:grid-cols-2", PANEL_INSET_X)}>
           {[agents.slice(0, half), agents.slice(half)].map((column, columnIndex) => (
             <ol key={columnIndex} className="divide-y divide-border/60">
@@ -242,8 +253,9 @@ export default function TopAgents({
                   key={agent.id}
                   agent={agent}
                   rank={columnIndex * half + index + 1}
-                  share={totalShare > 0 ? (agent.tokens / totalShare) * 100 : 0}
+                  share={listTotal > 0 ? (agentValue(agent, metric) / listTotal) * 100 : 0}
                   color={colorOf(agent.label)}
+                  metric={metric}
                   onOpen={onOpenAgent}
                 />
               ))}

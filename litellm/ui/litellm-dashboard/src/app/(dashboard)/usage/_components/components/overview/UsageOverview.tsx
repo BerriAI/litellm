@@ -7,6 +7,8 @@ import { KeyRound, Users } from "lucide-react";
 import type { OverviewTotals } from "./overviewData";
 import { Panel } from "./Primitives";
 import UsageStatStrip from "./UsageStatStrip";
+import TrendControls from "./TrendControls";
+import { useTrendSelection, type TrendSelection } from "./trendSelection";
 import UsageTrendPanel from "./UsageTrendPanel";
 import type { StatComparison } from "./usageComparison";
 import type { DayRange } from "./usageTrendData";
@@ -25,8 +27,13 @@ interface UsageOverviewProps {
   topKeys: ReactNode;
   topUsers: ReactNode;
   gatewayByEndpoint: ReactNode;
-  topAgents: ReactNode;
+  topAgents: ((trend: SharedTrend) => ReactNode) | null;
   providerBreakdown: ReactNode;
+}
+
+export interface SharedTrend {
+  range: DayRange | null;
+  selection: TrendSelection;
 }
 
 export default function UsageOverview({
@@ -47,6 +54,8 @@ export default function UsageOverview({
   budget,
 }: UsageOverviewProps) {
   const { t } = useTranslation();
+  const trendState = useTrendSelection(range, results);
+  const shared = { range, selection: trendState.selection };
   return (
     <div className="grid gap-3">
       <UsageStatStrip
@@ -62,9 +71,24 @@ export default function UsageOverview({
 
       {subscriptionCosts}
 
-      <UsageTrendPanel results={results} range={range} loading={loading} failed={failed} />
-
-      {topAgents}
+      <div
+        role="group"
+        aria-label={t("usage.trend.controls.label")}
+        className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2"
+      >
+        <p className="text-xs text-muted-foreground">
+          {topAgents ? t("usage.trend.controls.appliesToTrendAndAgents") : t("usage.trend.controls.appliesToTrend")}
+        </p>
+        <TrendControls state={trendState} />
+      </div>
+      <UsageTrendPanel
+        results={results}
+        range={range}
+        loading={loading}
+        failed={failed}
+        selection={trendState.selection}
+      />
+      {topAgents?.(shared)}
       {providerBreakdown}
 
       <Panel icon={KeyRound} title={t("usage.overview.topVirtualKeys")}>

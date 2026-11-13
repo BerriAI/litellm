@@ -22,8 +22,8 @@ async function openUsage(page: PlaywrightPage): Promise<Locator> {
   const card = topKeysCard(page);
   await expect(card).toBeVisible({ timeout: 30_000 });
   // Widen past the default top-5 so other keys in the database cannot crowd this one out.
-  // The radio itself is sr-only and its label covers it, so click the label.
-  await card.getByRole("radiogroup", { name: "Number of top keys to show" }).getByText("50", { exact: true }).click();
+  await card.getByRole("combobox", { name: "Number of top keys to show" }).click();
+  await page.getByRole("option", { name: "Show 50 keys" }).click();
   return card;
 }
 

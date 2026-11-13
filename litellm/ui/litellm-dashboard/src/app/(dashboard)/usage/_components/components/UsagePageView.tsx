@@ -611,15 +611,19 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
                       ) : null
                     }
                     topAgents={
-                      showTopAgents ? (
-                        <TopAgents
-                          rows={tagSummary}
-                          daily={tagDaily}
-                          loading={tagSummaryLoading || tagDailyLoading}
-                          totalTokens={totals.tokens}
-                          onOpenAgent={openAgentActivity}
-                        />
-                      ) : null
+                      showTopAgents
+                        ? (trend) => (
+                            <TopAgents
+                              rows={tagSummary}
+                              daily={tagDaily}
+                              loading={tagSummaryLoading || tagDailyLoading}
+                              totalTokens={totals.tokens}
+                              range={trend.range}
+                              selection={trend.selection}
+                              onOpenAgent={openAgentActivity}
+                            />
+                          )
+                        : null
                     }
                     providerBreakdown={
                       <SpendByProvider loading={loading} isDateChanging={false} providerSpend={providerSpend} />

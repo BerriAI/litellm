@@ -2,7 +2,10 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DailyData, SpendMetrics } from "@/components/UsagePage/types";
+import TrendControls from "./TrendControls";
+import { useTrendSelection } from "./trendSelection";
 import UsageTrendPanel from "./UsageTrendPanel";
+import type { DayRange } from "./usageTrendData";
 
 const metricsOf = (spend: number, tokens: number): SpendMetrics => ({
   spend,
@@ -61,6 +64,21 @@ const chartContainerOfWidth = (width: number) =>
     disconnect() {}
   };
 
+function Trend({ results, range, compact }: { results: readonly DailyData[]; range: DayRange; compact?: boolean }) {
+  const state = useTrendSelection(range, results);
+  return (
+    <UsageTrendPanel
+      results={results}
+      range={range}
+      loading={false}
+      failed={false}
+      selection={state.selection}
+      compact={compact}
+      action={<TrendControls state={state} />}
+    />
+  );
+}
+
 const quarter = { start: "2026-08-01", end: "2026-10-31" };
 const quarterly = [
   day("2026-08-10", { alpha: [777, 7777] }),
@@ -71,19 +89,30 @@ const quarterly = [
 describe("UsageTrendPanel", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("prints each month's spend and token total above its bar when the chart has room", () => {
-    render(<UsageTrendPanel results={quarterly} range={quarter} loading={false} failed={false} />);
+  it("charts one metric at a time, tokens first, and retitles the chart as the metric and bucket change", async () => {
+    const user = userEvent.setup();
+    render(<Trend results={quarterly} range={quarter} />);
 
-    expect(screen.getAllByText("$777")).toHaveLength(3);
+    expect(screen.getByRole("group", { name: "Monthly tokens by model" })).toBeInTheDocument();
+    expect(screen.getByText("Monthly tokens by model, Aug 1 – Oct 31")).toBeInTheDocument();
     expect(screen.getAllByText("7.8K")).toHaveLength(3);
+    expect(screen.queryByText("$777")).not.toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "Models" })).toHaveTextContent("alpha");
+
+    await user.click(screen.getByRole("radio", { name: "Spend" }));
+    expect(screen.getByRole("group", { name: "Monthly spend by model" })).toBeInTheDocument();
+    expect(screen.getAllByText("$777")).toHaveLength(3);
+    expect(screen.queryByText("7.8K")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("radio", { name: "Weekly" }));
+    expect(screen.getByText("Weekly spend by model, Aug 1 – Oct 31")).toBeInTheDocument();
   });
 
   it("keeps a narrow compact chart free of crowded totals and leaves exact figures in the table", () => {
     vi.stubGlobal("innerWidth", 1440);
     vi.stubGlobal("ResizeObserver", chartContainerOfWidth(150));
-    render(<UsageTrendPanel results={quarterly} range={quarter} loading={false} failed={false} compact />);
+    render(<Trend results={quarterly} range={quarter} compact />);
 
-    expect(screen.queryByText("$777")).not.toBeInTheDocument();
     expect(screen.queryByText("7.8K")).not.toBeInTheDocument();
     const table = screen.getByRole("region", { name: "Contribution by model" });
     expect(within(table).getByRole("row", { name: /alpha/ })).toHaveTextContent("$2,331.00");
@@ -92,14 +121,7 @@ describe("UsageTrendPanel", () => {
   it("labels clipped months and weeks by the days they cover", async () => {
     const user = userEvent.setup();
     const results = [day("2026-10-20", { alpha: [5, 50] }), day("2026-11-05", { alpha: [7, 70] })];
-    render(
-      <UsageTrendPanel
-        results={results}
-        range={{ start: "2026-10-15", end: "2026-11-12" }}
-        loading={false}
-        failed={false}
-      />,
-    );
+    render(<Trend results={results} range={{ start: "2026-10-15", end: "2026-11-12" }} />);
     const bucketSize = screen.getByRole("radiogroup", { name: "Bucket size" });
 
     await user.click(within(bucketSize).getByRole("radio", { name: "Monthly" }));
@@ -119,14 +141,7 @@ describe("UsageTrendPanel", () => {
 
   it("names spend without tokens and tokens without recorded spend instead of a rate", () => {
     const results = [day("2026-10-03", { images: [0.4, 0], bundled: [0, 5000] })];
-    render(
-      <UsageTrendPanel
-        results={results}
-        range={{ start: "2026-10-01", end: "2026-10-31" }}
-        loading={false}
-        failed={false}
-      />,
-    );
+    render(<Trend results={results} range={{ start: "2026-10-01", end: "2026-10-31" }} />);
     const table = screen.getByRole("region", { name: "Contribution by model" });
 
     expect(within(table).getByRole("row", { name: /images/ })).toHaveTextContent("Spend without tokens");

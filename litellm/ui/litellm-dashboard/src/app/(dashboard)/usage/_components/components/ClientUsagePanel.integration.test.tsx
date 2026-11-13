@@ -276,15 +276,18 @@ describe("ClientUsagePanel", () => {
     expect(screen.getByRole("dialog", { name: "Claude Desktop" })).toBeInTheDocument();
   });
 
-  it("should show the client's tokens over spend with the overview's buckets and contribution table", async () => {
+  it("should chart one client metric at a time with its own controls and keep the contribution table", async () => {
+    const user = userEvent.setup();
     renderWithProviders(<ClientUsagePanel {...defaultProps} />);
     const table = await screen.findByRole("region", { name: "Contribution by model" });
     const row = within(table).getByRole("row", { name: /test-model/ });
     expect(row).toHaveTextContent("9,000");
     expect(row).toHaveTextContent("$12.50");
     expect(screen.getByRole("heading", { name: "Usage trend" })).toBeInTheDocument();
-    expect(screen.getByRole("group", { name: "Tokens stacked by model" })).toBeInTheDocument();
-    expect(screen.getByRole("group", { name: "Spend stacked by model" })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Daily tokens by model" })).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Daily spend by model" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("radio", { name: "Spend" }));
+    expect(screen.getByRole("group", { name: "Daily spend by model" })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "Monthly" })).toBeInTheDocument();
   });
 

@@ -1,6 +1,6 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
-import { renderWithProviders as render } from "../../../../../tests/test-utils";
+import { chooseSelectOption, renderWithProviders as render } from "../../../../../tests/test-utils";
 import { parseAsString, useQueryStates } from "nuqs";
 import type { UrlUpdateEvent } from "nuqs/adapters/testing";
 import userEvent from "@testing-library/user-event";
@@ -255,13 +255,17 @@ describe("TopKeyView", () => {
     expect(tableViewButton).toBeChecked();
   });
 
-  it("should call setTopKeysLimit when limit is changed via the segmented control", async () => {
+  it("offers the key limits in one labelled dropdown and asks for the chosen number of keys", async () => {
     const user = userEvent.setup();
     render(<TopKeyView {...baseProps} />);
 
-    await user.click(screen.getByRole("radio", { name: "10" }));
+    const limit = screen.getByRole("combobox", { name: "Number of top keys to show" });
+    expect(limit).toHaveTextContent("Show 5 keys");
+    expect(screen.queryByRole("radio", { name: "10" })).not.toBeInTheDocument();
 
-    expect(mockSetTopKeysLimit).toHaveBeenCalledWith(10);
+    await chooseSelectOption(user, limit, "Show 25 keys");
+
+    expect(mockSetTopKeysLimit).toHaveBeenCalledWith(25);
   });
 
   it("should display truncated key ID in table", () => {

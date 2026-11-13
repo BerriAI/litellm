@@ -5,6 +5,7 @@ import { IdCell, MoneyCell } from "@/components/shared/table_cells";
 import { ChevronDownIcon, ChevronUpIcon } from "@heroicons/react/outline";
 import { Segmented } from "@/app/(dashboard)/usage/_components/components/overview/Primitives";
 import { SimpleTooltip } from "@/components/ui/tooltip";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { ParseKeys } from "i18next";
 import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -17,7 +18,6 @@ import { storedKeyId } from "../../keyActivityData";
 import { useResetDetailState } from "@/hooks/useUrlTab";
 
 const TOP_KEYS_LIMITS = [5, 10, 25, 50] as const;
-const LIMIT_OPTIONS = TOP_KEYS_LIMITS.map((limit) => ({ value: String(limit), label: String(limit) }));
 
 type ViewMode = "table" | "chart";
 const VIEW_OPTIONS = [
@@ -221,12 +221,21 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
   return (
     <>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <Segmented
-          label={t("usage.topKeys.limitLabel")}
+        <Select
           value={String(topKeysLimit)}
-          options={LIMIT_OPTIONS}
-          onChange={(limit) => setTopKeysLimit(Number(limit))}
-        />
+          onValueChange={(limit) => limit !== null && setTopKeysLimit(Number(limit))}
+        >
+          <SelectTrigger size="sm" aria-label={t("usage.topKeys.limitLabel")}>
+            <SelectValue>{t("usage.topKeys.showKeys", { limit: topKeysLimit })}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            {TOP_KEYS_LIMITS.map((limit) => (
+              <SelectItem key={limit} value={String(limit)}>
+                {t("usage.topKeys.showKeys", { limit })}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         <Segmented
           label={t("usage.topKeys.viewLabel")}
           value={viewMode}

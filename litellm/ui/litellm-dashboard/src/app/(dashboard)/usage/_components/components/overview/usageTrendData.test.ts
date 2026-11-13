@@ -303,6 +303,36 @@ describe("usageTrend", () => {
     expect(trend.unattributed).toEqual({ spend: 0, tokens: 0, requests: 0 });
   });
 
+  it("ranks leaders by the charted metric while keeping each model's color", () => {
+    const results = [
+      day("2026-10-03", {
+        pricey: { spend: 50, tokens: 100 },
+        chatty: { spend: 1, tokens: 9000 },
+        image: { spend: 5, tokens: 0 },
+      }),
+    ];
+    const colorByModel = modelColorMap(results);
+    const ranked = (rankBy: "tokens" | "spend") => {
+      const input = {
+        results,
+        range: { start: "2026-10-01", end: "2026-10-31" },
+        granularity: "month",
+        colorByModel,
+        rankBy,
+      } as const;
+      return usageTrend(input);
+    };
+
+    expect(ranked("tokens").series.tokens.labels).toEqual(["chatty", "pricey"]);
+    expect(ranked("spend").series.spend.labels).toEqual(["pricey", "image", "chatty"]);
+    expect(ranked("tokens").rows.map((row) => row.key)).toEqual(["chatty", "pricey", "image"]);
+    const colorOf = (rankBy: "tokens" | "spend", label: string) => {
+      const series = ranked(rankBy).series[rankBy];
+      return series.colors[series.labels.indexOf(label)];
+    };
+    expect(colorOf("tokens", "chatty")).toBe(colorOf("spend", "chatty"));
+  });
+
   it("omits Other entirely when every model fits among the leaders", () => {
     const october = { start: "2026-10-01", end: "2026-10-31" };
     const trend = trendOf([day("2026-10-03", { a: { spend: 1, tokens: 1 } })], october, "month");

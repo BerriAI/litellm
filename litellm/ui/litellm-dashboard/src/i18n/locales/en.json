@@ -15422,18 +15422,19 @@
     },
     "trend": {
       "title": "Usage trend",
-      "subtitle": "Tokens and spend by model, {{range}}",
-      "viewLabel": "Chart view",
-      "viewOptions": {
-        "paired": "Tokens & spend",
-        "requests": "Requests"
-      },
+      "subtitle": "{{caption}}, {{range}}",
+      "caption": "{{granularity}} {{metric}} by model",
       "granularityMonth": "Monthly",
-      "tokensTitle": "Tokens",
-      "spendTitle": "Spend",
-      "requestsTitle": "Requests",
-      "chartLabel": "{{metric}} stacked by model",
       "legend": "Models",
+      "legendHint": {
+        "modelGroups": "Model names as callers requested them, which are the proxy's model groups and aliases",
+        "models": "Deployed model names that served this client's requests"
+      },
+      "controls": {
+        "label": "Chart options",
+        "appliesToTrend": "Applies to Usage trend",
+        "appliesToTrendAndAgents": "Applies to Usage trend and Top agents"
+      },
       "loading": "Loading usage trend",
       "empty": "No usage recorded in this range",
       "unavailable": "Usage trend is unavailable because spend data failed to load.",
@@ -15502,19 +15503,19 @@
       "byProvider": "by {{provider}}"
     },
     "topAgents": {
-      "metricOptions": {
-        "tokens": "Tokens",
-        "spend": "Spend",
-        "requests": "Requests"
-      },
       "viewActivity": "View activity",
-      "tokens": "{{tokens}} tokens",
+      "value": {
+        "tokens": "{{value}} tokens",
+        "spend": "{{value}}",
+        "requests": "{{value}} requests"
+      },
+      "share": "{{percent}}% of listed",
+      "caption": "{{granularity}} {{metric}} by client",
       "viewAgentUsage": "View {{agent}} usage",
       "empty": "No agent traffic in this range",
-      "subtitleLowCoverage": "Daily usage by agent. {{percent}}% of tokens came with a User-Agent; the rest is unattributed",
-      "subtitle": "Daily usage by agent, from each request's User-Agent",
-      "title": "Top agents",
-      "metricLabel": "Agent metric"
+      "subtitleLowCoverage": "{{caption}}, recognised from each request's User-Agent tag. Only {{percent}}% of tokens carried one, the rest is unattributed",
+      "subtitle": "{{caption}}, recognised from each request's User-Agent tag",
+      "title": "Top agents"
     },
     "agentCatalog": {
       "labels": {
@@ -15948,6 +15949,7 @@
       "showFewerTags": "Show fewer tags",
       "showAllTags": "Show all tags",
       "limitLabel": "Number of top keys to show",
+      "showKeys": "Show {{limit}} keys",
       "viewLabel": "View",
       "chartTooltip": {
         "keyAlias": "Key Alias: ",

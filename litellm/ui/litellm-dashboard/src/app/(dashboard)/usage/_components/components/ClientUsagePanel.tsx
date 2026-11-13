@@ -24,6 +24,8 @@ import type { UsageClient } from "../hooks/clientUsageData";
 import { useClientUsage } from "../hooks/useClientUsage";
 import { topAgents, type AgentRow } from "./overview/agentCatalog";
 import { useClientAgentModels } from "../hooks/useClientAgentModels";
+import TrendControls from "./overview/TrendControls";
+import { useTrendSelection } from "./overview/trendSelection";
 import UsageTrendPanel from "./overview/UsageTrendPanel";
 import { clientAgentDetail, type ClientAgentDetail } from "./overview/clientAgentDetail";
 import { modelColorMap, formatCompact, formatUsd, overviewTotals } from "./overview/overviewData";
@@ -144,6 +146,7 @@ export default function ClientUsagePanel({
     () => (startTime && endTime ? { start: formatDate(startTime), end: formatDate(endTime) } : null),
     [startTime, endTime],
   );
+  const trendState = useTrendSelection(chartRange, modelResults);
 
   const canFilterPerson = canChooseUser && !teamId && !accessError;
   const canRetry = !accessError && (scopedRequest || canChooseUser);
@@ -293,6 +296,8 @@ export default function ClientUsagePanel({
                       range={chartRange}
                       loading={chartLoading}
                       failed={false}
+                      selection={trendState.selection}
+                      action={<TrendControls state={trendState} />}
                       compact
                       colorByModel={colorByModel}
                     />
