@@ -40,7 +40,7 @@ from litellm.types.proxy.auth.customer_hierarchy import (
     CustomerRequestIdentity,
     CustomerScopeAuth,
 )
-from litellm.types.proxy.management_endpoints.customer_hierarchy import CustomerMember
+from litellm.types.proxy.management_endpoints.customer_hierarchy import CustomerMember, Organization
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 NOW: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -464,12 +464,39 @@ class _Registrar:
         )
 
 
+class _OrganizationRegistrar:
+    """Stands in for ensure_customer_organization: records the alias and adds the organization row, or fails."""
+
+    def __init__(self, organizations: _OrganizationTable, failure: Failure | None = None) -> None:
+        self.organizations = organizations
+        self.failure = failure
+        self.calls: tuple[str, ...] = ()
+
+    async def __call__(self, alias: str, prisma_client: object) -> Organization | Failure:
+        self.calls = (*self.calls, alias)
+        if self.failure is not None:
+            return self.failure
+        self.organizations.rows = (*self.organizations.rows, _organization(alias, org_id=alias))
+        return Organization.model_validate(
+            {
+                "customer_org_id": alias,
+                "alias": alias,
+                "member_count": 0,
+                "created_at": NOW,
+                "created_by": "x",
+                "updated_at": NOW,
+                "updated_by": "x",
+            }
+        )
+
+
 def _resolve(
     prisma: _Prisma,
     identity: CustomerRequestIdentity,
     route: str = "/chat/completions",
     register: _Registrar | None = None,
     key_metadata: Mapping[str, object] | None = None,
+    register_organization: _OrganizationRegistrar | None = None,
 ):
     return resolve_customer_hierarchy(
         identity=identity,
@@ -480,6 +507,9 @@ def _resolve(
         route=route,
         key_metadata=key_metadata,
         register=register if register is not None else _Registrar(_MemberTable({}), Failure(ErrorCode.NOT_FOUND)),
+        register_organization=register_organization
+        if register_organization is not None
+        else _OrganizationRegistrar(_OrganizationTable(), Failure(ErrorCode.NOT_FOUND)),
     )
 
 
@@ -614,8 +644,48 @@ async def test_an_alias_next_to_a_member_must_name_that_members_organization() -
 
 
 @pytest.mark.asyncio
-async def test_an_unknown_alias_runs_untracked_and_a_shared_alias_is_rejected_as_ambiguous() -> None:
-    assert await _resolve(_Prisma(_MemberTable({})), CustomerRequestIdentity(customer_org_alias="ghost")) is None
+async def test_an_unknown_alias_becomes_a_new_organization_charged_for_the_request() -> None:
+    organizations: Final = _OrganizationTable(())
+    registrar: Final = _OrganizationRegistrar(organizations)
+    prisma: Final = _Prisma(_MemberTable({}), organizations)
+
+    hierarchy: Final = await _resolve(
+        prisma, CustomerRequestIdentity(customer_org_alias="ghost"), register_organization=registrar
+    )
+
+    assert registrar.calls == ("ghost",)
+    assert hierarchy is not None
+    assert (hierarchy.customer_org_id, hierarchy.customer_team_id, hierarchy.customer_member_id) == (
+        "ghost",
+        None,
+        None,
+    )
+    assert tuple((scope.key, scope.entity_id) for scope in hierarchy.scopes) == (("customer_org", "ghost"),)
+
+    again: Final = await _resolve(
+        prisma, CustomerRequestIdentity(customer_org_alias="ghost"), register_organization=registrar
+    )
+    assert again is not None and registrar.calls == ("ghost",)
+
+
+@pytest.mark.asyncio
+async def test_an_alias_that_cannot_be_registered_runs_untracked_and_a_shared_alias_is_rejected_as_ambiguous() -> None:
+    failing: Final = _OrganizationRegistrar(_OrganizationTable(()), Failure(ErrorCode.ALREADY_EXISTS))
+    untracked: Final = await _resolve(
+        _Prisma(_MemberTable({})), CustomerRequestIdentity(customer_org_alias="ghost"), register_organization=failing
+    )
+    assert (untracked, failing.calls) == (None, ("ghost",))
+
+    oversized: Final = _OrganizationRegistrar(_OrganizationTable(()))
+    assert (
+        await _resolve(
+            _Prisma(_MemberTable({})),
+            CustomerRequestIdentity(customer_org_alias="g" * 257),
+            register_organization=oversized,
+        )
+        is None
+    )
+    assert oversized.calls == ()
 
     shared: Final = _Prisma(
         _MemberTable({}), _OrganizationTable((_organization("acme"), _organization("acme", org_id="org-2")))
