@@ -56,7 +56,7 @@ async def organization_by_identity(
 
 
 def template_budget(template: BudgetTemplate) -> Budget:
-    return Budget.model_validate(template.model_dump(exclude_unset=True, exclude={"name", "is_default"}))
+    return Budget.model_validate(template.model_dump(exclude_unset=True, exclude={"name"}))
 
 
 def templates_match(organization: Organization, payload: OrganizationUpsert, default_index: int | None) -> bool:
@@ -69,7 +69,7 @@ def templates_match(organization: Organization, payload: OrganizationUpsert, def
     ) and (
         default_index is not None
         and payload.default_budgets[default_index].name in existing
-        and existing[payload.default_budgets[default_index].name].budget_id == organization.default_budget_id
+        and existing[payload.default_budgets[default_index].name].budget_id == organization.default_budget_template_id
     )
 
 
@@ -83,13 +83,18 @@ async def write_templates(
     existing: Final = {template.name: template.budget_id for template in organization.default_budgets}
     written: Final = tuple(
         [
-            (await store.update_budget(existing.get(template.name), template_budget(template), actor), template.name)
+            await store.update_budget(existing[template.name], template_budget(template), actor)
+            if template.name in existing
+            else await store.create_budget(template_budget(template), actor, template.name)
             for template in payload.default_budgets
         ]
     )
-    names: Final = {template.budget_id: template.name for template in organization.default_budgets}
+    current_ids: Final = tuple(template.budget_id for template in organization.default_budgets)
     await store.write_template_metadata(
-        organization.customer_org_id, {**names, **dict(written)}, written[default_index][0], actor
+        organization.customer_org_id,
+        (*current_ids, *(budget_id for budget_id in written if budget_id not in current_ids)),
+        written[default_index],
+        actor,
     )
 
 
@@ -97,7 +102,7 @@ async def upsert_organization(
     store: CustomerHierarchyStore, payload: OrganizationUpsert, actor: str
 ) -> OrganizationOutcome | Failure:
     await store.lock_customer_identities()
-    default_index: Final = default_template_index(payload.default_budgets)
+    default_index: Final = default_template_index(payload.default_budgets, payload.default_budget_template)
     if isinstance(default_index, Failure):
         return default_index
     names: Final = tuple(template.name for template in payload.default_budgets)
@@ -114,7 +119,9 @@ async def upsert_organization(
             OrganizationUpsertResponse.model_validate({**created.model_dump(), "created": True}), None
         )
     patch: Final = OrganizationPatch.model_validate(
-        payload.model_dump(exclude_unset=True, exclude={"customer_org_id", "default_budgets"})
+        payload.model_dump(
+            exclude_unset=True, exclude={"customer_org_id", "default_budgets", "default_budget_template"}
+        )
     )
     alias_failure: Final = await store.claim_organization_alias(payload.alias, existing.customer_org_id)
     if alias_failure is not None:
@@ -150,7 +157,7 @@ async def customer_team(
             if explicit_team.parent_org_id == organization_id
             else Failure(ErrorCode.CUSTOMER_ORG_MISMATCH)
         )
-    row: Final = await store.teams.upsert(
+    await store.teams.upsert(
         where={"customer_team_id": default_team_id(organization_id)},
         data={
             "create": {
@@ -163,7 +170,9 @@ async def customer_team(
             "update": {},
         },
     )
-    team: Final = Team.model_validate(row.model_dump())
+    team: Final = await store.get_team(default_team_id(organization_id))
+    if isinstance(team, Failure):
+        return team
     return team if team.parent_org_id == organization_id else Failure(ErrorCode.CUSTOMER_ORG_MISMATCH)
 
 
@@ -178,8 +187,7 @@ async def upsert_member(
         return Failure(ErrorCode.CUSTOMER_ORG_MISMATCH)
     existing: Final = await store.get_member(payload.customer_member_id)
     if not isinstance(existing, Failure):
-        previous_team: Final = await store.get_team(existing.parent_team_id)
-        if isinstance(previous_team, Failure) or previous_team.parent_org_id != organization.customer_org_id:
+        if existing.parent_org_id != organization.customer_org_id:
             return Failure(ErrorCode.CUSTOMER_ORG_MISMATCH)
     elif existing.code is not ErrorCode.NOT_FOUND:
         return existing
@@ -192,12 +200,14 @@ async def upsert_member(
     requested_budget: Final = (
         patch.budget_id
         if "budget_id" in patch.model_fields_set
-        else organization.default_budget_id
+        else organization.default_budget_template_id
         if isinstance(existing, Failure)
         else existing.budget_id
     )
     selected: Final = (
-        requested_budget or organization.default_budget_id if isinstance(existing, Failure) else requested_budget
+        requested_budget or organization.default_budget_template_id
+        if isinstance(existing, Failure)
+        else requested_budget
     )
     if selected is not None and not any(template.budget_id == selected for template in organization.default_budgets):
         return Failure(ErrorCode.TEMPLATE_NOT_IN_ORG)
@@ -211,13 +221,20 @@ async def upsert_member(
     team: Final = await customer_team(store, organization.customer_org_id, payload.parent_team_id, actor)
     if isinstance(team, Failure):
         return team
+    team_ids: Final = (
+        (team.customer_team_id,)
+        if isinstance(existing, Failure)
+        else existing.parent_team_ids
+        if payload.parent_team_id is None
+        else (team.customer_team_id, *(tid for tid in existing.parent_team_ids if tid != team.customer_team_id))
+    )
     if isinstance(existing, Failure):
         member: Final = await store.create_member(
             MemberCreate.model_validate(
                 {
                     **patch.model_dump(exclude_unset=True),
                     "customer_member_id": payload.customer_member_id,
-                    "parent_team_id": team.customer_team_id,
+                    "parent_team_ids": (team.customer_team_id,),
                 }
             ),
             actor,
@@ -233,7 +250,7 @@ async def upsert_member(
         existing.budget_override_expires_at == patch.budget_override_expires_at
     )
     if (
-        existing.parent_team_id == team.customer_team_id
+        existing.parent_team_ids == team_ids
         and selected == existing.budget_id
         and alias_matches
         and override_matches
@@ -241,7 +258,7 @@ async def upsert_member(
     ):
         return MemberUpsertResponse.model_validate({**existing.model_dump(), "created": False})
     await store.members.update(
-        where={"customer_member_id": payload.customer_member_id}, data={"parent_team_id": team.customer_team_id}
+        where={"customer_member_id": payload.customer_member_id}, data={"parent_team_ids": team_ids}
     )
     updated: Final = await store.update_member(payload.customer_member_id, patch, actor)
     if isinstance(updated, Failure):

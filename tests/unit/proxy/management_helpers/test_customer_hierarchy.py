@@ -8,12 +8,31 @@ from typing import Final
 
 import pytest
 from prisma import Json
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
-from litellm.proxy.management_helpers.customer_hierarchy import effective_member_budget, related_budget
+from litellm.models.budget import BudgetLimit, LiteLLM_BudgetTable
+from litellm.proxy._types import BudgetWriteRequest
+from litellm.proxy.management_helpers.customer_hierarchy import (
+    budget_row_values,
+    effective_member_budget,
+    related_budget,
+)
 from litellm.types.proxy.management_endpoints.customer_hierarchy import Budget
 
 NOW: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize("windows", (None, []))
+def test_scalar_budget_accepts_absent_windows(windows: object) -> None:
+    budget: Final = LiteLLM_BudgetTable.model_validate({"max_budget": 0, "budget_limits": windows})
+    assert budget.max_budget == 0
+
+
+def test_scalar_budget_rejects_concurrent_windows() -> None:
+    row: Final = {"budget_limits": [{"budget_duration": "1mo", "max_budget": 0}]}
+    with pytest.raises(ValidationError, match="customer hierarchies"):
+        LiteLLM_BudgetTable.model_validate(row)
+    assert Budget.model_validate(row).budget_limits == (BudgetLimit(budget_duration="1mo", max_budget=0),)
 
 
 class Record(BaseModel):
@@ -27,8 +46,17 @@ def matches_where(row: Mapping[str, object], where: Mapping[str, object]) -> boo
             matched: Final = tuple(matches_where(row, part) for part in nested)
             return any(matched) if key == "OR" else all(matched)
         if isinstance(value, Mapping):
+            if "has" in value:
+                items: Final = TypeAdapter(tuple[str, ...]).validate_python(row.get(key, ()))
+                return value["has"] in items
             if "in" in value:
                 return row.get(key) in value["in"]
+            if "has" in value:
+                return value["has"] in TypeAdapter(tuple[str, ...]).validate_python(row.get(key) or ())
+            if "has_some" in value:
+                return bool(
+                    set(value["has_some"]) & set(TypeAdapter(tuple[str, ...]).validate_python(row.get(key) or ()))
+                )
             if "not" in value:
                 return not matches_where(row, {key: value["not"]})
             if "contains" in value:
@@ -74,9 +102,7 @@ class Table:
         row: Final = Record.model_validate(
             {
                 "spend": 0.0,
-                "budget_reset_at": None,
-                "budget_ids": (),
-                "budget_names": {},
+                "budget_template_ids": (),
                 "created_at": NOW,
                 "updated_at": NOW,
                 **{key: value.data if isinstance(value, Json) else value for key, value in data.items()},
@@ -140,6 +166,12 @@ class Table:
         self.rows = {key: row for key, row in self.rows.items() if row not in matched}
         return len(matched)
 
+    async def update_many(self, where: Mapping[str, object], data: Mapping[str, object]) -> int:
+        matched: Final = await self.find_many(where=where)
+        values: Final = {key: value.data if isinstance(value, Json) else value for key, value in data.items()}
+        self.rows = {key: (row.model_copy(update=values) if row in matched else row) for key, row in self.rows.items()}
+        return len(matched)
+
 
 class Database:
     def __init__(self) -> None:
@@ -147,11 +179,14 @@ class Database:
         self.litellm_customerteamtable = Table("customer_team_id", self)
         self.litellm_customermembertable = Table("customer_member_id", self)
         self.litellm_budgettable = Table("budget_id", self)
+        self.litellm_customerbudgetincreaserequest = Table("request_id", self)
         self.locked_organization_ids: tuple[str, ...] = ()
 
     async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
         if "pg_advisory_xact_lock" in query:
             return ()
+        if "SELECT EXISTS" in query:
+            return ({"referenced": False},)
         if "FOR UPDATE" in query:
             self.locked_organization_ids = (*self.locked_organization_ids, *(str(arg) for arg in args))
             return ()
@@ -159,7 +194,7 @@ class Database:
             connection.row_factory = sqlite3.Row
             connection.executescript(
                 'CREATE TABLE "LiteLLM_CustomerTeamTable" (customer_team_id TEXT, parent_org_id TEXT);'
-                'CREATE TABLE "LiteLLM_CustomerMemberTable" (customer_member_id TEXT, parent_team_id TEXT);'
+                'CREATE TABLE "LiteLLM_CustomerMemberTable" (customer_member_id TEXT, parent_org_id TEXT);'
             )
             connection.executemany(
                 'INSERT INTO "LiteLLM_CustomerTeamTable" VALUES (?, ?)',
@@ -171,7 +206,7 @@ class Database:
             connection.executemany(
                 'INSERT INTO "LiteLLM_CustomerMemberTable" VALUES (?, ?)',
                 tuple(
-                    (row.model_dump()["customer_member_id"], row.model_dump()["parent_team_id"])
+                    (row.model_dump()["customer_member_id"], row.model_dump()["parent_org_id"])
                     for row in self.litellm_customermembertable.rows.values()
                 ),
             )
@@ -222,6 +257,54 @@ def test_custom_budget_and_missing_sources_resolve_without_a_template() -> None:
     assert effective_member_budget(None, None, None, NOW) == Budget(allowed_models=())
 
 
+@pytest.mark.parametrize("request_type", (Budget, BudgetWriteRequest))
+@pytest.mark.parametrize("maximum", (-1.0, float("nan"), float("inf")))
+def test_budget_windows_reject_invalid_caps(request_type: type[BaseModel], maximum: float) -> None:
+    with pytest.raises(ValidationError):
+        request_type.model_validate({"budget_limits": [{"budget_duration": "1mo", "max_budget": maximum}]})
+
+
+@pytest.mark.parametrize("request_type", (Budget, BudgetWriteRequest))
+def test_budget_windows_reject_duplicate_durations(request_type: type[BaseModel]) -> None:
+    with pytest.raises(ValidationError):
+        request_type.model_validate(
+            {
+                "budget_limits": [
+                    {"budget_duration": "1mo", "max_budget": 0},
+                    {"budget_duration": "1mo", "max_budget": 10},
+                ]
+            }
+        )
+
+
+@pytest.mark.parametrize("request_type", (Budget, BudgetWriteRequest))
+@pytest.mark.parametrize("duration", ("2d", "14d", "30d", "1y", "1h"))
+def test_budget_windows_reject_noncanonical_durations(request_type: type[BaseModel], duration: str) -> None:
+    with pytest.raises(ValidationError, match="literal_error"):
+        request_type.model_validate({"budget_limits": [{"budget_duration": duration, "max_budget": 0}]})
+
+
+def test_window_override_preserves_other_period_and_scalar_fields() -> None:
+    template: Final = Budget(
+        max_budget=500,
+        budget_duration="30d",
+        budget_limits=(
+            BudgetLimit(budget_duration="1mo", max_budget=100),
+            BudgetLimit(budget_duration="12mo", max_budget=1000),
+        ),
+    )
+    override: Final = Budget(budget_limits=(BudgetLimit(budget_duration="1mo", max_budget=0),))
+    effective: Final = effective_member_budget(template, override, None, NOW)
+    assert effective.budget_limits == (
+        BudgetLimit(budget_duration="1mo", max_budget=0),
+        BudgetLimit(budget_duration="12mo", max_budget=1000),
+    )
+    assert effective.max_budget == template.max_budget
+    assert effective.budget_duration == template.budget_duration
+    assert effective_member_budget(template, override, NOW, NOW) == template
+    assert effective_member_budget(template, Budget(budget_limits=()), None, NOW) == template
+
+
 @pytest.mark.parametrize(
     "expiry, expected",
     (
@@ -245,3 +328,11 @@ def test_existing_budget_model_applies_temporary_increase_using_injected_now(exp
 def test_member_temporary_increase_is_added_to_its_inherited_maximum(expiry: datetime, expected: float) -> None:
     resolved: Final = related_budget({"temp_budget_increase": 5, "temp_budget_expiry": expiry}, NOW, 100)
     assert resolved == Budget(max_budget=expected)
+
+
+def test_a_budget_row_without_windows_writes_budget_limits_as_prisma_json_null() -> None:
+    values: Final = budget_row_values({"max_budget": 1.0, "budget_limits": None, "model_tpm_limit": None})
+    assert values["max_budget"] == 1.0
+    assert isinstance(values["budget_limits"], Json)
+    assert values["budget_limits"].data is None
+    assert "model_tpm_limit" not in values

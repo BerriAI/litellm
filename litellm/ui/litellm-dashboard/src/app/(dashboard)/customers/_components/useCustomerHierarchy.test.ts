@@ -15,7 +15,7 @@ it("should encode hierarchy IDs in paths and preserve their identity", async () 
       let record: object = { customer_team_id: "team/one", parent_org_id: "org/one" };
       if (url.pathname.includes("customer_organizations")) record = { customer_org_id: "org/one", default_budgets: [] };
       if (url.pathname.includes("customer_members"))
-        record = { customer_member_id: "member/one", parent_team_id: "team/one" };
+        record = { customer_member_id: "member/one", parent_team_ids: ["team/one"] };
       return new Response(JSON.stringify(record), { headers: { "Content-Type": "application/json" } });
     }),
   );
@@ -27,6 +27,6 @@ it("should encode hierarchy IDs in paths and preserve their identity", async () 
   ]);
   expect(result.entity).toEqual({
     kind: "member",
-    record: { customer_member_id: "member/one", parent_team_id: "team/one" },
+    record: { customer_member_id: "member/one", parent_team_ids: ["team/one"] },
   });
 });

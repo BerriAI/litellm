@@ -1,8 +1,9 @@
+from collections.abc import Mapping
 from math import ceil
+from types import MappingProxyType
 from typing import Annotated, Final, NoReturn, TypeAlias, TypeVar
 
 from fastapi import APIRouter, Depends, Query, Request, Response
-from typing_extensions import assert_never
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.customer_hierarchy_auth import forget_customer_hierarchies, forget_customer_organization_aliases
@@ -42,52 +43,69 @@ from litellm.types.proxy.management_endpoints.management_v1 import ListMeta, Lis
 T: Final = TypeVar("T")
 
 
+_ERROR_DETAILS: Final[Mapping[ErrorCode, tuple[int, str, str]]] = MappingProxyType(
+    {
+        ErrorCode.NOT_FOUND: (404, "Not found", "Customer entity not found."),
+        ErrorCode.PARENT_NOT_FOUND: (404, "Parent not found", "Customer parent not found."),
+        ErrorCode.ALREADY_EXISTS: (409, "Already exists", "Customer entity ID already exists."),
+        ErrorCode.INVALID_DEFAULT_BUDGET: (
+            422,
+            "Invalid default budget",
+            "default_budget_template must name one of default_budgets, or default_budgets must hold one template.",
+        ),
+        ErrorCode.TEMPLATE_NOT_IN_ORG: (
+            422,
+            "Template not in organization",
+            "Budget template must belong to the member's organization.",
+        ),
+        ErrorCode.HAS_CHILDREN: (409, "Has children", "Delete the customer's children before deleting the parent."),
+        ErrorCode.INVALID_TEMPLATE_NAMES: (
+            422,
+            "Invalid template names",
+            "Budget template names must be unique within the organization.",
+        ),
+        ErrorCode.TEMPLATE_IN_USE: (409, "Template in use", "A default or referenced template cannot be deleted."),
+        ErrorCode.BUDGET_REQUIRED: (422, "Budget required", "A member requires a template or a budget override."),
+        ErrorCode.INCREASE_NOT_ALLOWED: (
+            422,
+            "Increase not allowed",
+            "The member's budget does not allow temporary increase requests.",
+        ),
+        ErrorCode.REQUEST_NOT_PENDING: (
+            409,
+            "Request not pending",
+            "Only a pending increase request can be approved or rejected.",
+        ),
+        ErrorCode.REQUEST_ALREADY_PENDING: (
+            409,
+            "Request already pending",
+            "The member already has an increase request waiting for review.",
+        ),
+        ErrorCode.EXPIRY_IN_PAST: (422, "Expiry in past", "A temporary increase must expire in the future."),
+        ErrorCode.KEY_NOT_IN_ORG: (
+            403,
+            "Key not in organization",
+            "The key may only act for members of its own customer organization.",
+        ),
+        ErrorCode.FORBIDDEN: (403, "Forbidden", "Only proxy admins can manage customer hierarchies."),
+        ErrorCode.DATABASE_UNAVAILABLE: (503, "Database not connected", "Database not connected."),
+        ErrorCode.ALIAS_ALREADY_EXISTS: (
+            409,
+            "Customer org alias already exists",
+            "Customer org alias is already used by another customer org.",
+        ),
+        ErrorCode.CUSTOMER_ORG_MISMATCH: (
+            409,
+            "Customer org mismatch",
+            "Customer member and customer team must belong to the specified customer org.",
+        ),
+    }
+)
+assert _ERROR_DETAILS.keys() == frozenset(ErrorCode), "every ErrorCode needs a public problem"
+
+
 def error_details(code: ErrorCode) -> tuple[int, str, str]:
-    match code:
-        case ErrorCode.NOT_FOUND:
-            return 404, "Not found", "Customer entity not found."
-        case ErrorCode.PARENT_NOT_FOUND:
-            return 404, "Parent not found", "Customer parent not found."
-        case ErrorCode.ALREADY_EXISTS:
-            return 409, "Already exists", "Customer entity ID already exists."
-        case ErrorCode.INVALID_DEFAULT_BUDGET:
-            return (
-                422,
-                "Invalid default budget",
-                "Exactly one organization budget must be marked default.",
-            )
-        case ErrorCode.TEMPLATE_NOT_IN_ORG:
-            return (
-                422,
-                "Template not in organization",
-                "Budget template must belong to the member's organization.",
-            )
-        case ErrorCode.HAS_CHILDREN:
-            return 409, "Has children", "Delete the customer's children before deleting the parent."
-        case ErrorCode.INVALID_TEMPLATE_NAMES:
-            return 422, "Invalid template names", "Budget template names must be unique within the organization."
-        case ErrorCode.TEMPLATE_IN_USE:
-            return 409, "Template in use", "A default or referenced template cannot be deleted."
-        case ErrorCode.BUDGET_REQUIRED:
-            return 422, "Budget required", "A member requires a template or a budget override."
-        case ErrorCode.FORBIDDEN:
-            return 403, "Forbidden", "Only proxy admins can manage customer hierarchies."
-        case ErrorCode.DATABASE_UNAVAILABLE:
-            return 503, "Database not connected", "Database not connected."
-        case ErrorCode.ALIAS_ALREADY_EXISTS:
-            return (
-                409,
-                "Customer org alias already exists",
-                "Customer org alias is already used by another customer org.",
-            )
-        case ErrorCode.CUSTOMER_ORG_MISMATCH:
-            return (
-                409,
-                "Customer org mismatch",
-                "Customer member and customer team must belong to the specified customer org.",
-            )
-        case _:
-            assert_never(code)
+    return _ERROR_DETAILS[code]
 
 
 def raise_public(failure: Failure) -> NoReturn:
@@ -190,7 +208,7 @@ async def create_customer_organization(
         "Create or update a customer org by customer_org_id, or by alias when no ID is supplied. "
         "Returns 200 with created=true for creation and created=false for updates. Repeated identical calls are no-ops. "
         "Supplied default_budgets are merged by template name, preserving existing template IDs and omitted templates. "
-        "A single supplied template becomes the default; multiple templates require exactly one is_default=true. "
+        "A single supplied template becomes the default; multiple templates require default_budget_template to name one. "
         "Omitted fields retain their values. Conflicting or ambiguous aliases return 409. Proxy admins only."
     ),
 )
@@ -378,7 +396,7 @@ async def create_customer_member(
     description=(
         "Create or update a customer member by customer_member_id within a customer org identified by "
         "customer_org_id or customer_org_alias. If both are supplied they must match. "
-        "An omitted parent_team_id selects the customer org's default customer team, creating it if necessary. "
+        "A new customer member with no parent_team_id joins the customer org's default customer team, created if necessary. An existing customer member keeps its customer teams, and a supplied parent_team_id becomes its first customer team. "
         "Alias, budget_id, budget_override and budget_override_expires_at follow the existing customer member models. "
         "Omitted update fields retain their values. Moving between customer teams in the same customer org is allowed. "
         "Moving between customer orgs or selecting another customer org's customer team returns 409. "

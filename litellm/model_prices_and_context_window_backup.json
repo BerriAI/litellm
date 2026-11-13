@@ -88720,8 +88720,10 @@
         "mode": "chat",
         "output_cost_per_token": 3e-06,
         "source": "https://api.together.ai/v1/models",
+        "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_response_schema": true,
         "supports_vision": true
     },
     "gemini/gemini-4-carbon": {
