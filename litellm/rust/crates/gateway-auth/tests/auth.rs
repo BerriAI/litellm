@@ -9,7 +9,8 @@ use axum::{
 };
 use futures_util::future::BoxFuture;
 use litellm_config::Config;
-use litellm_gateway_auth::{Auth, RequireMasterKey, hash_token};
+use litellm_gateway_auth::{Auth, RequireMasterKey};
+use litellm_gateway_auth_core::Token;
 use litellm_secret_value::SecretValue;
 use litellm_secrets::source::SecretSource;
 use rstest::{fixture, rstest};
@@ -89,14 +90,6 @@ async fn enforces_configured_keys_without_exposing_secrets(
     assert!(!text.contains("private-backend-detail"));
     assert!(!text.contains("literal-key"));
     assert!(!text.contains("resolved-key"));
-}
-
-#[rstest]
-fn hash_token_matches_python_sha256_hexdigest() {
-    assert_eq!(
-        hash_token("sk-9876"),
-        "595b23af2e99cee580245f388d3244a39247a25a3846e898e9c78841f8471a3e"
-    );
 }
 
 use litellm_gateway_auth::{
@@ -281,7 +274,7 @@ async fn policy_cannot_expand_membership_or_credential_permissions(
     let pipeline = pipeline("issuer-a", permissions, restrictions, None);
     let identity = pipeline
         .auth
-        .authenticate(&SecretValue::new("test-token"))
+        .authenticate(&Token::new("test-token"))
         .await
         .unwrap();
     assert!(matches!(
@@ -306,12 +299,12 @@ async fn authorization_grants_bind_the_exact_caller_and_target() {
     let second = pipeline("issuer-b", Permissions::All, Permissions::All, None);
     let caller = first
         .auth
-        .authenticate(&SecretValue::new("test-token"))
+        .authenticate(&Token::new("test-token"))
         .await
         .unwrap();
     let other = second
         .auth
-        .authenticate(&SecretValue::new("test-token"))
+        .authenticate(&Token::new("test-token"))
         .await
         .unwrap();
     assert_ne!(caller.caller().principal(), other.caller().principal());
@@ -344,7 +337,7 @@ async fn expiry_is_checked_again_for_operations_on_existing_connections() {
     let pipeline = pipeline("issuer-a", Permissions::All, Permissions::All, None);
     let identity = pipeline
         .auth
-        .authenticate(&SecretValue::new("test-token"))
+        .authenticate(&Token::new("test-token"))
         .await
         .unwrap();
     assert!(identity.authorize(model("allowed")).await.is_ok());
@@ -354,10 +347,7 @@ async fn expiry_is_checked_again_for_operations_on_existing_connections() {
         Err(Error::Expired)
     ));
     assert!(matches!(
-        pipeline
-            .auth
-            .authenticate(&SecretValue::new("test-token"))
-            .await,
+        pipeline.auth.authenticate(&Token::new("test-token")).await,
         Err(Error::Expired)
     ));
     assert_eq!(pipeline.identities.calls.load(Ordering::SeqCst), 1);
@@ -370,7 +360,7 @@ async fn bearer_extraction_rejects_duplicates_and_does_not_trust_preexisting_ide
     let pipeline = pipeline("issuer-a", Permissions::All, Permissions::All, None);
     let identity = pipeline
         .auth
-        .authenticate(&SecretValue::new("test-token"))
+        .authenticate(&Token::new("test-token"))
         .await
         .unwrap();
     let app = Router::new()
@@ -444,9 +434,7 @@ impl litellm_gateway_auth::CredentialExtractor for CustomHeader {
             .get("x-test-key")
             .and_then(|value| value.to_str().ok())
             .ok_or(Error::InvalidToken)?;
-        Ok(litellm_gateway_auth::Credential::Token(SecretValue::new(
-            value,
-        )))
+        Ok(litellm_gateway_auth::Credential::Token(Token::new(value)))
     }
 }
 
@@ -489,12 +477,12 @@ async fn master_rotation_preserves_session_owner_but_rejects_the_old_key(
     let second =
         Config::from_yaml("model_list: []\ngeneral_settings:\n  master_key: second-key\n").unwrap();
     let original = Auth::from_config(&first, secrets.clone())
-        .authenticate(&SecretValue::new("first-key"))
+        .authenticate(&Token::new("first-key"))
         .await
         .unwrap();
     let rotated = Auth::from_config(&second, secrets);
     let replacement = rotated
-        .authenticate(&SecretValue::new("second-key"))
+        .authenticate(&Token::new("second-key"))
         .await
         .unwrap();
     assert_eq!(
@@ -502,7 +490,7 @@ async fn master_rotation_preserves_session_owner_but_rejects_the_old_key(
         replacement.caller().session_owner()
     );
     assert!(matches!(
-        rotated.authenticate(&SecretValue::new("first-key")).await,
+        rotated.authenticate(&Token::new("first-key")).await,
         Err(Error::InvalidToken)
     ));
 }
@@ -539,12 +527,9 @@ async fn mapping_two_issuers_to_one_account_does_not_merge_session_ownership() {
         Arc::new(Policy(AtomicUsize::new(0))),
         Arc::new(TestClock(AtomicU64::new(10))),
     );
-    let original = first
-        .authenticate(&SecretValue::new("test-token"))
-        .await
-        .unwrap();
+    let original = first.authenticate(&Token::new("test-token")).await.unwrap();
     let mapped = second
-        .authenticate(&SecretValue::new("test-token"))
+        .authenticate(&Token::new("test-token"))
         .await
         .unwrap();
     assert_eq!(original.caller().principal(), mapped.caller().principal());
