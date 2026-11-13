@@ -113,14 +113,14 @@ def test_template_edits_propagate_and_only_live_override_fields_win() -> None:
         },
     )
     assert default.status_code == 201, default.text
-    assert default.json()["budget_id"] is None
-    assert default.json()["budget_template_id"] == default_id
+    assert default.json()["budget_override_id"] is None
+    assert default.json()["budget_id"] == default_id
     override: Final = http.post(
         "/management/v1/customer_members",
         json={
             "customer_member_id": "override",
             "parent_team_id": "team",
-            "budget_template_id": other_id,
+            "budget_id": other_id,
             "budget_override": {"max_budget": 3, "allowed_models": []},
         },
     )
@@ -201,15 +201,15 @@ def test_override_can_be_reexpired_cleared_and_template_switched() -> None:
     switched: Final = http.patch(
         "/management/v1/customer_members/member",
         json={
-            "budget_template_id": org["default_budgets"][1]["budget_id"],
+            "budget_id": org["default_budgets"][1]["budget_id"],
             "budget_override": None,
         },
     )
     assert switched.status_code == 200, switched.text
-    assert switched.json()["budget_id"] is None
+    assert switched.json()["budget_override_id"] is None
     assert switched.json()["budget_override"] is None
     assert switched.json()["effective_budget"]["max_budget"] == 20
-    cleared: Final = http.patch("/management/v1/customer_members/member", json={"budget_template_id": None})
+    cleared: Final = http.patch("/management/v1/customer_members/member", json={"budget_id": None})
     assert cleared.status_code == 422, cleared.text
     after: Final = http.get("/management/v1/customer_members/member")
     assert after.json() == switched.json()
@@ -268,7 +268,7 @@ def test_template_deletion_guards_names_and_references() -> None:
         json={
             "customer_member_id": "member",
             "parent_team_id": "team",
-            "budget_template_id": selected_id,
+            "budget_id": selected_id,
         },
     )
     assert member.status_code == 201, member.text
@@ -312,7 +312,7 @@ def test_missing_template_requires_custom_budget_and_wrong_org_is_rejected() -> 
         "/management/v1/customer_members",
         json={
             "parent_team_id": "empty-team",
-            "budget_template_id": org["default_budget_id"],
+            "budget_id": org["default_budget_id"],
             "budget_override": {"max_budget": 2},
         },
     )
@@ -321,7 +321,7 @@ def test_missing_template_requires_custom_budget_and_wrong_org_is_rejected() -> 
         "/management/v1/customer_members", json={"parent_team_id": "empty-team", "budget_override": {"max_budget": 2}}
     )
     assert custom.status_code == 201, custom.text
-    assert custom.json()["budget_template_id"] is None
+    assert custom.json()["budget_id"] is None
     assert custom.json()["effective_budget"]["max_budget"] == 2
 
 
@@ -487,7 +487,7 @@ def test_partial_member_override_updates_preserve_other_fields_and_never_change_
         },
     )
     assert patched.status_code == 200, patched.text
-    assert patched.json()["budget_id"] != organization["default_budget_id"]
+    assert patched.json()["budget_override_id"] != organization["default_budget_id"]
     assert patched.json()["effective_budget"]["max_budget"] == 5
     inherited: Final = http.patch(
         "/management/v1/customer_members/member",
@@ -496,14 +496,14 @@ def test_partial_member_override_updates_preserve_other_fields_and_never_change_
         },
     )
     assert inherited.status_code == 200, inherited.text
-    assert inherited.json()["budget_id"] == patched.json()["budget_id"]
+    assert inherited.json()["budget_override_id"] == patched.json()["budget_override_id"]
     assert inherited.json()["effective_budget"]["max_budget"] == 100
     assert inherited.json()["effective_budget"]["soft_budget"] == 4
     assert inherited.json()["effective_budget"]["tpm_limit"] == 2
     assert inherited.json()["effective_budget"]["allowed_models"] == ["model-a"]
     unchanged: Final = http.get("/management/v1/customer_organizations/org")
     assert unchanged.status_code == 200, unchanged.text
-    assert unchanged.json() == organization
+    assert unchanged.json() == {**organization, "member_count": 1}
 
 
 def test_first_added_template_is_default_and_default_cannot_be_unset_without_replacement() -> None:
@@ -539,3 +539,35 @@ def test_template_routes_return_404_for_a_missing_organization(
 ) -> None:
     response: Final = client().request(method, "/management/v1" + path, json=body)
     assert response.status_code == 404, response.text
+
+
+def test_organization_list_counts_all_members_and_searches_before_paginating() -> None:
+    http: Final = client()
+    family(http)
+    for identifier in ("member-a", "member-b"):
+        created: Final = http.post(
+            "/management/v1/customer_members", json={"customer_member_id": identifier, "parent_team_id": "team"}
+        )
+        assert created.status_code == 201, created.text
+    second_team: Final = http.post(
+        "/management/v1/customer_teams", json={"customer_team_id": "second-team", "parent_org_id": "org"}
+    )
+    assert second_team.status_code == 201, second_team.text
+    third_member: Final = http.post(
+        "/management/v1/customer_members", json={"customer_member_id": "member-c", "parent_team_id": "second-team"}
+    )
+    assert third_member.status_code == 201, third_member.text
+    other: Final = http.post(
+        "/management/v1/customer_organizations", json={"customer_org_id": "other", "alias": "Literal%_"}
+    )
+    assert other.status_code == 201, other.text
+    page: Final = http.get("/management/v1/customer_organizations", params={"q": "ORG", "page_size": 1})
+    assert page.status_code == 200, page.text
+    assert page.json()["meta"]["total_count"] == 1
+    assert page.json()["data"][0]["member_count"] == 3
+    assert page.json()["data"][0]["spend"] == 0
+    assert page.json()["data"][0]["budget"]["max_budget"] == 1000
+    literal: Final = http.get("/management/v1/customer_organizations", params={"q": "%_"})
+    assert literal.json()["data"][0]["customer_org_id"] == "other"
+    assert literal.json()["data"][0]["member_count"] == 0
+    assert literal.json()["meta"]["total_count"] == 1

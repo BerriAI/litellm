@@ -30,8 +30,7 @@ use serde_json::{Map, Value};
 
 use super::{
     Delivered, Error, HostAnswer, MessagesBody, MessagesCall, MessagesCallResponse, MessagesRoute,
-    Transport, TransportBody, TransportRequest, TransportResponse, UnencodableHeader,
-    WorkloadIdentity,
+    Transport, TransportRequest, TransportResponse, UnencodableHeader, WorkloadIdentity,
     common_utils::{MessagesProvider, merge_messages_header_sources, string_headers},
     constants::{
         MESSAGES_HTTP_ERROR_ATTEMPTS, MESSAGES_STREAM_ERROR_BODY_READ_SECS, MESSAGES_TIMEOUT_SECS,
@@ -42,7 +41,7 @@ use super::{
 use litellm_inference::{
     caching::{CacheRequest, CallCache},
     context::CallContext,
-    outbound::raw_leaf_outbound_request,
+    outbound::{raw_leaf_body, serialized_outbound_request},
 };
 
 struct ProviderCall {
@@ -505,9 +504,13 @@ async fn call_provider(
     let timeout = request
         .timeout
         .unwrap_or(Duration::from_secs(MESSAGES_TIMEOUT_SECS));
-    let response = match send_recovering(http, transport, &request, timeout, context).await? {
+    let (upstream, sent_body) =
+        send_recovering(http, transport, &request, timeout, context).await?;
+    let response = match upstream {
         Upstream::Native(response) => response,
-        Upstream::Hosted(response) => return hosted_response(response, request, context).await,
+        Upstream::Hosted(response) => {
+            return hosted_response(response, sent_body, request, context).await;
+        }
     };
     let ProviderCall {
         identity,
@@ -522,6 +525,8 @@ async fn call_provider(
     let head = ResponseHead {
         status: response.status().as_u16(),
         headers: super::encoding::header_pairs(response.headers()),
+        sent_body,
+        streamed: stream,
     };
     if stream {
         context
@@ -556,6 +561,7 @@ async fn call_provider(
 
 async fn hosted_response(
     response: TransportResponse,
+    sent_body: Bytes,
     request: ProviderCall,
     context: &CallContext<'_, impl Interceptors<Error>>,
 ) -> Result<MessagesCallResponse, Error> {
@@ -579,6 +585,8 @@ async fn hosted_response(
                 .raw_response_received(RawResponse::new(String::new()).with_head(ResponseHead {
                     status,
                     headers: headers.clone(),
+                    sent_body,
+                    streamed: true,
                 }))
                 .await?;
             let streamed =
@@ -593,9 +601,12 @@ async fn hosted_response(
     };
     log_response_body(&text);
     context
-        .raw_response_received(
-            RawResponse::new(text.clone()).with_head(ResponseHead { status, headers }),
-        )
+        .raw_response_received(RawResponse::new(text.clone()).with_head(ResponseHead {
+            status,
+            headers,
+            sent_body,
+            streamed: false,
+        }))
         .await?;
     if serde_json::from_str::<serde::de::IgnoredAny>(&text).is_err() {
         return Err(litellm_http::Error::upstream(status, text).into());
@@ -606,14 +617,14 @@ async fn hosted_response(
 fn hosted_request(
     authenticated: Authenticated,
     url: &str,
-    body: &Value,
+    body: Bytes,
     stream: bool,
 ) -> Result<TransportRequest, Error> {
     if authenticated.signer.is_none() {
         return Ok(TransportRequest {
             url: url.to_owned(),
             headers: authenticated.headers,
-            body: TransportBody::Json(body.clone()),
+            body,
             stream,
         });
     }
@@ -622,7 +633,7 @@ fn hosted_request(
         .iter()
         .map(|(name, _)| name.clone())
         .collect();
-    let signed = raw_leaf_outbound_request(authenticated, url, body, None)?;
+    let signed = serialized_outbound_request(authenticated, url, body.clone(), None)?;
     let headers = signed
         .headers()
         .iter()
@@ -635,15 +646,10 @@ fn hosted_request(
             Some((spelled, value.to_str().ok()?.to_owned()))
         })
         .collect();
-    let bytes = signed
-        .body()
-        .and_then(reqwest::Body::as_bytes)
-        .map(Bytes::copy_from_slice)
-        .unwrap_or_default();
     Ok(TransportRequest {
         url: signed.url().to_string(),
         headers,
-        body: TransportBody::Signed(bytes),
+        body,
         stream,
     })
 }
@@ -654,7 +660,7 @@ async fn send_recovering(
     request: &ProviderCall,
     timeout: Duration,
     context: &CallContext<'_, impl Interceptors<Error>>,
-) -> Result<Upstream, Error> {
+) -> Result<(Upstream, Bytes), Error> {
     let config = request.provider.config();
     let mut body = std::borrow::Cow::Borrowed(&request.wire.body);
     let mut attempt = 1;
@@ -680,16 +686,24 @@ async fn send_recovering(
             headers: request.wire.headers.clone(),
             signer: request.signer.clone(),
         };
+        let sent_body = raw_leaf_body(&body)?;
         let response = match transport {
             None => Upstream::Native(
-                send(http, authenticated, &request.wire.url, &body, timeout).await?,
+                send(
+                    http,
+                    authenticated,
+                    &request.wire.url,
+                    sent_body.clone(),
+                    timeout,
+                )
+                .await?,
             ),
             Some(transport) => Upstream::Hosted(
                 transport
                     .send(hosted_request(
                         authenticated,
                         &request.wire.url,
-                        &body,
+                        sent_body.clone(),
                         request.stream,
                     )?)
                     .await?,
@@ -703,7 +717,7 @@ async fn send_recovering(
         }
         let failure = match response {
             Upstream::Native(response) if response.status().is_success() => {
-                return Ok(Upstream::Native(response));
+                return Ok((Upstream::Native(response), sent_body));
             }
             Upstream::Native(response) => {
                 provider_failure(response, timeout, request.stream).await?
@@ -721,7 +735,7 @@ async fn send_recovering(
                     raised: Some(error),
                 }
             }
-            hosted @ Upstream::Hosted(_) => return Ok(hosted),
+            hosted @ Upstream::Hosted(_) => return Ok((hosted, sent_body)),
         };
         let retried = if attempt == MESSAGES_HTTP_ERROR_ATTEMPTS {
             None
@@ -756,10 +770,10 @@ async fn send(
     http: &litellm_http::Client,
     authenticated: Authenticated,
     url: &str,
-    body: &Value,
+    body: Bytes,
     timeout: Duration,
 ) -> Result<reqwest::Response, Error> {
-    let request = raw_leaf_outbound_request(authenticated, url, body, None)?;
+    let request = serialized_outbound_request(authenticated, url, body, None)?;
     tokio::time::timeout(timeout, litellm_inference::outbound::send(request, http))
         .await
         .map_err(litellm_http::Error::read_timeout)?
@@ -1746,13 +1760,13 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(call.wire.url, format!("{base}{path}"));
-        let signed = raw_leaf_outbound_request(
+        let signed = serialized_outbound_request(
             Authenticated {
                 headers: call.wire.headers,
                 signer: call.signer,
             },
             &call.wire.url,
-            &call.wire.body,
+            raw_leaf_body(&call.wire.body).unwrap(),
             None,
         )
         .unwrap();

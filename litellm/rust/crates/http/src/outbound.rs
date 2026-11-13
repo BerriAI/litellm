@@ -38,7 +38,7 @@ pub fn json(
 pub fn json_bytes(
     url: &str,
     headers: &[(String, String)],
-    body: Vec<u8>,
+    body: impl Into<reqwest::Body>,
     timeout: Option<Duration>,
 ) -> Result<Request, Error> {
     let url = Url::parse(url).map_err(Repr::ParseUrl)?;

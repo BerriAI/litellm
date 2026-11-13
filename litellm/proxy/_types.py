@@ -725,6 +725,7 @@ class LiteLLMRoutes(enum.Enum):
             "/jwt/key/mapping/list",
             "/jwt/key/mapping/info",
             "/management/v1/customer_organizations",
+            "/management/v1/customer_organizations/daily/activity/aggregated",
             "/management/v1/customer_organizations/{customer_org_id}",
             "/management/v1/customer_organizations/daily/activity",
             "/management/v1/customer_organizations/{customer_org_id}/default_budgets",

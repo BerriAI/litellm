@@ -98,6 +98,8 @@ import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolset
 
 vi.mock("../networking", () => ({
   serverRootPath: "",
+  getProxyBaseUrl: vi.fn(() => ""),
+  getUiSettings: vi.fn().mockResolvedValue({ values: {} }),
   keyDeleteCall: vi.fn().mockResolvedValue({}),
   keyUpdateCall: vi.fn().mockResolvedValue({}),
   regenerateKeyCall: vi.fn().mockResolvedValue({ key: "sk-regenerated", token: "regenerated-token" }),

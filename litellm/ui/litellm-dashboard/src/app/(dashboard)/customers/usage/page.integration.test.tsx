@@ -166,6 +166,10 @@ describe("CustomerHierarchyUsagePage", () => {
     renderWithProviders(<CustomerHierarchyUsagePage />, { searchParams: initialUrl });
 
     expect(await screen.findByRole("heading", { name: "Customer organization" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Teams", exact: true })).toHaveAttribute(
+      "href",
+      "/ui/customers/manage?org=org-1",
+    );
     expect(screen.getByText("$15.00")).toBeInTheDocument();
     expect(screen.getByTitle("700 tokens")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Usage over time" })).toBeInTheDocument();
