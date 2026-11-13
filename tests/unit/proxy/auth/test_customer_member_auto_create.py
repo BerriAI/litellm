@@ -11,6 +11,8 @@ from litellm.proxy.management_helpers.customer_hierarchy import CustomerHierarch
 from litellm.types.proxy.management_endpoints.customer_hierarchy import (
     BudgetTemplate,
     CustomerMember,
+    MemberCreate,
+    MemberPatch,
     OrganizationCreate,
     TeamCreate,
 )
@@ -66,14 +68,32 @@ async def test_registering_the_same_member_twice_keeps_one_row_and_reuses_an_exi
 
 
 @pytest.mark.asyncio
-async def test_an_organization_without_a_default_budget_cannot_register_members() -> None:
+async def test_a_new_member_of_an_organization_without_a_default_budget_is_registered_uncapped() -> None:
     database: Final = Database()
     await _organization(database, "org-1", default_budget=False)
 
-    result: Final = await ensure_customer_member("org-1", "user-7", _prisma(database))
+    member: Final = await ensure_customer_member("org-1", "user-7", _prisma(database))
 
-    assert result == Failure(ErrorCode.BUDGET_REQUIRED)
-    assert "user-7" not in database.litellm_customermembertable.rows
+    assert isinstance(member, CustomerMember), member
+    assert (member.parent_org_id, member.parent_team_ids) == ("org-1", (default_team_id("org-1"),))
+    assert (member.budget_id, member.budget_override_id, member.effective_budget.max_budget) == (None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_an_admin_created_member_still_needs_a_budget_and_an_uncapped_member_stays_editable() -> None:
+    database: Final = Database()
+    await _organization(database, "org-1", default_budget=False)
+    hierarchy: Final = CustomerHierarchy(_prisma(database), clock=lambda: NOW)
+    registered: Final = await ensure_customer_member("org-1", "user-7", _prisma(database))
+    assert isinstance(registered, CustomerMember), registered
+
+    by_admin: Final = await hierarchy.create_member(
+        MemberCreate(customer_member_id="user-8", parent_team_ids=registered.parent_team_ids), "admin"
+    )
+    renamed: Final = await hierarchy.update_member("user-7", MemberPatch(alias="Seven"), "admin")
+
+    assert by_admin == Failure(ErrorCode.BUDGET_REQUIRED)
+    assert isinstance(renamed, CustomerMember) and renamed.alias == "Seven", renamed
 
 
 @pytest.mark.asyncio
