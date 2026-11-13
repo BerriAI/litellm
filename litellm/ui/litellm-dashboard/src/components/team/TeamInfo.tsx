@@ -130,12 +130,13 @@ import {
 import TeamMembersComponent from "./TeamMemberTab";
 import { useModelAccessGroupNames } from "@/app/(dashboard)/hooks/models/useModels";
 import {
-  isValidThreshold,
+  budgetAlertEmailsFromRows,
+  budgetAlertRowsFromMetadata,
+  budgetAlertRowsSchema,
   TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY,
-  teamMemberBudgetAlertEmailsFromRows,
-  teamMemberBudgetAlertRowsFromMetadata,
   teamMemberBudgetAlertSummary,
-} from "./teamMemberBudgetAlertEmails";
+} from "../key_team_helpers/budgetAlertEmails";
+import { BudgetAlertEmailsEditor } from "../key_team_helpers/BudgetAlertEmailsEditor";
 import { TeamVirtualKeysTable } from "./TeamVirtualKeysTable";
 import ResetMemberBudgetsDialog from "./ResetMemberBudgetsDialog";
 import { customBudgetMemberUserIds, shouldPromptMemberBudgetReset } from "./memberBudgetReset";
@@ -387,26 +388,11 @@ const buildTeamUpdateFieldsSchema = (t: TFunction) =>
     team_member_key_duration: z.string().optional(),
     team_member_tpm_limit: numericInputSchema,
     team_member_rpm_limit: numericInputSchema,
-    team_member_max_budget_alert_emails: z
-      .array(z.object({ threshold: z.number().nullable(), emails: z.string() }))
-      .superRefine((rows, ctx) => {
-        rows.forEach((row, index) => {
-          if (!isValidThreshold(row.threshold)) {
-            ctx.addIssue({
-              code: "custom",
-              message: t("teams.teamInfo.validation.thresholdRange"),
-              path: [index, "threshold"],
-            });
-          } else if (rows.filter((other) => other.threshold === row.threshold).length > 1) {
-            ctx.addIssue({
-              code: "custom",
-              message: t("teams.teamInfo.validation.duplicateThreshold"),
-              path: [index, "threshold"],
-            });
-          }
-        });
-      })
-      .optional(),
+    team_member_max_budget_alert_emails: budgetAlertRowsSchema((issue) =>
+      issue === "thresholdRange"
+        ? t("teams.teamInfo.validation.thresholdRange")
+        : t("teams.teamInfo.validation.duplicateThreshold"),
+    ).optional(),
     budget_duration: z.string().nullish(),
     tpm_limit: numericInputSchema,
     rpm_limit: numericInputSchema,
@@ -551,7 +537,9 @@ const toTeamFormValues = (info: TeamInfoRecord, effectiveGuardrails: string[]): 
   team_member_key_duration: info.metadata?.team_member_key_duration,
   team_member_tpm_limit: info.team_member_budget_table?.tpm_limit,
   team_member_rpm_limit: info.team_member_budget_table?.rpm_limit,
-  team_member_max_budget_alert_emails: [...teamMemberBudgetAlertRowsFromMetadata(info.metadata)],
+  team_member_max_budget_alert_emails: [
+    ...budgetAlertRowsFromMetadata(info.metadata, TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY),
+  ],
   budget_duration: info.budget_duration,
   tpm_limit: info.tpm_limit,
   rpm_limit: info.rpm_limit,
@@ -639,11 +627,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     append: appendModelLimit,
     remove: removeModelLimit,
   } = useFieldArray({ control: form.control, name: "modelLimits" });
-  const {
-    fields: memberBudgetAlertRows,
-    append: appendMemberBudgetAlertRow,
-    remove: removeMemberBudgetAlertRow,
-  } = useFieldArray({ control: form.control, name: "team_member_max_budget_alert_emails" });
   const [teamMemberSettingsOpen, setTeamMemberSettingsOpen] = useState(false);
   const [searchToolSettingsOpen, setSearchToolSettingsOpen] = useState(false);
   const [isEditMemberModalVisible, setIsEditMemberModalVisible] = useState(false);
@@ -1081,7 +1064,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
       const memberBudgetAlertEmails =
         values.team_member_max_budget_alert_emails !== undefined
-          ? teamMemberBudgetAlertEmailsFromRows(values.team_member_max_budget_alert_emails)
+          ? budgetAlertEmailsFromRows(values.team_member_max_budget_alert_emails)
           : info.metadata?.[TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY];
       const memberBudgetAlertEmailsMetadata =
         memberBudgetAlertEmails !== undefined && Object.keys(memberBudgetAlertEmails).length > 0
@@ -1877,71 +1860,22 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                             />
                           )}
                         </FormField>
-                        <Field>
-                          <FieldLabel>
-                            {labelWithHint(
-                              t("teams.teamInfo.editForm.teamMemberSettings.budgetAlertThresholds"),
-                              t("teams.teamInfo.editForm.teamMemberSettings.budgetAlertThresholdsHint"),
-                            )}
-                          </FieldLabel>
-                          {memberBudgetAlertRows.map((row, index) => (
-                            <div key={row.id} className="mb-2 flex items-start gap-2">
-                              <FormField
-                                control={form.control}
-                                name={`team_member_max_budget_alert_emails.${index}.threshold`}
-                                className="w-32"
-                              >
-                                {({ ref, value, onChange, ...field }) => (
-                                  <NumericalInput
-                                    {...field}
-                                    ref={ref}
-                                    value={value ?? ""}
-                                    onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
-                                      onChange(event.target.value === "" ? null : Number(event.target.value))
-                                    }
-                                    placeholder={t("teams.teamInfo.editForm.teamMemberSettings.thresholdPlaceholder")}
-                                    min={1}
-                                    max={100}
-                                    step={1}
-                                  />
-                                )}
-                              </FormField>
-                              <FormField
-                                control={form.control}
-                                name={`team_member_max_budget_alert_emails.${index}.emails`}
-                                className="flex-1"
-                              >
-                                {({ ref, value, ...field }) => (
-                                  <UIInput
-                                    {...field}
-                                    ref={ref}
-                                    value={value ?? ""}
-                                    placeholder={t("teams.teamInfo.editForm.teamMemberSettings.recipientsPlaceholder")}
-                                  />
-                                )}
-                              </FormField>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                aria-label={t("teams.teamInfo.editForm.teamMemberSettings.removeThreshold")}
-                                className="mt-1 text-destructive"
-                                onClick={() => removeMemberBudgetAlertRow(index)}
-                              >
-                                <CircleMinus className="size-4" />
-                              </Button>
-                            </div>
-                          ))}
-                          <Button
-                            type="button"
-                            variant="outline"
-                            className="w-full border-dashed"
-                            onClick={() => appendMemberBudgetAlertRow({ threshold: null, emails: "" })}
-                          >
-                            <Plus className="size-4" />
-                            {t("teams.teamInfo.editForm.teamMemberSettings.addThreshold")}
-                          </Button>
-                        </Field>
+                        <BudgetAlertEmailsEditor
+                          control={form.control}
+                          name="team_member_max_budget_alert_emails"
+                          label={labelWithHint(
+                            t("teams.teamInfo.editForm.teamMemberSettings.budgetAlertThresholds"),
+                            t("teams.teamInfo.editForm.teamMemberSettings.budgetAlertThresholdsHint"),
+                          )}
+                          text={{
+                            thresholdPlaceholder: t("teams.teamInfo.editForm.teamMemberSettings.thresholdPlaceholder"),
+                            recipientsPlaceholder: t(
+                              "teams.teamInfo.editForm.teamMemberSettings.recipientsPlaceholder",
+                            ),
+                            removeThreshold: t("teams.teamInfo.editForm.teamMemberSettings.removeThreshold"),
+                            addThreshold: t("teams.teamInfo.editForm.teamMemberSettings.addThreshold"),
+                          }}
+                        />
                       </FieldGroup>
                     </CollapsibleContent>
                   </Collapsible>
