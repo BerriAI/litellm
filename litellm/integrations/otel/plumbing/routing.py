@@ -401,4 +401,4 @@ class TenantTracerCache:
             if (field == "headers" and routed != spec.headers)
             or (field == "endpoint" and endpoint is not None and endpoint != spec.endpoint)
         }
-        return spec if not update else spec.model_copy(update=update)
+        return spec if not update else spec.model_copy(update={**update, "resource_attributes": {}})

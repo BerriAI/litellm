@@ -146,8 +146,10 @@ class LangfuseMapper:
 
     @classmethod
     def _llm_call(cls, data: LLMCallSpanData) -> AttributeMap:
+        trace: Final = cls.trace_attributes(data.trace)
         return {
+            **{key: trace[key] for key in (LANGFUSE_RELEASE, LANGFUSE_VERSION) if key in trace},
             **collect(cls._LLM_CALL_ATTRS, data),
-            **cls.trace_attributes(data.trace),
+            **trace,
             **collect(cls._BLOB_ATTRS, data),
         }

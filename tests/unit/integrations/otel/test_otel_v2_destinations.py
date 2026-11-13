@@ -3732,6 +3732,26 @@ class TestLangfuseDestinationFields:
         assert environments == {True: None, False: tracing_environment}
         assert "langfuse.environment" not in otel_providers.build_resource(config).attributes
 
+    def test_an_environment_the_proxys_resource_already_names_wins_on_the_langfuse_exporter(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-operator")
+        monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-operator")
+        monkeypatch.setenv("LANGFUSE_TRACING_ENVIRONMENT", "staging")
+        monkeypatch.setenv("OTEL_RESOURCE_ATTRIBUTES", "langfuse.environment=from-resource")
+        capture: Final = _ExporterCapture()
+        monkeypatch.setitem(otel_providers._EXPORTER_FACTORIES, "otlp_http", capture.build)  # pyright: ignore[reportPrivateUsage]  # the factory table is the seam for capturing each exporter
+        config: Final = langfuse_preset()
+        provider: Final = build_tracer_provider(config)
+
+        SpanEmitter(get_tracer(provider, "litellm"), config).emit(SpanRole.LLM_CALL, _MODEL_CALL_WITHOUT_CONTENT)
+        provider.force_flush()
+
+        assert [
+            exporter.get_finished_spans()[0].resource.attributes.get("langfuse.environment")
+            for _headers, exporter in capture.built
+        ] == ["from-resource"]
+
     @pytest.mark.parametrize("operator_keys", [False, True], ids=["no-operator-keys", "operator-keys"])
     @pytest.mark.parametrize("configured", [None, "no_content", "span_only"])
     def test_a_langfuse_destination_keeps_its_own_capture_setting_whatever_the_operator_keys(
@@ -3832,7 +3852,11 @@ class TestLangfuseDestinationFields:
         )
 
     def test_a_span_at_its_attribute_limit_sheds_the_release_and_version_before_its_other_fields(self) -> None:
-        call: Final = replace(_MODEL_CALL_WITH_CONTENT, trace=TraceControls(release="rel-1", version="v-1"))
+        call: Final = replace(
+            _MODEL_CALL_WITH_CONTENT,
+            trace=TraceControls(release="rel-1", version="v-1"),
+            request_metadata=MappingProxyType({"user_api_key_alias": "prod-key"}),
+        )
         config: Final = OpenTelemetryV2Config(mapper_names=["genai", "langfuse"])
 
         def attributes(limit: int | None) -> dict[str, object]:
@@ -3844,6 +3868,7 @@ class TestLangfuseDestinationFields:
 
         whole: Final = attributes(None)
 
+        assert LANGFUSE_REQUEST_METADATA_ATTRIBUTES & whole.keys() > {"langfuse.release", "langfuse.version"}
         assert whole.keys() - attributes(len(whole) - 2).keys() == {"langfuse.release", "langfuse.version"}
 
     def test_a_span_at_its_attribute_limit_sheds_the_destinations_request_metadata_before_its_other_fields(

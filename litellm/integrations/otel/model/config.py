@@ -97,7 +97,7 @@ class ExporterSpec(LiteLLMBaseModel):
     )
     resource_attributes: Mapping[str, str] = Field(
         default_factory=dict,
-        description="Resource attributes only this exporter's copy of a span carries, over the provider's resource.",
+        description="Resource attributes only this exporter's copy of a span carries, under the provider's resource.",
     )
     options: dict[str, str] | None = Field(
         default=None,

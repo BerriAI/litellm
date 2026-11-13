@@ -1306,8 +1306,9 @@ class _DestinationLangfuseAttributeFilter(SpanProcessor):
 
 
 class _ExporterResource(SpanProcessor):
-    """Add one exporter's own resource attributes to every span before ``inner`` exports it. The merged resource is
-    kept for the next span, since a provider's spans share one resource."""
+    """Add one exporter's own resource attributes to every span before ``inner`` exports it, under any value the
+    span's own resource already names. The merged resource is kept for the next span, since a provider's spans share
+    one resource."""
 
     def __init__(self, inner: SpanProcessor, attributes: Mapping[str, str]) -> None:
         self._inner: Final = inner
@@ -1322,7 +1323,7 @@ class _ExporterResource(SpanProcessor):
         merged: Final = (
             cached
             if cached is not None and cached[0] is span.resource
-            else (span.resource, span.resource.merge(self._extra))
+            else (span.resource, self._extra.merge(span.resource))
         )
         self._merged = merged
         self._inner.on_end(_CountedSpanView(span, span.attributes, resource=merged[1]))
