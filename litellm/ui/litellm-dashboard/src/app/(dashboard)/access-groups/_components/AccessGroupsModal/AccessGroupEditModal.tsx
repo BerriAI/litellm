@@ -18,6 +18,7 @@ import {
   GENERAL_TAB,
   MCP_SERVERS_TAB,
   MODELS_TAB,
+  VECTOR_STORES_TAB,
   type AccessGroupFormValues,
 } from "./AccessGroupBaseForm";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -37,6 +38,7 @@ const toFormValues = (accessGroup: AccessGroupResponse): AccessGroupFormValues =
   mcpToolPermissions: accessGroup.mcp_tool_permissions ?? {},
   agentIds: accessGroup.access_agent_ids ?? [],
   skillNames: accessGroup.access_skill_names ?? [],
+  vectorStoreIds: accessGroup.access_vector_store_ids ?? [],
 });
 
 function AccessGroupEditForm({ accessGroup, onCancel, onSuccess }: Omit<AccessGroupEditModalProps, "visible">) {
@@ -62,6 +64,7 @@ function AccessGroupEditForm({ accessGroup, onCancel, onSuccess }: Omit<AccessGr
         ...(dirtyFields.mcpToolPermissions && { mcp_tool_permissions: values.mcpToolPermissions }),
         access_agent_ids: visitedTabs.has(AGENTS_TAB) ? values.agentIds : undefined,
         access_skill_names: visitedTabs.has(SKILLS_TAB) ? values.skillNames : undefined,
+        access_vector_store_ids: visitedTabs.has(VECTOR_STORES_TAB) ? values.vectorStoreIds : undefined,
       };
 
       editMutation.mutate(
