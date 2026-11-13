@@ -13,6 +13,7 @@ memory in long-lived deployments.
 """
 
 import asyncio
+import re
 from collections import OrderedDict
 from collections.abc import Mapping
 from datetime import datetime, timezone
@@ -25,6 +26,7 @@ from litellm.constants import SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import Litellm_EntityType
 from litellm.proxy.db.db_lookup_gate import bounded_db_lookup, db_lookup_gate
+from litellm.proxy.management_helpers.customer_hierarchy import customer_row_reset_at
 from litellm.proxy.spend_tracking.spend_counter_batch import (
     read_batched_spend_counter,
     record_spend_counter_value,
@@ -35,6 +37,9 @@ from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.project_repository import ProjectRepository
 from litellm.repositories.table_repositories import (
     BudgetWindowSpendRepository,
+    CustomerMemberRepository,
+    CustomerOrganizationRepository,
+    CustomerTeamRepository,
     EndUserRepository,
     SpendLogsRepository,
     TeamMembershipRepository,
@@ -71,6 +76,24 @@ _WINDOW_SPEND_LOG_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
 
 def _as_utc(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
+_CUSTOMER_OVERRIDE_INCLUDE: Final = MappingProxyType({"budget": True, "budget_override": True})
+_CUSTOMER_COUNTER: Final = re.compile(
+    r"spend:(customer_org|customer_team|customer_member):(.+):"
+    r"(lifetime|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})?)"
+)
+
+
+def _customer_counter_period_matches(row: object, period: str) -> bool:
+    try:
+        expected: Final = None if period == "lifetime" else datetime.fromisoformat(period)
+    except ValueError:
+        return False
+    actual: Final = customer_row_reset_at(row, datetime.now(timezone.utc))
+    if expected is None or actual is None:
+        return expected is actual
+    return _as_utc(actual) == _as_utc(expected)
 
 
 class SpendCounterReseed:
@@ -155,11 +178,28 @@ class SpendCounterReseed:
             return None
         if row is None:
             return None
+        customer: Final = _CUSTOMER_COUNTER.fullmatch(counter_key)
+        if customer is not None and not _customer_counter_period_matches(row, customer.group(3)):
+            return None
         return float(getattr(row, "spend", 0.0) or 0.0)
 
     @staticmethod
     async def _counter_row(prisma_client: "PrismaClient", counter_key: str) -> object | None:
         async with db_lookup_gate.current():
+            customer: Final = _CUSTOMER_COUNTER.fullmatch(counter_key)
+            if customer is not None:
+                family, entity_id, _ = customer.groups()
+                if family == "customer_org":
+                    return await CustomerOrganizationRepository(prisma_client).table.find_unique(
+                        where={"customer_org_id": entity_id}, include={"budget": True}
+                    )
+                if family == "customer_team":
+                    return await CustomerTeamRepository(prisma_client).table.find_unique(
+                        where={"customer_team_id": entity_id}, include=_CUSTOMER_OVERRIDE_INCLUDE
+                    )
+                return await CustomerMemberRepository(prisma_client).table.find_unique(
+                    where={"customer_member_id": entity_id}, include=_CUSTOMER_OVERRIDE_INCLUDE
+                )
             if counter_key.startswith("spend:key:"):
                 token: Final = counter_key[len("spend:key:") :]
                 return await VerificationTokenRepository(prisma_client).table.find_unique(where={"token": token})

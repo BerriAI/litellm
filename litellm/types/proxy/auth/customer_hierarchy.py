@@ -1,5 +1,6 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
@@ -29,6 +30,7 @@ class CustomerScopeAuth(BaseModel):
     key: CustomerScopeKey
     entity_id: str
     spend: float = 0.0
+    budget_reset_at: datetime | None = None
     max_budget: float | None = None
     budget_limits: tuple[BudgetLimit, ...] = ()
     tpm_limit: int | None = None

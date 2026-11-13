@@ -40,6 +40,9 @@ pub enum SpendCounter {
     Project(String),
     ModelAccessGroup(String),
     ShadowEval(String),
+    CustomerOrg(String),
+    CustomerTeam(String),
+    CustomerMember(String),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -75,6 +78,9 @@ impl SpendCounter {
             Self::Project(id) => format!("spend:project:{id}"),
             Self::ModelAccessGroup(name) => format!("spend:model_access_group:{name}"),
             Self::ShadowEval(job_id) => format!("spend:shadow_eval:{job_id}"),
+            Self::CustomerOrg(id) => format!("spend:customer_org:{id}"),
+            Self::CustomerTeam(id) => format!("spend:customer_team:{id}"),
+            Self::CustomerMember(id) => format!("spend:customer_member:{id}"),
         }
     }
 
@@ -93,15 +99,21 @@ impl SpendCounter {
         }
         let (scope, id) = rest.split_once(':').ok_or_else(invalid)?;
         if let Ok(scope) = scope.parse::<CustomerScope>() {
-            let (entity_id, window) = id.rsplit_once(":window:").ok_or_else(invalid)?;
-            if entity_id.is_empty() || window.is_empty() {
-                return Err(invalid());
-            }
-            return Ok(Self::CustomerWindow {
-                scope,
-                entity_id: entity_id.to_owned(),
-                window: window.to_owned(),
-            });
+            return match id.rsplit_once(":window:") {
+                Some((entity_id, window)) if !entity_id.is_empty() && !window.is_empty() => {
+                    Ok(Self::CustomerWindow {
+                        scope,
+                        entity_id: entity_id.to_owned(),
+                        window: window.to_owned(),
+                    })
+                }
+                Some(_) => Err(invalid()),
+                None => Ok(match scope {
+                    CustomerScope::Organization => Self::CustomerOrg(id.to_owned()),
+                    CustomerScope::Team => Self::CustomerTeam(id.to_owned()),
+                    CustomerScope::Member => Self::CustomerMember(id.to_owned()),
+                }),
+            };
         }
         let windowed = || match id.rsplit_once(":window:") {
             Some((id, window)) if !window.is_empty() => (id.to_owned(), Some(window.to_owned())),
@@ -134,7 +146,6 @@ impl SpendCounter {
         })
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::SpendCounter;
@@ -144,15 +155,17 @@ mod tests {
     #[case::member("spend:customer_member:member%3A1:window:1mo@2026-11-01T05:30:00+00:00")]
     #[case::team("spend:customer_team:team:window:12mo@2026-01-01T05:30:00+00:00")]
     #[case::organization("spend:customer_org:org:window:1mo@2026-11-01T00:00:00+00:00")]
-    fn customer_window_round_trip(#[case] key: &str) {
+    #[case::lifetime_organization("spend:customer_org:tenant:lifetime")]
+    #[case::period_team("spend:customer_team:tenant:team:2026-01-01T00:00:00+00:00")]
+    #[case::lifetime_member("spend:customer_member:user@example.com:lifetime")]
+    fn customer_counter_keys_round_trip(#[case] key: &str) {
         assert_eq!(
-            SpendCounter::parse(key).expect("customer window").key(),
+            SpendCounter::parse(key).expect("customer counter").key(),
             key
         );
     }
 
     #[rstest]
-    #[case::no_window("spend:customer_member:member")]
     #[case::no_identity("spend:customer_team::window:1mo")]
     #[case::empty_window("spend:customer_org:org:window:")]
     #[case::committed("spend:committed:customer_member:member:window:1mo")]

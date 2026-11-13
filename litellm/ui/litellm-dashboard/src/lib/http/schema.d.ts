@@ -33422,6 +33422,8 @@ export interface components {
              * @default []
              */
             budget_limits: components["schemas"]["BudgetLimit"][];
+            /** Budget Reset At */
+            budget_reset_at?: string | null;
             /** Cap Policy */
             cap_policy?: ("pause_until_reset" | "pause_allow_increase") | null;
             /** Entity Id */

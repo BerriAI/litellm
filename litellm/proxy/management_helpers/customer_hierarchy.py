@@ -325,6 +325,22 @@ def member_window_reset_at(
     return window_reset_at(template)
 
 
+class CustomerRowWindow(BaseModel):
+    """The budget relations a customer row carries, read off a Prisma row or a dumped mapping."""
+
+    model_config = ConfigDict(frozen=True, extra="ignore", from_attributes=True)
+
+    budget: BudgetWindow | None = None
+    budget_override: BudgetWindow | None = None
+    budget_override_expires_at: datetime | None = None
+
+
+def customer_row_reset_at(row: object, now: datetime) -> datetime | None:
+    """When the row's current spend window resets: its budget row's clock, or an unexpired override's own."""
+    window: Final = CustomerRowWindow.model_validate(row, from_attributes=True)
+    return member_window_reset_at(window.budget, window.budget_override, window.budget_override_expires_at, now)
+
+
 def member_response(row: PrismaRecord, now: datetime) -> CustomerMember:
     values: Final = row.model_dump()
     override: Final = related_budget(values.get("budget_override"))
