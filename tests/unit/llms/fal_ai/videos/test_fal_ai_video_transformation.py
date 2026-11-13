@@ -117,6 +117,19 @@ class TestFalAIVideoTransformation:
         assert "reference_image_urls" not in mapped
         assert mapped["duration"] == "5"
 
+    @pytest.mark.parametrize(
+        ("model", "expected"),
+        [
+            ("bytedance/seedance-2.5/reference-to-video", {"image_urls": ["https://example.com/image.png"]}),
+            ("bytedance/seedance-2.0/fast/reference-to-video", {"image_urls": ["https://example.com/image.png"]}),
+            ("bytedance/seedance-2.5/image-to-video", {"image_url": "https://example.com/image.png"}),
+        ],
+    )
+    def test_map_openai_params_seedance_input_reference_follows_task(self, model: str, expected: dict[str, object]):
+        mapped = self.config.map_openai_params({"input_reference": "https://example.com/image.png"}, model, False)
+
+        assert mapped == expected
+
     def test_map_openai_params_h3_omits_auto_duration(self):
         assert self.config.map_openai_params({"seconds": "auto"}, H3_TEXT_MODEL, False) == {}
         assert self.config.map_openai_params({"seconds": "auto"}, MODEL, False) == {"duration": "auto"}
@@ -218,6 +231,29 @@ class TestFalAIVideoTransformation:
         )
 
         assert video.usage == {"duration_seconds": 5.0, "video_resolution": "2K"}
+
+    def test_transform_video_create_response_luma_ray_defaults_to_540p(self):
+        response = Mock(spec=httpx.Response)
+        response.json.return_value = {"request_id": "abc"}
+
+        for model in (
+            "luma/agent/ray/v3.2/text-to-video",
+            "luma/agent/ray/v3.2/image-to-video",
+            "luma/agent/ray/v3.2/reframe",
+            "luma/agent/ray/v3.2/video-to-video",
+        ):
+            video = self.config.transform_video_create_response(
+                model=model,
+                raw_response=response,
+                logging_obj=self.logging_obj,
+                custom_llm_provider="fal_ai",
+                request_data={"duration": "5"},
+            )
+            assert video.usage == {"duration_seconds": 5.0, "video_resolution": "540p"}, model
+            row = litellm.model_cost[f"fal_ai/{model}"]
+            assert default_video_cost_calculator(model, 5, "fal_ai", video_resolution="540p") == (
+                5 * row["output_cost_per_second"]
+            ), model
 
     def test_transform_video_create_response_h3_max_leaves_default_resolution_to_cost_map(
         self, local_model_cost_map: None
@@ -709,7 +745,8 @@ class TestFalAIVideoTransformation:
         assert isinstance(provider_config, FalAIVideoConfig)
         assert isinstance(self.config.get_error_class("bad key", 401, {}), FalAIVideoError)
 
-    def test_video_cost_uses_tiered_rows(self):
+    @pytest.mark.parametrize(("duration", "resolution"), [(0, None), (5, "720p"), (17, "9999p")])
+    def test_video_cost_uses_tiered_rows(self, duration: float, resolution: str | None) -> None:
         rows = {
             model: row
             for model, row in litellm.model_cost.items()
@@ -717,6 +754,9 @@ class TestFalAIVideoTransformation:
         }
         assert rows
         for model, row in rows.items():
+            if (flat_cost := row.get("output_cost_per_video")) is not None:
+                assert default_video_cost_calculator(model, duration, "fal_ai", video_resolution=resolution) == flat_cost
+                continue
             for key, value in row.items():
                 if key.startswith("output_cost_per_second_") and value is not None:
                     tier = key.removeprefix("output_cost_per_second_")

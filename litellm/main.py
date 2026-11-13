@@ -9087,7 +9087,7 @@ def speech(
         custom_llm_provider=custom_llm_provider,
     )
     response: HttpxBinaryResponseContent | Coroutine[object, object, HttpxBinaryResponseContent] | None = None
-    if custom_llm_provider in ("edenai", "dashscope") and text_to_speech_provider_config is not None:
+    if custom_llm_provider in ("edenai", "dashscope", "replicate") and text_to_speech_provider_config is not None:
         litellm_params_dict["api_base"] = caller_api_base if custom_llm_provider == "dashscope" else api_base
         response = base_llm_http_handler.text_to_speech_handler(
             model=model,

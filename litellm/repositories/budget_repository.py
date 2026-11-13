@@ -3,7 +3,7 @@ Budget repository for database operations on LiteLLM_BudgetTable.
 """
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, TypeVar
 
 from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.repositories.base_repository import BaseRepository
@@ -12,6 +12,19 @@ from litellm.repositories.table_repositories import PrismaTableRepository
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
+
+
+_Row: Final = TypeVar("_Row")
+
+
+async def create_budget_row(table: TableActions[_Row], data: Mapping[str, object], actor: str) -> _Row:
+    return await table.create(data={**data, "created_by": actor, "updated_by": actor})
+
+
+async def update_budget_row(
+    table: TableActions[_Row], budget_id: str, data: Mapping[str, object], actor: str
+) -> _Row | None:
+    return await table.update(where={"budget_id": budget_id}, data={**data, "updated_by": actor})
 
 
 class _BudgetTable(PrismaTableRepository["prisma_models.LiteLLM_BudgetTable"]):
@@ -66,7 +79,10 @@ class BudgetRepository(BaseRepository[LiteLLM_BudgetTable]):
         if allowed_models is not None:
             data["allowed_models"] = allowed_models
 
-        return await self.create(data)
+        record: Final = await create_budget_row(self.table, data, created_by)
+        model: Final = self._to_model(record)
+        assert model is not None
+        return model
 
     async def update_budget(
         self,
@@ -100,7 +116,8 @@ class BudgetRepository(BaseRepository[LiteLLM_BudgetTable]):
         if allowed_models is not None:
             data["allowed_models"] = allowed_models
 
-        return await self.update(budget_id, data, id_field="budget_id")
+        record: Final = await update_budget_row(self.table, budget_id, data, updated_by)
+        return self._to_model(record)
 
     async def delete_budget(self, budget_id: str) -> LiteLLM_BudgetTable | None:
         """Delete a budget record."""

@@ -237,6 +237,7 @@ class UpdateRouterConfig(LiteLLMBaseModel):
     tag_routing_prefix: str | None = None
     optional_pre_call_checks: OptionalPreCallChecks | None = None
     fallback_on_unsupported_params: bool | None = None
+    fallback_on_saturation: bool | None = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -869,6 +870,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     cost_per_second: ReadOnly[float | None]
     input_cost_per_second: float | None
     input_cost_per_text_message: ReadOnly[float | None]
+    output_cost_per_video: ReadOnly[float | None]
     output_cost_per_second: float | None
     output_cost_per_second_480p: ReadOnly[float | None]
     output_cost_per_second_720p: ReadOnly[float | None]
@@ -1311,13 +1313,6 @@ class RoutingStrategy(enum.Enum):
     USAGE_BASED_ROUTING_V2 = "usage-based-routing-v2"
     USAGE_BASED_ROUTING = "usage-based-routing"
     PROVIDER_BUDGET_LIMITING = "provider-budget-routing"
-
-
-class RouterCacheEnum(enum.Enum):
-    TPM = "global_router:{id}:{model}:tpm:{current_minute}"
-    RPM = "global_router:{id}:{model}:rpm:{current_minute}"
-    ITPM = "global_router:{id}:{model}:itpm:{current_minute}"
-    OTPM = "global_router:{id}:{model}:otpm:{current_minute}"
 
 
 class GenericBudgetWindowDetails(LiteLLMBaseModel):

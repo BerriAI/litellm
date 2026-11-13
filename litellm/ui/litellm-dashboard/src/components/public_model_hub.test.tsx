@@ -2,8 +2,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import { render, screen, waitFor, within, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { NuqsTestingAdapter } from "nuqs/adapters/testing";
 import { flexRender, getCoreRowModel, useReactTable } from "@tanstack/react-table";
 import PublicModelHub from "./public_model_hub";
+import { getClaudeCodePluginsList, skillHubPublicCall } from "./networking";
 import { getPublicMCPHubColumns, MCPServerData, ModelGroupInfo } from "./PublicModelHubTableColumns";
 
 const { apiGetMock } = vi.hoisted(() => ({ apiGetMock: vi.fn() }));
@@ -33,6 +35,7 @@ vi.mock("./networking", async (importOriginal) => {
     agentHubPublicModelsCall: vi.fn().mockResolvedValue([]),
     mcpHubPublicServersCall: vi.fn().mockResolvedValue([]),
     skillHubPublicCall: vi.fn().mockResolvedValue({ plugins: [] }),
+    getClaudeCodePluginsList: vi.fn().mockResolvedValue({ plugins: [] }),
     getUiConfig: vi.fn().mockResolvedValue({}),
   };
 });
@@ -62,6 +65,17 @@ const model = (overrides: Partial<ModelGroupInfo> & { model_group: string }): Mo
   ...overrides,
 });
 
+const passThrough = (name: string, path: string, methods?: string[]): ModelGroupInfo => {
+  const spec: Partial<ModelGroupInfo> & { model_group: string } = {
+    model_group: name,
+    providers: [],
+    mode: "passthrough",
+    pass_through_path: path,
+    pass_through_methods: methods,
+  };
+  return model(spec);
+};
+
 const DEFAULT_MODELS = [model({ model_group: "gpt-4" }), model({ model_group: "claude-3", providers: ["anthropic"] })];
 
 const respondWith = (
@@ -71,6 +85,7 @@ const respondWith = (
   facetValues: Record<string, string[]> = FACET_VALUES,
 ) =>
   apiGetMock.mockImplementation((path: string) => {
+    if (path === "/skill-hub/skills/private-skill/versions") return Promise.resolve({ versions: [], total: 0 });
     const facet = facetValues[path];
     if (facet) {
       return Promise.resolve({
@@ -103,7 +118,9 @@ const renderHub = (props: React.ComponentProps<typeof PublicModelHub> = {}) => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   return render(
     <QueryClientProvider client={client}>
-      <PublicModelHub {...props} />
+      <NuqsTestingAdapter>
+        <PublicModelHub {...props} />
+      </NuqsTestingAdapter>
     </QueryClientProvider>,
   );
 };
@@ -126,6 +143,8 @@ beforeAll(() => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(getClaudeCodePluginsList).mockReset().mockResolvedValue({ plugins: [] });
+  vi.mocked(skillHubPublicCall).mockReset().mockResolvedValue({ plugins: [] });
   respondWith(DEFAULT_MODELS);
   Storage.prototype.getItem = vi.fn(() => "false");
   Storage.prototype.setItem = vi.fn();
@@ -140,6 +159,34 @@ beforeEach(() => {
 });
 
 describe("PublicModelHub", () => {
+  it.each([true, false])("keeps Skills catalog credentials scoped to embedded=%s", async (isEmbedded) => {
+    vi.mocked(getClaudeCodePluginsList).mockResolvedValueOnce({
+      plugins: [{ id: "private-skill", name: "private-skill", source: {}, enabled: false }],
+    });
+    vi.mocked(skillHubPublicCall).mockResolvedValueOnce({
+      plugins: [{ id: "public-skill", name: "public-skill", source: {}, enabled: true }],
+    });
+    renderHub({ isEmbedded, accessToken: "dashboard-session" });
+    await userEvent.click(await screen.findByRole("tab", { name: "Skills Hub" }));
+    expect(
+      await screen.findByRole("button", { name: isEmbedded ? "private-skill" : "public-skill" }),
+    ).toBeInTheDocument();
+    if (isEmbedded) {
+      expect(getClaudeCodePluginsList).toHaveBeenCalledWith("dashboard-session");
+      expect(skillHubPublicCall).not.toHaveBeenCalled();
+      await userEvent.click(screen.getByRole("button", { name: "private-skill" }));
+      await userEvent.click(await screen.findByRole("tab", { name: "Version history" }));
+      await waitFor(() =>
+        expect(apiGetMock).toHaveBeenCalledWith(
+          "/skill-hub/skills/private-skill/versions",
+          expect.objectContaining({ accessToken: "dashboard-session" }),
+        ),
+      );
+    } else {
+      expect(getClaudeCodePluginsList).not.toHaveBeenCalled();
+    }
+  });
+
   it("renders", () => {
     const { container } = renderHub();
     expect(container).toBeInTheDocument();
@@ -436,6 +483,60 @@ describe("PublicModelHub", () => {
       expect(gpt35Row).toBeInTheDocument();
       expect(within(gpt35Row as HTMLElement).getByText("Unknown")).toBeInTheDocument();
     });
+  });
+
+  it("lists a published pass-through endpoint under its display name and opens its route", async () => {
+    respondWith([passThrough("Clinical NER", "/clinical-ner")]);
+    renderHub();
+
+    const row = await screen.findByRole("row", { name: /Clinical NER/ });
+    expect(row).toHaveTextContent("passthrough");
+    expect(row).toHaveTextContent("n/a");
+    expect(row).not.toHaveTextContent("Free");
+
+    fireEvent.click(screen.getByRole("button", { name: "Clinical NER" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("/clinical-ner")).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(/curl -X "POST" "https:\/\/backend.example.com\/clinical-ner"/),
+    ).toBeInTheDocument();
+    expect(within(dialog).queryByText("Token & Cost Information")).not.toBeInTheDocument();
+  });
+
+  it("quotes a hostile configured method in the usage example", async () => {
+    respondWith([passThrough("Odd", "/odd", ['GET" ; touch /tmp/pwned ; "'])]);
+    renderHub();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Odd" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      within(dialog).getByText(/curl -X "GET\\" ; touch \/tmp\/pwned ; \\"" "https:\/\/backend.example.com\/odd"/),
+    ).toBeInTheDocument();
+  });
+
+  it("escapes shell characters in the pass-through route of the usage example", async () => {
+    respondWith([passThrough("Tenant", "/tenant/$acct")]);
+    renderHub();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Tenant" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      within(dialog).getByText(/curl -X "POST" "https:\/\/backend.example.com\/tenant\/\\\$acct"/),
+    ).toBeInTheDocument();
+  });
+
+  it("writes the usage example with a method the pass-through route accepts", async () => {
+    respondWith([passThrough("Catalog", "/catalog", ["GET"])]);
+    renderHub();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Catalog" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/curl -X "GET" "https:\/\/backend.example.com\/catalog"/)).toBeInTheDocument();
+    expect(within(dialog).queryByText(/-d '\{"input"/)).not.toBeInTheDocument();
   });
 
   it("shows no models when the search has no matches (LIT-5230 regression)", async () => {

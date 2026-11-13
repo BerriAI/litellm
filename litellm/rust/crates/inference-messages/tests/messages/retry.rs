@@ -151,6 +151,30 @@ async fn a_rejected_thinking_replay_is_sent_once_more_without_thinking(
 
 #[rstest]
 #[tokio::test]
+async fn the_raw_head_of_a_retried_call_carries_the_retried_bytes(
+    call: MessagesCall,
+    #[values(false, true)] stream: bool,
+) {
+    let success = if stream {
+        sse_response()
+    } else {
+        message_response()
+    };
+    let upstream = upstream([rejection(400, INVALID_SIGNATURE), success]).await;
+    let host = RecordingCall::<Messages>::new(replay(call, upstream.uri(), stream, enabled()));
+
+    execute(&host).await.expect("the retry succeeds");
+
+    let [_, retried] = <[_; 2]>::try_from(received(&upstream).await).unwrap();
+    let [raw] = <[_; 1]>::try_from(host.events.0.raw_heads()).unwrap();
+    assert_eq!(
+        raw.head.expect("the head is forwarded").sent_body,
+        retried.body
+    );
+}
+
+#[rstest]
+#[tokio::test]
 async fn a_second_rejection_is_the_error_the_caller_sees(
     call: MessagesCall,
     #[values(false, true)] stream: bool,

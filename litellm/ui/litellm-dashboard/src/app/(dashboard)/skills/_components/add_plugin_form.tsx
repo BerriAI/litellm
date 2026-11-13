@@ -3,7 +3,14 @@ import { useTranslation } from "react-i18next";
 import { z } from "zod";
 import i18n from "@/i18n/i18n";
 import { toast } from "@/lib/toast";
-import { importSkillHubSkill, updateSkillHubSkill, uploadSkillHubSkill } from "@/components/networking";
+import { ApiError } from "@/lib/http/client";
+import {
+  editSkillSubmission,
+  uploadSkillSubmission,
+  importSkillHubSkill,
+  updateSkillHubSkill,
+  uploadSkillHubSkill,
+} from "@/components/networking";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -13,7 +20,12 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { isValidSemanticVersion } from "@/components/claude_code_plugins/helpers";
-import { isPendingSkill, type SkillHubSkill, type SkillMutationResponse } from "@/components/claude_code_plugins/types";
+import {
+  isPendingSkill,
+  type SkillHubSkill,
+  type SkillMutationResponse,
+  type SkillSubmission,
+} from "@/components/claude_code_plugins/types";
 import { buildSkillImport, buildSkillMetadata, skillFormValues } from "@/components/claude_code_plugins/skillForm";
 
 const EDIT_SKILL_SOURCES = ["metadata", "upload"] as const;
@@ -23,8 +35,9 @@ interface AddPluginFormProps {
   visible: boolean;
   onClose: () => void;
   accessToken: string | null;
-  onSuccess: (response: SkillMutationResponse) => void;
+  onSuccess?: (response: SkillMutationResponse) => void;
   skill?: SkillHubSkill;
+  submission?: { value: SkillSubmission; publishedVersion: string | null; onChanged: () => void };
   requiresApproval?: boolean;
 }
 
@@ -65,23 +78,53 @@ const skillSchema = z.object(skillShape).superRefine((values, context) => {
   }
 });
 
+function formLabels(editing: boolean, submission: boolean, requiresApproval: boolean) {
+  if (submission) return { title: "skills.submissions.edit", submit: "skills.submissions.save" } as const;
+  const directSubmit = editing ? "skills.addForm.save" : "skills.addForm.submit";
+  return {
+    title: editing ? "skills.addForm.editTitle" : "skills.addForm.title",
+    submit: requiresApproval ? "skills.addForm.submitReview" : directSubmit,
+  } as const;
+}
+
 export default function AddPluginForm({
   visible,
   onClose,
   accessToken,
   onSuccess,
   skill,
+  submission,
   requiresApproval = false,
 }: AddPluginFormProps) {
   const { t } = useTranslation();
-  const form = useZodForm(skillSchema, { defaultValues: skillFormValues(skill) });
+  const form = useZodForm(skillSchema, {
+    defaultValues: {
+      ...skillFormValues(skill),
+      ...(submission ? { version: submission.value.proposal.version ?? "" } : {}),
+    },
+  });
   const mode = form.watch("mode");
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<Error | null>(null);
+  const conflictedSubmission = error instanceof ApiError && error.status === 409 ? submission : undefined;
   const isSubmitting = form.formState.isSubmitting;
   const submit = async (values: z.infer<typeof skillSchema>) => {
     if (!accessToken) return;
     setError(null);
     try {
+      if (submission && skill) {
+        if (values.mode === "upload" && values.archiveFile) {
+          await uploadSkillSubmission(accessToken, submission.value, values.archiveFile, values.version);
+        } else {
+          await editSkillSubmission(accessToken, submission.value.id, {
+            ...buildSkillMetadata(values, skill),
+            expected_revision: submission.value.revision ?? 0,
+          });
+        }
+        toast.success(t("skills.submissions.saved"));
+        submission.onChanged();
+        onClose();
+        return;
+      }
       const write = () => {
         if (values.mode === "upload" && values.archiveFile) {
           return uploadSkillHubSkill(accessToken, values.archiveFile, values.version, skill);
@@ -92,10 +135,10 @@ export default function AddPluginForm({
       const response = await write();
       const publishedMessage = skill ? "skills.addForm.toasts.updated" : "skills.addForm.toasts.registered";
       toast.success(t(isPendingSkill(response) ? "skills.addForm.toasts.submitted" : publishedMessage));
-      onSuccess(response);
+      onSuccess?.(response);
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("skills.addForm.toasts.registerFailed"));
+      setError(err instanceof Error ? err : new Error(t("skills.addForm.toasts.registerFailed")));
     }
   };
   const changeMode = (value: string) => {
@@ -105,15 +148,14 @@ export default function AddPluginForm({
     form.clearErrors();
     setError(null);
   };
-  const directLabel = skill ? "skills.addForm.save" : "skills.addForm.submit";
-  const submitLabel = requiresApproval ? "skills.addForm.submitReview" : directLabel;
+  const labels = formLabels(Boolean(skill), Boolean(submission), requiresApproval);
   const fields =
     mode === "import" ? (["url", "skill", "ref", "path"] as const) : (["domain", "namespace", "keywords"] as const);
   return (
     <Dialog open={visible} onOpenChange={(open) => !open && !isSubmitting && onClose()}>
       <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-xl">
         <DialogHeader>
-          <DialogTitle>{t(skill ? "skills.addForm.editTitle" : "skills.addForm.title")}</DialogTitle>
+          <DialogTitle>{t(labels.title)}</DialogTitle>
         </DialogHeader>
         {skill && <p className="text-sm font-medium">{skill.name}</p>}
         {requiresApproval && <p className="text-sm text-muted-foreground">{t("skills.addForm.approvalNotice")}</p>}
@@ -176,7 +218,10 @@ export default function AddPluginForm({
                 label={t(skill ? "skills.addForm.versionOverride" : "skills.addForm.labels.version")}
                 description={
                   skill
-                    ? t("skills.addForm.versionContext", { version: skill.version ?? t("skills.submissions.notSet") })
+                    ? t("skills.addForm.versionContext", {
+                        version:
+                          (submission ? submission.publishedVersion : skill.version) ?? t("skills.submissions.notSet"),
+                      })
                     : undefined
                 }
               >
@@ -186,15 +231,28 @@ export default function AddPluginForm({
           </fieldset>
           {error && (
             <p role="alert" className="text-sm text-destructive">
-              {error}
+              {error.message}
             </p>
           )}
           <div className="flex justify-end gap-2">
+            {conflictedSubmission && (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  conflictedSubmission.onChanged();
+                  onClose();
+                }}
+                disabled={isSubmitting}
+              >
+                {t("skills.submissions.reload")}
+              </Button>
+            )}
             <Button type="button" variant="outline" onClick={onClose} disabled={isSubmitting}>
               {t("skills.addForm.cancel")}
             </Button>
             <Button type="submit" disabled={isSubmitting} aria-busy={isSubmitting}>
-              {t(isSubmitting ? "skills.addForm.saving" : submitLabel)}
+              {t(isSubmitting ? "skills.addForm.saving" : labels.submit)}
             </Button>
           </div>
         </form>

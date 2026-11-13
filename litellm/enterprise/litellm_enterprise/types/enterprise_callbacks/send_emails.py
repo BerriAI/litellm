@@ -35,6 +35,7 @@ class SendKeyRotatedEmailEvent(WebhookEvent):
 
 class EmailEvent(str, enum.Enum):
     model_deprecations = MODEL_DEPRECATION_EMAIL_EVENT
+    performance_alerts = "Performance Alerts"
     virtual_key_created = "Virtual Key Created"
     new_user_invitation = "New User Invitation"
     virtual_key_rotated = "Virtual Key Rotated"
@@ -60,7 +61,8 @@ class DefaultEmailSettings(LiteLLMBaseModel):
 
     settings: dict[EmailEvent, bool] = Field(
         default_factory=lambda: {
-            EmailEvent.model_deprecations: False,  # Explicit opt-in for owner retirement reminders.
+            EmailEvent.model_deprecations: False,
+            EmailEvent.performance_alerts: False,
             EmailEvent.virtual_key_created: True,  # On by default
             EmailEvent.new_user_invitation: True,  # On by default
             EmailEvent.virtual_key_rotated: True,  # On by default
