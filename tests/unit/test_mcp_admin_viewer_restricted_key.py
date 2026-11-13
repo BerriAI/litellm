@@ -5,6 +5,7 @@ from litellm.proxy.management_endpoints.mcp_management_endpoints import (
     _is_restricted_virtual_key_request,
     _sanitize_mcp_server_for_non_admin,
     _sanitize_mcp_server_for_virtual_key,
+    _user_is_full_admin,
 )
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
@@ -24,9 +25,8 @@ def _mock_mcp_server(server_id: str = "srv-test-1", **kwargs) -> LiteLLM_MCPServ
 
 def test_is_restricted_virtual_key_request_admin_roles():
     """Route-restricted keys held by admin roles (PROXY_ADMIN, PROXY_ADMIN_VIEW_ONLY)
-
-    must NOT be flagged as restricted virtual keys, so they receive full admin or
-    non-admin governance metadata rather than the stripped virtual-key view.
+    with explicit MCP management routes must NOT be flagged as restricted virtual keys,
+    so they receive non-admin governance metadata rather than the stripped virtual-key view.
     """
     admin_viewer = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
@@ -34,11 +34,64 @@ def test_is_restricted_virtual_key_request_admin_roles():
     )
     assert _is_restricted_virtual_key_request(admin_viewer) is False
 
-    proxy_admin = UserAPIKeyAuth(
+    admin_viewer_group = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        allowed_routes=["mcp_management_routes"],
+    )
+    assert _is_restricted_virtual_key_request(admin_viewer_group) is False
+
+    proxy_admin_mgmt = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN,
         allowed_routes=["/v1/mcp/server"],
     )
-    assert _is_restricted_virtual_key_request(proxy_admin) is False
+    assert _is_restricted_virtual_key_request(proxy_admin_mgmt) is False
+
+
+def test_is_restricted_virtual_key_request_inference_scoped_admin_keys():
+    """An inference-scoped key associated with PROXY_ADMIN (e.g. allowed_routes=['llm_api_routes'])
+    reaches discovery endpoints via the route carve-out and MUST remain on the restricted
+    virtual key path so credentials are fully sanitized.
+    """
+    inference_admin_key = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        allowed_routes=["llm_api_routes"],
+    )
+    assert _is_restricted_virtual_key_request(inference_admin_key) is True
+
+    chat_admin_key = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        allowed_routes=["/chat/completions"],
+    )
+    assert _is_restricted_virtual_key_request(chat_admin_key) is True
+
+
+def test_user_is_full_admin_route_restricted_safety():
+    """Only an unrestricted PROXY_ADMIN receives full admin access. Route-restricted keys
+    (even if PROXY_ADMIN) must not be treated as full admin.
+    """
+    unrestricted_admin = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        allowed_routes=None,
+    )
+    assert _user_is_full_admin(unrestricted_admin) is True
+
+    empty_routes_admin = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        allowed_routes=[],
+    )
+    assert _user_is_full_admin(empty_routes_admin) is True
+
+    route_restricted_admin = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        allowed_routes=["/v1/mcp/server"],
+    )
+    assert _user_is_full_admin(route_restricted_admin) is False
+
+    admin_viewer = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        allowed_routes=None,
+    )
+    assert _user_is_full_admin(admin_viewer) is False
 
 
 def test_is_restricted_virtual_key_request_non_admin_roles():
@@ -63,7 +116,6 @@ def test_is_restricted_virtual_key_request_non_admin_roles():
 
 def test_admin_viewer_preserves_mcp_info_and_timestamps():
     """Admin viewer requests go through _sanitize_mcp_server_for_non_admin,
-
     which preserves governance metadata in mcp_info and creation/update timestamps
     while stripping credentials.
     """
@@ -112,7 +164,6 @@ def test_admin_viewer_preserves_mcp_info_and_timestamps():
 
 def test_restricted_virtual_key_strips_governance_mcp_info_and_timestamps():
     """Restricted virtual keys go through _sanitize_mcp_server_for_virtual_key,
-
     which restricts mcp_info to visibility flags only and blanks timestamps.
     """
     created_time = datetime(2026, 11, 10, 12, 0, 0, tzinfo=timezone.utc)
