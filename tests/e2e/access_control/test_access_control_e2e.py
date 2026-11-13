@@ -228,3 +228,27 @@ class TestVirtualKeyAuth:
                 pytest.fail("forged bearer must not reach a successful completion")
             case _:
                 pytest.fail(f"forged bearer must be auth-denied, got {bad}")
+
+
+class TestInvalidKeyConfidentiality:
+    @meta(Subject(domain=Domain.PROXY_AUTH))
+    def test_unknown_keys_return_the_same_error_without_credential_details(self, proxy: ProxyClient) -> None:
+        from hashlib import sha256
+        from typing import Final
+
+        first_key: Final = f"sk-invalid-first-{unique_marker()}"
+        second_key: Final = f"sk-invalid-second-{unique_marker()}"
+        first: Final = proxy.transport.download("/key/list", headers=proxy.transport.bearer(first_key))
+        second: Final = proxy.transport.download("/key/list", headers=proxy.transport.bearer(second_key))
+        assert first.status_code == second.status_code == 401, (first.body, second.body)
+        first_error: Final = error_envelope(first.body)
+        second_error: Final = error_envelope(second.body)
+        assert first_error is not None and second_error is not None, (first.body, second.body)
+        assert first.body == second.body
+        assert first_error == second_error
+        assert first_error.error.message
+        assert first_error.error.type == "token_not_found_in_db"
+        for credential in (first_key, second_key):
+            assert credential not in first.body
+            assert sha256(credential.encode()).hexdigest() not in first.body
+        assert "LiteLLM_VerificationToken" not in first.body
