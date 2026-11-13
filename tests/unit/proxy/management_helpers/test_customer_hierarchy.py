@@ -122,6 +122,15 @@ class Table:
         self.rows = {**self.rows, row_id: row}
         return row
 
+    async def upsert(self, where: Mapping[str, object], data: Mapping[str, object]) -> Record:
+        existing: Final = await self.find_unique(where)
+        values: Final = TypeAdapter(Mapping[str, object]).validate_python(data["update" if existing else "create"])
+        if existing is None:
+            return await self.create(values)
+        updated: Final = await self.update(where, values)
+        assert updated is not None
+        return updated
+
     def matches(self, row: Record, where: Mapping[str, object]) -> bool:
         values: Final = row.model_dump()
         for key, value in where.items():
@@ -244,6 +253,8 @@ class Database:
         return any(row.model_dump().get(field) == budget_id for row in table.rows.values())
 
     async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
+        if "pg_advisory_xact_lock" in query:
+            return ()
         if "SELECT EXISTS" in query:
             return ({"referenced": False},)
         if "FOR UPDATE" in query:

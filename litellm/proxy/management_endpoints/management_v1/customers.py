@@ -17,6 +17,7 @@ from litellm.proxy.list_api.common import (
 )
 from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V1_PREFIX
 from litellm.proxy.management_helpers.customer_hierarchy import CustomerHierarchy, ErrorCode, Failure, Page
+from litellm.proxy.management_helpers.customer_upsert import CustomerUpsert
 from litellm.proxy.management_helpers.utils import (
     management_endpoint_wrapper,  # pyright: ignore[reportUnknownVariableType]  # legacy decorator is untyped
 )
@@ -25,9 +26,13 @@ from litellm.types.proxy.management_endpoints.customer_hierarchy import (
     CustomerMember,
     MemberCreate,
     MemberPatch,
+    MemberUpsert,
+    MemberUpsertResponse,
     Organization,
     OrganizationCreate,
     OrganizationPatch,
+    OrganizationUpsert,
+    OrganizationUpsertResponse,
     Team,
     TeamCreate,
     TeamPatch,
@@ -84,6 +89,16 @@ _ERROR_DETAILS: Final[Mapping[ErrorCode, tuple[int, str, str]]] = MappingProxyTy
         ),
         ErrorCode.FORBIDDEN: (403, "Forbidden", "Only proxy admins can manage customer hierarchies."),
         ErrorCode.DATABASE_UNAVAILABLE: (503, "Database not connected", "Database not connected."),
+        ErrorCode.ALIAS_ALREADY_EXISTS: (
+            409,
+            "Customer org alias already exists",
+            "Customer org alias is already used by another customer org.",
+        ),
+        ErrorCode.CUSTOMER_ORG_MISMATCH: (
+            409,
+            "Customer org mismatch",
+            "Customer member and customer team must belong to the specified customer org.",
+        ),
     }
 )
 assert _ERROR_DETAILS.keys() == frozenset(ErrorCode), "every ErrorCode needs a public problem"
@@ -184,6 +199,32 @@ async def create_customer_organization(
     hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
 ) -> Organization:
     return resolve(await hierarchy.create_organization(data, actor))
+
+
+@router.post(
+    "/customer_organizations/upsert",
+    response_model=OrganizationUpsertResponse,
+    description=(
+        "Create or update a customer org by customer_org_id, or by alias when no ID is supplied. "
+        "Returns 200 with created=true for creation and created=false for updates. Repeated identical calls are no-ops. "
+        "Supplied default_budgets are merged by template name, preserving existing template IDs and omitted templates. "
+        "A single supplied template becomes the default; multiple templates require default_budget_template to name one. "
+        "Omitted fields retain their values. Conflicting or ambiguous aliases return 409. Proxy admins only."
+    ),
+)
+@management_endpoint_wrapper
+async def upsert_customer_organization(
+    data: OrganizationUpsert,
+    actor: Annotated[str, Depends(customer_actor)],
+    hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+    cache: AuthCache,
+) -> OrganizationUpsertResponse:
+    outcome: Final = resolve(await CustomerUpsert(hierarchy).organization(data, actor))
+    await forget_customer_hierarchies(
+        resolve(await hierarchy.member_ids_in_organization(outcome.data.customer_org_id)), cache
+    )
+    await forget_customer_organization_aliases((outcome.previous_alias, outcome.data.alias), cache)
+    return outcome.data
 
 
 @router.get(
@@ -349,6 +390,32 @@ async def create_customer_member(
     hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
 ) -> CustomerMember:
     return resolve(await hierarchy.create_member(data, actor))
+
+
+@router.post(
+    "/customer_members/upsert",
+    response_model=MemberUpsertResponse,
+    description=(
+        "Create or update a customer member by customer_member_id within a customer org identified by "
+        "customer_org_id or customer_org_alias. If both are supplied they must match. "
+        "A new customer member with no parent_team_id joins the customer org's default customer team, created if necessary. An existing customer member keeps its customer teams, and a supplied parent_team_id becomes its first customer team. "
+        "Alias, budget_id, budget_override and budget_override_expires_at follow the existing customer member models. "
+        "Omitted update fields retain their values. Moving between customer teams in the same customer org is allowed. "
+        "Moving between customer orgs or selecting another customer org's customer team returns 409. "
+        "Returns 200 with created=true for creation and created=false for updates. Repeated identical calls are no-ops. "
+        "Proxy admins only."
+    ),
+)
+@management_endpoint_wrapper
+async def upsert_customer_member(
+    data: MemberUpsert,
+    actor: Annotated[str, Depends(customer_actor)],
+    hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+    cache: AuthCache,
+) -> MemberUpsertResponse:
+    member: Final = resolve(await CustomerUpsert(hierarchy).member(data, actor))
+    await forget_customer_hierarchies((member.customer_member_id,), cache)
+    return member
 
 
 @router.get(
