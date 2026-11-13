@@ -1,0 +1,29 @@
+name: Keep handwritten PR description
+
+on:
+  pull_request_target:
+    types: [edited]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: keep-handwritten-description-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  restore:
+    if: github.event.changes.body != null
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          sparse-checkout: .github/scripts/ci
+      - uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+        with:
+          script: |
+            const { keepHandwrittenDescription } = require('./.github/scripts/ci/keep_handwritten_description.cjs');
+            await keepHandwrittenDescription({ github, context });
