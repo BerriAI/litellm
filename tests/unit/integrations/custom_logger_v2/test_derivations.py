@@ -1,6 +1,6 @@
 import json
 import math
-from collections.abc import Generator, Mapping
+from collections.abc import Callable, Generator, Mapping
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
@@ -14,6 +14,7 @@ from litellm.integrations.custom_logger_v2 import derivations
 from litellm.integrations.custom_logger_v2.derivations import RECORD_TYPES
 from litellm.integrations.custom_logger_v2.slots import HookArgs
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.integrations.prometheus import UserAPIKeyLabelValues
 from litellm.types.integrations.custom_logger_v2 import (
     AttemptTiming,
     BudgetPlan,
@@ -35,7 +36,7 @@ from litellm.types.integrations.custom_logger_v2 import (
     Record,
     ReservationEntry,
     Scalar,
-    ScalarItem,
+    Stringified,
     Usage,
     UsageRecord,
     ZeroCost,
@@ -44,16 +45,41 @@ from litellm.types.integrations.custom_logger_v2 import (
 )
 
 RECORDS_JSON: Final = Path(__file__).parents[4] / "litellm/rust/crates/callbacks/records.json"
+
+
+class _Unprintable:
+    def __str__(self) -> str:
+        raise RuntimeError("no text")
+
+
+class _Undecided:
+    def __bool__(self) -> bool:
+        raise RuntimeError("no truth")
+
+
+class _Falsy:
+    def __str__(self) -> str:
+        return "falsy object"
+
+    def __bool__(self) -> bool:
+        return False
+
+
 _SCALARS: Final[Mapping[object, object]] = {
     Scalar: 42,
-    ScalarItem: " 7 ",
     str: "text",
     bool: True,
     int: 7,
     float: 1.5,
     tuple[str, ...]: ["member"],
 }
-_WRONG: Final[Mapping[object, object]] = {Scalar: ["a1"], str: 7, bool: "maybe", int: "seven", float: "one and a half"}
+_WRONG: Final[Mapping[object, object]] = {
+    Scalar: _Unprintable(),
+    str: 7,
+    bool: "maybe",
+    int: "seven",
+    float: "one and a half",
+}
 _MOMENT: Final = datetime(2026, 11, 13, 9, 30, 15, 250, tzinfo=timezone(timedelta(hours=-5)))
 
 
@@ -165,8 +191,43 @@ def test_nan_is_carried_as_the_float_python_reads() -> None:
     assert math.isnan(cost.response_cost)
 
 
-@pytest.mark.parametrize("raw", [2**127, -(2**127) - 1, ["a1"], {"a": 1}, b"7"], ids=repr)
-def test_a_scalar_member_rejects_what_is_not_a_scalar_or_overflows_i128(raw: object) -> None:
+@pytest.mark.parametrize(
+    ("raw", "text", "truthy"),
+    [
+        pytest.param(["a1"], "['a1']", True, id="list"),
+        pytest.param([], "[]", False, id="empty_list"),
+        pytest.param({"a": 1}, "{'a': 1}", True, id="dict"),
+        pytest.param({}, "{}", False, id="empty_dict"),
+        pytest.param({"a"}, "{'a'}", True, id="set"),
+        pytest.param(set(), "set()", False, id="empty_set"),
+        pytest.param(b"7", "b'7'", True, id="bytes"),
+        pytest.param(b"", "b''", False, id="empty_bytes"),
+        pytest.param(_Falsy(), "falsy object", False, id="object"),
+        pytest.param(2**127, "170141183460469231731687303715884105728", True, id="past_i128"),
+        pytest.param(-(2**127) - 1, "-170141183460469231731687303715884105729", True, id="below_i128"),
+    ],
+)
+def test_a_scalar_member_carries_any_other_value_as_the_str_text_and_truthiness_python_reads(
+    raw: object, text: str, truthy: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level("WARNING", logger="LiteLLM"):
+        record: Final = coerce_record(UsageRecord, {"prompt_tokens": raw})
+
+    assert record == UsageRecord(prompt_tokens=Stringified(text=text, truthy=truthy))
+    assert record.prompt_tokens != text
+    assert not isinstance(record.prompt_tokens, str)
+    assert caplog.records == []
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        pytest.param(_Unprintable(), id="str_raises"),
+        pytest.param(_Undecided(), id="bool_raises"),
+        pytest.param(10**5000, id="int_too_long_for_str"),
+    ],
+)
+def test_a_value_whose_str_or_bool_raises_is_named_in_rejected(raw: object) -> None:
     assert coerce_record(UsageRecord, {"prompt_tokens": raw}) == UsageRecord(rejected=("prompt_tokens",))
 
 
@@ -312,24 +373,44 @@ def test_the_reservation_dict_budget_reservation_py_builds_reads_with_its_extra_
 
 
 @pytest.mark.parametrize(
-    ("entries", "expected", "rejected"),
+    ("entries", "expected", "is_list", "rejected"),
     [
-        pytest.param(("not", "a list"), None, ("entries",), id="tuple_is_not_the_list_capacity_checks"),
-        pytest.param("abc", None, ("entries",), id="text"),
-        pytest.param(["k", {"counter_key": "k"}], (None, ReservationEntry(counter_key="k")), None, id="text_entry"),
         pytest.param(
-            [{"counter_key": 7, "extra": 1}], (ReservationEntry(counter_key="7"),), None, id="key_formatted_by_str"
+            ({"counter_key": "k"}, "a list"),
+            (ReservationEntry(counter_key="k"), None),
+            False,
+            None,
+            id="tuple_budgets_iterates_and_capacity_reads_as_covered",
+        ),
+        pytest.param("ab", (None, None), False, None, id="text_iterates_as_characters"),
+        pytest.param({"counter_key": "k"}, (None,), False, None, id="dict_iterates_as_keys"),
+        pytest.param(0, (), False, None, id="falsy_is_the_empty_list_budgets_uses"),
+        pytest.param(5, None, None, ("entries",), id="truthy_that_does_not_iterate"),
+        pytest.param([], (), True, None, id="empty_list"),
+        pytest.param(
+            ["k", {"counter_key": "k"}], (None, ReservationEntry(counter_key="k")), True, None, id="text_entry"
+        ),
+        pytest.param(
+            [{"counter_key": 7, "extra": 1}],
+            (ReservationEntry(counter_key="7"),),
+            True,
+            None,
+            id="key_formatted_by_str",
         ),
         pytest.param(
             [{"entity_type": ["x"], "entity_id": "g"}],
             (ReservationEntry(entity_id="g", rejected=("entity_type",)),),
+            True,
             None,
             id="non_text_entity_type",
         ),
     ],
 )
 def test_reservation_entries_keep_what_capacity_and_budgets_each_read(
-    entries: object, expected: tuple[ReservationEntry | None, ...] | None, rejected: tuple[str, ...] | None
+    entries: object,
+    expected: tuple[ReservationEntry | None, ...] | None,
+    is_list: bool | None,
+    rejected: tuple[str, ...] | None,
 ) -> None:
     auth: Final = _auth()
     auth.budget_reservation = {"reserved_cost": 1.0, "entries": entries}
@@ -337,7 +418,22 @@ def test_reservation_entries_keep_what_capacity_and_budgets_each_read(
     read: Final = derivations.budget_reservation(HookArgs(auth=auth))
 
     assert read is not None
-    assert (read.entries, read.rejected) == (expected, rejected)
+    assert (read.entries, read.entries_is_list, read.rejected) == (expected, is_list, rejected)
+
+
+def test_a_reservation_write_never_stores_the_entries_shape_it_read() -> None:
+    reservation: Final[dict[str, object]] = {"entries": ({"counter_key": "k"},)}  # mutable-ok: the write updates it
+    auth: Final = _auth()
+    auth.budget_reservation = reservation
+    args: Final = HookArgs(auth=auth)
+    read: Final = derivations.budget_reservation(args)
+    assert read is not None
+    assert read.entries_is_list is False
+
+    derivations.write_budget_reservation(args, read.model_copy(update={"finalized": True}))
+    derivations.write_budget_reservation(args, {"entries_is_list": True, "input_tokens": 3})
+
+    assert reservation == {"entries": [{"counter_key": "k"}], "finalized": True, "input_tokens": 3}
 
 
 @pytest.mark.parametrize(
@@ -512,15 +608,18 @@ def test_key_identity_keeps_numeric_priorities_capacity_compares_by_value(priori
     assert (identity.team_priority, identity.key_priority) == (priority, priority)
 
 
-def test_key_identity_names_an_unhashable_priority_and_a_list_agent_id_in_rejected() -> None:
+def test_key_identity_carries_a_list_priority_and_agent_id_as_the_text_python_formats() -> None:
     auth: Final = _auth(team_metadata={"priority": ["gold"]})
     auth.agent_id = ["a1"]  # pyright: ignore[reportAttributeAccessIssue]  # the shape a hand-built auth object can hold
 
     identity: Final = derivations.key_identity(HookArgs(auth=auth))
 
     assert identity is not None
-    assert identity.rejected == ("agent_id", "team_priority")
-    assert (identity.agent_id, identity.team_priority) == (None, None)
+    assert identity.rejected is None
+    assert (identity.agent_id, identity.team_priority) == (
+        Stringified(text="['a1']", truthy=True),
+        Stringified(text="['gold']", truthy=True),
+    )
 
 
 @pytest.mark.parametrize(
@@ -770,7 +869,9 @@ def test_prometheus_parity_values_cross_as_python_holds_them() -> None:
     state: Final = derivations.rate_limit_state(args)
 
     assert usage is not None
-    assert usage.logged == UsageRecord(prompt_tokens="ten", completion_tokens=float("inf"), rejected=("total_tokens",))
+    assert usage.logged == UsageRecord(
+        prompt_tokens="ten", completion_tokens=float("inf"), total_tokens=Stringified(text="[10]", truthy=True)
+    )
     assert cost == Cost(response_cost=0.5, zero_cost=ZeroCost(reason_present=False))
     assert timing is not None
     assert (timing.queue_seconds, timing.overhead_ms) == ("slow", "slow")
@@ -795,7 +896,10 @@ def test_prometheus_parity_values_cross_as_python_holds_them() -> None:
         ),
         (
             [{"guardrail_mode": ["pre_call", 7, {"x": 1}]}, "text"],
-            (GuardrailEntry(mapping=True, modes=("pre_call", 7, None)), GuardrailEntry(mapping=False)),
+            (
+                GuardrailEntry(mapping=True, modes=("pre_call", 7, Stringified(text="{'x': 1}", truthy=True))),
+                GuardrailEntry(mapping=False),
+            ),
         ),
         ("abc", (GuardrailEntry(mapping=False),)),
     ],
@@ -827,10 +931,46 @@ def test_deployment_model_info_keeps_python_truthiness(raw: object, expected: De
     assert derivations.deployment(HookArgs(request=request)) == expected
 
 
-def test_request_tags_keep_scalar_tags_and_mark_others_as_never_matching() -> None:
-    payload: Final = {"request_tags": ["prod", 7, {"a": 1}, None]}
+def test_request_tags_keep_scalar_tags_and_carry_others_as_their_text() -> None:
+    payload: Final = {"request_tags": ["prod", 7, {"a": 1}, [], None]}
 
-    assert derivations.request_tags(HookArgs(request={"standard_logging_object": payload})) == ("prod", 7, None, None)
+    assert derivations.request_tags(HookArgs(request={"standard_logging_object": payload})) == (
+        "prod",
+        7,
+        Stringified(text="{'a': 1}", truthy=True),
+        Stringified(text="[]", truthy=False),
+        None,
+    )
+
+
+@pytest.mark.parametrize(
+    ("make", "expected"),
+    [
+        pytest.param(lambda: "ab", ("a", "b"), id="text_iterates_as_characters"),
+        pytest.param(lambda: {"prod": 1, "dev": 2}, ("prod", "dev"), id="dict_iterates_as_keys"),
+        pytest.param(lambda: {"prod"}, ("prod",), id="set"),
+        pytest.param(lambda: (tag for tag in ("prod", "dev")), ("prod", "dev"), id="generator"),
+        pytest.param(lambda: ("prod", 7), ("prod", 7), id="tuple"),
+        pytest.param(lambda: b"a", (97,), id="bytes_iterate_as_ints"),
+    ],
+)
+def test_request_tags_carry_any_iterable_as_the_items_prometheus_iterates(
+    make: Callable[[], object], expected: tuple[object, ...]
+) -> None:
+    payload: Final = {"request_tags": make()}
+
+    assert derivations.request_tags(HookArgs(request={"standard_logging_object": payload})) == expected
+    assert UserAPIKeyLabelValues(tags=make()).tags == expected
+
+
+def test_request_tags_that_do_not_iterate_are_absent_and_logged(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level("WARNING", logger="LiteLLM"):
+        tags: Final = derivations.request_tags(HookArgs(request={"standard_logging_object": {"request_tags": 7}}))
+
+    assert tags is None
+    assert [entry.getMessage().split(":")[1].strip() for entry in caplog.records] == [
+        "request_tags.value holds a value the contract cannot carry, so it is named in rejected"
+    ]
 
 
 def test_a_completion_start_that_is_present_but_none_differs_from_a_missing_one() -> None:

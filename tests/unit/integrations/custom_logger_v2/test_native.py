@@ -67,6 +67,7 @@ from litellm.types.integrations.custom_logger_v2 import (
     KeyIdentity,
     Outcome,
     ReservationEntry,
+    Stringified,
 )
 
 RUST: Final = Path(__file__).parents[4] / "litellm/rust/crates"
@@ -385,6 +386,34 @@ async def test_typed_records_reach_the_native_with_the_python_values_json_mode_w
         {"rejected": None, "mapping": True, "modes": ("pre_call", None), "duration": None},
     )
     assert fields["outcome"] == "success"
+
+
+async def test_a_value_carried_as_its_text_reaches_the_native_as_text_and_truthiness() -> None:
+    handle: Final = Handle()
+    logger: Final = native_logger(handle)
+    assert isinstance(logger, NativeLogger)
+    view: Final = SimpleNamespace(
+        key_identity=KeyIdentity(team_id=["t1"], team_priority={}),
+        request_tags=(Stringified(text="[]", truthy=False), "prod"),
+        budget_reservation=BudgetReservation(entries=(), entries_is_list=False),
+    )
+
+    _ = await logger.run_native(
+        Hook.pre_call,
+        frozenset({Field.key_identity, Field.request_tags, Field.budget_reservation}),
+        view,
+        CallContext(hook=Hook.pre_call, call=None, state=None),
+    )
+
+    fields: Final = handle.calls[0][1]
+    identity: Final = _REQUEST.validate_python(fields["key_identity"])
+    reservation: Final = _REQUEST.validate_python(fields["budget_reservation"])
+    assert (identity["team_id"], identity["team_priority"]) == (
+        {"text": "['t1']", "truthy": True},
+        {"text": "{}", "truthy": False},
+    )
+    assert fields["request_tags"] == ({"text": "[]", "truthy": False}, "prod")
+    assert (reservation["entries"], reservation["entries_is_list"]) == ((), False)
 
 
 async def test_an_infinite_budget_reservation_reaches_the_native_as_a_python_float() -> None:

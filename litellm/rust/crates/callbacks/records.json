@@ -48,7 +48,7 @@
     "params_present": true
   },
   "request_tags": [
-    " 7 "
+    42
   ],
   "guardrail_info": [
     {
@@ -57,7 +57,7 @@
       ],
       "mapping": true,
       "modes": [
-        " 7 "
+        42
       ],
       "duration": 42
     }
@@ -258,6 +258,7 @@
         "applied_adjustment": 1.5
       }
     ],
+    "entries_is_list": true,
     "finalized": true,
     "callback_bound": true,
     "input_cost": 1.5,

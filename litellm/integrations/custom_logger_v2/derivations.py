@@ -29,6 +29,7 @@ from litellm.types.integrations.custom_logger_v2 import (
     RateLimitStatuses,
     ReservationEntry,
     ScalarItem,
+    Stringified,
     Usage,
     UsageRecord,
     coerce_record,
@@ -36,7 +37,10 @@ from litellm.types.integrations.custom_logger_v2 import (
 )
 
 _ABSENT: Final = object()
-_TAGS: Final[TypeAdapter[tuple[str | int | float | bool | None, ...]]] = TypeAdapter(tuple[ScalarItem, ...])
+_TAGS: Final[TypeAdapter[tuple[str | int | float | bool | Stringified | None, ...]]] = TypeAdapter(
+    tuple[ScalarItem, ...]
+)
+_DERIVED_RESERVATION_MEMBERS: Final = frozenset({"rejected", "entries_is_list"})
 _LIMITER_HEADER_PREFIX: Final = "x-ratelimit-"
 
 
@@ -279,17 +283,32 @@ def _reservation_entry(raw: object) -> ReservationEntry | None:
     return None if members is None else coerce_record(ReservationEntry, members)
 
 
+def _iterated(raw: object) -> tuple[object, ...] | None:
+    try:
+        return tuple(raw)  # pyright: ignore[reportArgumentType, reportUnknownArgumentType]  # any iterable a caller stored
+    except (TypeError, ValueError):
+        return None
+
+
+def _budget_entries(entries: object) -> tuple[object, ...] | None:
+    try:
+        return tuple(entries or ())  # pyright: ignore[reportArgumentType, reportUnknownArgumentType]  # any iterable a caller stored
+    except (TypeError, ValueError):
+        return None
+
+
+def _entries_members(entries: object) -> Mapping[str, object]:
+    iterated: Final = None if entries is None else _budget_entries(entries)
+    if iterated is None:
+        return {"entries": entries, "entries_is_list": None}
+    return {"entries": tuple(map(_reservation_entry, iterated)), "entries_is_list": isinstance(entries, list)}
+
+
 def budget_reservation(args: HookArgs) -> BudgetReservation | None:
     members: Final = mapping(getattr(args.auth, "budget_reservation", None))
     if members is None:
         return None
-    entries: Final = members.get("entries")
-    if not isinstance(entries, list):
-        return coerce_record(BudgetReservation, members)
-    return coerce_record(
-        BudgetReservation,
-        {**members, "entries": tuple(map(_reservation_entry, entries))},  # pyright: ignore[reportUnknownArgumentType]  # the shared reservation dict holds whatever was written
-    )
+    return coerce_record(BudgetReservation, {**members, **_entries_members(members.get("entries"))})
 
 
 def _written_entry(entry: object) -> object:
@@ -310,7 +329,11 @@ def _record_members(value: object) -> Mapping[str, object]:
     if members is None:
         raise TypeError("a budget_reservation write must be a mapping of reservation members")
     return MappingProxyType(
-        {key: _written(key, item) for key, item in members.items() if item is not None and key != "rejected"}
+        {
+            key: _written(key, item)
+            for key, item in members.items()
+            if item is not None and key not in _DERIVED_RESERVATION_MEMBERS
+        }
     )
 
 
@@ -416,8 +439,12 @@ def cost(args: HookArgs) -> Cost | None:
     )
 
 
-def request_tags(args: HookArgs) -> tuple[str | int | float | bool | None, ...] | None:
-    return coerce_value("request_tags", _TAGS, member(payload_of(args), "request_tags"))
+def request_tags(args: HookArgs) -> tuple[str | int | float | bool | Stringified | None, ...] | None:
+    raw: Final = member(payload_of(args), "request_tags")
+    if raw is None:
+        return None
+    iterated: Final = _iterated(raw)
+    return coerce_value("request_tags", _TAGS, raw if iterated is None else iterated)
 
 
 def _guardrail_entry(entry: object) -> GuardrailEntry:

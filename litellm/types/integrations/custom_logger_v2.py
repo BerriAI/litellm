@@ -5,7 +5,15 @@ from enum import Enum
 from functools import cache
 from typing import Annotated, Final, TypeAlias, TypeVar
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, PlainValidator, TypeAdapter, ValidationError
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    PlainSerializer,
+    PlainValidator,
+    TypeAdapter,
+    ValidationError,
+)
 from pydantic import Field as Member
 
 _LOGGER: Final = logging.getLogger("LiteLLM")
@@ -33,28 +41,38 @@ Formatted: TypeAlias = Annotated[str, PlainValidator(str)]
 _I128_BOUND: Final = 2**127
 
 
-def _scalar(value: object) -> bool | int | float | str:
-    if isinstance(value, bool | float | str):
-        return value
-    if isinstance(value, int):
-        if -_I128_BOUND <= value < _I128_BOUND:
-            return value
-        raise ValueError("an integer outside the i128 range cannot cross into Rust")
-    raise ValueError(f"a {type(value).__name__} is not a bool, int, float or str")
-
-
-Scalar: TypeAlias = Annotated[bool | int | float | str, PlainValidator(_scalar)]
-
-
-def _scalar_or_none(value: object) -> object:
-    return value if isinstance(value, bool | int | float | str) else None
-
-
-ScalarItem: TypeAlias = Annotated[Scalar | None, BeforeValidator(_scalar_or_none)]
-
-
 class Strict(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class Stringified(Strict):
+    text: str
+    truthy: bool
+
+
+def _stringified(value: object) -> Stringified:
+    try:
+        return Stringified(text=str(value), truthy=bool(value))
+    except Exception as error:
+        raise ValueError(f"str() or bool() of a {type(value).__name__} raises") from error
+
+
+def _scalar(value: object) -> bool | int | float | str | Stringified:
+    if isinstance(value, bool | float | str | Stringified):
+        return value
+    if isinstance(value, int) and -_I128_BOUND <= value < _I128_BOUND:
+        return value
+    return _stringified(value)
+
+
+def _dumped_scalar(value: object) -> object:
+    return value.model_dump() if isinstance(value, Stringified) else value
+
+
+Scalar: TypeAlias = Annotated[
+    bool | int | float | str | Stringified, PlainValidator(_scalar), PlainSerializer(_dumped_scalar)
+]
+ScalarItem: TypeAlias = Scalar | None
 
 
 class Record(Strict):
@@ -223,6 +241,7 @@ class ReservationEntry(Record):
 class BudgetReservation(Record):
     reserved_cost: FloatOrZero | None = None
     entries: tuple[ReservationEntry | None, ...] | None = None
+    entries_is_list: bool | None = None
     finalized: Flag | None = None
     callback_bound: Flag | None = None
     input_cost: FloatOrZero | None = None
@@ -424,6 +443,7 @@ __all__ = [
     "Scalar",
     "ScalarItem",
     "Strict",
+    "Stringified",
     "Usage",
     "UsageRecord",
     "ZeroCost",
