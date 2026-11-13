@@ -130,3 +130,12 @@ it("updates the dates when the user changes the date picker", async () => {
   await act(async () => result.current.onDateChange({ from: new Date(2026, 2, 1, 12), to: new Date(2026, 2, 8, 12) }));
   expect(result.current.dateValue.from).toEqual(new Date(2026, 2, 1, 12));
 });
+
+it("keeps URL dates ahead of the cost optimization default", () => {
+  const { result } = testingRenderHook(() => useDailyActivityRange("test-token", "u1", "proxy_admin"), {
+    wrapper: ({ children }) => (
+      <NuqsTestingAdapter searchParams="activity_from=2026-01-01&activity_to=2026-02-01">{children}</NuqsTestingAdapter>
+    ),
+  });
+  expect(result.current.dateValue).toEqual({ from: new Date(2026, 0, 1, 12), to: new Date(2026, 1, 1, 12) });
+});
