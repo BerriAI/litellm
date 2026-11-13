@@ -2,7 +2,7 @@ import datetime
 import functools
 import json
 import logging
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import Final
 
@@ -399,6 +399,37 @@ def test_an_unencodable_header_is_the_error_pythons_ascii_codec_raises(value: by
 
     assert isinstance(error, UnicodeEncodeError)
     assert text in str(error)
+
+
+def _flagged(marker: str) -> ValueError:
+    error: Final = ValueError("Missing Azure API Base")
+    setattr(error, marker, True)
+    return error
+
+
+@pytest.mark.parametrize(
+    "mapped",
+    (
+        pytest.param(
+            lambda: messages_host.map_failure(
+                _flagged("messages_python_raised"), {"model": _ADAPTIVE_OPUS}, "azure_ai"
+            ),
+            id="python-raised",
+        ),
+        pytest.param(
+            lambda: messages_host.map_failure(
+                _flagged("messages_missing_credential"), {"model": _ADAPTIVE_OPUS}, "anthropic"
+            ),
+            id="missing-credential",
+        ),
+        pytest.param(lambda: messages_host.azure_ad_token_failure(RuntimeError("provider")), id="token-provider"),
+        pytest.param(lambda: messages_host.non_string_azure_ad_token(7), id="non-string-token"),
+    ),
+)
+def test_a_failure_python_raises_before_the_send_is_logged_with_its_traceback(mapped: Callable[[], Exception]) -> None:
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    assert StandardLoggingPayloadSetup.get_error_information(mapped()).get("traceback")
 
 
 def test_a_native_read_timeout_maps_to_the_public_timeout_with_python_text() -> None:

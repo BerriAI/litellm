@@ -10,7 +10,7 @@ import os
 import socket
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
-from typing import Final, TypeAlias, cast  # noqa: TID251  # narrows native payloads to public TypedDicts
+from typing import Final, TypeAlias, TypeVar, cast  # noqa: TID251  # narrows native payloads to public TypedDicts
 from urllib.parse import SplitResult, urlsplit
 
 import httpx
@@ -99,6 +99,7 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CallTypes, ProviderSpecificHeader, anthropic_wif_litellm_params
 from litellm.utils import clamp_max_tokens
 
+_RaisedT: Final = TypeVar("_RaisedT", bound=Exception)
 _METADATA: Final = TypeAdapter(dict[str, object])
 _BODY_FIELDS: Final = frozenset(
     {
@@ -824,6 +825,14 @@ def _with_deployment_debug_info(error: Exception, request: Mapping[str, object],
     )
 
 
+def _raised(error: _RaisedT) -> _RaisedT:
+    """`error` raised through a Python frame, so its failure log carries a traceback as the one Python raises does."""
+    try:
+        raise error
+    except Exception:  # noqa: BLE001  # catches only the exception it just raised
+        return error
+
+
 def map_failure(
     error: Exception,
     request: Mapping[str, object],
@@ -858,14 +867,16 @@ def map_failure(
         # Python's request transform raises this builtin exception unmapped, e.g. the TypeError
         # of comparing a string max_tokens while capping the thinking budget.
         _flag_messages_call(request.get("litellm_logging_obj"), asynchronous)
-        return error
+        return _raised(error)
     if getattr(error, "messages_request_error", False):
         return _rejection(error, request, request_provider)
     if getattr(error, "messages_missing_credential", False):
-        return litellm.AuthenticationError(
-            message=_MISSING_KEY,
-            llm_provider=request_provider,
-            model=str(request["model"]).removeprefix(f"{request_provider}/"),
+        return _raised(
+            litellm.AuthenticationError(
+                message=_MISSING_KEY,
+                llm_provider=request_provider,
+                model=str(request["model"]).removeprefix(f"{request_provider}/"),
+            )
         )
     provider_error: Final = _provider_error(error, request, request_provider, secrets_read or [])
     if provider_error is None:
@@ -1251,13 +1262,13 @@ def azure_ad_token_failure(error: Exception) -> Exception:
     verbose_logger.error("Error calling Azure AD token provider: %s", error)
     failure: Final = python_failure(error)
     failure.__cause__ = error
-    return failure
+    return _raised(failure)
 
 
 def non_string_azure_ad_token(token: object) -> TypeError:
     """What `get_azure_ad_token` logs and raises when its token provider returns `token`, not a string."""
     verbose_logger.error("Azure AD token provider returned non-string value: %s", type(token))
-    return TypeError(f"Azure AD token must be a string, got {type(token)}")
+    return _raised(TypeError(f"Azure AD token must be a string, got {type(token)}"))
 
 
 def entra_token_failure(reason: str) -> Exception:

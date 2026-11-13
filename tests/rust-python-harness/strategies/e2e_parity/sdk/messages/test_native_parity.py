@@ -4430,6 +4430,7 @@ def _logged_error(details: Mapping[str, object], standard: Mapping[str, object])
         "error_message": _normalized(str(information.get("error_message"))),
         "error_code": information.get("error_code"),
         "llm_provider": information.get("llm_provider"),
+        "traced": bool(information.get("traceback")),
         "exception": None if exception is None else _normalized(str(exception)),
         "exception_model": getattr(exception, "model", None),
         "exception_provider": getattr(exception, "llm_provider", None),
