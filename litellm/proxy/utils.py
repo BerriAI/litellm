@@ -337,7 +337,7 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
     from litellm.models.team import LiteLLM_TeamTableCachedObj
-    from litellm.proxy.db.autorouter_session_rollup import AutoRouterTurnTransaction
+    from litellm.proxy.db.autorouter_session_rollup import AutoRouterTurnTransaction, UnwrittenTurns
     from litellm.proxy.db.baseline_accounting import BaselineAccountingRecord
     from litellm.proxy.db.model_usage_rollup import ModelUsageTransaction
     from litellm.proxy.db.spend_log_tool_index import ToolUsageTransaction
@@ -5705,7 +5705,7 @@ class PrismaClient:
     _tool_usage_transactions_lock = asyncio.Lock()
     model_usage_transactions: ClassVar[list["ModelUsageTransaction"]] = []
     _model_usage_transactions_lock = asyncio.Lock()
-    autorouter_turn_transactions: ClassVar[list["AutoRouterTurnTransaction"]] = []
+    autorouter_turn_transactions: list["AutoRouterTurnTransaction"] = []
     _autorouter_turn_transactions_lock = asyncio.Lock()
 
     # How long a health probe failure waits for an in-flight planned engine
@@ -9220,25 +9220,27 @@ async def _run_spend_logs_job(
 
     await flush_baseline_accounting(prisma_client)
 
-    async with prisma_client._autorouter_turn_transactions_lock:
+    autorouter_queue_lock: Final = prisma_client._autorouter_turn_transactions_lock
+    async with autorouter_queue_lock:
         autorouter_turns_to_process: Final = prisma_client.autorouter_turn_transactions[:MAX_LOGS_PER_INTERVAL]
         remaining_autorouter_turns: Final = prisma_client.autorouter_turn_transactions[
             len(autorouter_turns_to_process) :
         ]
         prisma_client.autorouter_turn_transactions = remaining_autorouter_turns  # rebind-ok: drain under lock
-    try:
-        from litellm.proxy.db.autorouter_session_rollup import flush_autorouter_turn_transactions
-
-        await flush_autorouter_turn_transactions(
-            prisma_client=prisma_client,
-            transactions=autorouter_turns_to_process,
+    unwritten_autorouter_turns: Final = await _flush_autorouter_turns(prisma_client, autorouter_turns_to_process)
+    if unwritten_autorouter_turns is not None:
+        async with autorouter_queue_lock:
+            prisma_client.autorouter_turn_transactions = [  # rebind-ok: requeue under lock
+                *unwritten_autorouter_turns.turns,
+                *prisma_client.autorouter_turn_transactions,
+            ]
+        verbose_proxy_logger.warning(
+            "Spend tracking - database unavailable during auto-router session rollup flush, "
+            "requeued %s unwritten turn transactions for the next flush: %s",
+            len(unwritten_autorouter_turns.turns),
+            unwritten_autorouter_turns.error,
         )
-    except Exception as autorouter_tracking_err:  # noqa: BLE001  # a drain bug must not abort the spend job
-        verbose_proxy_logger.error(
-            "Spend tracking - auto-router session rollup drain failed; %s turn transactions dropped: %s",
-            len(autorouter_turns_to_process),
-            autorouter_tracking_err,
-        )
+        raise unwritten_autorouter_turns.error
 
     try:
         from litellm.proxy.db.shadow_eval_funnel import flush_shadow_eval_funnel
@@ -9246,6 +9248,22 @@ async def _run_spend_logs_job(
         await flush_shadow_eval_funnel(prisma_client)
     except Exception as funnel_err:  # noqa: BLE001  # a drain bug must not abort the spend job
         verbose_proxy_logger.error("Spend tracking - shadow eval funnel drain failed: %s", funnel_err)
+
+
+async def _flush_autorouter_turns(
+    prisma_client: PrismaClient, turns: "Sequence[AutoRouterTurnTransaction]"
+) -> "UnwrittenTurns | None":
+    from litellm.proxy.db.autorouter_session_rollup import flush_autorouter_turn_transactions
+
+    try:
+        return await flush_autorouter_turn_transactions(prisma_client=prisma_client, transactions=turns)
+    except Exception as autorouter_tracking_err:  # noqa: BLE001  # a drain bug must not abort the spend job
+        verbose_proxy_logger.error(
+            "Spend tracking - auto-router session rollup drain failed; %s turn transactions dropped: %s",
+            len(turns),
+            autorouter_tracking_err,
+        )
+        return None
 
 
 MAX_SPEND_LOG_DRAIN_ITERATIONS: Final = 20
