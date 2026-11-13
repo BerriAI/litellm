@@ -6,7 +6,7 @@ from datetime import datetime
 from enum import Enum
 from functools import partial, reduce
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, cast  # noqa: TID251  # the router passes the request kwargs as an untyped dict
 
 import httpx
 from pydantic import TypeAdapter
@@ -984,7 +984,14 @@ async def log_success_fallback_event(
     kwargs: dict,  # mutable-ok: the request kwargs the custom loggers receive
     original_exception: Exception,
 ):
-    await _log_fallback_event(True, original_model_group, kwargs, original_exception)
+    await _log_fallback_event(
+        True,
+        original_model_group,
+        cast(  # cast-ok: the request kwargs dict, keyed by parameter name
+            dict[str, object], kwargs
+        ),
+        original_exception,
+    )
 
 
 async def log_failure_fallback_event(
@@ -992,7 +999,14 @@ async def log_failure_fallback_event(
     kwargs: dict,  # mutable-ok: the request kwargs the custom loggers receive
     original_exception: Exception,
 ):
-    await _log_fallback_event(False, original_model_group, kwargs, original_exception)
+    await _log_fallback_event(
+        False,
+        original_model_group,
+        cast(  # cast-ok: the request kwargs dict, keyed by parameter name
+            dict[str, object], kwargs
+        ),
+        original_exception,
+    )
 
 
 async def _log_fallback_event(
