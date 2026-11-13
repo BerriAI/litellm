@@ -1747,6 +1747,9 @@ if TYPE_CHECKING:
     from .llms.parallel_ai.decisions.transformation import (
         ParallelAIDecisionsConfig as ParallelAIDecisionsConfig,
     )
+    from .llms.litellm_proxy.decisions.transformation import (
+        LiteLLMProxyDecisionsConfig as LiteLLMProxyDecisionsConfig,
+    )
     from .llms.openrouter.decisions.transformation import (
         OpenRouterDecisionsConfig as OpenRouterDecisionsConfig,
     )
