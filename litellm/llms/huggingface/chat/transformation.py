@@ -133,16 +133,12 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        if litellm_params.get("api_base"):
-            return dict(ChatCompletionRequest(model=model, messages=messages, **optional_params))
-        if _api_base_from_env():
-            return dict(
-                ChatCompletionRequest(
-                    model=model,
-                    messages=self._transform_messages(messages=messages, model=model),
-                    **optional_params,
-                )
+        lacks_explicit_api_base: Final = not litellm_params.get("api_base")
+        if not lacks_explicit_api_base or _api_base_from_env():
+            endpoint_messages: Final = (
+                self._transform_messages(messages=messages, model=model) if lacks_explicit_api_base else messages
             )
+            return dict(ChatCompletionRequest(model=model, messages=endpoint_messages, **optional_params))
         if "max_retries" in optional_params:
             logger.warning("`max_retries` is not supported. It will be ignored.")
             optional_params.pop("max_retries", None)
