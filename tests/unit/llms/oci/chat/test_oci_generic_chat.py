@@ -2,10 +2,11 @@
 Unit tests for litellm/llms/oci/chat/generic.py — error paths and stream handling.
 """
 
-import pytest
+from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
+import pytest
 
 from litellm import ModelResponse
 from litellm.llms.oci.chat.generic import (
@@ -22,6 +23,7 @@ from litellm.llms.oci.chat.transformation import (
     _model_uses_max_completion_tokens,
 )
 from litellm.llms.oci.common_utils import OCIError
+from litellm.types.llms.oci import OCIMessage, OCITextContentPart
 
 # ---------------------------------------------------------------------------
 # adapt_messages_to_generic_oci_standard_content_message — error paths
@@ -158,6 +160,49 @@ class TestGenericToolCallErrors:
 
 
 class TestGenericMessageAdaptation:
+    @pytest.mark.parametrize(
+        "content, expected",
+        [
+            ("plain result", "plain result"),
+            ([], ""),
+            ([{"type": "text", "text": "first"}], "first"),
+            ([{"type": "input_text", "text": "second"}], "second"),
+            (
+                [{"type": "text", "text": "first"}, {"type": "input_text", "text": "second"}],
+                "first\nsecond",
+            ),
+            ([{"type": "text", "text": ""}, {"type": "text", "text": "last"}], "\nlast"),
+        ],
+    )
+    def test_tool_result_preserves_call_id_and_normalizes_text(self, content: object, expected: str) -> None:
+        result: Final = adapt_messages_to_generic_oci_standard(
+            [{"role": "tool", "tool_call_id": "call_mcp", "content": content}]
+        )
+
+        assert result == [OCIMessage(role="TOOL", content=[OCITextContentPart(text=expected)], toolCallId="call_mcp")]
+
+    @pytest.mark.parametrize(
+        "content, error",
+        [
+            (None, "must be a string or list of text parts"),
+            (42, "must be a string or list of text parts"),
+            (["text"], "must contain only text parts"),
+            ([{"text": "missing type"}], "must contain only text parts"),
+            (
+                [{"type": "image_url", "image_url": {"url": "https://example.com/image.png"}}],
+                "must contain only text parts",
+            ),
+            ([{"type": "text"}], "must have a string `text` field"),
+            ([{"type": "input_text", "text": 42}], "must have a string `text` field"),
+            ([{"type": "text", "text": "valid"}, {"type": "text", "text": None}], "must have a string `text` field"),
+        ],
+    )
+    def test_tool_result_rejects_invalid_content(self, content: object, error: str) -> None:
+        with pytest.raises(OCIError, match=error) as exc_info:
+            adapt_messages_to_generic_oci_standard([{"role": "tool", "tool_call_id": "call_mcp", "content": content}])
+
+        assert exc_info.value.status_code == 400
+
     def test_tool_calls_not_list_raises(self):
         messages = [
             {
@@ -310,6 +355,7 @@ class TestHandleGenericStreamChunk:
             },
         }
         result = handle_generic_stream_chunk(chunk)
+        assert result.choices[0].delta.role == "assistant"
         assert result.choices[0].delta.tool_calls is not None
 
 
