@@ -1200,8 +1200,8 @@ def _resolved_credentials(core: EndpointCore, deployment: Mapping[str, object], 
 
 
 def vector_store_deployment_refusal(plan: Plan, deployment: Mapping[str, object], group: str) -> Exception | None:
-    """A vector store deployment serves only the vector store searches the server itself routed to a group."""
-    served_by_the_server: Final = plan.host_op in _VECTOR_STORE_SEARCH_OPS and selected_vector_store_group() is not None
+    """A vector store deployment serves only the vector store searches the server itself routed to its group."""
+    served_by_the_server: Final = plan.host_op in _VECTOR_STORE_SEARCH_OPS and selected_vector_store_group() == group
     if served_by_the_server or not is_vector_store_router_deployment(deployment):
         return None
     from litellm.exceptions import UnsupportedEndpointError

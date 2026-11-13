@@ -523,3 +523,52 @@ async def test_a_search_the_server_did_not_route_to_a_group_never_reaches_it(res
         await _grouped_search(_search_group_router())
 
     assert not eastus.called
+
+
+@pytest.mark.asyncio
+async def test_a_grouped_search_never_falls_back_to_another_vector_store_group(respx_mock, httpx_transport):
+    from litellm.vector_stores.deployments import vector_store_group_selected
+
+    eastus = respx_mock.post(url__startswith=_EASTUS_SEARCH).mock(return_value=httpx.Response(503, json={}))
+    other = respx_mock.post(url__startswith="https://other.search.windows.net").mock(
+        return_value=httpx.Response(200, json=_AZURE_SEARCH_HIT)
+    )
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "query-embeddings",
+                "litellm_params": {
+                    "model": "openai/text-embedding-3-small",
+                    "api_key": "sk-fake",
+                    "mock_response": [0.1, 0.2, 0.3],
+                },
+            },
+            {
+                "model_name": "kb-search",
+                "litellm_params": {
+                    "model": "azure_ai/kb-search",
+                    "custom_llm_provider": "azure_ai",
+                    "api_base": "https://eastus.search.windows.net",
+                    "api_key": "key-eastus",
+                },
+                "model_info": {"id": "search-eastus", "mode": "vector_store"},
+            },
+            {
+                "model_name": "kb-other",
+                "litellm_params": {
+                    "model": "azure_ai/kb-other",
+                    "custom_llm_provider": "azure_ai",
+                    "api_base": "https://other.search.windows.net",
+                    "api_key": "key-other",
+                },
+                "model_info": {"id": "search-other", "mode": "vector_store"},
+            },
+        ],
+        num_retries=0,
+    )
+
+    with vector_store_group_selected("kb-search"), pytest.raises(litellm.ServiceUnavailableError):
+        await _grouped_search(router, fallbacks=["kb-other"])
+
+    assert eastus.called
+    assert not other.called
