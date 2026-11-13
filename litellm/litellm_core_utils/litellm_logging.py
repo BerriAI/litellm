@@ -14,6 +14,7 @@ import sys
 import time
 import traceback
 from collections.abc import Awaitable, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import datetime as dt_object
 from enum import Enum
@@ -28,7 +29,12 @@ from pydantic import BaseModel, JsonValue, TypeAdapter
 from typing_extensions import TypedDict
 
 import litellm
-from litellm._internal_context import in_mirrored_call, outside_mirrored_call, post_response_phase
+from litellm._internal_context import (
+    in_mirrored_call,
+    outside_mirrored_call,
+    post_response_phase,
+    request_parent_otel_span,
+)
 from litellm._lazy_imports import get_token_counter_new
 from litellm._logging import (
     is_debugging_on,
@@ -117,6 +123,7 @@ from litellm.litellm_core_utils.core_helpers import (
     attribute_or_none,
     decoded_json_object,
     finite_cost,
+    get_parent_otel_span_from_kwargs,
     get_provider_response_headers_from_hidden_params,
     has_attributes,
     is_expected_client_error,
@@ -4001,6 +4008,11 @@ class Logging(LiteLLMLoggingBaseClass):
         if trace_id_var.get() == self._own_trace_id and session_id_var.get() == self._own_session_id:
             self._restore_correlation_context()
 
+    def _parent_otel_span_anchored(self) -> AbstractContextManager[None]:
+        """Every callback runs in one of the four handlers, streamed or not, so anchoring here gives each
+        callback's datastore spans the caller's span without the callback knowing."""
+        return request_parent_otel_span(get_parent_otel_span_from_kwargs(self.model_call_details))
+
     def success_handler(
         self,
         result: object = None,  # heterogeneous response object; varies by call type (ANN401 ignored, see ruff-strict.toml)
@@ -4014,7 +4026,7 @@ class Logging(LiteLLMLoggingBaseClass):
         """Restores trace_id/session_id contextvars once this attempt's own success
         logging (including any nested calls its callbacks trigger) is fully done."""
         try:
-            with post_response_phase(), outside_mirrored_call():
+            with post_response_phase(), outside_mirrored_call(), self._parent_otel_span_anchored():
                 return self._success_handler_body(
                     result=result,
                     start_time=start_time,
@@ -4587,7 +4599,7 @@ class Logging(LiteLLMLoggingBaseClass):
         """Restores trace_id/session_id contextvars once this attempt's own success
         logging (including any nested calls its callbacks trigger) is fully done."""
         try:
-            with post_response_phase(), outside_mirrored_call():
+            with post_response_phase(), outside_mirrored_call(), self._parent_otel_span_anchored():
                 return await self._async_success_handler_body(
                     result=result, start_time=start_time, end_time=end_time, cache_hit=cache_hit, **kwargs
                 )
@@ -5215,7 +5227,7 @@ class Logging(LiteLLMLoggingBaseClass):
         ``for_async_request`` marks the sync run of a failure whose async run also logs it, so a
         CustomLogger that gets ``async_log_failure_event`` from that async run skips its sync hook."""
         try:
-            with outside_mirrored_call():
+            with outside_mirrored_call(), self._parent_otel_span_anchored():
                 return self._failure_handler_body(
                     exception=exception,
                     traceback_exception=traceback_exception,
@@ -5452,7 +5464,7 @@ class Logging(LiteLLMLoggingBaseClass):
         """Restores trace_id/session_id contextvars once this attempt's own failure
         logging (including any nested calls its callbacks trigger) is fully done."""
         try:
-            with outside_mirrored_call():
+            with outside_mirrored_call(), self._parent_otel_span_anchored():
                 return await self._async_failure_handler_body(
                     exception=exception,
                     traceback_exception=traceback_exception,
@@ -7697,6 +7709,9 @@ class StandardLoggingPayloadSetup:
             user_api_key_team_alias=None,
             user_api_key_user_email=None,
             user_api_key_end_user_id=None,
+            user_api_key_customer_member_id=None,
+            user_api_key_customer_team_id=None,
+            user_api_key_customer_org_id=None,
             user_api_key_request_route=None,
             spend_logs_metadata=None,
             requester_ip_address=None,
@@ -8841,6 +8856,9 @@ def get_standard_logging_metadata(
         user_agent=None,
         requester_metadata=None,
         user_api_key_end_user_id=None,
+        user_api_key_customer_member_id=None,
+        user_api_key_customer_team_id=None,
+        user_api_key_customer_org_id=None,
         prompt_management_metadata=None,
         applied_guardrails=None,
         mcp_tool_call_metadata=None,

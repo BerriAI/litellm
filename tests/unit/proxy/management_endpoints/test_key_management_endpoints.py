@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from contextlib import ExitStack
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, call, patch
 from uuid import UUID, uuid4
 
@@ -1857,6 +1857,7 @@ def _key_generation_prisma_client(
 
     budget_table: Final = MagicMock()
     budget_table.create = AsyncMock(return_value=MagicMock(budget_id="created-budget-id"))
+    budget_table.find_unique = AsyncMock(return_value=LiteLLM_BudgetTable(budget_id="caller-budget-id"))
     budget_table.delete = AsyncMock()
     object_permission_table: Final = MagicMock()
     object_permission_table.create = AsyncMock(
@@ -1865,6 +1866,7 @@ def _key_generation_prisma_client(
     object_permission_table.delete = AsyncMock()
 
     prisma_client.db.litellm_budgettable = budget_table
+    prisma_client.writer_db.litellm_budgettable = budget_table
     prisma_client.db.litellm_objectpermissiontable = object_permission_table
     prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
     prisma_client.writer_db.litellm_projecttable.find_unique = AsyncMock(return_value=project_record)
@@ -2045,6 +2047,7 @@ async def test_generate_key_end_user_budget_id_must_name_an_existing_budget():
     """A typo in end_user_budget_id would silently leave new customers on the proxy-wide default,
     so key creation rejects an id that matches no budget row."""
     mock_prisma_client = MagicMock()
+    mock_prisma_client.writer_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=None)
     with pytest.raises(HTTPException) as exc:
         await _validate_end_user_budget_id_change(
@@ -2066,6 +2069,7 @@ async def test_generate_key_end_user_budget_id_lands_in_key_metadata():
     budget_row = MagicMock()
     budget_row.model_dump.return_value = {"budget_id": "svc-a-budget", "max_budget": 0.5}
     mock_prisma_client = MagicMock()
+    mock_prisma_client.writer_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=budget_row)
     with (
         patch(  # test-quality-ok: the helper reads proxy_server globals, no seam
@@ -9697,6 +9701,10 @@ async def test_key_with_budget_id_does_not_store_budget_duration():
     from unittest.mock import AsyncMock, MagicMock, patch
 
     mock_prisma = MagicMock()
+    mock_prisma.writer_db = mock_prisma.db
+    mock_budget = MagicMock()
+    mock_budget.model_dump.return_value = {"budget_id": "7d-budget-tier", "budget_duration": "7d"}
+    mock_prisma.db.litellm_budgettable.find_unique = AsyncMock(return_value=mock_budget)
 
     mock_generate_key = AsyncMock(
         return_value={
@@ -9741,10 +9749,6 @@ async def test_key_with_budget_id_does_not_store_budget_duration():
         f"budget_duration; got: {call_kwargs.get('key_budget_duration')}"
     )
 
-    # No budget tier lookup - we don't copy budget_duration onto the key
-    mock_prisma.db.litellm_budgettable.find_unique.assert_not_called()
-
-
 @pytest.mark.asyncio
 async def test_key_does_not_override_explicit_budget_duration():
     """
@@ -9755,9 +9759,11 @@ async def test_key_does_not_override_explicit_budget_duration():
     from unittest.mock import AsyncMock, MagicMock, patch
 
     mock_prisma = MagicMock()
+    mock_prisma.writer_db = mock_prisma.db
     # The budget tier has budget_duration="7d"
     mock_budget_row = MagicMock()
     mock_budget_row.budget_duration = "7d"
+    mock_budget_row.model_dump.return_value = {"budget_id": "7d-budget-tier", "budget_duration": "7d"}
     mock_prisma.db.litellm_budgettable.find_unique = AsyncMock(
         return_value=mock_budget_row
     )
@@ -9805,8 +9811,6 @@ async def test_key_does_not_override_explicit_budget_duration():
         f"but got: {call_kwargs.get('key_budget_duration')}"
     )
 
-    # The budget tier should NOT have been looked up since budget_duration was explicit
-    mock_prisma.db.litellm_budgettable.find_unique.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -24618,3 +24622,89 @@ def test_user_new_without_a_key_does_not_check_guardrail_names(spend_permission_
 
     assert response.status_code == 200, response.text
     find_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ("customer_org_id", "customer_team_id", "customer_member_id"))
+async def test_customer_binding_requires_admin_on_key_creation(field: str) -> None:
+    with pytest.raises(HTTPException) as rejected:
+        await _common_key_generation_helper(
+            data=GenerateKeyRequest(metadata={field: "customer-id"}),
+            user_api_key_dict=UserAPIKeyAuth(user_id="member", user_role=LitellmUserRoles.INTERNAL_USER),
+            litellm_changed_by=None,
+            team_table=None,
+        )
+    assert rejected.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_type", ("key", "user"))
+async def test_direct_key_mint_cannot_bypass_customer_binding_authorization(request_type: Literal["key", "user"]) -> None:
+    with pytest.raises(HTTPException) as rejected:
+        await generate_key_helper_fn(request_type=request_type, metadata={"customer_org_id": "another-customer"})
+    assert rejected.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ("update", "regenerate"))
+@pytest.mark.parametrize("field", ("customer_org_id", "customer_team_id", "customer_member_id"))
+@pytest.mark.parametrize("requested", ("another-customer-id", None))
+async def test_customer_binding_cannot_be_reassigned_or_cleared_by_key_holder(
+    operation: Literal["update", "regenerate"], field: str, requested: str | None
+) -> None:
+    existing: Final = LiteLLM_VerificationToken(token="hashed-key", metadata={field: "customer-id"})
+    data: Final = (
+        UpdateKeyRequest(key="hashed-key", metadata={field: requested})
+        if operation == "update"
+        else RegenerateKeyRequest(metadata={field: requested})
+    )
+    with pytest.raises(HTTPException) as rejected:
+        await prepare_key_update_data(
+            data=data,
+            existing_key_row=existing,
+            user_api_key_dict=UserAPIKeyAuth(user_id="member", user_role=LitellmUserRoles.INTERNAL_USER),
+        )
+    assert rejected.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ("update", "regenerate"))
+@pytest.mark.parametrize("metadata", ({"application": "support"}, {}, None))
+async def test_unrelated_key_metadata_changes_preserve_existing_customer_binding(
+    operation: Literal["update", "regenerate"], metadata: dict[str, object] | None
+) -> None:
+    bindings: Final = {"customer_org_id": "org-id", "customer_team_id": "team-id", "customer_member_id": "member-id"}
+    existing: Final = LiteLLM_VerificationToken(token="hashed-key", metadata={**bindings, "old": "discard"})
+    data: Final = (
+        UpdateKeyRequest(key="hashed-key", metadata=metadata)
+        if operation == "update"
+        else RegenerateKeyRequest(metadata=metadata)
+    )
+    actual: Final = await prepare_key_update_data(
+        data=data,
+        existing_key_row=existing,
+        user_api_key_dict=UserAPIKeyAuth(user_id="member", user_role=LitellmUserRoles.INTERNAL_USER),
+    )
+    assert actual["metadata"] == {**(metadata or {}), **bindings}
+    assert existing.metadata == {**bindings, "old": "discard"}
+    assert data.metadata == metadata
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ("update", "regenerate"))
+@pytest.mark.parametrize("metadata", ({"customer_org_id": "another-org"}, {}, None))
+async def test_proxy_admin_can_replace_or_clear_customer_key_binding(
+    operation: Literal["update", "regenerate"], metadata: dict[str, object] | None
+) -> None:
+    existing: Final = LiteLLM_VerificationToken(token="hashed-key", metadata={"customer_org_id": "org-id"})
+    data: Final = (
+        UpdateKeyRequest(key="hashed-key", metadata=metadata)
+        if operation == "update"
+        else RegenerateKeyRequest(metadata=metadata)
+    )
+    actual: Final = await prepare_key_update_data(
+        data=data,
+        existing_key_row=existing,
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+    assert actual["metadata"] == metadata

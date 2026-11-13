@@ -7340,6 +7340,54 @@ async def test_centralized_common_checks_skips_public_routes():
             setattr(_proxy_server_mod, k, v)
 
 
+class _CustomerTablesOffLimits:
+    """Prisma stand-in whose customer tables fail the test the moment anything reads them."""
+
+    class _Db:
+        def __getattr__(self, name: str) -> MagicMock:
+            assert not name.startswith("litellm_customer"), f"public route read {name}"
+            return MagicMock()
+
+    db = _Db()
+
+
+@pytest.mark.asyncio
+async def test_authorizing_a_public_route_ignores_the_customer_headers():
+    """A credential-free GET / carrying both customer headers must not look up, register or charge a customer:
+    the builder served it without a key, so nothing on it is trusted."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from litellm.proxy.auth.user_api_key_auth import _authorize_authenticated_request
+
+    token = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
+    request = Request(
+        scope={
+            "type": "http",
+            "method": "GET",
+            "path": "/",
+            "query_string": b"",
+            "headers": [(b"x-litellm-customer-org-alias", b"acme"), (b"x-litellm-customer-member-id", b"user-7")],
+        }
+    )
+    attrs = {
+        **_proxy_attrs_for_centralized_checks(),
+        "prisma_client": _CustomerTablesOffLimits(),
+        "llm_model_list": None,
+        "user_model": None,
+    }
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        recovered = await _authorize_authenticated_request(
+            user_api_key_auth_obj=token, request=request, request_data={}, route="/", api_key=""
+        )
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+    assert (recovered, token.customer_hierarchy) == (None, None)
+
+
 @pytest.mark.asyncio
 async def test_centralized_common_checks_skips_passthrough_endpoint_with_auth_false():
     """Regression: user-configured pass-through endpoints with
@@ -14349,3 +14397,144 @@ async def test_blocked_cached_key_is_refused_before_the_body_is_read() -> None:
 
     assert refusal.code == "401", refusal.message
     assert "Key is blocked" in refusal.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body_mode", ("small-json", "large-unread", "stalled", "laya", "bespoke"))
+@pytest.mark.parametrize("blocked", (True, False), ids=("blocked", "rate-limited"))
+async def test_preflight_rejection_preserves_failure_logging_context(body_mode: str, blocked: bool) -> None:
+    from litellm.proxy.utils import hash_token
+
+    api_key: Final = "sk-preflight-logging"
+    cache: Final = DualCache()
+    identity: Final = UserAPIKeyAuth(
+        token=hash_token(api_key),
+        blocked=blocked,
+        rpm_limit=1,
+        metadata={
+            "logging": [{"callback_name": "langfuse", "callback_type": "success_and_failure", "callback_vars": {}}]
+        },
+    )
+    await cache_key_object(
+        hashed_token=hash_token(api_key),
+        user_api_key_obj=identity,
+        user_api_key_cache=cache,
+        proxy_logging_obj=None,
+    )
+    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
+    if not blocked:
+        await limiter.async_pre_call_hook(
+            UserAPIKeyAuth(api_key=hash_token(api_key), rpm_limit=1),
+            DualCache(),
+            {"model": "requested-model", "messages": []},
+            "acompletion",
+        )
+    body: Final = json.dumps(
+        {
+            "model": "requested-model",
+            "metadata": {
+                "tags": ["caller-tag"],
+                "session_id": "caller-session",
+                "trace_user_id": "caller-user",
+            },
+            "failure_callback": ["untrusted-callback"],
+        }
+    ).encode()
+
+    upload: Final[asyncio.Queue[dict[str, object]]] = asyncio.Queue()
+    upload.put_nowait({"type": "http.request", "body": b"{", "more_body": True})
+
+    async def receive() -> dict[str, object]:
+        assert body_mode in ("small-json", "stalled"), "large refused bodies must not be read"
+        if body_mode == "stalled":
+            return await upload.get()
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": f"/{body_mode}/v1/systemone" if body_mode in ("laya", "bespoke") else "/v1/chat/completions",
+            "headers": [
+                (b"content-type", b"application/json"),
+                (
+                    b"content-length",
+                    str(len(body) if body_mode == "small-json" else 2 if body_mode == "stalled" else 8388608).encode(),
+                ),
+                (b"x-litellm-call-id", b"caller-call-id"),
+            ],
+        },
+        receive=receive,
+    )
+    logging_obj: Final = MagicMock(post_call_failure_hook=AsyncMock(return_value=None))
+    logging_obj.get_proxy_hook.return_value = limiter
+    with (
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.master_key", "sk-master"),
+        patch("litellm.proxy.proxy_server.open_telemetry_logger", None),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", cache),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", logging_obj),
+        pytest.raises(ProxyException) as failure,
+    ):
+        await asyncio.wait_for(user_api_key_auth(request=request, api_key=f"Bearer {api_key}"), timeout=3)
+    assert failure.value.code == ("401" if blocked else "429")
+    logging_obj.post_call_failure_hook.assert_awaited_once()
+    data: Final = logging_obj.post_call_failure_hook.call_args.kwargs["request_data"]
+    assert data["litellm_call_id"] == "caller-call-id"
+    assert data["failure_callback"] == ["langfuse"]
+    if body_mode not in ("laya", "bespoke"):
+        assert data["call_type"] == "acompletion"
+    if body_mode == "small-json":
+        assert data["model"] == "requested-model"
+        assert data["metadata"]["tags"] == ["caller-tag"]
+        assert data["metadata"]["session_id"] == "caller-session"
+        assert data["metadata"]["trace_user_id"] == "caller-user"
+    else:
+        assert "model" not in data
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "headers,body,reads",
+    (
+        ((), b"{}", 0),
+        (((b"content-length", b"2"), (b"transfer-encoding", b"chunked")), b"{}", 0),
+        (((b"content-length", b"2"), (b"content-type", b"text/plain")), b"{}", 0),
+        (((b"content-length", b"bad"),), b"{}", 0),
+        (((b"content-length", b"10"),), b"{invalid", 1),
+        (((b"content-length", b"2"),), b"[]", 1),
+        (((b"content-length", b"2"),), b"x" * (64 * 1024 + 1), 1),
+    ),
+    ids=("no-length", "chunked", "not-json", "invalid-length", "invalid-json", "not-object", "actual-over-cap"),
+)
+async def test_preflight_logging_drops_unsafe_or_unparsable_bodies(
+    headers: tuple[tuple[bytes, bytes], ...], body: bytes, reads: int
+) -> None:
+    from litellm.proxy.auth.user_api_key_auth import _small_preflight_failure_json
+
+    receive: Final = AsyncMock(
+        return_value={
+            "type": "http.request",
+            "body": body,
+            "more_body": len(body) > 64 * 1024,
+        }
+    )
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "headers": [
+                *headers,
+                *(
+                    ()
+                    if any(name == b"content-type" for name, _ in headers)
+                    else ((b"content-type", b"application/json"),)
+                ),
+            ],
+        },
+        receive=receive,
+    )
+    assert await _small_preflight_failure_json(request) == {}
+    assert receive.await_count == reads

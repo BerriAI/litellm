@@ -63,6 +63,12 @@ const createMockAccessGroup = (overrides: Partial<AccessGroupResponse> = {}): Ac
   access_mcp_servers: [{ id: "mcp-1", name: "GitHub MCP" }],
   access_agents: [{ id: "agent-1", name: "Support Agent" }],
   access_skill_names: ["private-plugin"],
+  access_vector_store_ids: ["store-a", "store-b", "store-c"],
+  access_vector_stores: [
+    { id: "store-a", name: "Parks knowledge base" },
+    { id: "store-b", name: null },
+    { id: "store-c", name: "HR policies" },
+  ],
   assigned_teams: [{ id: "team-1", name: "Platform Team" }],
   assigned_keys: [
     { id: "key-1", name: "ci-key" },
@@ -477,6 +483,41 @@ describe("AccessGroupDetail", () => {
       await user.click(screen.getByRole("tab", { name: /Skills/i }));
 
       expect(screen.getByText("No skills assigned to this group")).toBeInTheDocument();
+    });
+  });
+
+  describe("Vector Stores tab", () => {
+    it("should count the group's vector stores and show each by name, or by id when it has none", async () => {
+      const user = userEvent.setup();
+      renderWithProviders(<AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />);
+
+      const tab = screen.getByRole("tab", { name: /Vector Stores/i });
+      expect(tab).toHaveTextContent("3");
+      await user.click(tab);
+
+      expect(screen.getByText("Parks knowledge base")).toBeInTheDocument();
+      expect(screen.getByText("HR policies")).toBeInTheDocument();
+      expect(screen.getByText("store-b")).toBeInTheDocument();
+      expect(screen.queryByText("store-a")).not.toBeInTheDocument();
+    });
+
+    it("should fall back to the ids when the proxy sends no names", async () => {
+      const user = userEvent.setup();
+      renderWith({ access_vector_stores: undefined });
+
+      await user.click(screen.getByRole("tab", { name: /Vector Stores/i }));
+
+      expect(screen.getByText("store-a")).toBeInTheDocument();
+      expect(screen.getByText("store-c")).toBeInTheDocument();
+    });
+
+    it("should show empty state when none assigned", async () => {
+      const user = userEvent.setup();
+      renderWith({ access_vector_store_ids: [], access_vector_stores: [] });
+
+      await user.click(screen.getByRole("tab", { name: /Vector Stores/i }));
+
+      expect(screen.getByText("No vector stores assigned to this group")).toBeInTheDocument();
     });
   });
 

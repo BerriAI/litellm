@@ -22,6 +22,7 @@ interface UsageStatStripProps {
   requestCountsPending: boolean;
   budget: number | null;
   showBudgetHint?: boolean;
+  spendDetails?: React.ReactNode;
 }
 
 /** Spend, requests, tokens and averages for a range, each with a daily sparkline. */
@@ -32,6 +33,7 @@ export default function UsageStatStrip({
   requestCountsPending,
   budget,
   showBudgetHint = true,
+  spendDetails,
 }: UsageStatStripProps) {
   const { t } = useTranslation();
   const daily = useMemo(() => dailyTotals(results), [results]);
@@ -40,15 +42,22 @@ export default function UsageStatStrip({
     : t("usage.statStrip.noBudget");
   return (
     <div className="grid grid-cols-1 overflow-hidden rounded-xl border bg-card sm:grid-cols-2 lg:grid-cols-4 lg:divide-x">
-      <StatCell trend={<Sparkline data={daily} dataKey="spend" color={BRAND} className="h-14" />}>
+      <StatCell
+        trend={daily.length > 1 ? <Sparkline data={daily} dataKey="spend" color={BRAND} className="h-14" /> : undefined}
+      >
         <Stat
           label={t("usage.statStrip.spend")}
           value={t("format.usd", { val: totals.spend })}
           pending={loading}
           hint={showBudgetHint ? budgetHint : undefined}
         />
+        {spendDetails}
       </StatCell>
-      <StatCell trend={<Sparkline data={daily} dataKey="requests" color={BRAND} className="h-14" />}>
+      <StatCell
+        trend={
+          daily.length > 1 ? <Sparkline data={daily} dataKey="requests" color={BRAND} className="h-14" /> : undefined
+        }
+      >
         <Stat
           label={t("usage.statStrip.totalRequests")}
           value={t("format.number", { val: totals.requests })}
@@ -81,7 +90,11 @@ export default function UsageStatStrip({
           </div>
         )}
       </StatCell>
-      <StatCell trend={<Sparkline data={daily} dataKey="tokens" color={BRAND} className="h-14" />}>
+      <StatCell
+        trend={
+          daily.length > 1 ? <Sparkline data={daily} dataKey="tokens" color={BRAND} className="h-14" /> : undefined
+        }
+      >
         <Stat
           label={t("usage.statStrip.totalTokens")}
           value={loading ? null : t("format.compactNumber", { val: totals.tokens })}

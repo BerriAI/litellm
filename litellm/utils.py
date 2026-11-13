@@ -4225,7 +4225,7 @@ def lookup_catalog_model_info(model: str, custom_llm_provider: str | None) -> Mo
 
 def _get_builtin_model_info_for_registration(
     model: str, custom_llm_provider: str | None
-) -> ModelInfo | ModelInfoLookupMiss:
+) -> ModelInfoBase | ModelInfoLookupMiss:
     """Resolve ``model`` to its built-in cost-map entry for registration merging.
 
     Misses when the lookup cannot map the model or resolved it via a
@@ -4234,9 +4234,7 @@ def _get_builtin_model_info_for_registration(
     changing the map mid-walk, is retried, so a transient failure registers exactly
     where the untripped lookup would.
     """
-    lookups: Final = (
-        lookup_model_info_for_registration(model, custom_llm_provider) for _ in range(_REGISTRATION_ATTEMPTS)
-    )
+    lookups: Final = (lookup_catalog_model_info(model, custom_llm_provider) for _ in range(_REGISTRATION_ATTEMPTS))
     return next(
         (lookup for lookup in lookups if not (isinstance(lookup, ModelInfoLookupMiss) and lookup.tripped)),
         ModelInfoLookupMiss(tripped=True),
@@ -7596,6 +7594,7 @@ def get_model_info_helper(
                 ),
                 output_cost_per_second=_model_info.get("output_cost_per_second", None),
                 output_cost_per_second_1080p=_model_info.get("output_cost_per_second_1080p", None),
+                output_cost_per_video_clip=_model_info.get("output_cost_per_video_clip", None),
                 output_cost_per_second_480p=_model_info.get("output_cost_per_second_480p", None),
                 output_cost_per_second_720p=_model_info.get("output_cost_per_second_720p", None),
                 output_cost_per_second_768p=_model_info.get("output_cost_per_second_768p", None),
@@ -10363,7 +10362,7 @@ class ProviderConfigManager:
         if provider == LlmProviders.TYPESAFE:
             return litellm.TypeSafeDecisionsConfig()
         if provider == LlmProviders.NACE:
-            return litellm.NaceDecisionsConfig()
+            return litellm.NaceDecisionsConfig(model=model)
         if provider == LlmProviders.OPENROUTER:
             return litellm.OpenRouterDecisionsConfig()
         if provider == LlmProviders.FIREWORKS_AI:

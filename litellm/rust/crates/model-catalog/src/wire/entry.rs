@@ -21,6 +21,7 @@ pub struct EntryWire {
     pub off_peak: Option<OffPeakBlock>,
     pub search_context: Option<SearchContextCostPerQuery>,
     pub guardrail: Option<BTreeMap<String, UnitPrice>>,
+    pub output_cost_per_video_clip: Option<BTreeMap<String, BTreeMap<String, UnitPrice>>>,
     pub regional_endpoint_uplift: Option<Multiplier>,
     pub residency_uplift_eu: Option<Multiplier>,
     pub residency_uplift_us: Option<Multiplier>,
@@ -49,6 +50,9 @@ impl EntryWire {
             "off_peak_pricing" => self.off_peak = reader.off_peak(value),
             "search_context_cost_per_query" => self.search_context = reader.value(path(), value),
             "guardrail_cost_per_unit" => self.guardrail = reader.value(path(), value),
+            "output_cost_per_video_clip" => {
+                self.output_cost_per_video_clip = reader.value(path(), value)
+            }
             "regional_endpoint_uplift_multiplier" => {
                 self.regional_endpoint_uplift = reader.value(path(), value)
             }
@@ -106,6 +110,17 @@ mod tests {
             .iter()
             .map(|problem| problem.path().to_owned())
             .collect()
+    }
+
+    #[rstest]
+    #[case::clip_table(json!({"5s": {"720p": 0.15}}), false)]
+    #[case::empty(json!({}), false)]
+    #[case::invalid_price(json!({"5s": {"720p": "invalid"}}), true)]
+    fn video_clip_table_is_a_known_price_block(#[case] prices: Value, #[case] invalid: bool) {
+        let wire = read(json!({"output_cost_per_video_clip": prices}));
+        assert!(wire.unknown.is_empty());
+        assert_eq!(!wire.problems.is_empty(), invalid);
+        assert_eq!(wire.output_cost_per_video_clip.is_some(), !invalid);
     }
 
     #[rstest]
