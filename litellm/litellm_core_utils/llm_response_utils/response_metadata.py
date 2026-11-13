@@ -168,11 +168,16 @@ class ResponseMetadata:
         ## ADD OTHER HIDDEN PARAMS
         model_info: Final = kwargs.get("model_info", {}) or {}
         model_id: Final = model_info.get("id", None)
+        is_unexhausted_stream: Final = hasattr(self.result, "completion_stream") and not getattr(
+            self.result, "sent_last_chunk", False
+        )
         new_params: Final = {
             "litellm_call_id": getattr(logging_obj, "litellm_call_id", None),
             "api_base": get_api_base(model=model or "", optional_params=kwargs),
             "model_id": model_id,
-            "response_cost": logging_obj.response_cost_calculator(
+            "response_cost": None
+            if is_unexhausted_stream
+            else logging_obj.response_cost_calculator(
                 result=self.result,
                 litellm_model_name=model,
                 router_model_id=model_id,
