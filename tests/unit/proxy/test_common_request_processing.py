@@ -8507,7 +8507,9 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         assert processor.data["model"] == "claude-3-haiku"
 
     @pytest.mark.asyncio
-    async def test_a_refused_fallbacks_rate_limit_hold_is_released_before_the_walk_moves_on(self):
+    async def test_the_rate_limited_models_hold_and_a_refused_fallbacks_hold_are_released_before_the_walk_moves_on(
+        self,
+    ):
         from fastapi import HTTPException
 
         from litellm.caching.caching import DualCache
@@ -8571,7 +8573,9 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                 llm_router=mock_router,
             )
 
-        assert released == [("gpt-3.5-turbo", refusal)]
+        assert [model for model, _ in released] == ["gpt-4", "gpt-3.5-turbo"]
+        assert isinstance(released[0][1], ProxyRateLimitError)
+        assert released[1][1] is refusal
         assert data["model"] == "gpt-4"
 
     @pytest.mark.asyncio
@@ -8615,6 +8619,56 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             )
 
         assert processor.data["model"] == "claude-3-haiku"
+
+    @pytest.mark.asyncio
+    async def test_a_fallback_aliased_to_a_model_over_its_budget_is_skipped(self, monkeypatch):
+        """The walk grants the group an alias is served by, so ``fallbacks: [{A: [B]}]`` with
+        ``model_group_alias: {B: C}`` checks C's budget, not B's."""
+        from litellm.proxy._types import UserAPIKeyAuth as ProxyKey
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+
+        processor = ProxyBaseLLMRequestProcessing(
+            data={"model": "gpt-4", "router_settings_override": {"model_group_alias": {"gpt-3.5-turbo": "pricey"}}}
+        )
+
+        async def mock_pre_call_logic(**kwargs):
+            if processor.data.get("model") == "gpt-4":
+                raise ProxyRateLimitError(detail="TPM limit exceeded", headers={"retry-after": "30"})
+            return processor.data, MagicMock()
+
+        budget_checked: list[str] = []
+
+        async def served_model_over_budget(*, valid_token, model_max_budget_limiter, model):
+            budget_checked.append(model)
+            return model != "pricey"
+
+        monkeypatch.setattr(
+            "litellm.proxy.auth.user_api_key_auth._is_within_every_model_budget", served_model_over_budget
+        )
+        mock_router = route_entry_points_to_stubs(MagicMock())
+        mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo", "claude-3-haiku"]}]
+
+        with patch.object(processor, "common_processing_pre_call_logic", side_effect=mock_pre_call_logic):
+            await processor._pre_call_with_fallbacks(
+                request=MagicMock(),
+                general_settings={},
+                proxy_logging_obj=MagicMock(),
+                user_api_key_dict=ProxyKey(),
+                version=None,
+                proxy_config=_proxy_config(),
+                user_model=None,
+                user_temperature=None,
+                user_request_timeout=None,
+                user_max_tokens=None,
+                user_api_base=None,
+                model="gpt-4",
+                route_type="acompletion",
+                llm_router=mock_router,
+            )
+
+        assert processor.data["model"] == "claude-3-haiku"
+        assert budget_checked == ["pricey", "claude-3-haiku"]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

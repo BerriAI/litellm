@@ -2432,15 +2432,17 @@ def _fallback_pricing_admits(requested_model: str, fallback_model: str, llm_rout
     )
 
 
-async def _release_refused_fallback_attempt(
+async def _release_pre_call_hold(
     proxy_logging_obj: ProxyLogging,
     request_data: Mapping[str, object],
     refusal: Exception,
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
-    """Give back the slot and tokens the rate limiter holds for a fallback the proxy refused after admitting it, so the
-    walk's next attempt does not overwrite a hold that would otherwise stay charged until the window resets. The request
-    has not failed, so only the limiter's release runs, not the failure logging and alerting of ``post_call_failure_hook``."""
+    """Give back the slot and tokens the rate limiter holds for a model the walk is leaving: the requested model a
+    later hook rate limited after the limiter admitted it, or a fallback the proxy refused after admitting it. The
+    walk's next attempt overwrites the request's stash, so a hold not released here stays charged until the window
+    resets. The request has not failed, so only the limiter's release runs, not the failure logging and alerting of
+    ``post_call_failure_hook``."""
     limiter: Final = proxy_logging_obj.get_proxy_hook("parallel_request_limiter")
     if not isinstance(limiter, PROXY_MaxParallelRequestsHandler_v3):
         return
@@ -2457,7 +2459,8 @@ async def _fallback_grant(
     requested_model: str,
 ) -> list[str] | None:
     """The model access groups a pre-call fallback to ``fallback_model`` charges, or None when the caller may not use
-    it: an agent-owned key never leaves the model it asked for, as at auth, then the key, team and project allowlists
+    it. The caller passes the group the fallback is served by, through every alias rewrite, so an alias never skips
+    the budgets of the model that answers: an agent-owned key never leaves the model it asked for, as at auth, then the key, team and project allowlists
     while ``enforce_fallback_model_access`` is on, the end user's allowlist, the pricing rules, every per-model budget layer, the budgets of the access groups that grant the model, and the budget auth reserved for
     ``requested_model``, the same checks a direct request passes at auth."""
     from litellm.proxy.auth.auth_checks import (
@@ -3263,6 +3266,9 @@ class ProxyBaseLLMRequestProcessing:
                 if isinstance(raw_router_settings, Mapping)
                 else None
             )
+            await _release_pre_call_hold(
+                proxy_logging_obj, _REQUEST_FIELDS.validate_python(rate_limited_data), original_exc, user_api_key_dict
+            )
             attempt_numbers: Final[Iterator[int]] = itertools.count(1)
             requested_groups: Final = user_api_key_dict.matched_model_access_groups
             try:
@@ -3271,7 +3277,11 @@ class ProxyBaseLLMRequestProcessing:
                         continue
                     if (
                         grant := await _fallback_grant(
-                            fallback_model, user_api_key_dict, llm_router, proxy_logging_obj, original_model
+                            pre_call_served_model(fallback_model, user_api_key_dict, group_alias),
+                            user_api_key_dict,
+                            llm_router,
+                            proxy_logging_obj,
+                            original_model,
                         )
                     ) is None:
                         continue
@@ -3318,7 +3328,7 @@ class ProxyBaseLLMRequestProcessing:
                         user_api_key_dict.matched_model_access_groups = requested_groups  # rebind-ok: undo the fallback
                         if _fallback_refusal_ends_the_walk(fallback_exc, at_saturation, general_settings_view):
                             raise
-                        await _release_refused_fallback_attempt(
+                        await _release_pre_call_hold(
                             proxy_logging_obj,
                             self.data,  # pyright: ignore[reportUnknownMemberType]  # caller-defined request-payload shape
                             fallback_exc,
