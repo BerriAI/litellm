@@ -805,6 +805,26 @@ _REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(str
 _UNSEEN_DEPLOYMENT: Final = DropPolicy(drop_params=True, additional_drop_params=frozenset())
 
 
+class _DashboardBillingRequest(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    data: Mapping[str, object]
+
+
+async def _prepare_dashboard_request_billing(processing: object, auth: object, llm_router: Router | None) -> None:
+    if llm_router is None or not isinstance(auth, UserAPIKeyAuth):
+        return
+    if auth.dashboard_session_context is None:
+        return
+    from litellm.proxy.auth.fallback_model_access import prepare_dashboard_fallback_billing
+
+    data: Final = _DashboardBillingRequest.model_validate(processing, from_attributes=True).data
+    model: Final = data.get("model")
+    if isinstance(model, str) and not await prepare_dashboard_fallback_billing(
+        model, data, auth, RoutingContext(llm_router)
+    ):
+        raise HTTPException(403, "Cannot establish dashboard model billing context")
+
+
 def _is_auto_router(params: Mapping[str, object]) -> bool:
     model: Final = params.get("model")
     return isinstance(model, str) and model.startswith(AUTO_ROUTER_MODEL_PREFIX)
@@ -3724,6 +3744,8 @@ class ProxyBaseLLMRequestProcessing:
                 llm_router=llm_router,
             )
             phase_event("litellm.request.pre_call_completed")
+
+        await _prepare_dashboard_request_billing(self, user_api_key_dict, llm_router)
 
         _post_call_guardrails_active: Final = self._has_post_call_guardrails()
 

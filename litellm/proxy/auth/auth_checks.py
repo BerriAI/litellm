@@ -5663,6 +5663,15 @@ async def can_key_call_resolved_model(
     valid_token: UserAPIKeyAuth,
     llm_router: RegistryReader | None,
 ) -> None:
+    await _can_key_call_resolved_model(model, llm_model_list, valid_token.dashboard_model_access_auth(), llm_router)
+
+
+async def _can_key_call_resolved_model(
+    model: str,
+    llm_model_list: Sequence[object] | None,
+    valid_token: UserAPIKeyAuth,
+    llm_router: RegistryReader | None,
+) -> None:
     from litellm.proxy.auth.customer_hierarchy_auth import check_customer_hierarchy_model_access
     from litellm.proxy.proxy_server import (
         prisma_client,
@@ -6446,6 +6455,74 @@ async def personal_key_owner_teams(
     ).teams
 
 
+async def dashboard_model_billing_auth(
+    auth: UserAPIKeyAuth,
+    model: str | None,
+    llm_router: RegistryReader | None,
+    request: Request | None = None,
+) -> UserAPIKeyAuth:
+    from litellm.proxy.auth.team_grants import team_grant_billing_auth_update
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+
+    if not _is_dashboard_session(auth) or not personal_key_team_model_access_applies(auth) or model is None:
+        return auth
+    origin: Final = auth.dashboard_session_context.origin if auth.dashboard_session_context is not None else auth
+    owner: Final = await _personal_key_owner(origin, prisma_client, user_api_key_cache, proxy_logging_obj)
+    fields: Final = frozenset(
+        name for name in UserAPIKeyAuth.model_fields if name.startswith(("team_", "organization_")) or name == "org_id"
+    )
+    original_billing: Final = TypeAdapter(Mapping[str, object]).validate_python(origin.model_dump(include=set(fields)))
+    base: Final = auth.model_copy(update=original_billing)
+    if auth.dashboard_session_context is None:
+        base.bind_dashboard_session(origin, request)
+    if _dashboard_user_grants_model(model, origin, owner, llm_router):
+        return base
+    team: Final = await _dashboard_model_billing_team(origin, model, llm_router)
+    membership: Final = (
+        await get_team_membership(
+            user_id=origin.user_id,
+            team_id=team.team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        if origin.user_id is not None and prisma_client is not None
+        else None
+    )
+    update: Final = await team_grant_billing_auth_update(base, team, membership)
+    billed: Final = base.model_copy(update=update)
+    if auth.dashboard_session_context is None:
+        billed.bind_dashboard_session(origin, request)
+    return billed
+
+
+async def _dashboard_model_billing_team(
+    origin: UserAPIKeyAuth, model: str, llm_router: RegistryReader | None
+) -> LiteLLM_TeamTableCachedObj:
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+
+    teams: Final = await _personal_key_listing_teams(origin, prisma_client, user_api_key_cache, proxy_logging_obj)
+    loaded: Final = tuple(team for team in teams if team is not None)
+    allowed: Final = await asyncio.gather(
+        *(
+            _team_grants_personal_key_model(
+                model, team, origin, llm_router, prisma_client, user_api_key_cache, proxy_logging_obj
+            )
+            for team in loaded
+        )
+    )
+    eligible: Final = tuple(team for team, granted in zip(loaded, allowed, strict=True) if granted)
+    if not eligible:
+        raise ModelAccessDeniedProxyException(
+            message=model_access_denied_client_message(model=model),
+            internal_message=f"No eligible owner team grants dashboard model {model}",
+            type=ProxyErrorTypes.key_model_access_denied,
+            param="model",
+            code=status.HTTP_403_FORBIDDEN,
+        )
+    return min(eligible, key=lambda source: source.team_id)
+
+
 async def personal_key_team_visible_models(
     models: Sequence[str],
     user_api_key_dict: UserAPIKeyAuth,
@@ -6634,7 +6711,9 @@ def _search_tool_deny_by_default(general_settings: Mapping[str, object]) -> bool
 
 
 def _is_dashboard_session(valid_token: UserAPIKeyAuth | None) -> bool:
-    return valid_token is not None and valid_token.team_id == UI_TEAM_ID
+    return valid_token is not None and (
+        valid_token.team_id == UI_TEAM_ID or valid_token.dashboard_session_context is not None
+    )
 
 
 def _is_search_tool_strict_identity(valid_token: UserAPIKeyAuth) -> bool:

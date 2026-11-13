@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
     Any,  # noqa: TID251  # moved UserAPIKeyAuth fields and the Span alias are typed Any
@@ -6,7 +7,8 @@ from typing import (
     TypeAlias,
 )
 
-from pydantic import ConfigDict, Field, PrivateAttr, model_validator
+from pydantic import ConfigDict, Field, PrivateAttr, TypeAdapter, model_validator
+from starlette.requests import Request
 from typing_extensions import TypeIs  # noqa: TID251  # narrows the before-validator input without copying it
 
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
@@ -30,6 +32,16 @@ if TYPE_CHECKING:
     Span: TypeAlias = _Span | Any
 else:
     Span: TypeAlias = Any
+
+
+_BILLING_FIELDS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+@dataclass(frozen=True, slots=True)
+class DashboardSessionContext:
+    origin: "UserAPIKeyAuth"
+    request: Request | None
+    billing_auth: "UserAPIKeyAuth"
 
 
 def is_jwt(token: str | None) -> bool:
@@ -138,6 +150,38 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
 
     api_key: str | None = None
     _access_group_rule_grants: frozenset[str] = PrivateAttr(default=frozenset())
+    _dashboard_session_context: "DashboardSessionContext | None" = PrivateAttr(default=None)
+
+    @property
+    def dashboard_session_context(self) -> "DashboardSessionContext | None":
+        return self._dashboard_session_context
+
+    def bind_dashboard_session(self, origin: "UserAPIKeyAuth", request: Request | None) -> None:
+        self._dashboard_session_context = DashboardSessionContext(origin, request, self)
+
+    def dashboard_model_access_auth(self) -> "UserAPIKeyAuth":
+        if self._dashboard_session_context is None:
+            return self
+        origin: Final = self._dashboard_session_context.origin
+        fields: Final = frozenset(
+            name
+            for name in UserAPIKeyAuth.model_fields
+            if name.startswith(("team_", "organization_")) or name == "org_id"
+        )
+        values: Final = _BILLING_FIELDS_ADAPTER.validate_python(origin.model_dump(include=set(fields)))
+        return self.model_copy(update=values)
+
+    def adopt_dashboard_billing(self, billed: "UserAPIKeyAuth") -> None:
+        fields: Final = frozenset(
+            name
+            for name in UserAPIKeyAuth.model_fields
+            if name.startswith(("team_", "organization_")) or name == "org_id"
+        )
+        values: Final = _BILLING_FIELDS_ADAPTER.validate_python(billed.model_dump(include=set(fields)))
+        for name, value in values.items():
+            setattr(self, name, value)
+        self.budget_reservation = billed.budget_reservation
+        self.matched_model_access_groups = billed.matched_model_access_groups
 
     @property
     def access_group_rule_grants(self) -> frozenset[str]:
